@@ -64,8 +64,11 @@ export interface UiConfig {
   history_height: number;
   quick_cmd_height: number;
   show_file_explorer: boolean;
-  show_right_sidebar: boolean;
+  show_saved_connections: boolean;
+  show_active_sessions: boolean;
+  show_command_history: boolean;
   show_quick_commands: boolean;
+  zoom_level: number;
   theme?: string;
 }
 

@@ -48,8 +48,11 @@ const DEFAULT_UI_CONFIG: UiConfig = {
   history_height: 200,
   quick_cmd_height: 36,
   show_file_explorer: true,
-  show_right_sidebar: true,
+  show_saved_connections: true,
+  show_active_sessions: true,
+  show_command_history: true,
   show_quick_commands: true,
+  zoom_level: 1.0,
   theme: "github-dark",
 };
 
