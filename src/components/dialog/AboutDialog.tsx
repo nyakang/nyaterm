@@ -2,6 +2,7 @@ import { getName, getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
+import DragonflyLogo from "../DragonflyLogo";
 
 interface AboutDialogProps {
     open: boolean;
@@ -27,7 +28,7 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
                 className="rounded-lg w-[320px] shadow-2xl border flex flex-col items-center p-6 space-y-4"
                 style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
             >
-                <img src="/dragonfly.svg" alt="Dragonfly Logo" className="w-24 h-24 object-contain" />
+                <DragonflyLogo className="w-24 h-24 object-contain" />
 
                 <div className="text-center">
                     <h2 className="text-lg font-bold" style={{ color: "var(--df-text)" }}>

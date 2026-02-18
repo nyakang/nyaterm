@@ -166,8 +166,11 @@ pub struct UiConfig {
     pub history_height: f64,
     pub quick_cmd_height: f64,
     pub show_file_explorer: bool,
-    pub show_right_sidebar: bool,
+    pub show_saved_connections: bool,
+    pub show_active_sessions: bool,
+    pub show_command_history: bool,
     pub show_quick_commands: bool,
+    pub zoom_level: f64,
     #[serde(default = "default_theme")]
     pub theme: Option<String>,
 }
@@ -185,8 +188,11 @@ impl Default for UiConfig {
             history_height: 200.0,
             quick_cmd_height: 36.0,
             show_file_explorer: true,
-            show_right_sidebar: true,
+            show_saved_connections: true,
+            show_active_sessions: true,
+            show_command_history: true,
             show_quick_commands: true,
+            zoom_level: 1.0,
             theme: Some("github-dark".to_string()),
         }
     }
