@@ -2,6 +2,16 @@
   "name": "dragonfly",
   "private": true,
   "version": "0.1.0",
+  "description": "A modern, high-performance SSH client built with Tauri and React.",
+  "author": "CoderKang",
+  "homepage": "https://github.com/CoderKang/Dragonfly",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CoderKang/Dragonfly.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CoderKang/Dragonfly/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
