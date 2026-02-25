@@ -97,11 +97,6 @@
   background-color: color-mix(in srgb, var(--df-primary, #3b82f6) 5%, transparent);
 }
 
-/* ── Material Icons default size ────────────────────────────────────────── */
-.material-icons {
-  font-size: 16px;
-  line-height: 16px;
-}
 
 /* ── Global resets ──────────────────────────────────────────────────────── */
 html,

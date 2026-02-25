@@ -1,14 +1,79 @@
-import { useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 import { appLogDir } from "@tauri-apps/api/path";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { useTranslation } from "react-i18next";
+import {
+  MdAdd,
+  MdArticle,
+  MdComputer,
+  MdContentCopy,
+  MdContentPaste,
+  MdDashboard,
+  MdFullscreen,
+  MdInfo,
+  MdMenu,
+  MdMenuBook,
+  MdPalette,
+  MdRestartAlt,
+  MdSelectAll,
+  MdSettings,
+  MdTranslate,
+  MdUpdate,
+  MdViewSidebar,
+  MdZoomIn,
+  MdZoomOut,
+} from "react-icons/md";
 import packageJson from "../../../package.json";
 import { useApp } from "../../context/AppContext";
 import { useTheme } from "../../context/ThemeContext";
 import { AVAILABLE_LANGUAGES } from "../../i18n";
 
+import {
+  Menubar,
+  MenubarCheckboxItem,
+  MenubarContent,
+  MenubarItem,
+  MenubarMenu,
+  MenubarPortal,
+  MenubarSeparator,
+  MenubarSub,
+  MenubarSubContent,
+  MenubarSubTrigger,
+  MenubarTrigger,
+} from "../ui/menubar";
+
+const iconMap: Record<string, React.ElementType> = {
+  add: MdAdd,
+  content_copy: MdContentCopy,
+  content_paste: MdContentPaste,
+  select_all: MdSelectAll,
+  dashboard: MdDashboard,
+  palette: MdPalette,
+  translate: MdTranslate,
+  zoom_in: MdZoomIn,
+  zoom_out: MdZoomOut,
+  restart_alt: MdRestartAlt,
+  fullscreen: MdFullscreen,
+  computer: MdComputer,
+  menu_book: MdMenuBook,
+  update: MdUpdate,
+  article: MdArticle,
+  info: MdInfo,
+  menu: MdMenu,
+  view_sidebar: MdViewSidebar,
+  settings: MdSettings,
+};
+
+function DynamicIcon({ name, className }: { name: string; className?: string }) {
+  const Icon = iconMap[name];
+  if (!Icon) return null;
+  return <Icon className={className} />;
+}
+
 interface HeaderProps {
   onNewSession: () => void;
+  onToggleLeft?: () => void;
+  onToggleRight?: () => void;
+  onAbout: () => void;
 }
 
 interface MenuItem {
@@ -26,9 +91,7 @@ export default function Header({
   onToggleLeft,
   onToggleRight,
   onAbout,
-}: HeaderProps & { onToggleLeft?: () => void; onToggleRight?: () => void; onAbout: () => void }) {
-  const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+}: HeaderProps) {
   const { themeName, setTheme, themeNames } = useTheme();
   const { uiConfig, updateUiConfig, setShowSettingsDialog } = useApp();
   const { t, i18n } = useTranslation();
@@ -67,7 +130,6 @@ export default function Header({
     file: [
       { label: t("menu.newSshConnection"), action: onNewSession, icon: "add" },
       { label: "separator", separator: true },
-      { label: t("menu.exit"), action: () => window.close(), icon: "exit_to_app" },
     ],
     edit: [
       { label: t("menu.copy"), icon: "content_copy" },
@@ -87,7 +149,8 @@ export default function Header({
           {
             label: t("panel.savedConnections"),
             checked: uiConfig.show_saved_connections,
-            action: () => updateUiConfig({ show_saved_connections: !uiConfig.show_saved_connections }),
+            action: () =>
+              updateUiConfig({ show_saved_connections: !uiConfig.show_saved_connections }),
           },
           {
             label: t("panel.activeSessions"),
@@ -121,7 +184,7 @@ export default function Header({
         submenu: AVAILABLE_LANGUAGES.map((l) => ({
           label: l.name,
           checked: i18n.language === l.id,
-          action: () => changeLanguage(l.id)
+          action: () => changeLanguage(l.id),
         })),
       },
       { label: "separator", separator: true },
@@ -163,61 +226,88 @@ export default function Header({
     ],
   };
 
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setActiveMenu(null);
-      }
-    };
-    if (activeMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
+  const renderMenuItem = (item: MenuItem, idx: number) => {
+    if (item.separator) {
+      return <MenubarSeparator key={`sep-${idx}`} />;
     }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [activeMenu]);
+
+    if (item.submenu) {
+      return (
+        <MenubarSub key={item.label}>
+          <MenubarSubTrigger>
+            {item.icon && (
+              <DynamicIcon
+                name={item.icon}
+                className="text-[16px] mr-2 text-[var(--df-text-muted)]"
+              />
+            )}
+            <span className="flex-1">{item.label}</span>
+          </MenubarSubTrigger>
+          <MenubarPortal>
+            <MenubarSubContent>
+              {item.submenu.map((sub, i) => renderMenuItem(sub, i))}
+            </MenubarSubContent>
+          </MenubarPortal>
+        </MenubarSub>
+      );
+    }
+
+    if (item.checked !== undefined) {
+      return (
+        <MenubarCheckboxItem
+          key={item.label}
+          checked={item.checked}
+          onCheckedChange={() => {
+            item.action?.();
+          }}
+        >
+          {item.label}
+        </MenubarCheckboxItem>
+      );
+    }
+
+    return (
+      <MenubarItem
+        key={item.label}
+        onClick={() => {
+          item.action?.();
+        }}
+      >
+        {item.icon && (
+          <DynamicIcon name={item.icon} className="text-[16px] mr-2 text-[var(--df-text-muted)]" />
+        )}
+        <span className="flex-1">{item.label}</span>
+      </MenubarItem>
+    );
+  };
 
   return (
     <header
       className="h-10 border-b flex items-center justify-between px-3 select-none shrink-0"
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
-      <div className="flex items-center gap-4" ref={menuRef}>
+      <div className="flex items-center gap-4">
         {/* Mobile Left Toggle */}
         <button
           className="lg:hidden flex items-center"
           style={{ color: "var(--df-text-muted)" }}
           onClick={onToggleLeft}
         >
-          <span className="material-icons text-base">menu</span>
+          <MdMenu className="text-base" />
         </button>
 
-        <nav className="flex items-center gap-0 text-xs font-medium relative">
+        <Menubar className="border-none bg-transparent h-auto p-0 gap-1 shadow-none">
           {menuKeys.map(({ key, label }) => (
-            <div key={key} className="relative">
-              <span
-                className="cursor-pointer px-2 py-1 rounded transition-colors"
-                style={{
-                  color: activeMenu === key ? "var(--df-primary)" : "var(--df-text-muted)",
-                  backgroundColor:
-                    activeMenu === key
-                      ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
-                      : undefined,
-                }}
-                onClick={() => setActiveMenu(activeMenu === key ? null : key)}
-              >
+            <MenubarMenu key={key}>
+              <MenubarTrigger className="cursor-default px-2.5 py-1 text-xs font-medium rounded-md transition-colors text-[var(--df-text-muted)] data-[state=open]:text-[var(--df-primary)] data-[state=open]:bg-[color-mix(in_srgb,var(--df-primary)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] focus:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] focus:text-[var(--df-text-muted)] data-[state=open]:focus:bg-[color-mix(in_srgb,var(--df-primary)_10%,transparent)] data-[state=open]:focus:text-[var(--df-primary)] outline-none">
                 {label}
-              </span>
-              {activeMenu === key && (
-                <div
-                  className="absolute top-full left-0 mt-1 rounded shadow-xl py-1 min-w-[180px] z-50 border"
-                  style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
-                >
-                  <MenuContent items={menus[key]} onClose={() => setActiveMenu(null)} />
-                </div>
-              )}
-            </div>
+              </MenubarTrigger>
+              <MenubarContent align="start" className="min-w-[180px]">
+                {menus[key].map((item, idx) => renderMenuItem(item, idx))}
+              </MenubarContent>
+            </MenubarMenu>
           ))}
-        </nav>
+        </Menubar>
       </div>
       <div className="flex items-center gap-3" style={{ color: "var(--df-text-muted)" }}>
         {/* Mobile Right Toggle */}
@@ -226,86 +316,14 @@ export default function Header({
           style={{ color: "var(--df-text-muted)" }}
           onClick={onToggleRight}
         >
-          <span className="material-icons text-base">view_sidebar</span>
+          <MdViewSidebar className="text-base" />
         </button>
 
-        <span
-          className="material-icons text-base cursor-pointer hover:opacity-80 transition-opacity hidden sm:block"
+        <MdSettings
+          className="text-base cursor-pointer hover:opacity-80 transition-opacity hidden sm:block"
           onClick={() => setShowSettingsDialog(true)}
-        >
-          settings
-        </span>
+        />
       </div>
     </header>
-  );
-}
-
-function MenuContent({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
-  return (
-    <>
-      {items.map((menuItem, idx) =>
-        menuItem.separator ? (
-          <div
-            key={`sep-${idx}`}
-            className="my-1 border-t"
-            style={{ borderColor: "var(--df-border)" }}
-          />
-        ) : (
-          <MenuItemRow key={menuItem.label} item={menuItem} onClose={onClose} />
-        ),
-      )}
-    </>
-  );
-}
-
-function MenuItemRow({ item, onClose }: { item: MenuItem; onClose: () => void }) {
-  const [showSubmenu, setShowSubmenu] = useState(false);
-
-  return (
-    <div
-      className="px-3 py-1.5 text-xs cursor-pointer transition-colors relative flex items-center justify-between group"
-      style={{ color: "var(--df-text)" }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.backgroundColor =
-          "color-mix(in srgb, var(--df-primary) 20%, transparent)";
-        if (item.submenu) setShowSubmenu(true);
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = "";
-        if (item.submenu) setShowSubmenu(false);
-      }}
-      onClick={() => {
-        if (!item.submenu) {
-          item.action?.();
-          onClose();
-        }
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <span className="w-4 flex items-center justify-center">
-          {item.checked ? (
-            <span className="material-icons text-[10px]" style={{ color: "var(--df-primary)" }}>
-              check
-            </span>
-          ) : item.icon ? (
-            <span className="material-icons text-[16px] text-[var(--df-text-muted)]">
-              {item.icon}
-            </span>
-          ) : null}
-        </span>
-        <span>{item.label}</span>
-      </div>
-      {item.submenu && <span className="material-icons text-[10px]">chevron_right</span>}
-
-      {/* Submenu */}
-      {item.submenu && showSubmenu && (
-        <div
-          className="absolute top-0 left-full ml-1 rounded shadow-xl py-1 min-w-[160px] z-50 border"
-          style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
-        >
-          <MenuContent items={item.submenu} onClose={onClose} />
-        </div>
-      )}
-    </div>
   );
 }
