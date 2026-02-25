@@ -119,7 +119,33 @@
     "command": "Command",
     "add": "Add",
     "edit": "Edit",
-    "delete": "Delete"
+    "delete": "Delete",
+    "errorLabelRequired": "Label is required",
+    "errorCommandRequired": "Command script is required",
+    "addCommand": "Add Quick Command",
+    "editCommand": "Edit Quick Command",
+    "labelName": "Label",
+    "labelPlaceholder": "e.g. List files",
+    "category": "Category",
+    "categoryPlaceholder": "e.g. K8s",
+    "description": "Description (optional)",
+    "descriptionPlaceholder": "Details about this command",
+    "colorTag": "Color Tag",
+    "pin": "Pin to top",
+    "executionMode": "Execution Mode",
+    "executeImmediately": "Execute immediately",
+    "appendOnly": "Append to prompt",
+    "executeHint": "Command will be executed automatically when clicked.",
+    "appendHint": "Command will be placed at the prompt for review before executing.",
+    "commandScript": "Command Script",
+    "commandPlaceholder": "e.g. ls -la\nUse ${varName} for variables.",
+    "fillVariables": "Fill Command Variables",
+    "run": "Run Command",
+    "search": "Search cmd...",
+    "allCategories": "All Categories",
+    "uncategorized": "Uncategorized",
+    "noCommandsFound": "No commands found.",
+    "selectIcon": "Select Icon"
   },
   "suggestions": {
     "history": "History",
@@ -146,6 +172,9 @@
     "noActiveSessions": "No active sessions",
     "newConnection": "New Connection"
   },
+  "statusBar": {
+    "lock": "Lock Screen"
+  },
   "error": {
     "somethingWentWrong": "Something went wrong",
     "reloadApplication": "Reload Application"
@@ -166,7 +195,7 @@
     "search": "Search",
     "translation": "Translation",
     "security": "Security",
-    "terminal": "Terminal Core",
+    "terminal": "Terminal",
     "interaction": "Interaction",
     "startupBehavior": "Startup Behavior",
     "startupRestore": "Restore previous session tabs on startup",
@@ -230,11 +259,21 @@
     "sessionLock": "Session Lock",
     "idleLockMinutes": "Idle Lock (minutes)",
     "idleLockMinutesDesc": "Automatically lock the application after X minutes of inactivity. 0 to disable.",
+    "lockPassword": "Unlock Password",
+    "lockPasswordDesc": "Set a password required to unlock the application. Leave empty for click-to-unlock.",
+    "lockPasswordPlaceholder": "Optional",
     "connectionSecurity": "Connection Security",
     "hostKeyPolicy": "Host Key Policy",
     "hostKeyPolicyDesc": "How to handle unknown SSH host keys during connection.",
     "policyPrompt": "Prompt (Ask user)",
     "policyAccept": "Accept (Auto-add)",
     "policyStrict": "Strict (Reject unknown)"
+  },
+  "lockScreen": {
+    "title": "Application Locked",
+    "message": "This application has been locked due to inactivity.",
+    "unlock": "Unlock",
+    "passwordPlaceholder": "Enter unlock password",
+    "wrongPassword": "Incorrect password, please try again."
   }
 }

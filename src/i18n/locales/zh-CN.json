@@ -119,7 +119,33 @@
     "command": "命令",
     "add": "添加",
     "edit": "编辑",
-    "delete": "删除"
+    "delete": "删除",
+    "errorLabelRequired": "标签名称不能为空",
+    "errorCommandRequired": "命令脚本不能为空",
+    "addCommand": "添加快捷命令",
+    "editCommand": "编辑快捷命令",
+    "labelName": "标签名称",
+    "labelPlaceholder": "例如：列出文件",
+    "category": "分类",
+    "categoryPlaceholder": "例如：K8s",
+    "description": "描述（可选）",
+    "descriptionPlaceholder": "关于此命令的详细说明",
+    "colorTag": "颜色标签",
+    "pin": "置顶显示",
+    "executionMode": "执行模式",
+    "executeImmediately": "立即执行",
+    "appendOnly": "追加到输入行",
+    "executeHint": "点击后命令将自动在终端回车执行。",
+    "appendHint": "点击后命令只会被放置在终端的输入行上供您检查，不会立即执行。",
+    "commandScript": "命令脚本",
+    "commandPlaceholder": "例如：ls -la\n使用 ${变量名} 注入动态参数。",
+    "fillVariables": "填写命令参数",
+    "run": "运行命令",
+    "search": "搜索命令...",
+    "allCategories": "所有分类",
+    "uncategorized": "未分类",
+    "noCommandsFound": "未找到匹配的命令。",
+    "selectIcon": "选择图标"
   },
   "suggestions": {
     "history": "历史记录",
@@ -146,6 +172,9 @@
     "noActiveSessions": "暂无活动会话",
     "newConnection": "新建连接"
   },
+  "statusBar": {
+    "lock": "锁定屏幕"
+  },
   "error": {
     "somethingWentWrong": "出现错误",
     "reloadApplication": "重新加载应用"
@@ -166,7 +195,7 @@
     "search": "搜索",
     "translation": "翻译",
     "security": "安全",
-    "terminal": "终端核心",
+    "terminal": "终端",
     "interaction": "交互",
     "startupBehavior": "启动行为",
     "startupRestore": "启动时恢复先前的会话标签",
@@ -230,11 +259,21 @@
     "sessionLock": "会话锁定",
     "idleLockMinutes": "空闲锁定 (分钟)",
     "idleLockMinutesDesc": "在 X 分钟无活动后自动锁定应用程序。设置为 0 以禁用。",
+    "lockPassword": "解锁密码",
+    "lockPasswordDesc": "设置解锁应用程序所需的密码。留空则点击即可解锁。",
+    "lockPasswordPlaceholder": "可选",
     "connectionSecurity": "连接安全",
     "hostKeyPolicy": "主机密钥策略",
     "hostKeyPolicyDesc": "连接期间处理未知 SSH 主机密钥的方法。",
     "policyPrompt": "提示 (询问用户)",
     "policyAccept": "接受 (自动添加)",
     "policyStrict": "严格 (拒绝未知)"
+  },
+  "lockScreen": {
+    "title": "应用程序已锁定",
+    "message": "由于长时间无操作，应用程序已自动锁定。",
+    "unlock": "解锁",
+    "passwordPlaceholder": "请输入解锁密码",
+    "wrongPassword": "密码错误，请重试。"
   }
 }
