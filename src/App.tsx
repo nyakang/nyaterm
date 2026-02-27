@@ -322,82 +322,82 @@ function App() {
           {(uiConfig.show_saved_connections ||
             uiConfig.show_active_sessions ||
             uiConfig.show_command_history) && (
-              <>
-                {/* Only show resize handle on desktop */}
-                <ResizeHandle
-                  direction="horizontal"
-                  onResize={handleRightResize}
-                  className="hidden md:block"
-                />
-                <aside
-                  style={{
-                    width: uiConfig.right_width,
-                    backgroundColor: "var(--df-bg-panel)",
-                    borderColor: "var(--df-border)",
-                  }}
-                  className={`
+            <>
+              {/* Only show resize handle on desktop */}
+              <ResizeHandle
+                direction="horizontal"
+                onResize={handleRightResize}
+                className="hidden md:block"
+              />
+              <aside
+                style={{
+                  width: uiConfig.right_width,
+                  backgroundColor: "var(--df-bg-panel)",
+                  borderColor: "var(--df-border)",
+                }}
+                className={`
                   fixed inset-y-0 right-0 z-50 flex flex-col shadow-xl transition-transform duration-200 border-l
                   md:relative md:translate-x-0 md:z-0 md:shadow-none
                   ${mobileRightOpen ? "translate-x-0" : "translate-x-full"}
                 `}
+              >
+                {/* Mobile placeholder for header height if needed, or close button */}
+                <div
+                  className="md:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
+                  style={{ borderColor: "var(--df-border)" }}
                 >
-                  {/* Mobile placeholder for header height if needed, or close button */}
-                  <div
-                    className="md:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
-                    style={{ borderColor: "var(--df-border)" }}
+                  <button
+                    onClick={() => setMobileRightOpen(false)}
+                    style={{ color: "var(--df-text-muted)" }}
                   >
-                    <button
-                      onClick={() => setMobileRightOpen(false)}
-                      style={{ color: "var(--df-text-muted)" }}
+                    <MdClose />
+                  </button>
+                </div>
+
+                {/* Saved Connections - fixed pixel height at top */}
+                {uiConfig.show_saved_connections && (
+                  <>
+                    <div
+                      style={{ height: uiConfig.saved_conn_height }}
+                      className="shrink-0 overflow-hidden"
                     >
-                      <MdClose />
-                    </button>
-                  </div>
-
-                  {/* Saved Connections - fixed pixel height at top */}
-                  {uiConfig.show_saved_connections && (
-                    <>
-                      <div
-                        style={{ height: uiConfig.saved_conn_height }}
-                        className="shrink-0 overflow-hidden"
-                      >
-                        <SavedConnections
-                          onEditConnection={handleEditConnection}
-                          onSessionCreated={handleSessionConnected}
-                        />
-                      </div>
-                      {/* Show resize handle only if there's something below it */}
-                      {(uiConfig.show_active_sessions || uiConfig.show_command_history) && (
-                        <ResizeHandle direction="vertical" onResize={handleSavedConnResize} />
-                      )}
-                    </>
-                  )}
-
-                  {/* Active Sessions - flexible middle */}
-                  {uiConfig.show_active_sessions && (
-                    <div className="flex-1 min-h-0 overflow-hidden">
-                      <ActiveSessions onSessionClick={handleSessionClick} />
+                      <SavedConnections
+                        onEditConnection={handleEditConnection}
+                        onSessionCreated={handleSessionConnected}
+                      />
                     </div>
-                  )}
+                    {/* Show resize handle only if there's something below it */}
+                    {(uiConfig.show_active_sessions || uiConfig.show_command_history) && (
+                      <ResizeHandle direction="vertical" onResize={handleSavedConnResize} />
+                    )}
+                  </>
+                )}
 
-                  {/* Command History - fixed pixel height at bottom */}
-                  {uiConfig.show_command_history && (
-                    <>
-                      {/* Show resize handle only if there's something above it */}
-                      {(uiConfig.show_saved_connections || uiConfig.show_active_sessions) && (
-                        <ResizeHandle direction="vertical" onResize={handleHistoryResize} />
-                      )}
-                      <div
-                        style={{ height: uiConfig.history_height }}
-                        className="shrink-0 overflow-hidden"
-                      >
-                        <CommandHistory onCommandSend={handleHistoryCommand} />
-                      </div>
-                    </>
-                  )}
-                </aside>
-              </>
-            )}
+                {/* Active Sessions - flexible middle */}
+                {uiConfig.show_active_sessions && (
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    <ActiveSessions onSessionClick={handleSessionClick} />
+                  </div>
+                )}
+
+                {/* Command History - fixed pixel height at bottom */}
+                {uiConfig.show_command_history && (
+                  <>
+                    {/* Show resize handle only if there's something above it */}
+                    {(uiConfig.show_saved_connections || uiConfig.show_active_sessions) && (
+                      <ResizeHandle direction="vertical" onResize={handleHistoryResize} />
+                    )}
+                    <div
+                      style={{ height: uiConfig.history_height }}
+                      className="shrink-0 overflow-hidden"
+                    >
+                      <CommandHistory onCommandSend={handleHistoryCommand} />
+                    </div>
+                  </>
+                )}
+              </aside>
+            </>
+          )}
         </main>
 
         {/* Status Bar */}
