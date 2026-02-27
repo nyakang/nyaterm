@@ -24,7 +24,18 @@ import {
   SiRust,
   SiTypescript,
   SiUbuntu,
+  SiGoogle,
+  SiBaidu,
+  SiDuckduckgo,
+  SiBilibili,
+  SiOpenai,
+  SiClaude,
+  SiGooglegemini,
+  SiZhihu,
+  SiYoutube,
 } from "react-icons/si";
+import { DiBingSmall, DiYahooSmall } from "react-icons/di";
+import { MdSearch } from "react-icons/md";
 
 export interface QuickIconDef {
   icon: IconType;
@@ -59,3 +70,22 @@ export const QUICK_ICONS: Record<string, QuickIconDef> = {
 };
 
 export type QuickIconName = keyof typeof QUICK_ICONS;
+
+export const SEARCH_ICONS: Record<string, QuickIconDef> = {
+  google: { icon: SiGoogle, color: "#4285F4" },
+  duckduckgo: { icon: SiDuckduckgo, color: "#DE5833" },
+  baidu: { icon: SiBaidu, color: "#2932E1" },
+  bilibili: { icon: SiBilibili, color: "#00A1D6" },
+  zhihu: { icon: SiZhihu, color: "#0084FF" },
+  youtube: { icon: SiYoutube, color: "#FF0000" },
+  github: { icon: SiGithub, color: "#181717" },
+  gitlab: { icon: SiGitlab, color: "#FC6D26" },
+  bing: { icon: DiBingSmall, color: "#008373" },
+  yahoo: { icon: DiYahooSmall, color: "#410093" },
+  openai: { icon: SiOpenai, color: "#10A37F" },
+  claude: { icon: SiClaude, color: "#d97757" },
+  gemini: { icon: SiGooglegemini, color: "#4285F4" },
+  default: { icon: MdSearch, color: "currentColor" },
+};
+
+export type SearchIconName = keyof typeof SEARCH_ICONS;

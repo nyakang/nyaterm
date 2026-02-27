@@ -3,9 +3,14 @@ import { MdAdd, MdDelete } from "react-icons/md";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SelectItem } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SEARCH_ICONS, QuickIconDef } from "../../icons";
 import { useApp } from "../../../context/AppContext";
-import { SettingSelect } from "./SettingFormItems";
 
 export function SearchTab() {
   const { t } = useTranslation();
@@ -13,24 +18,6 @@ export function SearchTab() {
 
   return (
     <div className="space-y-6">
-      <SettingSelect
-        label={t("settings.defaultSearchEngine", "Default Search Engine")}
-        desc={t(
-          "settings.defaultSearchEngineDesc",
-          "The primary engine used when double-clicking or right-clicking to search.",
-        )}
-        value={appSettings.search.default_engine}
-        onValueChange={(v) =>
-          updateAppSettings({ search: { ...appSettings.search, default_engine: v } })
-        }
-      >
-        {appSettings.search.custom_engines.map((engine, idx) => (
-          <SelectItem key={idx} value={engine.name}>
-            {engine.name}
-          </SelectItem>
-        ))}
-      </SettingSelect>
-
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="font-medium text-sm">
@@ -58,6 +45,62 @@ export function SearchTab() {
               key={i}
               className="flex items-center gap-2 p-2 border-b last:border-0 hover:bg-accent transition-colors"
             >
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="w-8 h-8 rounded-md border flex items-center justify-center hover:bg-secondary transition-colors shrink-0"
+                    title={t("settings.selectIcon", "Select Icon")}
+                  >
+                    {engine.icon && SEARCH_ICONS[engine.icon] ? (
+                      (() => {
+                        const Icon = SEARCH_ICONS[engine.icon].icon;
+                        return <Icon className="text-base" style={{ color: SEARCH_ICONS[engine.icon].color }} />;
+                      })()
+                    ) : (
+                      <MdAdd className="text-sm text-muted-foreground" />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="p-2 w-48 z-50">
+                  <div className="grid grid-cols-6 gap-1 max-h-48 overflow-y-auto terminal-scroll">
+                    {/* Option to clear icon */}
+                    <DropdownMenuItem
+                      className="p-1 cursor-pointer flex items-center justify-center hover:bg-secondary rounded text-xs text-muted-foreground"
+                      onSelect={() => {
+                        const newEngines = [...appSettings.search.custom_engines];
+                        newEngines[i] = { ...newEngines[i], icon: undefined };
+                        updateAppSettings({
+                          search: { ...appSettings.search, custom_engines: newEngines },
+                        });
+                      }}
+                      title="Clear icon"
+                    >
+                      ✕
+                    </DropdownMenuItem>
+                    {Object.entries(SEARCH_ICONS).map(([name, iconDef]) => {
+                      const Icon = (iconDef as QuickIconDef).icon;
+                      const color = (iconDef as QuickIconDef).color;
+                      return (
+                        <DropdownMenuItem
+                          key={name}
+                          className="p-1 cursor-pointer flex items-center justify-center hover:bg-secondary rounded"
+                          onSelect={() => {
+                            const newEngines = [...appSettings.search.custom_engines];
+                            newEngines[i] = { ...newEngines[i], icon: name };
+                            updateAppSettings({
+                              search: { ...appSettings.search, custom_engines: newEngines },
+                            });
+                          }}
+                          title={name}
+                        >
+                          <Icon className="text-base" style={{ color }} />
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Input
                 placeholder="Name"
                 className="w-1/3 text-sm"
@@ -84,19 +127,15 @@ export function SearchTab() {
               />
               <Button
                 variant="ghost"
-                size="icon-xs"
+                size="icon-sm"
                 className="text-destructive hover:bg-destructive/10"
                 title={t("common.delete", "Delete")}
                 onClick={() => {
                   const newEngines = appSettings.search.custom_engines.filter(
                     (_, idx) => idx !== i,
                   );
-                  const newDefault =
-                    appSettings.search.default_engine === engine.name
-                      ? newEngines[0]?.name || ""
-                      : appSettings.search.default_engine;
                   updateAppSettings({
-                    search: { default_engine: newDefault, custom_engines: newEngines },
+                    search: { ...appSettings.search, custom_engines: newEngines },
                   });
                 }}
               >

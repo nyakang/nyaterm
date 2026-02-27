@@ -101,7 +101,9 @@ export default function SettingsDialog() {
         <div className="w-full sm:w-52 shrink-0 flex flex-col border-r bg-background overflow-y-auto">
           <div className="p-6 border-b shrink-0 flex items-center gap-3">
             <MdSettings className="text-2xl text-primary" />
-            <DialogTitle className="text-xl font-semibold">{t("settings.title", "Settings")}</DialogTitle>
+            <DialogTitle className="text-xl font-semibold">
+              {t("settings.title", "Settings")}
+            </DialogTitle>
           </div>
           <div className="flex-1 py-3 px-3 space-y-1">
             {tabs.map((tab) => (

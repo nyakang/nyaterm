@@ -17,7 +17,9 @@ export function TranslationTab() {
         )}
         value={appSettings.translation.provider || "none"}
         onValueChange={(v) =>
-          updateAppSettings({ translation: { ...appSettings.translation, provider: v === "none" ? "" : v } })
+          updateAppSettings({
+            translation: { ...appSettings.translation, provider: v === "none" ? "" : v },
+          })
         }
       >
         <SelectItem value="none">{t("settings.translationDisabled", "Disabled")}</SelectItem>
