@@ -173,7 +173,12 @@ pub async fn create_ssh_session(
     let session_id = uuid::Uuid::new_v4().to_string();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
 
-    let mut ssh_config_obj = client::Config::default();
+    let mut ssh_config_obj = client::Config {
+        window_size: 32 * 1024 * 1024,
+        maximum_packet_size: 32 * 1024,
+        nodelay: true,
+        ..Default::default()
+    };
     if let Ok(app_settings) = crate::config::load_app_settings(&app) {
         let interval = app_settings.terminal.keep_alive_interval;
         if interval > 0 {

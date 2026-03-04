@@ -35,6 +35,7 @@ pub struct TransferEvent {
 pub struct FileEntry {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub permissions: String,
 }
@@ -43,6 +44,7 @@ pub struct FileEntry {
 pub struct FileProperties {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub permissions: String,
     pub owner: String,
@@ -87,11 +89,11 @@ async fn open_sftp(
 }
 
 /// Convert a SFTP permission bitmask (u32) to the classic `ls -l` string like `-rwxr-xr-x`.
-fn permissions_to_string(mode: u32, is_dir: bool) -> String {
+/// `type_char` should be `'d'` for directories, `'l'` for symlinks, or `'-'` for regular files.
+fn permissions_to_string(mode: u32, type_char: char) -> String {
     let mut s = String::with_capacity(10);
 
-    // File type character
-    s.push(if is_dir { 'd' } else { '-' });
+    s.push(type_char);
 
     // Owner
     s.push(if mode & 0o400 != 0 { 'r' } else { '-' });
@@ -161,15 +163,22 @@ pub async fn list_remote_dir(
         if name == "." || name == ".." {
             continue;
         }
-        let is_dir = entry.file_type() == FileType::Dir;
+        // read_dir uses lstat semantics per SFTP spec, so FileType correctly reflects
+        // the entry itself (a symlink will be Symlink, not the type of its target).
+        let file_type = entry.file_type();
+        let is_dir = file_type == FileType::Dir;
+        let is_symlink = file_type == FileType::Symlink;
+        let type_char = if is_dir { 'd' } else if is_symlink { 'l' } else { '-' };
+
         let attrs = entry.metadata();
         let size = attrs.size.unwrap_or(0);
         let perms = attrs.permissions.unwrap_or(0);
-        let permissions = permissions_to_string(perms, is_dir);
+        let permissions = permissions_to_string(perms, type_char);
 
         entries.push(FileEntry {
             name,
             is_dir,
+            is_symlink,
             size,
             permissions,
         });
@@ -186,11 +195,14 @@ pub async fn delete_remote_file(
     let sftp = open_sftp(&manager, session_id).await?;
 
     let meta = sftp.metadata(path).await?;
-    let is_dir = meta.permissions.map_or(false, |p| p & 0o40000 != 0);
+    // Use the full POSIX type mask (S_IFMT = 0o170000) so that symlinks and other
+    // special files are never mistakenly treated as directories.
+    let is_dir = meta.permissions.map_or(false, |p| (p & 0o170000) == 0o040000);
 
     if is_dir {
         remove_dir_recursive(&sftp, path).await?;
     } else {
+        // Covers regular files, symlinks, devices, etc.
         sftp.remove_file(path).await?;
     }
 
@@ -199,23 +211,49 @@ pub async fn delete_remote_file(
 }
 
 /// Recursively remove a directory and all its contents via SFTP.
+///
+/// Continues deleting as many entries as possible on partial permission failures,
+/// collecting all errors and returning them as one combined message at the end.
+/// Symlinks are removed directly without following their targets.
 async fn remove_dir_recursive(sftp: &SftpSession, path: &str) -> AppResult<()> {
+    // Strip any trailing slashes to avoid double-slash paths like /var/www//file
+    let path = path.trim_end_matches('/');
+
     let dir = sftp.read_dir(path).await?;
+    let mut errors: Vec<String> = Vec::new();
+
     for entry in dir {
         let name = entry.file_name();
         if name == "." || name == ".." {
             continue;
         }
         let child = format!("{}/{}", path, name);
-        let is_dir = entry.file_type() == FileType::Dir;
-        if is_dir {
-            Box::pin(remove_dir_recursive(sftp, &child)).await?;
+        let file_type = entry.file_type();
+
+        if file_type == FileType::Dir {
+            if let Err(e) = Box::pin(remove_dir_recursive(sftp, &child)).await {
+                errors.push(e.to_string());
+            }
         } else {
-            sftp.remove_file(&child).await?;
+            // Symlinks and regular files are both removed with remove_file so we
+            // never accidentally recurse into a symlinked directory.
+            if let Err(e) = sftp.remove_file(&child).await {
+                errors.push(format!("'{}': {}", child, e));
+            }
         }
     }
-    sftp.remove_dir(path).await?;
-    Ok(())
+
+    if !errors.is_empty() {
+        return Err(AppError::Channel(format!(
+            "{} item(s) could not be deleted:\n{}",
+            errors.len(),
+            errors.join("\n")
+        )));
+    }
+
+    sftp.remove_dir(path)
+        .await
+        .map_err(|e| AppError::Channel(format!("Failed to remove directory '{}': {}", path, e)))
 }
 
 pub async fn rename_remote_file(
@@ -237,7 +275,10 @@ pub async fn download_remote_file(
     remote_path: &str,
     local_path: &str,
 ) -> AppResult<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::io::SeekFrom;
+    use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+    use tokio::task::JoinSet;
 
     let file_name = remote_path.split('/').last().unwrap_or(remote_path).to_string();
     let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -273,27 +314,140 @@ pub async fn download_remote_file(
             .map(|m| m.size.unwrap_or(0))
             .unwrap_or(0);
 
-        let mut remote_file = sftp.open(remote_path).await?;
-
         let mut local_file = tokio::fs::File::create(local_path)
             .await
             .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
 
-        const CHUNK_SIZE: usize = 32 * 1024;
-        let mut buf = vec![0u8; CHUNK_SIZE];
+        if total_size > 0 {
+            let _ = local_file.set_len(total_size).await;
+        }
+
+        const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+        let mut last_progress = Instant::now();
         let mut bytes_transferred: u64 = 0;
 
-        loop {
-            let n = remote_file.read(&mut buf).await
-                .map_err(|e| AppError::Channel(format!("SFTP read failed: {}", e)))?;
-            if n == 0 {
-                break;
-            }
-            local_file.write_all(&buf[..n]).await
-                .map_err(|e| AppError::Channel(format!("Write failed: {}", e)))?;
-            bytes_transferred += n as u64;
+        if total_size > 0 {
+            // ── Pipelined path ─────────────────────────────────────────────
+            //
+            // Open CONCURRENCY independent SFTP File handles all sharing the
+            // same Arc<RawSftpSession>. RawSftpSession uses a concurrent hash
+            // map keyed by request-id so every handle can have one
+            // SSH_FXP_READ in flight simultaneously, filling the pipe.
+            //
+            // Sliding-window pattern: when a task finishes it returns its
+            // handle so we immediately re-enqueue the next chunk on it,
+            // keeping the pipeline full for the entire transfer.
 
-            let _ = app.emit("transfer-event", &make_event("progress", bytes_transferred, total_size, None));
+            // 128 KiB per request (OpenSSH caps responses at ~64 KiB, so each
+            // task may do 1-2 round trips; 16 × 64 KiB ≈ 1 MiB in-flight).
+            const CHUNK_SIZE: u64 = 128 * 1024;
+            const CONCURRENCY: usize = 16;
+
+            let num_chunks = ((total_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as usize;
+            let concurrency = CONCURRENCY.min(num_chunks);
+
+            let mut handle_pool: Vec<russh_sftp::client::fs::File> =
+                Vec::with_capacity(concurrency);
+            for _ in 0..concurrency {
+                handle_pool.push(sftp.open(remote_path).await.map_err(|e| {
+                    AppError::Channel(format!("Failed to open remote file: {}", e))
+                })?);
+            }
+
+            type Task = AppResult<(u64, Vec<u8>, russh_sftp::client::fs::File)>;
+            let mut join_set: JoinSet<Task> = JoinSet::new();
+            let mut next_offset: u64 = 0;
+
+            // Seed the pipeline
+            while let Some(fh) = handle_pool.pop() {
+                if next_offset >= total_size {
+                    break;
+                }
+                let len = CHUNK_SIZE.min(total_size - next_offset) as usize;
+                let offset = next_offset;
+                next_offset += len as u64;
+
+                join_set.spawn(async move {
+                    let mut f = fh;
+                    // seek(SeekFrom::Start) is a pure local offset update — no
+                    // network round trip. The offset is sent as part of the next
+                    // SSH_FXP_READ request.
+                    f.seek(SeekFrom::Start(offset)).await
+                        .map_err(|e| AppError::Channel(format!("Seek failed: {}", e)))?;
+                    let mut buf = vec![0u8; len];
+                    f.read_exact(&mut buf).await
+                        .map_err(|e| AppError::Channel(format!("SFTP read failed: {}", e)))?;
+                    Ok((offset, buf, f))
+                });
+            }
+
+            // Drain results and keep the pipeline full
+            while let Some(res) = join_set.join_next().await {
+                let (chunk_offset, data, fh) = res
+                    .map_err(|e| AppError::Channel(format!("Task panicked: {}", e)))??;
+
+                // All writes are sequential in this loop; seek + write on a
+                // single local handle is safe and needs no mutex.
+                local_file.seek(SeekFrom::Start(chunk_offset)).await
+                    .map_err(|e| AppError::Channel(format!("Local seek failed: {}", e)))?;
+                local_file.write_all(&data).await
+                    .map_err(|e| AppError::Channel(format!("Local write failed: {}", e)))?;
+
+                bytes_transferred += data.len() as u64;
+
+                if last_progress.elapsed() >= PROGRESS_INTERVAL {
+                    last_progress = Instant::now();
+                    let _ = app.emit(
+                        "transfer-event",
+                        &make_event("progress", bytes_transferred, total_size, None),
+                    );
+                }
+
+                // Refill: recycle the returned handle for the next chunk
+                if next_offset < total_size {
+                    let len = CHUNK_SIZE.min(total_size - next_offset) as usize;
+                    let offset = next_offset;
+                    next_offset += len as u64;
+
+                    join_set.spawn(async move {
+                        let mut f = fh;
+                        f.seek(SeekFrom::Start(offset)).await
+                            .map_err(|e| AppError::Channel(format!("Seek failed: {}", e)))?;
+                        let mut buf = vec![0u8; len];
+                        f.read_exact(&mut buf).await
+                            .map_err(|e| AppError::Channel(format!("SFTP read failed: {}", e)))?;
+                        Ok((offset, buf, f))
+                    });
+                }
+                // No more chunks → `fh` drops here, triggering SSH_FXP_CLOSE.
+            }
+        } else {
+            // ── Sequential fallback (file size unknown) ─────────────────────
+            // Used when the server does not report a size in metadata (e.g.
+            // virtual/proc files). Pipelining requires knowing offsets upfront.
+            let mut remote_file = sftp.open(remote_path).await
+                .map_err(|e| AppError::Channel(format!("Failed to open remote file: {}", e)))?;
+
+            const SEQ_CHUNK: usize = 512 * 1024;
+            let mut buf = vec![0u8; SEQ_CHUNK];
+            loop {
+                let n = remote_file.read(&mut buf).await
+                    .map_err(|e| AppError::Channel(format!("SFTP read failed: {}", e)))?;
+                if n == 0 {
+                    break;
+                }
+                local_file.write_all(&buf[..n]).await
+                    .map_err(|e| AppError::Channel(format!("Write failed: {}", e)))?;
+                bytes_transferred += n as u64;
+
+                if last_progress.elapsed() >= PROGRESS_INTERVAL {
+                    last_progress = Instant::now();
+                    let _ = app.emit(
+                        "transfer-event",
+                        &make_event("progress", bytes_transferred, 0, None),
+                    );
+                }
+            }
         }
 
         local_file.flush().await
@@ -323,7 +477,8 @@ pub async fn upload_local_file(
     local_path: &str,
     remote_path: &str,
 ) -> AppResult<()> {
-    use tokio::io::AsyncWriteExt;
+    use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let file_name = remote_path.split('/').last().unwrap_or(remote_path).to_string();
     let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -345,24 +500,42 @@ pub async fn upload_local_file(
     let _ = app.emit("transfer-event", &make_event("started", 0, 0, None));
 
     let result: AppResult<u64> = async {
-        let data = tokio::fs::read(local_path)
+        // Get file size from metadata instead of reading the whole file into memory
+        let total_size = tokio::fs::metadata(local_path)
             .await
-            .map_err(|e| AppError::Channel(format!("Failed to read local file: {}", e)))?;
-        let total_size = data.len() as u64;
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let mut local_file = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|e| AppError::Channel(format!("Failed to open local file: {}", e)))?;
 
         let sftp = open_sftp(&manager, session_id).await?;
 
         let mut remote_file = sftp.create(remote_path).await?;
 
-        const CHUNK_SIZE: usize = 32 * 1024;
+        // Match the download chunk size for symmetric throughput
+        const CHUNK_SIZE: usize = 512 * 1024;
+        let mut buf = vec![0u8; CHUNK_SIZE];
         let mut bytes_transferred: u64 = 0;
 
-        for chunk in data.chunks(CHUNK_SIZE) {
-            remote_file.write_all(chunk).await
-                .map_err(|e| AppError::Channel(format!("SFTP write failed: {}", e)))?;
-            bytes_transferred += chunk.len() as u64;
+        const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+        let mut last_progress = Instant::now();
 
-            let _ = app.emit("transfer-event", &make_event("progress", bytes_transferred, total_size, None));
+        loop {
+            let n = local_file.read(&mut buf).await
+                .map_err(|e| AppError::Channel(format!("Failed to read local file: {}", e)))?;
+            if n == 0 {
+                break;
+            }
+            remote_file.write_all(&buf[..n]).await
+                .map_err(|e| AppError::Channel(format!("SFTP write failed: {}", e)))?;
+            bytes_transferred += n as u64;
+
+            if last_progress.elapsed() >= PROGRESS_INTERVAL {
+                last_progress = Instant::now();
+                let _ = app.emit("transfer-event", &make_event("progress", bytes_transferred, total_size, None));
+            }
         }
 
         remote_file.shutdown().await
@@ -370,7 +543,7 @@ pub async fn upload_local_file(
 
         let _ = sftp.close().await;
 
-        Ok(total_size)
+        Ok(bytes_transferred)
     }.await;
 
     match result {
@@ -416,13 +589,18 @@ pub async fn get_file_properties(
     let _ = sftp.close().await;
 
     let perms = attrs.permissions.unwrap_or(0);
-    let is_dir = perms & 0o40000 != 0;
-    let permissions = permissions_to_string(perms, is_dir);
+    // Apply S_IFMT mask (0o170000) for reliable type detection across all SFTP servers.
+    let type_bits = perms & 0o170000;
+    let is_dir = type_bits == 0o040000;
+    let is_symlink = type_bits == 0o120000;
+    let type_char = if is_dir { 'd' } else if is_symlink { 'l' } else { '-' };
+    let permissions = permissions_to_string(perms, type_char);
     let name = path.split('/').last().unwrap_or(path).to_string();
 
     Ok(FileProperties {
         name,
         is_dir,
+        is_symlink,
         size: attrs.size.unwrap_or(0),
         permissions,
         owner: attrs.user.unwrap_or_default(),
