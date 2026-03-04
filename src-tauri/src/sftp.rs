@@ -1,11 +1,11 @@
 //! Remote file operations via the SFTP subsystem (russh-sftp).
 //!
-//! Opens a temporary SSH connection, requests the SFTP subsystem, then
-//! performs file operations using proper SFTP protocol calls.
+//! Reuses the existing SSH connection via channel multiplexing instead of
+//! creating a new TCP connection for each operation.
 
 use crate::error::{AppError, AppResult};
 use crate::session::SessionManager;
-use crate::ssh::{SshAuth, SshConfig, SshHandler};
+use crate::ssh::SshHandler;
 use russh::client;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileType;
@@ -53,90 +53,37 @@ pub struct FileProperties {
     pub atime: u64,
 }
 
-/// Opens a temporary SSH connection + SFTP session.
+/// Opens an SFTP session by reusing the existing SSH connection's handle.
 async fn open_sftp(
-    app: &tauri::AppHandle,
     manager: &SessionManager,
     session_id: &str,
-) -> AppResult<(client::Handle<SshHandler>, SftpSession)> {
-    let config = {
+) -> AppResult<SftpSession> {
+    let handle = {
         let sessions = manager.sessions.lock().await;
         let session = sessions
             .get(session_id)
             .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", session_id)))?;
 
         session
-            .ssh_config
+            .ssh_handle
             .as_ref()
             .ok_or_else(|| AppError::Config("Not an SSH session".to_string()))?
             .clone()
-            .downcast::<SshConfig>()
-            .map_err(|_| AppError::Config("Failed to get SSH config".to_string()))?
+            .downcast::<client::Handle<SshHandler>>()
+            .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?
     };
-
-    let mut ssh_config_obj = client::Config::default();
-    if let Ok(app_settings) = crate::config::load_app_settings(app) {
-        let interval = app_settings.terminal.keep_alive_interval;
-        if interval > 0 {
-            ssh_config_obj.keepalive_interval = Some(std::time::Duration::from_secs(interval as u64));
-        }
-    }
-    let ssh_config = Arc::new(ssh_config_obj);
-    let mut handle = crate::ssh::connect_with_proxy(
-        app,
-        &config,
-        ssh_config,
-        SshHandler::new(app.clone(), config.host.clone(), config.port),
-    )
-    .await?;
-
-    match &config.auth {
-        SshAuth::Password { password } => {
-            let ok = handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| AppError::Auth(format!("Auth failed: {}", e)))?;
-            if !ok.success() {
-                return Err(AppError::Auth(
-                    "Auth failed: invalid credentials".to_string(),
-                ));
-            }
-        }
-        SshAuth::Key {
-            key_data,
-            passphrase,
-        } => {
-            let key = russh::keys::decode_secret_key(key_data, passphrase.as_deref())?;
-            let hash_alg = handle.best_supported_rsa_hash().await.ok().flatten().flatten();
-            let ok = handle
-                .authenticate_publickey(&config.username, russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
-                .await
-                .map_err(|e| AppError::Auth(format!("Key auth failed: {}", e)))?;
-            if !ok.success() {
-                return Err(AppError::Auth("Auth failed: key rejected".to_string()));
-            }
-        }
-    }
 
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| AppError::Channel(format!("Failed to open channel: {}", e)))?;
+        .map_err(|e| AppError::Channel(format!("Failed to open SFTP channel: {}", e)))?;
     channel
         .request_subsystem(true, "sftp")
         .await
         .map_err(|e| AppError::Channel(format!("Failed to start SFTP subsystem: {}", e)))?;
 
     let sftp = SftpSession::new(channel.into_stream()).await?;
-
-    Ok((handle, sftp))
-}
-
-/// Helper to disconnect after SFTP operations.
-async fn disconnect(handle: client::Handle<SshHandler>) {
-    let _ = handle
-        .disconnect(russh::Disconnect::ByApplication, "", "English")
-        .await;
+    Ok(sftp)
 }
 
 /// Convert a SFTP permission bitmask (u32) to the classic `ls -l` string like `-rwxr-xr-x`.
@@ -181,14 +128,12 @@ fn permissions_to_string(mode: u32, is_dir: bool) -> String {
 
 /// Resolves `$HOME` on the remote host via SFTP `canonicalize(".")`.
 pub async fn get_home_dir(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
 ) -> AppResult<String> {
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
     let home = sftp.canonicalize(".").await?;
     let _ = sftp.close().await;
-    disconnect(handle).await;
 
     if home.is_empty() {
         Err(AppError::Config(
@@ -201,16 +146,14 @@ pub async fn get_home_dir(
 
 /// Lists a remote directory via SFTP `read_dir`.
 pub async fn list_remote_dir(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
     path: &str,
 ) -> AppResult<Vec<FileEntry>> {
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
 
     let dir = sftp.read_dir(path).await?;
     let _ = sftp.close().await;
-    disconnect(handle).await;
 
     let mut entries = Vec::new();
     for entry in dir {
@@ -236,26 +179,22 @@ pub async fn list_remote_dir(
 }
 
 pub async fn delete_remote_file(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
     path: &str,
 ) -> AppResult<()> {
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
 
-    // Check if directory or file
     let meta = sftp.metadata(path).await?;
     let is_dir = meta.permissions.map_or(false, |p| p & 0o40000 != 0);
 
     if is_dir {
-        // Recursively delete directory contents first
         remove_dir_recursive(&sftp, path).await?;
     } else {
         sftp.remove_file(path).await?;
     }
 
     let _ = sftp.close().await;
-    disconnect(handle).await;
     Ok(())
 }
 
@@ -280,16 +219,14 @@ async fn remove_dir_recursive(sftp: &SftpSession, path: &str) -> AppResult<()> {
 }
 
 pub async fn rename_remote_file(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
     old_path: &str,
     new_path: &str,
 ) -> AppResult<()> {
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
     sftp.rename(old_path, new_path).await?;
     let _ = sftp.close().await;
-    disconnect(handle).await;
     Ok(())
 }
 
@@ -330,21 +267,19 @@ pub async fn download_remote_file(
             }
         }
 
-        let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+        let sftp = open_sftp(&manager, session_id).await?;
 
-        // Get file size for progress tracking
         let total_size = sftp.metadata(remote_path).await
             .map(|m| m.size.unwrap_or(0))
             .unwrap_or(0);
 
-        // Open remote file handle for chunked reading
         let mut remote_file = sftp.open(remote_path).await?;
 
         let mut local_file = tokio::fs::File::create(local_path)
             .await
             .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
 
-        const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
+        const CHUNK_SIZE: usize = 32 * 1024;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut bytes_transferred: u64 = 0;
 
@@ -365,7 +300,6 @@ pub async fn download_remote_file(
             .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
 
         let _ = sftp.close().await;
-        disconnect(handle).await;
 
         Ok(bytes_transferred)
     }.await;
@@ -416,12 +350,11 @@ pub async fn upload_local_file(
             .map_err(|e| AppError::Channel(format!("Failed to read local file: {}", e)))?;
         let total_size = data.len() as u64;
 
-        let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+        let sftp = open_sftp(&manager, session_id).await?;
 
-        // Open remote file for writing (truncate if exists)
         let mut remote_file = sftp.create(remote_path).await?;
 
-        const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
+        const CHUNK_SIZE: usize = 32 * 1024;
         let mut bytes_transferred: u64 = 0;
 
         for chunk in data.chunks(CHUNK_SIZE) {
@@ -436,7 +369,6 @@ pub async fn upload_local_file(
             .map_err(|e| AppError::Channel(format!("SFTP flush failed: {}", e)))?;
 
         let _ = sftp.close().await;
-        disconnect(handle).await;
 
         Ok(total_size)
     }.await;
@@ -456,7 +388,6 @@ pub async fn upload_local_file(
 
 
 pub async fn chmod_remote_file(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
     path: &str,
@@ -465,27 +396,24 @@ pub async fn chmod_remote_file(
     let mode_u32 = u32::from_str_radix(mode, 8)
         .map_err(|_| AppError::Channel(format!("Invalid octal mode: {}", mode)))?;
 
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
 
     let mut attrs = sftp.metadata(path).await?;
     attrs.permissions = Some(mode_u32);
     sftp.set_metadata(path, attrs).await?;
 
     let _ = sftp.close().await;
-    disconnect(handle).await;
     Ok(())
 }
 
 pub async fn get_file_properties(
-    app: tauri::AppHandle,
     manager: Arc<SessionManager>,
     session_id: &str,
     path: &str,
 ) -> AppResult<FileProperties> {
-    let (handle, sftp) = open_sftp(&app, &manager, session_id).await?;
+    let sftp = open_sftp(&manager, session_id).await?;
     let attrs = sftp.metadata(path).await?;
     let _ = sftp.close().await;
-    disconnect(handle).await;
 
     let perms = attrs.permissions.unwrap_or(0);
     let is_dir = perms & 0o40000 != 0;

@@ -238,18 +238,21 @@ pub async fn create_ssh_session(
     };
 
     let ssh_config_arc: Arc<dyn std::any::Any + Send + Sync> = Arc::new(config.clone());
+    let handle_arc = Arc::new(handle);
+    let ssh_handle_arc: Arc<dyn std::any::Any + Send + Sync> = handle_arc.clone();
 
     let session_handle = SessionHandle {
         info: session_info,
         cmd_tx,
         ssh_config: Some(ssh_config_arc),
+        ssh_handle: Some(ssh_handle_arc),
     };
     manager.add_session(session_handle).await;
 
     let sid = session_id.clone();
     let mgr = manager.clone();
     tokio::spawn(async move {
-        ssh_io_loop(app, sid, mgr, channel, handle, cmd_rx).await;
+        ssh_io_loop(app, sid, mgr, channel, handle_arc, cmd_rx).await;
     });
 
     tracing::info!(session_id = %session_id, "SSH session created");
@@ -261,7 +264,7 @@ async fn ssh_io_loop(
     session_id: String,
     manager: Arc<SessionManager>,
     mut channel: russh::Channel<client::Msg>,
-    _handle: client::Handle<SshHandler>,
+    _handle: Arc<client::Handle<SshHandler>>,
     mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
 ) {
     let output_event = format!("terminal-output-{}", session_id);

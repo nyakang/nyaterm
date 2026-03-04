@@ -247,9 +247,9 @@ function App() {
   function renderPanelContent(id: PanelId) {
     switch (id) {
       case "fileExplorer":
-        return <FileExplorer activeSessionId={activeTab?.sessionId ?? null} />;
+        return <FileExplorer activeSessionId={activeTab?.connecting ? null : (activeTab?.sessionId ?? null)} />;
       case "fileTransfer":
-        return <FileTransfer activeSessionId={activeTab?.sessionId ?? null} />;
+        return <FileTransfer activeSessionId={activeTab?.connecting ? null : (activeTab?.sessionId ?? null)} />;
       case "savedConnections":
         return (
           <SavedConnections

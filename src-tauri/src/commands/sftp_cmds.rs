@@ -5,43 +5,38 @@ use std::sync::Arc;
 
 #[tauri::command]
 pub async fn get_home_dir(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> AppResult<String> {
-    sftp::get_home_dir(app, state.inner().clone(), &session_id).await
+    sftp::get_home_dir(state.inner().clone(), &session_id).await
 }
 
 #[tauri::command]
 pub async fn list_remote_dir(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     path: String,
 ) -> AppResult<Vec<sftp::FileEntry>> {
-    sftp::list_remote_dir(app, state.inner().clone(), &session_id, &path).await
+    sftp::list_remote_dir(state.inner().clone(), &session_id, &path).await
 }
 
 #[tauri::command]
 pub async fn delete_remote_file(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     path: String,
 ) -> AppResult<()> {
-    sftp::delete_remote_file(app, state.inner().clone(), &session_id, &path).await
+    sftp::delete_remote_file(state.inner().clone(), &session_id, &path).await
 }
 
 #[tauri::command]
 pub async fn rename_remote_file(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     old_path: String,
     new_path: String,
 ) -> AppResult<()> {
     sftp::rename_remote_file(
-        app,
         state.inner().clone(),
         &session_id,
         &old_path,
@@ -88,21 +83,19 @@ pub async fn upload_local_file(
 
 #[tauri::command]
 pub async fn get_file_properties(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     path: String,
 ) -> AppResult<sftp::FileProperties> {
-    sftp::get_file_properties(app, state.inner().clone(), &session_id, &path).await
+    sftp::get_file_properties(state.inner().clone(), &session_id, &path).await
 }
 
 #[tauri::command]
 pub async fn chmod_remote_file(
-    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     path: String,
     mode: String,
 ) -> AppResult<()> {
-    sftp::chmod_remote_file(app, state.inner().clone(), &session_id, &path, &mode).await
+    sftp::chmod_remote_file(state.inner().clone(), &session_id, &path, &mode).await
 }

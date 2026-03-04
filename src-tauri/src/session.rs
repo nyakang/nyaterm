@@ -43,8 +43,11 @@ pub enum SessionCommand {
 pub struct SessionHandle {
     pub info: SessionInfo,
     pub cmd_tx: mpsc::UnboundedSender<SessionCommand>,
-    /// SSH-specific: stores config for opening new connections (SFTP, exec)
+    /// SSH-specific: stores config for potential reconnection.
+    #[allow(dead_code)]
     pub ssh_config: Option<Arc<dyn Any + Send + Sync>>,
+    /// SSH-specific: authenticated `client::Handle` for channel multiplexing (SFTP, exec).
+    pub ssh_handle: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 /// Central registry of sessions, history, and fuzzy search store.

@@ -24,7 +24,7 @@ export default function StatusBar() {
 
   const showRemoteStats = appSettings.ui.show_remote_stats ?? false;
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
-  const isSSHTab = activeTab?.type === "SSH";
+  const isSSHTab = activeTab?.type === "SSH" && !activeTab?.connecting;
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);

@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openPath as openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdApps,
@@ -220,6 +220,9 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   );
   const [, setAlwaysUploadFiles] = useState<Set<string>>(new Set());
 
+  const sessionCacheRef = useRef<Map<string, { files: FileEntry[]; currentPath: string; homeDir: string }>>(new Map());
+  const prevSessionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     const unlisten = listen<{ session_id: string; local_path: string; remote_path: string }>(
       "file-modified",
@@ -271,6 +274,13 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         });
         setFiles(entries);
         setCurrentPath(path);
+
+        const cached = sessionCacheRef.current.get(activeSessionId);
+        sessionCacheRef.current.set(activeSessionId, {
+          files: entries,
+          currentPath: path,
+          homeDir: cached?.homeDir ?? homeDir,
+        });
       } catch (e) {
         const msg = String(e);
         if (files.length > 0) {
@@ -282,28 +292,46 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         setLoading(false);
       }
     },
-    [activeSessionId, files.length],
+    [activeSessionId, files.length, homeDir],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    if (activeSessionId) {
-      (async () => {
-        try {
-          const home = await invoke<string>("get_home_dir", { sessionId: activeSessionId });
-          if (cancelled) return;
-          setHomeDir(home);
-          loadDirectory(home);
-        } catch {
-          if (cancelled) return;
-          loadDirectory("~");
-        }
-      })();
-    } else {
+    const cache = sessionCacheRef.current;
+    const prevId = prevSessionIdRef.current;
+
+    if (prevId && prevId !== activeSessionId) {
+      cache.set(prevId, { files, currentPath, homeDir });
+    }
+    prevSessionIdRef.current = activeSessionId;
+
+    if (!activeSessionId) {
       setFiles([]);
       setCurrentPath("");
       setHomeDir("");
+      return;
     }
+
+    const cached = cache.get(activeSessionId);
+    if (cached) {
+      setFiles(cached.files);
+      setCurrentPath(cached.currentPath);
+      setHomeDir(cached.homeDir);
+      setError(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const home = await invoke<string>("get_home_dir", { sessionId: activeSessionId });
+        if (cancelled) return;
+        setHomeDir(home);
+        loadDirectory(home);
+      } catch {
+        if (cancelled) return;
+        loadDirectory("~");
+      }
+    })();
     return () => {
       cancelled = true;
     };

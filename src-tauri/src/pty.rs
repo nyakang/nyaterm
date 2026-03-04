@@ -73,6 +73,7 @@ pub async fn create_local_session(
         info: session_info,
         cmd_tx,
         ssh_config: None,
+        ssh_handle: None,
     };
     manager.add_session(session_handle).await;
 
