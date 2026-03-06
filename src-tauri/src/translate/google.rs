@@ -1,6 +1,23 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rand::Rng;
+
 use crate::error::{AppError, AppResult};
 
 use super::TranslateResult;
+
+fn generate_tkk() -> (i64, i64) {
+    const MIM: u64 = 3_600_000;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+        / MIM as i64;
+    let mut rng = rand::thread_rng();
+    let r1 = rng.gen::<i32>() as i64;
+    let r2 = rng.gen::<i32>() as i64;
+    (now, r1.abs() + r2)
+}
 
 fn tk(text: &str, tkk: (i64, i64)) -> String {
     let mut a = tkk.0;
@@ -74,7 +91,7 @@ fn tk(text: &str, tkk: (i64, i64)) -> String {
 pub async fn translate(text: &str, target_lang: &str) -> AppResult<TranslateResult> {
     let client = reqwest::Client::new();
 
-    let tkk = (444005, 2686318299i64);
+    let tkk = generate_tkk();
     let tk_val = tk(text, tkk);
 
     let tl = google_lang(target_lang);
