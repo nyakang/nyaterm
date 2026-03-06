@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly"
-version = "0.1.5"
+version = "0.2.1"
 description = "A Tauri App"
 authors = ["Kang"]
 edition = "2021"
