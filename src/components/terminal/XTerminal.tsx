@@ -40,6 +40,7 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
 
   const currentLineRef = useRef("");
   const appSettingsRef = useRef(appSettings);
+  const doFindRef = useRef<(selection?: string) => void>(() => { });
 
   useEffect(() => {
     appSettingsRef.current = appSettings;
@@ -119,6 +120,73 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+
+    let lastSelection = "";
+
+    terminal.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const shift = e.shiftKey;
+
+      if (ctrl && shift) {
+        switch (e.code) {
+          case "KeyC": {
+            e.preventDefault();
+            const sel = terminal.getSelection();
+            if (sel) navigator.clipboard.writeText(sel).catch(() => { });
+            return false;
+          }
+          case "KeyV":
+            e.preventDefault();
+            navigator.clipboard.readText().then((text) => {
+              if (text) invoke("write_to_session", { sessionId, data: text }).catch(() => { });
+            }).catch(() => { });
+            return false;
+          case "KeyF":
+            e.preventDefault();
+            doFindRef.current();
+            return false;
+          case "KeyK":
+            e.preventDefault();
+            terminal.clear();
+            return false;
+          case "KeyX": {
+            e.preventDefault();
+            const sel = terminal.getSelection() || lastSelection;
+            if (sel) invoke("write_to_session", { sessionId, data: sel }).catch(() => { });
+            return false;
+          }
+          case "KeyA":
+            e.preventDefault();
+            terminal.selectAll();
+            return false;
+          case "KeyN":
+          case "KeyW":
+          case "KeyE":
+          case "KeyB":
+          case "KeyL":
+          case "Tab":
+            return false;
+        }
+      }
+
+      if (ctrl && !shift) {
+        switch (e.code) {
+          case "Tab":
+          case "Digit1": case "Digit2": case "Digit3": case "Digit4":
+          case "Digit5": case "Digit6": case "Digit7": case "Digit8":
+          case "Digit9": case "Digit0":
+          case "Equal": case "Minus":
+          case "Backquote":
+          case "Comma":
+            return false;
+        }
+      }
+
+      if (e.key === "F11") return false;
+
+      return true;
+    });
 
     const oscDisposable = terminal.parser.registerOscHandler(133, (data) => {
       const si = shellIntegrationRef.current;
@@ -316,15 +384,42 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
     observer.observe(containerRef.current);
 
     const selectionDisposable = terminal.onSelectionChange(() => {
+      const text = terminal.getSelection();
+      if (text) {
+        lastSelection = text;
+      }
       if (appSettingsRef.current?.interaction?.copy_on_select) {
-        const text = terminal.getSelection();
         if (text) {
           navigator.clipboard.writeText(text).catch(() => { });
         }
       }
     });
 
+    const handleMiddleMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) e.preventDefault(); // Prevent auto-scroll mechanism
+    };
+
+    const handleMiddleClick = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      const sel = terminal.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel).catch(() => { });
+        terminal.clearSelection();
+      } else {
+        navigator.clipboard.readText().then((text) => {
+          if (text) invoke("write_to_session", { sessionId, data: text }).catch(() => { });
+        }).catch(() => { });
+      }
+    };
+
+    containerRef.current.addEventListener("mousedown", handleMiddleMouseDown);
+    containerRef.current.addEventListener("mouseup", handleMiddleClick);
+    const containerEl = containerRef.current;
+
     return () => {
+      containerEl.removeEventListener("mousedown", handleMiddleMouseDown);
+      containerEl.removeEventListener("mouseup", handleMiddleClick);
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
 
       const si = shellIntegrationRef.current;
@@ -383,6 +478,10 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
     },
     [setShowSearchBar, setSearchQuery, searchAddonRef],
   );
+
+  useEffect(() => {
+    doFindRef.current = doFind;
+  }, [doFind]);
 
   return (
     <div className="h-full w-full relative" style={{ display: active ? "block" : "none" }}>

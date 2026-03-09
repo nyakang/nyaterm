@@ -193,13 +193,19 @@ function ContextMenuSeparator({
   );
 }
 
-function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
+import { Kbd } from "@/components/ui/kbd";
+
+function ContextMenuShortcut({ className, children, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="context-menu-shortcut"
-      className={cn("text-muted-foreground ml-auto text-xs tracking-widest", className)}
+      className={cn("ml-auto text-xs tracking-widest", className)}
       {...props}
-    />
+    >
+      <Kbd variant="outline" size="sm" className="font-sans text-[9px] text-muted-foreground/70 border-none bg-transparent px-0 shadow-none uppercase">
+        {children}
+      </Kbd>
+    </span>
   );
 }
 

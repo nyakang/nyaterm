@@ -19,9 +19,11 @@ import TabBar from "./components/terminal/TabBar";
 import XTerminal from "./components/terminal/XTerminal";
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { invoke } from "./lib/invoke";
-import { openNewSession } from "./lib/windowManager";
+import { logger } from "./lib/logger";
+import { openNewSession, openSettings } from "./lib/windowManager";
 import type { AppSettings, PanelId, PanelLayout, SavedConnection, UiConfig } from "./types/global";
 
 const PANEL_VISIBILITY: Record<PanelId, keyof UiConfig & `show_${string}`> = {
@@ -181,6 +183,113 @@ function App() {
     },
     [activeTab],
   );
+
+  // --- Shortcut callbacks ---
+
+  const handleNewLocalTerminal = useCallback(() => {
+    invoke<string>("create_local_session")
+      .then((sessionId) => {
+        addTab(sessionId, t("menu.newLocalTerminal"), "Local");
+      })
+      .catch((e) => logger.error("Failed to create local session", e));
+  }, [addTab, t]);
+
+  const handleCloseActiveTab = useCallback(() => {
+    if (!activeTab) return;
+    if (!activeTab.connecting) {
+      invoke("close_session", { sessionId: activeTab.sessionId }).catch(() => {});
+    }
+    closeTab(activeTab.id);
+  }, [activeTab, closeTab]);
+
+  const handleNextTab = useCallback(() => {
+    if (tabs.length < 2 || !activeTabId) return;
+    const idx = tabs.findIndex((t) => t.id === activeTabId);
+    setActiveTabId(tabs[(idx + 1) % tabs.length].id);
+  }, [tabs, activeTabId, setActiveTabId]);
+
+  const handlePrevTab = useCallback(() => {
+    if (tabs.length < 2 || !activeTabId) return;
+    const idx = tabs.findIndex((t) => t.id === activeTabId);
+    setActiveTabId(tabs[(idx - 1 + tabs.length) % tabs.length].id);
+  }, [tabs, activeTabId, setActiveTabId]);
+
+  const handleSwitchTab = useCallback(
+    (index: number) => {
+      if (tabs.length === 0) return;
+      const target = index === -1 ? tabs[tabs.length - 1] : tabs[index];
+      if (target) setActiveTabId(target.id);
+    },
+    [tabs, setActiveTabId],
+  );
+
+  const LEFT_PANELS: PanelId[] = ["fileExplorer", "fileTransfer"];
+  const RIGHT_PANELS: PanelId[] = ["savedConnections", "activeSessions", "commandHistory"];
+
+  const handleToggleLeftSidebar = useCallback(() => {
+    const anyVisible = LEFT_PANELS.some((id) => uiConfig[PANEL_VISIBILITY[id]]);
+    const updates: Partial<UiConfig> = {};
+    for (const id of LEFT_PANELS) updates[PANEL_VISIBILITY[id]] = !anyVisible;
+    updateUi(updates);
+  }, [uiConfig, updateUi]);
+
+  const handleToggleRightSidebar = useCallback(() => {
+    const anyVisible = RIGHT_PANELS.some((id) => uiConfig[PANEL_VISIBILITY[id]]);
+    const updates: Partial<UiConfig> = {};
+    for (const id of RIGHT_PANELS) updates[PANEL_VISIBILITY[id]] = !anyVisible;
+    updateUi(updates);
+  }, [uiConfig, updateUi]);
+
+  const handleZoomIn = useCallback(() => {
+    updateUi((prev) => ({
+      zoom_level: parseFloat(Math.min(2.0, prev.zoom_level + 0.1).toFixed(1)),
+    }));
+  }, [updateUi]);
+
+  const handleZoomOut = useCallback(() => {
+    updateUi((prev) => ({
+      zoom_level: parseFloat(Math.max(0.5, prev.zoom_level - 0.1).toFixed(1)),
+    }));
+  }, [updateUi]);
+
+  const handleResetZoom = useCallback(() => {
+    updateUi({ zoom_level: 1.0 });
+  }, [updateUi]);
+
+  const handleToggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    openSettings();
+  }, []);
+
+  const handleLockScreen = useCallback(() => {
+    if (appSettings.security.enable_screen_lock) {
+      setIsLocked(true);
+    }
+  }, [appSettings.security.enable_screen_lock, setIsLocked]);
+
+  useGlobalShortcuts({
+    onNewSession: () => handleNewSession(),
+    onNewLocalTerminal: handleNewLocalTerminal,
+    onCloseTab: handleCloseActiveTab,
+    onNextTab: handleNextTab,
+    onPrevTab: handlePrevTab,
+    onSwitchTab: handleSwitchTab,
+    onToggleLeftSidebar: handleToggleLeftSidebar,
+    onToggleRightSidebar: handleToggleRightSidebar,
+    onZoomIn: handleZoomIn,
+    onZoomOut: handleZoomOut,
+    onResetZoom: handleResetZoom,
+    onToggleFullscreen: handleToggleFullscreen,
+    onOpenSettings: handleOpenSettings,
+    onLockScreen: handleLockScreen,
+  });
 
   // Resize handlers
   const handleLeftResize = useCallback(

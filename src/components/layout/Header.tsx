@@ -31,6 +31,8 @@ import { AVAILABLE_LANGUAGES } from "../../i18n";
 import { openSettings } from "../../lib/windowManager";
 import ImportDialog from "../dialog/saved-connections/ImportDialog";
 
+import { MOD } from "../../hooks/useGlobalShortcuts";
+
 import {
   Menubar,
   MenubarCheckboxItem,
@@ -39,6 +41,7 @@ import {
   MenubarMenu,
   MenubarPortal,
   MenubarSeparator,
+  MenubarShortcut,
   MenubarSub,
   MenubarSubContent,
   MenubarSubTrigger,
@@ -88,6 +91,7 @@ interface MenuItem {
   submenu?: MenuItem[];
   checked?: boolean;
   icon?: string;
+  shortcut?: string;
 }
 
 /** Top bar with File/Edit/View/Terminal/Help menus, theme picker, and mobile toggles. */
@@ -135,13 +139,13 @@ export default function Header({
 
   const menus: Record<string, MenuItem[]> = {
     file: [
-      { label: t("menu.newSshConnection"), action: onNewSession, icon: "add" },
+      { label: t("menu.newSshConnection"), action: onNewSession, icon: "add", shortcut: `${MOD}+Shift+N` },
       { label: t("savedConnections.importSessions"), action: () => setShowImportDialog(true), icon: "file_upload" },
       { label: "separator", separator: true },
     ],
     edit: [
-      { label: t("menu.copy"), icon: "content_copy" },
-      { label: t("menu.paste"), icon: "content_paste" },
+      { label: t("menu.copy"), icon: "content_copy", shortcut: `${MOD}+Shift+C` },
+      { label: t("menu.paste"), icon: "content_paste", shortcut: `${MOD}+Shift+V` },
       { label: t("menu.selectAll"), icon: "select_all" },
     ],
     view: [
@@ -212,15 +216,15 @@ export default function Header({
         })),
       },
       { label: "separator", separator: true },
-      { label: t("menu.zoomIn"), action: () => handleZoom(0.1), icon: "zoom_in" },
-      { label: t("menu.zoomOut"), action: () => handleZoom(-0.1), icon: "zoom_out" },
-      { label: t("menu.resetZoom"), action: handleResetZoom, icon: "restart_alt" },
+      { label: t("menu.zoomIn"), action: () => handleZoom(0.1), icon: "zoom_in", shortcut: `${MOD}+=` },
+      { label: t("menu.zoomOut"), action: () => handleZoom(-0.1), icon: "zoom_out", shortcut: `${MOD}+-` },
+      { label: t("menu.resetZoom"), action: handleResetZoom, icon: "restart_alt", shortcut: `${MOD}+0` },
       { label: "separator", separator: true },
-      { label: t("menu.fullscreen"), action: toggleFullscreen, icon: "fullscreen" },
+      { label: t("menu.fullscreen"), action: toggleFullscreen, icon: "fullscreen", shortcut: "F11" },
     ],
     terminal: [
-      { label: t("menu.newSshConnection"), action: onNewSession, icon: "add" },
-      { label: t("menu.newLocalTerminal"), action: onNewSession, icon: "computer" },
+      { label: t("menu.newSshConnection"), action: onNewSession, icon: "add", shortcut: `${MOD}+Shift+N` },
+      { label: t("menu.newLocalTerminal"), action: onNewSession, icon: "computer", shortcut: `${MOD}+\`` },
     ],
     help: [
       {
@@ -301,6 +305,7 @@ export default function Header({
           <DynamicIcon name={item.icon} className="text-[1rem] mr-2 text-[var(--df-text-muted)]" />
         )}
         <span className="flex-1">{item.label}</span>
+        {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
       </MenubarItem>
     );
   };

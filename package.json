@@ -44,6 +44,7 @@
     "radix-ui": "^1.4.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-hotkeys-hook": "^5.2.4",
     "react-i18next": "^16.5.4",
     "react-icons": "^5.5.0",
     "sonner": "^2.0.7",

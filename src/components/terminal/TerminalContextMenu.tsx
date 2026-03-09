@@ -27,7 +27,9 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
+  ContextMenuShortcut,
 } from "../ui/context-menu";
+import { MOD } from "@/hooks/useGlobalShortcuts";
 
 interface TerminalContextMenuProps {
   children: React.ReactNode;
@@ -162,10 +164,12 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={() => doCopy(ctxSelection.text)}>
                 <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.copy")}
+                <ContextMenuShortcut>{MOD}+Shift+C</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={() => onFind(ctxSelection.text)}>
                 <MdSearch className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.find")}
+                <ContextMenuShortcut>{MOD}+Shift+F</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuSub>
                 <ContextMenuSubTrigger>
@@ -220,10 +224,12 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
+                <ContextMenuShortcut>{MOD}+Shift+V</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={doPasteSelected}>
                 <MdContentPasteGo className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.pasteSelectedText")}
+                <ContextMenuShortcut>{MOD}+Shift+X</ContextMenuShortcut>
               </ContextMenuItem>
             </>
           ) : (
@@ -231,10 +237,12 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
+                <ContextMenuShortcut>{MOD}+Shift+V</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={() => onFind()}>
                 <MdSearch className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.find")}
+                <ContextMenuShortcut>{MOD}+Shift+F</ContextMenuShortcut>
               </ContextMenuItem>
             </>
           )}
@@ -242,6 +250,7 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doClearScreen}>
             <MdClearAll className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.clearScreen")}
+            <ContextMenuShortcut>{MOD}+Shift+K</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuItem onClick={doClearAll}>
             <MdDeleteSweep className="text-[0.875rem] text-muted-foreground mr-2" />
@@ -251,6 +260,7 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doSelectAll}>
             <MdSelectAll className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.selectAll")}
+            <ContextMenuShortcut>{MOD}+Shift+A</ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
