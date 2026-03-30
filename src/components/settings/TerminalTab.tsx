@@ -118,6 +118,23 @@ export function TerminalTab() {
           />
         </SettingRow>
 
+        <SettingRow
+          label={t("settings.keywordHighlightWrappedLines")}
+          desc={t("settings.keywordHighlightWrappedLinesDesc")}
+        >
+          <SettingSwitch
+            checked={appSettings.terminal.keyword_highlights_across_wrapped_lines ?? false}
+            onChange={(v) =>
+              updateAppSettings({
+                terminal: {
+                  ...appSettings.terminal,
+                  keyword_highlights_across_wrapped_lines: v,
+                },
+              })
+            }
+          />
+        </SettingRow>
+
         {/* ── Built-in rules (read-only preview) ── */}
         <div className="space-y-1">
           <Label className="font-medium text-sm">{t("settings.keywordHighlightBuiltinRules")}</Label>
