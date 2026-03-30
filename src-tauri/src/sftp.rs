@@ -19,6 +19,7 @@ pub struct TransferEvent {
     pub id: String,
     pub session_id: String,
     pub file_name: String,
+    pub remote_path: String,
     /// "upload" or "download"
     pub direction: String,
     /// "started", "progress", "completed", or "error"
@@ -295,6 +296,7 @@ pub async fn download_remote_file(
                 id: transfer_id.clone(),
                 session_id: session_id.to_string(),
                 file_name: file_name.clone(),
+                remote_path: remote_path.to_string(),
                 direction: "download".to_string(),
                 status: status.to_string(),
                 size: total_size,
@@ -522,6 +524,7 @@ pub async fn upload_local_file(
                 id: transfer_id.clone(),
                 session_id: session_id.to_string(),
                 file_name: file_name.clone(),
+                remote_path: remote_path.to_string(),
                 direction: "upload".to_string(),
                 status: status.to_string(),
                 size: total_size,

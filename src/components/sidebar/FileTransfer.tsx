@@ -173,7 +173,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
         <div className="flex gap-1">
           {hasCompleted && (
             <MdPlaylistRemove
-              className="text-xs cursor-pointer hover:opacity-80 transition-opacity"
+              className="text-sm cursor-pointer hover:opacity-80 transition-opacity"
               style={{ color: "var(--df-text-muted)" }}
               onClick={clearCompleted}
               title={t("fileTransfer.clearCompleted")}
@@ -181,7 +181,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
           )}
           {visibleTransfers.length > 0 && (
             <MdDeleteSweep
-              className="text-xs cursor-pointer hover:opacity-80 transition-opacity"
+              className="text-sm cursor-pointer hover:opacity-80 transition-opacity"
               style={{ color: "var(--df-text-muted)" }}
               onClick={clearAll}
               title={t("fileTransfer.clearAll")}

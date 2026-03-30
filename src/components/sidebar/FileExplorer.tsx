@@ -42,6 +42,19 @@ import { FileEntry, FileExplorerProps } from "@/types/global";
 import { formatSize } from "@/lib/utils";
 import { FileListItem } from "./FileListItem";
 
+interface TransferEventPayload {
+  session_id: string;
+  direction: string;
+  status: string;
+  remote_path?: string;
+}
+
+function getParentPath(path: string) {
+  const normalized = path !== "/" && path.endsWith("/") ? path.slice(0, -1) : path;
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+}
+
 /** Remote file browser for active SSH session. Lists dirs/files, supports navigation. */
 export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const { t } = useTranslation();
@@ -52,7 +65,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [pathInputText, setPathInputText] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [renameDialogData, setRenameDialogData] = useState<RenameDialogData | null>(null);
@@ -71,6 +84,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
 
   const sessionCacheRef = useRef<Map<string, { files: FileEntry[]; currentPath: string; homeDir: string }>>(new Map());
   const prevSessionIdRef = useRef<string | null>(null);
+  const pendingManualRefreshUploadsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const unlisten = listen<{ session_id: string; local_path: string; remote_path: string }>(
@@ -109,7 +123,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const loadDirectory = useCallback(
     async (path: string) => {
       if (!activeSessionId) return;
-      setLoading(true);
+      setDirectoryLoading(true);
       setError(null);
 
       try {
@@ -138,7 +152,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
           setError(msg);
         }
       } finally {
-        setLoading(false);
+        setDirectoryLoading(false);
       }
     },
     [activeSessionId, files.length, homeDir],
@@ -218,6 +232,37 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeSessionId || !currentPath) return;
+
+    const unlisten = listen<TransferEventPayload>("transfer-event", (event) => {
+      const { session_id, direction, status, remote_path } = event.payload;
+      const uploadKey = remote_path ? `${session_id}:${remote_path}` : null;
+
+      if (
+        session_id !== activeSessionId ||
+        direction !== "upload" ||
+        !remote_path ||
+        !uploadKey ||
+        !pendingManualRefreshUploadsRef.current.has(uploadKey)
+      ) {
+        return;
+      }
+
+      if (status === "completed" || status === "error") {
+        pendingManualRefreshUploadsRef.current.delete(uploadKey);
+      }
+
+      if (status === "completed" && getParentPath(remote_path) === currentPath) {
+        loadDirectory(currentPath);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [activeSessionId, currentPath, loadDirectory]);
 
   const handleItemClick = (entry: FileEntry) => {
     if (entry.is_dir) {
@@ -363,32 +408,41 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
 
   const handleUpload = async () => {
     if (!activeSessionId) return;
+    let uploadKey: string | null = null;
     try {
       const localPath = await openDialog({ multiple: false, directory: false });
       if (!localPath || typeof localPath !== "string") return;
 
       const fileName = localPath.split(/[\\/]/).pop() || "uploaded_file";
       const remotePath = currentPath === "/" ? `/${fileName}` : `${currentPath}/${fileName}`;
+      uploadKey = `${activeSessionId}:${remotePath}`;
 
-      setLoading(true);
+      pendingManualRefreshUploadsRef.current.add(uploadKey);
       await invoke("upload_local_file", {
         sessionId: activeSessionId,
         localPath,
         remotePath,
       });
-      await loadDirectory(currentPath);
     } catch (e) {
       toast.error(String(e));
-      setLoading(false);
+      if (uploadKey) {
+        pendingManualRefreshUploadsRef.current.delete(uploadKey);
+      }
     }
   };
 
   const handleOpenDefault = async (entry: FileEntry) => {
     if (!activeSessionId || entry.is_dir) return;
     try {
-      setLoading(true);
       const tDir = await tempDir();
-      const localPath = await join(tDir, "dragonfly", activeSessionId, entry.name);
+      const downloadTimestamp = Date.now().toString();
+      const localPath = await join(
+        tDir,
+        "dragonfly",
+        activeSessionId,
+        downloadTimestamp,
+        entry.name,
+      );
       await invoke("download_remote_file", {
         sessionId: activeSessionId,
         remotePath: getEntryFullPath(entry),
@@ -403,10 +457,8 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
       });
 
       await openUrl(localPath);
-      setLoading(false);
     } catch (e) {
       toast.error(String(e));
-      setLoading(false);
     }
   };
 
@@ -535,7 +587,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
                 <MdFolderOff className="text-xl block mx-auto mb-2" />
                 <div className="text-sm block mb-2">{t("fileExplorer.connectToSession")}</div>
               </div>
-            ) : loading ? (
+            ) : directoryLoading ? (
               <div className="text-center py-4 text-xs" style={{ color: "var(--df-text-dimmed)" }}>
                 {t("fileExplorer.loading")}
               </div>
@@ -646,7 +698,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
           }}
         >
           <div className="flex gap-4">
-            {!loading && !error && files.length > 0 && (
+            {!directoryLoading && !error && files.length > 0 && (
               <>
                 <span>{t("fileExplorer.totalItems", { count: files.length })}</span>
                 {files.some((f) => !f.is_dir) && (
