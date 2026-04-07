@@ -16,6 +16,7 @@
         "width": 1280,
         "height": 800,
         "visible": false,
+        "decorations": false,
         "dragDropEnabled": false
       }
     ],

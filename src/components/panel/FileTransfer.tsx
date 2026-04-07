@@ -10,6 +10,7 @@ import {
   MdSync,
   MdUpload,
 } from "react-icons/md";
+import PanelHeader from "@/components/layout/PanelHeader";
 import { type TransferItem, useTransfer } from "../../context/TransferContext";
 
 interface FileTransferProps {
@@ -116,7 +117,10 @@ function TransferRow({ item }: { item: TransferItem }) {
 
         {/* Status icon or percentage */}
         {item.status === "transferring" ? (
-          <span className="text-[0.625rem] font-mono font-bold shrink-0" style={{ color: statusColor }}>
+          <span
+            className="text-[0.625rem] font-mono font-bold shrink-0"
+            style={{ color: statusColor }}
+          >
             {statusText}
           </span>
         ) : (
@@ -165,30 +169,30 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       className="h-full flex flex-col overflow-hidden"
       style={{ backgroundColor: "var(--df-bg-panel)" }}
     >
-      <div
-        className="p-2 text-[0.625rem] uppercase tracking-wider font-bold border-b flex justify-between items-center"
-        style={{ color: "var(--df-text-muted)", borderColor: "var(--df-border)" }}
-      >
-        <span>{t("panel.fileTransfer")}</span>
-        <div className="flex gap-1">
-          {hasCompleted && (
-            <MdPlaylistRemove
-              className="text-sm cursor-pointer hover:opacity-80 transition-opacity"
-              style={{ color: "var(--df-text-muted)" }}
-              onClick={clearCompleted}
-              title={t("fileTransfer.clearCompleted")}
-            />
-          )}
-          {visibleTransfers.length > 0 && (
-            <MdDeleteSweep
-              className="text-sm cursor-pointer hover:opacity-80 transition-opacity"
-              style={{ color: "var(--df-text-muted)" }}
-              onClick={clearAll}
-              title={t("fileTransfer.clearAll")}
-            />
-          )}
-        </div>
-      </div>
+      <PanelHeader
+        title={t("panel.fileTransfer")}
+        meta={visibleTransfers.length}
+        actions={
+          <>
+            {hasCompleted && (
+              <MdPlaylistRemove
+                className="text-sm cursor-pointer transition-opacity hover:opacity-80"
+                style={{ color: "var(--df-text-muted)" }}
+                onClick={clearCompleted}
+                title={t("fileTransfer.clearCompleted")}
+              />
+            )}
+            {visibleTransfers.length > 0 && (
+              <MdDeleteSweep
+                className="text-sm cursor-pointer transition-opacity hover:opacity-80"
+                style={{ color: "var(--df-text-muted)" }}
+                onClick={clearAll}
+                title={t("fileTransfer.clearAll")}
+              />
+            )}
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto p-1 text-sm terminal-scroll">
         {!activeSessionId ? (

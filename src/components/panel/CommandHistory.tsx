@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdChevronRight, MdHistory } from "react-icons/md";
+import { MdChevronRight } from "react-icons/md";
+import PanelHeader from "@/components/layout/PanelHeader";
 
 interface CommandHistoryProps {
   onCommandSend: (command: string) => void;
@@ -27,7 +28,9 @@ function CommandHistory({ onCommandSend }: CommandHistoryProps) {
     const unlisten = listen("command-history-changed", () => {
       fetchHistory();
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [fetchHistory]);
 
   const handleDoubleClick = useCallback(
@@ -37,22 +40,18 @@ function CommandHistory({ onCommandSend }: CommandHistoryProps) {
     [onCommandSend],
   );
 
+  const historyEntries = useMemo(() => {
+    const counts = new Map<string, number>();
+    return history.map((command) => {
+      const occurrence = (counts.get(command) ?? 0) + 1;
+      counts.set(command, occurrence);
+      return { command, key: `${command}-${occurrence}` };
+    });
+  }, [history]);
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div
-        className="p-2 text-[0.625rem] uppercase tracking-wider font-bold border-b flex justify-between items-center"
-        style={{
-          color: "var(--df-text-muted)",
-          borderColor: "var(--df-border)",
-          backgroundColor: "var(--df-bg-section-header)",
-        }}
-      >
-        <span>{t("panel.commandHistory")}</span>
-        <MdHistory
-          className="text-sm cursor-pointer hover:opacity-80 transition-opacity"
-          style={{ color: "var(--df-text-muted)" }}
-        />
-      </div>
+      <PanelHeader title={t("panel.commandHistory")} />
       <div className="flex-1 overflow-y-auto p-2 text-xs font-mono space-y-0.5 terminal-scroll">
         {history.length === 0 ? (
           <div
@@ -62,19 +61,19 @@ function CommandHistory({ onCommandSend }: CommandHistoryProps) {
             {t("panel.noCommandsYet")}
           </div>
         ) : (
-          history.map((cmd, index) => (
+          historyEntries.map(({ command, key }) => (
             <div
-              key={`${cmd}-${index}`}
+              key={key}
               className="px-2 py-1.5 rounded cursor-pointer transition-colors truncate flex items-center gap-1.5 group df-hover"
               style={{ color: "var(--df-text)" }}
-              title={cmd}
-              onDoubleClick={() => handleDoubleClick(cmd)}
+              title={command}
+              onDoubleClick={() => handleDoubleClick(command)}
             >
               <MdChevronRight
                 className="text-[0.625rem] transition-colors"
                 style={{ color: "var(--df-text-dimmed)" }}
               />
-              <span className="truncate">{cmd}</span>
+              <span className="truncate">{command}</span>
             </div>
           ))
         )}

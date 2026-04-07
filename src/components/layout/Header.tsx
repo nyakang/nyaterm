@@ -1,15 +1,18 @@
-import { useState } from "react";
 import { appLogDir } from "@tauri-apps/api/path";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
   MdArticle,
+  MdCheckBoxOutlineBlank,
+  MdClose,
   MdComputer,
   MdContentCopy,
   MdContentPaste,
-  MdDashboard,
   MdFileUpload,
+  MdFilterNone,
   MdFullscreen,
   MdInfo,
   MdMenu,
@@ -27,16 +30,15 @@ import {
 import packageJson from "../../../package.json";
 import { useApp } from "../../context/AppContext";
 import { useTheme } from "../../context/ThemeContext";
+import { MOD } from "../../hooks/useGlobalShortcuts";
 import { AVAILABLE_LANGUAGES } from "../../i18n";
-import { openSettings } from "../../lib/windowManager";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   decreaseTerminalFontSize,
   increaseTerminalFontSize,
 } from "../../lib/terminalFontSize";
+import DragonflyLogo from "../DragonflyLogo";
 import ImportDialog from "../dialog/saved-connections/ImportDialog";
-
-import { MOD } from "../../hooks/useGlobalShortcuts";
 
 import {
   Menubar,
@@ -58,7 +60,6 @@ const iconMap: Record<string, React.ElementType> = {
   content_copy: MdContentCopy,
   content_paste: MdContentPaste,
   select_all: MdSelectAll,
-  dashboard: MdDashboard,
   palette: MdPalette,
   translate: MdTranslate,
   zoom_in: MdZoomIn,
@@ -106,11 +107,41 @@ export default function Header({
   onToggleRight,
   onAbout,
 }: HeaderProps) {
+  const [appWindow] = useState(() => getCurrentWindow());
   const { themeName, setTheme, themeNames } = useTheme();
-  const { appSettings, updateAppSettings, updateUi } = useApp();
+  const { updateAppSettings, updateUi } = useApp();
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const uiConfig = appSettings.ui;
+  const [isMaximized, setIsMaximized] = useState(false);
   const { t, i18n } = useTranslation();
+  const appTitle = document.title || "Dragonfly";
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncMaximizedState = async () => {
+      const maximized = await appWindow.isMaximized().catch(() => false);
+      if (mounted) {
+        setIsMaximized(maximized);
+      }
+    };
+
+    void syncMaximizedState();
+
+    let unlistenResized: (() => void) | undefined;
+    appWindow
+      .onResized(() => {
+        void syncMaximizedState();
+      })
+      .then((unlisten) => {
+        unlistenResized = unlisten;
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+      unlistenResized?.();
+    };
+  }, [appWindow]);
 
   const changeLanguage = (lng: string) => {
     i18n.changeLanguage(lng);
@@ -153,8 +184,17 @@ export default function Header({
 
   const menus: Record<string, MenuItem[]> = {
     file: [
-      { label: t("menu.newSshConnection"), action: onNewSession, icon: "add", shortcut: `${MOD}+Shift+N` },
-      { label: t("savedConnections.importSessions"), action: () => setShowImportDialog(true), icon: "file_upload" },
+      {
+        label: t("menu.newSshConnection"),
+        action: onNewSession,
+        icon: "add",
+        shortcut: `${MOD}+Shift+N`,
+      },
+      {
+        label: t("savedConnections.importSessions"),
+        action: () => setShowImportDialog(true),
+        icon: "file_upload",
+      },
       { label: "separator", separator: true },
     ],
     edit: [
@@ -163,54 +203,6 @@ export default function Header({
       { label: t("menu.selectAll"), icon: "select_all" },
     ],
     view: [
-      {
-        label: t("menu.layout"),
-        icon: "dashboard",
-        submenu: [
-          {
-            label: t("panel.fileExplorer"),
-            checked: uiConfig.show_file_explorer,
-            action: () => updateUi({ show_file_explorer: !uiConfig.show_file_explorer }),
-          },
-          {
-            label: t("panel.fileTransfer"),
-            checked: uiConfig.show_file_transfer,
-            action: () => updateUi({ show_file_transfer: !uiConfig.show_file_transfer }),
-          },
-          {
-            label: t("panel.savedConnections"),
-            checked: uiConfig.show_saved_connections,
-            action: () =>
-              updateUi({ show_saved_connections: !uiConfig.show_saved_connections }),
-          },
-          {
-            label: t("panel.activeSessions"),
-            checked: uiConfig.show_active_sessions,
-            action: () => updateUi({ show_active_sessions: !uiConfig.show_active_sessions }),
-          },
-          {
-            label: t("panel.commandHistory"),
-            checked: uiConfig.show_command_history,
-            action: () => updateUi({ show_command_history: !uiConfig.show_command_history }),
-          },
-          {
-            label: t("panel.quickCommands"),
-            checked: uiConfig.show_quick_commands,
-            action: () => updateUi({ show_quick_commands: !uiConfig.show_quick_commands }),
-          },
-          { label: "separator", separator: true },
-          {
-            label: t("menu.resetLayout"),
-            action: () =>
-              updateUi({
-                panel_layout: {
-                  left: ["fileExplorer", "fileTransfer"],
-                  right: ["savedConnections", "activeSessions", "commandHistory"],
-                },
-              }),
-          },
-        ],
-      },
       {
         label: t("menu.theme"),
         icon: "palette",
@@ -230,22 +222,42 @@ export default function Header({
         })),
       },
       { label: "separator", separator: true },
-      { label: t("menu.zoomIn"), action: () => handleZoom(0.1), icon: "zoom_in", shortcut: `${MOD}+=` },
-      { label: t("menu.zoomOut"), action: () => handleZoom(-0.1), icon: "zoom_out", shortcut: `${MOD}+-` },
-      { label: t("menu.resetZoom"), action: handleResetZoom, icon: "restart_alt", shortcut: `${MOD}+0` },
+      {
+        label: t("menu.zoomIn"),
+        action: () => handleZoom(0.1),
+        icon: "zoom_in",
+        shortcut: `${MOD}+=`,
+      },
+      {
+        label: t("menu.zoomOut"),
+        action: () => handleZoom(-0.1),
+        icon: "zoom_out",
+        shortcut: `${MOD}+-`,
+      },
+      {
+        label: t("menu.resetZoom"),
+        action: handleResetZoom,
+        icon: "restart_alt",
+        shortcut: `${MOD}+0`,
+      },
       { label: "separator", separator: true },
-      { label: t("menu.fullscreen"), action: toggleFullscreen, icon: "fullscreen", shortcut: "F11" },
+      {
+        label: t("menu.fullscreen"),
+        action: toggleFullscreen,
+        icon: "fullscreen",
+        shortcut: "F11",
+      },
     ],
     help: [
       {
         label: t("menu.documentation"),
         icon: "menu_book",
-        action: () => openUrl(packageJson.homepage + "/docs"),
+        action: () => openUrl(`${packageJson.homepage}/docs`),
       },
       {
         label: t("menu.checkForUpdates"),
         icon: "update",
-        action: () => openUrl(packageJson.homepage + "/releases"),
+        action: () => openUrl(`${packageJson.homepage}/releases`),
       },
       {
         label: t("menu.viewLogs"),
@@ -320,15 +332,27 @@ export default function Header({
     );
   };
 
+  const handleMinimizeWindow = () => {
+    appWindow.minimize().catch(() => {});
+  };
+
+  const handleToggleMaximizeWindow = () => {
+    appWindow.toggleMaximize().catch(() => {});
+  };
+
+  const handleCloseWindow = () => {
+    appWindow.close().catch(() => {});
+  };
+
   return (
     <header
-      className="h-10 border-b flex items-center justify-between px-3 select-none shrink-0"
+      className="h-10 border-b flex items-center gap-2 px-2 select-none shrink-0"
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 shrink-0">
         {/* Mobile Left Toggle */}
         <button
-          className="lg:hidden flex items-center"
+          className="lg:hidden flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)]"
           style={{ color: "var(--df-text-muted)" }}
           onClick={onToggleLeft}
         >
@@ -348,20 +372,58 @@ export default function Header({
           ))}
         </Menubar>
       </div>
-      <div className="flex items-center gap-3" style={{ color: "var(--df-text-muted)" }}>
+
+      <div
+        className="flex-1 min-w-0 h-full flex items-center justify-center gap-2 px-2"
+        data-tauri-drag-region
+        onDoubleClick={handleToggleMaximizeWindow}
+      >
+        <div
+          className="flex items-center gap-2 min-w-0 pointer-events-none"
+          style={{ color: "var(--df-text-muted)" }}
+        >
+          <DragonflyLogo className="h-4 w-4 shrink-0" />
+          <span className="text-xs font-medium truncate">{appTitle}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 shrink-0" style={{ color: "var(--df-text-muted)" }}>
         {/* Mobile Right Toggle */}
         <button
-          className="md:hidden flex items-center"
+          className="md:hidden flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)]"
           style={{ color: "var(--df-text-muted)" }}
           onClick={onToggleRight}
         >
           <MdViewSidebar className="text-base" />
         </button>
 
-        <MdSettings
-          className="text-base cursor-pointer hover:opacity-80 transition-opacity hidden sm:block"
-          onClick={() => openSettings()}
-        />
+        <button
+          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)]"
+          aria-label={t("menu.minimize")}
+          onClick={handleMinimizeWindow}
+        >
+          <span className="block h-px w-3.5 rounded-full bg-current" />
+        </button>
+
+        <button
+          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)]"
+          aria-label={isMaximized ? t("menu.restore") : t("menu.maximize")}
+          onClick={handleToggleMaximizeWindow}
+        >
+          {isMaximized ? (
+            <MdFilterNone className="text-sm" />
+          ) : (
+            <MdCheckBoxOutlineBlank className="text-base" />
+          )}
+        </button>
+
+        <button
+          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-red-500/90 hover:text-white"
+          aria-label={t("common.close")}
+          onClick={handleCloseWindow}
+        >
+          <MdClose className="text-base" />
+        </button>
       </div>
       <ImportDialog open={showImportDialog} onClose={() => setShowImportDialog(false)} />
     </header>

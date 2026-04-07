@@ -4,7 +4,6 @@ import { join, tempDir } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openPath as openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import {
   MdArrowUpward,
@@ -12,6 +11,7 @@ import {
   MdCreateNewFolder,
   MdDelete,
   MdDownload,
+  MdDriveFolderUpload,
   MdFolderOff,
   MdInfo,
   MdLink,
@@ -23,23 +23,37 @@ import {
   MdUpload,
 } from "react-icons/md";
 import { toast } from "sonner";
-import { openAutoUpload } from "@/lib/windowManager";
-import MoveDialog, { type MoveDialogData } from "../dialog/file-explorer/MoveDialog";
-import NewItemDialog, { type NewItemDialogData } from "../dialog/file-explorer/NewItemDialog";
-import NewSymlinkDialog, { type NewSymlinkDialogData } from "../dialog/file-explorer/NewSymlinkDialog";
-import PropertiesDialog, { type PropertiesDialogData } from "../dialog/file-explorer/PropertiesDialog";
-import RenameDialog, { type RenameDialogData } from "../dialog/file-explorer/RenameDialog";
-import DeleteDialog, { type DeleteDialogData } from "../dialog/file-explorer/DeleteDialog";
+import PanelHeader from "@/components/layout/PanelHeader";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-
-import { FileEntry, FileExplorerProps } from "@/types/global";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatSize } from "@/lib/utils";
+import { openAutoUpload } from "@/lib/windowManager";
+import type { FileEntry, FileExplorerProps } from "@/types/global";
+import DeleteDialog, { type DeleteDialogData } from "../dialog/file-explorer/DeleteDialog";
+import MoveDialog, { type MoveDialogData } from "../dialog/file-explorer/MoveDialog";
+import NewItemDialog, { type NewItemDialogData } from "../dialog/file-explorer/NewItemDialog";
+import NewSymlinkDialog, {
+  type NewSymlinkDialogData,
+} from "../dialog/file-explorer/NewSymlinkDialog";
+import PropertiesDialog, {
+  type PropertiesDialogData,
+} from "../dialog/file-explorer/PropertiesDialog";
+import RenameDialog, { type RenameDialogData } from "../dialog/file-explorer/RenameDialog";
 import { FileListItem } from "./FileListItem";
 
 interface TransferEventPayload {
@@ -55,6 +69,16 @@ function getParentPath(path: string) {
   return index <= 0 ? "/" : normalized.slice(0, index);
 }
 
+function ToolbarDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="mx-1 h-3 w-px shrink-0 rounded-full"
+      style={{ backgroundColor: "var(--df-border)" }}
+    />
+  );
+}
+
 /** Remote file browser for active SSH session. Lists dirs/files, supports navigation. */
 export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const { t } = useTranslation();
@@ -62,7 +86,8 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
   const [homeDir, setHomeDir] = useState("");
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const lastSelectedRef = useRef<string | null>(null);
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [pathInputText, setPathInputText] = useState("");
   const [directoryLoading, setDirectoryLoading] = useState(false);
@@ -72,16 +97,28 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const [deleteDialogData, setDeleteDialogData] = useState<DeleteDialogData | null>(null);
   const [moveDialogData, setMoveDialogData] = useState<MoveDialogData | null>(null);
   const [newItemDialogData, setNewItemDialogData] = useState<NewItemDialogData | null>(null);
-  const [newSymlinkDialogData, setNewSymlinkDialogData] = useState<NewSymlinkDialogData | null>(null);
+  const [newSymlinkDialogData, setNewSymlinkDialogData] = useState<NewSymlinkDialogData | null>(
+    null,
+  );
   const [propertiesDialogData, setPropertiesDialogData] = useState<PropertiesDialogData | null>(
     null,
   );
   const [autoSyncCwd, setAutoSyncCwd] = useState(false);
   const alwaysUploadFilesRef = useRef<Set<string>>(new Set());
+  const filesRef = useRef<FileEntry[]>([]);
+  const currentPathRef = useRef("");
+  const homeDirRef = useRef("");
+  const pathInputRef = useRef<HTMLInputElement | null>(null);
 
-  const sessionCacheRef = useRef<Map<string, { files: FileEntry[]; currentPath: string; homeDir: string }>>(new Map());
+  const sessionCacheRef = useRef<
+    Map<string, { files: FileEntry[]; currentPath: string; homeDir: string }>
+  >(new Map());
   const prevSessionIdRef = useRef<string | null>(null);
   const pendingManualRefreshUploadsRef = useRef<Set<string>>(new Set());
+
+  filesRef.current = files;
+  currentPathRef.current = currentPath;
+  homeDirRef.current = homeDir;
 
   useEffect(() => {
     const unlisten = listen<{ session_id: string; local_path: string; remote_path: string }>(
@@ -115,7 +152,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         if (always) {
           alwaysUploadFilesRef.current.add(`${sessionId}:${localPath}`);
         }
-      }
+      },
     );
 
     return () => {
@@ -146,11 +183,11 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         sessionCacheRef.current.set(activeSessionId, {
           files: entries,
           currentPath: path,
-          homeDir: cached?.homeDir ?? homeDir,
+          homeDir: cached?.homeDir ?? homeDirRef.current,
         });
       } catch (e) {
         const msg = String(e);
-        if (files.length > 0) {
+        if (filesRef.current.length > 0) {
           toast.error(msg);
         } else {
           setError(msg);
@@ -159,7 +196,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         setDirectoryLoading(false);
       }
     },
-    [activeSessionId, files.length, homeDir],
+    [activeSessionId],
   );
 
   useEffect(() => {
@@ -167,7 +204,11 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     const prevId = prevSessionIdRef.current;
 
     if (prevId && prevId !== activeSessionId) {
-      cache.set(prevId, { files, currentPath, homeDir });
+      cache.set(prevId, {
+        files: filesRef.current,
+        currentPath: currentPathRef.current,
+        homeDir: homeDirRef.current,
+      });
     }
     prevSessionIdRef.current = activeSessionId;
 
@@ -192,6 +233,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
       try {
         const home = await invoke<string>("get_home_dir", { sessionId: activeSessionId });
         if (cancelled) return;
+        homeDirRef.current = home;
         setHomeDir(home);
         loadDirectory(home);
       } catch {
@@ -202,8 +244,13 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, loadDirectory]);
 
+  useEffect(() => {
+    if (isEditingPath) {
+      pathInputRef.current?.focus();
+    }
+  }, [isEditingPath]);
 
   useEffect(() => {
     if (!activeSessionId || !currentPath) return;
@@ -236,12 +283,54 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     };
   }, [activeSessionId, currentPath, loadDirectory]);
 
+  const handleSelect = useCallback(
+    (entry: FileEntry, event: React.MouseEvent) => {
+      setSelectedFiles((prev) => {
+        const isContextMenuEvent = event.button === 2 || event.type === "contextmenu";
+        if (isContextMenuEvent) {
+          if (prev.has(entry.name)) {
+            return prev;
+          }
+          lastSelectedRef.current = entry.name;
+          return new Set([entry.name]);
+        }
+
+        if (event.ctrlKey || event.metaKey) {
+          const next = new Set(prev);
+          if (next.has(entry.name)) {
+            next.delete(entry.name);
+          } else {
+            next.add(entry.name);
+          }
+          lastSelectedRef.current = entry.name;
+          return next;
+        }
+        if (event.shiftKey && lastSelectedRef.current) {
+          const names = files.map((f) => f.name);
+          const lastIdx = names.indexOf(lastSelectedRef.current);
+          const curIdx = names.indexOf(entry.name);
+          if (lastIdx >= 0 && curIdx >= 0) {
+            const [start, end] = lastIdx < curIdx ? [lastIdx, curIdx] : [curIdx, lastIdx];
+            const next = new Set(prev);
+            for (let i = start; i <= end; i++) {
+              next.add(names[i]);
+            }
+            return next;
+          }
+        }
+        lastSelectedRef.current = entry.name;
+        return new Set([entry.name]);
+      });
+    },
+    [files],
+  );
+
   const handleItemClick = (entry: FileEntry) => {
     if (entry.is_dir) {
       const newPath = currentPath === "/" ? `/${entry.name}` : `${currentPath}/${entry.name}`;
       loadDirectory(newPath);
     } else {
-      setSelectedFile(entry.name);
+      setSelectedFiles(new Set([entry.name]));
     }
   };
 
@@ -271,7 +360,12 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
   const handleCurrentDirProperties = () => {
     if (!activeSessionId || !currentPath) return;
     const name = currentPath.split("/").filter(Boolean).pop() || currentPath;
-    setPropertiesDialogData({ sessionId: activeSessionId, fullPath: currentPath, name, is_dir: true });
+    setPropertiesDialogData({
+      sessionId: activeSessionId,
+      fullPath: currentPath,
+      name,
+      is_dir: true,
+    });
   };
 
   const handleCopyCurrentPath = () => {
@@ -284,16 +378,12 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     emit(`focus-terminal-${activeSessionId}`);
   };
 
-  const handleDownloadSelected = () => {
-    if (!selectedFile) return;
-    const entry = files.find((f) => f.name === selectedFile);
-    if (entry) handleDownload(entry);
-  };
-
   const handleDeleteSelected = () => {
-    if (!selectedFile) return;
-    const entry = files.find((f) => f.name === selectedFile);
-    if (entry) handleDelete(entry);
+    if (selectedFiles.size === 0) return;
+    const selected = files.filter((f) => selectedFiles.has(f.name));
+    for (const entry of selected) {
+      handleDelete(entry);
+    }
   };
 
   const handleGoUp = () => {
@@ -363,9 +453,36 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     });
   };
 
-  const handleDownload = async (entry: FileEntry) => {
-    if (!activeSessionId || entry.is_dir) return;
+  const downloadEntries = async (entries: FileEntry[]) => {
+    if (!activeSessionId || entries.length === 0) return;
+
     try {
+      const shouldPickDirectory = entries.length > 1 || entries.some((entry) => entry.is_dir);
+
+      if (shouldPickDirectory) {
+        const localDir = await openDialog({ directory: true });
+        if (!localDir || typeof localDir !== "string") return;
+
+        for (const entry of entries) {
+          const localPath = await join(localDir, entry.name);
+          if (entry.is_dir) {
+            await invoke("download_remote_directory", {
+              sessionId: activeSessionId,
+              remotePath: getEntryFullPath(entry),
+              localPath,
+            });
+          } else {
+            await invoke("download_remote_file", {
+              sessionId: activeSessionId,
+              remotePath: getEntryFullPath(entry),
+              localPath,
+            });
+          }
+        }
+        return;
+      }
+
+      const [entry] = entries;
       const localPath = await saveDialog({ defaultPath: entry.name });
       if (!localPath) return;
       await invoke("download_remote_file", {
@@ -378,28 +495,72 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
     }
   };
 
-  const handleUpload = async () => {
+  const handleDownloadSelected = async () => {
+    if (selectedFiles.size === 0) return;
+    const selected = files.filter((f) => selectedFiles.has(f.name));
+    await downloadEntries(selected);
+  };
+
+  const handleDownload = async (entry: FileEntry) => {
+    await downloadEntries([entry]);
+  };
+
+  const handleDownloadFromContextMenu = async (entry: FileEntry) => {
+    if (selectedFiles.size > 1 && selectedFiles.has(entry.name)) {
+      const selected = files.filter((f) => selectedFiles.has(f.name));
+      await downloadEntries(selected);
+      return;
+    }
+
+    await handleDownload(entry);
+  };
+
+  const handleUploadFiles = async () => {
     if (!activeSessionId) return;
-    let uploadKey: string | null = null;
     try {
-      const localPath = await openDialog({ multiple: false, directory: false });
-      if (!localPath || typeof localPath !== "string") return;
+      const localPaths = await openDialog({ multiple: true, directory: false });
+      if (!localPaths) return;
+      const pathList = Array.isArray(localPaths) ? localPaths : [localPaths];
+      for (const localPath of pathList) {
+        if (typeof localPath !== "string") continue;
+        const fileName = localPath.split(/[\\/]/).pop() || "uploaded_file";
+        const remotePath = currentPath === "/" ? `/${fileName}` : `${currentPath}/${fileName}`;
+        const uploadKey = `${activeSessionId}:${remotePath}`;
 
-      const fileName = localPath.split(/[\\/]/).pop() || "uploaded_file";
-      const remotePath = currentPath === "/" ? `/${fileName}` : `${currentPath}/${fileName}`;
-      uploadKey = `${activeSessionId}:${remotePath}`;
-
-      pendingManualRefreshUploadsRef.current.add(uploadKey);
-      await invoke("upload_local_file", {
-        sessionId: activeSessionId,
-        localPath,
-        remotePath,
-      });
+        pendingManualRefreshUploadsRef.current.add(uploadKey);
+        try {
+          await invoke("upload_local_file", {
+            sessionId: activeSessionId,
+            localPath,
+            remotePath,
+          });
+        } catch (e) {
+          toast.error(String(e));
+          pendingManualRefreshUploadsRef.current.delete(uploadKey);
+        }
+      }
     } catch (e) {
       toast.error(String(e));
-      if (uploadKey) {
-        pendingManualRefreshUploadsRef.current.delete(uploadKey);
-      }
+    }
+  };
+
+  const handleUploadFolder = async () => {
+    if (!activeSessionId) return;
+    try {
+      const localDir = await openDialog({ directory: true });
+      if (!localDir || typeof localDir !== "string") return;
+
+      const folderName = localDir.split(/[\\/]/).pop() || "uploaded_folder";
+      const remotePath = currentPath === "/" ? `/${folderName}` : `${currentPath}/${folderName}`;
+
+      await invoke("upload_local_directory", {
+        sessionId: activeSessionId,
+        localPath: localDir,
+        remotePath,
+      });
+      loadDirectory(currentPath);
+    } catch (e) {
+      toast.error(String(e));
     }
   };
 
@@ -446,38 +607,63 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
       className="h-full flex flex-col overflow-hidden"
       style={{ backgroundColor: "var(--df-bg-panel)" }}
     >
-      <div
-        className="p-2 text-[0.625rem] uppercase tracking-wider font-bold border-b flex justify-between items-center"
-        style={{ color: "var(--df-text-muted)", borderColor: "var(--df-border)" }}
-      >
-        <span>{t("panel.fileExplorer")}</span>
-      </div>
+      <PanelHeader title={t("panel.fileExplorer")} />
 
       {activeSessionId && (
         <div
           className="flex items-center px-1.5 py-1 border-b gap-0.5"
           style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
         >
-
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground" onClick={handleNewFile} title={t("fileExplorer.newFile")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+            onClick={handleNewFile}
+            title={t("fileExplorer.newFile")}
+          >
             <MdNoteAdd className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground" onClick={handleNewFolder} title={t("fileExplorer.newFolder")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+            onClick={handleNewFolder}
+            title={t("fileExplorer.newFolder")}
+          >
             <MdCreateNewFolder className="h-4 w-4" />
           </Button>
 
-          <div className="w-px h-4 mx-1" style={{ backgroundColor: "var(--df-border)" }} />
+          <ToolbarDivider />
 
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground" onClick={handleUpload} title={t("fileExplorer.upload")}>
-            <MdUpload className="h-4 w-4" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                title={t("fileExplorer.upload")}
+              >
+                <MdUpload className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-44">
+              <DropdownMenuItem onClick={handleUploadFiles}>
+                <MdUpload className="mr-2 h-4 w-4" />
+                {t("fileExplorer.upload")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleUploadFolder}>
+                <MdDriveFolderUpload className="mr-2 h-4 w-4" />
+                {t("fileExplorer.uploadFolder")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={handleDownloadSelected}
             title={t("fileExplorer.downloadSelected")}
-            disabled={!selectedFile || files.find((f) => f.name === selectedFile)?.is_dir}
+            disabled={selectedFiles.size === 0}
           >
             <MdDownload className="h-4 w-4" />
           </Button>
@@ -486,18 +672,30 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-destructive"
             onClick={handleDeleteSelected}
-            disabled={!selectedFile}
+            disabled={selectedFiles.size === 0}
             title={t("fileExplorer.delete")}
           >
             <MdDelete className="h-4 w-4" />
           </Button>
 
-          <div className="w-px h-4 mx-1" style={{ backgroundColor: "var(--df-border)" }} />
+          <ToolbarDivider />
 
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground" onClick={handleGoUp} title={t("fileExplorer.goUp")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+            onClick={handleGoUp}
+            title={t("fileExplorer.goUp")}
+          >
             <MdArrowUpward className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground" onClick={() => loadDirectory(currentPath)} title={t("fileExplorer.refresh")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+            onClick={() => loadDirectory(currentPath)}
+            title={t("fileExplorer.refresh")}
+          >
             <MdRefresh className="h-4 w-4" />
           </Button>
         </div>
@@ -510,7 +708,7 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
         >
           {isEditingPath ? (
             <input
-              autoFocus
+              ref={pathInputRef}
               className="w-full text-[0.625rem] font-mono bg-transparent outline-none m-0 p-0"
               style={{ color: "var(--df-text)" }}
               value={pathInputText}
@@ -575,14 +773,15 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
                   <FileListItem
                     key={entry.name}
                     entry={entry}
-                    isSelected={selectedFile === entry.name}
+                    isSelected={selectedFiles.has(entry.name)}
                     activeSessionId={activeSessionId}
-                    onSelect={(entry) => setSelectedFile(entry.name)}
+                    onSelect={handleSelect}
                     onItemClick={handleItemClick}
                     onOpenDefault={handleOpenDefault}
                     onRefresh={() => loadDirectory(currentPath)}
-                    onUpload={handleUpload}
-                    onDownload={handleDownload}
+                    onUpload={handleUploadFiles}
+                    onUploadFolder={handleUploadFolder}
+                    onDownload={handleDownloadFromContextMenu}
                     onRename={(entry) => {
                       if (activeSessionId)
                         setRenameDialogData({
@@ -625,10 +824,22 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
               <MdRefresh className="mr-2 h-4 w-4" />
               {t("fileExplorer.refresh")}
             </ContextMenuItem>
-            <ContextMenuItem onClick={handleUpload}>
-              <MdUpload className="mr-2 h-4 w-4" />
-              {t("fileExplorer.upload")}
-            </ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <MdUpload className="mr-2 h-4 w-4" />
+                {t("fileExplorer.cmUpload")}
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-48">
+                <ContextMenuItem onClick={handleUploadFiles}>
+                  <MdUpload className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.upload")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleUploadFolder}>
+                  <MdDriveFolderUpload className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.uploadFolder")}
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleNewFile}>
               <MdNoteAdd className="mr-2 h-4 w-4" />
@@ -674,7 +885,9 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
               <>
                 <span>{t("fileExplorer.totalItems", { count: files.length })}</span>
                 {files.some((f) => !f.is_dir) && (
-                  <span>{formatSize(files.filter((f) => !f.is_dir).reduce((sum, f) => sum + f.size, 0))}</span>
+                  <span>
+                    {formatSize(files.filter((f) => !f.is_dir).reduce((sum, f) => sum + f.size, 0))}
+                  </span>
                 )}
               </>
             )}

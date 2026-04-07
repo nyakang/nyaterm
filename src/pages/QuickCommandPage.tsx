@@ -1,8 +1,11 @@
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd } from "react-icons/md";
+import { QUICK_ICONS } from "@/components/icons";
+import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -12,17 +15,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { QUICK_ICONS } from "@/components/icons";
 import { parseJsonSearchParam } from "@/lib/utils";
 import type { QuickCommand, QuickCommandCategory } from "@/types/global";
-import { invoke } from "@tauri-apps/api/core";
 
 interface QuickCommandsConfig {
   commands: QuickCommand[];
@@ -63,7 +60,7 @@ export default function QuickCommandPage() {
   useEffect(() => {
     invoke<QuickCommandsConfig>("get_quick_commands")
       .then((cfg) => setSavedCategories(cfg.categories || []))
-      .catch(() => { });
+      .catch(() => {});
   }, []);
 
   const filteredCategories = savedCategories.filter((c) =>
@@ -113,14 +110,11 @@ export default function QuickCommandPage() {
   const handleClose = () => getCurrentWindow().close();
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" data-tauri-drag-region>
-      <div className="px-5 py-4 border-b shrink-0" data-tauri-drag-region>
-        <h1 className="text-base font-semibold">
-          {initialData
-            ? t("quickCommands.editCommand")
-            : t("quickCommands.addCommand")}
-        </h1>
-      </div>
+    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground">
+      <ChildWindowHeader
+        title={initialData ? t("quickCommands.editCommand") : t("quickCommands.addCommand")}
+        onClose={handleClose}
+      />
 
       <div className="flex-1 p-5 space-y-5 overflow-y-auto terminal-scroll">
         <div className="flex flex-col sm:flex-row gap-4">
@@ -129,7 +123,9 @@ export default function QuickCommandPage() {
               <Label htmlFor="qc-label" className="text-xs text-muted-foreground">
                 {t("quickCommands.labelName")}
               </Label>
-              {errors.label && <span className="text-[0.6875rem] text-destructive">{errors.label}</span>}
+              {errors.label && (
+                <span className="text-[0.6875rem] text-destructive">{errors.label}</span>
+              )}
             </div>
             <Input
               id="qc-label"
@@ -147,10 +143,13 @@ export default function QuickCommandPage() {
             <Label htmlFor="qc-category" className="text-xs text-muted-foreground">
               {t("quickCommands.category")}
             </Label>
-            <Popover open={showCategoryDropdown} onOpenChange={(open) => {
-              setShowCategoryDropdown(open);
-              if (!open) setCategorySearchQuery("");
-            }}>
+            <Popover
+              open={showCategoryDropdown}
+              onOpenChange={(open) => {
+                setShowCategoryDropdown(open);
+                if (!open) setCategorySearchQuery("");
+              }}
+            >
               <PopoverTrigger asChild>
                 <Button
                   type="button"
@@ -248,19 +247,21 @@ export default function QuickCommandPage() {
         {/* Color Tag & Pinned */}
         <div className="flex flex-col sm:flex-row gap-4 sm:items-end">
           <div className="flex-1 space-y-2">
-            <Label className="text-xs text-muted-foreground">
-              {t("quickCommands.colorTag")}
-            </Label>
+            <Label className="text-xs text-muted-foreground">{t("quickCommands.colorTag")}</Label>
             <div className="flex gap-2 h-9 items-center">
               {THEME_COLORS.map((color) => (
                 <button
                   key={color}
                   type="button"
-                  onClick={() => { setColorTag(color); setIconTag(undefined); }}
-                  className={`w-7 h-7 rounded-full border-2 focus:outline-none transition-all ${colorTag === color && !iconTag
-                    ? "border-foreground scale-110 shadow-sm"
-                    : "border-transparent hover:scale-105"
-                    } ${COLOR_CLASSES[color]}`}
+                  onClick={() => {
+                    setColorTag(color);
+                    setIconTag(undefined);
+                  }}
+                  className={`w-7 h-7 rounded-full border-2 focus:outline-none transition-all ${
+                    colorTag === color && !iconTag
+                      ? "border-foreground scale-110 shadow-sm"
+                      : "border-transparent hover:scale-105"
+                  } ${COLOR_CLASSES[color]}`}
                   title={color}
                 />
               ))}
@@ -288,7 +289,10 @@ export default function QuickCommandPage() {
                       <DropdownMenuItem
                         key={name}
                         className="p-1 cursor-pointer flex items-center justify-center hover:bg-secondary rounded"
-                        onSelect={() => { setIconTag(name); setColorTag("default"); }}
+                        onSelect={() => {
+                          setIconTag(name);
+                          setColorTag("default");
+                        }}
                       >
                         <iconDef.icon className="text-base" style={{ color: iconDef.color }} />
                       </DropdownMenuItem>
@@ -344,7 +348,9 @@ export default function QuickCommandPage() {
             <Label htmlFor="qc-command" className="text-xs text-muted-foreground">
               {t("quickCommands.commandScript")}
             </Label>
-            {errors.command && <span className="text-[0.6875rem] text-destructive">{errors.command}</span>}
+            {errors.command && (
+              <span className="text-[0.6875rem] text-destructive">{errors.command}</span>
+            )}
           </div>
           <Textarea
             id="qc-command"

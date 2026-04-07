@@ -1,6 +1,6 @@
+import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { emit } from "@tauri-apps/api/event";
 import i18n from "../i18n";
 
 interface ChildWindowOptions {
@@ -26,7 +26,9 @@ async function getMainWindow() {
 
 async function getOpenModalChildWindows() {
   const windows = await WebviewWindow.getAll();
-  return windows.filter((window) => window.label !== MAIN_WINDOW_LABEL && isModalChildLabel(window.label));
+  return windows.filter(
+    (window) => window.label !== MAIN_WINDOW_LABEL && isModalChildLabel(window.label),
+  );
 }
 
 async function applyModalWindowState(excludedLabel?: string) {
@@ -39,19 +41,19 @@ async function applyModalWindowState(excludedLabel?: string) {
     : modalWindows;
   const hasModalChild = remainingModalWindows.length > 0;
 
-  await mainWindow.setEnabled(!hasModalChild).catch(() => { });
-  await mainWindow.setFocusable(!hasModalChild).catch(() => { });
+  await mainWindow.setEnabled(!hasModalChild).catch(() => {});
+  await mainWindow.setFocusable(!hasModalChild).catch(() => {});
 
   if (hasModalChild) {
     const topModalWindow = remainingModalWindows[remainingModalWindows.length - 1];
-    await topModalWindow.show().catch(() => { });
-    await topModalWindow.setAlwaysOnTop(true).catch(() => { });
-    await topModalWindow.setFocus().catch(() => { });
+    await topModalWindow.show().catch(() => {});
+    await topModalWindow.setAlwaysOnTop(true).catch(() => {});
+    await topModalWindow.setFocus().catch(() => {});
     return;
   }
 
-  await mainWindow.show().catch(() => { });
-  await mainWindow.setFocus().catch(() => { });
+  await mainWindow.show().catch(() => {});
+  await mainWindow.setFocus().catch(() => {});
 }
 
 export async function syncMainWindowModalState() {
@@ -67,19 +69,19 @@ export async function bounceTopModalWindow() {
   const topModalWindow = modalWindows[modalWindows.length - 1];
   if (!topModalWindow) return;
 
-  await topModalWindow.requestUserAttention(UserAttentionType.Critical).catch(() => { });
-  await topModalWindow.setAlwaysOnTop(true).catch(() => { });
-  await topModalWindow.setFocus().catch(() => { });
+  await topModalWindow.requestUserAttention(UserAttentionType.Critical).catch(() => {});
+  await topModalWindow.setAlwaysOnTop(true).catch(() => {});
+  await topModalWindow.setFocus().catch(() => {});
 }
 
 export async function openChildWindow(opts: ChildWindowOptions) {
   const existing = await WebviewWindow.getByLabel(opts.label);
   if (existing) {
-    await existing.setTitle(opts.title).catch(() => { });
-    await existing.show().catch(() => { });
-    await existing.setAlwaysOnTop(true).catch(() => { });
-    await existing.setFocus().catch(() => { });
-    await syncMainWindowModalState().catch(() => { });
+    await existing.setTitle(opts.title).catch(() => {});
+    await existing.show().catch(() => {});
+    await existing.setAlwaysOnTop(true).catch(() => {});
+    await existing.setFocus().catch(() => {});
+    await syncMainWindowModalState().catch(() => {});
     return existing;
   }
   const parentWindow = await getMainWindow();
@@ -90,14 +92,15 @@ export async function openChildWindow(opts: ChildWindowOptions) {
     height: opts.height ?? 560,
     visible: false,
     center: true,
+    decorations: false,
     resizable: opts.resizable ?? true,
     alwaysOnTop: isModalChildLabel(opts.label),
     parent: parentWindow,
   });
   win.once("tauri://created", () => {
     emit("child-window-opened", { label: opts.label });
-    void win.setAlwaysOnTop(true).catch(() => { });
-    void win.setFocus().catch(() => { });
+    void win.setAlwaysOnTop(true).catch(() => {});
+    void win.setFocus().catch(() => {});
     void syncMainWindowModalState();
   });
   win.once("tauri://destroyed", () => {
@@ -111,7 +114,9 @@ export async function openChildWindow(opts: ChildWindowOptions) {
 }
 
 export function openSettings(tab?: string) {
-  const url = tab ? `index.html?window=settings&tab=${encodeURIComponent(tab)}` : "index.html?window=settings";
+  const url = tab
+    ? `index.html?window=settings&tab=${encodeURIComponent(tab)}`
+    : "index.html?window=settings";
   return openChildWindow({
     label: "settings",
     title: i18n.t("settings.title"),

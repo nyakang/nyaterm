@@ -357,7 +357,34 @@ pub struct AppSettings {
 
 pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     let dir = get_config_dir(app)?;
-    load_json(&dir.join("settings.json"))
+    let mut settings: AppSettings = load_json(&dir.join("settings.json"))?;
+
+    // Migrate "keyManagement" → "securityAuth" in activity bar layout
+    let mut migrated = false;
+    for list in [
+        &mut settings.ui.activity_bar_layout.left_top,
+        &mut settings.ui.activity_bar_layout.left_bottom,
+        &mut settings.ui.activity_bar_layout.right_top,
+        &mut settings.ui.activity_bar_layout.right_bottom,
+    ] {
+        for item in list.iter_mut() {
+            if item == "keyManagement" {
+                *item = "securityAuth".to_string();
+                migrated = true;
+            }
+        }
+    }
+    if let Some(ref mut panel) = settings.ui.active_left_panel {
+        if panel == "keyManagement" {
+            *panel = "securityAuth".to_string();
+            migrated = true;
+        }
+    }
+    if migrated {
+        let _ = save_app_settings(app, &settings);
+    }
+
+    Ok(settings)
 }
 
 pub fn save_app_settings(app: &AppHandle, config: &AppSettings) -> AppResult<()> {

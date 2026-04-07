@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import { MdCloudSync } from "react-icons/md";
+import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { Button } from "@/components/ui/button";
 import { parseJsonSearchParam } from "@/lib/utils";
 
@@ -22,7 +23,7 @@ export default function AutoUploadPage() {
 
   const handleUpload = async (always: boolean) => {
     if (!data) return;
-    
+
     // We emit an event to the main window to update its 'alwaysUploadFilesRef'
     if (always) {
       await emit("auto-upload-decision", {
@@ -42,15 +43,21 @@ export default function AutoUploadPage() {
     } catch (e) {
       console.error("Upload failed", e);
     }
-    
+
     handleClose();
   };
 
   if (!data) return null;
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground" data-tauri-drag-region>
-      <div className="flex-1 p-5 space-y-4" data-tauri-drag-region>
+    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground">
+      <ChildWindowHeader
+        title={t("fileExplorer.fileModified")}
+        icon={<MdCloudSync className="text-base" />}
+        onClose={handleClose}
+      />
+
+      <div className="flex-1 p-5 space-y-4">
         <div className="flex items-center gap-3 pointer-events-none">
           <div
             className="flex items-center justify-center w-8 h-8 rounded-full shrink-0"
