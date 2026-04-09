@@ -23,12 +23,12 @@ import type { Group, SavedConnection } from "@/types/global";
 import { useApp } from "../../context/AppContext";
 import { invoke } from "../../lib/invoke";
 import { logger } from "../../lib/logger";
-import ClearAllDialog from "../dialog/saved-connections/ClearAllDialog";
-import DeleteConnectionDialog from "../dialog/saved-connections/DeleteConnectionDialog";
-import DeleteFolderDialog from "../dialog/saved-connections/DeleteFolderDialog";
-import FolderDialog from "../dialog/saved-connections/FolderDialog";
-import ImportDialog from "../dialog/saved-connections/ImportDialog";
-import RenameConnectionDialog from "../dialog/saved-connections/RenameConnectionDialog";
+import ClearAllDialog from "../dialog/connections/ClearAllDialog";
+import DeleteConnectionDialog from "../dialog/connections/DeleteConnectionDialog";
+import DeleteFolderDialog from "../dialog/connections/DeleteFolderDialog";
+import FolderDialog from "../dialog/connections/FolderDialog";
+import ImportDialog from "../dialog/connections/ImportDialog";
+import RenameConnectionDialog from "../dialog/connections/RenameConnectionDialog";
 import ConnectionItem from "./saved-connections/ConnectionItem";
 import type { SavedConnectionsContextValue } from "./saved-connections/context";
 import {

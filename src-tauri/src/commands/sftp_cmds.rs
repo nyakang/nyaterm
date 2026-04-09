@@ -1,6 +1,6 @@
 use crate::error::AppResult;
-use crate::session::SessionManager;
-use crate::sftp;
+use crate::runtime::SessionManager;
+use crate::ssh::sftp;
 use std::sync::Arc;
 
 #[tauri::command]
