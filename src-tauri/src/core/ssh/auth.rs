@@ -47,6 +47,7 @@ struct OtpRequestPayload {
     request_id: String,
     connection_name: String,
     prompts: Vec<OtpPrompt>,
+    otp_entry_id: Option<String>,
 }
 
 pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> AppResult<SshConfig> {
@@ -123,6 +124,19 @@ pub(super) async fn authenticate_handle(
     password_error: &str,
     key_error: &str,
 ) -> AppResult<()> {
+    authenticate_handle_with_otp(handle, config, app, password_error, key_error, None).await
+}
+
+pub(super) async fn authenticate_handle_with_otp(
+    handle: &mut client::Handle<SshHandler>,
+    config: &SshConfig,
+    app: &AppHandle,
+    password_error: &str,
+    key_error: &str,
+    connection_id: Option<&str>,
+) -> AppResult<()> {
+    let otp_info = connection_id.and_then(|cid| resolve_otp_info(app, cid));
+
     match &config.auth {
         SshAuth::Password { password } => {
             let authenticated = handle
@@ -137,6 +151,7 @@ pub(super) async fn authenticate_handle(
                 &config.name,
                 app,
                 password_error,
+                otp_info.as_ref(),
             )
             .await?;
         }
@@ -166,6 +181,7 @@ pub(super) async fn authenticate_handle(
                 &config.name,
                 app,
                 key_error,
+                otp_info.as_ref(),
             )
             .await?;
         }
@@ -174,14 +190,32 @@ pub(super) async fn authenticate_handle(
     Ok(())
 }
 
+struct OtpAutoFillInfo {
+    otp_id: String,
+    auto_fill: bool,
+}
+
+fn resolve_otp_info(app: &AppHandle, connection_id: &str) -> Option<OtpAutoFillInfo> {
+    let conn = crate::config::load_connection_by_id(app, connection_id).ok()?;
+    let otp_id = conn.otp_id?;
+    Some(OtpAutoFillInfo {
+        otp_id,
+        auto_fill: conn.auto_fill_otp,
+    })
+}
+
 /// Runs the keyboard-interactive auth state machine, emitting `otp-request` events
 /// to the frontend for each `InfoRequest` that contains prompts, and automatically
 /// responding with an empty array for empty `InfoRequest`s.
+///
+/// When `otp_info` is present with `auto_fill == true`, the OTP code is generated
+/// automatically and used as the response without prompting the user.
 async fn finish_keyboard_interactive(
     handle: &mut client::Handle<SshHandler>,
     username: &str,
     connection_name: &str,
     app: &AppHandle,
+    otp_info: Option<&OtpAutoFillInfo>,
 ) -> AppResult<()> {
     let pending_mgr = app
         .try_state::<Arc<PendingAuthManager>>()
@@ -208,6 +242,11 @@ async fn finish_keyboard_interactive(
             } => {
                 let responses = if prompts.is_empty() {
                     Vec::new()
+                } else if let Some(info) = otp_info.filter(|i| i.auto_fill) {
+                    tracing::info!("Auto-filling OTP for keyboard-interactive auth");
+                    let result =
+                        crate::cmd::otp::generate_otp_for_entry(app, &info.otp_id)?;
+                    prompts.iter().map(|_| result.code.clone()).collect()
                 } else {
                     let request_id = uuid::Uuid::new_v4().to_string();
                     let rx = pending_mgr.register(request_id.clone()).await;
@@ -222,6 +261,7 @@ async fn finish_keyboard_interactive(
                                 echo: prompt.echo,
                             })
                             .collect(),
+                        otp_entry_id: otp_info.map(|i| i.otp_id.clone()),
                     };
                     let _ = app.emit("otp-request", &payload);
 
@@ -260,6 +300,7 @@ async fn try_keyboard_interactive_after_partial(
     connection_name: &str,
     app: &AppHandle,
     fallback_error: &str,
+    otp_info: Option<&OtpAutoFillInfo>,
 ) -> AppResult<()> {
     match auth_result {
         client::AuthResult::Success => Ok(()),
@@ -271,7 +312,7 @@ async fn try_keyboard_interactive_after_partial(
                 tracing::info!(
                     "Primary auth partial success, continuing with keyboard-interactive"
                 );
-                finish_keyboard_interactive(handle, username, connection_name, app).await
+                finish_keyboard_interactive(handle, username, connection_name, app, otp_info).await
             } else {
                 Err(AppError::Auth(fallback_error.to_string()))
             }

@@ -239,6 +239,11 @@ impl Totp {
         self.hotp.secret()
     }
 
+    #[inline]
+    pub fn period(&self) -> u64 {
+        self.period
+    }
+
     /// Parses a TOTP configuration from a URI string in the [Key URI Format].
     ///
     /// This function supports URIs of the form:

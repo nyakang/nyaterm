@@ -1,4 +1,4 @@
-use super::auth::{authenticate_handle, load_saved_ssh_config};
+use super::auth::{authenticate_handle, authenticate_handle_with_otp, load_saved_ssh_config};
 use super::client::{build_client_config, connect_with_proxy, SshConfig, SshHandle, SshHandler};
 use super::io::{open_shell_channel, ssh_io_loop};
 use crate::error::AppResult;
@@ -56,12 +56,13 @@ pub async fn create_ssh_session(
     let mut handle =
         connect_with_proxy(&config, Arc::new(build_client_config(&app)), handler).await?;
 
-    authenticate_handle(
+    authenticate_handle_with_otp(
         &mut handle,
         &config,
         &app,
         "Authentication failed: invalid credentials",
         "Authentication failed: key rejected",
+        connection_id.as_deref(),
     )
     .await?;
 

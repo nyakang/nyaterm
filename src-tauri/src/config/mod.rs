@@ -4,6 +4,7 @@
 
 mod connection;
 mod key;
+mod otp;
 mod password;
 mod proxy;
 mod quick_command;
@@ -22,6 +23,8 @@ pub use key::{decrypt_key_pem, load_key_by_id, load_keys, save_keys, KeysConfig,
 pub use password::{
     load_password_by_id, load_passwords, save_passwords, PasswordsConfig, SavedPassword,
 };
+#[allow(unused_imports)]
+pub use otp::{load_otp_entries, load_otp_entry_by_id, save_otp_entries, OtpConfig, OtpEntry};
 #[allow(unused_imports)]
 pub use proxy::{load_proxies, load_proxy_by_id, save_proxies, ProxyConfig};
 #[allow(unused_imports)]

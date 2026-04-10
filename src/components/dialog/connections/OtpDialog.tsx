@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { OtpCodePanel } from "@/components/panel/OtpCodePanel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,6 +23,7 @@ export interface OtpRequest {
   requestId: string;
   connectionName: string;
   prompts: OtpPrompt[];
+  otpEntryId?: string;
 }
 
 interface OtpDialogProps {
@@ -79,6 +81,13 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
     }
   };
 
+  const handleSendToInput = (code: string) => {
+    if (!request) return;
+    const next = [...responses];
+    next[0] = code;
+    setResponses(next);
+  };
+
   return (
     <Dialog
       open={!!request}
@@ -88,34 +97,40 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
     >
       <DialogContent className="max-w-sm" onKeyDown={handleKeyDown}>
         <DialogHeader>
-          <DialogTitle className="text-sm">
-            {t("otp.title")}
-          </DialogTitle>
+          <DialogTitle className="text-sm">{t("otp.title")}</DialogTitle>
           <DialogDescription className="text-xs">
             {t("otp.description", { name: request?.connectionName })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
-          {request?.prompts.map((p, i) => (
-            <div key={i}>
+          {request?.prompts.map((p, promptIndex) => (
+            <div key={`${request.requestId}-${p.prompt}-${p.echo ? "echo" : "masked"}`}>
               <Label className="text-[0.6875rem] text-muted-foreground">
                 {p.prompt.replace(/:\s*$/, "")}
               </Label>
               <Input
-                ref={i === 0 ? firstInputRef : undefined}
+                ref={promptIndex === 0 ? firstInputRef : undefined}
                 className="mt-1 text-xs h-8"
                 type={p.echo ? "text" : "password"}
                 autoComplete="one-time-code"
-                value={responses[i] ?? ""}
+                value={responses[promptIndex] ?? ""}
                 onChange={(e) => {
                   const next = [...responses];
-                  next[i] = e.target.value;
+                  next[promptIndex] = e.target.value;
                   setResponses(next);
                 }}
               />
             </div>
           ))}
+
+          {request?.otpEntryId && (
+            <OtpCodePanel
+              otpEntryId={request.otpEntryId}
+              onSendToInput={handleSendToInput}
+              variant="dialog"
+            />
+          )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">

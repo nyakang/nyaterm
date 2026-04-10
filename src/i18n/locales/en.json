@@ -209,6 +209,10 @@
     "advancedConfig": "Advanced Configuration",
     "proxySelect": "Proxy",
     "noProxy": "No Proxy",
+    "twoFactorAuth": "Two-Factor Authentication",
+    "selectOtp": "OTP Entry",
+    "noOtp": "None",
+    "autoFillOtp": "Auto-fill verification code",
     "connectionSaved": "Connection saved successfully!",
     "cancel": "Cancel",
     "save": "Save",
@@ -686,7 +690,8 @@
   "securityAuth": {
     "title": "Security Authentication",
     "passwords": "Passwords",
-    "keys": "Keys"
+    "keys": "Keys",
+    "otp": "OTP"
   },
   "passwordManager": {
     "title": "Password Manager",
@@ -711,7 +716,39 @@
     "description": "\"{{name}}\" requires additional verification.",
     "submit": "Verify",
     "cancel": "Cancel",
-    "cancelled": "2FA authentication cancelled"
+    "cancelled": "2FA authentication cancelled",
+    "currentCode": "Current Code",
+    "sendToInput": "Send to Input",
+    "copyCode": "Copy Code",
+    "copied": "Copied",
+    "generateCode": "Generate Code",
+    "loadingCode": "Loading code",
+    "expiresIn": "{{seconds}}s remaining",
+    "hotpHint": "Generate on demand. The counter advances each time."
+  },
+  "otpManager": {
+    "title": "OTP Entries",
+    "add": "Add",
+    "noEntries": "No OTP entries",
+    "issuerPlaceholder": "Issuer (e.g. GitHub)",
+    "usernamePlaceholder": "Username (e.g. user@example.com)",
+    "secretPlaceholder": "Secret (Base32)",
+    "secretUnchanged": "Secret unchanged",
+    "advanced": "Advanced Settings",
+    "algorithm": "Algorithm",
+    "digits": "Digits",
+    "period": "Period (seconds)",
+    "counter": "Counter",
+    "deleteTitle": "Delete OTP Entry",
+    "deleteConfirm": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
+    "view": "View",
+    "hide": "Hide",
+    "scanQr": "Scan QR",
+    "showCodes": "Show codes",
+    "hideCodes": "Hide codes",
+    "scanningQr": "Scanning...",
+    "qrImportFailed": "Failed to import from QR code",
+    "selectQrImage": "Select QR Code Image"
   }
 }
 

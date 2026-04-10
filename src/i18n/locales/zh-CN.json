@@ -209,6 +209,10 @@
     "advancedConfig": "高级配置",
     "proxySelect": "代理",
     "noProxy": "不使用代理",
+    "twoFactorAuth": "双因素认证",
+    "selectOtp": "OTP 条目",
+    "noOtp": "无",
+    "autoFillOtp": "自动填入验证码",
     "connectionSaved": "连接保存成功！",
     "cancel": "取消",
     "save": "保存",
@@ -701,7 +705,8 @@
   "securityAuth": {
     "title": "安全认证",
     "passwords": "密码",
-    "keys": "密钥"
+    "keys": "密钥",
+    "otp": "双因素"
   },
   "passwordManager": {
     "title": "密码",
@@ -726,6 +731,38 @@
     "description": "\"{{name}}\" 需要额外的身份验证。",
     "submit": "验证",
     "cancel": "取消",
-    "cancelled": "双因素认证已取消"
+    "cancelled": "双因素认证已取消",
+    "currentCode": "当前验证码",
+    "sendToInput": "发送到输入框",
+    "copyCode": "复制验证码",
+    "copied": "已复制",
+    "generateCode": "生成验证码",
+    "loadingCode": "正在加载验证码",
+    "expiresIn": "剩余 {{seconds}} 秒",
+    "hotpHint": "按需生成验证码，每次生成都会推进计数器。"
+  },
+  "otpManager": {
+    "title": "OTP 条目",
+    "add": "添加",
+    "noEntries": "暂无 OTP 条目",
+    "issuerPlaceholder": "发行方（如 GitHub）",
+    "usernamePlaceholder": "用户名（如 user@example.com）",
+    "secretPlaceholder": "密钥（Base32 编码）",
+    "secretUnchanged": "密钥未更改",
+    "advanced": "高级设置",
+    "algorithm": "算法",
+    "digits": "位数",
+    "period": "时间间隔（秒）",
+    "counter": "计数器",
+    "deleteTitle": "删除 OTP 条目",
+    "deleteConfirm": "确定要删除「{{name}}」吗？此操作无法撤销。",
+    "view": "查看",
+    "hide": "隐藏",
+    "scanQr": "扫描二维码",
+    "showCodes": "显示验证码",
+    "hideCodes": "隐藏验证码",
+    "scanningQr": "扫描中...",
+    "qrImportFailed": "从二维码导入失败",
+    "selectQrImage": "选择二维码图片"
   }
 }

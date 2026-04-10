@@ -51,6 +51,14 @@ pub struct SavedConnection {
     #[serde(default)]
     pub proxy_id: Option<String>,
 
+    /// References an OTP entry for two-factor authentication.
+    #[serde(default)]
+    pub otp_id: Option<String>,
+
+    /// When true, auto-fill the OTP code during keyboard-interactive auth.
+    #[serde(default)]
+    pub auto_fill_otp: bool,
+
     #[serde(default)]
     pub network: ConnectionNetworkSettings,
 }

@@ -95,6 +95,12 @@ pub fn run() {
             cmd::proxy::save_proxy,
             cmd::proxy::delete_proxy,
             cmd::proxy::get_proxy_password,
+            cmd::otp::get_otp_entries,
+            cmd::otp::get_otp_secret_value,
+            cmd::otp::save_otp_entry,
+            cmd::otp::delete_otp_entry,
+            cmd::otp::generate_otp_code,
+            cmd::otp::import_otp_from_qr,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

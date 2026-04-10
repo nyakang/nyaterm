@@ -74,6 +74,8 @@ hex = "0.4"
 urlencoding = "2"
 zip = "8"
 encoding_rs = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
+rqrr = "0.9"
 
 [profile.release]
 lto = true

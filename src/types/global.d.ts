@@ -85,7 +85,36 @@ export interface SavedConnection {
   icon?: string;
   /** References a standalone proxy config by id. */
   proxy_id?: string;
+  /** References an OTP entry for two-factor authentication. */
+  otp_id?: string;
+  /** When true, auto-fill the OTP code during keyboard-interactive auth. */
+  auto_fill_otp?: boolean;
   network?: ConnectionNetworkSettings;
+}
+
+/** Stored OTP entry for two-factor authentication. */
+export interface OtpEntry {
+  id: string;
+  /** "totp" or "hotp". */
+  otp_type: string;
+  issuer: string;
+  username: string;
+  /** Base32-encoded secret (only sent when creating/updating). */
+  secret?: string;
+  algorithm: string;
+  digits: number;
+  /** Time step in seconds (TOTP only). */
+  period: number;
+  /** Counter value (HOTP only). */
+  counter: number;
+  /** True when encrypted secret data exists on disk. */
+  has_secret?: boolean;
+}
+
+/** Result of generating an OTP code. */
+export interface OtpCodeResult {
+  code: string;
+  remainingSeconds: number;
 }
 
 /** Saved tab state for startup restoration. */

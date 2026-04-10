@@ -427,6 +427,8 @@ pub fn import_sessions(app: tauri::AppHandle, file_path: String) -> AppResult<us
             sort_order: 0,
             icon: None,
             proxy_id: None,
+            otp_id: None,
+            auto_fill_otp: false,
             network: Default::default(),
         });
     }
