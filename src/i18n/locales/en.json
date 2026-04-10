@@ -428,8 +428,8 @@
     "folderNamePlaceholder": "New folder...",
     "connectionName": "Connection Name",
     "sortDefault": "Custom Order",
-    "sortNameAsc": "Name A �?Z",
-    "sortNameDesc": "Name Z �?A"
+    "sortNameAsc": "Name A → Z",
+    "sortNameDesc": "Name Z → A"
   },
   "app": {
     "noActiveSessions": "No active sessions",
@@ -714,3 +714,4 @@
     "cancelled": "2FA authentication cancelled"
   }
 }
+
