@@ -57,33 +57,23 @@ export default function AutoUploadPage() {
         onClose={handleClose}
       />
 
-      <div className="flex-1 min-h-0 space-y-4 overflow-y-auto p-4 sm:p-5">
-        <div className="flex items-center gap-3 pointer-events-none">
-          <div
-            className="flex items-center justify-center w-8 h-8 rounded-full shrink-0"
-            style={{ backgroundColor: "color-mix(in srgb, var(--df-primary) 15%, transparent)" }}
-          >
-            <MdCloudSync className="text-[1.125rem] text-primary shrink-0" />
-          </div>
-          <h2 className="min-w-0 text-sm font-semibold">{t("fileExplorer.fileModified")}</h2>
-        </div>
-        <p className="text-xs leading-relaxed min-w-0 mt-1 pointer-events-none text-muted-foreground">
+      <div className="flex-1 min-h-0 overflow-y-auto p-5">
+        <p className="text-[13px] leading-relaxed text-foreground/90">
           {t("fileExplorer.uploadPrompt")}
         </p>
         <div
-          className="mt-2 min-w-0 break-all rounded border bg-black/20 px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap pointer-events-none"
-          style={{ color: "var(--df-text)", borderColor: "var(--df-border)" }}
+          className="mt-3 min-w-0 break-all rounded-md border bg-muted/40 px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-pre-wrap select-text"
           title={data.remotePath}
         >
           {data.remotePath}
         </div>
       </div>
 
-      <div className="flex shrink-0 flex-col-reverse gap-2 border-t bg-muted/20 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
+      <div className="flex shrink-0 flex-row gap-2 border-t bg-muted/20 px-5 py-3 justify-end items-center">
         <Button
           variant="ghost"
           size="sm"
-          className="w-full text-xs sm:w-auto"
+          className="text-xs px-4"
           onClick={handleClose}
         >
           {t("dialog.cancel")}
@@ -91,12 +81,16 @@ export default function AutoUploadPage() {
         <Button
           variant="outline"
           size="sm"
-          className="w-full text-xs sm:flex-1"
+          className="text-xs px-4"
           onClick={() => handleUpload(true)}
         >
           {t("fileExplorer.alwaysUpload")}
         </Button>
-        <Button size="sm" className="w-full text-xs sm:flex-1" onClick={() => handleUpload(false)}>
+        <Button
+          size="sm"
+          className="text-xs px-4"
+          onClick={() => handleUpload(false)}
+        >
           {t("fileExplorer.uploadOnce")}
         </Button>
       </div>

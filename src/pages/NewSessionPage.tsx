@@ -627,18 +627,18 @@ export default function NewSessionPage() {
       </Tabs>
 
       {/* Footer */}
-      <div className="flex shrink-0 flex-col-reverse gap-2 border-t px-4 py-3 sm:flex-row sm:justify-end sm:px-5">
+      <div className="flex shrink-0 flex-row gap-2 border-t px-5 py-3 justify-end items-center">
         <Button
           variant="ghost"
           size="sm"
-          className="w-full text-xs sm:w-auto"
+          className="text-xs px-4"
           onClick={handleClose}
         >
           {t("dialog.cancel")}
         </Button>
         <Button
           size="sm"
-          className="w-full text-xs sm:w-auto"
+          className="text-xs px-4"
           onClick={handleSave}
           disabled={
             connecting ||

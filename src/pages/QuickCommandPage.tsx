@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { parseJsonSearchParam } from "@/lib/utils";
 import type { QuickCommand, QuickCommandCategory } from "@/types/global";
@@ -245,9 +246,9 @@ export default function QuickCommandPage() {
         </div>
 
         {/* Color Tag & Pinned */}
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
-          <div className="min-w-0 flex-1 space-y-2">
-            <Label className="text-xs text-muted-foreground">{t("quickCommands.colorTag")}</Label>
+        <div className="flex flex-row items-center gap-4 border p-2 rounded-md bg-muted/20">
+          <div className="min-w-0 flex-1 space-y-1">
+            <Label className="text-[0.6875rem] text-muted-foreground">{t("quickCommands.colorTag")}</Label>
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {THEME_COLORS.map((color) => (
                 <button
@@ -257,7 +258,7 @@ export default function QuickCommandPage() {
                     setColorTag(color);
                     setIconTag(undefined);
                   }}
-                  className={`w-7 h-7 rounded-full border-2 focus:outline-none transition-all ${
+                  className={`w-6 h-6 rounded-full border-2 focus:outline-none transition-all ${
                     colorTag === color && !iconTag
                       ? "border-foreground scale-110 shadow-sm"
                       : "border-transparent hover:scale-105"
@@ -266,10 +267,10 @@ export default function QuickCommandPage() {
                 />
               ))}
               {iconTag && QUICK_ICONS[iconTag] && (
-                <div className="w-7 h-7 rounded-full border-2 border-foreground scale-110 shadow-sm flex items-center justify-center bg-secondary">
+                <div className="w-6 h-6 rounded-full border-2 border-foreground scale-110 shadow-sm flex items-center justify-center bg-secondary">
                   {(() => {
                     const iconDef = QUICK_ICONS[iconTag];
-                    return <iconDef.icon className="text-sm" style={{ color: iconDef.color }} />;
+                    return <iconDef.icon className="text-xs" style={{ color: iconDef.color }} />;
                   })()}
                 </div>
               )}
@@ -277,10 +278,10 @@ export default function QuickCommandPage() {
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="w-7 h-7 rounded-full border-2 border-dashed border-muted-foreground/50 hover:border-foreground flex items-center justify-center transition-all hover:scale-110 ml-1"
+                    className="w-6 h-6 rounded-full border-2 border-dashed border-muted-foreground/50 hover:border-foreground flex items-center justify-center transition-all hover:scale-110 ml-1"
                     title={t("quickCommands.selectIcon")}
                   >
-                    <MdAdd className="text-sm" />
+                    <MdAdd className="text-xs" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="p-2 w-48">
@@ -302,11 +303,11 @@ export default function QuickCommandPage() {
               </DropdownMenu>
             </div>
           </div>
-          <div className="flex items-center gap-2 lg:flex-1 lg:justify-end lg:pb-1">
-            <Switch checked={pinned} onCheckedChange={setPinned} id="qc-pinned" />
-            <Label htmlFor="qc-pinned" className="text-sm cursor-pointer select-none">
+          <div className="flex flex-col items-end gap-1.5 shrink-0 pl-4 border-l">
+            <Label htmlFor="qc-pinned" className="text-[0.6875rem] text-muted-foreground mr-1 cursor-pointer select-none">
               {t("quickCommands.pin")}
             </Label>
+            <Switch checked={pinned} onCheckedChange={setPinned} id="qc-pinned" className="mr-1" />
           </div>
         </div>
 
@@ -315,27 +316,21 @@ export default function QuickCommandPage() {
           <Label className="text-xs text-muted-foreground">
             {t("quickCommands.executionMode")}
           </Label>
-          <div className="flex flex-col gap-1 rounded-md border bg-muted/40 p-1 sm:flex-row sm:items-center">
-            <Button
-              type="button"
-              variant={executionMode === "execute" ? "secondary" : "ghost"}
-              size="sm"
-              className={`flex-1 text-sm h-8 ${executionMode === "execute" ? "shadow-sm" : ""}`}
-              onClick={() => setExecutionMode("execute")}
-            >
-              {t("quickCommands.executeImmediately")}
-            </Button>
-            <Button
-              type="button"
-              variant={executionMode === "append" ? "secondary" : "ghost"}
-              size="sm"
-              className={`flex-1 text-sm h-8 ${executionMode === "append" ? "shadow-sm" : ""}`}
-              onClick={() => setExecutionMode("append")}
-            >
-              {t("quickCommands.appendOnly")}
-            </Button>
-          </div>
-          <p className="text-[0.6875rem] text-muted-foreground pl-1">
+          <Tabs
+            value={executionMode}
+            onValueChange={(val) => setExecutionMode(val as "execute" | "append")}
+            className="w-full"
+          >
+            <TabsList className="grid w-full grid-cols-2 h-8">
+              <TabsTrigger value="execute" className="text-xs">
+                {t("quickCommands.executeImmediately")}
+              </TabsTrigger>
+              <TabsTrigger value="append" className="text-xs">
+                {t("quickCommands.appendOnly")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <p className="text-[0.6875rem] text-muted-foreground pl-1 mt-1">
             {executionMode === "execute"
               ? t("quickCommands.executeHint")
               : t("quickCommands.appendHint")}
@@ -373,16 +368,16 @@ export default function QuickCommandPage() {
       </div>
 
       {/* Footer */}
-      <div className="flex shrink-0 flex-col-reverse gap-2 border-t bg-muted/20 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
+      <div className="flex shrink-0 flex-row gap-2 border-t px-5 py-3 justify-end items-center">
         <Button
           variant="ghost"
           size="sm"
-          className="h-9 w-full px-4 text-sm sm:w-auto"
+          className="text-xs px-4"
           onClick={handleClose}
         >
           {t("dialog.cancel")}
         </Button>
-        <Button size="sm" className="h-9 w-full px-4 text-sm sm:w-auto" onClick={handleSave}>
+        <Button size="sm" className="text-xs px-4" onClick={handleSave}>
           {t("dialog.save")}
         </Button>
       </div>

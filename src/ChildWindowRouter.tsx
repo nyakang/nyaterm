@@ -6,7 +6,7 @@ import { isModalChildLabel, prepareForModalChildClose } from "./lib/windowManage
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const NewSessionPage = lazy(() => import("./pages/NewSessionPage"));
 const QuickCommandPage = lazy(() => import("./pages/QuickCommandPage"));
-const AutoUploadPage = lazy(() => import("./pages/AutoUploadPage"));
+const AutoUploadPage = lazy(() => import("./pages/FileUploadPage"));
 
 const PAGES: Record<string, React.ComponentType<any>> = {
   settings: SettingsPage,
