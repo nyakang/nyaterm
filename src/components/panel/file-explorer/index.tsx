@@ -4,7 +4,7 @@ import { downloadDir, join, tempDir } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionInfo } from "@/types/global";
 import {
@@ -86,6 +86,23 @@ function ToolbarDivider() {
       className="mx-1 h-3 w-px shrink-0 rounded-full"
       style={{ backgroundColor: "var(--df-border)" }}
     />
+  );
+}
+
+type ToolbarIconButtonProps = ComponentProps<typeof Button> & {
+  label: string;
+};
+
+function ToolbarIconButton({ label, children, ...props }: ToolbarIconButtonProps) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button aria-label={label} type="button" {...props}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -669,38 +686,44 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
           className="flex items-center px-1.5 py-1 border-b gap-0.5"
           style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
         >
-          <Button
+          <ToolbarIconButton
+            label={t("fileExplorer.newFile")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={handleNewFile}
-            title={t("fileExplorer.newFile")}
           >
             <MdNoteAdd className="h-4 w-4" />
-          </Button>
-          <Button
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label={t("fileExplorer.newFolder")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={handleNewFolder}
-            title={t("fileExplorer.newFolder")}
           >
             <MdCreateNewFolder className="h-4 w-4" />
-          </Button>
+          </ToolbarIconButton>
 
           <ToolbarDivider />
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
-                title={t("fileExplorer.upload")}
-              >
-                <MdUpload className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    aria-label={t("fileExplorer.upload")}
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                  >
+                    <MdUpload className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">{t("fileExplorer.upload")}</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="start" className="min-w-44">
               <DropdownMenuItem onClick={handleUploadFiles}>
                 <MdUpload className="mr-2 h-4 w-4" />
@@ -712,47 +735,47 @@ export default function FileExplorer({ activeSessionId }: FileExplorerProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
+          <ToolbarIconButton
+            label={t("fileExplorer.downloadSelected")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={handleDownloadSelected}
-            title={t("fileExplorer.downloadSelected")}
             disabled={selectedFiles.size === 0}
           >
             <MdDownload className="h-4 w-4" />
-          </Button>
-          <Button
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label={t("fileExplorer.delete")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-destructive"
             onClick={handleDeleteSelected}
             disabled={selectedFiles.size === 0}
-            title={t("fileExplorer.delete")}
           >
             <MdDelete className="h-4 w-4" />
-          </Button>
+          </ToolbarIconButton>
 
           <ToolbarDivider />
 
-          <Button
+          <ToolbarIconButton
+            label={t("fileExplorer.goUp")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={handleGoUp}
-            title={t("fileExplorer.goUp")}
           >
             <MdArrowUpward className="h-4 w-4" />
-          </Button>
-          <Button
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label={t("fileExplorer.refresh")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={() => loadDirectory(currentPath)}
-            title={t("fileExplorer.refresh")}
           >
             <MdRefresh className="h-4 w-4" />
-          </Button>
+          </ToolbarIconButton>
         </div>
       )}
 
