@@ -52,27 +52,56 @@ struct OtpRequestPayload {
 
 pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> AppResult<SshConfig> {
     let conn = crate::config::load_connection_by_id(app, connection_id)?;
-    let proxy = resolve_proxy(app, &conn)?;
+    resolve_saved_ssh_config(app, &conn, Some(connection_id.to_string()), true)
+}
 
-    let (host, port, username) = match &conn.config {
+fn resolve_saved_ssh_config(
+    app: &AppHandle,
+    conn: &crate::config::SavedConnection,
+    connection_id: Option<String>,
+    include_proxy_jump: bool,
+) -> AppResult<SshConfig> {
+    let proxy = resolve_proxy(app, conn)?;
+    let (host, port, username) = resolve_ssh_target(conn)?;
+    let auth = resolve_auth(app, conn)?;
+    let proxy_jump = if include_proxy_jump {
+        resolve_proxy_jump(app, conn)?
+    } else {
+        None
+    };
+
+    Ok(SshConfig {
+        connection_id,
+        name: conn.name.clone(),
+        host,
+        port,
+        username,
+        auth,
+        proxy,
+        proxy_jump,
+    })
+}
+
+fn resolve_ssh_target(conn: &crate::config::SavedConnection) -> AppResult<(String, u16, String)> {
+    match &conn.config {
         crate::config::ConnectionType::Ssh {
             host,
             port,
             username,
-        } => (host.clone(), *port, username.clone()),
-        _ => {
-            return Err(AppError::Auth(
-                "Connection is not an SSH connection".to_string(),
-            ))
-        }
-    };
+        } => Ok((host.clone(), *port, username.clone())),
+        _ => Err(AppError::Auth(
+            "Connection is not an SSH connection".to_string(),
+        )),
+    }
+}
 
+fn resolve_auth(app: &AppHandle, conn: &crate::config::SavedConnection) -> AppResult<SshAuth> {
     let conn_auth = conn
         .auth
         .as_ref()
         .ok_or_else(|| AppError::Auth("No auth config for SSH connection".to_string()))?;
 
-    let auth = match conn_auth.mode.as_str() {
+    match conn_auth.mode.as_str() {
         "password" => {
             let pw_id = conn_auth
                 .password_id
@@ -82,7 +111,7 @@ pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> App
             let password = pw_entry
                 .password
                 .ok_or_else(|| AppError::Auth("No stored password".to_string()))?;
-            SshAuth::Password { password }
+            Ok(SshAuth::Password { password })
         }
         "key" => {
             let key_id = conn_auth
@@ -92,22 +121,51 @@ pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> App
             let ssh_key = crate::config::load_key_by_id(app, key_id)?;
             let key_data = crate::config::decrypt_key_pem(&ssh_key)?
                 .ok_or_else(|| AppError::Auth("No key data stored".to_string()))?;
-            SshAuth::Key {
+            Ok(SshAuth::Key {
                 key_data,
                 passphrase: ssh_key.passphrase,
-            }
+            })
         }
-        other => return Err(AppError::Auth(format!("Unknown auth type: {}", other))),
+        other => Err(AppError::Auth(format!("Unknown auth type: {}", other))),
+    }
+}
+
+fn resolve_proxy_jump(
+    app: &AppHandle,
+    conn: &crate::config::SavedConnection,
+) -> AppResult<Option<Box<SshConfig>>> {
+    let proxy_jump_id = conn
+        .network
+        .as_ref()
+        .and_then(|network| network.proxy_jump_id.as_deref());
+
+    let Some(proxy_jump_id) = proxy_jump_id else {
+        return Ok(None);
     };
 
-    Ok(SshConfig {
-        name: conn.name,
-        host,
-        port,
-        username,
-        auth,
-        proxy,
-    })
+    let jump_conn = crate::config::load_connection_by_id(app, proxy_jump_id)?;
+    if !matches!(jump_conn.config, crate::config::ConnectionType::Ssh { .. }) {
+        return Err(AppError::Config(
+            "Only SSH connections can be used as jump hosts".to_string(),
+        ));
+    }
+    if jump_conn
+        .network
+        .as_ref()
+        .and_then(|network| network.proxy_jump_id.as_deref())
+        .is_some()
+    {
+        return Err(AppError::Config(
+            "Jump hosts cannot use another jump host".to_string(),
+        ));
+    }
+
+    Ok(Some(Box::new(resolve_saved_ssh_config(
+        app,
+        &jump_conn,
+        Some(proxy_jump_id.to_string()),
+        false,
+    )?)))
 }
 
 fn resolve_proxy(
@@ -144,18 +202,10 @@ pub(super) async fn authenticate_handle(
     password_error: &str,
     key_error: &str,
 ) -> AppResult<()> {
-    authenticate_handle_with_otp(handle, config, app, password_error, key_error, None).await
-}
-
-pub(super) async fn authenticate_handle_with_otp(
-    handle: &mut client::Handle<SshHandler>,
-    config: &SshConfig,
-    app: &AppHandle,
-    password_error: &str,
-    key_error: &str,
-    connection_id: Option<&str>,
-) -> AppResult<()> {
-    let otp_info = connection_id.and_then(|cid| resolve_otp_info(app, cid));
+    let otp_info = config
+        .connection_id
+        .as_deref()
+        .and_then(|connection_id| resolve_otp_info(app, connection_id));
 
     match &config.auth {
         SshAuth::Password { password } => {

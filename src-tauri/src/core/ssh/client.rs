@@ -18,6 +18,8 @@ pub struct SshConfig {
     pub auth: SshAuth,
     #[serde(default)]
     pub proxy: Option<crate::config::ProxySettings>,
+    #[serde(default)]
+    pub proxy_jump: Option<Box<SshConfig>>,
 }
 
 /// Authentication method: password or key (with optional passphrase).
@@ -227,4 +229,17 @@ pub(super) async fn connect_with_proxy(
     .map_err(|error| AppError::Auth(format!("SSH connection failed: {}", error)))?;
 
     Ok(handle)
+}
+
+pub(super) async fn connect_via_stream<S>(
+    stream: S,
+    ssh_config: Arc<client::Config>,
+    handler: SshHandler,
+) -> AppResult<client::Handle<SshHandler>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    client::connect_stream(ssh_config, stream, handler)
+        .await
+        .map_err(|error| AppError::Auth(format!("SSH connection failed: {}", error)))
 }
