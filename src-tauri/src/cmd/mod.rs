@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod connection;
 pub mod importer;
+pub mod log;
 pub mod otp;
 pub mod proxy;
 pub mod session;

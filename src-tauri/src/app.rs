@@ -15,8 +15,8 @@ pub fn init_tracing(log_dir: std::path::PathBuf) {
         .build(&log_dir)
         .expect("failed to initialize rolling file appender");
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("dragonfly=info,warn"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("dragonfly=info,user_action=debug,warn"));
 
     let local_time = fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| {
         fmt::time::OffsetTime::new(
