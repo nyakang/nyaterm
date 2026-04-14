@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdFolder, MdInsertDriveFile, MdRefresh } from "react-icons/md";
@@ -13,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { invoke } from "@/lib/invoke";
 
 export interface PropertiesDialogData {
   sessionId: string;
@@ -105,11 +105,11 @@ export default function PropertiesDialog({ data, onClose }: PropertiesDialogProp
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
-    invoke("get_file_properties", {
+    invoke<FileProperties>("get_file_properties", {
       sessionId: data.sessionId,
       path: data.fullPath,
     })
-      .then((props: any) => {
+      .then((props) => {
         if (isMounted) {
           setProperties(props);
           setOctal(parsePermissionsToOctal(props.permissions));
@@ -152,7 +152,7 @@ export default function PropertiesDialog({ data, onClose }: PropertiesDialogProp
       if (!chars[i]) chars[i] = "0";
     }
     let val = parseInt(chars[index], 8);
-    if (isNaN(val)) val = 0;
+    if (Number.isNaN(val)) val = 0;
     if (checked) val |= bit;
     else val &= ~bit;
     chars[index] = val.toString(8);
@@ -214,48 +214,58 @@ export default function PropertiesDialog({ data, onClose }: PropertiesDialogProp
                 </h3>
                 <div className="space-y-2.5 text-xs text-left">
                   {[
-                    [t("fileExplorer.type"), getFileType()],
-                    [
-                      t("fileExplorer.location"),
-                      <span
-                        key="loc"
-                        className="truncate break-all select-all font-mono"
-                        title={getLocation()}
-                      >
-                        {getLocation()}
-                      </span>,
-                    ],
-                    [t("fileExplorer.size"), formatSize(properties.size)],
-                    [
-                      t("fileExplorer.mtime"),
-                      <span key="mt" className="font-mono">
-                        {formatTime(properties.mtime)}
-                      </span>,
-                    ],
-                    [
-                      t("fileExplorer.atime"),
-                      <span key="at" className="font-mono">
-                        {formatTime(properties.atime)}
-                      </span>,
-                    ],
-                    [
-                      t("fileExplorer.owner"),
-                      <span key="ow">
-                        {properties.owner}{" "}
-                        <span className="font-mono opacity-70">[{properties.uid}]</span>
-                      </span>,
-                    ],
-                    [
-                      t("fileExplorer.group"),
-                      <span key="gr">
-                        {properties.group}{" "}
-                        <span className="font-mono opacity-70">[{properties.gid}]</span>
-                      </span>,
-                    ],
-                  ].map(([label, value], i) => (
-                    <div key={i} className="flex items-start">
-                      <span className="w-24 shrink-0 text-muted-foreground">{label}:</span>
-                      <span>{value}</span>
+                    { key: "type", label: t("fileExplorer.type"), value: getFileType() },
+                    {
+                      key: "location",
+                      label: t("fileExplorer.location"),
+                      value: (
+                        <span
+                          className="truncate break-all select-all font-mono"
+                          title={getLocation()}
+                        >
+                          {getLocation()}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "size",
+                      label: t("fileExplorer.size"),
+                      value: formatSize(properties.size),
+                    },
+                    {
+                      key: "mtime",
+                      label: t("fileExplorer.mtime"),
+                      value: <span className="font-mono">{formatTime(properties.mtime)}</span>,
+                    },
+                    {
+                      key: "atime",
+                      label: t("fileExplorer.atime"),
+                      value: <span className="font-mono">{formatTime(properties.atime)}</span>,
+                    },
+                    {
+                      key: "owner",
+                      label: t("fileExplorer.owner"),
+                      value: (
+                        <span>
+                          {properties.owner}{" "}
+                          <span className="font-mono opacity-70">[{properties.uid}]</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "group",
+                      label: t("fileExplorer.group"),
+                      value: (
+                        <span>
+                          {properties.group}{" "}
+                          <span className="font-mono opacity-70">[{properties.gid}]</span>
+                        </span>
+                      ),
+                    },
+                  ].map((row) => (
+                    <div key={row.key} className="flex items-start">
+                      <span className="w-24 shrink-0 text-muted-foreground">{row.label}:</span>
+                      <span>{row.value}</span>
                     </div>
                   ))}
                 </div>
@@ -332,7 +342,9 @@ export default function PropertiesDialog({ data, onClose }: PropertiesDialogProp
                             <label className="flex items-center justify-center gap-1.5 cursor-pointer text-[0.625rem]">
                               <Checkbox
                                 checked={hasBit(row.sIdx, row.sBit)}
-                                onCheckedChange={(checked) => updateBit(row.sIdx, row.sBit, checked === true)}
+                                onCheckedChange={(checked) =>
+                                  updateBit(row.sIdx, row.sBit, checked === true)
+                                }
                               />
                               {row.sLabel}
                             </label>
@@ -344,9 +356,7 @@ export default function PropertiesDialog({ data, onClose }: PropertiesDialogProp
                 </div>
 
                 <div className="flex items-center justify-between mt-4">
-                  <span className="text-xs text-muted-foreground">
-                    {t("fileExplorer.octal")}:
-                  </span>
+                  <span className="text-xs text-muted-foreground">{t("fileExplorer.octal")}:</span>
                   <div className="flex items-center">
                     <span className="text-xs font-mono mr-2 opacity-50">0</span>
                     <Input
