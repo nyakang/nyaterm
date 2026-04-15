@@ -44,7 +44,7 @@ tokio = { version = "1", features = [
     "time",
     "fs",
 ] }
-russh = "0.60"
+russh = { version = "0.60", features = ["des"] }
 russh-sftp = "2.1.1"
 ssh-key = { version = "0.6", features = ["std"] }
 portable-pty = "0.8"
