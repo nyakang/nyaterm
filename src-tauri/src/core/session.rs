@@ -205,10 +205,24 @@ impl SessionManager {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
 
-                {
+                let pending = {
                     let mut store = history_store.lock().await;
-                    if let Err(err) = store.save() {
-                        tracing::warn!("Failed to save command history: {}", err);
+                    store.prepare_save()
+                };
+
+                if let Some((path, bytes)) = pending {
+                    let write_result = tokio::task::spawn_blocking(move || {
+                        super::history::flush_to_disk(&path, &bytes)
+                    })
+                    .await;
+                    match write_result {
+                        Ok(Err(err)) => {
+                            tracing::warn!("Failed to save command history: {}", err);
+                        }
+                        Err(err) => {
+                            tracing::warn!("History save task panicked: {}", err);
+                        }
+                        _ => {}
                     }
                 }
 

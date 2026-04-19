@@ -22,7 +22,7 @@ pub struct FuzzyResult {
 /// `value` is stored as `command` in the result (used when filling/executing).
 /// `source` tags every result so the frontend can distinguish providers.
 pub fn fuzzy_search_items(
-    items: &[(String, String)],
+    items: &[(&str, &str)],
     pattern_str: &str,
     source: &str,
     limit: usize,
@@ -67,11 +67,11 @@ pub fn fuzzy_search_items(
         indices.dedup();
 
         results.push(FuzzyResult {
-            command: value.clone(),
+            command: (*value).to_string(),
             score,
             indices,
             source: source.to_string(),
-            display: display.clone(),
+            display: (*display).to_string(),
         });
     }
 

@@ -1,5 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppSettings, Group, SavedConnection, UiConfig } from "@/types/global";
 import i18n from "../i18n";
 import { invoke } from "../lib/invoke";
@@ -170,46 +170,64 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const noop = useCallback(() => {}, []);
   const noopString = useCallback(() => "", []);
   const noopAsync = useCallback(async () => {}, []);
+  const noopSplitPane = useCallback(() => null, []);
+
+  const emptyConnections = useMemo(() => [] as SavedConnection[], []);
+  const emptyGroups = useMemo(() => [] as Group[], []);
+
+  const contextValue = useMemo(
+    () => ({
+      tabs: [] as never[],
+      activeTabId: null,
+      setActiveTabId: noop,
+      addTab: noopString,
+      addPendingTab: noopString,
+      updateTabSession: noop,
+      markTabConnectionFailed: noop,
+      updatePaneSession: noop,
+      markPaneConnectionFailed: noop,
+      markPaneConnecting: noop,
+      setActivePane: noop,
+      updateSplitRatio: noop,
+      splitPane: noopSplitPane,
+      closePane: noop,
+      reorderTabs: noop,
+      updateTab: noopAsync,
+      closeTabs: noop,
+      closeTab: noop,
+      persistTabsNow: noopAsync,
+      appSettings,
+      updateAppSettings,
+      updateUi,
+      savedConnections: emptyConnections,
+      savedGroups: emptyGroups,
+      refreshConnections: noopAsync,
+      showNewSession: false,
+      setShowNewSession: noop,
+      editingConnection: undefined,
+      setEditingConnection: noop,
+      showSettingsDialog: false,
+      setShowSettingsDialog: noop,
+      isLocked: false,
+      setIsLocked: noop,
+      settingsLoaded,
+    }),
+    [
+      noop,
+      noopString,
+      noopAsync,
+      noopSplitPane,
+      emptyConnections,
+      emptyGroups,
+      appSettings,
+      updateAppSettings,
+      updateUi,
+      settingsLoaded,
+    ],
+  );
 
   return (
-    <AppContext.Provider
-      value={{
-        tabs: [],
-        activeTabId: null,
-        setActiveTabId: noop,
-        addTab: noopString,
-        addPendingTab: noopString,
-        updateTabSession: noop,
-        markTabConnectionFailed: noop,
-        updatePaneSession: noop,
-        markPaneConnectionFailed: noop,
-        markPaneConnecting: noop,
-        setActivePane: noop,
-        updateSplitRatio: noop,
-        splitPane: () => null,
-        closePane: noop,
-        reorderTabs: noop,
-        updateTab: noopAsync,
-        closeTabs: noop,
-        closeTab: noop,
-        persistTabsNow: noopAsync,
-        appSettings,
-        updateAppSettings,
-        updateUi,
-        savedConnections: [] as SavedConnection[],
-        savedGroups: [] as Group[],
-        refreshConnections: noopAsync,
-        showNewSession: false,
-        setShowNewSession: noop,
-        editingConnection: undefined,
-        setEditingConnection: noop,
-        showSettingsDialog: false,
-        setShowSettingsDialog: noop,
-        isLocked: false,
-        setIsLocked: noop,
-        settingsLoaded,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

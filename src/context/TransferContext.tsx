@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { invoke } from "@/lib/invoke";
 
@@ -50,15 +50,18 @@ interface TransferEventPayload {
 }
 
 export function TransferProvider({ children }: { children: ReactNode }) {
-  const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const [transferMap, setTransferMap] = useState<Map<string, TransferItem>>(() => new Map());
+
+  const transfers = useMemo(() => Array.from(transferMap.values()), [transferMap]);
 
   useEffect(() => {
     const unlisten = listen<TransferEventPayload>("transfer-event", (e) => {
       const p = e.payload;
 
       if (p.status === "started") {
-        setTransfers((prev) => [
-          {
+        setTransferMap((prev) => {
+          const next = new Map(prev);
+          next.set(p.id, {
             id: p.id,
             sessionId: p.session_id,
             fileName: p.file_name,
@@ -70,76 +73,27 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             bytesTransferred: 0,
             totalSize: p.total_size,
             timestamp: Date.now(),
-          },
-          ...prev,
-        ]);
-      } else if (p.status === "progress") {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === p.id
-              ? {
-                  ...t,
-                  bytesTransferred: p.bytes_transferred,
-                  totalSize: p.total_size,
-                }
-              : t,
-          ),
-        );
-      } else if (p.status === "paused") {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === p.id
-              ? {
-                  ...t,
-                  status: "paused",
-                  bytesTransferred: p.bytes_transferred,
-                  totalSize: p.total_size,
-                }
-              : t,
-          ),
-        );
-      } else if (p.status === "resumed") {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === p.id
-              ? {
-                  ...t,
-                  status: "transferring",
-                  bytesTransferred: p.bytes_transferred,
-                  totalSize: p.total_size,
-                }
-              : t,
-          ),
-        );
-      } else if (p.status === "cancelled") {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === p.id
-              ? {
-                  ...t,
-                  status: "cancelled",
-                  bytesTransferred: p.bytes_transferred,
-                  totalSize: p.total_size,
-                  error: undefined,
-                }
-              : t,
-          ),
-        );
+          });
+          return next;
+        });
       } else {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === p.id
-              ? {
-                  ...t,
-                  status: p.status as TransferStatus,
-                  size: p.size,
-                  bytesTransferred: p.bytes_transferred,
-                  totalSize: p.total_size,
-                  error: p.error_msg,
-                }
-              : t,
-          ),
-        );
+        setTransferMap((prev) => {
+          const existing = prev.get(p.id);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          if (p.status === "progress") {
+            next.set(p.id, { ...existing, bytesTransferred: p.bytes_transferred, totalSize: p.total_size });
+          } else if (p.status === "paused") {
+            next.set(p.id, { ...existing, status: "paused", bytesTransferred: p.bytes_transferred, totalSize: p.total_size });
+          } else if (p.status === "resumed") {
+            next.set(p.id, { ...existing, status: "transferring", bytesTransferred: p.bytes_transferred, totalSize: p.total_size });
+          } else if (p.status === "cancelled") {
+            next.set(p.id, { ...existing, status: "cancelled", bytesTransferred: p.bytes_transferred, totalSize: p.total_size, error: undefined });
+          } else {
+            next.set(p.id, { ...existing, status: p.status as TransferStatus, size: p.size, bytesTransferred: p.bytes_transferred, totalSize: p.total_size, error: p.error_msg });
+          }
+          return next;
+        });
       }
     });
 
@@ -149,15 +103,26 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearCompleted = useCallback(() => {
-    setTransfers((prev) => prev.filter((t) => t.status !== "completed"));
+    setTransferMap((prev) => {
+      const next = new Map(prev);
+      for (const [id, t] of prev) {
+        if (t.status === "completed") next.delete(id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
   }, []);
 
   const clearAll = useCallback(() => {
-    setTransfers([]);
+    setTransferMap(new Map());
   }, []);
 
   const removeTransfer = useCallback((id: string) => {
-    setTransfers((prev) => prev.filter((item) => item.id !== id));
+    setTransferMap((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
   }, []);
 
   const pauseTransfer = useCallback(async (id: string) => {
@@ -204,19 +169,22 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const contextValue = useMemo(
+    () => ({
+      transfers,
+      clearCompleted,
+      clearAll,
+      removeTransfer,
+      pauseTransfer,
+      resumeTransfer,
+      cancelTransfer,
+      retryTransfer,
+    }),
+    [transfers, clearCompleted, clearAll, removeTransfer, pauseTransfer, resumeTransfer, cancelTransfer, retryTransfer],
+  );
+
   return (
-    <TransferContext.Provider
-      value={{
-        transfers,
-        clearCompleted,
-        clearAll,
-        removeTransfer,
-        pauseTransfer,
-        resumeTransfer,
-        cancelTransfer,
-        retryTransfer,
-      }}
-    >
+    <TransferContext.Provider value={contextValue}>
       {children}
     </TransferContext.Provider>
   );

@@ -204,13 +204,15 @@ impl RecordingManager {
     }
 
     pub fn stop(&self, session_id: &str) -> AppResult<String> {
-        let mut recordings = self.recordings.lock().unwrap();
-        if let Some(mut state) = recordings.remove(session_id) {
-            state.finish();
-            Ok(state.file_path.to_string_lossy().to_string())
-        } else {
-            Err(AppError::Config("No active recording".to_string()))
-        }
+        let mut state = {
+            let mut recordings = self.recordings.lock().unwrap();
+            recordings
+                .remove(session_id)
+                .ok_or_else(|| AppError::Config("No active recording".to_string()))?
+        };
+        // finish() flushes to disk -- run outside the mutex to minimize lock hold time
+        state.finish();
+        Ok(state.file_path.to_string_lossy().to_string())
     }
 
     pub fn is_recording(&self, session_id: &str) -> bool {
@@ -232,8 +234,11 @@ impl RecordingManager {
     }
 
     pub fn cleanup_session(&self, session_id: &str) {
-        let mut recordings = self.recordings.lock().unwrap();
-        if let Some(mut state) = recordings.remove(session_id) {
+        let removed = {
+            let mut recordings = self.recordings.lock().unwrap();
+            recordings.remove(session_id)
+        };
+        if let Some(mut state) = removed {
             state.finish();
         }
     }

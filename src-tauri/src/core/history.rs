@@ -71,26 +71,26 @@ impl CommandHistoryStore {
     }
 
     pub fn save(&mut self) -> AppResult<()> {
+        if let Some((path, bytes)) = self.prepare_save() {
+            flush_to_disk(&path, &bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Serializes dirty state and marks clean. Returns `(path, bytes)` for
+    /// the caller to write to disk (possibly via `spawn_blocking`).
+    pub fn prepare_save(&mut self) -> Option<(PathBuf, Vec<u8>)> {
         if !self.dirty {
-            return Ok(());
+            return None;
         }
-
-        let Some(path) = &self.history_path else {
-            return Ok(());
-        };
-
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
+        let path = self.history_path.clone()?;
         let payload = HistoryStoreFileV2 {
             version: HISTORY_STORE_VERSION,
             entries: self.entries.clone(),
         };
-        let bytes = serde_json::to_vec(&payload)?;
-        write_atomic(path, &bytes)?;
+        let bytes = serde_json::to_vec(&payload).ok()?;
         self.dirty = false;
-        Ok(())
+        Some((path, bytes))
     }
 
     pub fn add(&mut self, command: String) -> bool {
@@ -130,10 +130,10 @@ impl CommandHistoryStore {
     }
 
     pub fn search(&self, pattern_str: &str, limit: usize) -> Vec<FuzzyResult> {
-        let items: Vec<(String, String)> = self
+        let items: Vec<(&str, &str)> = self
             .entries
             .iter()
-            .map(|entry| (entry.command.clone(), entry.command.clone()))
+            .map(|entry| (entry.command.as_str(), entry.command.as_str()))
             .collect();
         fuzzy_search_items(&items, pattern_str, "history", limit)
     }
@@ -337,6 +337,14 @@ fn current_time_ms() -> u64 {
         .unwrap_or_default()
         .as_millis();
     u64::try_from(millis).unwrap_or(u64::MAX)
+}
+
+/// Writes serialized history bytes to disk. Safe to call from a blocking context.
+pub(crate) fn flush_to_disk(path: &Path, bytes: &[u8]) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_atomic(path, bytes)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {

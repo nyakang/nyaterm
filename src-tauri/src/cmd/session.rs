@@ -232,18 +232,22 @@ pub async fn fuzzy_search_history(
 }
 
 #[tauri::command]
-pub fn fuzzy_search_commands(
+pub async fn fuzzy_search_commands(
     app: tauri::AppHandle,
     pattern: String,
     limit: usize,
 ) -> AppResult<Vec<FuzzyResult>> {
-    let cfg = config::load_quick_commands(&app)?;
-    let items: Vec<(String, String)> = cfg
-        .commands
-        .into_iter()
-        .map(|c| (c.label, c.command))
-        .collect();
-    Ok(fuzzy_search_items(&items, &pattern, "quickCommand", limit))
+    tokio::task::spawn_blocking(move || {
+        let cfg = config::load_quick_commands(&app)?;
+        let items: Vec<(&str, &str)> = cfg
+            .commands
+            .iter()
+            .map(|c| (c.label.as_str(), c.command.as_str()))
+            .collect();
+        Ok(fuzzy_search_items(&items, &pattern, "quickCommand", limit))
+    })
+    .await
+    .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
@@ -252,7 +256,10 @@ pub async fn start_recording(
     session_id: String,
     file_path: String,
 ) -> AppResult<()> {
-    state.start(&session_id, &file_path)
+    let mgr = state.inner().clone();
+    tokio::task::spawn_blocking(move || mgr.start(&session_id, &file_path))
+        .await
+        .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
@@ -260,7 +267,10 @@ pub async fn stop_recording(
     state: tauri::State<'_, Arc<RecordingManager>>,
     session_id: String,
 ) -> AppResult<String> {
-    state.stop(&session_id)
+    let mgr = state.inner().clone();
+    tokio::task::spawn_blocking(move || mgr.stop(&session_id))
+        .await
+        .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
