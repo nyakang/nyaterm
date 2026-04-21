@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { OtpCodePanel } from "@/components/panel/security-auth/OtpCodePanel";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Label } from "@/components/ui/label";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
@@ -35,12 +35,23 @@ interface OtpDialogProps {
 export function OtpDialog({ request, onDone }: OtpDialogProps) {
   const { t } = useTranslation();
   const [responses, setResponses] = useState<string[]>([]);
+  const [codeLengths, setCodeLengths] = useState<number[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const firstInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCodeChange = useCallback((code: string) => {
+    setCodeLengths((prev) => {
+      if (prev[0] === code.length) return prev;
+      const next = [...prev];
+      next[0] = code.length;
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (request) {
       setResponses(request.prompts.map(() => ""));
+      setCodeLengths(request.prompts.map(() => 6));
       setSubmitting(false);
     }
   }, [request]);
@@ -112,6 +123,13 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
     const next = [...responses];
     next[0] = code;
     setResponses(next);
+    
+    setCodeLengths((prev) => {
+      if ((prev[0] ?? 0) >= code.length) return prev;
+      const nextLengths = [...prev];
+      nextLengths[0] = code.length;
+      return nextLengths;
+    });
   };
 
   return (
@@ -135,18 +153,23 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
               <Label className="text-[0.6875rem] text-muted-foreground">
                 {p.prompt.replace(/:\s*$/, "")}
               </Label>
-              <Input
+              <InputOTP
                 ref={promptIndex === 0 ? firstInputRef : undefined}
-                className="mt-1 text-xs h-8"
-                type={p.echo ? "text" : "password"}
-                autoComplete="one-time-code"
+                maxLength={codeLengths[promptIndex] ?? 6}
                 value={responses[promptIndex] ?? ""}
-                onChange={(e) => {
+                onChange={(val) => {
                   const next = [...responses];
-                  next[promptIndex] = e.target.value;
+                  next[promptIndex] = val;
                   setResponses(next);
                 }}
-              />
+                containerClassName="mt-1"
+              >
+                <InputOTPGroup>
+                  {Array.from({ length: codeLengths[promptIndex] ?? 6 }).map((_, i) => (
+                    <InputOTPSlot key={i} index={i} />
+                  ))}
+                </InputOTPGroup>
+              </InputOTP>
             </div>
           ))}
 
@@ -154,6 +177,7 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
             <OtpCodePanel
               otpEntryId={request.otpEntryId}
               onSendToInput={handleSendToInput}
+              onCodeChange={handleCodeChange}
               variant="dialog"
             />
           )}

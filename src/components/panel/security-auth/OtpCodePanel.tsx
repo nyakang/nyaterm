@@ -10,6 +10,7 @@ import type { OtpEntry } from "@/types/global";
 interface OtpCodePanelProps {
   className?: string;
   onSendToInput?: (code: string) => void;
+  onCodeChange?: (code: string) => void;
   otpEntryId: string;
   otpType?: string;
   period?: number;
@@ -32,6 +33,7 @@ function LoadingState({ label }: { label: string }) {
 export function OtpCodePanel({
   className = "",
   onSendToInput,
+  onCodeChange,
   otpEntryId,
   otpType,
   period,
@@ -100,6 +102,12 @@ export function OtpCodePanel({
     otpType: resolvedType,
     period: resolvedPeriod,
   });
+
+  useEffect(() => {
+    if (code && onCodeChange) {
+      onCodeChange(code);
+    }
+  }, [code, onCodeChange]);
 
   if (metaLoading || !resolvedType) {
     return (
