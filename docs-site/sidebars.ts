@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
         'guide/themes',
         'guide/translation',
         'guide/security',
+        'guide/sync-and-backup',
         'guide/keyboard-shortcuts',
       ],
     },

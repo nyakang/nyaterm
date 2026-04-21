@@ -13,7 +13,7 @@ slug: /
 - Switching between local terminals, Telnet sessions, and serial devices during troubleshooting
 - Working with remote files while watching terminal output
 - Standardizing common operations with reusable commands, jump-host chains, and saved connection metadata
-- Using OTP, recording, resource monitoring, and auto-upload in the same desktop app
+- Using OTP, recording, resource monitoring, auto-upload, cross-device config sync, and encrypted backup in the same desktop app
 
 ## Core capabilities
 
@@ -58,6 +58,13 @@ Dragonfly supports more than SSH:
 - Proxy configs, jump hosts, and local / remote / dynamic tunnels
 - Screen lock and master-password support
 
+### Cloud sync and encrypted backup
+
+- Sync Dragonfly's portable configuration data through **WebDAV** or **S3-compatible** storage
+- Configure a master password in **Settings → Security** before using **Settings → Sync & Backup**
+- Support startup checks, debounced auto-push after supported local changes, scheduled encrypted backups, and remote backup restore
+- Resolve snapshot-level conflicts from the settings page or the in-workspace history panel when both local and remote state changed
+
 ## Suggested reading order
 
 If you are new to Dragonfly, this order works well:
@@ -70,3 +77,4 @@ If you are new to Dragonfly, this order works well:
 6. [SFTP File Transfer](./guide/file-transfer)
 7. [Tunnels and Proxy](./guide/tunnels-and-proxy)
 8. [OTP and Authentication](./guide/otp-and-auth)
+9. [Sync & Backup](./guide/sync-and-backup)

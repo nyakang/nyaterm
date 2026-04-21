@@ -86,6 +86,18 @@ Build artifacts are in `src-tauri/target/release/bundle/`.
 | `pnpm lint` | Run Biome linting |
 | `pnpm format` | Run Biome auto-format |
 | `pnpm version-sync` | Sync version numbers across files |
+| `pnpm --dir docs-site start` | Start the docs site for all locales |
+| `pnpm --dir docs-site start:zh` | Start the Chinese docs dev server |
+| `pnpm --dir docs-site start:en` | Start the English docs dev server |
+| `pnpm --dir docs-site build` | Build the docs site |
+
+## Docs workflow tips
+
+If you are editing README or files under `docs-site/docs/` / `docs-site/i18n/en/`, it is a good idea to run the docs build so you can verify:
+
+- both locales still build successfully
+- new pages appear in navigation
+- relative links still resolve correctly
 
 ## Code Style
 

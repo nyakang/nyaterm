@@ -92,10 +92,23 @@ In **Settings → Terminal**, you can enable:
 
 These features are intentionally conservative by default, so you can enable them only where they help your workflow.
 
-## Step 5: Keep exploring by use case
+## Step 5: Optionally configure sync and backup
+
+If you want cross-device configuration sync or recoverable encrypted backups for this device, continue with:
+
+1. Open **Settings → Security** and set a **Master Password**
+2. Open **Settings → Sync & Backup**
+3. Choose **WebDAV** or an **S3-compatible** storage provider
+4. Fill in the connection details and run **Test Connection** first
+5. Then decide whether to enable automatic sync and scheduled backup
+
+If you are just evaluating Dragonfly for the first time, this step is optional. For the full workflow, see [Sync & Backup](../guide/sync-and-backup).
+
+## Step 6: Keep exploring by use case
 
 - Want to understand the differences between sessions? See [Session Types](../guide/session-types)
 - Want to configure auth, proxy, or jump hosts? See [SSH Connection Management](../guide/ssh-connection)
 - Want to manage files and auto-upload? See [SFTP File Transfer](../guide/file-transfer)
 - Want to learn terminal enhancements and recording? See [Terminal Features](../guide/terminal)
 - Want to configure OTP? See [OTP and Authentication](../guide/otp-and-auth)
+- Want to enable cloud sync and encrypted backups? See [Sync & Backup](../guide/sync-and-backup)

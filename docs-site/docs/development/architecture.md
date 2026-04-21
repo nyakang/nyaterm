@@ -116,12 +116,14 @@ Dragonfly 的终端工作区有两个容易混淆、但职责不同的层次：
 - `TunnelManager`
 - `RecordingManager`
 - `PendingAuthManager`
+- `CloudSyncManager`
 
 同时也在这里集中注册所有 Tauri commands，例如：
 
 - session 创建 / 关闭 / 写入 / 录制 / OTP
 - SFTP 文件与传输操作
 - 连接 / 密钥 / 密码 / OTP / 设置读写
+- cloud sync / backup 状态、推送、拉取、恢复、冲突处理
 - watcher、翻译、导入、stats、tunnel、proxy
 
 ## SessionManager 与事件流
@@ -144,6 +146,9 @@ Dragonfly 的终端工作区有两个容易混淆、但职责不同的层次：
 | `connections-changed` | 已保存连接变化 |
 | `transfer-event` | 传输队列进度变化 |
 | `otp-request` | 触发 OTP / keyboard-interactive 认证 |
+| `cloud-sync-status-changed` | 云同步 / 备份状态变化 |
+| `cloud-sync-history-changed` | 同步 / 备份历史变化 |
+| `cloud-sync-conflict` | 云同步冲突预览与处理入口 |
 
 ## SSH / SFTP / watcher / 导入
 
@@ -156,6 +161,8 @@ Dragonfly 的终端工作区有两个容易混淆、但职责不同的层次：
 - `src-tauri/src/core/watcher.rs` — 本地文件监听与自动上传流程
 - `src-tauri/src/core/importer.rs` — Xshell / MobaXterm / WindTerm 导入
 - `src-tauri/src/core/recording.rs` — 会话录制
+- `src-tauri/src/core/cloud_sync.rs` — 云同步、远程备份、状态事件、冲突处理
+- `src-tauri/src/core/portable_snapshot.rs` — 可移植快照构建 / 应用与同步范围控制
 
 ## 配置与持久化
 
@@ -171,5 +178,11 @@ Dragonfly 的终端工作区有两个容易混淆、但职责不同的层次：
 - `proxies.json`
 - `history.json`
 - `known_hosts`
+- `cloud_sync_state.json`
 
 其中敏感值会先加密再写盘，因此前端管理的是可复用凭据条目，而不是明文配置。
+
+云同步功能本身还有两层额外模型：
+
+- `src-tauri/src/config/cloud_sync.rs` 负责 provider 配置、运行状态和敏感字段加密 / mask / merge
+- `src-tauri/src/core/portable_snapshot.rs` 定义哪些配置会进入可移植快照，哪些设备本地 UI 状态会保留在本机

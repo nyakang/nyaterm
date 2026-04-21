@@ -29,6 +29,7 @@ src-tauri/src/cmd/
 ├── proxy.rs
 ├── otp.rs
 ├── importer.rs
+├── cloud_sync.rs
 ├── clipboard.rs
 └── log.rs
 ```
@@ -48,6 +49,7 @@ src-tauri/src/cmd/
 - `TunnelManager`
 - `RecordingManager`
 - `PendingAuthManager`
+- `CloudSyncManager`
 
 它们分别负责：
 
@@ -55,6 +57,7 @@ src-tauri/src/cmd/
 - SSH 隧道状态
 - 录制状态
 - keyboard-interactive / OTP 等待中的认证请求
+- 云同步 / 备份状态、远端快照操作与冲突处理
 
 ## SessionManager
 
@@ -129,6 +132,37 @@ src-tauri/src/cmd/
 - `core/watcher.rs`
 - 前端 `FileUploadPage.tsx`
 
+## Cloud sync / portable snapshot
+
+`src-tauri/src/core/cloud_sync.rs` 负责这条能力线的运行时行为，包括：
+
+- 启动时同步检查
+- 手动推送 / 拉取
+- 自动推送防抖
+- 定时备份
+- 远程备份列表与恢复
+- 冲突检测与事件广播
+
+它通过 `src-tauri/src/cmd/cloud_sync.rs` 暴露给前端的 commands 包括：
+
+- `test_cloud_sync_connection`
+- `get_cloud_sync_status`
+- `sync_push_now`
+- `sync_pull_now`
+- `run_cloud_backup_now`
+- `list_cloud_sync_history`
+- `list_remote_backups`
+- `restore_remote_backup`
+- `resolve_cloud_sync_conflict`
+
+`src-tauri/src/core/portable_snapshot.rs` 则定义了“哪些数据应该进入可移植快照”。这层很重要，因为它决定了：
+
+- 哪些设置适合跨设备同步
+- 哪些数据只应该保留在本机
+- 备份快照和同步快照的范围差异
+
+当前实现里，portable snapshot 会覆盖连接、凭据配置、OTP、代理、隧道、快捷命令和大部分应用设置；但设备本地的运行态 UI 状态不会被无差别漫游。
+
 ## 配置与加密
 
 配置文件保存在 `~/.dragonfly/`，主要由 `src-tauri/src/config/` 管理。
@@ -145,8 +179,15 @@ src-tauri/src/cmd/
 - `proxies.json`
 - `history.json`
 - `known_hosts`
+- `cloud_sync_state.json`
 
 敏感字段会在写盘前加密，因此新增配置时要确认是否属于敏感数据边界。
+
+对于 cloud sync，还要额外关注：
+
+- provider 配置中的凭据字段会经过加密 / mask / merge 处理
+- 运行时状态单独落在 `cloud_sync_state.json`
+- 历史记录主要来自结构化日志，再被 `list_cloud_sync_history` 聚合读取
 
 ## 事件模型
 
@@ -161,5 +202,8 @@ src-tauri/src/cmd/
 | `connections-changed` | 已保存连接变化 |
 | `transfer-event` | 传输进度 |
 | `otp-request` | 触发 OTP / keyboard-interactive 认证 |
+| `cloud-sync-status-changed` | 云同步 / 备份状态变化 |
+| `cloud-sync-history-changed` | 同步 / 备份历史变化 |
+| `cloud-sync-conflict` | 云同步冲突预览 |
 
 设计新后端能力时，优先考虑是否应该通过已有事件流对前端暴露，而不是额外引入新的轮询接口。

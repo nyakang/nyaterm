@@ -20,7 +20,7 @@ Dragonfly is a **Tauri 2** desktop application. The frontend lives in `src/`, th
 ├─────────────────────────────────────────────────────────┤
 │ Backend (Rust)                                         │
 │  ├─ SessionManager / TunnelManager / RecordingManager  │
-│  ├─ PendingAuthManager                                 │
+│  ├─ PendingAuthManager / CloudSyncManager              │
 │  ├─ SSH / SFTP / watcher / importer / stats            │
 │  └─ JSON config + encrypted credential storage         │
 └─────────────────────────────────────────────────────────┘
@@ -116,12 +116,14 @@ A practical shorthand is:
 - `TunnelManager`
 - `RecordingManager`
 - `PendingAuthManager`
+- `CloudSyncManager`
 
 It also registers Tauri commands centrally, including commands for:
 
 - Session creation / close / write / recording / OTP flows
 - SFTP file and transfer operations
 - Connections, keys, passwords, OTP, and settings persistence
+- Cloud sync / backup status, push, pull, restore, and conflict handling
 - Watcher, translation, importer, stats, tunnel, and proxy flows
 
 ## SessionManager and event flow
@@ -144,6 +146,9 @@ The backend also emits these common events to the frontend:
 | `connections-changed` | Saved connections changed |
 | `transfer-event` | Transfer queue progress changed |
 | `otp-request` | OTP / keyboard-interactive authentication requested |
+| `cloud-sync-status-changed` | Cloud sync / backup status changed |
+| `cloud-sync-history-changed` | Sync / backup history changed |
+| `cloud-sync-conflict` | Cloud sync conflict preview and handling entry point |
 
 ## SSH, SFTP, watcher, and import flows
 
@@ -156,6 +161,8 @@ Core backend capabilities are mainly organized under these modules:
 - `src-tauri/src/core/watcher.rs` — local file watching and auto-upload workflows
 - `src-tauri/src/core/importer.rs` — Xshell / MobaXterm / WindTerm session import
 - `src-tauri/src/core/recording.rs` — session recording
+- `src-tauri/src/core/cloud_sync.rs` — cloud sync, remote backups, status events, and conflict handling
+- `src-tauri/src/core/portable_snapshot.rs` — portable snapshot build/apply logic and sync scope control
 
 ## Configuration and persistence
 
@@ -171,5 +178,11 @@ Application data is stored under `~/.dragonfly/`. Typical files include:
 - `proxies.json`
 - `history.json`
 - `known_hosts`
+- `cloud_sync_state.json`
 
 Sensitive values are encrypted before being written, so the app manages reusable credential records rather than plain-text secrets.
+
+Cloud sync adds two more important layers:
+
+- `src-tauri/src/config/cloud_sync.rs` manages provider settings, runtime state, and sensitive-field encrypt / mask / merge behavior
+- `src-tauri/src/core/portable_snapshot.rs` defines which data belongs in portable snapshots and which device-local UI state stays local

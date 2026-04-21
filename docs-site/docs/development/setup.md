@@ -87,6 +87,18 @@ pnpm tauri build
 | `pnpm lint` | 运行 Biome 代码检查 |
 | `pnpm format` | 运行 Biome 代码格式化 |
 | `pnpm version-sync` | 同步各文件中的版本号 |
+| `pnpm --dir docs-site start` | 启动文档站点（所有语言） |
+| `pnpm --dir docs-site start:zh` | 启动中文文档开发服务器 |
+| `pnpm --dir docs-site start:en` | 启动英文文档开发服务器 |
+| `pnpm --dir docs-site build` | 构建文档站点 |
+
+## 文档开发提示
+
+如果你在修改 README 或 `docs-site/docs/` / `docs-site/i18n/en/` 下的文档，建议同时执行文档站点构建，确认：
+
+- 中英文两套文档都能通过构建
+- 新增页面已经进入导航
+- 相对链接没有失效
 
 ## 代码规范
 

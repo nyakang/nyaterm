@@ -5,7 +5,7 @@
 
 ## Overview
 
-Dragonfly is a desktop client for SSH-centric operations and mixed terminal workflows. It combines a React + Tauri interface with a Rust backend so you can manage remote hosts, local shells, file transfers, authentication, and network tooling from one workspace.
+Dragonfly is a desktop client for SSH-centric operations and mixed terminal workflows. It combines a React + Tauri interface with a Rust backend so you can manage remote hosts, local shells, file transfers, authentication, network tooling, and protected configuration sync / backup workflows from one workspace.
 
 ## Highlights
 
@@ -39,6 +39,14 @@ Dragonfly is a desktop client for SSH-centric operations and mixed terminal work
 - Screen lock, master password support, and known-hosts management
 - Proxy configs, SSH jump hosts, and local / remote / dynamic tunnels
 
+### Sync and backup
+
+- Encrypted cloud sync and backup for portable Dragonfly data through WebDAV and S3-compatible storage
+- Master password required before enabling sync, running manual actions, or creating scheduled encrypted backups
+- Startup sync checks, debounced auto-push after supported local changes, and scheduled backup retention policies
+- Manual test / push / pull / backup actions, remote backup restore, and snapshot-level conflict resolution
+- Dedicated **Sync & Backup** settings tab plus an in-workspace activity history panel
+
 ## Supported session types
 
 | Type | Typical use | Notes |
@@ -55,6 +63,7 @@ The detailed user docs live in `docs-site/`.
 - Product overview: [docs-site/docs/intro.md](docs-site/docs/intro.md)
 - Quick start: [docs-site/docs/getting-started/quick-start.md](docs-site/docs/getting-started/quick-start.md)
 - Guides: [docs-site/docs/guide/](docs-site/docs/guide)
+- Sync and backup guide: [docs-site/docs/guide/sync-and-backup.md](docs-site/docs/guide/sync-and-backup.md)
 - Development docs: [docs-site/docs/development/](docs-site/docs/development)
 
 The docs site ships with Simplified Chinese by default and English under `/en/`.

@@ -54,6 +54,21 @@ const features = [
     ),
   },
   {
+    title: <Translate>加密同步与备份</Translate>,
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={styles.featureSvg}>
+        <path d="M12 3v12" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M5 19h14" />
+      </svg>
+    ),
+    description: (
+      <Translate>
+        通过 WebDAV 或 S3 兼容存储同步 Dragonfly 的可移植配置，并为连接、凭据和常用设置创建可恢复的加密备份快照。
+      </Translate>
+    ),
+  },
+  {
     title: <Translate>高度可定制</Translate>,
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={styles.featureSvg}>
@@ -66,7 +81,7 @@ const features = [
         深色/浅色主题切换、可调整面板布局、快捷命令管理、多语言翻译、快捷键自定义，打造专属工作流。
       </Translate>
     ),
-  },
+  }
 ];
 
 const techStack = [

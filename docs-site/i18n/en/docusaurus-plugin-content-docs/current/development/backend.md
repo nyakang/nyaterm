@@ -29,6 +29,7 @@ src-tauri/src/cmd/
 ├── proxy.rs
 ├── otp.rs
 ├── importer.rs
+├── cloud_sync.rs
 ├── clipboard.rs
 └── log.rs
 ```
@@ -48,6 +49,7 @@ When adding a new command, the usual flow is:
 - `TunnelManager`
 - `RecordingManager`
 - `PendingAuthManager`
+- `CloudSyncManager`
 
 Their roles are:
 
@@ -55,6 +57,7 @@ Their roles are:
 - SSH tunnel state
 - Recording state
 - Pending keyboard-interactive / OTP authentication requests
+- Cloud sync / backup state, remote snapshot operations, and conflict handling
 
 ## SessionManager
 
@@ -129,6 +132,37 @@ This flow involves:
 - `core/watcher.rs`
 - Frontend `FileUploadPage.tsx`
 
+## Cloud sync / portable snapshot
+
+`src-tauri/src/core/cloud_sync.rs` owns the runtime behavior for this capability, including:
+
+- startup sync checks
+- manual push / pull
+- debounced auto-push
+- scheduled backups
+- remote backup listing and restore
+- conflict detection and event emission
+
+The frontend reaches it through `src-tauri/src/cmd/cloud_sync.rs`, which exposes commands such as:
+
+- `test_cloud_sync_connection`
+- `get_cloud_sync_status`
+- `sync_push_now`
+- `sync_pull_now`
+- `run_cloud_backup_now`
+- `list_cloud_sync_history`
+- `list_remote_backups`
+- `restore_remote_backup`
+- `resolve_cloud_sync_conflict`
+
+`src-tauri/src/core/portable_snapshot.rs` defines which data belongs in a portable snapshot. That matters because it controls:
+
+- which settings are suitable for cross-device sync
+- which data should remain local to the device
+- how backup snapshots differ in scope from sync snapshots
+
+In the current implementation, portable snapshots cover connections, credential config, OTP, proxies, tunnels, quick commands, and most application settings; they do not blindly roam all live UI state.
+
 ## Configuration and encryption
 
 Configuration files are stored under `~/.dragonfly/` and are mainly managed by `src-tauri/src/config/`.
@@ -145,8 +179,15 @@ Common files include:
 - `proxies.json`
 - `history.json`
 - `known_hosts`
+- `cloud_sync_state.json`
 
 Sensitive fields are encrypted before being written, so when adding new configuration you should verify whether it crosses a sensitive-data boundary.
+
+For cloud sync specifically, also pay attention to:
+
+- provider credential fields going through encrypt / mask / merge handling
+- runtime state being stored separately in `cloud_sync_state.json`
+- history mainly being reconstructed from structured logs and then exposed through `list_cloud_sync_history`
 
 ## Event model
 
@@ -161,5 +202,8 @@ The backend relies heavily on Tauri events to notify the frontend. Typical event
 | `connections-changed` | Saved connections changed |
 | `transfer-event` | Transfer progress |
 | `otp-request` | OTP / keyboard-interactive authentication requested |
+| `cloud-sync-status-changed` | Cloud sync / backup status changed |
+| `cloud-sync-history-changed` | Sync / backup history changed |
+| `cloud-sync-conflict` | Cloud sync conflict preview |
 
 When designing new backend features, prefer exposing them through the existing event flow where appropriate rather than introducing extra polling APIs.

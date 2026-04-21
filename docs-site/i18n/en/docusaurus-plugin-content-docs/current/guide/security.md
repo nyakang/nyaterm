@@ -73,8 +73,29 @@ You can configure it in **Settings → Security**. After it is set:
 - The app uses it for unlock verification
 - Sensitive local configuration protection is built around it
 - The lock screen requires it before unlocking
+- **Sync & Backup** actions become eligible to be enabled and used
 
 If you have not set a master password, the lock screen is only a visual lock layer, not full password-based protection.
+
+## Sync & Backup security model
+
+If you plan to use **Settings → Sync & Backup**, the master password is not just recommended. It is a prerequisite.
+
+In the current implementation:
+
+- Sync and backup actions cannot be enabled without a master password
+- Cloud-provider credentials are treated as protected local secrets
+- Dragonfly uploads **encrypted portable snapshots**, not plain-text config files
+- Remote restore overwrites the portable local data included in the snapshot, but it does not blindly roam every piece of device-local UI state to another machine
+
+That makes this feature best understood as:
+
+- **Cross-device sync for portable configuration**
+- **Recoverable encrypted backup for a device**
+
+not as a collaborative merge tool.
+
+For the complete setup and workflow details, see [Sync & Backup](./sync-and-backup).
 
 ## Screen lock
 

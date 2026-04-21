@@ -17,6 +17,12 @@
   "同时管理多个 SSH 和本地终端会话。支持 WebGL 硬件加速渲染、自定义字体、关键词高亮、命令历史模糊搜索。": {
     "message": "Manage multiple SSH and local terminal sessions simultaneously. WebGL hardware-accelerated rendering, custom fonts, keyword highlighting, and fuzzy command history search."
   },
+  "加密同步与备份": {
+    "message": "Encrypted Sync & Backup"
+  },
+  "通过 WebDAV 或 S3 兼容存储同步 Dragonfly 的可移植配置，并为连接、凭据和常用设置创建可恢复的加密备份快照。": {
+    "message": "Sync Dragonfly's portable configuration through WebDAV or S3-compatible storage, and create recoverable encrypted backup snapshots for connections, credentials, and common settings."
+  },
   "高度可定制": {
     "message": "Highly Customizable"
   },
