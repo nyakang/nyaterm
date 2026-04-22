@@ -463,7 +463,7 @@ function SyncBackupHistoryPanel() {
         actions={
           <Button
             variant="ghost"
-            size="icon-xs"
+            size="icon-sm"
             onClick={() => void refresh()}
             disabled={loading}
             title={t("resourceMonitor.refresh")}
