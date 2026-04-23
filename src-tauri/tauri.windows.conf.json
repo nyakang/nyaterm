@@ -1,0 +1,17 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Dragonfly",
+        "width": 1280,
+        "height": 800,
+        "transparent": true,
+        "visible": false,
+        "decorations": false,
+        "create": false,
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}
