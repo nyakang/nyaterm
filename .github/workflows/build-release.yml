@@ -6,38 +6,103 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  cleanup-caches:
+    name: Cleanup old caches
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Delete old Actions caches
+        uses: actions/github-script@v8
+        with:
+          script: |
+            // Delete actions caches older than 90 days to avoid stale/large caches.
+            const threshold = Date.now() - (90 * 24 * 60 * 60 * 1000);
+            const oldCaches = [];
+
+            let page = 1;
+            while (true) {
+              const { data } = await github.rest.actions.getActionsCacheList({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+                page,
+              });
+
+              const caches = data.actions_caches || [];
+              for (const cache of caches) {
+                const created = new Date(cache.created_at).getTime();
+                if (created < threshold) {
+                  oldCaches.push(cache);
+                }
+              }
+
+              if (caches.length < 100) break;
+              page += 1;
+            }
+
+            console.log(`Found ${oldCaches.length} cache(s) older than 90 days.`);
+
+            for (const cache of oldCaches) {
+              console.log(`Deleting cache: ${cache.key} (created: ${cache.created_at})`);
+              await github.rest.actions.deleteActionsCacheById({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                cache_id: cache.id,
+              });
+            }
+
+            console.log(`Deleted ${oldCaches.length} old cache(s).`);
+
   build:
+    name: Build ${{ matrix.target }}
+    needs: cleanup-caches
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
+
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            target: 'aarch64-apple-darwin'
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            target: 'x86_64-apple-darwin'
-          - platform: 'ubuntu-24.04'
-            args: ''
-            target: 'x86_64-unknown-linux-gnu'
-          - platform: 'ubuntu-24.04-arm'
-            args: ''
-            target: 'aarch64-unknown-linux-gnu'
-          - platform: 'windows-latest'
-            args: '--bundles nsis'
-            target: 'x86_64-pc-windows-msvc'
-          - platform: 'windows-latest'
-            args: '--target aarch64-pc-windows-msvc --bundles nsis'
-            target: 'aarch64-pc-windows-msvc'
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            target: aarch64-apple-darwin
 
-    runs-on: ${{ matrix.platform }}
-    
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            target: x86_64-apple-darwin
+
+          - platform: ubuntu-24.04
+            args: ''
+            target: x86_64-unknown-linux-gnu
+
+          - platform: ubuntu-24.04-arm
+            args: ''
+            target: aarch64-unknown-linux-gnu
+
+          - platform: windows-latest
+            args: --bundles nsis
+            target: x86_64-pc-windows-msvc
+
+          - platform: windows-latest
+            args: --target aarch64-pc-windows-msvc --bundles nsis
+            target: aarch64-pc-windows-msvc
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -52,22 +117,23 @@ jobs:
           workspaces: |
             ./src-tauri -> target
             ./cli -> target
-          # 为不同的编译目标使用不同的缓存（不包含 commit hash）
           key: ${{ matrix.platform }}-${{ matrix.target }}
-          # 编译失败时不保存损坏的缓存
           cache-on-failure: false
         env:
           RUST_CACHE_COMPRESS: true
-
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
 
       - name: Install pnpm
         uses: pnpm/action-setup@v5
         with:
           version: 9
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Linux dependencies
         if: contains(matrix.platform, 'ubuntu')
@@ -90,34 +156,11 @@ jobs:
             xdg-utils
 
           if [ "${{ matrix.platform }}" = "ubuntu-24.04-arm" ]; then
-            # AppImage tools still need FUSE 2 runtime on Ubuntu 24.04; the package was renamed from libfuse2.
             sudo apt-get install -y libfuse2t64
           fi
 
-      - name: Cleanup Old Caches
-        uses: actions/github-script@v8
-        with:
-          script: |
-            // Delete actions caches older than 90 days to avoid stale/large caches
-            const caches = await github.rest.actions.getActionsCacheList({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            const threshold = Date.now() - (90 * 24 * 60 * 60 * 1000); // 90 days
-            for (const cache of caches.data.actions_caches || []) {
-              const created = new Date(cache.created_at).getTime();
-              if (created < threshold) {
-                console.log(`Deleting cache: ${cache.key} (created: ${cache.created_at})`);
-                await github.rest.actions.deleteActionsCacheById({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  cache_id: cache.id,
-                });
-              }
-            }
-
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Generate release notes
         if: startsWith(github.ref, 'refs/tags/v')
@@ -126,50 +169,60 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
 
-          # Try manual changelog first (exit 2 = no changelog found)
-          NOTES=$(pnpm --silent release:notes "$VERSION" --stdout 2>/dev/null) && HAS_CHANGELOG=true || HAS_CHANGELOG=false
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES=""
+
+          if NOTES=$(pnpm --silent release:notes "$VERSION" --stdout 2>/dev/null); then
+            HAS_CHANGELOG=true
+          else
+            HAS_CHANGELOG=false
+          fi
 
           if [ "$HAS_CHANGELOG" = "false" ]; then
-            # Fall back to GitHub auto-generated release notes (based on .github/release.yml + PR history)
-            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p' || echo "")
+            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p' || true)
+
             if [ -n "$PREV_TAG" ]; then
               AUTO_NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
                 -f tag_name="${GITHUB_REF_NAME}" \
                 -f previous_tag_name="$PREV_TAG" \
-                --jq '.body' 2>/dev/null || echo "")
+                --jq '.body' 2>/dev/null || true)
             else
               AUTO_NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
                 -f tag_name="${GITHUB_REF_NAME}" \
-                --jq '.body' 2>/dev/null || echo "")
+                --jq '.body' 2>/dev/null || true)
             fi
 
-            # Combine: auto-generated notes + install tips from script
-            INSTALL_TIPS=$(echo "$NOTES")
-            if [ -n "$AUTO_NOTES" ]; then
-              NOTES="${AUTO_NOTES}
-
-          ${INSTALL_TIPS}"
+            if [ -n "${AUTO_NOTES:-}" ]; then
+              NOTES="$AUTO_NOTES"
+            else
+              NOTES="See the assets below to download the installer for your platform."
             fi
           fi
 
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "body<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build CLI companion
         shell: bash
         run: |
           set -euo pipefail
+
           cd cli
           cargo build --release --target ${{ matrix.target }}
+
           mkdir -p ../src-tauri/cli-bin
+
           if [[ "${{ matrix.platform }}" == *"windows"* ]]; then
             cp "target/${{ matrix.target }}/release/oxt.exe" ../src-tauri/cli-bin/oxt.exe
           else
             cp "target/${{ matrix.target }}/release/oxt" ../src-tauri/cli-bin/oxt
           fi
+
           ls -la ../src-tauri/cli-bin/
 
       - name: Build Tauri app
@@ -181,16 +234,157 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '1' || '' }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'OxideTerm ${{ github.ref_name }}'
+          releaseName: OxideTerm ${{ github.ref_name }}
           releaseBody: ${{ steps.release_notes.outputs.body || 'See the assets below to download the installer for your platform.' }}
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
+  rename-assets:
+    name: Rename release assets
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Rename assets to consistent naming
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const version = tag.replace(/^v/, '');
+
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag,
+            });
+
+            function getNewAssetName(assetName) {
+              if (assetName === 'latest.json') return null;
+
+              const sigSuffix = assetName.endsWith('.sig') ? '.sig' : '';
+              const name = sigSuffix ? assetName.slice(0, -4) : assetName;
+
+              const rules = [
+                // macOS DMG
+                {
+                  match: /^OxideTerm.*[_-](aarch64|arm64)\.dmg$/i,
+                  newName: `OxideTerm_${version}_macos_arm64.dmg`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](x64|x86_64)\.dmg$/i,
+                  newName: `OxideTerm_${version}_macos_x64.dmg`,
+                },
+
+                // macOS updater
+                {
+                  match: /^OxideTerm.*[_-](aarch64|arm64)\.app\.tar\.gz$/i,
+                  newName: `OxideTerm_${version}_macos_arm64.app.tar.gz`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](x64|x86_64)\.app\.tar\.gz$/i,
+                  newName: `OxideTerm_${version}_macos_x64.app.tar.gz`,
+                },
+
+                // Linux DEB
+                {
+                  match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.deb$/i,
+                  newName: `OxideTerm_${version}_linux_x64.deb`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](arm64|aarch64)\.deb$/i,
+                  newName: `OxideTerm_${version}_linux_arm64.deb`,
+                },
+
+                // Linux RPM
+                {
+                  match: /^OxideTerm.*[._-](x86_64|amd64|x64)\.rpm$/i,
+                  newName: `OxideTerm_${version}_linux_x64.rpm`,
+                },
+                {
+                  match: /^OxideTerm.*[._-](aarch64|arm64)\.rpm$/i,
+                  newName: `OxideTerm_${version}_linux_arm64.rpm`,
+                },
+
+                // Linux AppImage
+                {
+                  match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.AppImage$/i,
+                  newName: `OxideTerm_${version}_linux_x64.AppImage`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](aarch64|arm64)\.AppImage$/i,
+                  newName: `OxideTerm_${version}_linux_arm64.AppImage`,
+                },
+
+                // Windows NSIS installer
+                {
+                  match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.exe$/i,
+                  newName: `OxideTerm_${version}_windows_x64-setup.exe`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.exe$/i,
+                  newName: `OxideTerm_${version}_windows_arm64-setup.exe`,
+                },
+
+                // Windows NSIS updater
+                {
+                  match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.nsis\.zip$/i,
+                  newName: `OxideTerm_${version}_windows_x64-setup.nsis.zip`,
+                },
+                {
+                  match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.nsis\.zip$/i,
+                  newName: `OxideTerm_${version}_windows_arm64-setup.nsis.zip`,
+                },
+              ];
+
+              for (const rule of rules) {
+                if (rule.match.test(name)) {
+                  return `${rule.newName}${sigSuffix}`;
+                }
+              }
+
+              return null;
+            }
+
+            const existingNames = new Set(release.assets.map(asset => asset.name));
+            const renames = [];
+
+            for (const asset of release.assets) {
+              const newName = getNewAssetName(asset.name);
+              if (!newName || newName === asset.name) continue;
+
+              if (existingNames.has(newName)) {
+                console.log(`Skip rename because target already exists: ${asset.name} -> ${newName}`);
+                continue;
+              }
+
+              renames.push({
+                id: asset.id,
+                oldName: asset.name,
+                newName,
+              });
+
+              existingNames.add(newName);
+            }
+
+            for (const { id, oldName, newName } of renames) {
+              console.log(`Renaming: ${oldName} -> ${newName}`);
+              await github.rest.repos.updateReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: id,
+                name: newName,
+              });
+            }
+
+            console.log(`Renamed ${renames.length} asset(s).`);
+
   publish-updater:
     name: Generate updater manifest
-    needs: build
+    needs: rename-assets
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -211,66 +405,79 @@ jobs:
 
             const allAssets = release.assets;
 
-            // Map .sig asset name → platform keys
             function mapSigToPlatforms(name) {
               const baseName = name.replace(/\.sig$/, '');
               const keys = [];
 
               if (name.endsWith('.app.tar.gz.sig')) {
-                if (name.includes('x64') || name.includes('x86_64'))
+                if (name.includes('macos_x64') || name.includes('x64') || name.includes('x86_64')) {
                   keys.push('darwin-x86_64', 'darwin-x86_64-app');
-                else if (name.includes('aarch64') || name.includes('arm64'))
+                } else if (name.includes('macos_arm64') || name.includes('aarch64') || name.includes('arm64')) {
                   keys.push('darwin-aarch64', 'darwin-aarch64-app');
+                }
               } else if (name.endsWith('.AppImage.sig')) {
-                if (name.includes('amd64') || name.includes('x86_64'))
+                if (name.includes('linux_x64') || name.includes('amd64') || name.includes('x86_64')) {
                   keys.push('linux-x86_64', 'linux-x86_64-appimage');
-                else if (name.includes('aarch64') || name.includes('arm64'))
+                } else if (name.includes('linux_arm64') || name.includes('aarch64') || name.includes('arm64')) {
                   keys.push('linux-aarch64', 'linux-aarch64-appimage');
+                }
               } else if (name.endsWith('.deb.sig')) {
-                if (name.includes('amd64') || name.includes('x86_64'))
+                if (name.includes('linux_x64') || name.includes('amd64') || name.includes('x86_64')) {
                   keys.push('linux-x86_64-deb');
-                else if (name.includes('aarch64') || name.includes('arm64'))
+                } else if (name.includes('linux_arm64') || name.includes('aarch64') || name.includes('arm64')) {
                   keys.push('linux-aarch64-deb');
+                }
               } else if (name.endsWith('.rpm.sig')) {
-                if (name.includes('x86_64'))
+                if (name.includes('linux_x64') || name.includes('x86_64')) {
                   keys.push('linux-x86_64-rpm');
-                else if (name.includes('aarch64'))
+                } else if (name.includes('linux_arm64') || name.includes('aarch64') || name.includes('arm64')) {
                   keys.push('linux-aarch64-rpm');
+                }
               } else if (name.endsWith('-setup.exe.sig')) {
-                if (name.includes('x64') || name.includes('x86_64'))
+                if (name.includes('windows_x64') || name.includes('x64') || name.includes('x86_64')) {
                   keys.push('windows-x86_64', 'windows-x86_64-nsis');
-                else if (name.includes('arm64') || name.includes('aarch64'))
+                } else if (name.includes('windows_arm64') || name.includes('arm64') || name.includes('aarch64')) {
                   keys.push('windows-aarch64', 'windows-aarch64-nsis');
+                }
               }
 
               return { keys, baseName };
             }
 
             const platforms = {};
-            const sigAssets = allAssets.filter(a => a.name.endsWith('.sig'));
+            const sigAssets = allAssets.filter(asset => asset.name.endsWith('.sig'));
 
             for (const sigAsset of sigAssets) {
               const { keys, baseName } = mapSigToPlatforms(sigAsset.name);
-              if (keys.length === 0) continue;
+              if (keys.length === 0) {
+                console.log(`Skip unmapped signature asset: ${sigAsset.name}`);
+                continue;
+              }
 
-              const binaryAsset = allAssets.find(a => a.name === baseName);
+              const binaryAsset = allAssets.find(asset => asset.name === baseName);
               if (!binaryAsset) {
                 console.log(`Warning: no binary asset found for ${baseName}`);
                 continue;
               }
 
-              // Download .sig content
               const sigResponse = await fetch(sigAsset.browser_download_url);
               if (!sigResponse.ok) {
-                console.log(`Warning: failed to download ${sigAsset.name}`);
+                console.log(`Warning: failed to download signature: ${sigAsset.name}`);
                 continue;
               }
+
               const signature = (await sigResponse.text()).trim();
               const url = binaryAsset.browser_download_url;
 
               for (const key of keys) {
                 platforms[key] = { signature, url };
               }
+            }
+
+            const platformCount = Object.keys(platforms).length;
+            if (platformCount === 0) {
+              core.setFailed('No updater platforms were generated. Check whether Tauri signing produced .sig assets.');
+              return;
             }
 
             const latestJson = {
@@ -280,9 +487,9 @@ jobs:
               platforms,
             };
 
-            // Delete existing latest.json if present
-            const existing = allAssets.find(a => a.name === 'latest.json');
+            const existing = allAssets.find(asset => asset.name === 'latest.json');
             if (existing) {
+              console.log('Deleting existing latest.json');
               await github.rest.repos.deleteReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -290,8 +497,8 @@ jobs:
               });
             }
 
-            // Upload latest.json
             const content = JSON.stringify(latestJson, null, 2);
+
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -304,7 +511,7 @@ jobs:
               },
             });
 
-            console.log(`Uploaded latest.json with ${Object.keys(platforms).length} platform(s):`);
+            console.log(`Uploaded latest.json with ${platformCount} platform key(s):`);
             for (const key of Object.keys(platforms).sort()) {
               console.log(`  ${key}: ${platforms[key].url.split('/').pop()}`);
             }
@@ -322,132 +529,29 @@ jobs:
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
+
             const { data: release } = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag,
             });
-            const sigAssets = release.assets.filter(a => a.name.endsWith('.sig'));
+
+            const sigAssets = release.assets.filter(asset => asset.name.endsWith('.sig'));
+
             for (const asset of sigAssets) {
-              console.log(`Deleting: ${asset.name}`);
+              console.log(`Deleting signature asset: ${asset.name}`);
               await github.rest.repos.deleteReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 asset_id: asset.id,
               });
             }
+
             console.log(`Deleted ${sigAssets.length} .sig file(s).`);
-
-  rename-assets:
-    name: Rename release assets
-    needs: cleanup-sigs
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - name: Rename assets to consistent naming
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const version = tag.replace(/^v/, '');
-
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag,
-            });
-
-            // Unified naming: OxideTerm_{version}_{os}_{arch}.{ext}
-            // Arch: x64 (Intel/AMD 64-bit), arm64 (ARM 64-bit)
-            const renameRules = [
-              // macOS DMG
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.dmg$/i, newName: `OxideTerm_${version}_macos_arm64.dmg` },
-              { match: /^OxideTerm.*[_-](x64|x86_64)\.dmg$/i, newName: `OxideTerm_${version}_macos_x64.dmg` },
-              // macOS updater (.app.tar.gz)
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_macos_arm64.app.tar.gz` },
-              { match: /^OxideTerm.*[_-](x64|x86_64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_macos_x64.app.tar.gz` },
-              // Linux .deb
-              { match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.deb$/i, newName: `OxideTerm_${version}_linux_x64.deb` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)\.deb$/i, newName: `OxideTerm_${version}_linux_arm64.deb` },
-              // Linux .rpm
-              { match: /^OxideTerm.*[._-](x86_64|amd64|x64)\.rpm$/i, newName: `OxideTerm_${version}_linux_x64.rpm` },
-              { match: /^OxideTerm.*[._-](aarch64|arm64)\.rpm$/i, newName: `OxideTerm_${version}_linux_arm64.rpm` },
-              // Linux .AppImage
-              { match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.AppImage$/i, newName: `OxideTerm_${version}_linux_x64.AppImage` },
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.AppImage$/i, newName: `OxideTerm_${version}_linux_arm64.AppImage` },
-              // Windows NSIS installer
-              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.exe$/i, newName: `OxideTerm_${version}_windows_x64-setup.exe` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.exe$/i, newName: `OxideTerm_${version}_windows_arm64-setup.exe` },
-              // Windows NSIS updater (.nsis.zip)
-              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_windows_x64-setup.nsis.zip` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_windows_arm64-setup.nsis.zip` },
-            ];
-
-            const renames = [];
-            for (const asset of release.assets) {
-              if (asset.name === 'latest.json') continue;
-              for (const rule of renameRules) {
-                if (rule.match.test(asset.name) && asset.name !== rule.newName) {
-                  renames.push({ id: asset.id, oldName: asset.name, newName: rule.newName });
-                  break;
-                }
-              }
-            }
-
-            for (const { id, oldName, newName } of renames) {
-              console.log(`Renaming: ${oldName} → ${newName}`);
-              await github.rest.repos.updateReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                asset_id: id,
-                name: newName,
-              });
-            }
-
-            // Update latest.json URLs to match renamed assets
-            if (renames.length > 0) {
-              const latestAsset = release.assets.find(a => a.name === 'latest.json');
-              if (latestAsset) {
-                const resp = await fetch(latestAsset.browser_download_url);
-                const latest = await resp.json();
-
-                for (const platform of Object.values(latest.platforms)) {
-                  for (const { oldName, newName } of renames) {
-                    if (platform.url && platform.url.includes(oldName)) {
-                      platform.url = platform.url.replace(oldName, newName);
-                    }
-                  }
-                }
-
-                await github.rest.repos.deleteReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  asset_id: latestAsset.id,
-                });
-
-                const content = JSON.stringify(latest, null, 2);
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release.id,
-                  name: 'latest.json',
-                  data: content,
-                  headers: {
-                    'content-type': 'application/json',
-                    'content-length': Buffer.byteLength(content),
-                  },
-                });
-                console.log('Updated latest.json with renamed URLs');
-              }
-            }
-
-            console.log(`Renamed ${renames.length} asset(s).`);
 
   publish-beta-updater:
     name: Publish beta updater manifest
-    needs: rename-assets
+    needs: cleanup-sigs
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -459,23 +563,26 @@ jobs:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
 
-            // Get the latest.json from the current release
             const { data: release } = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag,
             });
 
-            const latestJsonAsset = release.assets.find(a => a.name === 'latest.json');
+            const latestJsonAsset = release.assets.find(asset => asset.name === 'latest.json');
             if (!latestJsonAsset) {
-              console.log('No latest.json found on current release, skipping beta manifest');
+              core.setFailed('No latest.json found on current release.');
               return;
             }
 
             const resp = await fetch(latestJsonAsset.browser_download_url);
+            if (!resp.ok) {
+              core.setFailed(`Failed to download latest.json from release ${tag}`);
+              return;
+            }
+
             const content = await resp.text();
 
-            // Create or find the updater-beta release
             let betaRelease;
             try {
               const { data } = await github.rest.repos.getReleaseByTag({
@@ -484,9 +591,8 @@ jobs:
                 tag: 'updater-beta',
               });
               betaRelease = data;
-            } catch (e) {
-              if (e.status === 404) {
-                // Create the release and the tag
+            } catch (error) {
+              if (error.status === 404) {
                 const { data } = await github.rest.repos.createRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -498,13 +604,13 @@ jobs:
                 });
                 betaRelease = data;
               } else {
-                throw e;
+                throw error;
               }
             }
 
-            // Delete existing latest.json on updater-beta release
-            const existingAsset = betaRelease.assets.find(a => a.name === 'latest.json');
+            const existingAsset = betaRelease.assets.find(asset => asset.name === 'latest.json');
             if (existingAsset) {
+              console.log('Deleting existing updater-beta latest.json');
               await github.rest.repos.deleteReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -512,7 +618,6 @@ jobs:
               });
             }
 
-            // Upload latest.json to updater-beta release
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
