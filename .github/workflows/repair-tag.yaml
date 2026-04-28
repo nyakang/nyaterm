@@ -1,0 +1,148 @@
+name: Repair latest.json
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.8.4"
+        required: true
+        default: "v0.8.4"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-updater:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and upload latest.json
+        uses: actions/github-script@v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            const tag = '${{ inputs.tag }}';
+            const version = tag.replace(/^v/, '');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag,
+            });
+
+            const assets = release.assets || [];
+
+            function mapSigToPlatforms(name) {
+              const baseName = name.replace(/\.sig$/, '');
+              const lower = name.toLowerCase();
+              const keys = [];
+
+              if (lower.endsWith('.app.tar.gz.sig')) {
+                if (lower.includes('macos_x64') || lower.includes('x64') || lower.includes('x86_64')) {
+                  keys.push('darwin-x86_64');
+                } else if (lower.includes('macos_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                  keys.push('darwin-aarch64');
+                }
+              } else if (lower.endsWith('.appimage.sig')) {
+                if (lower.includes('linux_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
+                  keys.push('linux-x86_64');
+                } else if (lower.includes('linux_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                  keys.push('linux-aarch64');
+                }
+              } else if (lower.endsWith('-setup.exe.sig') || lower.endsWith('-setup.nsis.zip.sig')) {
+                if (lower.includes('windows_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
+                  keys.push('windows-x86_64');
+                } else if (lower.includes('windows_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                  keys.push('windows-aarch64');
+                }
+              }
+
+              return { keys, baseName };
+            }
+
+            async function downloadAssetText(asset) {
+              const response = await fetch(asset.url, {
+                headers: {
+                  Accept: 'application/octet-stream',
+                  Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'actions/github-script',
+                },
+                redirect: 'follow',
+              });
+
+              if (!response.ok) {
+                const body = await response.text().catch(() => '');
+                throw new Error(`Failed to download ${asset.name}: HTTP ${response.status} ${body.slice(0, 300)}`);
+              }
+
+              return (await response.text()).trim();
+            }
+
+            const platforms = {};
+            const sigAssets = assets.filter(asset => asset.name.endsWith('.sig'));
+
+            for (const sigAsset of sigAssets) {
+              const { keys, baseName } = mapSigToPlatforms(sigAsset.name);
+
+              if (keys.length === 0) {
+                console.log(`Skip non-updater signature asset: ${sigAsset.name}`);
+                continue;
+              }
+
+              const binaryAsset = assets.find(asset => asset.name === baseName);
+
+              if (!binaryAsset) {
+                console.log(`Warning: no binary asset found for ${baseName}`);
+                continue;
+              }
+
+              const signature = await downloadAssetText(sigAsset);
+
+              for (const key of keys) {
+                platforms[key] = {
+                  signature,
+                  url: binaryAsset.browser_download_url,
+                };
+              }
+            }
+
+            if (Object.keys(platforms).length === 0) {
+              core.setFailed('No updater platforms generated.');
+              return;
+            }
+
+            const latestJson = {
+              version,
+              notes: release.body || '',
+              pub_date: release.published_at || new Date().toISOString(),
+              platforms,
+            };
+
+            const existing = assets.find(asset => asset.name === 'latest.json');
+
+            if (existing) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner,
+                repo,
+                asset_id: existing.id,
+              });
+            }
+
+            const content = JSON.stringify(latestJson, null, 2);
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id: release.id,
+              name: 'latest.json',
+              data: content,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(content),
+              },
+            });
+
+            console.log(`Uploaded latest.json with ${Object.keys(platforms).length} platform key(s).`);
