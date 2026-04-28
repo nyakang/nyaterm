@@ -11,6 +11,7 @@ import {
   MdKeyboardReturn,
   MdPushPin,
   MdSearch,
+  MdSend,
   MdTerminal,
 } from "react-icons/md";
 import PanelHeader from "@/components/layout/PanelHeader";
@@ -41,6 +42,7 @@ import { QUICK_ICONS } from "../icons";
 
 interface QuickCommandsProps {
   onSend: (command: string, execute?: boolean) => void;
+  onSendToAll?: (command: string) => void;
 }
 
 const COLOR_DOT: Record<string, string> = {
@@ -52,7 +54,7 @@ const COLOR_DOT: Record<string, string> = {
   purple: "bg-purple-500",
 };
 
-function QuickCommands({ onSend }: QuickCommandsProps) {
+function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
   const { t } = useTranslation();
   const [commands, setCommands] = useState<QuickCommand[]>([]);
   const [savedCategories, setSavedCategories] = useState<QuickCommandCategory[]>([]);
@@ -67,8 +69,12 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
   // Variable Prompt State
   const [promptCmd, setPromptCmd] = useState<QuickCommand | null>(null);
   const [promptVars, setPromptVars] = useState<VariableDef[]>([]);
+  const [promptSendToAll, setPromptSendToAll] = useState(false);
 
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
+  const [openTooltipCommandId, setOpenTooltipCommandId] = useState<string | null>(null);
+  const [suppressCommandTooltips, setSuppressCommandTooltips] = useState(false);
+  const suppressTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load from backend on mount
   useEffect(() => {
@@ -129,6 +135,53 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (suppressTooltipTimerRef.current) {
+        clearTimeout(suppressTooltipTimerRef.current);
+      }
+    };
+  }, []);
+
+  const clearCommandTooltipSuppression = useCallback(() => {
+    if (suppressTooltipTimerRef.current) {
+      clearTimeout(suppressTooltipTimerRef.current);
+      suppressTooltipTimerRef.current = null;
+    }
+    setSuppressCommandTooltips(false);
+  }, []);
+
+  const handleTooltipOpenChange = useCallback(
+    (commandId: string, open: boolean) => {
+      if (suppressCommandTooltips || isContextMenuOpen) {
+        if (!openTooltipCommandId) return;
+        setOpenTooltipCommandId(null);
+        return;
+      }
+
+      setOpenTooltipCommandId(open ? commandId : null);
+    },
+    [isContextMenuOpen, openTooltipCommandId, suppressCommandTooltips],
+  );
+
+  const handleContextMenuOpenChange = useCallback((open: boolean) => {
+    setIsContextMenuOpen(open);
+    setOpenTooltipCommandId(null);
+
+    if (suppressTooltipTimerRef.current) {
+      clearTimeout(suppressTooltipTimerRef.current);
+      suppressTooltipTimerRef.current = null;
+    }
+
+    if (!open) {
+      setSuppressCommandTooltips(true);
+      suppressTooltipTimerRef.current = setTimeout(() => {
+        setSuppressCommandTooltips(false);
+        suppressTooltipTimerRef.current = null;
+      }, 700);
+    }
+  }, []);
+
   const handleCommandClick = useCallback(
     (cmd: QuickCommand) => {
       const vars = parseCommandVariables(cmd.command);
@@ -145,14 +198,34 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
     [onSend],
   );
 
+  const handleSendToAll = useCallback(
+    (cmd: QuickCommand) => {
+      if (!onSendToAll) return;
+      const vars = parseCommandVariables(cmd.command);
+      if (vars.length > 0) {
+        setPromptCmd(cmd);
+        setPromptVars(vars);
+        setPromptSendToAll(true);
+      } else {
+        onSendToAll(cmd.command);
+      }
+    },
+    [onSendToAll],
+  );
+
   const handlePromptSubmit = useCallback(
     (resolvedCommand: string) => {
       if (promptCmd) {
-        onSend(resolvedCommand, promptCmd.execution_mode !== "append");
+        if (promptSendToAll && onSendToAll) {
+          onSendToAll(resolvedCommand);
+        } else {
+          onSend(resolvedCommand, promptCmd.execution_mode !== "append");
+        }
         setPromptCmd(null);
+        setPromptSendToAll(false);
       }
     },
-    [promptCmd, onSend],
+    [promptCmd, promptSendToAll, onSend, onSendToAll],
   );
 
   // Derived state for categories and filtering
@@ -306,13 +379,21 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
                 const dotColor = COLOR_DOT[cmd.color_tag || "default"] || COLOR_DOT.default;
 
                 return (
-                  <ContextMenu key={cmd.id} onOpenChange={setIsContextMenuOpen}>
-                    <Tooltip open={isContextMenuOpen ? false : undefined}>
+                  <ContextMenu key={cmd.id} onOpenChange={handleContextMenuOpenChange}>
+                    <Tooltip
+                      open={
+                        openTooltipCommandId === cmd.id &&
+                        !isContextMenuOpen &&
+                        !suppressCommandTooltips
+                      }
+                      onOpenChange={(open) => handleTooltipOpenChange(cmd.id, open)}
+                    >
                       <ContextMenuTrigger asChild>
                         <TooltipTrigger asChild>
                           <button
                             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium cursor-pointer transition-colors border bg-muted/20 hover:bg-muted/50 shrink-0 max-w-full text-foreground/80 hover:text-foreground"
                             onClick={() => handleCommandClick(cmd)}
+                            onPointerLeave={clearCommandTooltipSuppression}
                           >
                             {cmd.icon_tag && QUICK_ICONS[cmd.icon_tag] ? (
                               (() => {
@@ -405,6 +486,15 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
                     </Tooltip>
 
                     <ContextMenuContent className="min-w-[120px]">
+                      {onSendToAll && (
+                        <ContextMenuItem
+                          className="text-xs gap-2"
+                          onClick={() => handleSendToAll(cmd)}
+                        >
+                          <MdSend className="text-[0.875rem]" />
+                          {t("quickCommands.sendToAll")}
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuItem
                         className="text-xs gap-2"
                         onClick={() => openQuickCommand(JSON.stringify(cmd))}
@@ -433,6 +523,7 @@ function QuickCommands({ onSend }: QuickCommandsProps) {
             variables={promptVars}
             onCancel={() => {
               setPromptCmd(null);
+              setPromptSendToAll(false);
             }}
             onSubmit={handlePromptSubmit}
           />
