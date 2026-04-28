@@ -43,10 +43,12 @@ pub use quick_command::{
 };
 #[allow(unused_imports)]
 pub use settings::{
-    load_app_settings, save_app_settings, ActionLinksMatcherSettings, AppSettings,
-    AppearanceSettings, DiagnosticsLogLevel, DiagnosticsSettings, GeneralSettings,
-    InteractionSettings, KeywordHighlightRule, ProxySettings, SearchEngine, SearchSettings,
-    SecuritySettings, TerminalSettings, TransferSettings, TranslationSettings,
+    decrypt_ai_settings, encrypt_ai_settings, load_app_settings, mask_ai_settings,
+    merge_masked_ai_settings, save_app_settings, ActionLinksMatcherSettings, AiProviderKind,
+    AiProviderProfile, AiSettings, AppSettings, AppearanceSettings, DiagnosticsLogLevel,
+    DiagnosticsSettings, GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings,
+    SearchEngine, SearchSettings, SecuritySettings, TerminalSettings, TransferSettings,
+    TranslationSettings,
 };
 #[allow(unused_imports)]
 pub use tunnel::{load_tunnels, save_tunnels, TunnelConfig, TunnelsConfig};

@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
+  MdAutoAwesome,
   MdBolt,
   MdClose,
   MdDelete,
@@ -23,6 +24,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -31,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { openAIAssistant } from "@/lib/aiEvents";
 import { invoke } from "@/lib/invoke";
 import type { QuickCommand, QuickCommandCategory, QuickCommandsConfig } from "@/types/global";
 import { openQuickCommand } from "../../lib/windowManager";
@@ -65,6 +68,8 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
   // UI State
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiPopoverOpen, setAiPopoverOpen] = useState(false);
 
   // Variable Prompt State
   const [promptCmd, setPromptCmd] = useState<QuickCommand | null>(null);
@@ -228,6 +233,14 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
     [promptCmd, promptSendToAll, onSend, onSendToAll],
   );
 
+  const handleAiPromptSubmit = useCallback(() => {
+    const userInput = aiPrompt.trim();
+    if (!userInput) return;
+    setAiPrompt("");
+    setAiPopoverOpen(false);
+    openAIAssistant({ action: "generate_command", userInput });
+  }, [aiPrompt]);
+
   // Derived state for categories and filtering
   const allCategories = useMemo(() => {
     const catsMap = new Map<string, QuickCommandCategory>();
@@ -353,6 +366,52 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                 </TooltipTrigger>
                 <TooltipContent side="top">{t("quickCommands.addCommand")}</TooltipContent>
               </Tooltip>
+
+              <Popover open={aiPopoverOpen} onOpenChange={setAiPopoverOpen}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="h-6 w-6 shrink-0 rounded-md p-0 transition-colors hover:bg-[var(--df-bg-hover)]"
+                        style={{ color: "var(--df-text-muted)" }}
+                        aria-label={t("ai.generateCommand")}
+                      >
+                        <MdAutoAwesome className="text-[1.05rem]" />
+                      </Button>
+                    </PopoverTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {t("ai.generateCommand")}
+                  </TooltipContent>
+                </Tooltip>
+                <PopoverContent align="end" className="w-80 p-3">
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium">
+                      {t("ai.generateCommand")}
+                    </div>
+                    <Input
+                      value={aiPrompt}
+                      onChange={(event) => setAiPrompt(event.target.value)}
+                      placeholder={t("ai.quickPrompt")}
+                      className="h-8 text-xs"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleAiPromptSubmit();
+                        }
+                      }}
+                    />
+                    <div className="flex justify-end">
+                      <Button size="xs" disabled={!aiPrompt.trim()} onClick={handleAiPromptSubmit}>
+                        <MdAutoAwesome />
+                        {t("ai.generate")}
+                      </Button>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </>
           }
         />

@@ -30,6 +30,7 @@ pub fn get_app_settings(app: tauri::AppHandle) -> AppResult<config::AppSettings>
         settings.security.master_password = Some("__SET__".to_string());
     }
     settings.cloud_sync = config::mask_cloud_sync_settings(settings.cloud_sync);
+    settings.ai = config::mask_ai_settings(settings.ai);
     Ok(settings)
 }
 
@@ -105,9 +106,12 @@ pub async fn persist_app_settings(
     let merged_cloud_sync =
         config::merge_masked_cloud_sync_settings(&existing.cloud_sync, settings.cloud_sync);
     settings.cloud_sync = merged_cloud_sync.clone();
+    let merged_ai = config::merge_masked_ai_settings(&existing.ai, settings.ai);
+    settings.ai = merged_ai.clone();
 
     let mut persisted_settings = settings.clone();
     persisted_settings.cloud_sync = config::encrypt_cloud_sync_settings(merged_cloud_sync.clone())?;
+    persisted_settings.ai = config::encrypt_ai_settings(merged_ai)?;
 
     if let Err(error) = config::save_app_settings(app, &persisted_settings) {
         observability::log_event(StructuredLog {

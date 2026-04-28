@@ -6,6 +6,7 @@ import { BiServer } from "react-icons/bi";
 import { FaRegFolder } from "react-icons/fa";
 import { LuKeyRound } from "react-icons/lu";
 import {
+  MdAutoAwesome,
   MdBackup,
   MdBolt,
   MdClose,
@@ -21,7 +22,6 @@ import {
 import { PiRecordFill } from "react-icons/pi";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import SyncGroupDialog from "./components/dialog/terminal/SyncGroupDialog";
 import AboutDialog from "./components/dialog/app/AboutDialog";
 import LockScreen from "./components/dialog/app/LockScreen";
 import QuitConfirmDialog from "./components/dialog/app/QuitConfirmDialog";
@@ -31,11 +31,13 @@ import {
   type HostKeyVerifyRequest,
 } from "./components/dialog/connections/HostKeyVerifyDialog";
 import { OtpDialog, type OtpRequest } from "./components/dialog/connections/OtpDialog";
+import SyncGroupDialog from "./components/dialog/terminal/SyncGroupDialog";
 import type { ActivityBarItem } from "./components/layout/ActivityBar";
 import ActivityBar from "./components/layout/ActivityBar";
 import Header from "./components/layout/Header";
 import ResizeHandle from "./components/layout/ResizeHandle";
 import ActiveSessions from "./components/panel/ActiveSessions";
+import AIAssistantPanel from "./components/panel/AIAssistantPanel";
 import CommandHistory from "./components/panel/CommandHistory";
 import FileExplorer from "./components/panel/file-explorer";
 import FileTransfer from "./components/panel/file-explorer/FileTransfer";
@@ -51,10 +53,13 @@ import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
+import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
 import { getErrorMessage, shouldPromptConnectionEditOnFailure } from "./lib/errors";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
 import { clearSessionCommandHistory, sendSessionInput } from "./lib/sessionInput";
+import { buildSmartSplitLayout, type SmartSplitMode } from "./lib/smartSplit";
+import { purgeSessionFromGroups } from "./lib/syncInputGroups";
 import {
   findTerminalWindowLeafById,
   findTerminalWindowLeafByTabId,
@@ -67,8 +72,6 @@ import {
   type TerminalWindowNode,
   updateTerminalWindowSplitRatio,
 } from "./lib/tabWindows";
-import { buildSmartSplitLayout, type SmartSplitMode } from "./lib/smartSplit";
-import { purgeSessionFromGroups } from "./lib/syncInputGroups";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   decreaseTerminalFontSize,
@@ -235,8 +238,9 @@ function App() {
 
   // OTP / 2FA dialog state
   const [otpRequest, setOtpRequest] = useState<OtpRequest | null>(null);
-  const [hostKeyVerifyRequest, setHostKeyVerifyRequest] =
-    useState<HostKeyVerifyRequest | null>(null);
+  const [hostKeyVerifyRequest, setHostKeyVerifyRequest] = useState<HostKeyVerifyRequest | null>(
+    null,
+  );
   const lastCloudConflictRevisionRef = useRef<string | null>(null);
 
   // Idle auto-lock
@@ -515,6 +519,10 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activePane = activeTab ? getActivePane(activeTab) : null;
+  const activeConnection = activePane?.connectionId
+    ? (savedConnections.find((connection) => connection.id === activePane.connectionId) ?? null)
+    : null;
+  const [aiIntent, setAiIntent] = useState<AIOpenIntent | null>(null);
   const [terminalWindows, setTerminalWindows] = useState<TerminalWindowNode | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
   const tabsRef = useRef(tabs);
@@ -556,6 +564,17 @@ function App() {
     );
     previousActiveTabIdRef.current = activeTabId;
   }, [activeTabId, tabs]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<AIOpenIntent>).detail;
+      if (!detail) return;
+      setAiIntent(detail);
+      updateUi({ active_right_panel: "aiAssistant" });
+    };
+    window.addEventListener(AI_OPEN_EVENT, handler);
+    return () => window.removeEventListener(AI_OPEN_EVENT, handler);
+  }, [updateUi]);
 
   // Listen for background session output and mark as unread
   useEffect(() => {
@@ -1507,6 +1526,7 @@ function App() {
       syncBackupHistory: { icon: <MdBackup />, tooltip: t("panel.syncBackupHistory") },
       settings: { icon: <MdSettings />, tooltip: t("settings.title") },
       savedConnections: { icon: <BiServer />, tooltip: t("panel.savedConnections") },
+      aiAssistant: { icon: <MdAutoAwesome />, tooltip: t("ai.title") },
       activeSessions: { icon: <MdLink />, tooltip: t("panel.activeSessions") },
       commandHistory: { icon: <MdHistory />, tooltip: t("panel.commandHistory") },
       resourceMonitor: { icon: <MdOutlineMonitorHeart />, tooltip: t("panel.resourceMonitor") },
@@ -1542,12 +1562,14 @@ function App() {
       ...layout.right_bottom,
     ];
     const needsSyncBackupHistory = !allIds.includes("syncBackupHistory");
+    const needsAiAssistant = !allIds.includes("aiAssistant");
     const needsSerialSend = !allIds.includes("serialSend");
     const needsRecording = !allIds.includes("recording");
-    if (!needsSyncBackupHistory && !needsSerialSend && !needsRecording) return;
+    if (!needsSyncBackupHistory && !needsAiAssistant && !needsSerialSend && !needsRecording) return;
 
     updateUi((prev) => {
       const nextLeftBottom = [...prev.activity_bar_layout.left_bottom];
+      const nextRightTop = [...prev.activity_bar_layout.right_top];
       const nextRightBottom = [...prev.activity_bar_layout.right_bottom];
 
       if (!nextLeftBottom.includes("syncBackupHistory")) {
@@ -1556,6 +1578,15 @@ function App() {
           nextLeftBottom.splice(settingsIndex, 0, "syncBackupHistory");
         } else {
           nextLeftBottom.push("syncBackupHistory");
+        }
+      }
+
+      if (!nextRightTop.includes("aiAssistant")) {
+        const savedConnectionsIndex = nextRightTop.indexOf("savedConnections");
+        if (savedConnectionsIndex !== -1) {
+          nextRightTop.splice(savedConnectionsIndex + 1, 0, "aiAssistant");
+        } else {
+          nextRightTop.unshift("aiAssistant");
         }
       }
 
@@ -1590,6 +1621,7 @@ function App() {
         activity_bar_layout: {
           ...prev.activity_bar_layout,
           left_bottom: nextLeftBottom,
+          right_top: nextRightTop,
           right_bottom: nextRightBottom,
         },
       };
@@ -1786,6 +1818,16 @@ function App() {
             onEditConnection={handleEditConnection}
           />
         );
+      case "aiAssistant":
+        return (
+          <AIAssistantPanel
+            activePane={
+              activePane && !activePane.connecting && !activePane.connectError ? activePane : null
+            }
+            activeConnection={activeConnection}
+            intent={aiIntent}
+          />
+        );
       case "activeSessions":
         return (
           <ActiveSessions
@@ -1796,7 +1838,9 @@ function App() {
           />
         );
       case "commandHistory":
-        return <CommandHistory activeSessionId={activeSessionId} onCommandSend={handleHistoryCommand} />;
+        return (
+          <CommandHistory activeSessionId={activeSessionId} onCommandSend={handleHistoryCommand} />
+        );
       case "resourceMonitor":
         return <ResourceMonitor activeSessionId={activeSshSessionId} />;
       default:
@@ -1827,7 +1871,9 @@ function App() {
           onBroadcastToAll={() => setBroadcastToAll((prev) => !prev)}
           broadcastToAll={broadcastToAll}
           onClearTerminal={() => window.dispatchEvent(new CustomEvent("dragonfly:clear-terminal"))}
-          onResetTerminalSize={() => window.dispatchEvent(new CustomEvent("dragonfly:refresh-terminals"))}
+          onResetTerminalSize={() =>
+            window.dispatchEvent(new CustomEvent("dragonfly:refresh-terminals"))
+          }
         />
 
         {/* Main Content */}
@@ -1960,7 +2006,10 @@ function App() {
                   style={{ height: uiConfig.quick_cmd_height }}
                   className="shrink-0 overflow-hidden"
                 >
-                  <QuickCommands onSend={handleHistoryCommand} onSendToAll={handleSendToAllSessions} />
+                  <QuickCommands
+                    onSend={handleHistoryCommand}
+                    onSendToAll={handleSendToAllSessions}
+                  />
                 </div>
               </>
             )}
@@ -2042,10 +2091,7 @@ function App() {
 
         <AboutDialog open={showAbout} onClose={() => setShowAbout(false)} />
 
-        <SyncGroupDialog
-          open={showSyncGroupDialog}
-          onClose={() => setShowSyncGroupDialog(false)}
-        />
+        <SyncGroupDialog open={showSyncGroupDialog} onClose={() => setShowSyncGroupDialog(false)} />
 
         <UpdateDialog
           open={showUpdateDialog}

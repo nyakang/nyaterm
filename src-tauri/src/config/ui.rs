@@ -169,6 +169,7 @@ fn default_left_bottom() -> Vec<String> {
 fn default_right_top() -> Vec<String> {
     vec![
         "savedConnections".to_string(),
+        "aiAssistant".to_string(),
         "activeSessions".to_string(),
         "commandHistory".to_string(),
         "resourceMonitor".to_string(),

@@ -25,6 +25,10 @@ pub struct QuickCommand {
     pub pinned: bool,
     #[serde(default = "default_execute")]
     pub execution_mode: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub risk_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

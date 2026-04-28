@@ -1,6 +1,22 @@
 import { type DragEvent, memo, useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdCellTower, MdClose, MdDns, MdErrorOutline, MdTerminal } from "react-icons/md";
+import {
+  MdAdd,
+  MdAutoAwesome,
+  MdCellTower,
+  MdClose,
+  MdDns,
+  MdErrorOutline,
+  MdTerminal,
+} from "react-icons/md";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { openAIAssistant } from "@/lib/aiEvents";
 import { getActiveGroupForSession, isSessionPausedInGroup } from "@/lib/syncInputGroups";
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import type { PaneSplitDirection, Tab } from "@/types/global";
@@ -46,9 +62,8 @@ function SyncIndicator({
   }, [sessionId, syncGroups, broadcastToAll, pane?.connecting, pane?.connectError]);
 
   const isMember = broadcastToAll || !!activeGroup;
-  const isPaused = activeGroup && sessionId
-    ? isSessionPausedInGroup(activeGroup, sessionId)
-    : false;
+  const isPaused =
+    activeGroup && sessionId ? isSessionPausedInGroup(activeGroup, sessionId) : false;
 
   if (!isMember) return null;
 
@@ -310,6 +325,39 @@ function TabBar({
           handleDropAtIndex(tabs.length);
         }}
       >
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="px-3 transition-colors df-hover"
+              style={{ color: "var(--df-text-muted)" }}
+              title={t("ai.title")}
+            >
+              <MdAutoAwesome className="mx-auto text-base" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => openAIAssistant({ action: "explain_output" })}>
+              {t("ai.explainRecent")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openAIAssistant({ action: "generate_command" })}>
+              {t("ai.generateCommand")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openAIAssistant({ action: "analyze_error" })}>
+              {t("ai.analyzeError")}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() =>
+                openAIAssistant({
+                  action: "generate_command",
+                  userInput: "生成一组只读巡检命令计划",
+                })
+              }
+            >
+              {t("ai.inspectionPlan")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {draggedTabId && dropIndex === tabs.length && (
           <div
             className="pointer-events-none absolute inset-y-1 left-0 z-20 w-0.5 rounded-full"

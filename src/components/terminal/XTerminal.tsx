@@ -15,7 +15,9 @@ import { useKeywordHighlighter } from "@/hooks/useKeywordHighlighter";
 import { useShellIntegration } from "@/hooks/useShellIntegration";
 import { useTerminalSearch } from "@/hooks/useTerminalSearch";
 import { useTerminalSettings } from "@/hooks/useTerminalSettings";
+import { emitAIErrorDetected } from "@/lib/aiEvents";
 import { readClipboardText } from "@/lib/clipboard";
+import { assessCommandRisk } from "@/lib/commandRisk";
 import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { logger } from "@/lib/logger";
@@ -25,6 +27,7 @@ import {
   sendSessionInput,
   sendSessionInputWithSync,
 } from "@/lib/sessionInput";
+import { registerTerminalContextProvider } from "@/lib/terminalContext";
 import {
   applyTerminalInputData,
   applyTerminalInputPreview,
@@ -33,6 +36,8 @@ import {
   getTrackedSubmissionCommand,
 } from "@/lib/terminalInputTracker";
 import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
+import { Button } from "../ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
 import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
@@ -59,17 +64,47 @@ interface XTerminalProps {
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   syncPeerSessionIds?: string[];
   syncOverlay?: SyncOverlayState;
+  riskUsername?: string;
 }
 
 type PerformanceMode = "normal" | "overloaded";
 type PerformanceOverlayState = "overloaded" | "recovered" | null;
+
+type RiskPromptState = {
+  command: string;
+  risk: import("@/types/global").CommandRiskResponse;
+};
+
+function readRecentOutput(terminal: Terminal, lineLimit: number) {
+  const buffer = terminal.buffer.active;
+  const total = buffer.length;
+  const start = Math.max(0, total - lineLimit);
+  const lines: string[] = [];
+  for (let y = start; y < total; y += 1) {
+    const line = buffer.getLine(y);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join("\n").replace(/\s+$/u, "");
+}
+
+function hasErrorKeyword(output: string) {
+  return /\b(error|failed|permission denied|no space left on device|connection refused|segmentation fault|out of memory|cannot allocate memory|command not found|module not found|port already in use)\b/i.test(
+    output,
+  );
+}
 
 function SyncActionOverlay({ overlay }: { overlay: SyncOverlayState }) {
   const { t } = useTranslation();
   const color = overlay.groupColor ?? "var(--df-primary)";
 
   return (
-    <div className="absolute right-2 top-1 z-20 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] shadow-sm" style={{ backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 92%, transparent)", border: `1px solid color-mix(in srgb, ${color} 30%, transparent)` }}>
+    <div
+      className="absolute right-2 top-1 z-20 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] shadow-sm"
+      style={{
+        backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 92%, transparent)",
+        border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
+      }}
+    >
       <MdCellTower className="text-xs mr-0.5" style={{ color }} />
       <span className="font-medium mr-1" style={{ color }}>
         {overlay.isPaused ? t("syncGroup.paused") : t("syncGroup.broadcastActive")}
@@ -119,6 +154,7 @@ export default function XTerminal({
   onReconnected,
   syncPeerSessionIds,
   syncOverlay,
+  riskUsername,
 }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -127,6 +163,7 @@ export default function XTerminal({
   const [performanceMode, setPerformanceMode] = useState<PerformanceMode>("normal");
   const [performanceOverlay, setPerformanceOverlay] = useState<PerformanceOverlayState>(null);
   const [skippedOutputChars, setSkippedOutputChars] = useState(0);
+  const [riskPrompt, setRiskPrompt] = useState<RiskPromptState | null>(null);
 
   const { terminalTheme } = useTheme();
   const { t } = useTranslation();
@@ -153,6 +190,7 @@ export default function XTerminal({
   const onReconnectedRef = useRef(onReconnected);
   const sessionIdRef = useRef(sessionId);
   const syncPeerSessionIdsRef = useRef(syncPeerSessionIds);
+  const riskUsernameRef = useRef(riskUsername);
   const visibleRef = useRef(visible);
   const performanceModeRef = useRef<PerformanceMode>("normal");
   const performanceOverlayTimerRef = useRef<number | null>(null);
@@ -161,6 +199,9 @@ export default function XTerminal({
   const queuedOutputCharsRef = useRef(0);
   const pendingOutputFlushRef = useRef<number | null>(null);
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
+  const continueRiskCommandRef = useRef<((command: string) => void) | null>(null);
+  const replaceInputCommandRef = useRef<((command: string) => void) | null>(null);
+  const lastErrorNoticeAtRef = useRef(0);
 
   useEffect(() => {
     connectionIdRef.current = connectionId;
@@ -173,6 +214,10 @@ export default function XTerminal({
   useEffect(() => {
     syncPeerSessionIdsRef.current = syncPeerSessionIds;
   }, [syncPeerSessionIds]);
+
+  useEffect(() => {
+    riskUsernameRef.current = riskUsername;
+  }, [riskUsername]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -463,6 +508,67 @@ export default function XTerminal({
         dismissSuggestions();
       }
     };
+
+    const sendRawInput = (data: string, command: string | null) => {
+      const peers = syncPeerSessionIdsRef.current;
+      if (peers && peers.length > 0) {
+        void sendSessionInputWithSync(sessionId, data, peers, {
+          preview: null,
+          registerSubmission: command,
+        }).catch(() => {});
+      } else {
+        void sendSessionInput(sessionId, data, {
+          preview: null,
+          registerSubmission: command,
+        }).catch(() => {});
+      }
+    };
+
+    const replaceInputCommand = (command: string) => {
+      const trackedState = inputStateRef.current;
+      const input = trackedState.lineRewriteRequired
+        ? `\u0005\u0015${command}`
+        : `${"\x7f".repeat(trackedState.value.length)}${command}`;
+      void sendSessionInput(sessionId, input, {
+        preview: { kind: "replace", value: command },
+        registerSubmission: null,
+      }).catch(() => {});
+    };
+
+    replaceInputCommandRef.current = replaceInputCommand;
+    continueRiskCommandRef.current = (command: string) => {
+      inputStateRef.current = applyTerminalInputData(inputStateRef.current, "\r");
+      syncSuggestionsWithInputState();
+      sendRawInput("\r", command);
+      void invoke("append_ai_audit", {
+        request: {
+          connectionId: connectionIdRef.current ?? null,
+          action: "ai.command_risk_override",
+          generatedCommand: command,
+          riskLevel: "high",
+          insertedToTerminal: false,
+          executed: true,
+          blocked: false,
+        },
+      }).catch(() => {});
+    };
+
+    const unregisterTerminalContext = registerTerminalContextProvider(sessionId, {
+      getRecentOutput: (lineLimit) => readRecentOutput(terminal, lineLimit),
+      getSelectedText: () => terminal.getSelection(),
+      getInputBuffer: () => inputStateRef.current.value,
+      insertCommand: async (command) => {
+        const trackedState = inputStateRef.current;
+        const input = trackedState.lineRewriteRequired
+          ? `\u0005\u0015${command}`
+          : `${"\x7f".repeat(trackedState.value.length)}${command}`;
+        await sendSessionInput(sessionId, input, {
+          preview: { kind: "replace", value: command },
+          registerSubmission: null,
+        });
+      },
+      focus: () => terminal.focus(),
+    });
 
     const handleInputPreview = (preview: SessionInputPreview) => {
       inputStateRef.current = applyTerminalInputPreview(inputStateRef.current, preview);
@@ -809,6 +915,13 @@ export default function XTerminal({
         if (!isTerminalAlive()) return;
         queuedOutputChunksRef.current.push(event.payload);
         queuedOutputCharsRef.current += event.payload.length;
+        if (visibleRef.current && hasErrorKeyword(event.payload)) {
+          const now = Date.now();
+          if (now - lastErrorNoticeAtRef.current > 30_000) {
+            lastErrorNoticeAtRef.current = now;
+            emitAIErrorDetected({ sessionId, output: event.payload.slice(-4000) });
+          }
+        }
 
         const dropped = trimQueuedOutput(getBacklogCap());
         noteSkippedOutput(dropped);
@@ -934,21 +1047,29 @@ export default function XTerminal({
       }
 
       const command = data === "\r" ? getTrackedSubmissionCommand(inputStateRef.current) : "";
+      if (data === "\r" && command && terminalAppSettingsRef.current?.ai?.risk_check_enabled) {
+        const risk = assessCommandRisk(command, riskUsernameRef.current);
+        if (risk.riskLevel === "critical" || risk.riskLevel === "high") {
+          setRiskPrompt({ command, risk });
+          if (risk.blocked) {
+            void invoke("append_ai_audit", {
+              request: {
+                connectionId: connectionIdRef.current ?? null,
+                action: "ai.command_risk_blocked",
+                generatedCommand: command,
+                riskLevel: risk.riskLevel,
+                insertedToTerminal: false,
+                executed: false,
+                blocked: true,
+              },
+            }).catch(() => {});
+          }
+          return;
+        }
+      }
       inputStateRef.current = applyTerminalInputData(inputStateRef.current, data);
       syncSuggestionsWithInputState();
-
-      const peers = syncPeerSessionIdsRef.current;
-      if (peers && peers.length > 0) {
-        void sendSessionInputWithSync(sessionId, data, peers, {
-          preview: null,
-          registerSubmission: data === "\r" && command ? command : null,
-        }).catch(() => {});
-      } else {
-        void sendSessionInput(sessionId, data, {
-          preview: null,
-          registerSubmission: data === "\r" && command ? command : null,
-        }).catch(() => {});
-      }
+      sendRawInput(data, data === "\r" && command ? command : null);
     });
 
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
@@ -1028,6 +1149,8 @@ export default function XTerminal({
       shellIntegrationRef.current.enabled = false;
       shellIntegrationRef.current.commandRunning = false;
       sendInputRef.current = null;
+      continueRiskCommandRef.current = null;
+      replaceInputCommandRef.current = null;
 
       oscDisposable.dispose();
       writeParsedDisposable.dispose();
@@ -1037,6 +1160,7 @@ export default function XTerminal({
       selectionDisposable.dispose();
       removeLinkPopup();
       removePreviewListener();
+      unregisterTerminalContext();
 
       observer.disconnect();
       if (outputUnlisten) outputUnlisten();
@@ -1207,9 +1331,7 @@ export default function XTerminal({
           </div>
         )}
 
-        {syncOverlay && (
-          <SyncActionOverlay overlay={syncOverlay} />
-        )}
+        {syncOverlay && <SyncActionOverlay overlay={syncOverlay} />}
 
         <TerminalSearchBar
           show={showSearchBar}
@@ -1232,6 +1354,63 @@ export default function XTerminal({
         <ActionLinkTooltip state={tooltipState} />
         <ActionLinkMenu state={menuState} onClose={closeMenu} />
       </div>
+      <Dialog open={!!riskPrompt} onOpenChange={(open) => !open && setRiskPrompt(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{t("ai.riskPromptTitle")}</DialogTitle>
+          </DialogHeader>
+          {riskPrompt ? (
+            <div className="space-y-3 text-xs leading-5">
+              <div className="rounded-md border border-border/70 bg-muted/30 p-2 font-mono break-all">
+                {riskPrompt.command}
+              </div>
+              <div>{riskPrompt.risk.reason}</div>
+              <div className="font-medium">
+                {t("ai.riskLevel")}：{riskPrompt.risk.riskLevel}
+              </div>
+              {riskPrompt.risk.safeAlternatives.length > 0 ? (
+                <div>
+                  <div className="mb-1 text-muted-foreground">
+                    {t("ai.safeAlternatives")}
+                  </div>
+                  <pre className="rounded-md bg-muted/40 p-2 font-mono whitespace-pre-wrap break-all">
+                    {riskPrompt.risk.safeAlternatives.join("\n")}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRiskPrompt(null)}>
+              {t("common.cancel")}
+            </Button>
+            {riskPrompt?.risk.safeAlternatives[0] ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  replaceInputCommandRef.current?.(riskPrompt.risk.safeAlternatives[0]);
+                  setRiskPrompt(null);
+                }}
+              >
+                {t("ai.insertSafeAlternative")}
+              </Button>
+            ) : null}
+            {!riskPrompt?.risk.blocked ? (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (riskPrompt) {
+                    continueRiskCommandRef.current?.(riskPrompt.command);
+                  }
+                  setRiskPrompt(null);
+                }}
+              >
+                {t("ai.continueExecute")}
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

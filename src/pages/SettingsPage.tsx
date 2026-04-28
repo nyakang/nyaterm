@@ -1,7 +1,16 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ComponentType, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
+  MdAutoAwesome,
   MdBackup,
   MdDashboard,
   MdDns,
@@ -17,6 +26,7 @@ import {
 } from "react-icons/md";
 import { toast } from "sonner";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
+import { AiTab } from "@/components/settings/AiTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { GeneralTab } from "@/components/settings/GeneralTab";
 import { InteractionTab } from "@/components/settings/InteractionTab";
@@ -30,8 +40,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppContext, useApp } from "@/context/AppContext";
 import { SettingsDraftContext } from "@/context/SettingsDraftContext";
+import { type CloudSyncValidationCode, getCloudSyncValidationErrors } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
-import { getCloudSyncValidationErrors, type CloudSyncValidationCode } from "@/lib/cloudSync";
 import { invoke } from "@/lib/invoke";
 import type { AppSettings, UiConfig } from "@/types/global";
 
@@ -97,7 +107,7 @@ export default function SettingsPage() {
         id: "terminal_session",
         label: t("settings.groupTerminalSession"),
         icon: "dns",
-        items: ["terminal", "search", "translation"],
+        items: ["terminal", "search", "translation", "ai"],
       },
       {
         id: "transfer_group",
@@ -130,10 +140,7 @@ export default function SettingsPage() {
     setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   }, []);
 
-  const committedSerialized = useMemo(
-    () => JSON.stringify(committedSettings),
-    [committedSettings],
-  );
+  const committedSerialized = useMemo(() => JSON.stringify(committedSettings), [committedSettings]);
   const draftSerialized = useMemo(() => JSON.stringify(draftSettings), [draftSettings]);
   const isDirty = committedSerialized !== draftSerialized;
 
@@ -199,6 +206,12 @@ export default function SettingsPage() {
       icon: "mouse",
       Component: InteractionTab,
     },
+    {
+      id: "ai",
+      label: t("ai.title"),
+      icon: "ai",
+      Component: AiTab,
+    },
   ];
 
   const activeTabConfig = tabs.find((tab) => tab.id === activeTab);
@@ -216,6 +229,7 @@ export default function SettingsPage() {
     security: MdSecurity,
     terminal: MdTerminal,
     mouse: MdMouse,
+    ai: MdAutoAwesome,
   };
 
   function DynamicIcon({ name, className }: { name: string; className?: string }) {
@@ -351,10 +365,11 @@ export default function SettingsPage() {
                           variant="ghost"
                           onClick={() => setActiveTab(tabId)}
                           title={category.label}
-                          className={`h-auto w-full justify-center gap-3 rounded-xl border px-2 py-2.5 text-sm font-semibold transition-colors sm:justify-start sm:px-3 ${isActive
+                          className={`h-auto w-full justify-center gap-3 rounded-xl border px-2 py-2.5 text-sm font-semibold transition-colors sm:justify-start sm:px-3 ${
+                            isActive
                               ? "border-primary/20 bg-primary/12 text-foreground shadow-xs hover:bg-primary/16"
                               : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background hover:text-foreground"
-                            }`}
+                          }`}
                         >
                           <DynamicIcon
                             name={tabItem.icon}
@@ -365,7 +380,9 @@ export default function SettingsPage() {
                       );
                     }
 
-                    const activeChildCount = category.items.filter((item) => activeTab === item).length;
+                    const activeChildCount = category.items.filter(
+                      (item) => activeTab === item,
+                    ).length;
                     const isGroupActive = activeChildCount > 0;
 
                     return (
@@ -374,10 +391,11 @@ export default function SettingsPage() {
                           variant="ghost"
                           onClick={() => toggleGroup(category.id)}
                           title={category.label}
-                          className={`h-auto w-full justify-center sm:justify-between rounded-xl px-2 py-2.5 text-sm font-semibold transition-colors sm:px-3 ${isGroupActive && !isExpanded
+                          className={`h-auto w-full justify-center sm:justify-between rounded-xl px-2 py-2.5 text-sm font-semibold transition-colors sm:px-3 ${
+                            isGroupActive && !isExpanded
                               ? "border border-primary/20 bg-primary/5 text-foreground hover:bg-primary/10"
                               : "border border-transparent text-muted-foreground hover:border-border/70 hover:bg-background hover:text-foreground"
-                            }`}
+                          }`}
                         >
                           <div className="flex items-center justify-center sm:justify-start gap-3">
                             <DynamicIcon
@@ -387,14 +405,16 @@ export default function SettingsPage() {
                             <span className="hidden truncate sm:inline">{category.label}</span>
                           </div>
                           <MdKeyboardArrowRight
-                            className={`hidden sm:block shrink-0 text-[1.125rem] transition-transform duration-200 ${isExpanded ? "rotate-90" : ""
-                              }`}
+                            className={`hidden sm:block shrink-0 text-[1.125rem] transition-transform duration-200 ${
+                              isExpanded ? "rotate-90" : ""
+                            }`}
                           />
                         </Button>
 
                         <div
-                          className={`relative flex flex-col gap-1 overflow-hidden transition-all duration-200 ${isExpanded ? "max-h-64 opacity-100 mt-1" : "max-h-0 opacity-0"
-                            } sm:ml-[1.3125rem] sm:pl-3 sm:border-l-2 sm:border-border/40`}
+                          className={`relative flex flex-col gap-1 overflow-hidden transition-all duration-200 ${
+                            isExpanded ? "max-h-64 opacity-100 mt-1" : "max-h-0 opacity-0"
+                          } sm:ml-[1.3125rem] sm:pl-3 sm:border-l-2 sm:border-border/40`}
                         >
                           {category.items.map((tabId) => {
                             const tabItem = tabs.find((t) => t.id === tabId);
@@ -406,10 +426,11 @@ export default function SettingsPage() {
                                 variant="ghost"
                                 onClick={() => setActiveTab(tabId)}
                                 title={tabItem.label}
-                                className={`h-auto w-full justify-center gap-3 rounded-lg border px-2 py-2 text-[0.85rem] font-medium transition-colors sm:justify-start sm:px-3 ${isActive
+                                className={`h-auto w-full justify-center gap-3 rounded-lg border px-2 py-2 text-[0.85rem] font-medium transition-colors sm:justify-start sm:px-3 ${
+                                  isActive
                                     ? "border-primary/20 bg-primary/12 text-foreground shadow-xs hover:bg-primary/16"
                                     : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/50 hover:text-foreground"
-                                  }`}
+                                }`}
                               >
                                 <DynamicIcon
                                   name={tabItem.icon}

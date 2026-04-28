@@ -3,6 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  MdAutoAwesome,
   MdClearAll,
   MdContentCopy,
   MdContentPaste,
@@ -15,6 +16,7 @@ import {
 } from "react-icons/md";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { MOD } from "@/hooks/useGlobalShortcuts";
+import { openAIAssistant } from "@/lib/aiEvents";
 import { readClipboardText } from "@/lib/clipboard";
 import type { SearchEngine } from "@/types/global";
 import TranslationDialog from "../dialog/terminal/TranslationDialog";
@@ -227,6 +229,29 @@ export default function TerminalContextMenu({
                   </ContextMenuSubContent>
                 </ContextMenuSub>
               )}
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onClick={() =>
+                  openAIAssistant({
+                    action: "explain_selected",
+                    selectedText: ctxSelection.text,
+                  })
+                }
+              >
+                <MdAutoAwesome className="text-[0.875rem] text-muted-foreground mr-2" />
+                {t("ai.explainSelected")}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() =>
+                  openAIAssistant({
+                    action: "repair_from_selection",
+                    selectedText: ctxSelection.text,
+                  })
+                }
+              >
+                <MdAutoAwesome className="text-[0.875rem] text-muted-foreground mr-2" />
+                {t("ai.repairSelected")}
+              </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />

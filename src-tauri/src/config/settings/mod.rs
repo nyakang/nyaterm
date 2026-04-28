@@ -1,4 +1,5 @@
 mod appearance;
+mod ai;
 mod diagnostics;
 mod general;
 mod interaction;
@@ -10,6 +11,10 @@ mod transfer;
 mod translation;
 
 pub use appearance::AppearanceSettings;
+pub use ai::{
+    decrypt_ai_settings, encrypt_ai_settings, mask_ai_settings, merge_masked_ai_settings,
+    AiProviderKind, AiProviderProfile, AiSettings,
+};
 pub use diagnostics::{DiagnosticsLogLevel, DiagnosticsSettings};
 pub use general::GeneralSettings;
 pub use interaction::InteractionSettings;
@@ -53,6 +58,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub diagnostics: DiagnosticsSettings,
     #[serde(default)]
+    pub ai: AiSettings,
+    #[serde(default)]
     pub cloud_sync: CloudSyncSettings,
     #[serde(default)]
     pub ui: UiConfig,
@@ -79,6 +86,10 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     {
         settings.cloud_sync = legacy_cloud_sync;
         migrated = true;
+    }
+
+    if let Ok(ai_settings) = decrypt_ai_settings(settings.ai.clone()) {
+        settings.ai = ai_settings;
     }
 
     for list in [
@@ -226,6 +237,7 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     if migrated {
         let mut persisted = settings.clone();
         persisted.cloud_sync = encrypt_cloud_sync_settings(persisted.cloud_sync.clone())?;
+        persisted.ai = encrypt_ai_settings(persisted.ai.clone())?;
         let _ = save_app_settings(app, &persisted);
     }
 

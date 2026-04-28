@@ -56,8 +56,9 @@ function SplitView({
   return (
     <div
       ref={containerRef}
-      className={`flex h-full w-full min-h-0 min-w-0 ${isHorizontalSplit ? "flex-col" : "flex-row"
-        }`}
+      className={`flex h-full w-full min-h-0 min-w-0 ${
+        isHorizontalSplit ? "flex-col" : "flex-row"
+      }`}
     >
       <div
         className="min-h-0 min-w-0 relative"
@@ -155,8 +156,9 @@ function PaneNodeView({
 
   return (
     <div
-      className={`relative h-full w-full overflow-hidden ${showChrome ? "rounded-sm border" : ""
-        } ${isActive ? "ring-1 ring-primary/60" : ""}`}
+      className={`relative h-full w-full overflow-hidden ${
+        showChrome ? "rounded-sm border" : ""
+      } ${isActive ? "ring-1 ring-primary/60" : ""}`}
       style={{
         borderColor: showChrome ? "var(--df-border)" : undefined,
         backgroundColor: "var(--df-bg-terminal)",
@@ -274,7 +276,10 @@ function PaneXTerminal({
   syncGroups: import("@/types/global").SyncGroup[];
   broadcastToAll: boolean;
 }) {
-  const { tabs, setSyncGroups } = useApp();
+  const { tabs, savedConnections, setSyncGroups } = useApp();
+  const riskUsername = connectionId
+    ? savedConnections.find((connection) => connection.id === connectionId)?.username
+    : undefined;
 
   const syncPeerSessionIds = useMemo(() => {
     const peers = getSyncPeers(sessionId, syncGroups);
@@ -282,7 +287,9 @@ function PaneXTerminal({
 
     const allSessionIds = new Set(peers);
     for (const tab of tabs) {
-      const panes = (function collect(n: import("@/types/global").PaneNode): import("@/types/global").SessionPane[] {
+      const panes = (function collect(
+        n: import("@/types/global").PaneNode,
+      ): import("@/types/global").SessionPane[] {
         if (n.kind === "leaf") return [n];
         return [...collect(n.first), ...collect(n.second)];
       })(tab.root);
@@ -310,7 +317,9 @@ function PaneXTerminal({
     setSyncGroups((prev) =>
       prev.map((g) =>
         g.id === activeGroup.id
-          ? (isPaused ? resumeSessionInGroup(g, sessionId) : pauseSessionInGroup(g, sessionId))
+          ? isPaused
+            ? resumeSessionInGroup(g, sessionId)
+            : pauseSessionInGroup(g, sessionId)
           : g,
       ),
     );
@@ -319,18 +328,14 @@ function PaneXTerminal({
   const handleLeaveGroup = useCallback(() => {
     if (!activeGroup) return;
     setSyncGroups((prev) =>
-      prev.map((g) =>
-        g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g,
-      ),
+      prev.map((g) => (g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g)),
     );
   }, [activeGroup, sessionId, setSyncGroups]);
 
   const handleCloseGroup = useCallback(() => {
     if (!activeGroup) return;
     setSyncGroups((prev) =>
-      prev.map((g) =>
-        g.id === activeGroup.id ? { ...g, enabled: false } : g,
-      ),
+      prev.map((g) => (g.id === activeGroup.id ? { ...g, enabled: false } : g)),
     );
   }, [activeGroup, setSyncGroups]);
 
@@ -345,7 +350,14 @@ function PaneXTerminal({
       onLeaveGroup: handleLeaveGroup,
       onCloseGroup: handleCloseGroup,
     };
-  }, [activeGroup, syncPeerSessionIds.length, isPaused, handlePauseResume, handleLeaveGroup, handleCloseGroup]);
+  }, [
+    activeGroup,
+    syncPeerSessionIds.length,
+    isPaused,
+    handlePauseResume,
+    handleLeaveGroup,
+    handleCloseGroup,
+  ]);
 
   return (
     <XTerminal
@@ -356,6 +368,7 @@ function PaneXTerminal({
       onReconnected={onReconnected}
       syncPeerSessionIds={syncPeerSessionIds}
       syncOverlay={syncOverlay}
+      riskUsername={riskUsername}
     />
   );
 }

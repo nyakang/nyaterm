@@ -9,7 +9,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
+import {
+  DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
+  DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
+} from "@/lib/interactionSettings";
 import {
   collectSessionPanes,
   createSessionPane,
@@ -26,11 +31,6 @@ import {
   updateSessionPane,
   updateSplitRatio as updateWorkspaceSplitRatio,
 } from "@/lib/workspaceTabs";
-import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
-import {
-  DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
-  DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
-} from "@/lib/interactionSettings";
 import type {
   AppSettings,
   Group,
@@ -142,7 +142,7 @@ interface AppContextType {
 
 export type TerminalAppSettings = Pick<
   AppSettings,
-  "appearance" | "interaction" | "terminal" | "translation" | "search"
+  "appearance" | "interaction" | "terminal" | "translation" | "search" | "ai"
 >;
 
 /**
@@ -242,6 +242,46 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     level: "info",
     retention_days: 7,
   },
+  ai: {
+    enabled: true,
+    context_line_limit: 200,
+    redaction_enabled: true,
+    risk_check_enabled: true,
+    allow_save_command: true,
+    record_history: true,
+    timeout_ms: 60000,
+    max_output_tokens: 1200,
+    active_profile_id: "openai",
+    provider_profiles: [
+      {
+        id: "openai",
+        name: "OpenAI",
+        provider_kind: "openai",
+        model: "gpt-4o-mini",
+        base_url: null,
+        api_key: null,
+        enabled: true,
+      },
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        provider_kind: "deepseek",
+        model: "deepseek-chat",
+        base_url: null,
+        api_key: null,
+        enabled: true,
+      },
+      {
+        id: "ollama",
+        name: "Ollama",
+        provider_kind: "ollama",
+        model: "qwen2.5-coder:7b",
+        base_url: "http://localhost:11434/v1/",
+        api_key: null,
+        enabled: true,
+      },
+    ],
+  },
   cloud_sync: DEFAULT_CLOUD_SYNC_SETTINGS,
   ui: {
     open_tabs: [],
@@ -262,7 +302,13 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     activity_bar_layout: {
       left_top: ["fileExplorer", "network", "securityAuth"],
       left_bottom: ["syncBackupHistory", "settings"],
-      right_top: ["savedConnections", "activeSessions", "commandHistory", "resourceMonitor"],
+      right_top: [
+        "savedConnections",
+        "aiAssistant",
+        "activeSessions",
+        "commandHistory",
+        "resourceMonitor",
+      ],
       right_bottom: ["quickCmdBar", "serialSend", "recording", "lock"],
       show_labels: false,
     },
@@ -329,6 +375,7 @@ function preserveAppSettingsReferences(prev: AppSettings, next: AppSettings): Ap
   const diagnostics = areSettingsValuesEqual(prev.diagnostics, next.diagnostics)
     ? prev.diagnostics
     : next.diagnostics;
+  const ai = areSettingsValuesEqual(prev.ai, next.ai) ? prev.ai : next.ai;
   const cloudSync = areSettingsValuesEqual(prev.cloud_sync, next.cloud_sync)
     ? prev.cloud_sync
     : next.cloud_sync;
@@ -345,6 +392,7 @@ function preserveAppSettingsReferences(prev: AppSettings, next: AppSettings): Ap
     interaction === prev.interaction &&
     transfer === prev.transfer &&
     diagnostics === prev.diagnostics &&
+    ai === prev.ai &&
     cloudSync === prev.cloud_sync &&
     ui === prev.ui
   ) {
@@ -363,6 +411,7 @@ function preserveAppSettingsReferences(prev: AppSettings, next: AppSettings): Ap
     interaction,
     transfer,
     diagnostics,
+    ai,
     cloud_sync: cloudSync,
     ui,
   };
@@ -1074,6 +1123,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       terminal: appSettings.terminal,
       translation: appSettings.translation,
       search: appSettings.search,
+      ai: appSettings.ai,
     }),
     [
       appSettings.appearance,
@@ -1081,6 +1131,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       appSettings.terminal,
       appSettings.translation,
       appSettings.search,
+      appSettings.ai,
     ],
   );
 

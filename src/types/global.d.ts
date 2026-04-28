@@ -222,6 +222,7 @@ export type LeftPanelId = "fileExplorer" | "network" | "securityAuth" | "syncBac
 
 export type RightPanelId =
   | "savedConnections"
+  | "aiAssistant"
   | "activeSessions"
   | "commandHistory"
   | "resourceMonitor"
@@ -326,6 +327,8 @@ export interface QuickCommand {
   icon_tag?: string;
   pinned?: boolean;
   execution_mode?: string;
+  source?: "manual" | "ai";
+  risk_level?: RiskLevel;
 }
 
 export interface QuickCommandsConfig {
@@ -471,6 +474,114 @@ export interface DiagnosticsSettings {
   retention_days: number;
 }
 
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+export type AIProviderKind =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "deepseek"
+  | "groq"
+  | "ollama"
+  | "openai_compatible";
+
+export interface AIProviderProfile {
+  id: string;
+  name: string;
+  provider_kind: AIProviderKind;
+  model: string;
+  base_url?: string | null;
+  api_key?: string | null;
+  enabled: boolean;
+}
+
+export interface AISettings {
+  enabled: boolean;
+  context_line_limit: number;
+  redaction_enabled: boolean;
+  risk_check_enabled: boolean;
+  allow_save_command: boolean;
+  record_history: boolean;
+  timeout_ms: number;
+  max_output_tokens: number;
+  active_profile_id: string;
+  provider_profiles: AIProviderProfile[];
+}
+
+export interface AIContext {
+  connectionName?: string | null;
+  host?: string | null;
+  port?: number | null;
+  username?: string | null;
+  cwd?: string | null;
+  os?: string | null;
+  arch?: string | null;
+  recentOutput: string;
+  selectedText: string;
+  inputBuffer: string;
+}
+
+export type AIAction =
+  | "generate_command"
+  | "explain_output"
+  | "explain_selected"
+  | "analyze_error"
+  | "repair_from_selection";
+
+export interface AICommandCard {
+  id: string;
+  title: string;
+  command: string;
+  explanation: string;
+  riskLevel: RiskLevel;
+  riskReason: string;
+  expectedEffect: string;
+  rollback?: string | null;
+  category?: string | null;
+  references?: string[];
+}
+
+export interface AIMessage {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+  commandCards?: AICommandCard[];
+}
+
+export interface AISession {
+  id: string;
+  connectionId?: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AIStreamStart {
+  streamId: string;
+  sessionId: string;
+}
+
+export interface AIStreamEventPayload {
+  type: "start" | "delta" | "done" | "error";
+  streamId: string;
+  sessionId?: string;
+  textDelta?: string;
+  message?: AIMessage;
+  commandCards?: AICommandCard[];
+  usage?: unknown;
+  error?: string;
+}
+
+export interface CommandRiskResponse {
+  riskLevel: RiskLevel;
+  blocked: boolean;
+  reason: string;
+  safeAlternatives: string[];
+  confirmText?: string | null;
+}
+
 export interface TunnelConfig {
   id: string;
   name: string;
@@ -505,6 +616,7 @@ export interface AppSettings {
   interaction: InteractionSettings;
   transfer: TransferSettings;
   diagnostics: DiagnosticsSettings;
+  ai: AISettings;
   cloud_sync: CloudSyncSettings;
   ui: UiConfig;
 }

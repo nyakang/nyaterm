@@ -1,4 +1,5 @@
 pub mod app;
+pub mod ai;
 pub mod backup;
 pub mod clipboard;
 pub mod cloud_sync;
