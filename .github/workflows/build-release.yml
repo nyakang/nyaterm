@@ -337,33 +337,35 @@ jobs:
     name: Generate updater manifest
     needs: rename-assets
     runs-on: ubuntu-latest
-
     if: startsWith(github.ref, 'refs/tags/v')
-
     permissions:
       contents: write
-
     steps:
       - name: Build and upload latest.json
         uses: actions/github-script@v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
             const version = tag.replace(/^v/, '');
-
+  
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+  
             const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner,
+              repo,
               tag,
             });
-
+  
             const assets = release.assets || [];
-
+  
             function mapSigToPlatforms(name) {
               const baseName = name.replace(/\.sig$/, '');
               const lower = name.toLowerCase();
               const keys = [];
-
+  
               if (lower.endsWith('.app.tar.gz.sig')) {
                 if (lower.includes('macos_x64') || lower.includes('x64') || lower.includes('x86_64')) {
                   keys.push('darwin-x86_64');
@@ -376,44 +378,64 @@ jobs:
                 } else if (lower.includes('linux_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
                   keys.push('linux-aarch64');
                 }
-              } else if (lower.endsWith('-setup.nsis.zip.sig')) {
+              } else if (lower.endsWith('-setup.exe.sig') || lower.endsWith('-setup.nsis.zip.sig')) {
                 if (lower.includes('windows_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
                   keys.push('windows-x86_64');
                 } else if (lower.includes('windows_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
                   keys.push('windows-aarch64');
                 }
               }
-
+  
               return { keys, baseName };
             }
-
+  
+            async function downloadAssetText(asset) {
+              const response = await fetch(asset.url, {
+                headers: {
+                  Accept: 'application/octet-stream',
+                  Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'actions/github-script',
+                },
+                redirect: 'follow',
+              });
+  
+              if (!response.ok) {
+                const body = await response.text().catch(() => '');
+                throw new Error(
+                  `Failed to download ${asset.name}: HTTP ${response.status} ${response.statusText} ${body.slice(0, 300)}`
+                );
+              }
+  
+              return (await response.text()).trim();
+            }
+  
             const platforms = {};
             const sigAssets = assets.filter(asset => asset.name.endsWith('.sig'));
-
+  
             for (const sigAsset of sigAssets) {
               const { keys, baseName } = mapSigToPlatforms(sigAsset.name);
-
+  
               if (keys.length === 0) {
                 console.log(`Skip non-updater signature asset: ${sigAsset.name}`);
                 continue;
               }
-
+  
               const binaryAsset = assets.find(asset => asset.name === baseName);
-
+  
               if (!binaryAsset) {
                 console.log(`Warning: no binary asset found for ${baseName}`);
                 continue;
               }
-
-              const sigResponse = await fetch(sigAsset.browser_download_url);
-
-              if (!sigResponse.ok) {
-                console.log(`Warning: failed to download signature: ${sigAsset.name}`);
+  
+              let signature;
+              try {
+                signature = await downloadAssetText(sigAsset);
+              } catch (error) {
+                console.log(`Warning: ${error.message}`);
                 continue;
               }
-
-              const signature = (await sigResponse.text()).trim();
-
+  
               for (const key of keys) {
                 platforms[key] = {
                   signature,
@@ -421,36 +443,36 @@ jobs:
                 };
               }
             }
-
+  
             if (Object.keys(platforms).length === 0) {
-              core.setFailed('No updater platforms generated. Please check whether Tauri signing generated .sig files.');
+              core.setFailed('No updater platforms generated. Check release asset names and .sig download permissions.');
               return;
             }
-
+  
             const latestJson = {
               version,
               notes: release.body || '',
               pub_date: release.published_at || new Date().toISOString(),
               platforms,
             };
-
+  
             const existing = assets.find(asset => asset.name === 'latest.json');
-
+  
             if (existing) {
               console.log('Deleting existing latest.json');
-
+  
               await github.rest.repos.deleteReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner,
+                repo,
                 asset_id: existing.id,
               });
             }
-
+  
             const content = JSON.stringify(latestJson, null, 2);
-
+  
             await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner,
+              repo,
               release_id: release.id,
               name: 'latest.json',
               data: content,
@@ -459,7 +481,7 @@ jobs:
                 'content-length': Buffer.byteLength(content),
               },
             });
-
+  
             console.log(`Uploaded latest.json with ${Object.keys(platforms).length} platform key(s).`);
 
   cleanup-sigs:
