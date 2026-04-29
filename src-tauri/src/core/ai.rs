@@ -2,6 +2,8 @@ use crate::config::{
     self, ai_model_id_for_credential, AiMode, AiModelConfigItem, AiModelSource,
     AiProviderCredential, AiProviderKind, AiSettings,
 };
+use crate::core::session::{SessionManager, SessionType};
+use crate::core::ssh::SshConnectionHandles;
 use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
 use genai::adapter::AdapterKind;
@@ -12,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
@@ -48,6 +50,80 @@ pub struct AiCommandCard {
     pub category: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Agent (ReAct) types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActionKind {
+    ExecuteCommand,
+    FinalAnswer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStepAction {
+    pub kind: AgentActionKind,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub risk_level: Option<RiskLevel>,
+    #[serde(default)]
+    pub answer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandObservation {
+    pub output: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStepStatus {
+    Running,
+    Completed,
+    NeedsApproval,
+    Rejected,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStepPayload {
+    pub stream_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub step_index: u16,
+    pub thought: String,
+    pub action: AgentStepAction,
+    #[serde(default)]
+    pub observation: Option<CommandObservation>,
+    pub status: AgentStepStatus,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Parsed single-step agent response from the LLM.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct AgentLlmResponse {
+    #[serde(default)]
+    thought: String,
+    action: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    risk_level: Option<RiskLevel>,
+    #[serde(default)]
+    answer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -111,6 +187,9 @@ pub struct AiChatRequest {
     pub session_id: Option<String>,
     #[serde(default)]
     pub connection_id: Option<String>,
+    /// The terminal session id to execute commands on (Agent mode).
+    #[serde(default)]
+    pub terminal_session_id: Option<String>,
     #[serde(default = "default_mode")]
     pub mode: AiMode,
     #[serde(default)]
@@ -349,7 +428,11 @@ fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-pub fn start_chat_stream(app: AppHandle, mut request: AiChatRequest) -> AppResult<AiStreamStart> {
+pub fn start_chat_stream(
+    app: AppHandle,
+    session_manager: Arc<SessionManager>,
+    mut request: AiChatRequest,
+) -> AppResult<AiStreamStart> {
     let settings = config::load_app_settings(&app)?;
     if !settings.ai.enabled {
         return Err(AppError::Config("AI assistant is disabled".to_string()));
@@ -376,20 +459,37 @@ pub fn start_chat_stream(app: AppHandle, mut request: AiChatRequest) -> AppResul
         streams.insert(stream_id.clone(), cancel_tx);
     }
 
+    let is_agent = request.mode == AiMode::Agent;
     let task_app = app.clone();
     let task_stream_id = stream_id.clone();
     let task_session_id = session_id.clone();
-    tauri::async_runtime::spawn(async move {
-        run_chat_stream(
-            task_app,
-            task_stream_id,
-            task_session_id,
-            request,
-            settings.ai,
-            cancel_rx,
-        )
-        .await;
-    });
+
+    if is_agent {
+        tauri::async_runtime::spawn(async move {
+            run_agent_stream(
+                task_app,
+                session_manager,
+                task_stream_id,
+                task_session_id,
+                request,
+                settings.ai,
+                cancel_rx,
+            )
+            .await;
+        });
+    } else {
+        tauri::async_runtime::spawn(async move {
+            run_chat_stream(
+                task_app,
+                task_stream_id,
+                task_session_id,
+                request,
+                settings.ai,
+                cancel_rx,
+            )
+            .await;
+        });
+    }
 
     Ok(AiStreamStart {
         stream_id,
@@ -526,6 +626,629 @@ async fn run_chat_stream(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Agent (ReAct) loop
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MAX_AGENT_STEPS: u16 = 10;
+const DEFAULT_AGENT_STEP_TIMEOUT_MS: u64 = 30_000;
+
+fn emit_agent_step(app: &AppHandle, stream_id: &str, payload: AgentStepPayload) {
+    let _ = app.emit(format!("ai-stream-{stream_id}").as_str(), payload);
+}
+
+/// Execute a command out-of-band — never touches the interactive terminal.
+///
+/// - **SSH**: opens a dedicated exec channel on the existing connection.
+/// - **Local**: spawns a child process via the system shell.
+/// - Other session types are not supported for agent mode.
+async fn execute_command_on_session(
+    session_manager: &SessionManager,
+    terminal_session_id: &str,
+    command: &str,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    let (session_type, ssh_handle, cwd) = {
+        let sessions = session_manager.sessions.lock().await;
+        let session = sessions.get(terminal_session_id).ok_or_else(|| {
+            AppError::SessionNotFound(format!("Session '{}' not found", terminal_session_id))
+        })?;
+        (
+            session.info.session_type.clone(),
+            session.ssh_handle.clone(),
+            session.cwd.clone(),
+        )
+    };
+
+    match session_type {
+        SessionType::SSH => exec_via_ssh_channel(ssh_handle, cwd, command, timeout_ms).await,
+        SessionType::Local => exec_via_subprocess(cwd, command, timeout_ms).await,
+        other => Err(AppError::Channel(format!(
+            "Agent mode is not supported for {:?} sessions",
+            other
+        ))),
+    }
+}
+
+/// SSH: open a separate exec channel so nothing appears in the interactive PTY.
+async fn exec_via_ssh_channel(
+    ssh_handle: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    cwd: crate::core::SharedCwd,
+    command: &str,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    let handles = ssh_handle
+        .ok_or_else(|| AppError::Config("Not an SSH session".to_string()))?
+        .downcast::<SshConnectionHandles>()
+        .map_err(|_| AppError::Config("Failed to downcast SSH handle".to_string()))?;
+    let handle_mtx = handles.target_handle();
+
+    let mut channel = {
+        let handle = handle_mtx.lock().await;
+        handle
+            .channel_open_session()
+            .await
+            .map_err(|e| AppError::Channel(format!("Failed to open exec channel: {e}")))?
+    };
+
+    let full_cmd = match cwd.lock().await.as_deref() {
+        Some(dir) if !dir.is_empty() => format!("cd {} && {}", shell_quote(dir), command),
+        _ => command.to_string(),
+    };
+
+    channel
+        .exec(true, full_cmd.as_bytes())
+        .await
+        .map_err(|e| AppError::Channel(format!("Failed to exec command: {e}")))?;
+
+    let start = std::time::Instant::now();
+    let timeout_dur = Duration::from_millis(timeout_ms);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_code: Option<i32> = None;
+
+    loop {
+        let remaining = timeout_dur.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, channel.wait()).await {
+            Ok(Some(russh::ChannelMsg::Data { ref data })) => {
+                stdout.push_str(&String::from_utf8_lossy(data));
+            }
+            Ok(Some(russh::ChannelMsg::ExtendedData { ref data, .. })) => {
+                stderr.push_str(&String::from_utf8_lossy(data));
+            }
+            Ok(Some(russh::ChannelMsg::ExitStatus { exit_status })) => {
+                exit_code = Some(exit_status as i32);
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    let output = if stderr.is_empty() {
+        stdout
+    } else if stdout.is_empty() {
+        stderr
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
+
+    Ok(CommandObservation {
+        output,
+        exit_code,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+/// Local: spawn a child process so nothing appears in the interactive PTY.
+async fn exec_via_subprocess(
+    cwd: crate::core::SharedCwd,
+    command: &str,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    let working_dir = cwd.lock().await.clone();
+
+    let start = std::time::Instant::now();
+
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = tokio::process::Command::new("cmd");
+        c.args(["/C", command]);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+
+    if let Some(ref dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdin(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let child = cmd.spawn().map_err(|e| {
+        AppError::Channel(format!("Failed to spawn subprocess: {e}"))
+    })?;
+
+    let timeout_dur = Duration::from_millis(timeout_ms);
+    match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let combined = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!("{stdout}\n{stderr}")
+            };
+            Ok(CommandObservation {
+                output: combined,
+                exit_code: output.status.code(),
+                duration_ms: start.elapsed().as_millis() as u64,
+            })
+        }
+        Ok(Err(e)) => Err(AppError::Channel(format!("Subprocess error: {e}"))),
+        Err(_) => Ok(CommandObservation {
+            output: "(command timed out)".to_string(),
+            exit_code: None,
+            duration_ms: start.elapsed().as_millis() as u64,
+        }),
+    }
+}
+
+/// Simple quoting to make a path safe for `cd`.
+fn shell_quote(s: &str) -> String {
+    if s.contains(' ') || s.contains('\'') || s.contains('"') || s.contains('\\') {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.to_string()
+    }
+}
+
+fn is_cancelled(cancel_rx: &mut oneshot::Receiver<()>) -> bool {
+    matches!(cancel_rx.try_recv(), Ok(()) | Err(oneshot::error::TryRecvError::Closed))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_stream(
+    app: AppHandle,
+    session_manager: Arc<SessionManager>,
+    stream_id: String,
+    session_id: String,
+    mut request: AiChatRequest,
+    settings: AiSettings,
+    mut cancel_rx: oneshot::Receiver<()>,
+) {
+    emit_stream_event(
+        &app,
+        &stream_id,
+        AiStreamEventPayload {
+            event_type: "start".to_string(),
+            stream_id: stream_id.clone(),
+            session_id: Some(session_id.clone()),
+            text_delta: None,
+            reasoning_delta: None,
+            message: None,
+            command_cards: vec![],
+            usage: None,
+            error: None,
+        },
+    );
+
+    if settings.redaction_enabled {
+        redact_context(&mut request.context);
+        request.user_input = redact_sensitive_text(&request.user_input);
+    }
+
+    if settings.record_history {
+        let _ = save_user_message(&app, &session_id, &request);
+    }
+
+    let terminal_session_id = match &request.terminal_session_id {
+        Some(id) if !id.trim().is_empty() => id.clone(),
+        _ => {
+            emit_agent_error(&app, &stream_id, &session_id, "Agent mode requires a terminal session");
+            return;
+        }
+    };
+
+    let resolved_model = match resolve_request_model(&settings, &request) {
+        Ok(m) => m,
+        Err(e) => {
+            emit_agent_error(&app, &stream_id, &session_id, &e.to_string());
+            return;
+        }
+    };
+
+    let max_steps = settings.max_agent_steps.unwrap_or(DEFAULT_MAX_AGENT_STEPS);
+    let step_timeout = settings.agent_step_timeout_ms.unwrap_or(DEFAULT_AGENT_STEP_TIMEOUT_MS);
+    let allowed_risk = &request.options.allowed_command_risk_level;
+
+    let mut conversation = vec![ChatMessage::system(AGENT_SYSTEM_PROMPT)];
+    let initial_prompt = build_agent_prompt(&request, &settings);
+    conversation.push(ChatMessage::user(initial_prompt));
+
+    let mut final_answer: Option<String> = None;
+    let mut all_steps: Vec<AgentStepPayload> = Vec::new();
+
+    for step_index in 0..max_steps {
+        if is_cancelled(&mut cancel_rx) {
+            emit_agent_error(&app, &stream_id, &session_id, "AI stream cancelled");
+            return;
+        }
+
+        let client = match build_client(&resolved_model) {
+            Ok(c) => c,
+            Err(e) => {
+                emit_agent_error(&app, &stream_id, &session_id, &e.to_string());
+                return;
+            }
+        };
+
+        let chat_req = ChatRequest::new(conversation.clone());
+        let chat_options = ChatOptions::default()
+            .with_capture_reasoning_content(true)
+            .with_normalize_reasoning_content(true);
+
+        let stream_result = match tokio::time::timeout(
+            Duration::from_millis(settings.timeout_ms),
+            client.exec_chat_stream(
+                &resolved_model.model_name,
+                chat_req,
+                Some(&chat_options),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                emit_agent_error(&app, &stream_id, &session_id, &format!("AI request failed: {e}"));
+                return;
+            }
+            Err(_) => {
+                emit_agent_error(&app, &stream_id, &session_id, "AI request timed out");
+                return;
+            }
+        };
+
+        let mut raw_output = String::new();
+        let mut reasoning_output = String::new();
+        let mut stream = stream_result.stream;
+        let idle_duration = Duration::from_millis(settings.timeout_ms);
+        let idle_deadline = tokio::time::sleep(idle_duration);
+        tokio::pin!(idle_deadline);
+
+        loop {
+            tokio::select! {
+                _ = &mut idle_deadline => break,
+                _ = &mut cancel_rx => {
+                    emit_agent_error(&app, &stream_id, &session_id, "AI stream cancelled");
+                    return;
+                }
+                item = stream.next() => {
+                    idle_deadline.as_mut().reset(tokio::time::Instant::now() + idle_duration);
+                    match item {
+                        Some(Ok(ChatStreamEvent::Chunk(chunk))) => {
+                            if !chunk.content.is_empty() {
+                                raw_output.push_str(&chunk.content);
+                            }
+                        }
+                        Some(Ok(ChatStreamEvent::ReasoningChunk(chunk))) => {
+                            if !chunk.content.is_empty() {
+                                reasoning_output.push_str(&chunk.content);
+                                emit_stream_event(&app, &stream_id, AiStreamEventPayload {
+                                    event_type: "reasoning_delta".to_string(),
+                                    stream_id: stream_id.clone(),
+                                    session_id: Some(session_id.clone()),
+                                    text_delta: None,
+                                    reasoning_delta: Some(chunk.content),
+                                    message: None,
+                                    command_cards: vec![],
+                                    usage: None,
+                                    error: None,
+                                });
+                            }
+                        }
+                        Some(Ok(ChatStreamEvent::End(end))) => {
+                            if reasoning_output.is_empty() {
+                                if let Some(r) = end.captured_reasoning_content {
+                                    reasoning_output = r;
+                                }
+                            }
+                            break;
+                        }
+                        None => break,
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => {
+                            emit_agent_error(&app, &stream_id, &session_id, &format!("AI stream failed: {e}"));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        let candidate = extract_json_object(&raw_output)
+            .unwrap_or_else(|| raw_output.trim().to_string());
+
+        let parsed: AgentLlmResponse = match serde_json::from_str(&candidate) {
+            Ok(r) => r,
+            Err(_) => {
+                let (text, _, _) = parse_model_output(&raw_output, trim_string_to_option(reasoning_output));
+                final_answer = Some(text);
+                break;
+            }
+        };
+
+        conversation.push(ChatMessage::assistant(&raw_output));
+
+        match parsed.action.as_str() {
+            "final_answer" => {
+                let answer = parsed.answer.unwrap_or_default();
+                let step = AgentStepPayload {
+                    stream_id: stream_id.clone(),
+                    session_id: Some(session_id.clone()),
+                    step_index,
+                    thought: parsed.thought,
+                    action: AgentStepAction {
+                        kind: AgentActionKind::FinalAnswer,
+                        command: None,
+                        risk_level: None,
+                        answer: Some(answer.clone()),
+                    },
+                    observation: None,
+                    status: AgentStepStatus::Completed,
+                    error: None,
+                };
+                emit_agent_step(&app, &stream_id, step.clone());
+                all_steps.push(step);
+                final_answer = Some(answer);
+                break;
+            }
+            "execute_command" => {
+                let command = match &parsed.command {
+                    Some(c) if !c.trim().is_empty() => c.trim().to_string(),
+                    _ => {
+                        emit_agent_error(&app, &stream_id, &session_id, "Agent returned execute_command without a command");
+                        return;
+                    }
+                };
+
+                let risk = check_command_risk(CommandRiskRequest {
+                    command: command.clone(),
+                    context: request.context.clone(),
+                });
+
+                if risk.blocked {
+                    let step = AgentStepPayload {
+                        stream_id: stream_id.clone(),
+                        session_id: Some(session_id.clone()),
+                        step_index,
+                        thought: parsed.thought.clone(),
+                        action: AgentStepAction {
+                            kind: AgentActionKind::ExecuteCommand,
+                            command: Some(command.clone()),
+                            risk_level: Some(risk.risk_level.clone()),
+                            answer: None,
+                        },
+                        observation: None,
+                        status: AgentStepStatus::Failed,
+                        error: Some(format!("命令被安全策略阻止：{}", risk.reason)),
+                    };
+                    emit_agent_step(&app, &stream_id, step.clone());
+                    all_steps.push(step);
+
+                    let blocked_msg = format!(
+                        "命令 `{}` 被安全策略阻止：{}。安全替代方案：{}。请换用安全命令或给出 final_answer。",
+                        command,
+                        risk.reason,
+                        if risk.safe_alternatives.is_empty() {
+                            "无".to_string()
+                        } else {
+                            risk.safe_alternatives.join(", ")
+                        }
+                    );
+                    conversation.push(ChatMessage::user(blocked_msg));
+                    continue;
+                }
+
+                let needs_approval = !is_risk_allowed(&risk.risk_level, allowed_risk);
+
+                if needs_approval {
+                    let step = AgentStepPayload {
+                        stream_id: stream_id.clone(),
+                        session_id: Some(session_id.clone()),
+                        step_index,
+                        thought: parsed.thought.clone(),
+                        action: AgentStepAction {
+                            kind: AgentActionKind::ExecuteCommand,
+                            command: Some(command.clone()),
+                            risk_level: Some(risk.risk_level.clone()),
+                            answer: None,
+                        },
+                        observation: None,
+                        status: AgentStepStatus::NeedsApproval,
+                        error: Some(risk.reason.clone()),
+                    };
+                    emit_agent_step(&app, &stream_id, step.clone());
+                    all_steps.push(step);
+
+                    let skipped_msg = format!(
+                        "命令 `{}` 风险等级为 {:?}，超出自动执行阈值，已跳过。请换用更安全的命令或给出 final_answer。",
+                        command, risk.risk_level
+                    );
+                    conversation.push(ChatMessage::user(skipped_msg));
+                    continue;
+                }
+
+                let step = AgentStepPayload {
+                    stream_id: stream_id.clone(),
+                    session_id: Some(session_id.clone()),
+                    step_index,
+                    thought: parsed.thought.clone(),
+                    action: AgentStepAction {
+                        kind: AgentActionKind::ExecuteCommand,
+                        command: Some(command.clone()),
+                        risk_level: Some(risk.risk_level),
+                        answer: None,
+                    },
+                    observation: None,
+                    status: AgentStepStatus::Running,
+                    error: None,
+                };
+                emit_agent_step(&app, &stream_id, step);
+
+                let obs = match execute_command_on_session(
+                    &session_manager,
+                    &terminal_session_id,
+                    &command,
+                    step_timeout,
+                )
+                .await
+                {
+                    Ok(obs) => obs,
+                    Err(e) => {
+                        let step = AgentStepPayload {
+                            stream_id: stream_id.clone(),
+                            session_id: Some(session_id.clone()),
+                            step_index,
+                            thought: parsed.thought,
+                            action: AgentStepAction {
+                                kind: AgentActionKind::ExecuteCommand,
+                                command: Some(command.clone()),
+                                risk_level: None,
+                                answer: None,
+                            },
+                            observation: None,
+                            status: AgentStepStatus::Failed,
+                            error: Some(e.to_string()),
+                        };
+                        emit_agent_step(&app, &stream_id, step.clone());
+                        all_steps.push(step);
+
+                        let err_msg = format!("命令执行失败：{}。请分析原因并给出下一步。", e);
+                        conversation.push(ChatMessage::user(err_msg));
+                        continue;
+                    }
+                };
+
+                let completed_step = AgentStepPayload {
+                    stream_id: stream_id.clone(),
+                    session_id: Some(session_id.clone()),
+                    step_index,
+                    thought: parsed.thought,
+                    action: AgentStepAction {
+                        kind: AgentActionKind::ExecuteCommand,
+                        command: Some(command.clone()),
+                        risk_level: None,
+                        answer: None,
+                    },
+                    observation: Some(obs.clone()),
+                    status: AgentStepStatus::Completed,
+                    error: None,
+                };
+                emit_agent_step(&app, &stream_id, completed_step.clone());
+                all_steps.push(completed_step);
+
+                let obs_msg = build_observation_message(&obs, &command);
+                conversation.push(ChatMessage::user(obs_msg));
+            }
+            other => {
+                let fallback = format!(
+                    "Unknown action '{}'. Treating as final answer. {}",
+                    other,
+                    parsed.answer.as_deref().unwrap_or(&parsed.thought)
+                );
+                final_answer = Some(fallback);
+                break;
+            }
+        }
+    }
+
+    active_streams().lock().unwrap().remove(&stream_id);
+
+    let answer_text = final_answer.unwrap_or_else(|| {
+        "Agent 已达到最大步数限制，任务可能未完成。".to_string()
+    });
+
+    let message = AiMessage {
+        id: format!("msg-{}", uuid()),
+        session_id: session_id.clone(),
+        role: AiMessageRole::Assistant,
+        content: answer_text,
+        created_at: now_rfc3339(),
+        reasoning_content: None,
+        command_cards: vec![],
+    };
+
+    if settings.record_history {
+        let _ = append_message(&app, message.clone());
+    }
+
+    emit_stream_event(
+        &app,
+        &stream_id,
+        AiStreamEventPayload {
+            event_type: "done".to_string(),
+            stream_id: stream_id.clone(),
+            session_id: Some(session_id),
+            text_delta: None,
+            reasoning_delta: None,
+            message: Some(message),
+            command_cards: vec![],
+            usage: None,
+            error: None,
+        },
+    );
+}
+
+fn emit_agent_error(app: &AppHandle, stream_id: &str, session_id: &str, error: &str) {
+    active_streams().lock().unwrap().remove(stream_id);
+    emit_stream_event(
+        app,
+        stream_id,
+        AiStreamEventPayload {
+            event_type: "error".to_string(),
+            stream_id: stream_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            text_delta: None,
+            reasoning_delta: None,
+            message: None,
+            command_cards: vec![],
+            usage: None,
+            error: Some(error.to_string()),
+        },
+    );
+}
+
+fn is_risk_allowed(risk: &RiskLevel, allowed: &RiskLevel) -> bool {
+    risk_rank(risk) <= risk_rank(allowed)
+}
+
+fn risk_rank(level: &RiskLevel) -> u8 {
+    match level {
+        RiskLevel::Low => 1,
+        RiskLevel::Medium => 2,
+        RiskLevel::High => 3,
+        RiskLevel::Critical => 4,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ask mode model stream
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct AiStreamResult {
@@ -992,9 +1715,86 @@ const SYSTEM_PROMPT: &str = r#"你是一个专业、谨慎、安全优先的 Lin
   ]
 }"#;
 
+const AGENT_SYSTEM_PROMPT: &str = r#"你是一个终端自动化 Agent，通过"思考—执行—观察"循环完成用户的任务。
+
+每一轮你只能做一件事：执行一条命令或给出最终回答。
+
+规则：
+1. 每轮只返回一个 JSON 对象，不要使用 Markdown。
+2. 如果需要执行命令，返回 action 为 "execute_command"。
+3. 任务完成或无需执行命令时，返回 action 为 "final_answer"。
+4. 优先使用只读命令收集信息，再做修改操作。
+5. 不要执行不可逆高危命令（如 rm -rf /、mkfs、停止 SSH 等），改为在 thought 中说明风险并给出 final_answer。
+6. 不要编造信息；不确定时先用验证命令确认。
+7. 不要要求用户提供密码、私钥、token。
+8. 命令必须适配用户当前的系统和 shell 环境。
+9. riskLevel 规则：只读命令 → low，普通写操作 → medium，删除/重启/权限修改 → high，不可逆破坏 → critical。
+
+执行命令的 JSON 格式：
+{
+  "thought": "分析当前状态和下一步计划",
+  "action": "execute_command",
+  "command": "要执行的单条 shell 命令",
+  "riskLevel": "low"
+}
+
+给出最终回答的 JSON 格式：
+{
+  "thought": "任务完成的原因",
+  "action": "final_answer",
+  "answer": "向用户展示的总结"
+}"#;
+
+fn build_agent_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
+    let ctx = &request.context;
+    format!(
+        r#"用户任务：
+{user_input}
+
+当前连接上下文：
+- 连接名：{connection_name}
+- 主机：{host}
+- 用户：{username}
+- 当前目录：{cwd}
+- 操作系统：{os}
+- 架构：{arch}
+
+最近终端输出（最多 {line_limit} 行）：
+{recent_output}
+
+请开始执行任务。每轮只返回一个 JSON 对象。"#,
+        user_input = request.user_input,
+        connection_name = ctx.connection_name.as_deref().unwrap_or("-"),
+        host = ctx.host.as_deref().unwrap_or("-"),
+        username = ctx.username.as_deref().unwrap_or("-"),
+        cwd = ctx.cwd.as_deref().unwrap_or("-"),
+        os = ctx.os.as_deref().unwrap_or("-"),
+        arch = ctx.arch.as_deref().unwrap_or(std::env::consts::ARCH),
+        line_limit = settings.context_line_limit,
+        recent_output = ctx.recent_output,
+    )
+}
+
+fn build_observation_message(obs: &CommandObservation, command: &str) -> String {
+    let status = obs
+        .exit_code
+        .map(|c| format!("exit code {c}"))
+        .unwrap_or_else(|| "unknown exit code".to_string());
+    let output = if obs.output.len() > 8000 {
+        let truncated = &obs.output[obs.output.len() - 8000..];
+        format!("...(truncated)\n{truncated}")
+    } else {
+        obs.output.clone()
+    };
+    format!(
+        "命令 `{command}` 执行完成（{status}，耗时 {duration}ms）。\n\n输出：\n{output}\n\n请根据观察结果决定下一步。只返回 JSON 对象。",
+        duration = obs.duration_ms,
+    )
+}
+
 fn build_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
     let action = match request.action {
-        AiAction::GenerateCommand => "根据自然语言需求生成 1 到 5 条 Shell 命令",
+        AiAction::GenerateCommand => "根据自然语言需求生成 1 到 2 条 Shell 命令",
         AiAction::ExplainOutput => "解释最近终端输出并给出下一步建议",
         AiAction::ExplainSelected => "解释用户选中的终端文本并给出下一步建议",
         AiAction::AnalyzeError => "分析终端错误输出并给出排查步骤",

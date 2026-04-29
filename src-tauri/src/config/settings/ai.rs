@@ -133,6 +133,10 @@ pub struct AiSettings {
     pub file_ai_actions: Vec<AiCustomActionConfig>,
     #[serde(default = "default_max_ai_file_size_bytes")]
     pub max_ai_file_size_bytes: u64,
+    #[serde(default)]
+    pub max_agent_steps: Option<u16>,
+    #[serde(default)]
+    pub agent_step_timeout_ms: Option<u64>,
 }
 
 fn default_schema_version() -> u32 {
@@ -393,6 +397,8 @@ impl Default for AiSettings {
             terminal_ai_actions: default_terminal_ai_actions(),
             file_ai_actions: default_file_ai_actions(),
             max_ai_file_size_bytes: default_max_ai_file_size_bytes(),
+            max_agent_steps: Some(10),
+            agent_step_timeout_ms: Some(30_000),
         }
     }
 }

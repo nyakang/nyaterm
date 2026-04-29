@@ -2,14 +2,17 @@ use crate::core::ai::{
     self, AiAuditLog, AiChatRequest, AiMessage, AiSession, AiStreamStart, AppendAiAuditRequest,
     CommandRiskRequest, CommandRiskResponse,
 };
+use crate::core::SessionManager;
 use crate::error::AppResult;
+use std::sync::Arc;
 
 #[tauri::command]
 pub fn start_ai_chat_stream(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SessionManager>>,
     request: AiChatRequest,
 ) -> AppResult<AiStreamStart> {
-    ai::start_chat_stream(app, request)
+    ai::start_chat_stream(app, state.inner().clone(), request)
 }
 
 #[tauri::command]
