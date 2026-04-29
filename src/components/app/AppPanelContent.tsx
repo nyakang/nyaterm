@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import ActiveSessions from "@/components/panel/ActiveSessions";
 import AIAssistantPanel from "@/components/panel/AIAssistantPanel";
@@ -55,54 +56,70 @@ export default function AppPanelContent({
   const liveActivePane =
     activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
 
-  switch (panelId) {
-    case "fileExplorer":
-      return (
-        <div className="h-full flex flex-col overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <FileExplorer
-              activeSessionId={activeSessionId}
-              activeSessionType={liveActivePane ? liveActivePane.type : null}
-            />
+  const aiEverMounted = useRef(false);
+  if (panelId === "aiAssistant") aiEverMounted.current = true;
+
+  const otherPanel = (() => {
+    switch (panelId) {
+      case "fileExplorer":
+        return (
+          <div className="h-full flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <FileExplorer
+                activeSessionId={activeSessionId}
+                activeSessionType={liveActivePane ? liveActivePane.type : null}
+              />
+            </div>
+            <ResizeHandle direction="vertical" onResize={onTransferResize} />
+            <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
+              <FileTransfer activeSessionId={activeSessionId} />
+            </div>
           </div>
-          <ResizeHandle direction="vertical" onResize={onTransferResize} />
-          <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
-            <FileTransfer activeSessionId={activeSessionId} />
-          </div>
+        );
+      case "network":
+        return <NetworkPanel />;
+      case "securityAuth":
+        return <SecurityAuthPanel />;
+      case "syncBackupHistory":
+        return <SyncBackupHistoryPanel />;
+      case "savedConnections":
+        return (
+          <SavedConnections onNewConnection={onNewConnection} onEditConnection={onEditConnection} />
+        );
+      case "activeSessions":
+        return (
+          <ActiveSessions
+            onSessionClick={onSessionClick}
+            onSessionReconnect={onSessionReconnect}
+            onSessionDisconnect={onSessionDisconnect}
+            canReconnect={canReconnect}
+          />
+        );
+      case "commandHistory":
+        return <CommandHistory activeSessionId={activeSessionId} onCommandSend={onCommandSend} />;
+      case "resourceMonitor":
+        return <ResourceMonitor activeSessionId={activeSshSessionId} />;
+      case "aiAssistant":
+        return null;
+      default:
+        return null;
+    }
+  })();
+
+  const isAiActive = panelId === "aiAssistant";
+
+  return (
+    <>
+      {otherPanel}
+      {aiEverMounted.current && (
+        <div className={isAiActive ? "h-full" : "hidden"}>
+          <AIAssistantPanel
+            activePane={liveActivePane}
+            activeConnection={activeConnection}
+            intent={aiIntent}
+          />
         </div>
-      );
-    case "network":
-      return <NetworkPanel />;
-    case "securityAuth":
-      return <SecurityAuthPanel />;
-    case "syncBackupHistory":
-      return <SyncBackupHistoryPanel />;
-    case "savedConnections":
-      return (
-        <SavedConnections onNewConnection={onNewConnection} onEditConnection={onEditConnection} />
-      );
-    case "aiAssistant":
-      return (
-        <AIAssistantPanel
-          activePane={liveActivePane}
-          activeConnection={activeConnection}
-          intent={aiIntent}
-        />
-      );
-    case "activeSessions":
-      return (
-        <ActiveSessions
-          onSessionClick={onSessionClick}
-          onSessionReconnect={onSessionReconnect}
-          onSessionDisconnect={onSessionDisconnect}
-          canReconnect={canReconnect}
-        />
-      );
-    case "commandHistory":
-      return <CommandHistory activeSessionId={activeSessionId} onCommandSend={onCommandSend} />;
-    case "resourceMonitor":
-      return <ResourceMonitor activeSessionId={activeSshSessionId} />;
-    default:
-      return null;
-  }
+      )}
+    </>
+  );
 }
