@@ -36,8 +36,10 @@ import {
   getTrackedSubmissionCommand,
 } from "@/lib/terminalInputTracker";
 import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
+import type { AIContext, CommandRiskResponse } from "@/types/global";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { Input } from "../ui/input";
 import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
@@ -72,8 +74,28 @@ type PerformanceOverlayState = "overloaded" | "recovered" | null;
 
 type RiskPromptState = {
   command: string;
-  risk: import("@/types/global").CommandRiskResponse;
+  risk: CommandRiskResponse;
 };
+
+async function assessCommandRiskForTerminal(
+  command: string,
+  username?: string | null,
+): Promise<CommandRiskResponse> {
+  const context: AIContext = {
+    username: username ?? null,
+    recentOutput: "",
+    selectedText: "",
+    inputBuffer: "",
+  };
+
+  try {
+    return await invoke<CommandRiskResponse>("check_command_risk", {
+      request: { command, context },
+    });
+  } catch {
+    return assessCommandRisk(command, username);
+  }
+}
 
 function readRecentOutput(terminal: Terminal, lineLimit: number) {
   const buffer = terminal.buffer.active;
@@ -164,6 +186,7 @@ export default function XTerminal({
   const [performanceOverlay, setPerformanceOverlay] = useState<PerformanceOverlayState>(null);
   const [skippedOutputChars, setSkippedOutputChars] = useState(0);
   const [riskPrompt, setRiskPrompt] = useState<RiskPromptState | null>(null);
+  const [riskConfirmValue, setRiskConfirmValue] = useState("");
 
   const { terminalTheme } = useTheme();
   const { t } = useTranslation();
@@ -201,6 +224,7 @@ export default function XTerminal({
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
   const continueRiskCommandRef = useRef<((command: string) => void) | null>(null);
   const replaceInputCommandRef = useRef<((command: string) => void) | null>(null);
+  const riskCheckPendingRef = useRef(false);
   const lastErrorNoticeAtRef = useRef(0);
 
   useEffect(() => {
@@ -535,11 +559,15 @@ export default function XTerminal({
       }).catch(() => {});
     };
 
-    replaceInputCommandRef.current = replaceInputCommand;
-    continueRiskCommandRef.current = (command: string) => {
+    const sendCommandEnter = (command: string) => {
       inputStateRef.current = applyTerminalInputData(inputStateRef.current, "\r");
       syncSuggestionsWithInputState();
       sendRawInput("\r", command);
+    };
+
+    replaceInputCommandRef.current = replaceInputCommand;
+    continueRiskCommandRef.current = (command: string) => {
+      sendCommandEnter(command);
       void invoke("append_ai_audit", {
         request: {
           connectionId: connectionIdRef.current ?? null,
@@ -1046,26 +1074,39 @@ export default function XTerminal({
         }
       }
 
+      if (riskCheckPendingRef.current) return;
+
       const command = data === "\r" ? getTrackedSubmissionCommand(inputStateRef.current) : "";
       if (data === "\r" && command && terminalAppSettingsRef.current?.ai?.risk_check_enabled) {
-        const risk = assessCommandRisk(command, riskUsernameRef.current);
-        if (risk.riskLevel === "critical" || risk.riskLevel === "high") {
-          setRiskPrompt({ command, risk });
-          if (risk.blocked) {
-            void invoke("append_ai_audit", {
-              request: {
-                connectionId: connectionIdRef.current ?? null,
-                action: "ai.command_risk_blocked",
-                generatedCommand: command,
-                riskLevel: risk.riskLevel,
-                insertedToTerminal: false,
-                executed: false,
-                blocked: true,
-              },
-            }).catch(() => {});
-          }
-          return;
-        }
+        riskCheckPendingRef.current = true;
+        void assessCommandRiskForTerminal(command, riskUsernameRef.current)
+          .then((risk) => {
+            if (!isTerminalAlive()) return;
+            if (risk.riskLevel === "critical" || risk.riskLevel === "high") {
+              setRiskConfirmValue("");
+              setRiskPrompt({ command, risk });
+              if (risk.blocked) {
+                void invoke("append_ai_audit", {
+                  request: {
+                    connectionId: connectionIdRef.current ?? null,
+                    action: "ai.command_risk_blocked",
+                    generatedCommand: command,
+                    riskLevel: risk.riskLevel,
+                    insertedToTerminal: false,
+                    executed: false,
+                    blocked: true,
+                  },
+                }).catch(() => {});
+              }
+              return;
+            }
+
+            sendCommandEnter(command);
+          })
+          .finally(() => {
+            riskCheckPendingRef.current = false;
+          });
+        return;
       }
       inputStateRef.current = applyTerminalInputData(inputStateRef.current, data);
       syncSuggestionsWithInputState();
@@ -1151,6 +1192,7 @@ export default function XTerminal({
       sendInputRef.current = null;
       continueRiskCommandRef.current = null;
       replaceInputCommandRef.current = null;
+      riskCheckPendingRef.current = false;
 
       oscDisposable.dispose();
       writeParsedDisposable.dispose();
@@ -1287,6 +1329,12 @@ export default function XTerminal({
     doFindRef.current = doFind;
   }, [doFind]);
 
+  const riskConfirmText = riskPrompt?.risk.confirmText?.trim() ?? "";
+  const canContinueRiskCommand =
+    !!riskPrompt &&
+    !riskPrompt.risk.blocked &&
+    (!riskConfirmText || riskConfirmValue.trim() === riskConfirmText);
+
   return (
     <div className="h-full w-full relative flex" style={{ display: visible ? "flex" : "none" }}>
       {showGutter && terminalReady && (
@@ -1354,7 +1402,15 @@ export default function XTerminal({
         <ActionLinkTooltip state={tooltipState} />
         <ActionLinkMenu state={menuState} onClose={closeMenu} />
       </div>
-      <Dialog open={!!riskPrompt} onOpenChange={(open) => !open && setRiskPrompt(null)}>
+      <Dialog
+        open={!!riskPrompt}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRiskPrompt(null);
+            setRiskConfirmValue("");
+          }
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="text-sm">{t("ai.riskPromptTitle")}</DialogTitle>
@@ -1376,10 +1432,30 @@ export default function XTerminal({
                   </pre>
                 </div>
               ) : null}
+              {riskConfirmText ? (
+                <div className="space-y-2">
+                  <div className="text-muted-foreground">{t("ai.riskConfirmInput")}</div>
+                  <div className="rounded-md border border-border/70 bg-muted/30 p-2 font-medium">
+                    {riskConfirmText}
+                  </div>
+                  <Input
+                    value={riskConfirmValue}
+                    placeholder={t("ai.riskConfirmPlaceholder")}
+                    className="h-8 text-xs"
+                    onChange={(event) => setRiskConfirmValue(event.target.value)}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRiskPrompt(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRiskPrompt(null);
+                setRiskConfirmValue("");
+              }}
+            >
               {t("common.cancel")}
             </Button>
             {riskPrompt?.risk.safeAlternatives[0] ? (
@@ -1388,6 +1464,7 @@ export default function XTerminal({
                 onClick={() => {
                   replaceInputCommandRef.current?.(riskPrompt.risk.safeAlternatives[0]);
                   setRiskPrompt(null);
+                  setRiskConfirmValue("");
                 }}
               >
                 {t("ai.insertSafeAlternative")}
@@ -1396,11 +1473,13 @@ export default function XTerminal({
             {!riskPrompt?.risk.blocked ? (
               <Button
                 variant="destructive"
+                disabled={!canContinueRiskCommand}
                 onClick={() => {
-                  if (riskPrompt) {
+                  if (riskPrompt && canContinueRiskCommand) {
                     continueRiskCommandRef.current?.(riskPrompt.command);
                   }
                   setRiskPrompt(null);
+                  setRiskConfirmValue("");
                 }}
               >
                 {t("ai.continueExecute")}
