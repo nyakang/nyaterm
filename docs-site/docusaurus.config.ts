@@ -55,12 +55,11 @@ const config: Config = {
 
   plugins: [
     [
-      "@dipakparmar/docusaurus-plugin-umami",
-      /** @type {import('@dipakparmar/docusaurus-plugin-umami').Options} */
-      ({
-        websiteID: "ba8f55f2-ab09-4cf8-9266-645c4304d58f", // Required
-        analyticsDomain: "umami.coderkang.top", // Required
-      }),
+      "./src/plugins/umami/index.ts",
+      {
+        websiteID: "ba8f55f2-ab09-4cf8-9266-645c4304d58f",
+        dataHostURL: "https://umami.coderkang.top",
+      },
     ],
   ],
 
