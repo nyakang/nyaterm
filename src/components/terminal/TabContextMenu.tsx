@@ -37,6 +37,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "../ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const TAB_PRESET_COLORS = [
   { name: "Red", value: "#ef4444" },
@@ -54,6 +55,7 @@ const TAB_PRESET_COLORS = [
 
 interface TabContextMenuProps {
   children: ReactNode;
+  tooltipContent?: ReactNode;
   tab: Tab;
   tabs: Tab[];
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
@@ -69,6 +71,7 @@ interface TabContextMenuProps {
 
 export default function TabContextMenu({
   children,
+  tooltipContent,
   tab,
   tabs,
   onDuplicateSession,
@@ -153,7 +156,18 @@ export default function TabContextMenu({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        {tooltipContent ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6} showArrow className="max-w-xs truncate">
+              {tooltipContent}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        )}
         <ContextMenuContent className="min-w-[220px]">
           <ContextMenuSub>
             <ContextMenuSubTrigger>

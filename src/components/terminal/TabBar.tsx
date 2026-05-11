@@ -1,4 +1,12 @@
-import { type DragEvent, memo, useCallback, useMemo, useState } from "react";
+import {
+  type DragEvent,
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
@@ -10,6 +18,7 @@ import {
   MdHistory,
   MdTerminal,
 } from "react-icons/md";
+import { RiExpandDiagonalLine } from "react-icons/ri";
 import { getActiveGroupForSession, isSessionPausedInGroup } from "@/lib/syncInputGroups";
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import type { Group, PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
@@ -27,6 +36,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import TabContextMenu from "./TabContextMenu";
 
 interface TabBarProps {
@@ -54,6 +64,66 @@ interface ConnectionGroupNode {
   children: ConnectionGroupNode[];
   connections: SavedConnection[];
   totalCount: number;
+}
+
+const TAB_WIDTH_FALLBACK = 220;
+const TAB_OVERFLOW_TRIGGER_WIDTH = 36;
+
+function areStringArraysEqual(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function computeVisibleTabIds(
+  tabs: Tab[],
+  tabWidths: Map<string, number>,
+  availableWidth: number,
+  activeTabId: string | null,
+) {
+  if (tabs.length === 0) return [];
+  if (availableWidth <= 0) {
+    return [tabs.find((tab) => tab.id === activeTabId)?.id ?? tabs[0].id];
+  }
+
+  const widths = tabs.map((tab) => Math.ceil(tabWidths.get(tab.id) ?? TAB_WIDTH_FALLBACK));
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  if (totalWidth <= availableWidth) return tabs.map((tab) => tab.id);
+
+  const selectedIndexes: number[] = [];
+  let usedWidth = 0;
+
+  for (let index = tabs.length - 1; index >= 0; index -= 1) {
+    const width = widths[index];
+    if (usedWidth + width > availableWidth) break;
+    selectedIndexes.push(index);
+    usedWidth += width;
+  }
+
+  const activeIndex = activeTabId ? tabs.findIndex((tab) => tab.id === activeTabId) : -1;
+  const activeWidth = activeIndex >= 0 ? widths[activeIndex] : 0;
+  if (activeIndex >= 0 && !selectedIndexes.includes(activeIndex)) {
+    while (selectedIndexes.length > 0 && usedWidth + activeWidth > availableWidth) {
+      const leftmostSelectedIndex = Math.min(...selectedIndexes);
+      selectedIndexes.splice(selectedIndexes.indexOf(leftmostSelectedIndex), 1);
+      usedWidth -= widths[leftmostSelectedIndex];
+    }
+
+    if (activeWidth <= availableWidth || selectedIndexes.length === 0) {
+      selectedIndexes.push(activeIndex);
+      usedWidth += activeWidth;
+    }
+  }
+
+  for (let index = tabs.length - 1; index >= 0; index -= 1) {
+    if (selectedIndexes.includes(index)) continue;
+    const width = widths[index];
+    if (usedWidth + width <= availableWidth) {
+      selectedIndexes.push(index);
+      usedWidth += width;
+    }
+  }
+
+  const selectedSet = new Set(selectedIndexes);
+  return tabs.filter((_, index) => selectedSet.has(index)).map((tab) => tab.id);
 }
 
 function compareSortOrder(left: { sort_order?: number }, right: { sort_order?: number }) {
@@ -119,6 +189,12 @@ function TabBar({
   const { appSettings, savedConnections, savedGroups, syncGroups, broadcastToAll } = useApp();
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
+  const [overflowTooltipOpen, setOverflowTooltipOpen] = useState(false);
+  const [suppressOverflowTooltip, setSuppressOverflowTooltip] = useState(false);
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const tabMeasureRefs = useRef(new Map<string, HTMLDivElement>());
+  const [visibleTabIds, setVisibleTabIds] = useState<string[]>(() => tabs.map((tab) => tab.id));
 
   const groupsById = useMemo(
     () => new Map(savedGroups.map((group) => [group.id, group])),
@@ -197,6 +273,57 @@ function TabBar({
       .slice(0, 10);
   }, [appSettings.ui.recent_connection_ids, savedConnections]);
 
+  const updateVisibleTabs = useCallback(() => {
+    const strip = tabStripRef.current;
+    if (!strip) return;
+
+    const tabWidths = new Map<string, number>();
+    for (const tab of tabs) {
+      const measuredWidth = tabMeasureRefs.current.get(tab.id)?.offsetWidth;
+      if (measuredWidth) tabWidths.set(tab.id, measuredWidth);
+    }
+
+    const totalTabWidth = tabs.reduce(
+      (sum, tab) => sum + Math.ceil(tabWidths.get(tab.id) ?? TAB_WIDTH_FALLBACK),
+      0,
+    );
+    const hasOverflowTrigger = visibleTabIds.length < tabs.length;
+    const availableWithoutOverflowTrigger =
+      strip.clientWidth + (hasOverflowTrigger ? TAB_OVERFLOW_TRIGGER_WIDTH : 0);
+    const availableWidth =
+      totalTabWidth <= availableWithoutOverflowTrigger
+        ? availableWithoutOverflowTrigger
+        : Math.max(0, availableWithoutOverflowTrigger - TAB_OVERFLOW_TRIGGER_WIDTH);
+
+    const nextVisibleTabIds = computeVisibleTabIds(tabs, tabWidths, availableWidth, activeTabId);
+
+    setVisibleTabIds((current) =>
+      areStringArraysEqual(current, nextVisibleTabIds) ? current : nextVisibleTabIds,
+    );
+  }, [activeTabId, tabs, visibleTabIds.length]);
+
+  useLayoutEffect(() => {
+    updateVisibleTabs();
+
+    const strip = tabStripRef.current;
+    if (!strip) return;
+
+    const observer = new ResizeObserver(() => updateVisibleTabs());
+    observer.observe(strip);
+
+    return () => observer.disconnect();
+  }, [updateVisibleTabs]);
+
+  const visibleTabIdSet = useMemo(() => new Set(visibleTabIds), [visibleTabIds]);
+  const visibleTabs = useMemo(
+    () => tabs.filter((tab) => visibleTabIdSet.has(tab.id)),
+    [tabs, visibleTabIdSet],
+  );
+  const overflowTabs = useMemo(
+    () => tabs.filter((tab) => !visibleTabIdSet.has(tab.id)),
+    [tabs, visibleTabIdSet],
+  );
+
   const getInsertionIndex = useCallback((event: DragEvent<HTMLDivElement>, index: number) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return event.clientX < rect.left + rect.width / 2 ? index : index + 1;
@@ -205,6 +332,14 @@ function TabBar({
   const resetDragState = useCallback(() => {
     setDraggedTabId(null);
     setDropIndex(null);
+  }, []);
+
+  const setMeasureTabRef = useCallback((tabId: string, element: HTMLDivElement | null) => {
+    if (element) {
+      tabMeasureRefs.current.set(tabId, element);
+    } else {
+      tabMeasureRefs.current.delete(tabId);
+    }
   }, []);
 
   const handleDropAtIndex = useCallback(
@@ -334,6 +469,203 @@ function TabBar({
     return <MdDns className="text-sm shrink-0 text-emerald-500/70" />;
   };
 
+  const renderTabItem = (tab: Tab, index: number, measureOnly = false) => {
+    const isActive = activeTabId === tab.id;
+    const isFocused = focusedTabId === tab.id;
+    const showUnreadIndicator = !isFocused && unreadTabIds?.has(tab.id);
+    const displayName = getTabDisplayName(tab);
+    const accentColor = tab.tabColor;
+
+    const tabButton = (
+      <div
+        ref={measureOnly ? (element) => setMeasureTabRef(tab.id, element) : undefined}
+        draggable={!measureOnly}
+        className={`group relative flex items-center gap-2 border-r pl-3 pr-2 text-xs transition-[color,background-color,opacity] duration-200 ${
+          isActive ? "font-semibold" : "font-medium df-hover"
+        } ${draggedTabId === tab.id ? "opacity-60" : ""}`}
+        style={{
+          borderColor: "var(--df-border)",
+          backgroundColor: isActive
+            ? accentColor
+              ? `color-mix(in srgb, ${accentColor} 8%, var(--df-bg))`
+              : "var(--df-bg)"
+            : accentColor
+              ? `color-mix(in srgb, ${accentColor} 5%, transparent)`
+              : "transparent",
+          color: isActive ? "var(--df-text)" : "var(--df-text-muted)",
+        }}
+        onClick={measureOnly ? undefined : () => onTabChange(tab.id)}
+        onContextMenu={measureOnly ? undefined : () => onTabChange(tab.id)}
+        onDragStart={measureOnly ? undefined : (event) => handleDragStart(event, tab.id)}
+        onDragEnd={
+          measureOnly
+            ? undefined
+            : () => {
+                resetDragState();
+                requestAnimationFrame(() => {
+                  window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+                });
+              }
+        }
+        onDragOver={
+          measureOnly
+            ? undefined
+            : (event) => {
+                if (!draggedTabId) return;
+                event.preventDefault();
+                setDropIndex(getInsertionIndex(event, index));
+              }
+        }
+        onDrop={
+          measureOnly
+            ? undefined
+            : (event) => {
+                event.preventDefault();
+                handleDropAtIndex(getInsertionIndex(event, index));
+              }
+        }
+      >
+        {isActive && (
+          <div
+            className="absolute top-0 left-0 h-[2px] w-full"
+            style={{
+              backgroundColor: accentColor || "var(--df-primary)",
+              boxShadow: `0 1px 4px ${accentColor || "var(--df-primary)"}`,
+            }}
+          />
+        )}
+
+        {isActive && (
+          <div
+            className="absolute bottom-0 left-0 z-10 h-[1px] w-full"
+            style={{ backgroundColor: "var(--df-bg)" }}
+          />
+        )}
+
+        {renderTabIcon(tab)}
+
+        {measureOnly ? (
+          <span className="max-w-[160px] truncate whitespace-nowrap">{displayName}</span>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="max-w-[160px] truncate whitespace-nowrap">{displayName}</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6} showArrow className="max-w-xs truncate">
+              {displayName}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        <SyncIndicator tab={tab} syncGroups={syncGroups} broadcastToAll={broadcastToAll} />
+
+        <div className="relative ml-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+          {showUnreadIndicator ? (
+            <span className="h-2 w-2 rounded-full bg-green-500 animate-breathing" />
+          ) : (
+            <div
+              className={`absolute inset-0 flex items-center justify-center rounded transition-all duration-200 ${
+                isActive
+                  ? "text-[var(--df-text-muted)]"
+                  : "text-[var(--df-text-dimmed)] opacity-0 group-hover:opacity-100"
+              } hover:!bg-red-500/10 hover:!text-red-500 active:scale-90 active:!bg-red-500/20`}
+              onClick={
+                measureOnly
+                  ? undefined
+                  : (event) => {
+                      event.stopPropagation();
+                      void onTabClose(tab);
+                    }
+              }
+            >
+              <MdClose className="text-[12px]" />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+
+    if (measureOnly) {
+      return (
+        <div key={tab.id} className="relative flex shrink-0">
+          {tabButton}
+        </div>
+      );
+    }
+
+    return (
+      <div key={tab.id} className="relative flex shrink-0">
+        {draggedTabId && dropIndex === index && (
+          <div
+            className="pointer-events-none absolute inset-y-1 left-0 z-20 w-0.5 rounded-full"
+            style={{ backgroundColor: "var(--df-primary)" }}
+          />
+        )}
+
+        <TabContextMenu
+          tab={tab}
+          tabs={tabs}
+          onDuplicateSession={onDuplicateSession}
+          onReconnectSession={onReconnectSession}
+          onSplitSession={onSplitSession}
+          onCloseSession={onCloseSession}
+          onCloseAll={onCloseAll}
+          onCloseInactive={onCloseInactive}
+          onCloseRight={onCloseRight}
+          onSessionInfo={onSessionInfo}
+          onActivateTab={onTabChange}
+        >
+          {tabButton}
+        </TabContextMenu>
+      </div>
+    );
+  };
+
+  const renderOverflowTabItem = (tab: Tab) => {
+    const isActive = activeTabId === tab.id;
+    const displayName = getTabDisplayName(tab);
+
+    return (
+      <DropdownMenuItem
+        key={tab.id}
+        className="max-w-[320px] pr-1"
+        onSelect={(event) => {
+          event.preventDefault();
+          onTabChange(tab.id);
+          setOverflowMenuOpen(false);
+        }}
+      >
+        {renderTabIcon(tab)}
+        <span
+          className={`min-w-0 flex-1 truncate ${isActive ? "font-semibold" : ""}`}
+          style={{ color: isActive ? "var(--df-text)" : undefined }}
+        >
+          {displayName}
+        </span>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={t("tabCtx.close")}
+          className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+          onPointerDown={(event) => {
+            event.stopPropagation();
+          }}
+          onPointerUp={(event) => {
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void onTabClose(tab);
+            setOverflowMenuOpen(false);
+          }}
+        >
+          <MdClose className="text-[12px]" />
+        </button>
+      </DropdownMenuItem>
+    );
+  };
+
   const renderConnectionMenuItem = (connection: SavedConnection, label = connection.name) => (
     <DropdownMenuItem
       key={connection.id}
@@ -374,123 +706,20 @@ function TabBar({
         boxShadow: "inset 0 -1px 0 var(--df-border)",
       }}
     >
-      <div className="flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden terminal-scroll">
-        {tabs.map((tab, index) => {
-          const isActive = activeTabId === tab.id;
-          const isFocused = focusedTabId === tab.id;
-          const showUnreadIndicator = !isFocused && unreadTabIds?.has(tab.id);
-          const displayName = getTabDisplayName(tab);
-          const accentColor = tab.tabColor;
+      <div ref={tabStripRef} className="relative flex min-w-0 flex-1 overflow-hidden">
+        <div
+          className="pointer-events-none absolute -left-[10000px] top-0 flex h-9 opacity-0"
+          aria-hidden="true"
+        >
+          {tabs.map((tab, index) => renderTabItem(tab, index, true))}
+        </div>
 
-          return (
-            <div key={tab.id} className="relative flex shrink-0">
-              {draggedTabId && dropIndex === index && (
-                <div
-                  className="pointer-events-none absolute inset-y-1 left-0 z-20 w-0.5 rounded-full"
-                  style={{ backgroundColor: "var(--df-primary)" }}
-                />
-              )}
-
-              <TabContextMenu
-                tab={tab}
-                tabs={tabs}
-                onDuplicateSession={onDuplicateSession}
-                onReconnectSession={onReconnectSession}
-                onSplitSession={onSplitSession}
-                onCloseSession={onCloseSession}
-                onCloseAll={onCloseAll}
-                onCloseInactive={onCloseInactive}
-                onCloseRight={onCloseRight}
-                onSessionInfo={onSessionInfo}
-                onActivateTab={onTabChange}
-              >
-                <div
-                  draggable
-                  className={`group relative flex items-center gap-2 border-r pl-3 pr-2 text-xs transition-[color,background-color,opacity] duration-200 ${
-                    isActive ? "font-semibold" : "font-medium df-hover"
-                  } ${draggedTabId === tab.id ? "opacity-60" : ""}`}
-                  style={{
-                    borderColor: "var(--df-border)",
-                    backgroundColor: isActive
-                      ? accentColor
-                        ? `color-mix(in srgb, ${accentColor} 8%, var(--df-bg))`
-                        : "var(--df-bg)"
-                      : accentColor
-                        ? `color-mix(in srgb, ${accentColor} 5%, transparent)`
-                        : "transparent",
-                    color: isActive ? "var(--df-text)" : "var(--df-text-muted)",
-                  }}
-                  onClick={() => onTabChange(tab.id)}
-                  onContextMenu={() => onTabChange(tab.id)}
-                  onDragStart={(event) => handleDragStart(event, tab.id)}
-                  onDragEnd={() => {
-                    resetDragState();
-                    requestAnimationFrame(() => {
-                      window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
-                    });
-                  }}
-                  onDragOver={(event) => {
-                    if (!draggedTabId) return;
-                    event.preventDefault();
-                    setDropIndex(getInsertionIndex(event, index));
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    handleDropAtIndex(getInsertionIndex(event, index));
-                  }}
-                  title={displayName}
-                >
-                  {isActive && (
-                    <div
-                      className="absolute top-0 left-0 h-[2px] w-full"
-                      style={{
-                        backgroundColor: accentColor || "var(--df-primary)",
-                        boxShadow: `0 1px 4px ${accentColor || "var(--df-primary)"}`,
-                      }}
-                    />
-                  )}
-
-                  {isActive && (
-                    <div
-                      className="absolute bottom-0 left-0 z-10 h-[1px] w-full"
-                      style={{ backgroundColor: "var(--df-bg)" }}
-                    />
-                  )}
-
-                  {renderTabIcon(tab)}
-
-                  <span className="max-w-[160px] truncate whitespace-nowrap">{displayName}</span>
-
-                  <SyncIndicator
-                    tab={tab}
-                    syncGroups={syncGroups}
-                    broadcastToAll={broadcastToAll}
-                  />
-
-                  <div className="relative ml-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-                    {showUnreadIndicator ? (
-                      <span className="h-2 w-2 rounded-full bg-green-500 animate-breathing" />
-                    ) : (
-                      <div
-                        className={`absolute inset-0 flex items-center justify-center rounded transition-all duration-200 ${
-                          isActive
-                            ? "text-[var(--df-text-muted)]"
-                            : "text-[var(--df-text-dimmed)] opacity-0 group-hover:opacity-100"
-                        } hover:!bg-red-500/10 hover:!text-red-500 active:scale-90 active:!bg-red-500/20`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void onTabClose(tab);
-                        }}
-                      >
-                        <MdClose className="text-[12px]" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </TabContextMenu>
-            </div>
-          );
-        })}
+        {visibleTabs.map((tab) =>
+          renderTabItem(
+            tab,
+            tabs.findIndex((item) => item.id === tab.id),
+          ),
+        )}
 
         <div
           className="relative flex min-w-6 flex-1 shrink-0"
@@ -513,17 +742,79 @@ function TabBar({
         </div>
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
-            style={{ color: "var(--df-text-muted)", borderColor: "var(--df-border)" }}
-            title={t("terminal.newSession")}
-            aria-label={t("terminal.newSession")}
+      {overflowTabs.length > 0 && (
+        <DropdownMenu
+          open={overflowMenuOpen}
+          onOpenChange={(open) => {
+            setOverflowMenuOpen(open);
+            if (open) {
+              setOverflowTooltipOpen(false);
+              setSuppressOverflowTooltip(true);
+            } else {
+              setSuppressOverflowTooltip(true);
+            }
+          }}
+        >
+          <Tooltip
+            open={!overflowMenuOpen && !suppressOverflowTooltip && overflowTooltipOpen}
+            onOpenChange={(open) =>
+              setOverflowTooltipOpen(open && !overflowMenuOpen && !suppressOverflowTooltip)
+            }
           >
-            <MdAdd className="text-base" />
-          </button>
-        </DropdownMenuTrigger>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
+                  style={{ color: "var(--df-text-muted)", borderColor: "var(--df-border)" }}
+                  aria-label={t("terminal.showHiddenSessions")}
+                  onPointerEnter={() => {
+                    if (!overflowMenuOpen && !suppressOverflowTooltip) {
+                      setOverflowTooltipOpen(true);
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    setOverflowTooltipOpen(false);
+                    setSuppressOverflowTooltip(false);
+                  }}
+                  onClick={() => {
+                    setOverflowTooltipOpen(false);
+                    setSuppressOverflowTooltip(true);
+                  }}
+                >
+                  <RiExpandDiagonalLine className="text-base" />
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6} showArrow>
+              {t("terminal.showHiddenSessions")}
+            </TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="min-w-[240px] max-w-[360px]">
+            <DropdownMenuLabel className="text-muted-foreground">
+              {t("terminal.hiddenSessions")}
+            </DropdownMenuLabel>
+            {overflowTabs.map(renderOverflowTabItem)}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
+                style={{ color: "var(--df-text-muted)", borderColor: "var(--df-border)" }}
+                aria-label={t("terminal.newSession")}
+              >
+                <MdAdd className="text-base" />
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6} showArrow>
+            {t("terminal.newSession")}
+          </TooltipContent>
+        </Tooltip>
         <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
           <DropdownMenuGroup>
             <DropdownMenuItem onSelect={() => onAddTab()}>
