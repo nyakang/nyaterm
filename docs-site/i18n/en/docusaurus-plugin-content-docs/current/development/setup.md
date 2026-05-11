@@ -45,7 +45,7 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 ## Get the Source
 
 ```bash
-git clone https://git.coderkang.top/Tauri/nyaterm.git
+git clone https://github.com/nyakang/nyaterm.git
 cd nyaterm
 ```
 

@@ -16,7 +16,7 @@ NyaTerm supports the following operating systems:
 
 ### From releases
 
-Visit the [Releases](https://git.coderkang.top/Tauri/nyaterm/releases) page and download the installer for your OS:
+Visit the [Releases](https://github.com/nyakang/nyaterm/releases) page and download the installer for your OS:
 
 | Platform | Format |
 |----------|--------|

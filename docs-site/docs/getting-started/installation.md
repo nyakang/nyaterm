@@ -16,7 +16,7 @@ NyaTerm 支持以下操作系统：
 
 ### 从发布页面下载
 
-前往 [Releases](https://git.coderkang.top/Tauri/nyaterm/releases) 页面，下载适合你操作系统的安装包：
+前往 [Releases](https://github.com/nyakang/nyaterm/releases) 页面，下载适合你操作系统的安装包：
 
 | 平台 | 安装包格式 |
 |------|-----------|

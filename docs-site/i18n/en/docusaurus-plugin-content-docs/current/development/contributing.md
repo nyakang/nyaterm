@@ -9,7 +9,7 @@ Thank you for your interest in contributing to NyaTerm!
 ## Before You Start
 
 1. Read the [Development Setup](./setup) documentation
-2. Check the [Issues](https://git.coderkang.top/Tauri/nyaterm/issues) list
+2. Check the [Issues](https://github.com/nyakang/nyaterm/issues) list
 
 ## Contribution Workflow
 
@@ -74,4 +74,4 @@ When adding or modifying UI text, update both:
 
 ## License
 
-Contributions are licensed under the project's [MIT License](https://git.coderkang.top/Tauri/nyaterm/blob/main/LICENSE).
+Contributions are licensed under the project's [MIT License](https://github.com/nyakang/nyaterm/blob/main/LICENSE).

@@ -8,10 +8,10 @@
   "docspage": "https://nyaterm.app/docs/",
   "repository": {
     "type": "git",
-    "url": "https://git.coderkang.top/Tauri/nyaterm.git"
+    "url": "https://github.com/nyakang/nyaterm.git"
   },
   "bugs": {
-    "url": "https://git.coderkang.top/Tauri/nyaterm/issues"
+    "url": "https://github.com/nyakang/nyaterm/issues"
   },
   "type": "module",
   "scripts": {

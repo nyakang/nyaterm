@@ -43,7 +43,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://git.coderkang.top/Tauri/nyaterm/edit/main/docs-site/',
+          editUrl: 'https://github.com/nyakang/nyaterm/edit/main/docs-site/',
         },
         blog: false,
         theme: {
@@ -100,7 +100,7 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://git.coderkang.top/Tauri/nyaterm',
+          href: 'https://github.com/nyakang/nyaterm',
           label: 'GitHub',
           position: 'right',
         },
@@ -140,11 +140,11 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://git.coderkang.top/Tauri/nyaterm',
+              href: 'https://github.com/nyakang/nyaterm',
             },
             {
               label: '问题反馈',
-              href: 'https://git.coderkang.top/Tauri/nyaterm/issues',
+              href: 'https://github.com/nyakang/nyaterm/issues',
             },
           ],
         },
