@@ -1,5 +1,4 @@
 import { downloadDir } from "@tauri-apps/api/path";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { type ElementType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -18,6 +17,7 @@ import {
   MdSync,
   MdUpload,
 } from "react-icons/md";
+import { toast } from "sonner";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { invoke } from "@/lib/invoke";
 import { type TransferItem, useTransfer } from "../../../context/TransferContext";
 
 interface FileTransferProps {
@@ -46,12 +47,6 @@ function formatSize(bytes: number): string {
 function formatTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-function getParentDirectory(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, "");
-  const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
-  return lastSlash > 0 ? normalized.slice(0, lastSlash) : normalized;
 }
 
 function HeaderActionButton({
@@ -94,6 +89,7 @@ function TransferRow({
   onRetry,
   onCancel,
   onDelete,
+  onOpenTargetDirectory,
 }: {
   item: TransferItem;
   onPause: (id: string) => void;
@@ -101,6 +97,7 @@ function TransferRow({
   onRetry: (item: TransferItem) => void;
   onCancel: (id: string) => void;
   onDelete: (id: string) => void;
+  onOpenTargetDirectory: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const DirIcon =
@@ -116,12 +113,6 @@ function TransferRow({
       : item.totalSize > 0
         ? Math.min(100, Math.round((item.bytesTransferred / item.totalSize) * 100))
         : 0;
-  const openTargetDirectory =
-    item.direction === "download"
-      ? item.kind === "directory"
-        ? item.localPath
-        : getParentDirectory(item.localPath)
-      : "";
   const canPause = item.status === "transferring";
   const canResume = item.status === "paused";
   const canRetry = item.status === "error" || item.status === "cancelled";
@@ -260,10 +251,7 @@ function TransferRow({
         {item.direction === "download" && (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => openPath(openTargetDirectory)}
-              disabled={!openTargetDirectory}
-            >
+            <ContextMenuItem onClick={() => onOpenTargetDirectory(item.id)}>
               <MdFolder className="mr-2 text-[0.875rem]" />
               {t("fileTransfer.openTargetDirectory")}
             </ContextMenuItem>
@@ -349,6 +337,22 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
     );
   }, [cancelTransfer, visibleTransfers]);
 
+  const handleOpenDownloadDir = useCallback(async () => {
+    try {
+      await invoke("open_download_dir");
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }, []);
+
+  const handleOpenTargetDirectory = useCallback(async (transferId: string) => {
+    try {
+      await invoke("open_transfer_target_directory", { transferId });
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }, []);
+
   return (
     <aside
       className="h-full flex flex-col overflow-hidden"
@@ -409,6 +413,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
                 onRetry={(transfer) => void retryTransfer(transfer)}
                 onCancel={(id) => void cancelTransfer(id)}
                 onDelete={removeTransfer}
+                onOpenTargetDirectory={(id) => void handleOpenTargetDirectory(id)}
               />
             ))}
           </div>
@@ -424,7 +429,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
                 borderColor: "var(--df-border)",
                 color: "var(--df-text-dimmed)",
               }}
-              onClick={() => openPath(displayPath)}
+              onClick={() => void handleOpenDownloadDir()}
             >
               <div className="truncate">{displayPath}</div>
             </div>

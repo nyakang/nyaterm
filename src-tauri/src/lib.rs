@@ -48,6 +48,8 @@ pub fn run() {
         .on_window_event(app::on_window_event)
         .invoke_handler(tauri::generate_handler![
             cmd::app::quit_application,
+            cmd::app::open_download_dir,
+            cmd::app::open_transfer_target_directory,
             cmd::app::resolve_local_drop_paths,
             cmd::ai::start_ai_chat_stream,
             cmd::ai::list_ai_model_names,

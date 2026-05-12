@@ -728,6 +728,9 @@ export interface FileEntry {
   is_symlink: boolean;
   size: number;
   permissions: string;
+  owner: string;
+  group: string;
+  mtime: number;
 }
 
 export interface FileExplorerProps {
