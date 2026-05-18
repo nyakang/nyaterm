@@ -1775,8 +1775,40 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
           >
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
-                <MdAutoAwesome className="text-3xl" />
-                <div>{aiSettings.enabled ? t("ai.empty") : t("ai.goToSettingsToEnable")}</div>
+                {!aiSettings.enabled ? (
+                  <>
+                    <MdAutoAwesome className="text-3xl" />
+                    <div>{t("ai.goToSettingsToEnable")}</div>
+                  </>
+                ) : !selectedModel ? (
+                  <div className="flex flex-col items-center gap-4 px-4">
+                    <div className="flex size-12 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
+                      <MdErrorOutline className="text-2xl text-amber-500" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium text-foreground">{t("ai.setupTitle")}</div>
+                    </div>
+                    <div className="w-full space-y-2 text-left text-xs">
+                      <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+                        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[0.625rem] font-bold text-primary">1</span>
+                        <span>{t("ai.setupStep1")}</span>
+                      </div>
+                      <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+                        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[0.625rem] font-bold text-primary">2</span>
+                        <span>{t("ai.setupStep2")}</span>
+                      </div>
+                    </div>
+                    <Button size="sm" className="mt-1 gap-1.5" onClick={() => openSettings("ai")}>
+                      <MdOutlineSettings className="text-sm" />
+                      {t("ai.setupAction")}
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <MdAutoAwesome className="text-3xl" />
+                    <div>{t("ai.empty")}</div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-3">
@@ -2049,9 +2081,6 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                 )}
               </div>
             </div>
-            {!selectedModel ? (
-              <div className="text-[0.6875rem] text-amber-600">{t("ai.noEnabledModels")}</div>
-            ) : null}
           </div>
         </div>
       </div>
