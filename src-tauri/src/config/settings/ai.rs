@@ -22,15 +22,6 @@ pub enum AiProviderKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum AiRiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum AiMode {
     Ask,
     Agent,
@@ -106,8 +97,6 @@ pub struct AiSettings {
     #[serde(default = "default_true")]
     pub redaction_enabled: bool,
     #[serde(default = "default_true")]
-    pub risk_check_enabled: bool,
-    #[serde(default = "default_true")]
     pub allow_save_command: bool,
     #[serde(default = "default_true")]
     pub record_history: bool,
@@ -117,8 +106,6 @@ pub struct AiSettings {
     pub active_profile_id: String,
     #[serde(default = "default_provider_profiles")]
     pub provider_profiles: Vec<AiProviderProfile>,
-    #[serde(default = "default_allowed_command_risk_level")]
-    pub allowed_command_risk_level: AiRiskLevel,
     #[serde(default = "default_mode")]
     pub default_mode: AiMode,
     #[serde(default)]
@@ -153,10 +140,6 @@ fn default_context_line_limit() -> u32 {
 
 fn default_timeout_ms() -> u64 {
     60_000
-}
-
-fn default_allowed_command_risk_level() -> AiRiskLevel {
-    AiRiskLevel::Medium
 }
 
 fn default_mode() -> AiMode {
@@ -386,13 +369,11 @@ impl Default for AiSettings {
             enabled: true,
             context_line_limit: default_context_line_limit(),
             redaction_enabled: true,
-            risk_check_enabled: true,
             allow_save_command: true,
             record_history: true,
             timeout_ms: default_timeout_ms(),
             active_profile_id: default_active_profile_id(),
             provider_profiles: default_provider_profiles(),
-            allowed_command_risk_level: default_allowed_command_risk_level(),
             default_mode: default_mode(),
             default_model_id,
             models,

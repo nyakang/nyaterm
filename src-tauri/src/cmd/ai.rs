@@ -1,6 +1,6 @@
 use crate::core::ai::{
-    self, AiAuditLog, AiChatRequest, AiMessage, AiSession, AiStreamStart, AppendAiAuditRequest,
-    CommandRiskRequest, CommandRiskResponse,
+    self, AgentApprovalManager, AiAuditLog, AiChatRequest, AiMessage, AiSession, AiStreamStart,
+    AppendAiAuditRequest,
 };
 use crate::core::SessionManager;
 use crate::error::AppResult;
@@ -26,8 +26,15 @@ pub fn cancel_ai_chat_stream(stream_id: String) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn check_command_risk(request: CommandRiskRequest) -> AppResult<CommandRiskResponse> {
-    Ok(ai::check_command_risk(request))
+pub async fn respond_agent_step(
+    state: tauri::State<'_, Arc<AgentApprovalManager>>,
+    stream_id: String,
+    step_index: u16,
+    approved: bool,
+) -> AppResult<()> {
+    let key = format!("{stream_id}-{step_index}");
+    state.respond(&key, approved).await;
+    Ok(())
 }
 
 #[tauri::command]

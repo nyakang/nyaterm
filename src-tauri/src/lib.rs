@@ -13,6 +13,7 @@ mod utils;
 
 use std::sync::Arc;
 
+use crate::core::ai::AgentApprovalManager;
 use crate::core::ssh::{HostKeyVerifyManager, PendingAuthManager, TunnelManager};
 use crate::core::{CloudSyncManager, QuickCommandsStore, RecordingManager, SessionManager};
 
@@ -25,6 +26,7 @@ pub fn run() {
     let host_key_verify_manager = Arc::new(HostKeyVerifyManager::new());
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
+    let agent_approval_manager = Arc::new(AgentApprovalManager::new());
 
     let builder = tauri::Builder::default();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -44,6 +46,7 @@ pub fn run() {
         .manage(host_key_verify_manager.clone())
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
+        .manage(agent_approval_manager.clone())
         .setup(move |a| app::setup(a, session_manager, quick_commands_store, cloud_sync_manager))
         .on_window_event(app::on_window_event)
         .invoke_handler(tauri::generate_handler![
@@ -54,7 +57,7 @@ pub fn run() {
             cmd::ai::start_ai_chat_stream,
             cmd::ai::list_ai_model_names,
             cmd::ai::cancel_ai_chat_stream,
-            cmd::ai::check_command_risk,
+            cmd::ai::respond_agent_step,
             cmd::ai::get_ai_sessions,
             cmd::ai::get_ai_messages,
             cmd::ai::clear_ai_history,
