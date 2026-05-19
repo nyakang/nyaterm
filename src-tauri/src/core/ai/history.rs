@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use crate::error::AppResult;
 
 use super::types::{
-    uuid, now_rfc3339, AiAuditLog, AiChatRequest, AiMessage, AiMessageRole, AiSession,
+    now_rfc3339, uuid, AiAuditLog, AiChatRequest, AiMessage, AiMessageRole, AiSession,
     AppendAiAuditRequest,
 };
 

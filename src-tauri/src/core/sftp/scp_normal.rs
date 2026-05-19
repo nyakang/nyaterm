@@ -412,9 +412,10 @@ async fn download_file_inner(
         let handle_mtx = ssh_handle.target_handle();
         let mut channel = {
             let handle = handle_mtx.lock().await;
-            handle.channel_open_session().await.map_err(|e| {
-                AppError::Channel(format!("Failed to open channel: {}", e))
-            })?
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|e| AppError::Channel(format!("Failed to open channel: {}", e)))?
         };
 
         let cmd = format!("cat -- {}", sh_quote(remote_path));
@@ -462,9 +463,7 @@ async fn download_file_inner(
                 }
                 Some(ChannelMsg::Eof) | None => {
                     if exit_code.is_none() {
-                        if let Some(ChannelMsg::ExitStatus { exit_status }) =
-                            channel.wait().await
-                        {
+                        if let Some(ChannelMsg::ExitStatus { exit_status }) = channel.wait().await {
                             exit_code = Some(exit_status);
                         }
                     }
@@ -548,9 +547,10 @@ async fn upload_file_inner(
         let handle_mtx = ssh_handle.target_handle();
         let mut channel = {
             let handle = handle_mtx.lock().await;
-            handle.channel_open_session().await.map_err(|e| {
-                AppError::Channel(format!("Failed to open channel: {}", e))
-            })?
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|e| AppError::Channel(format!("Failed to open channel: {}", e)))?
         };
 
         let cmd = format!("cat > {}", sh_quote(&tmp_path));
@@ -576,9 +576,10 @@ async fn upload_file_inner(
                 break;
             }
 
-            channel.data(&buf[..n]).await.map_err(|e| {
-                AppError::Channel(format!("Channel write failed: {}", e))
-            })?;
+            channel
+                .data(&buf[..n])
+                .await
+                .map_err(|e| AppError::Channel(format!("Channel write failed: {}", e)))?;
 
             bytes_transferred += n as u64;
             controller.update_progress(bytes_transferred, total_size);
@@ -592,9 +593,10 @@ async fn upload_file_inner(
             }
         }
 
-        channel.eof().await.map_err(|e| {
-            AppError::Channel(format!("Channel EOF failed: {}", e))
-        })?;
+        channel
+            .eof()
+            .await
+            .map_err(|e| AppError::Channel(format!("Channel EOF failed: {}", e)))?;
 
         let mut exit_code: Option<u32> = None;
         loop {
@@ -604,9 +606,7 @@ async fn upload_file_inner(
                 }
                 Some(ChannelMsg::Eof) | None => {
                     if exit_code.is_none() {
-                        if let Some(ChannelMsg::ExitStatus { exit_status }) =
-                            channel.wait().await
-                        {
+                        if let Some(ChannelMsg::ExitStatus { exit_status }) = channel.wait().await {
                             exit_code = Some(exit_status);
                         }
                     }
@@ -617,11 +617,7 @@ async fn upload_file_inner(
         }
 
         if exit_code != Some(0) {
-            let _ = exec_command(
-                ssh_handle,
-                &format!("rm -f -- {}", sh_quote(&tmp_path)),
-            )
-            .await;
+            let _ = exec_command(ssh_handle, &format!("rm -f -- {}", sh_quote(&tmp_path))).await;
             return Err(AppError::Channel(format!(
                 "Upload cat exited with code {}",
                 exit_code.unwrap_or(255)
@@ -630,20 +626,12 @@ async fn upload_file_inner(
 
         let mv_result = exec_command(
             ssh_handle,
-            &format!(
-                "mv -f -- {} {}",
-                sh_quote(&tmp_path),
-                sh_quote(remote_path)
-            ),
+            &format!("mv -f -- {} {}", sh_quote(&tmp_path), sh_quote(remote_path)),
         )
         .await?;
 
         if mv_result.exit_code != Some(0) {
-            let _ = exec_command(
-                ssh_handle,
-                &format!("rm -f -- {}", sh_quote(&tmp_path)),
-            )
-            .await;
+            let _ = exec_command(ssh_handle, &format!("rm -f -- {}", sh_quote(&tmp_path))).await;
             let stderr_text = String::from_utf8_lossy(&mv_result.stderr);
             return Err(AppError::Channel(format!(
                 "Failed to move uploaded file: {}",
@@ -667,11 +655,8 @@ async fn upload_file_inner(
         }
         Err(e) => {
             if matches!(e, AppError::Cancelled(_)) {
-                let _ = exec_command(
-                    ssh_handle,
-                    &format!("rm -f -- {}", sh_quote(&tmp_path)),
-                )
-                .await;
+                let _ =
+                    exec_command(ssh_handle, &format!("rm -f -- {}", sh_quote(&tmp_path))).await;
             } else {
                 let _ = app.emit(
                     "transfer-event",
@@ -684,17 +669,11 @@ async fn upload_file_inner(
     }
 }
 
-async fn resolve_remote_exists(
-    ssh_handle: &Arc<SshConnectionHandles>,
-    remote_path: &str,
-) -> bool {
-    exec_command(
-        ssh_handle,
-        &format!("test -e {}", sh_quote(remote_path)),
-    )
-    .await
-    .map(|r| r.exit_code == Some(0))
-    .unwrap_or(false)
+async fn resolve_remote_exists(ssh_handle: &Arc<SshConnectionHandles>, remote_path: &str) -> bool {
+    exec_command(ssh_handle, &format!("test -e {}", sh_quote(remote_path)))
+        .await
+        .map(|r| r.exit_code == Some(0))
+        .unwrap_or(false)
 }
 
 async fn resolve_remote_path(
@@ -724,8 +703,7 @@ async fn resolve_remote_path(
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| "/".to_string());
             for i in 1..=999 {
-                let candidate =
-                    format!("{}/{}({}){}", parent.trim_end_matches('/'), stem, i, ext);
+                let candidate = format!("{}/{}({}){}", parent.trim_end_matches('/'), stem, i, ext);
                 if !resolve_remote_exists(ssh_handle, &candidate).await {
                     return Some(candidate);
                 }

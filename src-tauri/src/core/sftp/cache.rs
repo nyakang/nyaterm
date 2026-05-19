@@ -48,19 +48,16 @@ pub(crate) fn save_cached_backend(
         .unwrap_or_default()
         .as_secs();
 
-    let _ = storage::update_json_doc::<FileBackendCache, (), _>(
-        JSON_FILE_BACKEND_CACHE,
-        |cache| {
-            cache.entries.insert(
-                key.to_string(),
-                FileBackendCacheEntry {
-                    last_working_backend: backend.to_string(),
-                    sftp_unavailable,
-                    last_failure_reason: failure_reason,
-                    updated_at: now,
-                },
-            );
-            Ok(())
-        },
-    );
+    let _ = storage::update_json_doc::<FileBackendCache, (), _>(JSON_FILE_BACKEND_CACHE, |cache| {
+        cache.entries.insert(
+            key.to_string(),
+            FileBackendCacheEntry {
+                last_working_backend: backend.to_string(),
+                sftp_unavailable,
+                last_failure_reason: failure_reason,
+                updated_at: now,
+            },
+        );
+        Ok(())
+    });
 }

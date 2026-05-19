@@ -52,10 +52,7 @@ impl ScpEnhancedBackend {
     }
 
     async fn count_remote_files(&self, remote_path: &str) -> AppResult<u64> {
-        let cmd = format!(
-            "find {} -type f | wc -l",
-            sh_quote(remote_path)
-        );
+        let cmd = format!("find {} -type f | wc -l", sh_quote(remote_path));
         let output = self.exec_ok(&cmd).await?;
         let text = String::from_utf8_lossy(&output);
         let count = text.trim().parse::<u64>().unwrap_or(0);
@@ -233,16 +230,18 @@ impl ScpEnhancedBackend {
         let result: AppResult<u64> = async {
             if let Some(parent) = std::path::Path::new(local_path).parent() {
                 if !parent.exists() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(|e| AppError::Channel(format!("Failed to create local dir: {}", e)))?;
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        AppError::Channel(format!("Failed to create local dir: {}", e))
+                    })?;
                 }
             }
 
-            let stat_result = self.exec(&format!(
-                "LC_ALL=C stat -c '%s' -- {}",
-                sh_quote(remote_path)
-            )).await?;
+            let stat_result = self
+                .exec(&format!(
+                    "LC_ALL=C stat -c '%s' -- {}",
+                    sh_quote(remote_path)
+                ))
+                .await?;
             let total_size = if stat_result.exit_code == 0 {
                 String::from_utf8_lossy(&stat_result.stdout)
                     .trim()
@@ -279,9 +278,10 @@ impl ScpEnhancedBackend {
 
                 match channel.wait().await {
                     Some(ChannelMsg::Data { data }) => {
-                        local_file.write_all(&data).await.map_err(|e| {
-                            AppError::Channel(format!("Local write failed: {}", e))
-                        })?;
+                        local_file
+                            .write_all(&data)
+                            .await
+                            .map_err(|e| AppError::Channel(format!("Local write failed: {}", e)))?;
                         bytes_transferred += data.len() as u64;
                         controller.update_progress(bytes_transferred, total_size);
 
@@ -303,7 +303,9 @@ impl ScpEnhancedBackend {
                     }
                     Some(ChannelMsg::Eof) | None => {
                         if exit_code.is_none() {
-                            if let Some(ChannelMsg::ExitStatus { exit_status }) = channel.wait().await {
+                            if let Some(ChannelMsg::ExitStatus { exit_status }) =
+                                channel.wait().await
+                            {
                                 exit_code = Some(exit_status);
                             }
                         }
@@ -313,9 +315,10 @@ impl ScpEnhancedBackend {
                 }
             }
 
-            local_file.flush().await.map_err(|e| {
-                AppError::Channel(format!("Flush failed: {}", e))
-            })?;
+            local_file
+                .flush()
+                .await
+                .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
 
             if exit_code.unwrap_or(1) != 0 {
                 let msg = String::from_utf8_lossy(&stderr_buf);
@@ -395,9 +398,9 @@ impl ScpEnhancedBackend {
             };
             channel.exec(true, cmd.as_bytes()).await?;
 
-            let mut local_file = tokio::fs::File::open(local_path).await.map_err(|e| {
-                AppError::Channel(format!("Failed to open local file: {}", e))
-            })?;
+            let mut local_file = tokio::fs::File::open(local_path)
+                .await
+                .map_err(|e| AppError::Channel(format!("Failed to open local file: {}", e)))?;
 
             const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
             let mut last_progress = Instant::now();
@@ -407,15 +410,17 @@ impl ScpEnhancedBackend {
             loop {
                 wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
 
-                let n = local_file.read(&mut buf).await.map_err(|e| {
-                    AppError::Channel(format!("Local read failed: {}", e))
-                })?;
+                let n = local_file
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| AppError::Channel(format!("Local read failed: {}", e)))?;
                 if n == 0 {
                     break;
                 }
-                channel.data(&buf[..n]).await.map_err(|e| {
-                    AppError::Channel(format!("Channel write failed: {}", e))
-                })?;
+                channel
+                    .data(&buf[..n])
+                    .await
+                    .map_err(|e| AppError::Channel(format!("Channel write failed: {}", e)))?;
                 bytes_transferred += n as u64;
                 controller.update_progress(bytes_transferred, total_size);
 
@@ -428,9 +433,10 @@ impl ScpEnhancedBackend {
                 }
             }
 
-            channel.eof().await.map_err(|e| {
-                AppError::Channel(format!("Channel EOF failed: {}", e))
-            })?;
+            channel
+                .eof()
+                .await
+                .map_err(|e| AppError::Channel(format!("Channel EOF failed: {}", e)))?;
 
             let mut exit_code: Option<u32> = None;
             let mut stderr_buf = Vec::new();
@@ -446,7 +452,9 @@ impl ScpEnhancedBackend {
                     }
                     Some(ChannelMsg::Eof) | None => {
                         if exit_code.is_none() {
-                            if let Some(ChannelMsg::ExitStatus { exit_status }) = channel.wait().await {
+                            if let Some(ChannelMsg::ExitStatus { exit_status }) =
+                                channel.wait().await
+                            {
                                 exit_code = Some(exit_status);
                             }
                         }
@@ -457,7 +465,9 @@ impl ScpEnhancedBackend {
             }
 
             if exit_code.unwrap_or(1) != 0 {
-                let _ = self.exec(&format!("rm -f -- {}", sh_quote(&tmp_path))).await;
+                let _ = self
+                    .exec(&format!("rm -f -- {}", sh_quote(&tmp_path)))
+                    .await;
                 let msg = String::from_utf8_lossy(&stderr_buf);
                 return Err(AppError::Channel(format!(
                     "Remote write failed (exit {}): {}",
@@ -466,14 +476,12 @@ impl ScpEnhancedBackend {
                 )));
             }
 
-            let mv_cmd = format!(
-                "mv -f -- {} {}",
-                sh_quote(&tmp_path),
-                sh_quote(remote_path)
-            );
+            let mv_cmd = format!("mv -f -- {} {}", sh_quote(&tmp_path), sh_quote(remote_path));
             let mv_result = self.exec(&mv_cmd).await?;
             if mv_result.exit_code != 0 {
-                let _ = self.exec(&format!("rm -f -- {}", sh_quote(&tmp_path))).await;
+                let _ = self
+                    .exec(&format!("rm -f -- {}", sh_quote(&tmp_path)))
+                    .await;
                 let msg = String::from_utf8_lossy(&mv_result.stderr);
                 return Err(AppError::Channel(format!(
                     "Failed to finalize upload (exit {}): {}",
@@ -498,7 +506,9 @@ impl ScpEnhancedBackend {
             }
             Err(e) => {
                 if matches!(e, AppError::Cancelled(_)) {
-                    let _ = self.exec(&format!("rm -f -- {}", sh_quote(&tmp_path))).await;
+                    let _ = self
+                        .exec(&format!("rm -f -- {}", sh_quote(&tmp_path)))
+                        .await;
                 } else {
                     let _ = app.emit(
                         "transfer-event",
@@ -652,11 +662,7 @@ impl RemoteFs for ScpEnhancedBackend {
             )));
         }
 
-        let name = fields[0]
-            .split('/')
-            .last()
-            .unwrap_or(fields[0])
-            .to_string();
+        let name = fields[0].split('/').last().unwrap_or(fields[0]).to_string();
         let file_type = fields[1].to_lowercase();
         let size = fields[2].parse::<u64>().unwrap_or(0);
         let mtime = fields[3].parse::<u64>().unwrap_or(0);

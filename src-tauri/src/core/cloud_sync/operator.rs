@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use opendal::layers::{RetryLayer, TimeoutLayer, TracingLayer};
-use opendal::services::{S3, Webdav};
+use opendal::services::{Webdav, S3};
 use opendal::{ErrorKind, Operator};
 
 use crate::config::CloudSyncSettings;
@@ -98,9 +98,12 @@ pub(super) async fn ensure_remote_layout(op: &Operator, base_root: &str) -> AppR
     op.create_dir(&remote_path(base_root, super::remote::SYNC_SNAPSHOTS_DIR))
         .await
         .map_err(map_storage_error)?;
-    op.create_dir(&remote_path(base_root, super::remote::BACKUPS_SNAPSHOTS_DIR))
-        .await
-        .map_err(map_storage_error)?;
+    op.create_dir(&remote_path(
+        base_root,
+        super::remote::BACKUPS_SNAPSHOTS_DIR,
+    ))
+    .await
+    .map_err(map_storage_error)?;
     Ok(())
 }
 

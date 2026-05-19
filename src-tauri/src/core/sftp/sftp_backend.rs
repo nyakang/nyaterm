@@ -126,11 +126,7 @@ async fn resolve_remote_path(
     }
 }
 
-async fn apply_remote_mode(
-    sftp: &SftpSession,
-    path: &str,
-    requested_mode: u32,
-) -> AppResult<()> {
+async fn apply_remote_mode(sftp: &SftpSession, path: &str, requested_mode: u32) -> AppResult<()> {
     let original_attrs = sftp.metadata(path).await?;
     let original_permissions = original_attrs.permissions;
     let requested_permissions = requested_mode & POSIX_MODE_MASK;
@@ -473,9 +469,7 @@ async fn upload_local_file_inner_with_controller(
                 let remote_file = sftp
                     .open_with_flags(remote_path, OpenFlags::WRITE)
                     .await
-                    .map_err(|e| {
-                        AppError::Channel(format!("Failed to open remote file: {}", e))
-                    })?;
+                    .map_err(|e| AppError::Channel(format!("Failed to open remote file: {}", e)))?;
                 handle_pool.push((local_file, remote_file));
             }
 
@@ -793,13 +787,14 @@ impl RemoteFs for SftpBackend {
             )));
         }
 
-        let mut file = sftp.open(path).await.map_err(|error| {
-            AppError::Channel(format!("Failed to open remote file: {error}"))
-        })?;
+        let mut file = sftp
+            .open(path)
+            .await
+            .map_err(|error| AppError::Channel(format!("Failed to open remote file: {error}")))?;
         let mut bytes = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut bytes).await.map_err(|error| {
-            AppError::Channel(format!("Failed to read remote file: {error}"))
-        })?;
+        file.read_to_end(&mut bytes)
+            .await
+            .map_err(|error| AppError::Channel(format!("Failed to read remote file: {error}")))?;
         let _ = sftp.close().await;
 
         if bytes.len() as u64 > max_bytes {

@@ -49,11 +49,7 @@ pub(super) fn is_cancelled(cancel_rx: &mut oneshot::Receiver<()>) -> bool {
     )
 }
 
-pub(super) fn emit_stream_event(
-    app: &AppHandle,
-    stream_id: &str,
-    payload: AiStreamEventPayload,
-) {
+pub(super) fn emit_stream_event(app: &AppHandle, stream_id: &str, payload: AiStreamEventPayload) {
     let _ = app.emit(format!("ai-stream-{stream_id}").as_str(), payload);
 }
 

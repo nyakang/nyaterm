@@ -16,10 +16,8 @@ pub(super) const SYNC_SNAPSHOTS_DIR: &str = "sync/snapshots/";
 pub(super) const BACKUPS_INDEX_FILE: &str = "backups/index.redb";
 pub(super) const BACKUPS_SNAPSHOTS_DIR: &str = "backups/snapshots/";
 
-const REMOTE_SYNC_POINTER_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("sync_pointer");
-const REMOTE_BACKUP_INDEX_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("backup_index");
+const REMOTE_SYNC_POINTER_TABLE: TableDefinition<&str, &str> = TableDefinition::new("sync_pointer");
+const REMOTE_BACKUP_INDEX_TABLE: TableDefinition<&str, &str> = TableDefinition::new("backup_index");
 
 const REMOTE_SYNC_POINTER_KEY: &str = "latest";
 const REMOTE_BACKUP_INDEX_KEY: &str = "index";
@@ -210,12 +208,9 @@ mod tests {
             device_id: "dev".to_string(),
             app_version: "1.0.0".to_string(),
         };
-        let encoded = encode_redb_json_doc(
-            REMOTE_SYNC_POINTER_TABLE,
-            REMOTE_SYNC_POINTER_KEY,
-            &pointer,
-        )
-        .expect("encode pointer");
+        let encoded =
+            encode_redb_json_doc(REMOTE_SYNC_POINTER_TABLE, REMOTE_SYNC_POINTER_KEY, &pointer)
+                .expect("encode pointer");
         let decoded: RemoteSyncPointer =
             decode_redb_json_doc(&encoded, REMOTE_SYNC_POINTER_TABLE, REMOTE_SYNC_POINTER_KEY)
                 .expect("decode pointer");

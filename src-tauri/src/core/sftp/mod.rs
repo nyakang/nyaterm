@@ -24,8 +24,8 @@ use crate::error::{AppError, AppResult};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub use transfer::{cancel_transfer, pause_transfer, resume_transfer};
 pub(crate) use transfer::{active_transfer_count, transfer_target_directory};
+pub use transfer::{cancel_transfer, pause_transfer, resume_transfer};
 pub use util::{FileEntry, FileProperties, RemoteTextFile};
 
 /// Orchestrator that lazily initialises the best available remote file system
@@ -100,12 +100,7 @@ impl AutoRemoteFs {
         tracing::debug!("Probing SCP Enhanced backend");
         match ScpEnhancedBackend::probe(&self.ssh_handle).await {
             Ok(()) => {
-                save_cached_backend(
-                    &self.cache_key,
-                    "scp_enhanced",
-                    true,
-                    sftp_failure,
-                );
+                save_cached_backend(&self.cache_key, "scp_enhanced", true, sftp_failure);
                 return Ok(Box::new(ScpEnhancedBackend::new(self.ssh_handle.clone())));
             }
             Err(e) => {
@@ -116,12 +111,7 @@ impl AutoRemoteFs {
         tracing::debug!("Probing SCP Normal backend");
         match ScpNormalBackend::probe(&self.ssh_handle).await {
             Ok(()) => {
-                save_cached_backend(
-                    &self.cache_key,
-                    "scp_normal",
-                    true,
-                    sftp_failure,
-                );
+                save_cached_backend(&self.cache_key, "scp_normal", true, sftp_failure);
                 return Ok(Box::new(ScpNormalBackend::new(self.ssh_handle.clone())));
             }
             Err(e) => {
@@ -137,23 +127,31 @@ impl AutoRemoteFs {
 
     async fn try_cached_backend(&self, name: &str) -> Option<Box<dyn RemoteFs>> {
         match name {
-            "sftp" => SftpBackend::probe(&self.ssh_handle)
-                .await
-                .ok()
-                .map(|()| -> Box<dyn RemoteFs> { Box::new(SftpBackend::new(self.ssh_handle.clone())) }),
-            "scp_enhanced" => ScpEnhancedBackend::probe(&self.ssh_handle)
-                .await
-                .ok()
-                .map(|()| -> Box<dyn RemoteFs> { Box::new(ScpEnhancedBackend::new(self.ssh_handle.clone())) }),
-            "scp_normal" => ScpNormalBackend::probe(&self.ssh_handle)
-                .await
-                .ok()
-                .map(|()| -> Box<dyn RemoteFs> { Box::new(ScpNormalBackend::new(self.ssh_handle.clone())) }),
+            "sftp" => {
+                SftpBackend::probe(&self.ssh_handle)
+                    .await
+                    .ok()
+                    .map(|()| -> Box<dyn RemoteFs> {
+                        Box::new(SftpBackend::new(self.ssh_handle.clone()))
+                    })
+            }
+            "scp_enhanced" => ScpEnhancedBackend::probe(&self.ssh_handle).await.ok().map(
+                |()| -> Box<dyn RemoteFs> {
+                    Box::new(ScpEnhancedBackend::new(self.ssh_handle.clone()))
+                },
+            ),
+            "scp_normal" => ScpNormalBackend::probe(&self.ssh_handle).await.ok().map(
+                |()| -> Box<dyn RemoteFs> {
+                    Box::new(ScpNormalBackend::new(self.ssh_handle.clone()))
+                },
+            ),
             _ => None,
         }
     }
 
-    async fn backend(&self) -> AppResult<tokio::sync::RwLockReadGuard<'_, Option<Box<dyn RemoteFs>>>> {
+    async fn backend(
+        &self,
+    ) -> AppResult<tokio::sync::RwLockReadGuard<'_, Option<Box<dyn RemoteFs>>>> {
         self.ensure_backend().await?;
         Ok(self.inner.read().await)
     }
@@ -163,11 +161,14 @@ impl AutoRemoteFs {
 // Public API functions called by cmd/sftp.rs
 // ---------------------------------------------------------------------------
 
-async fn get_ssh_info(manager: &SessionManager, session_id: &str) -> AppResult<(Arc<SshConnectionHandles>, String, u16, String)> {
+async fn get_ssh_info(
+    manager: &SessionManager,
+    session_id: &str,
+) -> AppResult<(Arc<SshConnectionHandles>, String, u16, String)> {
     let sessions = manager.sessions.lock().await;
-    let session = sessions.get(session_id).ok_or_else(|| {
-        AppError::SessionNotFound(format!("Session '{}' not found", session_id))
-    })?;
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", session_id)))?;
 
     let ssh_handle = session
         .ssh_handle
@@ -318,8 +319,14 @@ pub async fn download_remote_file(
         .unwrap_or_default();
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    fs.download_file(&app, session_id, remote_path, local_path, &transfer_settings)
-        .await
+    fs.download_file(
+        &app,
+        session_id,
+        remote_path,
+        local_path,
+        &transfer_settings,
+    )
+    .await
 }
 
 pub async fn upload_local_file(
@@ -335,8 +342,14 @@ pub async fn upload_local_file(
         .unwrap_or_default();
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    fs.upload_file(&app, session_id, local_path, remote_path, &transfer_settings)
-        .await
+    fs.upload_file(
+        &app,
+        session_id,
+        local_path,
+        remote_path,
+        &transfer_settings,
+    )
+    .await
 }
 
 pub async fn get_file_properties(

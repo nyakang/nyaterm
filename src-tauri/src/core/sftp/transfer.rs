@@ -363,9 +363,7 @@ pub(crate) fn create_child_file_transfer_controller(
     ))
 }
 
-pub(crate) async fn wait_for_transfer_ready(
-    controller: &Arc<TransferController>,
-) -> AppResult<()> {
+pub(crate) async fn wait_for_transfer_ready(controller: &Arc<TransferController>) -> AppResult<()> {
     loop {
         let notified = controller.notify.notified();
         match controller.control_state() {

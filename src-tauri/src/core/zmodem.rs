@@ -706,7 +706,6 @@ fn drain_sender_outgoing(sender: &mut zmodem2::Sender, actions: &mut Vec<ZmodemA
     }
 }
 
-
 /// Remove path separators and invalid characters from a filename.
 fn sanitize_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
