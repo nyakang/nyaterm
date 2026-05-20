@@ -214,13 +214,6 @@
   },
   "dialog": {
     "advancedConfig": "高级配置",
-    "aiExecutionProfile": "AI 执行 Profile",
-    "aiExecutionProfileAuto": "自动",
-    "aiExecutionProfileCmd": "CMD",
-    "aiExecutionProfileDisabled": "禁用",
-    "aiExecutionProfilePosix": "POSIX",
-    "aiExecutionProfilePowerShell": "PowerShell",
-    "aiExecutionProfileSendOnly": "仅发送",
     "authentication": "认证方式",
     "autoFillOtp": "自动填入验证码",
     "backspaceCtrlH": "Ctrl+H (BS)",
