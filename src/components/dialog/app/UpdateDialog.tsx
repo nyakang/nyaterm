@@ -44,7 +44,7 @@ function formatBytes(bytes: number): string {
 
 function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="break-words text-xs leading-5 text-foreground">
+    <div className="min-w-0 overflow-x-hidden break-words text-xs leading-5 text-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -81,7 +81,7 @@ function MarkdownContent({ content }: { content: string }) {
           hr: () => <hr className="my-3 border-border/70" />,
           a: ({ children, href }: MarkdownNodeProps) => (
             <button
-              className="cursor-pointer text-primary underline underline-offset-2 transition-opacity hover:opacity-80"
+              className="inline max-w-full cursor-pointer break-all text-left align-baseline text-primary underline underline-offset-2 transition-opacity hover:opacity-80"
               onClick={() => {
                 if (href) {
                   void openUrl(href);
@@ -98,7 +98,7 @@ function MarkdownContent({ content }: { content: string }) {
             </blockquote>
           ),
           pre: ({ children }: MarkdownNodeProps) => (
-            <pre className="my-3 max-h-52 overflow-auto rounded-md border border-border/70 bg-muted/40 p-3 font-mono text-[11px] leading-5 shadow-sm">
+            <pre className="terminal-scroll my-3 max-h-52 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-border/70 bg-muted/40 p-3 font-mono text-[11px] leading-5 shadow-sm [&_code]:whitespace-pre-wrap [&_code]:break-all">
               {children}
             </pre>
           ),
@@ -107,14 +107,14 @@ function MarkdownContent({ content }: { content: string }) {
               return <code className={className}>{children}</code>;
             }
             return (
-              <code className="rounded border border-border/50 bg-muted/50 px-1 py-0.5 font-mono text-[11px]">
+              <code className="break-all rounded border border-border/50 bg-muted/50 px-1 py-0.5 font-mono text-[11px]">
                 {children}
               </code>
             );
           },
           table: ({ children }: MarkdownNodeProps) => (
-            <div className="my-3 overflow-auto rounded-md border border-border/60">
-              <table className="min-w-full border-collapse text-left text-[11px] leading-5">
+            <div className="my-3 min-w-0 overflow-hidden rounded-md border border-border/60">
+              <table className="w-full table-fixed border-collapse text-left text-[11px] leading-5">
                 {children}
               </table>
             </div>
@@ -129,12 +129,12 @@ function MarkdownContent({ content }: { content: string }) {
             <tr className="border-b border-border/60">{children}</tr>
           ),
           th: ({ children }: MarkdownNodeProps) => (
-            <th className="px-2.5 py-1.5 font-semibold text-foreground whitespace-nowrap">
-              {children}
-            </th>
+            <th className="break-words px-2.5 py-1.5 font-semibold text-foreground">{children}</th>
           ),
           td: ({ children }: MarkdownNodeProps) => (
-            <td className="px-2.5 py-1.5 align-top text-muted-foreground">{children}</td>
+            <td className="break-words px-2.5 py-1.5 align-top text-muted-foreground">
+              {children}
+            </td>
           ),
         }}
       >
@@ -229,7 +229,7 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
       }}
     >
       <DialogContent
-        className="w-[min(92vw,560px)] sm:max-w-[560px]"
+        className="w-[min(92vw,560px)] overflow-x-hidden sm:max-w-[560px]"
         showCloseButton={canClose}
         onPointerDownOutside={(e) => {
           if (!canClose) e.preventDefault();
@@ -282,7 +282,7 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
             </DialogHeader>
 
             {localUpdateInfo.body && (
-              <div className="max-h-[260px] max-w-full overflow-y-auto rounded-md border p-3">
+              <div className="terminal-scroll max-h-[min(42vh,320px)] min-w-0 max-w-full overflow-y-auto overflow-x-hidden rounded-md border p-3">
                 <p className="mb-1.5 text-xs font-medium text-muted-foreground">
                   {t("updater.releaseNotes")}
                 </p>
@@ -340,7 +340,7 @@ export default function UpdateDialog({ open, onClose, onUpdateFound }: UpdateDia
             <DialogHeader className="items-center pt-2">
               <MdError className="text-4xl text-red-500 mb-2" />
               <DialogTitle>{t("updater.updateFailed")}</DialogTitle>
-              <DialogDescription className="text-xs break-words overflow-hidden">
+              <DialogDescription className="terminal-scroll max-h-32 overflow-y-auto overflow-x-hidden break-all rounded-md bg-muted/30 p-2 text-left text-xs">
                 {error}
               </DialogDescription>
             </DialogHeader>
