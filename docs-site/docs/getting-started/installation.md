@@ -20,9 +20,11 @@ NyaTerm 支持以下操作系统：
 
 | 平台 | 安装包格式 |
 |------|-----------|
-| Windows | `.msi` / `.exe` |
+| Windows | `.msi` / `.exe` / 便携版 `.zip` |
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` |
+
+Windows 便携版解压后运行 `NyaTerm.exe` 即可。便携版不会使用自动更新；更新时请下载新的便携版 zip，关闭 NyaTerm，替换程序文件，并保留 `data/` 目录。
 
 ### 从源码构建
 

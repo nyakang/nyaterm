@@ -250,9 +250,11 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 | 平台 | 格式 |
 |------|------|
-| Windows | `.msi` / `.exe` |
+| Windows | `.msi` / `.exe` / 便携版 `.zip` |
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` |
+
+Windows 便携版解压后运行 `NyaTerm.exe` 即可。便携版更新需要手动完成：下载新的便携版 zip，关闭 NyaTerm，替换程序文件，并保留 `data/` 目录。
 
 ## 开发环境要求
 

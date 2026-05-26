@@ -20,9 +20,11 @@ Visit the [Releases](https://github.com/nyakang/nyaterm/releases) page and downl
 
 | Platform | Format |
 |----------|--------|
-| Windows | `.msi` / `.exe` |
+| Windows | `.msi` / `.exe` / portable `.zip` |
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` |
+
+For the Windows portable edition, extract the zip and run `NyaTerm.exe`. Portable edition updates are manual: download the new portable zip, close NyaTerm, replace the program files, and keep the `data/` folder.
 
 ### Build from source
 

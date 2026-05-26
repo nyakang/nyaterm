@@ -249,9 +249,11 @@ Download the latest build for your platform from [nyaterm.app](https://nyaterm.a
 
 | Platform | Format |
 |----------|--------|
-| Windows | `.msi` / `.exe` |
+| Windows | `.msi` / `.exe` / portable `.zip` |
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` |
+
+For the Windows portable edition, extract the zip and run `NyaTerm.exe`. Portable updates are manual: download the new portable zip, close NyaTerm, replace the program files, and keep the `data/` folder.
 
 ## Prerequisites for Development
 
