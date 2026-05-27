@@ -6,11 +6,11 @@ use super::session::{
 use super::zmodem::{ZmodemAction, ZmodemDetector, ZmodemEvent, ZmodemTransfer};
 use crate::config::AiExecutionProfile;
 use crate::core::capture::OutputCaptureProcessor;
-use crate::core::SessionOutputCoalescer;
+use crate::core::{RecordingManager, SessionOutputCoalescer};
 use crate::error::AppResult;
 use crate::observability::{log_event, log_rate_limited, StructuredLog, StructuredLogLevel};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
@@ -231,6 +231,9 @@ async fn telnet_session_task(
     let (mut reader, mut writer) = stream.into_split();
     let output_event = format!("terminal-output-{}", session_id);
     let closed_event = format!("session-closed-{}", session_id);
+    let recording_mgr: Option<Arc<RecordingManager>> = app
+        .try_state::<Arc<RecordingManager>>()
+        .map(|state| state.inner().clone());
     let output = SessionOutputCoalescer::for_app(app.clone(), output_event.clone());
 
     let capture_processor = Arc::new(TokioMutex::new(OutputCaptureProcessor::new()));
@@ -246,6 +249,7 @@ async fn telnet_session_task(
     let sid_reader = session_id.clone();
     let output_reader = output.clone();
     let reader_connection_id = connection_id.clone();
+    let recording_mgr_reader = recording_mgr.clone();
 
     let (negotiate_tx, mut negotiate_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -296,6 +300,9 @@ async fn telnet_session_task(
                             let pre =
                                 String::from_utf8_lossy(&visible[..header_offset]).to_string();
                             if !pre.is_empty() {
+                                if let Some(ref recorder) = recording_mgr_reader {
+                                    recorder.write_output(&sid_reader, &pre);
+                                }
                                 output_reader.push_owned(pre);
                             }
                         }
@@ -313,6 +320,9 @@ async fn telnet_session_task(
                     }
                     drop(proc);
                     if !text.is_empty() {
+                        if let Some(ref recorder) = recording_mgr_reader {
+                            recorder.write_output(&sid_reader, &text);
+                        }
                         output_reader.push_owned(text);
                     }
                 }
@@ -376,6 +386,9 @@ async fn telnet_session_task(
                         }
                         if backspace_as_bs {
                             remap_del_to_bs(&mut data);
+                        }
+                        if let Some(ref recorder) = recording_mgr {
+                            recorder.write_input(&session_id, &data);
                         }
                         if let Err(e) = writer.write_all(&data).await {
                             log_rate_limited(StructuredLog {
@@ -459,6 +472,9 @@ async fn telnet_session_task(
 
     output.close();
     reader_handle.abort();
+    if let Some(ref recorder) = recording_mgr {
+        recorder.cleanup_session(&session_id);
+    }
     manager.remove_session(&session_id).await;
     let _ = app.emit(&closed_event, ());
 }
