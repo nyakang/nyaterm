@@ -13,7 +13,7 @@ import { SYSTEM_ICONS } from "@/components/icons";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import { SerialForm } from "@/components/sessions/SerialForm";
-import { SshForm } from "@/components/sessions/SshForm";
+import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ export default function NewSessionPage() {
   const [sshPort, setSshPort] = useState(22);
   const [telnetPort, setTelnetPort] = useState(23);
   const [username, setUsername] = useState("root");
-  const [authType, setAuthType] = useState<"password" | "key">("password");
+  const [authType, setAuthType] = useState<SshAuthMode>("password");
   const [passwordId, setPasswordId] = useState("");
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
@@ -130,7 +130,7 @@ export default function NewSessionPage() {
           setHost(found.host || "");
           setSshPort(found.port || 22);
           setUsername(found.username || "root");
-          setAuthType((found.auth?.mode as "password" | "key") || "password");
+          setAuthType((found.auth?.mode as SshAuthMode) || "password");
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
           setKeyId(found.auth?.key_id || "");
@@ -292,12 +292,6 @@ export default function NewSessionPage() {
       if (!username.trim()) {
         return t("dialog.usernameRequired", "Username is required");
       }
-      if (authType === "password" && !passwordId && !password && !hasPassword) {
-        return t("dialog.passwordRequired", "Enter a password or select a saved password");
-      }
-      if (authType === "key" && !keyId) {
-        return t("dialog.privateKeyRequired", "Private key is required");
-      }
     }
 
     if (currentTab === "telnet") {
@@ -314,20 +308,7 @@ export default function NewSessionPage() {
     }
 
     return "";
-  }, [
-    authType,
-    currentTab,
-    hasPassword,
-    host,
-    keyId,
-    password,
-    passwordId,
-    serialPortName,
-    sshPort,
-    telnetPort,
-    t,
-    username,
-  ]);
+  }, [currentTab, host, serialPortName, sshPort, telnetPort, t, username]);
 
   const validationError = getValidationError();
   const saveDisabled = connecting || !!validationError;
@@ -395,15 +376,21 @@ export default function NewSessionPage() {
       const auth =
         currentTab === "ssh"
           ? (() => {
+              const resolvedAuthMode: SshAuthMode =
+                authType === "password" && (passwordId || password || hasPassword)
+                  ? "password"
+                  : authType === "key" && keyId
+                    ? "key"
+                    : "none";
               const nextAuth: NonNullable<SavedConnection["auth"]> = {
-                mode: authType,
-                password_id: authType === "password" ? passwordId || "" : "",
-                key_id: authType === "key" && keyId ? keyId : undefined,
+                mode: resolvedAuthMode,
+                password_id: resolvedAuthMode === "password" ? passwordId || "" : "",
+                key_id: resolvedAuthMode === "key" ? keyId : undefined,
                 otp_id: otpId || undefined,
                 auto_fill_otp: otpId ? autoFillOtp : undefined,
               };
 
-              if (authType !== "password" || passwordId) {
+              if (resolvedAuthMode !== "password" || passwordId) {
                 nextAuth.password = "";
               } else if (password) {
                 nextAuth.password = password;

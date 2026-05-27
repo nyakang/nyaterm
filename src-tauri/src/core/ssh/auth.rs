@@ -1,14 +1,14 @@
 use super::client::{SshAuth, SshConfig, SshHandler};
 use crate::error::{AppError, AppResult};
 use crate::observability::{self, StructuredLog, StructuredLogLevel};
-use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::MethodKind;
+use russh::client::{self, KeyboardInteractiveAuthResponse};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 /// Manages pending keyboard-interactive auth requests awaiting user input from the frontend.
 pub struct PendingAuthManager {
@@ -141,12 +141,12 @@ fn resolve_ssh_target(conn: &crate::config::SavedConnection) -> AppResult<(Strin
 }
 
 fn resolve_auth(app: &AppHandle, conn: &crate::config::SavedConnection) -> AppResult<SshAuth> {
-    let conn_auth = conn
-        .auth
-        .as_ref()
-        .ok_or_else(|| AppError::Auth("No auth config for SSH connection".to_string()))?;
+    let Some(conn_auth) = conn.auth.as_ref() else {
+        return Ok(SshAuth::None);
+    };
 
     match conn_auth.mode.as_str() {
+        "none" => Ok(SshAuth::None),
         "password" => {
             if let Some(ref ciphertext) = conn_auth.password {
                 let password = crate::utils::crypto::decrypt(ciphertext).map_err(|e| {
@@ -155,10 +155,9 @@ fn resolve_auth(app: &AppHandle, conn: &crate::config::SavedConnection) -> AppRe
                 return Ok(SshAuth::Password { password });
             }
 
-            let pw_id = conn_auth
-                .password_id
-                .as_deref()
-                .ok_or_else(|| AppError::Auth("No password for this connection".to_string()))?;
+            let Some(pw_id) = conn_auth.password_id.as_deref() else {
+                return Ok(SshAuth::None);
+            };
             let pw_entry = crate::config::load_password_by_id(app, pw_id)?;
             let password = pw_entry
                 .password
@@ -166,10 +165,9 @@ fn resolve_auth(app: &AppHandle, conn: &crate::config::SavedConnection) -> AppRe
             Ok(SshAuth::Password { password })
         }
         "key" => {
-            let key_id = conn_auth
-                .key_id
-                .as_deref()
-                .ok_or_else(|| AppError::Auth("No SSH key for this connection".to_string()))?;
+            let Some(key_id) = conn_auth.key_id.as_deref() else {
+                return Ok(SshAuth::None);
+            };
             let ssh_key = crate::config::load_key_by_id(app, key_id)?;
             let key_data = crate::config::decrypt_key_pem(&ssh_key)?
                 .ok_or_else(|| AppError::Auth("No key data stored".to_string()))?;
@@ -260,6 +258,41 @@ pub(super) async fn authenticate_handle(
         .and_then(|connection_id| resolve_otp_info(app, connection_id));
 
     match &config.auth {
+        SshAuth::None => {
+            log_structured(
+                StructuredLogLevel::Info,
+                "ssh.auth",
+                "auth.start",
+                "Starting SSH authentication",
+                config.connection_id.as_deref(),
+                None,
+                Some(json!({
+                    "host": config.host,
+                    "port": config.port,
+                    "username": config.username,
+                    "auth_mode": "none",
+                })),
+                None,
+            );
+
+            let authenticated = handle
+                .authenticate_none(&config.username)
+                .await
+                .map_err(|error| AppError::Auth(format!("None auth failed: {}", error)))?;
+
+            try_keyboard_interactive_after_partial(
+                handle,
+                &authenticated,
+                &config.username,
+                config.connection_id.as_deref(),
+                &config.name,
+                app,
+                "Authentication failed: none auth rejected",
+                Some(KeyboardInteractiveMode::AdditionalFactor),
+                otp_info.as_ref(),
+            )
+            .await?;
+        }
         SshAuth::Password { password } => {
             log_structured(
                 StructuredLogLevel::Info,
@@ -600,8 +633,8 @@ async fn finish_keyboard_interactive(
     }
 }
 
-/// After primary auth returns `Failure`, check if `partial_success` is true and
-/// keyboard-interactive is available. If so, run the keyboard-interactive flow.
+/// After primary auth returns `Failure`, continue with keyboard-interactive when
+/// the server advertises it and either partial success or an explicit fallback applies.
 async fn try_keyboard_interactive_after_partial(
     handle: &mut client::Handle<SshHandler>,
     auth_result: &client::AuthResult,
@@ -610,7 +643,7 @@ async fn try_keyboard_interactive_after_partial(
     connection_name: &str,
     app: &AppHandle,
     fallback_error: &str,
-    password_fallback: Option<KeyboardInteractiveMode<'_>>,
+    keyboard_interactive_fallback: Option<KeyboardInteractiveMode<'_>>,
     otp_info: Option<&OtpAutoFillInfo>,
 ) -> AppResult<()> {
     match auth_result {
@@ -621,8 +654,8 @@ async fn try_keyboard_interactive_after_partial(
         } => {
             let keyboard_interactive_available =
                 remaining_methods.contains(&MethodKind::KeyboardInteractive);
-            let can_retry_with_password_fallback =
-                keyboard_interactive_available && password_fallback.is_some();
+            let can_retry_keyboard_interactive =
+                keyboard_interactive_available && keyboard_interactive_fallback.is_some();
 
             if *partial_success && keyboard_interactive_available {
                 log_structured(
@@ -648,12 +681,12 @@ async fn try_keyboard_interactive_after_partial(
                     otp_info,
                 )
                 .await
-            } else if can_retry_with_password_fallback {
+            } else if can_retry_keyboard_interactive {
                 log_structured(
                     StructuredLogLevel::Info,
                     "ssh.auth",
-                    "auth.password_fallback",
-                    "Password auth rejected, retrying with keyboard-interactive",
+                    "auth.keyboard_interactive_fallback",
+                    "Primary auth rejected, retrying with keyboard-interactive",
                     connection_id,
                     None,
                     Some(json!({
@@ -662,7 +695,7 @@ async fn try_keyboard_interactive_after_partial(
                     })),
                     None,
                 );
-                let Some(mode) = password_fallback else {
+                let Some(mode) = keyboard_interactive_fallback else {
                     return Err(AppError::Auth(fallback_error.to_string()));
                 };
                 finish_keyboard_interactive(
@@ -704,7 +737,7 @@ fn should_auto_fill_password_prompts(prompts: &[client::Prompt]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_auto_fill_password_prompts, KeyboardInteractiveMode};
+    use super::{KeyboardInteractiveMode, should_auto_fill_password_prompts};
     use russh::client::Prompt;
 
     #[test]
@@ -745,8 +778,10 @@ mod tests {
 
     #[test]
     fn additional_factor_mode_never_exposes_password_fallback() {
-        assert!(KeyboardInteractiveMode::AdditionalFactor
-            .password()
-            .is_none());
+        assert!(
+            KeyboardInteractiveMode::AdditionalFactor
+                .password()
+                .is_none()
+        );
     }
 }

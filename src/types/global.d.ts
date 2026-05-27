@@ -93,8 +93,9 @@ export interface SshConfig {
   auth: SshAuth;
 }
 
-/** SSH authentication: password or private key (PEM content). */
+/** SSH authentication: none, password, or private key (PEM content). */
 export type SshAuth =
+  | { type: "none" }
   | { type: "password"; password: string }
   | { type: "key"; key_data: string; passphrase?: string };
 

@@ -1,13 +1,13 @@
 use crate::error::{AppError, AppResult};
 use russh::client;
 use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKeyBase64};
-use russh::{cipher, kex, mac, Preferred};
+use russh::{Preferred, cipher, kex, mac};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 /// Connection parameters for SSH (host, port, user, auth method).
 #[derive(Debug, Clone, Deserialize)]
@@ -25,10 +25,12 @@ pub struct SshConfig {
     pub proxy_jump: Option<Box<SshConfig>>,
 }
 
-/// Authentication method: password or key (with optional passphrase).
+/// Authentication method: none, password, or key (with optional passphrase).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum SshAuth {
+    #[serde(rename = "none")]
+    None,
     #[serde(rename = "password")]
     Password { password: String },
     #[serde(rename = "key")]
@@ -480,7 +482,7 @@ pub(super) fn build_client_config(app: &AppHandle) -> client::Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_known_host_entry, preferred_algorithms, KnownHostCheck};
+    use super::{KnownHostCheck, check_known_host_entry, preferred_algorithms};
     use russh::{cipher, kex, mac};
 
     #[test]

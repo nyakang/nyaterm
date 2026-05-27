@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import type { OtpEntry, ProxyConfig, SavedPassword, SshKey } from "@/types/global";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
+export type SshAuthMode = "none" | "password" | "key";
 
 interface SshFormProps {
   host: string;
@@ -42,8 +43,8 @@ interface SshFormProps {
   setPort: (v: number) => void;
   username: string;
   setUsername: (v: string) => void;
-  authType: "password" | "key";
-  setAuthType: (v: "password" | "key") => void;
+  authType: SshAuthMode;
+  setAuthType: (v: SshAuthMode) => void;
   passwordId: string;
   setPasswordId: (v: string) => void;
   password: string;
@@ -352,14 +353,25 @@ export function SshForm({
       <div>
         <Label className="text-xs font-medium text-foreground/80">
           {t("dialog.authentication")}
-          <RequiredMark />
         </Label>
         <Tabs
           value={authType}
-          onValueChange={(v) => setAuthType(v as "password" | "key")}
+          onValueChange={(v) => {
+            const nextAuthType = v as SshAuthMode;
+            setAuthType(nextAuthType);
+            if (nextAuthType === "none") {
+              setPasswordId("");
+              setPassword("");
+              setHasPassword(false);
+              setKeyId("");
+            }
+          }}
           className="w-full mt-1"
         >
-          <TabsList className="grid w-full grid-cols-2 h-8 pointer-events-auto">
+          <TabsList className="grid w-full grid-cols-3 h-8 pointer-events-auto">
+            <TabsTrigger value="none" className="text-xs">
+              {t("dialog.noAuthentication", "None")}
+            </TabsTrigger>
             <TabsTrigger value="password" className="text-xs">
               {t("dialog.password")}
             </TabsTrigger>
@@ -368,10 +380,18 @@ export function SshForm({
             </TabsTrigger>
           </TabsList>
 
+          <TabsContent value="none" className="mt-3 border-0 outline-none">
+            <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+              {t(
+                "dialog.noAuthenticationDescription",
+                "Connect without a password or private key. Use this only for SSH servers that allow none authentication or will request credentials interactively.",
+              )}
+            </div>
+          </TabsContent>
+
           <TabsContent value="password" className="mt-3 border-0 outline-none">
             <Label className="text-xs font-medium text-foreground/80">
               {t("dialog.passwordSource")}
-              <RequiredMark />
             </Label>
             <Tabs
               value={passwordSource}
@@ -399,7 +419,6 @@ export function SshForm({
               <TabsContent value="direct" className="mt-3 border-0 outline-none">
                 <Label className="text-xs font-medium text-foreground/80">
                   {t("dialog.password")}
-                  <RequiredMark />
                 </Label>
                 <div className="relative mt-1">
                   <Input
@@ -438,7 +457,6 @@ export function SshForm({
               <TabsContent value="saved" className="mt-3 border-0 outline-none">
                 <Label className="text-xs font-medium text-foreground/80">
                   {t("dialog.savedPassword")}
-                  <RequiredMark />
                 </Label>
                 <Popover open={showPasswordDropdown} onOpenChange={setShowPasswordDropdown}>
                   <PopoverTrigger asChild>
@@ -512,7 +530,6 @@ export function SshForm({
           <TabsContent value="key" className="mt-3 border-0 outline-none">
             <Label className="text-xs font-medium text-foreground/80">
               {t("dialog.privateKey")}
-              <RequiredMark />
             </Label>
             <Popover open={showKeyDropdown} onOpenChange={setShowKeyDropdown}>
               <PopoverTrigger asChild>
