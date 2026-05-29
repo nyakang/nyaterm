@@ -26,7 +26,7 @@ interface ImportSource {
   nameKey: string;
   hintKey: string;
   extensions: string[];
-  icon: "windterm" | "json";
+  icon: "windterm" | "xshell" | "json";
 }
 
 const IMPORT_SOURCES: ImportSource[] = [
@@ -36,6 +36,13 @@ const IMPORT_SOURCES: ImportSource[] = [
     hintKey: "quickCommands.importWindTermHint",
     extensions: ["config", "json"],
     icon: "windterm",
+  },
+  {
+    id: "xshell_xts",
+    nameKey: "quickCommands.importXshell",
+    hintKey: "quickCommands.importXshellHint",
+    extensions: ["xts"],
+    icon: "xshell",
   },
   {
     id: "nyaterm_json",
@@ -121,8 +128,13 @@ export default function QuickCommandsImportDialog({
                 style={{ borderColor: "var(--df-border)" }}
                 onClick={() => handleSelect(source)}
               >
-                {source.icon === "windterm" ? (
-                  <img src="/WindTerm.svg" alt="" className="h-10 w-10" draggable={false} />
+                {source.icon === "windterm" || source.icon === "xshell" ? (
+                  <img
+                    src={source.icon === "windterm" ? "/WindTerm.svg" : "/Xshell.svg"}
+                    alt=""
+                    className="h-10 w-10"
+                    draggable={false}
+                  />
                 ) : (
                   <MdDataObject className="h-10 w-10 text-[var(--df-primary)]" />
                 )}

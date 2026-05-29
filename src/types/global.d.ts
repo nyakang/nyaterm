@@ -378,7 +378,7 @@ export interface QuickCommandsConfig {
   categories: QuickCommandCategory[];
 }
 
-export type QuickCommandImportSource = "windterm_quickbar" | "nyaterm_json";
+export type QuickCommandImportSource = "windterm_quickbar" | "xshell_xts" | "nyaterm_json";
 
 export interface QuickCommandImportResult {
   imported_commands: number;
