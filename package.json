@@ -1,7 +1,7 @@
 {
   "name": "nyaterm",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A modern, high-performance SSH client built with Tauri and React.",
   "author": "CoderKang",
   "homepage": "https://nyaterm.app",
