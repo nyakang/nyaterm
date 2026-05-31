@@ -26,16 +26,32 @@ use crate::core::portable_snapshot::{
 };
 
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+const AUTOMATIC_RETRY_BACKOFF_MS: [u64; 4] = [60_000, 300_000, 900_000, 3_600_000];
 
 pub struct CloudSyncManager {
     app_handle: OnceLock<tauri::AppHandle>,
     settings: Arc<Mutex<CloudSyncSettings>>,
     state: Arc<Mutex<CloudSyncState>>,
     status: Arc<Mutex<CloudSyncStatus>>,
+    automatic_retry: Arc<Mutex<AutomaticRetryState>>,
     auto_push_notify: Arc<Notify>,
     auto_push_worker_started: AtomicBool,
     backup_worker_started: AtomicBool,
     operation_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AutomaticRetryState {
+    consecutive_failures: u32,
+    blocked_until_ms: Option<u64>,
+    suspended_until_settings_change: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutomaticRetryGate {
+    Run,
+    Wait(Duration),
+    Suspended,
 }
 
 impl CloudSyncManager {
@@ -45,6 +61,7 @@ impl CloudSyncManager {
             settings: Arc::new(Mutex::new(CloudSyncSettings::default())),
             state: Arc::new(Mutex::new(CloudSyncState::default())),
             status: Arc::new(Mutex::new(CloudSyncStatus::default())),
+            automatic_retry: Arc::new(Mutex::new(AutomaticRetryState::default())),
             auto_push_notify: Arc::new(Notify::new()),
             auto_push_worker_started: AtomicBool::new(false),
             backup_worker_started: AtomicBool::new(false),
@@ -96,6 +113,7 @@ impl CloudSyncManager {
 
     pub async fn replace_settings(&self, settings: CloudSyncSettings) -> AppResult<()> {
         *self.settings.lock().await = settings.clone();
+        self.reset_automatic_retry().await;
         self.set_status(
             if settings.enabled { "idle" } else { "disabled" },
             String::new(),
@@ -142,6 +160,7 @@ impl CloudSyncManager {
 
         match result {
             Ok(()) => {
+                self.reset_automatic_retry().await;
                 self.append_history(CloudSyncHistoryEntry {
                     id: uuid::Uuid::new_v4().to_string(),
                     timestamp_ms: current_time_ms(),
@@ -166,7 +185,10 @@ impl CloudSyncManager {
 
     pub async fn sync_push_now(self: &Arc<Self>, trigger: &str) -> AppResult<()> {
         match self.push_snapshot(trigger, false).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.reset_automatic_retry().await;
+                Ok(())
+            }
             Err(error) => {
                 self.record_failure("sync", trigger, &error).await;
                 Err(error)
@@ -176,7 +198,10 @@ impl CloudSyncManager {
 
     pub async fn sync_pull_now(self: &Arc<Self>, trigger: &str) -> AppResult<()> {
         match self.pull_snapshot(trigger, false).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.reset_automatic_retry().await;
+                Ok(())
+            }
             Err(error) => {
                 self.record_failure("sync", trigger, &error).await;
                 Err(error)
@@ -186,7 +211,10 @@ impl CloudSyncManager {
 
     pub async fn run_cloud_backup_now(self: &Arc<Self>, trigger: &str) -> AppResult<()> {
         match self.backup_snapshot(trigger).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.reset_automatic_retry().await;
+                Ok(())
+            }
             Err(error) => {
                 self.record_failure("backup", trigger, &error).await;
                 Err(error)
@@ -205,7 +233,10 @@ impl CloudSyncManager {
         };
 
         match result {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.reset_automatic_retry().await;
+                Ok(())
+            }
             Err(error) => {
                 self.record_failure("sync", action, &error).await;
                 Err(error)
@@ -283,6 +314,7 @@ impl CloudSyncManager {
         .await;
         self.set_status("idle", "Remote backup restored".to_string(), None, None)
             .await;
+        self.reset_automatic_retry().await;
         Ok(())
     }
 
@@ -402,11 +434,30 @@ impl CloudSyncManager {
                     .is_ok()
                     {}
 
-                    let settings = manager.settings.lock().await.clone();
-                    if settings.enabled && settings.auto_push_on_change {
+                    loop {
+                        let settings = manager.settings.lock().await.clone();
+                        if !settings.enabled || !settings.auto_push_on_change {
+                            break;
+                        }
+                        match manager.automatic_retry_gate().await {
+                            AutomaticRetryGate::Run => {}
+                            AutomaticRetryGate::Wait(delay) => {
+                                tokio::time::sleep(delay).await;
+                                continue;
+                            }
+                            AutomaticRetryGate::Suspended => break,
+                        }
                         if let Err(error) = manager.sync_push_now("auto_push").await {
                             tracing::warn!("Auto push failed: {}", error);
+                            match manager.automatic_retry_gate().await {
+                                AutomaticRetryGate::Wait(delay) => {
+                                    tokio::time::sleep(delay).await;
+                                    continue;
+                                }
+                                AutomaticRetryGate::Suspended | AutomaticRetryGate::Run => break,
+                            }
                         }
+                        break;
                     }
 
                     let pending_more = tokio::time::timeout(
@@ -445,6 +496,12 @@ impl CloudSyncManager {
                         >= settings.backup_interval_hours.max(1) * 60 * 60 * 1000
                 });
                 if !due {
+                    continue;
+                }
+                if !matches!(
+                    manager.automatic_retry_gate().await,
+                    AutomaticRetryGate::Run
+                ) {
                     continue;
                 }
 
@@ -858,6 +915,47 @@ impl CloudSyncManager {
         .await;
         self.set_status("failed", message, status.current_operation, status.conflict)
             .await;
+        self.record_automatic_retry_failure(trigger, error).await;
+    }
+
+    async fn reset_automatic_retry(&self) {
+        *self.automatic_retry.lock().await = AutomaticRetryState::default();
+    }
+
+    async fn automatic_retry_gate(&self) -> AutomaticRetryGate {
+        let retry = self.automatic_retry.lock().await.clone();
+        if retry.suspended_until_settings_change {
+            return AutomaticRetryGate::Suspended;
+        }
+        let Some(blocked_until_ms) = retry.blocked_until_ms else {
+            return AutomaticRetryGate::Run;
+        };
+        let now = current_time_ms();
+        if blocked_until_ms <= now {
+            return AutomaticRetryGate::Run;
+        }
+        AutomaticRetryGate::Wait(Duration::from_millis(blocked_until_ms.saturating_sub(now)))
+    }
+
+    async fn record_automatic_retry_failure(&self, trigger: &str, error: &AppError) {
+        if !is_automatic_trigger(trigger) {
+            return;
+        }
+
+        let mut retry = self.automatic_retry.lock().await;
+        if is_non_retryable_automatic_error(error) {
+            retry.suspended_until_settings_change = true;
+            retry.blocked_until_ms = None;
+            return;
+        }
+
+        retry.consecutive_failures = retry.consecutive_failures.saturating_add(1);
+        let index = retry
+            .consecutive_failures
+            .saturating_sub(1)
+            .min((AUTOMATIC_RETRY_BACKOFF_MS.len() - 1) as u32) as usize;
+        retry.blocked_until_ms =
+            Some(current_time_ms().saturating_add(AUTOMATIC_RETRY_BACKOFF_MS[index]));
     }
 
     async fn set_status(
@@ -895,6 +993,14 @@ impl CloudSyncManager {
             .cloned()
             .ok_or_else(|| AppError::Config("cloud sync app handle is not initialized".to_string()))
     }
+}
+
+fn is_automatic_trigger(trigger: &str) -> bool {
+    matches!(trigger, "auto_push" | "scheduled_backup" | "startup_check")
+}
+
+fn is_non_retryable_automatic_error(error: &AppError) -> bool {
+    matches!(error, AppError::Auth(_) | AppError::Config(_))
 }
 
 pub async fn notify_config_changed(app: &tauri::AppHandle) {
@@ -936,5 +1042,27 @@ mod tests {
         assert_eq!(settings.provider, "webdav");
         assert!(settings.webdav.password.is_some());
         assert!(settings.s3.secret_access_key.is_some());
+    }
+
+    #[test]
+    fn automatic_retry_classifies_auth_and_config_as_non_retryable() {
+        assert!(is_non_retryable_automatic_error(&AppError::Auth(
+            "bad credentials".to_string()
+        )));
+        assert!(is_non_retryable_automatic_error(&AppError::Config(
+            "invalid endpoint".to_string()
+        )));
+        assert!(!is_non_retryable_automatic_error(&AppError::Io(
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")
+        )));
+    }
+
+    #[test]
+    fn automatic_trigger_detection_is_limited_to_background_work() {
+        assert!(is_automatic_trigger("auto_push"));
+        assert!(is_automatic_trigger("scheduled_backup"));
+        assert!(is_automatic_trigger("startup_check"));
+        assert!(!is_automatic_trigger("manual_push"));
+        assert!(!is_automatic_trigger("manual_test_connection"));
     }
 }
