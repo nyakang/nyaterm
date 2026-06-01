@@ -1,6 +1,6 @@
 use crate::config;
 use crate::core::CloudSyncManager;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::observability::{self, StructuredLog, StructuredLogLevel};
 use crate::utils::crypto;
 use crate::utils::fonts::{list_system_font_families, list_system_font_infos, FontInfo};
@@ -75,7 +75,12 @@ pub async fn persist_app_settings(
         Some("__SET__") => {
             settings.security.master_password = existing.security.master_password;
         }
-        Some("") | None => {
+        Some("") => {
+            return Err(AppError::Config(
+                "Master password cannot be empty when enabled".to_string(),
+            ));
+        }
+        None => {
             if existing.security.master_password.is_some() {
                 let old_plain = crypto::decrypt_settings_secret(
                     existing.security.master_password.as_deref().unwrap(),

@@ -119,6 +119,41 @@ NyaTerm 支持导入其他客户端的会话配置，目前可导入：
 - **Xshell**（`.xts`）
 - **MobaXterm**（`.mxtsessions`）
 - **WindTerm**（`.sessions`）
+- **NyaTerm JSON**（`.json`）
+
+### 从 NyaTerm JSON 导入
+
+如果你需要批量整理连接清单，可以选择 **NyaTerm JSON** 并导入一个 `.json` 文件。这个格式适合从脚本、资产清单或其他系统生成会话数据。
+
+示例文件：[session-import-sample.json](/examples/session-import-sample.json)
+
+JSON 顶层字段：
+
+- `version`：当前为 `1`
+- `groups`：要预先创建的会话分组，使用 `path` 表示层级
+- `passwords`：可复用的已保存密码条目，使用 `ref` 在本文件内引用
+- `ssh_keys`：可复用的已保存私钥条目，使用 `ref` 在本文件内引用
+- `sessions`：要导入的会话列表
+
+支持的会话类型：
+
+- `ssh`
+- `local_terminal`
+- `telnet`
+- `serial`
+
+SSH 认证支持：
+
+- 直接密码：`"auth": { "mode": "password", "password": "replace-me" }`
+- 已保存密码：`"auth": { "mode": "password", "password_ref": "prod-root-password" }`
+- 已保存密钥：`"auth": { "mode": "key", "key_ref": "ops-ed25519" }`
+- 无认证：`"auth": { "mode": "none" }`
+
+`password` 与 `password_ref` 二选一；`key` 模式必须提供 `key_ref`。`ref` 只在当前 JSON 文件内有效，导入后 NyaTerm 会生成真实的本地 ID。
+
+:::warning
+JSON 文件中的密码和私钥是明文。导入后请删除该文件，或至少按敏感文件方式保存。
+:::
 
 导入后建议逐条检查：
 

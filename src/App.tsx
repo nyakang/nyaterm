@@ -100,7 +100,7 @@ async function createSessionForConnection(connection: Pick<SavedConnection, "id"
 }
 
 function safeRecordingName(name: string) {
-  return name.replace(/[^\w.-]/g, "_") || "session";
+  return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
 }
 
 function joinPath(dir: string, fileName: string) {

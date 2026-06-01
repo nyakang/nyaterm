@@ -288,6 +288,13 @@ export default function SettingsPage() {
   }
 
   const getDraftSaveBlockState = useCallback(() => {
+    if (draftSettings.security.master_password === "") {
+      return {
+        message: t("settings.masterPasswordEmptyDesc"),
+        targetTab: "security" as const,
+      };
+    }
+
     if (!draftSettings.cloud_sync.enabled) {
       return null;
     }

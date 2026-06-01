@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import { SelectItem } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { useSettingsDraft } from "@/context/SettingsDraftContext";
 import { NumberInput } from "../ui/number-input";
 import {
   SettingInput,
@@ -15,65 +16,84 @@ import {
 export function SecurityTab() {
   const { t } = useTranslation();
   const { appSettings, updateAppSettings } = useApp();
+  const { committedSettings, isSaving } = useSettingsDraft();
   const [newPassword, setNewPassword] = useState("");
-  const [confirmClear, setConfirmClear] = useState(false);
 
-  const isSet = appSettings.security.master_password === "__SET__";
+  const masterPasswordValue = appSettings.security.master_password;
+  const hasStoredMasterPassword =
+    committedSettings.security.master_password === "__SET__" || masterPasswordValue === "__SET__";
+  const masterPasswordEnabled = appSettings.cloud_sync.enabled || masterPasswordValue !== undefined;
+  const masterPasswordSwitchDisabled = appSettings.cloud_sync.enabled || isSaving;
 
   const handlePasswordChange = (val: string) => {
     setNewPassword(val);
     updateAppSettings({
-      security: { ...appSettings.security, master_password: val || "__SET__" },
+      security: {
+        ...appSettings.security,
+        master_password: val || (hasStoredMasterPassword ? "__SET__" : ""),
+      },
     });
   };
 
-  const handleClear = () => {
-    if (!confirmClear) {
-      setConfirmClear(true);
-      return;
-    }
-    setConfirmClear(false);
+  const handleMasterPasswordEnabledChange = (enabled: boolean) => {
     setNewPassword("");
     updateAppSettings({
-      security: { ...appSettings.security, master_password: undefined },
+      security: {
+        ...appSettings.security,
+        master_password: enabled ? (hasStoredMasterPassword ? "__SET__" : "") : undefined,
+      },
     });
   };
 
   return (
     <div className="space-y-5">
-      <SettingSection title={t("settings.masterPasswordSection")}>
-        {isSet && (
-          <div className="mb-3 flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">
-              {t("settings.masterPasswordIsSet")}
-            </span>
-            <Button
-              variant={confirmClear ? "destructive" : "outline"}
-              size="sm"
-              onClick={handleClear}
-            >
-              {confirmClear
-                ? t("settings.masterPasswordConfirmClear")
-                : t("settings.masterPasswordClear")}
-            </Button>
-            {confirmClear && (
-              <Button variant="ghost" size="sm" onClick={() => setConfirmClear(false)}>
-                {t("common.cancel")}
-              </Button>
-            )}
-          </div>
-        )}
+      <SettingSection title={t("settings.masterPasswordSection")} contentClassName="space-y-5">
+        <SettingRow
+          label={t("settings.masterPasswordSwitch")}
+          desc={t("settings.masterPasswordSwitchDesc")}
+        >
+          {appSettings.cloud_sync.enabled ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="inline-flex">
+                  <SettingSwitch
+                    checked={masterPasswordEnabled}
+                    disabled={masterPasswordSwitchDisabled}
+                    onChange={handleMasterPasswordEnabledChange}
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {t("settings.masterPasswordLockedByCloudSync")}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <SettingSwitch
+              checked={masterPasswordEnabled}
+              disabled={masterPasswordSwitchDisabled}
+              onChange={handleMasterPasswordEnabledChange}
+            />
+          )}
+        </SettingRow>
+
+        {hasStoredMasterPassword && !newPassword ? (
+          <div className="text-sm text-muted-foreground">{t("settings.masterPasswordIsSet")}</div>
+        ) : null}
+
         <SettingInput
-          label={isSet ? t("settings.masterPasswordNew") : t("settings.masterPassword")}
+          label={
+            hasStoredMasterPassword ? t("settings.masterPasswordNew") : t("settings.masterPassword")
+          }
           desc={t("settings.masterPasswordDesc")}
           type="password"
           controlClassName="max-w-lg"
           placeholder={
-            isSet
+            hasStoredMasterPassword
               ? t("settings.masterPasswordNewPlaceholder")
               : t("settings.masterPasswordPlaceholder")
           }
           value={newPassword}
+          disabled={!masterPasswordEnabled || isSaving}
           onChange={(e) => handlePasswordChange(e.target.value)}
         />
       </SettingSection>

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "passwords": [
+    {
+      "ref": "prod-root-password",
+      "name": "Prod root password",
+      "password": "replace-me"
+    }
+  ],
+  "ssh_keys": [
+    {
+      "ref": "ops-ed25519",
+      "name": "Ops ED25519",
+      "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+      "passphrase": "optional-passphrase"
+    }
+  ],
+  "groups": [
+    {
+      "path": ["Production"]
+    },
+    {
+      "path": ["Production", "Web"]
+    },
+    {
+      "path": ["Lab"]
+    }
+  ],
+  "sessions": [
+    {
+      "name": "Prod web direct password",
+      "type": "ssh",
+      "group_path": ["Production", "Web"],
+      "host": "web-01.example.com",
+      "port": 22,
+      "username": "deploy",
+      "auth": {
+        "mode": "password",
+        "password": "replace-me"
+      }
+    },
+    {
+      "name": "Prod db saved password",
+      "type": "ssh",
+      "group_path": ["Production", "Database"],
+      "host": "db-01.example.com",
+      "username": "root",
+      "auth": {
+        "mode": "password",
+        "password_ref": "prod-root-password"
+      }
+    },
+    {
+      "name": "Bastion saved key",
+      "type": "ssh",
+      "group_path": ["Production"],
+      "host": "bastion.example.com",
+      "username": "ops",
+      "auth": {
+        "mode": "key",
+        "key_ref": "ops-ed25519"
+      }
+    },
+    {
+      "name": "Lab router",
+      "type": "telnet",
+      "group_path": ["Lab"],
+      "host": "192.168.10.1",
+      "port": 23,
+      "backspace_mode": "del"
+    },
+    {
+      "name": "USB console",
+      "type": "serial",
+      "group_path": ["Lab"],
+      "port_name": "COM3",
+      "baud_rate": 115200,
+      "data_bits": 8,
+      "parity": "none",
+      "stop_bits": "1",
+      "backspace_mode": "ctrl_h"
+    },
+    {
+      "name": "Local PowerShell",
+      "type": "local_terminal",
+      "shell_path": "pwsh.exe",
+      "working_dir": "C:\\Users\\me"
+    }
+  ]
+}
