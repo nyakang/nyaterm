@@ -436,7 +436,7 @@ impl ZmodemTransfer {
                         }
                     }
                     zmodem2::ReceiverEvent::FileComplete => {
-                        if let Some(ref mut rf) = current_file {
+                        if let Some(rf) = current_file {
                             let _ = rf.file.flush();
                         }
                         self.file_count += 1;
@@ -459,7 +459,7 @@ impl ZmodemTransfer {
                 let file_data = file_data.to_vec();
                 let len = file_data.len();
 
-                if let Some(ref mut rf) = current_file {
+                if let Some(rf) = current_file {
                     if let Err(e) = rf.file.write_all(&file_data) {
                         tracing::error!("Failed to write file data: {e}");
                         self.state = TransferState::Done;
@@ -534,7 +534,7 @@ impl ZmodemTransfer {
         // Drain outgoing after each feed_file() to prevent buffer overflow
         // in the no_std fixed-capacity internal buffer.
         while let Some(req) = sender.poll_file() {
-            if let Some(ref mut sf) = current_file {
+            if let Some(sf) = current_file {
                 if let Err(e) = sf.file.seek(SeekFrom::Start(u64::from(req.offset))) {
                     tracing::warn!("File seek error: {e}");
                     break;

@@ -459,7 +459,7 @@ async fn emit_output(
         return;
     }
 
-    if let Some(ref recorder) = recording_mgr {
+    if let Some(recorder) = recording_mgr {
         recorder.write_output(session_id, &result.visible);
     }
 

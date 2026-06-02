@@ -1,7 +1,5 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rand::Rng;
-
 use crate::error::{AppError, AppResult};
 
 use super::TranslateResult;
@@ -13,9 +11,8 @@ fn generate_tkk() -> (i64, i64) {
         .unwrap_or_default()
         .as_millis() as i64
         / MIM as i64;
-    let mut rng = rand::thread_rng();
-    let r1 = rng.gen::<i32>() as i64;
-    let r2 = rng.gen::<i32>() as i64;
+    let r1 = rand::random::<i32>() as i64;
+    let r2 = rand::random::<i32>() as i64;
     (now, r1.abs() + r2)
 }
 

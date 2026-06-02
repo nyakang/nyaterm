@@ -110,7 +110,10 @@ pub fn apply_to_context<R: tauri::Runtime>(context: &mut tauri::Context<R>, runt
 pub fn prepare_webview_environment(runtime: &AppRuntime) {
     if runtime.portable {
         #[cfg(windows)]
-        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", runtime.webview_data_dir());
+        // Called during app startup before Tauri initializes WebView threads.
+        unsafe {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", runtime.webview_data_dir());
+        }
     }
 }
 
