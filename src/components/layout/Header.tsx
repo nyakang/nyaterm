@@ -46,8 +46,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useConfigTransfer } from "@/hooks/useConfigTransfer";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { AVAILABLE_LANGUAGES } from "@/i18n";
-import { logger } from "@/lib/logger";
 import { invoke } from "@/lib/invoke";
+import { logger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
@@ -454,7 +454,11 @@ export default function Header({
   };
 
   const handleCloseWindow = () => {
-    if (tabs.length > 0 && appSettings.general.confirm_on_close !== false) {
+    if (
+      !appSettings.general.minimize_to_tray &&
+      tabs.length > 0 &&
+      appSettings.general.confirm_on_close !== false
+    ) {
       setShowCloseConfirm(true);
     } else {
       appWindow.close().catch(() => {});
