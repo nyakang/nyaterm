@@ -668,7 +668,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                               )}
                               <span className="truncate">
                                 {cmd.execution_mode === "append"
-                                  ? t("quickCommands.appendOnly")
+                                  ? t("quickCommands.appendOnlyBadge")
                                   : t("quickCommands.executeImmediately")}
                               </span>
                             </Badge>
@@ -741,19 +741,6 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                                         </span>
                                       )}
                                     </div>
-                                    <Badge
-                                      variant="outline"
-                                      className="w-fit gap-1 border-border/40 bg-background/35 px-1.5 py-0 text-[0.6875rem] leading-5 text-muted-foreground"
-                                    >
-                                      {cmd.execution_mode === "append" ? (
-                                        <MdKeyboardReturn className="text-[0.75rem]" />
-                                      ) : (
-                                        <MdBolt className="text-[0.75rem]" />
-                                      )}
-                                      {cmd.execution_mode === "append"
-                                        ? t("quickCommands.appendOnly")
-                                        : t("quickCommands.executeImmediately")}
-                                    </Badge>
                                   </div>
 
                                   <div className="flex flex-col gap-3 p-3">
