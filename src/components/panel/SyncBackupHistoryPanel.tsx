@@ -105,19 +105,6 @@ function kindBadge(kind: string): string {
   }
 }
 
-function overviewTone(status: "total" | "success" | "failed" | "conflict") {
-  switch (status) {
-    case "success":
-      return "border-emerald-500/25 bg-emerald-500/8";
-    case "failed":
-      return "border-red-500/25 bg-red-500/8";
-    case "conflict":
-      return "border-amber-500/25 bg-amber-500/8";
-    default:
-      return "border-border/60 bg-card/45";
-  }
-}
-
 function historyCardTone(status: string) {
   switch (status) {
     case "failed":
@@ -196,23 +183,6 @@ function StatRow({ label, value }: StatRowProps) {
         {label}
       </div>
       <div className="mt-1 truncate text-sm font-medium text-foreground/85">{value}</div>
-    </div>
-  );
-}
-
-interface OverviewCardProps {
-  label: string;
-  value: number;
-  tone: "total" | "success" | "failed" | "conflict";
-}
-
-function OverviewCard({ label, value, tone }: OverviewCardProps) {
-  return (
-    <div className={cn("rounded-xl border px-3 py-3", overviewTone(tone))}>
-      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/75">
-        {label}
-      </div>
-      <div className="mt-1 text-base font-semibold text-foreground/90">{value}</div>
     </div>
   );
 }
@@ -503,25 +473,6 @@ function SyncBackupHistoryPanel() {
                 ) : null}
               </div>
             </div>
-
-            <div className="grid grid-cols-1 gap-2 border-t border-border/35 px-3 py-3 sm:grid-cols-2">
-              <StatRow
-                label={t("settings.lastSyncCheck")}
-                value={formatTimestamp(status.last_checked_at_ms) ?? t("settings.never")}
-              />
-              <StatRow
-                label={t("settings.lastSyncAt")}
-                value={formatTimestamp(status.last_synced_at_ms) ?? t("settings.never")}
-              />
-              <StatRow
-                label={t("settings.lastBackupAt")}
-                value={formatTimestamp(status.last_backup_at_ms) ?? t("settings.never")}
-              />
-              <StatRow
-                label={t("settings.currentOperation")}
-                value={status.current_operation || t("settings.none")}
-              />
-            </div>
           </div>
         </div>
 
@@ -578,95 +529,68 @@ function SyncBackupHistoryPanel() {
         ) : null}
 
         {history.length > 0 ? (
-          <>
-            <div className="px-2 pt-2">
-              <div className="grid grid-cols-2 gap-2">
-                <OverviewCard
-                  label={t("settings.historyOverviewTotal")}
-                  value={counts.total}
-                  tone="total"
-                />
-                <OverviewCard
-                  label={t("settings.historyOverviewSuccess")}
-                  value={counts.success}
-                  tone="success"
-                />
-                <OverviewCard
-                  label={t("settings.historyOverviewFailed")}
-                  value={counts.failed}
-                  tone="failed"
-                />
-                <OverviewCard
-                  label={t("settings.historyOverviewConflict")}
-                  value={counts.conflict}
-                  tone="conflict"
+          <div className="px-2 pt-2">
+            <div className="rounded-xl border border-border/60 bg-card/45 p-3">
+              <div className="relative">
+                <MdFilterList className="absolute left-3 top-1/2 -translate-y-1/2 text-base text-muted-foreground/50" />
+                <input
+                  type="text"
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  placeholder={t("settings.historySearchPlaceholder")}
+                  className="h-10 w-full rounded-lg border border-border/60 bg-muted/25 pl-9 pr-3 text-sm placeholder:text-muted-foreground/45 focus:outline-none focus:ring-1 focus:ring-primary/50"
                 />
               </div>
-            </div>
 
-            <div className="px-2 pt-2">
-              <div className="rounded-xl border border-border/60 bg-card/45 p-3">
-                <div className="relative">
-                  <MdFilterList className="absolute left-3 top-1/2 -translate-y-1/2 text-base text-muted-foreground/50" />
-                  <input
-                    type="text"
-                    value={searchText}
-                    onChange={(event) => setSearchText(event.target.value)}
-                    placeholder={t("settings.historySearchPlaceholder")}
-                    className="h-10 w-full rounded-lg border border-border/60 bg-muted/25 pl-9 pr-3 text-sm placeholder:text-muted-foreground/45 focus:outline-none focus:ring-1 focus:ring-primary/50"
-                  />
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+                    {t("settings.historyFilterKind")}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {kindFilterOptions.map((option) => (
+                      <FilterChip
+                        key={option.value}
+                        active={filterKind === option.value}
+                        count={option.count}
+                        label={option.label}
+                        onClick={() => setFilterKind(option.value)}
+                      />
+                    ))}
+                  </div>
                 </div>
 
-                <div className="mt-3 space-y-3">
-                  <div>
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
-                      {t("settings.historyFilterKind")}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {kindFilterOptions.map((option) => (
-                        <FilterChip
-                          key={option.value}
-                          active={filterKind === option.value}
-                          count={option.count}
-                          label={option.label}
-                          onClick={() => setFilterKind(option.value)}
-                        />
-                      ))}
-                    </div>
+                <div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+                    {t("settings.historyFilterStatus")}
                   </div>
-
-                  <div>
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
-                      {t("settings.historyFilterStatus")}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {statusFilterOptions.map((option) => (
-                        <FilterChip
-                          key={option.value}
-                          active={filterStatus === option.value}
-                          count={option.count}
-                          label={option.label}
-                          onClick={() => setFilterStatus(option.value)}
-                        />
-                      ))}
-                    </div>
+                  <div className="flex flex-wrap gap-2">
+                    {statusFilterOptions.map((option) => (
+                      <FilterChip
+                        key={option.value}
+                        active={filterStatus === option.value}
+                        count={option.count}
+                        label={option.label}
+                        onClick={() => setFilterStatus(option.value)}
+                      />
+                    ))}
                   </div>
-
-                  {hasFilters ? (
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-primary underline underline-offset-2"
-                        onClick={clearFilters}
-                      >
-                        {t("settings.historyClearFilters")}
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
+
+                {hasFilters ? (
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-primary underline underline-offset-2"
+                      onClick={clearFilters}
+                    >
+                      {t("settings.historyClearFilters")}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
-          </>
+          </div>
         ) : null}
 
         <div className="space-y-2 p-2 pb-4">
