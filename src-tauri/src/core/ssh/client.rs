@@ -14,6 +14,8 @@ use tokio::sync::{oneshot, Mutex};
 pub struct SshConfig {
     #[serde(default)]
     pub connection_id: Option<String>,
+    #[serde(default)]
+    pub owner_window_label: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -108,6 +110,7 @@ struct HostKeyVerifyPayload {
     key_type: String,
     fingerprint: String,
     is_key_changed: bool,
+    target_window_label: Option<String>,
 }
 
 /// russh client handler; performs TOFU known_hosts verification.
@@ -115,11 +118,22 @@ pub struct SshHandler {
     app: AppHandle,
     host: String,
     port: u16,
+    owner_window_label: Option<String>,
 }
 
 impl SshHandler {
-    pub fn new(app: AppHandle, host: String, port: u16) -> Self {
-        Self { app, host, port }
+    pub fn new(
+        app: AppHandle,
+        host: String,
+        port: u16,
+        owner_window_label: Option<String>,
+    ) -> Self {
+        Self {
+            app,
+            host,
+            port,
+            owner_window_label,
+        }
     }
 
     fn append_known_host(&self, host_entry: &str) {
@@ -359,6 +373,7 @@ impl client::Handler for SshHandler {
                     key_type: key_type.clone(),
                     fingerprint: fingerprint.to_string(),
                     is_key_changed,
+                    target_window_label: self.owner_window_label.clone(),
                 };
 
                 tracing::info!(

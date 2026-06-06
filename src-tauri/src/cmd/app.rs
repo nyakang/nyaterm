@@ -20,6 +20,7 @@ pub struct ChildWindowOptions {
     label: String,
     title: String,
     url: String,
+    parent_label: Option<String>,
     width: Option<f64>,
     height: Option<f64>,
     resizable: Option<bool>,
@@ -76,7 +77,12 @@ pub async fn open_child_window(
 
     let width = options.width.unwrap_or(720.0);
     let height = options.height.unwrap_or(560.0);
-    let placement = crate::window_state::center_child_in_main_monitor(&app, width, height);
+    let parent_label = options
+        .parent_label
+        .as_deref()
+        .filter(|label| crate::window_state::is_main_window_label(label));
+    let placement =
+        crate::window_state::center_child_in_parent_monitor(&app, parent_label, width, height);
 
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
@@ -97,7 +103,10 @@ pub async fn open_child_window(
             .hidden_title(true);
     }
 
-    if let Some(parent) = app.get_webview_window("main") {
+    if let Some(parent) = parent_label
+        .and_then(|label| app.get_webview_window(label))
+        .or_else(|| crate::app::focused_or_first_main_window(&app))
+    {
         builder = builder
             .parent(&parent)
             .map_err(|error| AppError::Config(error.to_string()))?;

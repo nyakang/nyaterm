@@ -76,6 +76,7 @@ pub async fn create_serial_session(
     manager: Arc<SessionManager>,
     config: SerialConfig,
     connection_id: Option<String>,
+    owner_window_label: Option<String>,
 ) -> AppResult<String> {
     log_event(StructuredLog {
         level: StructuredLogLevel::Info,
@@ -102,6 +103,7 @@ pub async fn create_serial_session(
         name: config.name.clone(),
         session_type: SessionType::Serial,
         connected: true,
+        owner_window_label,
         ai_execution_profile: AiExecutionProfile::SendOnly,
         injection_active: false,
     };

@@ -20,6 +20,7 @@ export interface HostKeyVerifyRequest {
   keyType: string;
   fingerprint: string;
   isKeyChanged: boolean;
+  targetWindowLabel?: string | null;
 }
 
 interface HostKeyVerifyDialogProps {

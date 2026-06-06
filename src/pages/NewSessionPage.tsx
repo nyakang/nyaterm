@@ -40,6 +40,7 @@ export default function NewSessionPage() {
   const params = new URLSearchParams(window.location.search);
   const editId = params.get("edit") ?? undefined;
   const autoConnect = params.get("autoConnect") === "1";
+  const ownerWindowLabel = params.get("owner") ?? undefined;
   const initialGroupId = editId ? "" : (params.get("groupId") ?? "");
   const targetLeafId = params.get("targetLeafId") ?? undefined;
   const anchorTabId = params.get("anchorTabId") ?? undefined;
@@ -535,6 +536,7 @@ export default function NewSessionPage() {
           anchorTabId,
           sourceTabId,
           sourcePaneId,
+          targetWindowLabel: ownerWindowLabel,
         });
       }
       resetForm();

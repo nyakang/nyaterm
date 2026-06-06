@@ -81,6 +81,7 @@ export default function SettingsPage() {
 
   const params = new URLSearchParams(window.location.search);
   const requestedInitialTab = params.get("tab") || "general";
+  const ownerWindowLabel = params.get("owner") || "main";
   const initialTab = requestedInitialTab === "ai" ? "ai-general" : requestedInitialTab;
   const [activeTab, setActiveTab] = useState(initialTab);
   const [draftSettings, setDraftSettings] = useState<AppSettings>(committedSettings);
@@ -96,14 +97,18 @@ export default function SettingsPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    const unlisten = listen<{ tab: string }>("settings-open-tab", ({ payload }) => {
-      setActiveTab(payload.tab === "ai" ? "ai-general" : payload.tab);
-    });
+    const unlisten = listen<{ tab: string; targetWindowLabel?: string | null }>(
+      "settings-open-tab",
+      ({ payload }) => {
+        if (payload.targetWindowLabel && payload.targetWindowLabel !== ownerWindowLabel) return;
+        setActiveTab(payload.tab === "ai" ? "ai-general" : payload.tab);
+      },
+    );
 
     return () => {
       unlisten.then((dispose) => dispose());
     };
-  }, []);
+  }, [ownerWindowLabel]);
 
   type SettingsCategory = {
     id: string;

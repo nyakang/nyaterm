@@ -47,6 +47,7 @@ import type {
 import { invoke } from "../lib/invoke";
 import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
+import { isPrimaryMainWindow } from "../lib/windowManager";
 
 interface AppContextType {
   // Tabs
@@ -975,6 +976,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!hasRestored.current && appSettingsLoaded.current) {
       hasRestored.current = true;
       if (
+        isPrimaryMainWindow() &&
         appSettings.general.startup_restore &&
         appSettings.ui.open_tabs &&
         appSettings.ui.open_tabs.length > 0

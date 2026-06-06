@@ -329,6 +329,7 @@ pub async fn create_local_session(
     app: AppHandle,
     manager: Arc<SessionManager>,
     config: Option<LocalSessionConfig>,
+    owner_window_label: Option<String>,
 ) -> AppResult<String> {
     tracing::info!("Creating local PTY session");
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -355,6 +356,7 @@ pub async fn create_local_session(
         name: session_name,
         session_type: SessionType::Local,
         connected: true,
+        owner_window_label,
         ai_execution_profile,
         injection_active,
     };

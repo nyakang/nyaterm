@@ -56,9 +56,11 @@ import {
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
 import {
   type NewSessionTarget,
+  getOwnerMainWindowLabel,
   openNewSession,
   openNewSessionWithTarget,
   openSettings,
+  setOwnerMainWindowLabel,
 } from "./lib/windowManager";
 import {
   collectSessionPanes,
@@ -112,6 +114,10 @@ function joinPath(dir: string, fileName: string) {
   return `${dir}${dir.endsWith("\\") || dir.endsWith("/") ? "" : "/"}${fileName}`;
 }
 
+function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
+  return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
+}
+
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
 function App() {
   const {
@@ -151,7 +157,9 @@ function App() {
   useEffect(() => {
     if (!settingsLoaded) return;
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-      getCurrentWindow().show();
+      const currentWindow = getCurrentWindow();
+      setOwnerMainWindowLabel(currentWindow.label);
+      currentWindow.show();
     });
   }, [settingsLoaded]);
 
@@ -292,8 +300,11 @@ function App() {
         type: "SSH" | "Local" | "Telnet" | "Serial";
         targetLeafId?: string;
         anchorTabId?: string | null;
+        targetWindowLabel?: string | null;
       }>("session-created", (event) => {
-        const { sessionId, name: sessionName, type, targetLeafId, anchorTabId } = event.payload;
+        const { sessionId, name: sessionName, type, targetLeafId, anchorTabId, targetWindowLabel } =
+          event.payload;
+        if (!eventTargetsCurrentWindow(targetWindowLabel)) return;
         const tabId = addTab(
           sessionId,
           sessionName,
@@ -317,12 +328,14 @@ function App() {
 
     unsubs.push(
       listen<OtpRequest>("otp-request", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setOtpRequest(event.payload);
       }),
     );
 
     unsubs.push(
       listen<HostKeyVerifyRequest>("host-key-verify", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setHostKeyVerifyRequest(event.payload);
       }),
     );
@@ -334,9 +347,18 @@ function App() {
         anchorTabId?: string | null;
         sourceTabId?: string;
         sourcePaneId?: string;
+        targetWindowLabel?: string | null;
       }>("session-connect-after-edit", async (event) => {
-        const { connectionId, targetLeafId, anchorTabId, sourceTabId, sourcePaneId } =
+        const {
+          connectionId,
+          targetLeafId,
+          anchorTabId,
+          sourceTabId,
+          sourcePaneId,
+          targetWindowLabel,
+        } =
           event.payload;
+        if (!eventTargetsCurrentWindow(targetWindowLabel)) return;
         try {
           const conns = await invoke<SavedConnection[]>("get_saved_connections");
           const conn = conns.find((c) => c.id === connectionId);
@@ -912,6 +934,7 @@ function App() {
 
   useEffect(() => {
     const unlisten = listen<TrayAction>("tray-action", ({ payload }) => {
+      if (!eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
       if (isLocked && payload.type !== "lock_screen" && payload.type !== "request_quit") {
         return;
       }

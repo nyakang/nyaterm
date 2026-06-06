@@ -5,13 +5,17 @@ import type { ActivityBarLayout, SessionPane, SessionType, Tab } from "@/types/g
 export const NON_PANEL_IDS = new Set(["settings", "lock", "quickCmdBar", "serialSend"]);
 
 export type TrayAction =
-  | { type: "open_new_session" }
-  | { type: "focus_session"; sessionId: string }
-  | { type: "open_panel"; panelId: "activeSessions" | "syncBackupHistory" }
-  | { type: "open_settings" }
-  | { type: "lock_screen" }
-  | { type: "check_updates" }
-  | { type: "request_quit" };
+  | { type: "open_new_session"; targetWindowLabel?: string | null }
+  | { type: "focus_session"; sessionId: string; targetWindowLabel?: string | null }
+  | {
+      type: "open_panel";
+      panelId: "activeSessions" | "syncBackupHistory";
+      targetWindowLabel?: string | null;
+    }
+  | { type: "open_settings"; targetWindowLabel?: string | null }
+  | { type: "lock_screen"; targetWindowLabel?: string | null }
+  | { type: "check_updates"; targetWindowLabel?: string | null }
+  | { type: "request_quit"; targetWindowLabel?: string | null };
 
 export function canCreateSessionFromPane(
   pane: Pick<SessionPane, "type" | "connectionId"> | null | undefined,

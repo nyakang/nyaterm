@@ -36,7 +36,10 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        app::show_main_window(app);
+        if let Err(error) = app::create_additional_main_window(app) {
+            tracing::warn!("Failed to create additional main window: {}", error);
+            app::show_main_window(app);
+        }
     }));
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = if runtime.portable() {

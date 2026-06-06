@@ -10,7 +10,8 @@ const DEFAULT_MAIN_WIDTH: f64 = 1280.0;
 const DEFAULT_MAIN_HEIGHT: f64 = 800.0;
 const MIN_MAIN_WIDTH: f64 = 720.0;
 const MIN_MAIN_HEIGHT: f64 = 480.0;
-const MAIN_WINDOW_LABEL: &str = "main";
+pub const MAIN_WINDOW_LABEL: &str = "main";
+pub const MAIN_WINDOW_PREFIX: &str = "main-";
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,7 @@ pub struct ChildWindowPlacement {
 #[derive(Debug)]
 struct PendingSave {
     app: tauri::AppHandle,
+    window_label: String,
     scheduled_at: Instant,
 }
 
@@ -81,8 +83,12 @@ pub fn load_main_window_state() -> MainWindowState {
         .normalized()
 }
 
+pub fn is_main_window_label(label: &str) -> bool {
+    label == MAIN_WINDOW_LABEL || label.starts_with(MAIN_WINDOW_PREFIX)
+}
+
 pub fn save_main_window_state(window: &tauri::Window) -> AppResult<()> {
-    if window.label() != MAIN_WINDOW_LABEL {
+    if !is_main_window_label(window.label()) {
         return Ok(());
     }
 
@@ -97,7 +103,7 @@ pub fn save_main_window_state(window: &tauri::Window) -> AppResult<()> {
 }
 
 pub fn save_main_webview_window_state(window: &tauri::WebviewWindow) -> AppResult<()> {
-    if window.label() != MAIN_WINDOW_LABEL {
+    if !is_main_window_label(window.label()) {
         return Ok(());
     }
 
@@ -137,7 +143,7 @@ fn save_main_window_state_values(
     storage::save_settings_doc(SettingsDocKey::WindowState, &state.normalized())
 }
 
-pub fn schedule_main_window_state_save(app: &tauri::AppHandle) {
+pub fn schedule_main_window_state_save(app: &tauri::AppHandle, window_label: &str) {
     let scheduled_at = Instant::now();
     {
         let mut pending = pending_save()
@@ -145,27 +151,29 @@ pub fn schedule_main_window_state_save(app: &tauri::AppHandle) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *pending = Some(PendingSave {
             app: app.clone(),
+            window_label: window_label.to_string(),
             scheduled_at,
         });
     }
 
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(SAVE_DEBOUNCE).await;
-        let app = {
+        let (app, window_label) = {
             let mut pending = pending_save()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match pending.as_ref() {
                 Some(save) if save.scheduled_at == scheduled_at => {
                     let app = save.app.clone();
+                    let window_label = save.window_label.clone();
                     *pending = None;
-                    app
+                    (app, window_label)
                 }
                 _ => return,
             }
         };
 
-        if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        if let Some(window) = app.get_webview_window(&window_label) {
             if let Err(error) = save_main_webview_window_state(&window) {
                 tracing::warn!("Failed to save main window state: {}", error);
             }
@@ -173,12 +181,15 @@ pub fn schedule_main_window_state_save(app: &tauri::AppHandle) {
     });
 }
 
-pub fn center_child_in_main_monitor(
+pub fn center_child_in_parent_monitor(
     app: &tauri::AppHandle,
+    parent_label: Option<&str>,
     child_width: f64,
     child_height: f64,
 ) -> Option<ChildWindowPlacement> {
-    let main_window = app.get_webview_window(MAIN_WINDOW_LABEL)?;
+    let main_window = parent_label
+        .and_then(|label| app.get_webview_window(label))
+        .or_else(|| crate::app::focused_or_first_main_window(app))?;
     let monitor = main_window.current_monitor().ok().flatten()?;
     let scale_factor = monitor.scale_factor();
     let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -255,6 +266,14 @@ mod tests {
         assert_eq!(state.width, DEFAULT_MAIN_WIDTH);
         assert_eq!(state.height, MIN_MAIN_HEIGHT);
         assert!(state.maximized);
+    }
+
+    #[test]
+    fn recognizes_main_window_label_family() {
+        assert!(is_main_window_label("main"));
+        assert!(is_main_window_label("main-1234"));
+        assert!(!is_main_window_label("settings"));
+        assert!(!is_main_window_label("new-session-main-1234"));
     }
 
     #[test]

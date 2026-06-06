@@ -1,7 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { isModalChildLabel, prepareForModalChildClose } from "./lib/windowManager";
+import {
+  isModalChildLabel,
+  prepareForModalChildClose,
+  setOwnerMainWindowLabel,
+} from "./lib/windowManager";
 
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const NewSessionPage = lazy(() => import("./pages/NewSessionPage"));
@@ -20,6 +24,10 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
   const Page = PAGES[windowType];
 
   useEffect(() => {
+    const ownerLabel = new URLSearchParams(window.location.search).get("owner");
+    if (ownerLabel) {
+      setOwnerMainWindowLabel(ownerLabel);
+    }
     const currentWindow = getCurrentWindow();
     let unlistenCloseRequested: (() => void) | undefined;
     let programmaticClose = false;

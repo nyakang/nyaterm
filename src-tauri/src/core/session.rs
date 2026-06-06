@@ -76,6 +76,8 @@ pub struct SessionInfo {
     pub name: String,
     pub session_type: SessionType,
     pub connected: bool,
+    #[serde(default)]
+    pub owner_window_label: Option<String>,
     /// Effective AI command execution profile for this session.
     #[serde(default)]
     pub ai_execution_profile: AiExecutionProfile,
@@ -578,6 +580,7 @@ mod tests {
                 name: id.to_string(),
                 session_type,
                 connected: true,
+                owner_window_label: None,
                 ai_execution_profile: AiExecutionProfile::Auto,
                 injection_active,
             },

@@ -38,6 +38,7 @@ export interface SessionInfo {
   name: string;
   session_type: SessionType;
   connected: boolean;
+  owner_window_label?: string | null;
   ai_execution_profile: AIExecutionProfile;
   /** True when backend terminal-path tracking is available for this session. */
   injection_active: boolean;

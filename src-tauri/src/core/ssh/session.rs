@@ -28,7 +28,12 @@ async fn create_authenticated_connection(
             "Creating SSH connection via ProxyJump"
         );
 
-        let jump_handler = SshHandler::new(app.clone(), jump_config.host.clone(), jump_config.port);
+        let jump_handler = SshHandler::new(
+            app.clone(),
+            jump_config.host.clone(),
+            jump_config.port,
+            config.owner_window_label.clone(),
+        );
         let mut jump_handle =
             connect_with_proxy(jump_config, ssh_client_config.clone(), jump_handler).await?;
         let jump_password_error =
@@ -62,7 +67,12 @@ async fn create_authenticated_connection(
             "ProxyJump direct-tcpip channel opened"
         );
 
-        let target_handler = SshHandler::new(app.clone(), config.host.clone(), config.port);
+        let target_handler = SshHandler::new(
+            app.clone(),
+            config.host.clone(),
+            config.port,
+            config.owner_window_label.clone(),
+        );
         let mut target_handle =
             connect_via_stream(channel.into_stream(), ssh_client_config, target_handler).await?;
         authenticate_handle(
@@ -87,7 +97,12 @@ async fn create_authenticated_connection(
         )));
     }
 
-    let handler = SshHandler::new(app.clone(), config.host.clone(), config.port);
+    let handler = SshHandler::new(
+        app.clone(),
+        config.host.clone(),
+        config.port,
+        config.owner_window_label.clone(),
+    );
     let mut handle = connect_with_proxy(config, ssh_client_config, handler).await?;
     authenticate_handle(
         &mut handle,
@@ -105,6 +120,13 @@ async fn create_authenticated_connection(
 
     let handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(handle));
     Ok(Arc::new(SshConnectionHandles::new(handle, None)))
+}
+
+fn set_owner_window_label(config: &mut SshConfig, owner_window_label: Option<String>) {
+    config.owner_window_label = owner_window_label.clone();
+    if let Some(proxy_jump) = config.proxy_jump.as_mut() {
+        set_owner_window_label(proxy_jump, owner_window_label);
+    }
 }
 
 /// Creates an authenticated SSH handle for a saved connection without opening a PTY/shell.
@@ -126,9 +148,11 @@ pub async fn create_ssh_handle(app: &AppHandle, connection_id: &str) -> AppResul
 pub async fn create_ssh_session(
     app: AppHandle,
     manager: Arc<SessionManager>,
-    config: SshConfig,
+    mut config: SshConfig,
     connection_id: Option<String>,
+    owner_window_label: Option<String>,
 ) -> AppResult<String> {
+    set_owner_window_label(&mut config, owner_window_label.clone());
     tracing::info!(
         host = %config.host,
         port = config.port,
@@ -153,6 +177,7 @@ pub async fn create_ssh_session(
         name: config.name.clone(),
         session_type: SessionType::SSH,
         connected: true,
+        owner_window_label,
         ai_execution_profile: AiExecutionProfile::Posix,
         injection_active,
     };

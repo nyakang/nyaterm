@@ -72,6 +72,14 @@ enum TrayActionPayload {
     RequestQuit,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetedTrayActionPayload {
+    #[serde(flatten)]
+    action: TrayActionPayload,
+    target_window_label: Option<String>,
+}
+
 #[derive(Clone, Copy)]
 enum TrayLanguage {
     En,
@@ -587,7 +595,15 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 }
 
 fn emit_tray_action(app: &AppHandle, payload: TrayActionPayload) {
-    let _ = app.emit("tray-action", payload);
+    let target_window_label = crate::app::focused_or_first_main_window(app)
+        .map(|window| window.label().to_string());
+    let _ = app.emit(
+        "tray-action",
+        TargetedTrayActionPayload {
+            action: payload,
+            target_window_label,
+        },
+    );
 }
 
 fn toggle_minimize_to_tray(app: &AppHandle) {

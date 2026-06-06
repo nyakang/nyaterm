@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   bounceTopModalWindow,
   getOpenModalChildWindowLabels,
-  isModalChildLabel,
+  isOwnedModalChildLabel,
   prepareForModalChildClose,
   syncMainWindowModalState,
 } from "@/lib/windowManager";
@@ -27,7 +27,7 @@ export function useModalChildWindows() {
 
     const unsubs = [
       listen<{ label: string }>("child-window-opened", ({ payload }) => {
-        if (!isModalChildLabel(payload.label)) return;
+        if (!isOwnedModalChildLabel(payload.label)) return;
         closingLabelsRef.current.delete(payload.label);
         setModalChildWindowLabels((labels) => {
           const nextLabels = new Set(labels);
@@ -37,7 +37,7 @@ export function useModalChildWindows() {
         void refreshOpenModalChildWindows();
       }),
       listen<{ label: string }>("child-window-closed", ({ payload }) => {
-        if (!isModalChildLabel(payload.label)) return;
+        if (!isOwnedModalChildLabel(payload.label)) return;
         closingLabelsRef.current.add(payload.label);
         setModalChildWindowLabels((labels) => {
           const nextLabels = new Set(labels);

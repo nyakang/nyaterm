@@ -13,18 +13,79 @@ interface ChildWindowOptions {
   label: string;
   title: string;
   url: string;
+  parentLabel?: string;
   width?: number;
   height?: number;
   resizable?: boolean;
 }
 
 const MAIN_WINDOW_LABEL = "main";
+const MAIN_WINDOW_PREFIX = "main-";
 const AUTO_UPLOAD_WINDOW_PREFIX = "auto-upload-";
-const MODAL_CHILD_LABELS = new Set(["settings", "new-session", "quick-command"]);
+const AUTO_UPLOAD_OWNER_SEPARATOR = "--";
+const MODAL_CHILD_BASE_LABELS = new Set(["settings", "new-session", "quick-command"]);
 const registeredDestroyedHandlers = new Set<string>();
+let ownerMainWindowLabel = MAIN_WINDOW_LABEL;
+
+export function isMainWindowLabel(label: string) {
+  return label === MAIN_WINDOW_LABEL || label.startsWith(MAIN_WINDOW_PREFIX);
+}
+
+export function setOwnerMainWindowLabel(label: string) {
+  if (isMainWindowLabel(label)) {
+    ownerMainWindowLabel = label;
+  }
+}
+
+export function getOwnerMainWindowLabel() {
+  return ownerMainWindowLabel;
+}
+
+export function isPrimaryMainWindow() {
+  return ownerMainWindowLabel === MAIN_WINDOW_LABEL;
+}
+
+function scopedModalLabel(baseLabel: string, ownerLabel = ownerMainWindowLabel) {
+  return ownerLabel === MAIN_WINDOW_LABEL ? baseLabel : `${baseLabel}-${ownerLabel}`;
+}
+
+function ownerToken(ownerLabel = ownerMainWindowLabel) {
+  return btoa(ownerLabel).replace(/[^a-zA-Z0-9]/g, "");
+}
+
+function modalOwnerLabel(label: string) {
+  if (MODAL_CHILD_BASE_LABELS.has(label)) return MAIN_WINDOW_LABEL;
+  for (const baseLabel of MODAL_CHILD_BASE_LABELS) {
+    const prefix = `${baseLabel}-`;
+    if (label.startsWith(prefix)) {
+      return label.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
+function autoUploadOwnerLabel(label: string) {
+  if (!label.startsWith(AUTO_UPLOAD_WINDOW_PREFIX)) return null;
+  const rest = label.slice(AUTO_UPLOAD_WINDOW_PREFIX.length);
+  const separatorIndex = rest.indexOf(AUTO_UPLOAD_OWNER_SEPARATOR);
+  if (separatorIndex === -1) return null;
+  const token = rest.slice(0, separatorIndex);
+  try {
+    return atob(token);
+  } catch {
+    return null;
+  }
+}
 
 export function isModalChildLabel(label: string) {
-  return MODAL_CHILD_LABELS.has(label) || label.startsWith(AUTO_UPLOAD_WINDOW_PREFIX);
+  return modalOwnerLabel(label) !== null || label.startsWith(AUTO_UPLOAD_WINDOW_PREFIX);
+}
+
+export function isOwnedModalChildLabel(label: string, ownerLabel = ownerMainWindowLabel) {
+  if (label.startsWith(AUTO_UPLOAD_WINDOW_PREFIX)) {
+    return autoUploadOwnerLabel(label) === ownerLabel;
+  }
+  return modalOwnerLabel(label) === ownerLabel;
 }
 
 function needsAlwaysOnTop(label: string) {
@@ -32,13 +93,13 @@ function needsAlwaysOnTop(label: string) {
 }
 
 async function getMainWindow() {
-  return (await WebviewWindow.getByLabel(MAIN_WINDOW_LABEL)) ?? getCurrentWindow();
+  return (await WebviewWindow.getByLabel(ownerMainWindowLabel)) ?? getCurrentWindow();
 }
 
 async function getOpenModalChildWindows() {
   const windows = await WebviewWindow.getAll();
   const modalWindows = windows.filter(
-    (window) => window.label !== MAIN_WINDOW_LABEL && isModalChildLabel(window.label),
+    (window) => window.label !== ownerMainWindowLabel && isOwnedModalChildLabel(window.label),
   );
   const visibleStates = await Promise.all(
     modalWindows.map((window) => window.isVisible().catch(() => false)),
@@ -138,6 +199,7 @@ export async function openChildWindow(opts: ChildWindowOptions) {
       label: opts.label,
       title: opts.title,
       url: opts.url,
+      parentLabel: opts.parentLabel ?? ownerMainWindowLabel,
       width: opts.width ?? 720,
       height: opts.height ?? 560,
       resizable: opts.resizable ?? true,
@@ -161,17 +223,18 @@ export async function openChildWindow(opts: ChildWindowOptions) {
 
 export async function openSettings(tab?: string) {
   const url = tab
-    ? `index.html?window=settings&tab=${encodeURIComponent(tab)}`
-    : "index.html?window=settings";
+    ? `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}&tab=${encodeURIComponent(tab)}`
+    : `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
   const win = await openChildWindow({
-    label: "settings",
+    label: scopedModalLabel("settings"),
     title: i18n.t("settings.title"),
     url,
+    parentLabel: ownerMainWindowLabel,
     width: 800,
     height: 560,
   });
   if (tab) {
-    emit("settings-open-tab", { tab });
+    emit("settings-open-tab", { tab, targetWindowLabel: ownerMainWindowLabel });
   }
   return win;
 }
@@ -194,8 +257,8 @@ export function openNewSessionWithTarget(
   target?: NewSessionTarget,
 ) {
   let url = editId
-    ? `index.html?window=new-session&edit=${encodeURIComponent(editId)}`
-    : "index.html?window=new-session";
+    ? `index.html?window=new-session&owner=${encodeURIComponent(ownerMainWindowLabel)}&edit=${encodeURIComponent(editId)}`
+    : `index.html?window=new-session&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
   if (autoConnect) url += "&autoConnect=1";
   if (target?.targetLeafId) {
     url += `&targetLeafId=${encodeURIComponent(target.targetLeafId)}`;
@@ -213,9 +276,10 @@ export function openNewSessionWithTarget(
     url += `&groupId=${encodeURIComponent(target.initialGroupId)}`;
   }
   return openChildWindow({
-    label: "new-session",
+    label: scopedModalLabel("new-session"),
     title: i18n.t(editId ? "dialog.editConnection" : "dialog.newConnection"),
     url,
+    parentLabel: ownerMainWindowLabel,
     width: 520,
     height: 620,
   });
@@ -223,12 +287,13 @@ export function openNewSessionWithTarget(
 
 export function openQuickCommand(editJson?: string) {
   const url = editJson
-    ? `index.html?window=quick-command&data=${encodeURIComponent(editJson)}`
-    : "index.html?window=quick-command";
+    ? `index.html?window=quick-command&owner=${encodeURIComponent(ownerMainWindowLabel)}&data=${encodeURIComponent(editJson)}`
+    : `index.html?window=quick-command&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
   return openChildWindow({
-    label: "quick-command",
+    label: scopedModalLabel("quick-command"),
     title: i18n.t(editJson ? "quickCommands.editCommand" : "quickCommands.addCommand"),
     url,
+    parentLabel: ownerMainWindowLabel,
     width: 540,
     height: 640,
   });
@@ -238,12 +303,13 @@ export function openAutoUpload(data: { sessionId: string; localPath: string; rem
   // Use a unique label for each upload dialog so multiple files modifying simultaneously don't conflict
   // We use the local path base64 (or just random) to make it unique per file
   const safePath = btoa(encodeURIComponent(data.localPath)).replace(/[^a-zA-Z0-9]/g, "");
-  const label = `auto-upload-${safePath}`;
-  const url = `index.html?window=auto-upload&data=${encodeURIComponent(JSON.stringify(data))}`;
+  const label = `auto-upload-${ownerToken()}${AUTO_UPLOAD_OWNER_SEPARATOR}${safePath}`;
+  const url = `index.html?window=auto-upload&owner=${encodeURIComponent(ownerMainWindowLabel)}&data=${encodeURIComponent(JSON.stringify(data))}`;
   return openChildWindow({
     label,
     title: i18n.t("fileExplorer.fileModified"),
     url,
+    parentLabel: ownerMainWindowLabel,
     width: 440,
     height: 240,
     resizable: false,

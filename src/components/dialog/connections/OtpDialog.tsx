@@ -25,6 +25,7 @@ export interface OtpRequest {
   connectionName: string;
   prompts: OtpPrompt[];
   otpEntryId?: string;
+  targetWindowLabel?: string | null;
 }
 
 interface OtpDialogProps {

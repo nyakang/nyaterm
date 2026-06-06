@@ -50,6 +50,7 @@ struct OtpRequestPayload {
     connection_name: String,
     prompts: Vec<OtpPrompt>,
     otp_entry_id: Option<String>,
+    target_window_label: Option<String>,
 }
 
 fn build_ids(connection_id: Option<&str>, request_id: Option<&str>) -> Option<Value> {
@@ -118,6 +119,7 @@ fn resolve_saved_ssh_config(
 
     Ok(SshConfig {
         connection_id,
+        owner_window_label: None,
         name: conn.name.clone(),
         host,
         port,
@@ -309,6 +311,7 @@ pub(super) async fn authenticate_handle(
                 &config.username,
                 config.connection_id.as_deref(),
                 &config.name,
+                config.owner_window_label.as_deref(),
                 app,
                 "Authentication failed: none auth rejected",
                 Some(KeyboardInteractiveMode::AdditionalFactor),
@@ -344,6 +347,7 @@ pub(super) async fn authenticate_handle(
                 &config.username,
                 config.connection_id.as_deref(),
                 &config.name,
+                config.owner_window_label.as_deref(),
                 app,
                 password_error,
                 Some(KeyboardInteractiveMode::PasswordFallback { password }),
@@ -395,6 +399,7 @@ pub(super) async fn authenticate_handle(
                 &config.username,
                 config.connection_id.as_deref(),
                 &config.name,
+                config.owner_window_label.as_deref(),
                 app,
                 key_error,
                 None,
@@ -670,6 +675,7 @@ async fn finish_keyboard_interactive(
     username: &str,
     connection_id: Option<&str>,
     connection_name: &str,
+    target_window_label: Option<&str>,
     app: &AppHandle,
     mode: KeyboardInteractiveMode<'_>,
     otp_info: Option<&OtpAutoFillInfo>,
@@ -822,8 +828,9 @@ async fn finish_keyboard_interactive(
                                 prompt: prompt.prompt.clone(),
                                 echo: prompt.echo,
                             })
-                            .collect(),
+                        .collect(),
                         otp_entry_id: otp_info.map(|i| i.otp_id.clone()),
+                        target_window_label: target_window_label.map(str::to_string),
                     };
                     log_structured(
                         StructuredLogLevel::Info,
@@ -880,6 +887,7 @@ async fn try_keyboard_interactive_after_partial(
     username: &str,
     connection_id: Option<&str>,
     connection_name: &str,
+    target_window_label: Option<&str>,
     app: &AppHandle,
     fallback_error: &str,
     keyboard_interactive_fallback: Option<KeyboardInteractiveMode<'_>>,
@@ -915,6 +923,7 @@ async fn try_keyboard_interactive_after_partial(
                     username,
                     connection_id,
                     connection_name,
+                    target_window_label,
                     app,
                     KeyboardInteractiveMode::AdditionalFactor,
                     otp_info,
@@ -942,6 +951,7 @@ async fn try_keyboard_interactive_after_partial(
                     username,
                     connection_id,
                     connection_name,
+                    target_window_label,
                     app,
                     mode,
                     otp_info,

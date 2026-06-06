@@ -45,8 +45,11 @@ if (windowType) {
   );
 } else {
   // Main window: full app with all providers
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const { setOwnerMainWindowLabel } = await import("./lib/windowManager");
   const { AppProvider } = await import("./context/AppContext");
   const { default: App } = await import("./App");
+  setOwnerMainWindowLabel(getCurrentWindow().label);
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
