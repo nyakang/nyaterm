@@ -8,6 +8,7 @@ export interface TerminalInputState {
   desyncReason: "tab" | "terminal" | null;
   lineRewriteRequired: boolean;
   multiline: boolean;
+  pasteMode: boolean;
 }
 
 export function createTerminalInputState(): TerminalInputState {
@@ -18,6 +19,7 @@ export function createTerminalInputState(): TerminalInputState {
     desyncReason: null,
     lineRewriteRequired: false,
     multiline: false,
+    pasteMode: false,
   };
 }
 
@@ -29,6 +31,7 @@ function resetState(multiline = false): TerminalInputState {
     desyncReason: null,
     lineRewriteRequired: false,
     multiline,
+    pasteMode: false,
   };
 }
 
@@ -37,10 +40,12 @@ function insertText(state: TerminalInputState, text: string): TerminalInputState
     return state;
   }
 
+  const value = `${state.value.slice(0, state.cursor)}${text}${state.value.slice(state.cursor)}`;
   return {
     ...state,
-    value: `${state.value.slice(0, state.cursor)}${text}${state.value.slice(state.cursor)}`,
+    value,
     cursor: state.cursor + text.length,
+    multiline: /[\r\n]/u.test(value),
   };
 }
 
@@ -49,10 +54,12 @@ function deleteLeft(state: TerminalInputState): TerminalInputState {
     return state;
   }
 
+  const value = `${state.value.slice(0, state.cursor - 1)}${state.value.slice(state.cursor)}`;
   return {
     ...state,
-    value: `${state.value.slice(0, state.cursor - 1)}${state.value.slice(state.cursor)}`,
+    value,
     cursor: state.cursor - 1,
+    multiline: value.includes("\n"),
   };
 }
 
@@ -61,9 +68,11 @@ function deleteRight(state: TerminalInputState): TerminalInputState {
     return state;
   }
 
+  const value = `${state.value.slice(0, state.cursor)}${state.value.slice(state.cursor + 1)}`;
   return {
     ...state,
-    value: `${state.value.slice(0, state.cursor)}${state.value.slice(state.cursor + 1)}`,
+    value,
+    multiline: value.includes("\n"),
   };
 }
 
@@ -80,10 +89,12 @@ function deletePreviousWord(state: TerminalInputState): TerminalInputState {
     start -= 1;
   }
 
+  const value = `${state.value.slice(0, start)}${state.value.slice(state.cursor)}`;
   return {
     ...state,
-    value: `${state.value.slice(0, start)}${state.value.slice(state.cursor)}`,
+    value,
     cursor: start,
+    multiline: value.includes("\n"),
   };
 }
 
@@ -100,10 +111,12 @@ export function deleteTerminalInputRange(
     return state;
   }
 
+  const value = `${state.value.slice(0, from)}${state.value.slice(to)}`;
   return {
     ...state,
-    value: `${state.value.slice(0, from)}${state.value.slice(to)}`,
+    value,
     cursor: from,
+    multiline: value.includes("\n"),
   };
 }
 
@@ -128,8 +141,53 @@ function replaceValue(value: string): TerminalInputState {
     desynced: false,
     desyncReason: null,
     lineRewriteRequired: false,
-    multiline: false,
+    multiline: value.includes("\n"),
+    pasteMode: false,
   };
+}
+
+function extractPastedInputData(
+  state: TerminalInputState,
+  data: string,
+): { text: string; pasteMode: boolean } {
+  let text = data;
+  let pasteMode = state.pasteMode;
+
+  if (text.includes("\x1b[200~")) {
+    pasteMode = true;
+    text = text.replace(/\x1b\[200~/gu, "");
+  }
+
+  if (text.includes("\x1b[201~")) {
+    pasteMode = false;
+    text = text.replace(/\x1b\[201~/gu, "");
+  }
+
+  return {
+    text: text.replace(/\r\n|\r/gu, "\n"),
+    pasteMode,
+  };
+}
+
+export function applyTerminalPastedInputData(
+  state: TerminalInputState,
+  data: string,
+): TerminalInputState {
+  const pasted = extractPastedInputData(state, data);
+  const pasteState = { ...state, pasteMode: pasted.pasteMode };
+  if (!pasted.text) return pasteState;
+
+  const nextState =
+    pasteState.desynced && pasteState.desyncReason === "tab"
+      ? {
+          ...pasteState,
+          desynced: false,
+          desyncReason: null,
+          lineRewriteRequired: true,
+        }
+      : pasteState;
+
+  return insertText(nextState, pasted.text);
 }
 
 function normalizeLineContent(value: string): string {
@@ -205,12 +263,16 @@ export function applyTerminalInputData(
       return { ...state, cursor: 0 };
     case "\u0005":
       return { ...state, cursor: state.value.length };
-    case "\u0015":
-      return { ...state, value: state.value.slice(state.cursor), cursor: 0 };
+    case "\u0015": {
+      const value = state.value.slice(state.cursor);
+      return { ...state, value, cursor: 0, multiline: value.includes("\n") };
+    }
     case "\u0017":
       return deletePreviousWord(state);
-    case "\u000b":
-      return { ...state, value: state.value.slice(0, state.cursor) };
+    case "\u000b": {
+      const value = state.value.slice(0, state.cursor);
+      return { ...state, value, multiline: value.includes("\n") };
+    }
     case "\u000c":
       return state;
     case "\u007f":
@@ -234,8 +296,12 @@ export function applyTerminalInputData(
       return markDesynced(state, "tab");
   }
 
-  if (data.includes("\n") || data.includes("\r")) {
-    return resetState(true);
+  if (state.pasteMode || data.includes("\x1b[200~") || data.includes("\x1b[201~")) {
+    return applyTerminalPastedInputData(state, data);
+  }
+
+  if ((data.includes("\n") || data.includes("\r")) && data !== "\r") {
+    return applyTerminalPastedInputData(state, data);
   }
 
   if (data.startsWith("\x1b")) {
@@ -317,6 +383,7 @@ export function resyncFromTerminalLine(
     desyncReason: null,
     lineRewriteRequired: false,
     multiline: false,
+    pasteMode: false,
   };
 }
 

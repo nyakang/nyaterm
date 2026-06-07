@@ -48,6 +48,9 @@ export default function MultiLinePasteDialog({
           event.preventDefault();
           directPasteButtonRef.current?.focus();
         }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+        }}
       >
         <DialogHeader>
           <DialogTitle>{t("terminal.multiLinePasteTitle")}</DialogTitle>

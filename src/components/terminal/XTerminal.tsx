@@ -122,7 +122,7 @@ export default function XTerminal({
   const terminalAppSettingsRef = useRef(terminalAppSettings);
   const tRef = useRef(t);
   const doFindRef = useRef<(selection?: string) => void>(() => {});
-  const pasteTextRef = useRef<(text: string) => void>(() => {});
+  const pasteTextRef = useRef<(text: string, options?: { skipDialog?: boolean }) => void>(() => {});
   const executeActionCommandRef = useRef<((command: string) => void) | null>(null);
   const disconnectedRef = useRef(false);
   const reconnectingRef = useRef(false);
@@ -372,12 +372,12 @@ export default function XTerminal({
     const sendRawInput = (data: string, command: string | null) => {
       const peers = syncPeerSessionIdsRef.current;
       if (peers && peers.length > 0) {
-        void sendSessionInputWithSync(sessionId, data, peers, {
+        return sendSessionInputWithSync(sessionId, data, peers, {
           preview: null,
           registerSubmission: command,
         }).catch(() => {});
       } else {
-        void sendSessionInput(sessionId, data, {
+        return sendSessionInput(sessionId, data, {
           preview: null,
           registerSubmission: command,
         }).catch(() => {});
@@ -464,11 +464,48 @@ export default function XTerminal({
     executeActionCommandRef.current = (command: string) => {
       void executeInputCommand(command).catch(() => {});
     };
-    const pasteText = (text: string) => {
+
+    const isCredentialPromptInputMode = () => {
+      if (credentialPromptInputUntilRef.current > Date.now()) {
+        return true;
+      }
+      credentialPromptInputUntilRef.current = 0;
+      return false;
+    };
+
+    const canUseSmartCursor = (state = inputStateRef.current) => {
+      if (disconnectedRef.current || aiCapturingRef.current) return false;
+      if (terminal.buffer.active.type === "alternate") return false;
+      if (isCredentialPromptInputMode()) return false;
+
+      const shellIntegration = shellIntegrationRef.current;
+      if (shellIntegration.enabled && shellIntegration.commandRunning) return false;
+
+      if (state.desynced || state.lineRewriteRequired || state.pasteMode || state.multiline) {
+        return false;
+      }
+
+      return !syncPeerSessionIdsRef.current?.length;
+    };
+
+    const getSmartCursorSelectedInputRange = () => {
+      const state = inputStateRef.current;
+      if (!canUseSmartCursor(state)) return null;
+      return getSelectedInputRange(terminal, state);
+    };
+
+    const isPlainTextInputData = (data: string) => {
+      if (!data || data.startsWith("\x1b")) return false;
+      return !/[\x00-\x1f\x7f]/u.test(data);
+    };
+
+    const pasteText = (text: string, options: { skipDialog?: boolean } = {}) => {
       if (!text) return;
+      terminal.focus();
       const showMultiLinePasteDialog =
         terminalAppSettingsRef.current?.terminal?.show_multi_line_paste_dialog ?? true;
       if (
+        !options.skipDialog &&
         showMultiLinePasteDialog &&
         sessionTypeRef.current !== "Serial" &&
         isMultiLineText(text)
@@ -476,7 +513,38 @@ export default function XTerminal({
         setMultiLinePasteText(text);
         return;
       }
-      terminal.paste(text);
+
+      const selectedInputRange = getSmartCursorSelectedInputRange();
+      let pendingSelectionDelete: Promise<void> | null = null;
+      if (selectedInputRange) {
+        const currentCursor = inputStateRef.current.cursor;
+        const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
+        const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
+        inputStateRef.current = deleteTerminalInputRange(
+          inputStateRef.current,
+          selectedInputRange.start,
+          selectedInputRange.end,
+        );
+        terminal.clearSelection();
+        syncSuggestionsWithInputState();
+        if (moveToSelectionEnd || deleteSelection) {
+          pendingSelectionDelete = sendRawInput(`${moveToSelectionEnd}${deleteSelection}`, null);
+        }
+      }
+
+      const runPaste = () => {
+        terminal.paste(text);
+        terminal.focus();
+        requestAnimationFrame(() => {
+          if (!isTerminalAlive()) return;
+          terminal.focus();
+        });
+      };
+      if (pendingSelectionDelete) {
+        pendingSelectionDelete.then(runPaste);
+      } else {
+        runPaste();
+      }
     };
     pasteTextRef.current = pasteText;
 
@@ -492,6 +560,7 @@ export default function XTerminal({
 
     const moveInputCursor = (targetCursor: number) => {
       const currentState = inputStateRef.current;
+      if (!canUseSmartCursor(currentState)) return;
       const nextCursor = Math.max(0, Math.min(currentState.value.length, targetCursor));
       const input = buildMoveInputCursorData(currentState.cursor, nextCursor);
       if (!input) return;
@@ -506,6 +575,7 @@ export default function XTerminal({
       edge: "start" | "end",
     ) => {
       const currentState = inputStateRef.current;
+      if (!canUseSmartCursor(currentState)) return;
       const targetCursor = edge === "start" ? selectedInputRange.start : selectedInputRange.end;
       const input = buildMoveInputCursorData(currentState.cursor, targetCursor);
 
@@ -516,6 +586,7 @@ export default function XTerminal({
     };
 
     const deleteInputSelection = (selectedInputRange: InputSelectionRange) => {
+      if (!canUseSmartCursor()) return;
       const currentCursor = inputStateRef.current.cursor;
       const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
       const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
@@ -531,6 +602,7 @@ export default function XTerminal({
     };
 
     const replaceInputSelection = (selectedInputRange: InputSelectionRange, data: string) => {
+      if (!canUseSmartCursor()) return;
       const currentCursor = inputStateRef.current.cursor;
       const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
       const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
@@ -581,7 +653,12 @@ export default function XTerminal({
 
       if (isLocalBackspaceEvent(e, sessionTypeRef.current)) {
         e.preventDefault();
-        const selectedInputRange = getSelectedInputRange(terminal, inputStateRef.current);
+        if (isCredentialPromptInputMode()) {
+          sendRawInput(BACKSPACE_INPUT, null);
+          return false;
+        }
+
+        const selectedInputRange = getSmartCursorSelectedInputRange();
         if (selectedInputRange) {
           deleteInputSelection(selectedInputRange);
           return false;
@@ -600,7 +677,7 @@ export default function XTerminal({
         !e.altKey &&
         !e.shiftKey
       ) {
-        const selectedInputRange = getSelectedInputRange(terminal, inputStateRef.current);
+        const selectedInputRange = getSmartCursorSelectedInputRange();
         if (selectedInputRange) {
           e.preventDefault();
           collapseInputSelection(selectedInputRange, e.key === "ArrowLeft" ? "start" : "end");
@@ -609,7 +686,7 @@ export default function XTerminal({
       }
 
       if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const selectedInputRange = getSelectedInputRange(terminal, inputStateRef.current);
+        const selectedInputRange = getSmartCursorSelectedInputRange();
         if (selectedInputRange) {
           e.preventDefault();
           deleteInputSelection(selectedInputRange);
@@ -619,7 +696,7 @@ export default function XTerminal({
 
       const directInputData = getDirectInputDataFromKeyEvent(e);
       if (directInputData) {
-        const selectedInputRange = getSelectedInputRange(terminal, inputStateRef.current);
+        const selectedInputRange = getSmartCursorSelectedInputRange();
         if (selectedInputRange) {
           e.preventDefault();
           replaceInputSelection(selectedInputRange, directInputData);
@@ -1131,6 +1208,16 @@ export default function XTerminal({
         dismissCredentialPanel();
       }
 
+      if (isCredentialPromptInputMode()) {
+        if (data === "\r" || data === "\u0003") {
+          clearCredentialPromptInputMode();
+          inputStateRef.current = createTerminalInputState();
+        }
+        dismissSuggestions();
+        sendRawInput(data, null);
+        return;
+      }
+
       if (
         canShowCommandSuggestions() &&
         showSuggestionsRef.current &&
@@ -1190,12 +1277,15 @@ export default function XTerminal({
         }
       }
 
-      const suppressSubmission =
-        data === "\r" && credentialPromptInputUntilRef.current > Date.now();
-      const command =
-        data === "\r" && !suppressSubmission
-          ? getTrackedSubmissionCommand(inputStateRef.current)
-          : "";
+      if (isPlainTextInputData(data)) {
+        const selectedInputRange = getSmartCursorSelectedInputRange();
+        if (selectedInputRange) {
+          replaceInputSelection(selectedInputRange, data);
+          return;
+        }
+      }
+
+      const command = data === "\r" ? getTrackedSubmissionCommand(inputStateRef.current) : "";
       inputStateRef.current = applyTerminalInputData(inputStateRef.current, data);
       if (data === "\r" || data === "\u0003") {
         clearCredentialPromptInputMode();
@@ -1263,7 +1353,7 @@ export default function XTerminal({
           !!down && Math.abs(e.clientX - down.x) <= 4 && Math.abs(e.clientY - down.y) <= 4;
 
         if (isPlainPrimaryMouseUp && terminal.hasSelection()) {
-          const selectedInputRange = getSelectedInputRange(terminal, inputStateRef.current);
+          const selectedInputRange = getSmartCursorSelectedInputRange();
           if (selectedInputRange) {
             if (e.detail >= 2 || isStationaryMouseUp) {
               moveInputCursorAfterSelection(selectedInputRange, selectedInputRange.end);
@@ -1278,15 +1368,14 @@ export default function XTerminal({
             }
           }
         } else if (isPlainPrimaryMouseUp && isStationaryMouseUp) {
-          const position = getMouseBufferPosition(terminal, e);
-          if (position) {
-            const targetCursor = getInputIndexAtBufferPosition(
-              terminal,
-              inputStateRef.current,
-              position,
-            );
-            if (targetCursor !== null) {
-              moveInputCursor(targetCursor);
+          const state = inputStateRef.current;
+          if (canUseSmartCursor(state)) {
+            const position = getMouseBufferPosition(terminal, e);
+            if (position) {
+              const targetCursor = getInputIndexAtBufferPosition(terminal, state, position);
+              if (targetCursor !== null) {
+                moveInputCursor(targetCursor);
+              }
             }
           }
         }
@@ -1481,9 +1570,11 @@ export default function XTerminal({
 
   const handleDirectMultiLinePaste = useCallback(() => {
     if (!multiLinePasteText) return;
-    terminalRef.current?.paste(multiLinePasteText);
-    terminalRef.current?.focus();
+    const text = multiLinePasteText;
     setMultiLinePasteText(null);
+    requestAnimationFrame(() => {
+      pasteTextRef.current(text, { skipDialog: true });
+    });
   }, [multiLinePasteText]);
 
   const handleSendMultiLinePasteByLine = useCallback(() => {
