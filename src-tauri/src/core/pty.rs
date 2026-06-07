@@ -245,6 +245,28 @@ fn ensure_macos_interactive_path(cmd: &mut CommandBuilder) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn configure_local_pty_environment(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+    set_utf8_env_if_missing_or_non_utf8(cmd, "LANG", "en_US.UTF-8");
+    set_utf8_env_if_missing_or_non_utf8(cmd, "LC_CTYPE", "UTF-8");
+}
+
+#[cfg(target_os = "macos")]
+fn set_utf8_env_if_missing_or_non_utf8(cmd: &mut CommandBuilder, key: &str, default_value: &str) {
+    let value = std::env::var(key)
+        .ok()
+        .filter(|value| is_utf8_locale(value))
+        .unwrap_or_else(|| default_value.to_string());
+    cmd.env(key, value);
+}
+
+#[cfg(target_os = "macos")]
+fn is_utf8_locale(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace('_', "-");
+    normalized.contains("utf-8") || normalized.contains("utf8")
+}
+
 fn infer_local_ai_execution_profile(shell_name: &str) -> AiExecutionProfile {
     let shell = shell_name.to_ascii_lowercase();
     if shell.contains("powershell") || shell.contains("pwsh") {
@@ -330,14 +352,7 @@ fn local_backspace_compat_prelude(
         ShellKind::Fish | ShellKind::PosixSh => {
             Some("stty erase '^?' 2>/dev/null || true\n".to_string())
         }
-        ShellKind::Zsh => Some(
-            concat!(
-                "stty erase '^?' 2>/dev/null || true\n",
-                "bindkey -M emacs '^?' backward-delete-char 2>/dev/null || true\n",
-                "bindkey -M viins '^?' backward-delete-char 2>/dev/null || true\n",
-            )
-            .to_string(),
-        ),
+        ShellKind::Zsh => Some("stty erase '^?' 2>/dev/null || true\n".to_string()),
         ShellKind::Unknown => None,
     }
 }
@@ -514,6 +529,8 @@ fn pty_session_thread(
 
     #[cfg(target_os = "macos")]
     ensure_macos_interactive_path(&mut cmd);
+    #[cfg(target_os = "macos")]
+    configure_local_pty_environment(&mut cmd);
 
     let mut _child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
@@ -846,10 +863,16 @@ fn pty_session_thread(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::configure_local_pty_environment;
+    #[cfg(target_os = "macos")]
+    use super::is_utf8_locale;
     use super::{
         build_local_startup_script_for_platform, parse_shell_args, resolve_shell_command,
         should_emit_visible_output,
     };
+    #[cfg(target_os = "macos")]
+    use portable_pty::CommandBuilder;
 
     fn ready_marker() -> String {
         crate::core::ssh::osc::build_ready_marker("session-1")
@@ -908,6 +931,37 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn utf8_locale_detection_accepts_common_spellings() {
+        assert!(is_utf8_locale("en_US.UTF-8"));
+        assert!(is_utf8_locale("zh_CN.utf8"));
+        assert!(!is_utf8_locale("C"));
+        assert!(!is_utf8_locale("zh_CN.GBK"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn local_pty_environment_sets_terminal_and_utf8_locale() {
+        let mut cmd = CommandBuilder::new("/bin/zsh");
+        configure_local_pty_environment(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|value| value.to_str()),
+            Some("xterm-256color")
+        );
+        assert!(
+            cmd.get_env("LANG")
+                .and_then(|value| value.to_str())
+                .is_some_and(is_utf8_locale)
+        );
+        assert!(
+            cmd.get_env("LC_CTYPE")
+                .and_then(|value| value.to_str())
+                .is_some_and(is_utf8_locale)
+        );
+    }
+
+    #[test]
     fn startup_suppression_hides_chunks_until_ready_marker() {
         let mut suppress_visible = true;
 
@@ -933,24 +987,19 @@ mod tests {
     }
 
     #[test]
-    fn zsh_startup_sets_del_erase_and_bindkeys_before_ready_marker() {
+    fn zsh_startup_sets_del_erase_without_overriding_bindkeys() {
         let marker = ready_marker();
         let startup = build_local_startup_script_for_platform("/bin/zsh", &marker, true);
         let script = startup.script.expect("startup script");
 
         assert!(startup.shell_integration_active);
         assert!(script.contains("stty erase '^?' 2>/dev/null || true"));
-        assert!(script.contains("bindkey -M emacs '^?' backward-delete-char 2>/dev/null || true"));
-        assert!(script.contains("bindkey -M viins '^?' backward-delete-char 2>/dev/null || true"));
+        assert!(!script.contains("bindkey"));
 
         let stty_pos = script.find("stty erase '^?'").expect("stty prelude");
-        let emacs_pos = script.find("bindkey -M emacs").expect("emacs bindkey");
-        let viins_pos = script.find("bindkey -M viins").expect("viins bindkey");
         let ready_pos = script.find("NyaTermReady:session-1").expect("ready marker");
 
         assert!(stty_pos < ready_pos);
-        assert!(emacs_pos < ready_pos);
-        assert!(viins_pos < ready_pos);
     }
 
     #[test]
