@@ -5,15 +5,18 @@ use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemEvent, ZmodemTransfer,
 };
 use crate::core::{
-    update_cwd_if_changed, RecordingManager, SessionCommand, SessionManager,
-    SessionOutputCoalescer, SharedCwd,
+    RecordingManager, SessionCommand, SessionManager, SessionOutputCoalescer, SharedCwd,
+    update_cwd_if_changed,
 };
 use crate::error::{AppError, AppResult};
-use russh::{client, ChannelMsg};
+use russh::{ChannelMsg, client};
 use std::{pin::Pin, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration, Sleep};
+use tokio::time::{Duration, Sleep, timeout};
+
+const INJECT_TIMEOUT_SECS: u64 = 5;
+const INITIAL_INJECT_DELAY_MS: u64 = 500;
 
 /// Tries to detect the remote shell via an exec channel with a timeout.
 ///
@@ -119,7 +122,7 @@ pub(super) async fn open_shell_channel(
 /// ```
 ///
 /// When no injection script is provided we start directly in `Normal`.
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum IoPhase {
     /// Passing through all output; waiting for the first data chunk so we
     /// can display the banner / MOTD before injecting.
@@ -129,6 +132,19 @@ enum IoPhase {
     Suppressing,
     /// Normal operation — strip our OSC sequences, forward everything else.
     Normal,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InjectionEvent {
+    None,
+    Inject,
+    Ready { visible_after_ready: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InjectionTimeoutEvent {
+    None,
+    FallbackToNormal,
 }
 
 struct PendingPostLogin {
@@ -162,6 +178,106 @@ fn arm_post_login_timer(
     }
 }
 
+fn should_send_initial_injection(phase: &IoPhase, has_pending_script: bool) -> bool {
+    *phase == IoPhase::WaitInitial && has_pending_script
+}
+
+fn on_initial_injection_sent(phase: &mut IoPhase) {
+    if *phase == IoPhase::WaitInitial {
+        *phase = IoPhase::Suppressing;
+    }
+}
+
+fn handle_injection_result(phase: &mut IoPhase, result: &osc::OscResult) -> InjectionEvent {
+    match phase {
+        IoPhase::WaitInitial => {
+            *phase = IoPhase::Suppressing;
+            InjectionEvent::Inject
+        }
+        IoPhase::Suppressing if result.ready => {
+            *phase = IoPhase::Normal;
+            InjectionEvent::Ready {
+                visible_after_ready: result.visible_after_ready.clone(),
+            }
+        }
+        IoPhase::Suppressing => InjectionEvent::None,
+        IoPhase::Normal => InjectionEvent::None,
+    }
+}
+
+fn handle_injection_timeout(phase: &mut IoPhase) -> InjectionTimeoutEvent {
+    match phase {
+        IoPhase::WaitInitial | IoPhase::Suppressing => {
+            *phase = IoPhase::Normal;
+            InjectionTimeoutEvent::FallbackToNormal
+        }
+        IoPhase::Normal => InjectionTimeoutEvent::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_osc_result(
+    app: &AppHandle,
+    output: &Arc<SessionOutputCoalescer>,
+    cwd_event: &str,
+    cwd: &SharedCwd,
+    recording_mgr: &Option<Arc<RecordingManager>>,
+    session_id: &str,
+    manager: &Arc<SessionManager>,
+    channel: &mut russh::Channel<client::Msg>,
+    pending_script: &mut Option<String>,
+    inject_deadline: &mut Pin<&mut Sleep>,
+    phase: &mut IoPhase,
+    result: &osc::OscResult,
+) {
+    match handle_injection_result(phase, result) {
+        InjectionEvent::Inject => {
+            emit_output(
+                app,
+                output,
+                cwd_event,
+                cwd,
+                recording_mgr,
+                session_id,
+                manager,
+                result,
+            )
+            .await;
+
+            if let Some(script) = pending_script.take() {
+                let _ = channel.data(script.as_bytes()).await;
+            }
+            inject_deadline
+                .as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_secs(INJECT_TIMEOUT_SECS));
+        }
+        InjectionEvent::Ready {
+            visible_after_ready,
+        } => {
+            emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
+            if !visible_after_ready.is_empty() {
+                emit_visible_text(output, recording_mgr, session_id, &visible_after_ready);
+            }
+        }
+        InjectionEvent::None if *phase == IoPhase::Normal => {
+            emit_output(
+                app,
+                output,
+                cwd_event,
+                cwd,
+                recording_mgr,
+                session_id,
+                manager,
+                result,
+            )
+            .await;
+        }
+        InjectionEvent::None => {
+            emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
+        }
+    }
+}
+
 pub(super) async fn ssh_io_loop(
     app: AppHandle,
     session_id: String,
@@ -175,8 +291,6 @@ pub(super) async fn ssh_io_loop(
     ready_marker: String,
     post_login: Option<SshPostLoginConfig>,
 ) {
-    const INJECT_TIMEOUT_SECS: u64 = 30;
-
     let output_event = format!("terminal-output-{}", session_id);
     let cwd_event = format!("cwd-changed-{}", session_id);
     let closed_event = format!("session-closed-{}", session_id);
@@ -202,15 +316,17 @@ pub(super) async fn ssh_io_loop(
         })
     });
     let mut post_login_deadline: Option<Pin<Box<Sleep>>> = None;
-    if phase == IoPhase::Normal {
-        arm_post_login_timer(&pending_post_login, &mut post_login_deadline);
-    }
+    arm_post_login_timer(&pending_post_login, &mut post_login_deadline);
     let mut remote_exit_status: Option<u32> = None;
     let mut remote_exit_signal: Option<String> = None;
 
     let mut zmodem_detector = ZmodemDetector::new();
     let mut zmodem_transfer: Option<ZmodemTransfer> = None;
     let zmodem_event_name = format!("zmodem-event-{session_id}");
+
+    let initial_inject_deadline =
+        tokio::time::sleep(std::time::Duration::from_millis(INITIAL_INJECT_DELAY_MS));
+    tokio::pin!(initial_inject_deadline);
 
     let inject_deadline = tokio::time::sleep(std::time::Duration::from_secs(INJECT_TIMEOUT_SECS));
     tokio::pin!(inject_deadline);
@@ -321,50 +437,20 @@ pub(super) async fn ssh_io_loop(
                                         result.visible = capture_processor.process(&result.visible);
                                     }
 
-                                    match phase {
-                                        IoPhase::WaitInitial => {
-                                            emit_output(
-                                                &app, &output, &cwd_event, &cwd,
-                                                &recording_mgr, &session_id, &manager,
-                                                &result,
-                                            ).await;
-
-                                            if let Some(script) = pending_script.take() {
-                                                let _ = channel.data(script.as_bytes()).await;
-                                            }
-                                            phase = IoPhase::Suppressing;
-                                            inject_deadline.as_mut().reset(
-                                                tokio::time::Instant::now()
-                                                    + std::time::Duration::from_secs(INJECT_TIMEOUT_SECS),
-                                            );
-                                        }
-                                        IoPhase::Suppressing => {
-                                            for path in &result.cwd_paths {
-                                                if let Some(next_cwd) = update_cwd_if_changed(&cwd, path).await {
-                                                    let _ = app.emit(&cwd_event, &next_cwd);
-                                                }
-                                            }
-                                            for command in &result.accepted_commands {
-                                                manager
-                                                    .confirm_command_submission(&session_id, command.clone())
-                                                    .await;
-                                            }
-                                            if result.ready {
-                                                phase = IoPhase::Normal;
-                                                arm_post_login_timer(
-                                                    &pending_post_login,
-                                                    &mut post_login_deadline,
-                                                );
-                                            }
-                                        }
-                                        IoPhase::Normal => {
-                                            emit_output(
-                                                &app, &output, &cwd_event, &cwd,
-                                                &recording_mgr, &session_id, &manager,
-                                                &result,
-                                            ).await;
-                                        }
-                                    }
+                                    handle_osc_result(
+                                        &app,
+                                        &output,
+                                        &cwd_event,
+                                        &cwd,
+                                        &recording_mgr,
+                                        &session_id,
+                                        &manager,
+                                        &mut channel,
+                                        &mut pending_script,
+                                        &mut inject_deadline,
+                                        &mut phase,
+                                        &result,
+                                    ).await;
                                     continue;
                                 }
                             }
@@ -377,50 +463,20 @@ pub(super) async fn ssh_io_loop(
                             result.visible = capture_processor.process(&result.visible);
                         }
 
-                        match phase {
-                            IoPhase::WaitInitial => {
-                                emit_output(
-                                    &app, &output, &cwd_event, &cwd,
-                                    &recording_mgr, &session_id, &manager,
-                                    &result,
-                                ).await;
-
-                                if let Some(script) = pending_script.take() {
-                                    let _ = channel.data(script.as_bytes()).await;
-                                }
-                                phase = IoPhase::Suppressing;
-                                inject_deadline.as_mut().reset(
-                                    tokio::time::Instant::now()
-                                        + std::time::Duration::from_secs(INJECT_TIMEOUT_SECS),
-                                );
-                            }
-                            IoPhase::Suppressing => {
-                                for path in &result.cwd_paths {
-                                    if let Some(next_cwd) = update_cwd_if_changed(&cwd, path).await {
-                                        let _ = app.emit(&cwd_event, &next_cwd);
-                                    }
-                                }
-                                for command in &result.accepted_commands {
-                                    manager
-                                        .confirm_command_submission(&session_id, command.clone())
-                                        .await;
-                                }
-                                if result.ready {
-                                    phase = IoPhase::Normal;
-                                    arm_post_login_timer(
-                                        &pending_post_login,
-                                        &mut post_login_deadline,
-                                    );
-                                }
-                            }
-                            IoPhase::Normal => {
-                                emit_output(
-                                    &app, &output, &cwd_event, &cwd,
-                                    &recording_mgr, &session_id, &manager,
-                                    &result,
-                                ).await;
-                            }
-                        }
+                        handle_osc_result(
+                            &app,
+                            &output,
+                            &cwd_event,
+                            &cwd,
+                            &recording_mgr,
+                            &session_id,
+                            &manager,
+                            &mut channel,
+                            &mut pending_script,
+                            &mut inject_deadline,
+                            &mut phase,
+                            &result,
+                        ).await;
                     }
                     Some(ChannelMsg::ExtendedData { ref data, .. }) => {
                         let text = String::from_utf8_lossy(data).to_string();
@@ -477,20 +533,26 @@ pub(super) async fn ssh_io_loop(
                     _ => {}
                 }
             }
-            _ = &mut inject_deadline, if phase == IoPhase::Suppressing => {
-                phase = IoPhase::Normal;
-                arm_post_login_timer(&pending_post_login, &mut post_login_deadline);
+            _ = &mut initial_inject_deadline, if should_send_initial_injection(&phase, pending_script.is_some()) => {
+                if let Some(script) = pending_script.take() {
+                    let _ = channel.data(script.as_bytes()).await;
+                    on_initial_injection_sent(&mut phase);
+                    inject_deadline.as_mut().reset(
+                        tokio::time::Instant::now()
+                            + std::time::Duration::from_secs(INJECT_TIMEOUT_SECS),
+                    );
+                }
+            }
+            _ = &mut inject_deadline, if phase != IoPhase::Normal => {
+                let timeout_event = handle_injection_timeout(&mut phase);
                 let flushed = stripper.flush();
                 tracing::debug!(
                     session_id = %session_id,
                     buffered_bytes = flushed.len(),
                     "Injection timeout — falling back to passthrough mode"
                 );
-                if !flushed.is_empty() {
-                    if let Some(ref recorder) = recording_mgr {
-                        recorder.write_output(&session_id, &flushed);
-                    }
-                    output.push_owned(flushed);
+                if timeout_event == InjectionTimeoutEvent::FallbackToNormal && !flushed.is_empty() {
+                    emit_visible_text(&output, &recording_mgr, &session_id, &flushed);
                 }
             }
             _ = async {
@@ -575,6 +637,18 @@ async fn emit_output(
     manager: &Arc<SessionManager>,
     result: &osc::OscResult,
 ) {
+    emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
+    emit_visible_text(output, recording_mgr, session_id, &result.visible);
+}
+
+async fn emit_metadata(
+    app: &AppHandle,
+    cwd_event: &str,
+    cwd: &SharedCwd,
+    manager: &Arc<SessionManager>,
+    session_id: &str,
+    result: &osc::OscResult,
+) {
     for path in &result.cwd_paths {
         if let Some(next_cwd) = update_cwd_if_changed(cwd, path).await {
             let _ = app.emit(cwd_event, &next_cwd);
@@ -586,21 +660,35 @@ async fn emit_output(
             .confirm_command_submission(session_id, command.clone())
             .await;
     }
+}
 
-    if result.visible.is_empty() {
+fn emit_visible_text(
+    output: &Arc<SessionOutputCoalescer>,
+    recording_mgr: &Option<Arc<RecordingManager>>,
+    session_id: &str,
+    visible: &str,
+) {
+    if visible.is_empty() {
         return;
     }
 
     if let Some(recorder) = recording_mgr {
-        recorder.write_output(session_id, &result.visible);
+        recorder.write_output(session_id, visible);
     }
 
-    output.push(&result.visible);
+    output.push(visible);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_post_login_input;
+    use super::{
+        INITIAL_INJECT_DELAY_MS, INJECT_TIMEOUT_SECS, InjectionEvent, InjectionTimeoutEvent,
+        IoPhase, PendingPostLogin, build_post_login_input, handle_injection_result,
+        handle_injection_timeout, should_send_initial_injection,
+    };
+    use crate::core::ssh::osc::OscResult;
+    use std::pin::Pin;
+    use tokio::time::Sleep;
 
     #[test]
     fn post_login_input_normalizes_line_endings_and_adds_enter() {
@@ -619,5 +707,73 @@ mod tests {
     #[test]
     fn post_login_input_ignores_blank_commands() {
         assert!(build_post_login_input(" \n\t ").is_none());
+    }
+
+    fn osc_result(ready: bool, visible_after_ready: &str) -> OscResult {
+        OscResult {
+            visible: "suppressed output".to_string(),
+            visible_after_ready: visible_after_ready.to_string(),
+            cwd_paths: Vec::new(),
+            ready,
+            accepted_commands: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn initial_inject_delay_is_500ms_and_wait_initial_can_inject_without_output() {
+        assert_eq!(INITIAL_INJECT_DELAY_MS, 500);
+        assert!(should_send_initial_injection(&IoPhase::WaitInitial, true));
+        assert!(!should_send_initial_injection(&IoPhase::WaitInitial, false));
+        assert!(!should_send_initial_injection(&IoPhase::Suppressing, true));
+        assert!(!should_send_initial_injection(&IoPhase::Normal, true));
+    }
+
+    #[test]
+    fn ready_marker_in_suppressing_enters_normal_and_preserves_prompt_after_ready() {
+        let mut phase = IoPhase::Suppressing;
+        let result = osc_result(true, "[user@host ~]$ ");
+
+        let event = handle_injection_result(&mut phase, &result);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert_eq!(
+            event,
+            InjectionEvent::Ready {
+                visible_after_ready: "[user@host ~]$ ".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn injection_timeout_is_5s_and_falls_back_to_normal() {
+        assert_eq!(INJECT_TIMEOUT_SECS, 5);
+
+        let mut wait_initial = IoPhase::WaitInitial;
+        assert_eq!(
+            handle_injection_timeout(&mut wait_initial),
+            InjectionTimeoutEvent::FallbackToNormal
+        );
+        assert_eq!(wait_initial, IoPhase::Normal);
+
+        let mut suppressing = IoPhase::Suppressing;
+        assert_eq!(
+            handle_injection_timeout(&mut suppressing),
+            InjectionTimeoutEvent::FallbackToNormal
+        );
+        assert_eq!(suppressing, IoPhase::Normal);
+    }
+
+    #[tokio::test]
+    async fn post_login_timer_can_arm_while_injection_is_waiting_for_ready() {
+        let pending_post_login = Some(PendingPostLogin {
+            input: b"uptime\r".to_vec(),
+            delay_ms: 1,
+        });
+        let mut post_login_deadline: Option<Pin<Box<Sleep>>> = None;
+
+        super::arm_post_login_timer(&pending_post_login, &mut post_login_deadline);
+
+        assert!(post_login_deadline.is_some());
+        post_login_deadline.as_mut().unwrap().as_mut().await;
     }
 }

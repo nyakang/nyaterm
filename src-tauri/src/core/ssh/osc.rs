@@ -2,8 +2,8 @@
 //!
 //! Used by both SSH (`core::ssh::io`) and local PTY (`core::pty`) to avoid duplication.
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 /// Remote shell flavour detected via exec channel or local shell path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +154,8 @@ const MAX_OSC_BUF: usize = 64 * 1024;
 pub struct OscResult {
     /// Text safe to display in the terminal (all recognised OSC sequences removed).
     pub visible: String,
+    /// Visible text that appeared after the ready marker in this chunk.
+    pub visible_after_ready: String,
     /// CWD paths extracted from OSC 7 sequences in this chunk.
     pub cwd_paths: Vec<String>,
     /// Whether the ready marker was detected in this chunk.
@@ -166,11 +168,22 @@ pub struct OscResult {
 /// output, handling split packets and extracting CWD paths.
 pub struct OscStripper {
     buf: String,
+    ready_inner: String,
+    legacy_ready_inner: Option<String>,
 }
 
 impl OscStripper {
-    pub fn new(_ready_marker: &str) -> Self {
-        Self { buf: String::new() }
+    pub fn new(ready_marker: &str) -> Self {
+        let ready_inner = marker_inner(ready_marker);
+        let legacy_ready_inner = ready_inner
+            .strip_prefix(READY_MARKER_PREFIX)
+            .map(|session_id| format!("{LEGACY_READY_MARKER_PREFIX}{session_id}"));
+
+        Self {
+            buf: String::new(),
+            ready_inner,
+            legacy_ready_inner,
+        }
     }
 
     /// Feed a chunk of terminal output.  Returns visible text with OSC
@@ -184,6 +197,7 @@ impl OscStripper {
         if self.buf.len() > MAX_OSC_BUF && !self.buf.contains('\x1b') {
             return OscResult {
                 visible: std::mem::take(&mut self.buf),
+                visible_after_ready: String::new(),
                 cwd_paths: Vec::new(),
                 ready: false,
                 accepted_commands: Vec::new(),
@@ -191,8 +205,10 @@ impl OscStripper {
         }
 
         let mut visible = String::new();
+        let mut visible_after_ready = String::new();
         let mut paths = Vec::new();
         let mut ready = false;
+        let mut after_ready = false;
         let mut commands = Vec::new();
 
         loop {
@@ -200,6 +216,9 @@ impl OscStripper {
                 Some(i) => i,
                 None => {
                     // No ESC] left — everything is visible text.
+                    if after_ready {
+                        visible_after_ready.push_str(&self.buf);
+                    }
                     visible.push_str(&self.buf);
                     self.buf.clear();
                     break;
@@ -207,6 +226,9 @@ impl OscStripper {
             };
 
             // Text before the ESC is always visible.
+            if after_ready {
+                visible_after_ready.push_str(&self.buf[..esc_pos]);
+            }
             visible.push_str(&self.buf[..esc_pos]);
             let rest = self.buf[esc_pos..].to_string();
 
@@ -236,10 +258,14 @@ impl OscStripper {
                 if let Some(path) = parse_osc7_payload(&inner[2..]) {
                     paths.push(path);
                 }
+            } else if self.is_current_ready_marker(inner) {
+                ready = true;
+                after_ready = true;
             } else if inner.starts_with(READY_MARKER_PREFIX)
                 || inner.starts_with(LEGACY_READY_MARKER_PREFIX)
             {
-                ready = true;
+                // Private marker for another session; strip it without
+                // treating this session as ready.
             } else if let Some(command) = inner
                 .strip_prefix(COMMAND_MARKER_PREFIX)
                 .or_else(|| inner.strip_prefix(LEGACY_COMMAND_MARKER_PREFIX))
@@ -248,6 +274,9 @@ impl OscStripper {
                 commands.push(command);
             } else {
                 // Not ours — pass through to the terminal.
+                if after_ready {
+                    visible_after_ready.push_str(seq);
+                }
                 visible.push_str(seq);
             }
 
@@ -256,6 +285,7 @@ impl OscStripper {
 
         OscResult {
             visible,
+            visible_after_ready,
             cwd_paths: paths,
             ready,
             accepted_commands: commands,
@@ -265,6 +295,24 @@ impl OscStripper {
     /// Drain any buffered bytes as visible text (used on timeout / teardown).
     pub fn flush(&mut self) -> String {
         std::mem::take(&mut self.buf)
+    }
+
+    fn is_current_ready_marker(&self, inner: &str) -> bool {
+        inner == self.ready_inner || self.legacy_ready_inner.as_deref() == Some(inner)
+    }
+}
+
+fn marker_inner(marker: &str) -> String {
+    let Some(rest) = marker.strip_prefix("\x1b]") else {
+        return marker.to_string();
+    };
+
+    if let Some(inner) = rest.strip_suffix('\x07') {
+        inner.to_string()
+    } else if let Some(inner) = rest.strip_suffix("\x1b\\") {
+        inner.to_string()
+    } else {
+        rest.to_string()
     }
 }
 
@@ -277,11 +325,7 @@ fn parse_osc7_payload(payload: &str) -> Option<String> {
         let slash = after_scheme.find('/')?;
         after_scheme[slash..].to_string()
     };
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
+    if path.is_empty() { None } else { Some(path) }
 }
 
 fn parse_command_payload(payload: &str) -> Option<String> {
@@ -296,9 +340,9 @@ fn parse_command_payload(payload: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_ready_marker, injection_script, OscStripper, ShellKind};
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use super::{OscStripper, ShellKind, build_ready_marker, injection_script};
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     #[test]
     fn bash_injection_prunes_its_history_entry() {
@@ -307,8 +351,11 @@ mod tests {
 
         assert!(script.contains("NYATERM_PRUNE_HISTORY=1;"));
         assert!(script.contains("history -d $((HISTCMD-1)) 2>/dev/null || true;"));
-        assert!(script
-            .contains("PROMPT_COMMAND=\"__nyaterm_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}\""));
+        assert!(
+            script.contains(
+                "PROMPT_COMMAND=\"__nyaterm_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}\""
+            )
+        );
         assert!(!script.contains("set +o history"));
         assert!(!script.contains("set -o history"));
     }
@@ -347,6 +394,41 @@ mod tests {
         assert_eq!(result.visible, "beforeafter");
         assert_eq!(result.accepted_commands, vec!["docker ps".to_string()]);
         assert!(result.ready);
+    }
+
+    #[test]
+    fn ready_marker_with_prompt_in_same_chunk_preserves_prompt_after_ready() {
+        let payload = "echoed injection\x1b]7777;NyaTermReady:session-1\x07[user@host ~]$ ";
+
+        let result = OscStripper::new(&build_ready_marker("session-1")).push(payload);
+
+        assert!(result.ready);
+        assert_eq!(result.visible, "echoed injection[user@host ~]$ ");
+        assert_eq!(result.visible_after_ready, "[user@host ~]$ ");
+    }
+
+    #[test]
+    fn ready_marker_for_other_session_does_not_mark_ready() {
+        let payload = "before\x1b]7777;NyaTermReady:session-2\x07after";
+
+        let result = OscStripper::new(&build_ready_marker("session-1")).push(payload);
+
+        assert!(!result.ready);
+        assert_eq!(result.visible, "beforeafter");
+        assert!(result.visible_after_ready.is_empty());
+    }
+
+    #[test]
+    fn legacy_ready_marker_must_match_current_session() {
+        let mut stripper = OscStripper::new(&build_ready_marker("session-1"));
+
+        let other = stripper.push("x\x1b]7777;DflyReady:session-2\x07y");
+        assert!(!other.ready);
+        assert_eq!(other.visible, "xy");
+
+        let current = stripper.push("x\x1b]7777;DflyReady:session-1\x07y");
+        assert!(current.ready);
+        assert_eq!(current.visible_after_ready, "y");
     }
 
     #[test]
