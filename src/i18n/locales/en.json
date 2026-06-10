@@ -66,8 +66,8 @@
     "dateToday": "Today",
     "dateYesterday": "Yesterday",
     "defaultSession": "Current session (default)",
-    "deleteSession": "Delete",
     "deleteManualModel": "Delete manual model",
+    "deleteSession": "Delete",
     "disabled": "AI is disabled",
     "empty": "Ask AI to explain output or generate commands.",
     "enableAutoExecution": "Enable auto",
@@ -750,7 +750,7 @@
     "sortByCreated": "Created",
     "sortByName": "By name",
     "sortByUseCount": "Usage",
-    "tileMode": "Tile mode",
+    "tileMode": "Stacked mode",
     "uncategorized": "Uncat.",
     "view": "View",
     "viewMode": "View mode"
