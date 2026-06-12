@@ -234,7 +234,13 @@ export async function openSettings(tab?: string) {
     height: 560,
   });
   if (tab) {
-    emit("settings-open-tab", { tab, targetWindowLabel: ownerMainWindowLabel });
+    const payload = { tab, targetWindowLabel: ownerMainWindowLabel };
+    emit("settings-open-tab", payload);
+    window.setTimeout(() => {
+      void win.show().catch(() => {});
+      void win.setFocus().catch(() => {});
+      emit("settings-open-tab", payload);
+    }, 120);
   }
   return win;
 }

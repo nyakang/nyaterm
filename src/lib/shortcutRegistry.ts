@@ -80,6 +80,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     defaultKeys: "ctrl+shift+n, meta+shift+n",
   },
   {
+    id: "tab.quickSwitch",
+    category: "tab",
+    labelKey: "settings.shortcutLabels.quickSwitch",
+    defaultKeys: "ctrl+shift+s, meta+shift+s",
+  },
+  {
     id: "tab.newLocalTerminal",
     category: "tab",
     labelKey: "settings.shortcutLabels.newLocalTerminal",
@@ -146,6 +152,18 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     category: "view",
     labelKey: "settings.shortcutLabels.openSettings",
     defaultKeys: "ctrl+comma, meta+comma",
+  },
+  {
+    id: "view.openChat",
+    category: "view",
+    labelKey: "settings.shortcutLabels.openChat",
+    defaultKeys: "ctrl+alt+i, meta+alt+i",
+  },
+  {
+    id: "view.showAllCommands",
+    category: "view",
+    labelKey: "settings.shortcutLabels.showAllCommands",
+    defaultKeys: "ctrl+shift+p, meta+shift+p",
   },
 
   // --- File Explorer ---

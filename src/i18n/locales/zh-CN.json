@@ -174,7 +174,10 @@
   },
   "app": {
     "newConnection": "新建连接",
-    "noActiveSessions": "暂无活动会话"
+    "noActiveSessions": "暂无活动会话",
+    "openChat": "打开聊天",
+    "showAllCommands": "显示所有命令",
+    "switchTerminal": "切换终端"
   },
   "common": {
     "add": "添加",
@@ -922,6 +925,18 @@
     "unavailable": "没有可用的活动会话",
     "unavailableDesc": "切换到已连接的串口、SSH、本地终端或 Telnet 标签页后即可发送数据。"
   },
+  "sessionQuickSwitcher": {
+    "active": "当前",
+    "close": "关闭",
+    "move": "移动",
+    "newSsh": "新建 SSH",
+    "noMatches": "没有匹配搜索条件的会话或已保存连接",
+    "noSessions": "暂无打开的会话或已保存连接",
+    "open": "打开",
+    "saved": "已保存",
+    "searchPlaceholder": "搜索会话或已保存连接...",
+    "title": "切换会话"
+  },
   "settings": {
     "actionLinks": "快捷动作",
     "actionLinksDesc": "识别终端输出中的 IP、压缩包、host:port 和路径，并提供快捷操作。Ctrl/Cmd + 单击执行默认动作，Alt + 单击查看所有动作。",
@@ -1280,10 +1295,13 @@
       "newLocalTerminal": "新建本地终端",
       "newSession": "新建 SSH 会话",
       "nextTab": "下一个标签",
+      "openChat": "打开聊天",
       "openSettings": "打开设置",
       "prevTab": "上一个标签",
+      "quickSwitch": "快速切换会话",
       "renameFile": "重命名文件/目录",
       "resetZoom": "重置缩放",
+      "showAllCommands": "显示所有命令",
       "switchTab": "切换到标签 1-9",
       "toggleLeftSidebar": "切换左侧边栏",
       "toggleRightSidebar": "切换右侧边栏",

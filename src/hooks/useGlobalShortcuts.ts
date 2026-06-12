@@ -8,6 +8,7 @@ const HOTKEY_OPTIONS = { enableOnFormTags: true, preventDefault: true } as const
 
 export interface ShortcutCallbacks {
   onNewSession: () => void;
+  onOpenSessionSwitcher: () => void;
   onNewLocalTerminal: () => void;
   onCloseTab: () => void;
   onNextTab: () => void;
@@ -19,6 +20,8 @@ export interface ShortcutCallbacks {
   onZoomOut: () => void;
   onResetZoom: () => void;
   onOpenSettings: () => void;
+  onOpenChat: () => void;
+  onShowAllCommands: () => void;
   onLockScreen: () => void;
   onManageSyncGroups: () => void;
   onClearTerminal: () => void;
@@ -31,6 +34,7 @@ export function useGlobalShortcuts(
   const k = (id: string) => resolveShortcutKeys(id, keybindings);
 
   useHotkeys(k("tab.newSession"), cb.onNewSession, HOTKEY_OPTIONS);
+  useHotkeys(k("tab.quickSwitch"), cb.onOpenSessionSwitcher, HOTKEY_OPTIONS);
   useHotkeys(k("tab.newLocalTerminal"), cb.onNewLocalTerminal, HOTKEY_OPTIONS);
   useHotkeys(k("tab.close"), cb.onCloseTab, HOTKEY_OPTIONS);
   useHotkeys(k("tab.next"), cb.onNextTab, HOTKEY_OPTIONS);
@@ -53,6 +57,8 @@ export function useGlobalShortcuts(
   useHotkeys(k("view.zoomOut"), cb.onZoomOut, HOTKEY_OPTIONS);
   useHotkeys(k("view.resetZoom"), cb.onResetZoom, HOTKEY_OPTIONS);
   useHotkeys(k("view.openSettings"), cb.onOpenSettings, HOTKEY_OPTIONS);
+  useHotkeys(k("view.openChat"), cb.onOpenChat, HOTKEY_OPTIONS);
+  useHotkeys(k("view.showAllCommands"), cb.onShowAllCommands, HOTKEY_OPTIONS);
 
   useHotkeys(k("terminal.manageSyncGroups"), cb.onManageSyncGroups, HOTKEY_OPTIONS);
   useHotkeys(k("terminal.clear"), cb.onClearTerminal, HOTKEY_OPTIONS);

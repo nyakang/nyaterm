@@ -13,9 +13,11 @@ import SyncGroupDialog from "@/components/dialog/terminal/SyncGroupDialog";
 import ActivityBar from "@/components/layout/ActivityBar";
 import Header from "@/components/layout/Header";
 import ResizeHandle from "@/components/layout/ResizeHandle";
+import NyaTermLogo from "@/components/NyaTermLogo";
 import QuickCommands from "@/components/panel/QuickCommands";
 import SerialSendPanel from "@/components/panel/SendCommandPanel";
 import TabWindowsWorkspace from "@/components/terminal/TabWindowsWorkspace";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useTheme } from "@/context/ThemeContext";
 import {
   buildBackgroundImageLayerStyle,
@@ -51,6 +53,14 @@ interface AppLayoutProps {
   panelContent: (panelId: string | null) => ReactNode;
   workspace: WorkspaceProps;
   tabsCount: number;
+  emptyWorkspace: {
+    openChatShortcut: string;
+    showCommandsShortcut: string;
+    switchTerminalShortcut: string;
+    onOpenChat: () => void;
+    onShowCommands: () => void;
+    onSwitchTerminal: () => void;
+  };
   bottomPanel: {
     activePanel: "quickCmdBar" | "serialSend" | null;
     quickCmdHeight: number;
@@ -100,6 +110,7 @@ export default function AppLayout({
   panelContent,
   workspace,
   tabsCount,
+  emptyWorkspace,
   bottomPanel,
   dialogs,
 }: AppLayoutProps) {
@@ -264,23 +275,16 @@ export default function AppLayout({
           >
             <div className="flex-1 relative overflow-hidden">
               {tabsCount === 0 ? (
-                <div
-                  className="flex items-center justify-center h-full text-slate-500"
-                  style={{
-                    backgroundColor: backgroundEnabled ? "var(--df-bg-terminal)" : undefined,
-                  }}
-                >
-                  <div className="text-center space-y-3">
-                    <MdTerminal className="text-4xl mx-auto" />
-                    <p className="text-sm">{t("app.noActiveSessions")}</p>
-                    <button
-                      className="px-4 py-2 text-xs bg-primary hover:bg-primary/80 text-white rounded transition-colors"
-                      onClick={header.onNewSession}
-                    >
-                      {t("app.newConnection")}
-                    </button>
-                  </div>
-                </div>
+                <EmptyWorkspaceState
+                  t={t}
+                  backgroundEnabled={backgroundEnabled}
+                  openChatShortcut={emptyWorkspace.openChatShortcut}
+                  showCommandsShortcut={emptyWorkspace.showCommandsShortcut}
+                  switchTerminalShortcut={emptyWorkspace.switchTerminalShortcut}
+                  onOpenChat={emptyWorkspace.onOpenChat}
+                  onShowCommands={emptyWorkspace.onShowCommands}
+                  onSwitchTerminal={emptyWorkspace.onSwitchTerminal}
+                />
               ) : workspace.layout ? (
                 <TabWindowsWorkspace {...workspace} />
               ) : (
@@ -437,5 +441,105 @@ export default function AppLayout({
         )}
       </div>
     </div>
+  );
+}
+
+function EmptyWorkspaceState({
+  t,
+  backgroundEnabled,
+  openChatShortcut,
+  showCommandsShortcut,
+  switchTerminalShortcut,
+  onOpenChat,
+  onShowCommands,
+  onSwitchTerminal,
+}: {
+  t: TFunction;
+  backgroundEnabled: boolean;
+  openChatShortcut: string;
+  showCommandsShortcut: string;
+  switchTerminalShortcut: string;
+  onOpenChat: () => void;
+  onShowCommands: () => void;
+  onSwitchTerminal: () => void;
+}) {
+  const emptyWorkspaceActions = [
+    {
+      label: t("app.openChat"),
+      shortcut: openChatShortcut,
+      onClick: onOpenChat,
+    },
+    {
+      label: t("app.showAllCommands"),
+      shortcut: showCommandsShortcut,
+      onClick: onShowCommands,
+    },
+    {
+      label: t("app.switchTerminal"),
+      shortcut: switchTerminalShortcut,
+      onClick: onSwitchTerminal,
+    },
+  ];
+
+  return (
+    <div
+      className="flex h-full items-center justify-center px-6"
+      style={{
+        backgroundColor: backgroundEnabled ? "var(--df-bg-terminal)" : undefined,
+      }}
+    >
+      <div className="flex w-full max-w-[34rem] flex-col items-center">
+        <NyaTermLogo
+          aria-hidden="true"
+          className="mb-9 h-64 w-64 opacity-[0.13] grayscale"
+          style={{
+            color: "var(--df-text-dimmed)",
+            ["--grad-from" as string]: "currentColor",
+            ["--grad-to" as string]: "currentColor",
+          }}
+        />
+
+        <div className="grid w-fit max-w-[30rem] grid-cols-[max-content_auto] gap-x-4 gap-y-3 text-sm">
+          {emptyWorkspaceActions.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              className="contents text-left"
+              onClick={item.onClick}
+            >
+              <span
+                className="justify-self-start transition-colors hover:text-[var(--df-primary)]"
+                style={{ color: "var(--df-primary)" }}
+              >
+                {item.label}
+              </span>
+              <ShortcutKeys value={item.shortcut} />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutKeys({ value }: { value: string }) {
+  const keys = value
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (!keys.length) return null;
+
+  return (
+    <KbdGroup className="justify-self-end text-[0.8125rem]" aria-hidden="true">
+      {keys.map((key, index) => (
+        <span key={key} className="inline-flex items-center gap-1">
+          {index > 0 ? <span style={{ color: "var(--df-text-dimmed)" }}>+</span> : null}
+          <Kbd className="h-6 min-w-7 border border-[var(--df-border)] bg-[var(--df-bg-hover)] px-1.5 text-[0.8125rem] text-[var(--df-text)] shadow-sm">
+            {key}
+          </Kbd>
+        </span>
+      ))}
+    </KbdGroup>
   );
 }

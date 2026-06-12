@@ -174,7 +174,10 @@
   },
   "app": {
     "newConnection": "New Conn.",
-    "noActiveSessions": "No active sessions"
+    "noActiveSessions": "No active sessions",
+    "openChat": "Open Chat",
+    "showAllCommands": "Show All Commands",
+    "switchTerminal": "Switch Terminal"
   },
   "common": {
     "add": "Add",
@@ -922,6 +925,18 @@
     "unavailable": "No active session available",
     "unavailableDesc": "Switch to a connected serial, SSH, local terminal, or Telnet tab to send data."
   },
+  "sessionQuickSwitcher": {
+    "active": "Active",
+    "close": "close",
+    "move": "move",
+    "newSsh": "New SSH",
+    "noMatches": "No sessions or saved connections matched your search",
+    "noSessions": "No open sessions or saved connections",
+    "open": "open",
+    "saved": "Saved",
+    "searchPlaceholder": "Search sessions or saved connections...",
+    "title": "Switch Session"
+  },
   "settings": {
     "actionLinks": "Action Links",
     "actionLinksDesc": "Recognize patterns (IP, archive, host:port, path) in terminal output. Ctrl/Cmd+Click to run the default command. Alt+Click to show all actions.",
@@ -1280,10 +1295,13 @@
       "newLocalTerminal": "New Local Terminal",
       "newSession": "New SSH Session",
       "nextTab": "Next Tab",
+      "openChat": "Open Chat",
       "openSettings": "Open Settings",
       "prevTab": "Previous Tab",
+      "quickSwitch": "Quick Switch Session",
       "renameFile": "Rename File/Folder",
       "resetZoom": "Reset Zoom",
+      "showAllCommands": "Show All Commands",
       "switchTab": "Switch to Tab 1-9",
       "toggleLeftSidebar": "Toggle Left Sidebar",
       "toggleRightSidebar": "Right Sidebar",

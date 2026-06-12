@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronsUpDownIcon } from "lucide-react";
+import { ChevronsUpDownIcon, Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdCheck, MdChevronRight, MdClose, MdExpandMore, MdSettings } from "react-icons/md";
@@ -73,6 +73,7 @@ interface SshFormProps {
   setPostLoginDelayMs: (v: number) => void;
   minPostLoginDelayMs: number;
   maxPostLoginDelayMs: number;
+  connectionId?: string;
 }
 
 function RequiredMark() {
@@ -243,6 +244,7 @@ export function SshForm({
   setPostLoginDelayMs,
   minPostLoginDelayMs,
   maxPostLoginDelayMs,
+  connectionId,
 }: SshFormProps) {
   const { t } = useTranslation();
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
@@ -252,6 +254,8 @@ export function SshForm({
   const [showKeyManagement, setShowKeyManagement] = useState(false);
   const [showPasswordManagement, setShowPasswordManagement] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [showDirectPassword, setShowDirectPassword] = useState(false);
+  const [directPasswordLoading, setDirectPasswordLoading] = useState(false);
   const [passwordSource, setPasswordSource] = useState<"direct" | "saved">(
     passwordId ? "saved" : "direct",
   );
@@ -326,6 +330,32 @@ export function SshForm({
       .join(" "),
     subtitle: formatOtpSubtitle(entry),
   }));
+
+  const toggleDirectPasswordVisibility = async () => {
+    if (showDirectPassword) {
+      setShowDirectPassword(false);
+      return;
+    }
+
+    if (!password && hasPassword && connectionId) {
+      setDirectPasswordLoading(true);
+      try {
+        const value = await invoke<string | null>("get_connection_password_value", {
+          id: connectionId,
+        });
+        if (value) {
+          setPassword(value);
+          setHasPassword(false);
+        }
+      } catch {
+        return;
+      } finally {
+        setDirectPasswordLoading(false);
+      }
+    }
+
+    setShowDirectPassword(true);
+  };
 
   return (
     <div className="space-y-3 w-full">
@@ -440,8 +470,8 @@ export function SshForm({
                 </Label>
                 <div className="relative mt-1">
                   <Input
-                    type="password"
-                    className="text-xs h-8 pr-8"
+                    type={showDirectPassword ? "text" : "password"}
+                    className="text-xs h-8 pr-16"
                     placeholder={
                       hasPassword && !password
                         ? MASKED_PASSWORD_PLACEHOLDER
@@ -455,7 +485,27 @@ export function SshForm({
                         setHasPassword(false);
                       }
                     }}
+                    disabled={directPasswordLoading}
                   />
+                  {(password || hasPassword) && (
+                    <button
+                      type="button"
+                      className="absolute right-7 top-1/2 -translate-y-1/2 p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      title={
+                        showDirectPassword ? t("dialog.hidePassword") : t("dialog.showPassword")
+                      }
+                      disabled={directPasswordLoading}
+                      onClick={() => {
+                        void toggleDirectPasswordVisibility();
+                      }}
+                    >
+                      {showDirectPassword ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
                   {(password || hasPassword) && (
                     <button
                       type="button"
@@ -464,6 +514,7 @@ export function SshForm({
                       onClick={() => {
                         setPassword("");
                         setHasPassword(false);
+                        setShowDirectPassword(false);
                       }}
                     >
                       <MdClose className="text-sm" />
@@ -835,12 +886,15 @@ export function SshForm({
           }
         }}
       >
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden">
+        <DialogContent
+          className="w-[min(27rem,calc(100vw-3rem))] max-w-none max-h-[76vh] overflow-hidden"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>{t("passwordManager.title")}</DialogTitle>
             <DialogDescription className="sr-only">{t("passwordManager.title")}</DialogDescription>
           </DialogHeader>
-          <div className="overflow-y-auto pr-1">
+          <div className="overflow-y-auto px-1 pb-1">
             <PasswordManagementTab />
           </div>
         </DialogContent>

@@ -1,3 +1,5 @@
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
@@ -166,7 +168,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
-  useEffect(() => {
+  const loadAppSettings = useCallback(() => {
     invoke<AppSettings>("get_app_settings")
       .then((cfg) => {
         setAppSettings(cfg);
@@ -182,6 +184,37 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
         setSettingsLoaded(true);
       });
   }, []);
+
+  useEffect(() => {
+    loadAppSettings();
+  }, [loadAppSettings]);
+
+  useEffect(() => {
+    const unlisten = listen("settings-changed", () => {
+      loadAppSettings();
+    });
+
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, [loadAppSettings]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onFocusChanged((event) => {
+        if (event.payload) {
+          loadAppSettings();
+        }
+      })
+      .then((dispose) => {
+        unlisten = dispose;
+      });
+
+    return () => {
+      unlisten?.();
+    };
+  }, [loadAppSettings]);
 
   useEffect(() => {
     document.documentElement.style.fontSize = `${appSettings.appearance.ui_font_size}px`;

@@ -823,6 +823,7 @@ export default function NewSessionPage() {
               setPostLoginDelayMs={setPostLoginDelayMs}
               minPostLoginDelayMs={MIN_POST_LOGIN_DELAY_MS}
               maxPostLoginDelayMs={MAX_POST_LOGIN_DELAY_MS}
+              connectionId={initialData?.id || editId}
             />
           </TabsContent>
 

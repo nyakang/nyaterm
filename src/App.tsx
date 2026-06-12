@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { downloadDir } from "@tauri-apps/api/path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,12 +7,16 @@ import AppLayout from "./components/app/AppLayout";
 import AppPanelContent from "./components/app/AppPanelContent";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
+import SessionQuickSwitcher, {
+  type QuickSwitcherSession,
+} from "./components/terminal/SessionQuickSwitcher";
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useModalChildWindows } from "./hooks/useModalChildWindows";
+import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useUnreadTabs } from "./hooks/useUnreadTabs";
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
@@ -55,8 +59,8 @@ import {
 } from "./lib/tabWindows";
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
 import {
-  type NewSessionTarget,
   getOwnerMainWindowLabel,
+  type NewSessionTarget,
   openNewSession,
   openNewSessionWithTarget,
   openSettings,
@@ -153,6 +157,13 @@ function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
   return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
 }
 
+function focusTerminalSession(sessionId?: string | null) {
+  if (!sessionId) return;
+  requestAnimationFrame(() => {
+    void emit(`focus-terminal-${sessionId}`);
+  });
+}
+
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
 function App() {
   const {
@@ -216,6 +227,7 @@ function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
+  const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] = useState(false);
   const handleSendCommandDraftConsumed = useCallback(() => {
     setSendCommandDraft(null);
   }, []);
@@ -339,8 +351,14 @@ function App() {
         anchorTabId?: string | null;
         targetWindowLabel?: string | null;
       }>("session-created", (event) => {
-        const { sessionId, name: sessionName, type, targetLeafId, anchorTabId, targetWindowLabel } =
-          event.payload;
+        const {
+          sessionId,
+          name: sessionName,
+          type,
+          targetLeafId,
+          anchorTabId,
+          targetWindowLabel,
+        } = event.payload;
         if (!eventTargetsCurrentWindow(targetWindowLabel)) return;
         const tabId = addTab(
           sessionId,
@@ -360,6 +378,7 @@ function App() {
               : current,
           );
         }
+        focusTerminalSession(sessionId);
       }),
     );
 
@@ -393,8 +412,7 @@ function App() {
           sourceTabId,
           sourcePaneId,
           targetWindowLabel,
-        } =
-          event.payload;
+        } = event.payload;
         if (!eventTargetsCurrentWindow(targetWindowLabel)) return;
         try {
           const conns = await invoke<SavedConnection[]>("get_saved_connections");
@@ -481,9 +499,13 @@ function App() {
             } else {
               updateTabSession(tabId, sessionId);
             }
+            focusTerminalSession(sessionId);
             recordRecentConnection(connectionId);
           } catch (error) {
-            if (isSessionCreationCancelled(error) || (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))) {
+            if (
+              isSessionCreationCancelled(error) ||
+              (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+            ) {
               return;
             }
             const errorMessage = getErrorMessage(error);
@@ -1663,9 +1685,31 @@ function App() {
     }
   }, []);
 
+  const handleOpenChat = useCallback(() => {
+    if (!isLocked) {
+      updateUi({ active_right_panel: "aiAssistant" });
+    }
+  }, [isLocked, updateUi]);
+
+  const handleShowAllCommands = useCallback(() => {
+    if (!isLocked) {
+      updateUi((prev) => ({
+        show_quick_cmd_bar: !prev.show_quick_cmd_bar,
+        ...(prev.show_serial_send_panel ? { show_serial_send_panel: false } : {}),
+      }));
+    }
+  }, [isLocked, updateUi]);
+
+  const handleOpenSessionSwitcher = useCallback(() => {
+    if (!isLocked) {
+      setShowSessionQuickSwitcher(true);
+    }
+  }, [isLocked]);
+
   useGlobalShortcuts(
     {
       onNewSession: () => handleNewSession(),
+      onOpenSessionSwitcher: handleOpenSessionSwitcher,
       onNewLocalTerminal: handleNewLocalTerminal,
       onCloseTab: handleCloseActiveTab,
       onNextTab: handleNextTab,
@@ -1677,6 +1721,8 @@ function App() {
       onZoomOut: handleZoomOut,
       onResetZoom: handleResetZoom,
       onOpenSettings: handleOpenSettings,
+      onOpenChat: handleOpenChat,
+      onShowAllCommands: handleShowAllCommands,
       onLockScreen: handleLockScreen,
       onManageSyncGroups: () => setShowSyncGroupDialog(true),
       onClearTerminal: () => window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
@@ -1868,6 +1914,98 @@ function App() {
     : uiConfig.show_quick_cmd_bar
       ? "quickCmdBar"
       : null;
+  const openChatShortcut = resolveDisplayKeys("view.openChat", appSettings.keybindings);
+  const showCommandsShortcut = resolveDisplayKeys("view.showAllCommands", appSettings.keybindings);
+  const switchTerminalShortcut = resolveDisplayKeys("tab.quickSwitch", appSettings.keybindings);
+
+  const quickSwitcherSessions = useMemo<QuickSwitcherSession[]>(() => {
+    const connectionsById = new Map(
+      savedConnections.map((connection) => [connection.id, connection]),
+    );
+    const sessions: QuickSwitcherSession[] = [];
+    for (const tab of tabs) {
+      for (const pane of collectSessionPanes(tab.root)) {
+        const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
+        sessions.push({
+          id: pane.sessionId,
+          name: pane.name,
+          sessionType: pane.type,
+          connectionName: connection?.name,
+          tabName: getTabDisplayName(tab),
+          connecting: pane.connecting,
+          connectError: pane.connectError,
+        });
+      }
+    }
+    return sessions;
+  }, [savedConnections, tabs]);
+
+  const handleCloseSessionQuickSwitcher = useCallback(() => {
+    setShowSessionQuickSwitcher(false);
+    focusTerminalSession(activeSessionId);
+  }, [activeSessionId]);
+
+  const handleQuickSwitchSession = useCallback(
+    (sessionId: string) => {
+      handleSessionClick(sessionId);
+      setShowSessionQuickSwitcher(false);
+      focusTerminalSession(sessionId);
+    },
+    [handleSessionClick],
+  );
+
+  const handleQuickOpenConnection = useCallback(
+    async (connection: SavedConnection) => {
+      setShowSessionQuickSwitcher(false);
+
+      const pending = addPendingTab(
+        connection.name,
+        getConnectionSessionType(connection),
+        connection.id,
+      );
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(connection, createRequestId);
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        focusTerminalSession(sessionId);
+        recordRecentConnection(connection.id);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "connection.open_failed",
+          message: "Connection failed from quick switcher",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        maybePromptConnectionEdit(connection.id, errorMessage, { sourceTabId: tabId });
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      maybePromptConnectionEdit,
+      recordRecentConnection,
+      t,
+      updateTabSession,
+    ],
+  );
+
+  const handleQuickSwitcherNewSshSession = useCallback(() => {
+    setShowSessionQuickSwitcher(false);
+    openNewSession(undefined, true);
+  }, []);
 
   const handleTransferResize = useCallback(
     (delta: number) => {
@@ -2006,6 +2144,14 @@ function App() {
           onDisconnectedCloseRequested: handleCloseDisconnectedPane,
         }}
         tabsCount={tabs.length}
+        emptyWorkspace={{
+          openChatShortcut,
+          showCommandsShortcut,
+          switchTerminalShortcut,
+          onOpenChat: handleOpenChat,
+          onShowCommands: handleShowAllCommands,
+          onSwitchTerminal: handleOpenSessionSwitcher,
+        }}
         bottomPanel={{
           activePanel: activeBottomPanel,
           quickCmdHeight: uiConfig.quick_cmd_height || 180,
@@ -2040,6 +2186,16 @@ function App() {
           hasMasterPassword: !!appSettings.security.master_password,
           onUnlock: () => setIsLocked(false),
         }}
+      />
+      <SessionQuickSwitcher
+        open={showSessionQuickSwitcher}
+        activeSessionId={activePane?.sessionId ?? null}
+        workspaceSessions={quickSwitcherSessions}
+        savedConnections={savedConnections}
+        onClose={handleCloseSessionQuickSwitcher}
+        onSelectSession={handleQuickSwitchSession}
+        onOpenConnection={handleQuickOpenConnection}
+        onNewSshSession={handleQuickSwitcherNewSshSession}
       />
     </TransferProvider>
   );

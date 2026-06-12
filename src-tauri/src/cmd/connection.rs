@@ -389,6 +389,19 @@ pub fn delete_connection(app: tauri::AppHandle, id: String) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_connection_password_value(
+    app: tauri::AppHandle,
+    id: String,
+) -> AppResult<Option<String>> {
+    let connection = config::load_connection_by_id(&app, &id)?;
+    let Some(auth) = connection.auth else {
+        return Ok(None);
+    };
+
+    crypto::decrypt_optional(&auth.password)
+}
+
 #[derive(serde::Deserialize)]
 pub struct SortOrderUpdate {
     pub id: String,
