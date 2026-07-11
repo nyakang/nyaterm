@@ -19,26 +19,65 @@ pub async fn exec_ssh_session_command(
     command: &[u8],
     timeout: Duration,
 ) -> AppResult<RemoteCommandOutput> {
-    let ssh_handle = get_ssh_handle(manager, session_id).await?;
+    // Use an independent SSH connection if possible, so that opening an exec
+    // channel doesn't kill the shell session on servers that don't support
+    // multiple channels (e.g. dropbear/Termux on port 8022).
+    let ssh_handle = get_or_create_independent_handle(manager, session_id).await?;
     exec_ssh_command(&ssh_handle, command, timeout).await
 }
 
-async fn get_ssh_handle(
+/// Returns an independent SSH handle for the session, creating one if needed.
+///
+/// Falls back to the session's shared handle when a new connection cannot be
+/// established (e.g. temporary sessions without a connection_id).
+async fn get_or_create_independent_handle(
     manager: &Arc<SessionManager>,
     session_id: &str,
 ) -> AppResult<Arc<SshConnectionHandles>> {
-    let sessions = manager.sessions.lock().await;
-    let session = sessions
-        .get(session_id)
-        .ok_or_else(|| AppError::SessionNotFound(format!("Session '{session_id}' not found")))?;
+    let (connection_id, shared_handle) = {
+        let sessions = manager.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| AppError::SessionNotFound(format!("Session '{session_id}' not found")))?;
 
-    session
-        .ssh_handle
-        .as_ref()
-        .ok_or_else(|| AppError::Config("Not an SSH session".to_string()))?
-        .clone()
-        .downcast::<SshConnectionHandles>()
-        .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))
+        let shared_handle = session
+            .ssh_handle
+            .as_ref()
+            .ok_or_else(|| AppError::Config("Not an SSH session".to_string()))?
+            .clone()
+            .downcast::<SshConnectionHandles>()
+            .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?;
+
+        let connection_id = session
+            .ssh_config
+            .as_ref()
+            .and_then(|cfg| cfg.downcast_ref::<crate::core::ssh::SshConfig>())
+            .and_then(|cfg| cfg.connection_id.clone());
+
+        (connection_id, shared_handle)
+    };
+
+    if let (Some(conn_id), Some(app)) = (&connection_id, manager.app()) {
+        match crate::core::ssh::create_ssh_handle(&app, conn_id).await {
+            Ok(handle) => {
+                tracing::info!(
+                    session_id,
+                    "Created independent SSH connection for remote exec"
+                );
+                return Ok(handle);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    %error,
+                    "Failed to create independent SSH connection for remote exec, \
+                     falling back to shared connection"
+                );
+            }
+        }
+    }
+
+    Ok(shared_handle)
 }
 
 async fn exec_ssh_command(

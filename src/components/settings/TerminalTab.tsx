@@ -119,6 +119,24 @@ export function TerminalTab() {
           }
         />
 
+        <SettingNumberInput
+          label={t("settings.sshChannelWindowSize")}
+          desc={t("settings.sshChannelWindowSizeDesc")}
+          min={1}
+          max={64}
+          step={1}
+          value={appSettings.terminal.ssh_channel_window_size_mb ?? 4}
+          controlClassName="max-w-sm"
+          onChange={(v) =>
+            updateAppSettings({
+              terminal: {
+                ...appSettings.terminal,
+                ssh_channel_window_size_mb: Math.max(1, v || 4),
+              },
+            })
+          }
+        />
+
         <SettingInput
           label={t("settings.x11Display")}
           desc={t("settings.x11DisplayDesc")}

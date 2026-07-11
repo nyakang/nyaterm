@@ -681,6 +681,11 @@ function FileExplorer({
     lastSelectedRef.current = null;
     setSelectedFiles(new Set());
 
+    // Auto-probe SFTP.  This is safe because the backend now creates an
+    // independent SSH connection for file operations — if the server
+    // doesn't support SFTP or multiple channels, the terminal session
+    // is not affected.  The error (if any) is shown in the file browser
+    // panel so the user knows the file browser is unavailable.
     let cancelled = false;
     (async () => {
       const loadRootDirectory = async () => {
@@ -711,10 +716,11 @@ function FileExplorer({
             return;
           }
         }
-      } catch {
+      } catch (e) {
         if (cancelled) {
           return;
         }
+        setError(String(e));
       }
 
       await loadRootDirectory();

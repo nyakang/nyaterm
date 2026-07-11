@@ -224,6 +224,11 @@ impl SessionManager {
         let _ = self.app_handle.set(app);
     }
 
+    /// Returns the stored app handle, if set.
+    pub fn app(&self) -> Option<tauri::AppHandle> {
+        self.app_handle.get().cloned()
+    }
+
     /// Loads command history from redb for fuzzy search.
     pub async fn init_history_store(&self) {
         let needs_save = {

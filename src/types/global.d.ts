@@ -820,6 +820,7 @@ export interface TerminalSettings {
   show_timestamp_milliseconds: boolean;
   show_multi_line_paste_dialog: boolean;
   paste_image_as_path: boolean;
+  ssh_channel_window_size_mb: number;
 }
 
 export interface TransferSettings {
