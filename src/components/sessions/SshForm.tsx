@@ -47,6 +47,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { invoke } from "@/lib/invoke";
+import { parseUserHostInput } from "@/lib/hostParser";
 import { cn } from "@/lib/utils";
 import type {
   AlgorithmOption,
@@ -429,6 +430,29 @@ export function SshForm({
 }: SshFormProps) {
   const { t } = useTranslation();
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
+
+  const handleHostChange = (rawValue: string) => {
+    // Keep the raw input visible so the user sees what they typed.
+    setHost(rawValue);
+
+    const parsed = parseUserHostInput(rawValue);
+    if (parsed) {
+      setUsername(parsed.username);
+      if (parsed.port !== undefined && parsed.port >= 1 && parsed.port <= 65535) {
+        setPort(parsed.port);
+      }
+    }
+  };
+
+  const handleHostBlur = () => {
+    // On blur, normalize the host field: strip the user@ prefix since
+    // the username has already been extracted into its own field.
+    const parsed = parseUserHostInput(host);
+    if (parsed) {
+      setHost(parsed.host);
+    }
+  };
+
   const [savedPasswords, setSavedPasswords] = useState<SavedPassword[]>([]);
   const [showKeyDropdown, setShowKeyDropdown] = useState(false);
   const [showPasswordDropdown, setShowPasswordDropdown] = useState(false);
@@ -593,9 +617,10 @@ export function SshForm({
           </Label>
           <Input
             className="mt-1 text-xs h-8"
-            placeholder="192.168.1.100"
+            placeholder={t("dialog.hostPlaceholder", "192.168.1.100 or user@host:port")}
             value={host}
-            onChange={(e) => setHost(e.target.value)}
+            onChange={(e) => handleHostChange(e.target.value)}
+            onBlur={handleHostBlur}
           />
         </div>
         <div className="w-full sm:w-32">
