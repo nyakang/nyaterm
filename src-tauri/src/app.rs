@@ -138,10 +138,29 @@ fn create_main_window_with_label(
 
     let mut config = main_window_config(app)?;
     config.label = label.to_string();
+
+    // On Linux (especially SSH X11 forwarding without a compositor), transparent
+    // windows fail to render. Force opaque to ensure the window is visible.
+    #[cfg(target_os = "linux")]
+    {
+        config.transparent = false;
+    }
+
     let builder = tauri::WebviewWindowBuilder::from_config(app, &config)?;
     let window = apply_main_window_options(app, label, builder).build()?;
     ensure_restored_main_window_visible(&window, label == crate::window_state::MAIN_WINDOW_LABEL);
     install_main_window_bridges(&window);
+
+    // The config sets visible:false and relies on the frontend JS to call
+    // window.show() after load. On Linux — especially with SSH X11 forwarding
+    // — the frontend may take longer to load or fail silently, leaving the
+    // window invisible. Show it explicitly as a safety net.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+
     Ok(window)
 }
 
