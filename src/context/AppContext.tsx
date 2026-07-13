@@ -263,6 +263,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     show_timestamp_milliseconds: false,
     show_multi_line_paste_dialog: true,
     paste_image_as_path: true,
+    ssh_channel_window_size_mb: 4,
   },
   interaction: {
     copy_on_select: false,

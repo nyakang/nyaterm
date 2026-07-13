@@ -333,7 +333,23 @@ impl SftpBackend {
             let channel_result = {
                 let handle_mtx = ssh_handle.target_handle();
                 let handle = handle_mtx.lock().await;
-                handle.channel_open_session().await
+                // Use a short timeout to avoid hanging when the server
+                // doesn't support multiple channels.  If the server drops
+                // the connection on channel open, this will fail quickly
+                // and we can return an error without affecting the shell
+                // session (though the transport may already be dead).
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    handle.channel_open_session(),
+                ).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        drop(permit);
+                        return Err(AppError::Channel(
+                            "Timed out waiting for SFTP channel open".to_string(),
+                        ));
+                    }
+                }
             };
 
             let channel = match channel_result {

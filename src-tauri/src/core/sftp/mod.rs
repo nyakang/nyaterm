@@ -27,6 +27,22 @@ use russh_sftp::protocol::StatusCode;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Information needed to create an independent SSH connection for file
+/// operations.  This avoids opening channels on the shell's SSH connection,
+/// which can kill the entire transport on servers that don't support
+/// multiple channels (e.g. dropbear/Termux on port 8022).
+struct SftpConnectionInfo {
+    /// Saved-connection ID — used to load credentials and create a fresh
+    /// authenticated SSH connection via `create_ssh_handle`.
+    connection_id: Option<String>,
+    /// Fallback: the existing shared SSH handle (used when connection_id
+    /// is not available, e.g. for temporary sessions).
+    shared_handle: Arc<SshConnectionHandles>,
+    host: String,
+    port: u16,
+    username: String,
+}
+
 pub(crate) use duplicate::TransferDuplicateManager;
 pub(crate) use transfer::{active_transfer_count, transfer_target_directory};
 pub use transfer::{cancel_transfer, pause_transfer, resume_transfer};
@@ -113,7 +129,15 @@ impl AutoRemoteFs {
             Err(e) => {
                 let reason = e.to_string();
                 tracing::debug!(error = %reason, "SFTP backend unavailable, trying SCP Enhanced");
-                sftp_failure = Some(reason);
+                sftp_failure = Some(reason.clone());
+                // If the error indicates the transport was disconnected,
+                // probing further will only fail again and may have already
+                // killed the shell session.  Bail out early.
+                if reason.contains("Disconnected") || reason.contains("early eof") {
+                    return Err(AppError::Channel(
+                        "Terminal connection is working, but the remote file manager could not be initialized".to_string(),
+                    ));
+                }
             }
         }
 
@@ -125,6 +149,11 @@ impl AutoRemoteFs {
             }
             Err(e) => {
                 tracing::debug!(error = %e, "SCP Enhanced backend unavailable, trying SCP Normal");
+                if e.to_string().contains("Disconnected") || e.to_string().contains("early eof") {
+                    return Err(AppError::Channel(
+                        "Terminal connection is working, but the remote file manager could not be initialized".to_string(),
+                    ));
+                }
             }
         }
 
@@ -184,13 +213,13 @@ impl AutoRemoteFs {
 async fn get_ssh_info(
     manager: &SessionManager,
     session_id: &str,
-) -> AppResult<(Arc<SshConnectionHandles>, String, u16, String)> {
+) -> AppResult<SftpConnectionInfo> {
     let sessions = manager.sessions.lock().await;
     let session = sessions
         .get(session_id)
         .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", session_id)))?;
 
-    let ssh_handle = session
+    let shared_handle = session
         .ssh_handle
         .as_ref()
         .ok_or_else(|| AppError::Config("Not an SSH session".to_string()))?
@@ -198,17 +227,23 @@ async fn get_ssh_info(
         .downcast::<SshConnectionHandles>()
         .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?;
 
-    let (host, port, username) = if let Some(ref cfg_any) = session.ssh_config {
+    let (connection_id, host, port, username) = if let Some(ref cfg_any) = session.ssh_config {
         if let Some(cfg) = cfg_any.downcast_ref::<crate::core::ssh::SshConfig>() {
-            (cfg.host.clone(), cfg.port, cfg.username.clone())
+            (cfg.connection_id.clone(), cfg.host.clone(), cfg.port, cfg.username.clone())
         } else {
-            ("unknown".to_string(), 22, "unknown".to_string())
+            (None, "unknown".to_string(), 22, "unknown".to_string())
         }
     } else {
-        ("unknown".to_string(), 22, "unknown".to_string())
+        (None, "unknown".to_string(), 22, "unknown".to_string())
     };
 
-    Ok((ssh_handle, host, port, username))
+    Ok(SftpConnectionInfo {
+        connection_id,
+        shared_handle,
+        host,
+        port,
+        username,
+    })
 }
 
 async fn get_or_create_auto_fs(
@@ -230,8 +265,39 @@ async fn get_or_create_auto_fs(
         }
     }
 
-    let (ssh_handle, host, port, username) = get_ssh_info(manager, session_id).await?;
-    let auto_fs = Arc::new(AutoRemoteFs::new(ssh_handle, &host, port, &username));
+    let info = get_ssh_info(manager, session_id).await?;
+
+    // Try to create an independent SSH connection for file operations.
+    // This is critical for servers that don't support multiple channels on
+    // the same connection (e.g. dropbear/Termux on port 8022).  If we open
+    // a second channel on the shell's connection, the server may drop the
+    // entire transport, killing the terminal session.
+    let ssh_handle = if let (Some(conn_id), Some(app)) = (&info.connection_id, manager.app()) {
+        match crate::core::ssh::create_ssh_handle(&app, conn_id).await {
+            Ok(handle) => {
+                tracing::info!(
+                    session_id,
+                    "Created independent SSH connection for file operations"
+                );
+                handle
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    %error,
+                    "Failed to create independent SSH connection for SFTP, \
+                     falling back to shared connection"
+                );
+                info.shared_handle
+            }
+        }
+    } else {
+        // No connection_id (temporary session) or no app handle — fall back
+        // to the shared connection.
+        info.shared_handle
+    };
+
+    let auto_fs = Arc::new(AutoRemoteFs::new(ssh_handle, &info.host, info.port, &info.username));
 
     {
         let mut sessions = manager.sessions.lock().await;

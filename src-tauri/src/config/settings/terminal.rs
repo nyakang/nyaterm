@@ -81,6 +81,12 @@ pub struct TerminalSettings {
     pub show_multi_line_paste_dialog: bool,
     #[serde(default = "default_true")]
     pub paste_image_as_path: bool,
+    /// SSH channel window size in MB.  Controls how much data the remote
+    /// can send before waiting for a window adjust.  Larger values improve
+    /// throughput on high-latency links; smaller values improve
+    /// compatibility with lightweight SSH servers.  Default 4 MB.
+    #[serde(default = "default_ssh_window_size")]
+    pub ssh_channel_window_size_mb: u32,
 }
 
 fn default_scrollback() -> u32 {
@@ -88,6 +94,9 @@ fn default_scrollback() -> u32 {
 }
 fn default_keep_alive() -> u32 {
     60
+}
+fn default_ssh_window_size() -> u32 {
+    4
 }
 
 impl Default for TerminalSettings {
@@ -110,6 +119,7 @@ impl Default for TerminalSettings {
             show_timestamp_milliseconds: false,
             show_multi_line_paste_dialog: true,
             paste_image_as_path: true,
+            ssh_channel_window_size_mb: default_ssh_window_size(),
         }
     }
 }
