@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { getErrorMessage } from "@/lib/errors";
+import { parseUserHostInput } from "@/lib/hostParser";
 import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import type {
@@ -526,8 +527,13 @@ export default function NewSessionPage() {
     try {
       const normalizedName = name.trim();
       const normalizedDescription = description.trim();
-      const normalizedHost = host.trim();
-      const normalizedUsername = username.trim();
+      // Normalize host: strip user@ prefix in case onBlur didn't fire
+      // (e.g. on Windows WebView2 the blur event may not trigger before save)
+      const parsedHostInput = parseUserHostInput(host.trim());
+      const normalizedHost = parsedHostInput ? parsedHostInput.host : host.trim();
+      const normalizedUsername = parsedHostInput
+        ? parsedHostInput.username || username.trim()
+        : username.trim();
       const normalizedSerialPortName = serialPortName.trim();
       const normalizedShellPath = shellPath.trim();
       const normalizedShellArgs = shellArgs.trim();

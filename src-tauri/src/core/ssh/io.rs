@@ -212,6 +212,11 @@ pub(super) async fn open_shell_channel(
     Option<ShellKind>,
     Option<String>,
 )> {
+    // Open the shell channel FIRST, before any exec channels.
+    // Some SSH servers (e.g. dropbear/Termux on port 8022) do not support
+    // exec channels at all and will drop the entire transport with "early eof"
+    // when we try to open one.  By opening the shell channel first, we ensure
+    // the terminal works even on such servers.
     let channel = handle
         .channel_open_session()
         .await
@@ -244,7 +249,11 @@ pub(super) async fn open_shell_channel(
 
     let ready_marker = osc::build_ready_marker(session_id);
 
-    let mut detected_shell = None;
+    // Shell detection and integration installation are skipped to avoid
+    // opening exec channels that some servers don't support.  OSC 7 injection
+    // is still possible if we can detect the shell type from the environment
+    // (e.g. via $SHELL), but for now we just skip it.
+    let detected_shell = None;
     let injection_script = match cwd_follow_mode {
         SftpCwdFollowMode::Off => {
             tracing::debug!(
@@ -254,55 +263,11 @@ pub(super) async fn open_shell_channel(
             None
         }
         SftpCwdFollowMode::ShellIntegration | SftpCwdFollowMode::RcFile => {
-            match detect_shell_type(handle).await {
-                Some(shell_kind) => {
-                    detected_shell = Some(shell_kind);
-                    let script = if cwd_follow_mode == SftpCwdFollowMode::RcFile {
-                        match install_remote_shell_integration(handle, shell_kind).await {
-                            Ok(()) => {
-                                tracing::debug!(
-                                    session_id = %session_id,
-                                    shell = ?shell_kind,
-                                    "Remote shell integration files are installed"
-                                );
-                                osc::activation_script(shell_kind, &ready_marker)
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    session_id = %session_id,
-                                    shell = ?shell_kind,
-                                    %error,
-                                    "Failed to install remote shell integration files; falling back to session injection"
-                                );
-                                osc::injection_script(shell_kind, &ready_marker)
-                            }
-                        }
-                    } else {
-                        osc::injection_script(shell_kind, &ready_marker)
-                    };
-                    if script.is_some() {
-                        tracing::debug!(
-                            session_id = %session_id,
-                            shell = ?shell_kind,
-                            "Will inject OSC 7 hook after initial output"
-                        );
-                    } else {
-                        tracing::debug!(
-                            session_id = %session_id,
-                            shell = ?shell_kind,
-                            "Shell detected but no injection script available — skipping"
-                        );
-                    }
-                    script
-                }
-                None => {
-                    tracing::debug!(
-                        session_id = %session_id,
-                        "Shell detection returned no output — skipping OSC 7 injection"
-                    );
-                    None
-                }
-            }
+            tracing::info!(
+                session_id = %session_id,
+                "Skipping shell detection (exec channels disabled for compatibility) — OSC 7 injection will not be available"
+            );
+            None
         }
     };
 

@@ -418,7 +418,23 @@ fn resolve_ssh_target(conn: &crate::config::SavedConnection) -> AppResult<(Strin
             port,
             username,
             ..
-        } => Ok((host.clone(), *port, username.clone())),
+        } => {
+            // Defensive: strip accidental `user@` prefix from host that may
+            // have been saved without the onBlur normalization firing
+            // (observed on Windows WebView2 where blur may not trigger
+            // before the save button click).
+            let clean_host = if let Some(idx) = host.rfind('@') {
+                let after = &host[idx + 1..];
+                if !after.is_empty() {
+                    after.to_string()
+                } else {
+                    host.clone()
+                }
+            } else {
+                host.clone()
+            };
+            Ok((clean_host, *port, username.clone()))
+        }
         _ => Err(AppError::Auth(
             "Connection is not an SSH connection".to_string(),
         )),

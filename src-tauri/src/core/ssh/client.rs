@@ -820,7 +820,18 @@ pub(super) fn build_client_config(
     config: &SshConfig,
 ) -> AppResult<client::Config> {
     let mut client_cfg = client::Config {
-        window_size: 32 * 1024 * 1024,
+        // Configurable window size (default 4 MB).  See
+        // ssh_channel_window_size_mb in TerminalSettings.
+        window_size: {
+            let mb = if let Ok(app_settings) =
+                crate::config::load_app_settings(app)
+            {
+                app_settings.terminal.ssh_channel_window_size_mb.max(1)
+            } else {
+                4
+            };
+            mb as u32 * 1024 * 1024
+        },
         maximum_packet_size: 32 * 1024,
         nodelay: true,
         inactivity_timeout: None,
