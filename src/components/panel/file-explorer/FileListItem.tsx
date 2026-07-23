@@ -70,6 +70,7 @@ interface FileListItemProps {
   onRename: (entry: FileEntry) => void;
   onMove: (entry: FileEntry) => void;
   onDelete: (entry: FileEntry) => void;
+  onDeleteWithRm?: (entry: FileEntry) => void;
   onAddToFavorites: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
@@ -126,6 +127,7 @@ export function FileListItem({
   onRename,
   onMove,
   onDelete,
+  onDeleteWithRm,
   onAddToFavorites,
   onCopyPath,
   onSendToTerminal,
@@ -493,6 +495,12 @@ export function FileListItem({
               <MdDelete className="text-[0.875rem] mr-2" />
               {t("fileExplorer.cmDelete")}
             </ContextMenuItem>
+            {onDeleteWithRm && (
+              <ContextMenuItem variant="destructive" onClick={() => onDeleteWithRm(entry)}>
+                <MdDelete className="text-[0.875rem] mr-2" />
+                {t("fileExplorer.deleteWithRm")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             {entry.is_dir && (
               <>

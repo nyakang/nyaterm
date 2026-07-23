@@ -13,11 +13,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+
+export type DeleteDialogMode = "native" | "rm";
 
 export interface DeleteDialogData {
   sessionId: string;
   backend: FileExplorerBackendKind;
+  mode: DeleteDialogMode;
   items: DeleteDialogItem[];
 }
 
@@ -38,27 +42,33 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const previewItems = data.items.slice(0, 6);
   const remainingItems = data.items.length - previewItems.length;
+  const usesRm = data.mode === "rm" && data.backend === "remote";
 
   const handleDeleteSubmit = async () => {
     try {
       setIsSubmitting(true);
 
       const results = await Promise.allSettled(
-        data.items.map((item) =>
-          data.backend === "local"
-            ? invoke("delete_local_file", {
-                sessionId: data.sessionId,
-                path: item.path,
-              })
-            : invoke("delete_remote_file", {
-                sessionId: data.sessionId,
-                path: item.path,
-                rawPathToken: item.rawPathToken,
-              }),
-        ),
+        data.items.map((item) => {
+          if (data.backend === "local") {
+            return invoke("delete_local_file", {
+              sessionId: data.sessionId,
+              path: item.path,
+            });
+          }
+
+          return invoke(usesRm ? "delete_remote_file_with_rm" : "delete_remote_file", {
+            sessionId: data.sessionId,
+            path: item.path,
+            rawPathToken: item.rawPathToken,
+          });
+        }),
       );
 
-      const failedCount = results.filter((result) => result.status === "rejected").length;
+      const failedResults = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      const failedCount = failedResults.length;
       const successCount = results.length - failedCount;
 
       if (successCount > 0) {
@@ -67,9 +77,13 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
 
       if (failedCount > 0) {
         toast.error(
-          failedCount === 1
-            ? t("fileExplorer.deleteFailedItem")
-            : t("fileExplorer.deleteFailedCount", { count: failedCount }),
+          usesRm && failedCount === 1
+            ? t("fileExplorer.deleteWithRmFailed", {
+                error: getErrorMessage(failedResults[0]?.reason),
+              })
+            : failedCount === 1
+              ? t("fileExplorer.deleteFailedItem")
+              : t("fileExplorer.deleteFailedCount", { count: failedCount }),
         );
       }
 
@@ -103,10 +117,19 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
         <AlertDialogHeader className="min-w-0 text-left">
           <AlertDialogTitle className="text-sm break-all leading-relaxed">
             {data.items.length === 1
-              ? t("fileExplorer.sureDelete", { name: data.items[0]?.name ?? "" })
-              : t("fileExplorer.sureDeleteMultiple", { count: data.items.length })}
+              ? t(usesRm ? "fileExplorer.sureDeleteWithRm" : "fileExplorer.sureDelete", {
+                  name: data.items[0]?.name ?? "",
+                })
+              : t(
+                  usesRm
+                    ? "fileExplorer.sureDeleteWithRmMultiple"
+                    : "fileExplorer.sureDeleteMultiple",
+                  { count: data.items.length },
+                )}
           </AlertDialogTitle>
-          <AlertDialogDescription>{t("fileExplorer.deleteConfirmHint")}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {t(usesRm ? "fileExplorer.deleteWithRmConfirmHint" : "fileExplorer.deleteConfirmHint")}
+          </AlertDialogDescription>
         </AlertDialogHeader>
 
         {data.items.length > 1 && (
@@ -139,7 +162,7 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
             }}
           >
             {isSubmitting && <MdRefresh className="mr-1 text-[0.875rem] animate-spin" />}
-            {t("fileExplorer.cmDelete")}
+            {t(usesRm ? "fileExplorer.deleteWithRm" : "fileExplorer.cmDelete")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

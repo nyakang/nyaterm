@@ -39,6 +39,7 @@ import { toast } from "sonner";
 import type {
   DeleteDialogData,
   DeleteDialogItem,
+  DeleteDialogMode,
 } from "@/components/dialog/file-explorer/DeleteDialog";
 import type { MoveDialogData } from "@/components/dialog/file-explorer/MoveDialog";
 import type { NewItemDialogData } from "@/components/dialog/file-explorer/NewItemDialog";
@@ -2171,17 +2172,23 @@ function FileExplorerPane({
     ],
   );
 
-  const openDeleteDialog = (entries: FileEntry[]) => {
+  const openDeleteDialog = (entries: FileEntry[], mode: DeleteDialogMode = "native") => {
     if (!activeSessionId || entries.length === 0) return;
     setDeleteDialogData({
       sessionId: activeSessionId,
       backend: explorerBackend,
+      mode,
       items: buildDeleteItems(entries),
     });
   };
 
   const handleDeleteFromContextMenu = (entry: FileEntry) => {
     openDeleteDialog(getContextMenuEntries(entry));
+  };
+
+  const handleDeleteWithRmFromContextMenu = (entry: FileEntry) => {
+    if (explorerBackend !== "remote") return;
+    openDeleteDialog(getContextMenuEntries(entry), "rm");
   };
 
   const resolveDownloadDir = async (): Promise<string> => {
@@ -2769,6 +2776,11 @@ function FileExplorerPane({
                               });
                           }}
                           onDelete={handleDeleteFromContextMenu}
+                          onDeleteWithRm={
+                            explorerBackend === "remote"
+                              ? handleDeleteWithRmFromContextMenu
+                              : undefined
+                          }
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
                           onSendToTerminal={handleSendToTerminal}

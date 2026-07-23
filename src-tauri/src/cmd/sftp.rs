@@ -63,6 +63,22 @@ pub async fn delete_remote_file(
 }
 
 #[tauri::command]
+pub async fn delete_remote_file_with_rm(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    path: String,
+    raw_path_token: Option<String>,
+) -> AppResult<()> {
+    sftp::delete_remote_file_with_rm(
+        state.inner().clone(),
+        &session_id,
+        &path,
+        raw_path_token.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn rename_remote_file(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,

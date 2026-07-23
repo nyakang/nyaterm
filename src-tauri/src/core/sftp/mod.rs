@@ -19,14 +19,16 @@ use scp_normal::ScpNormalBackend;
 use sftp_backend::SftpBackend;
 use traits::RemoteFs;
 
-use crate::core::SessionManager;
+use crate::core::remote_exec::{ensure_success, exec_ssh_session_command};
 use crate::core::ssh::SshConnectionHandles;
+use crate::core::{SessionManager, SessionType};
 use crate::error::{AppError, AppResult};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
@@ -1251,6 +1253,120 @@ pub async fn delete_remote_file(
     Ok(())
 }
 
+const RM_DELETE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Delete a remote file-system entry through the user's POSIX shell.
+///
+/// This is intentionally separate from the normal remote-file-system delete
+/// path. The file browser exposes it as an explicit alternative for cases
+/// where the user needs the remote `rm` command rather than SFTP semantics.
+pub async fn delete_remote_file_with_rm(
+    manager: Arc<SessionManager>,
+    session_id: &str,
+    path: &str,
+    raw_path_token: Option<&str>,
+) -> AppResult<()> {
+    ensure_rm_delete_session(&manager, session_id).await?;
+
+    let path_ref = RemotePathRef::new(path, raw_path_token)?;
+    let target = path_ref
+        .raw_path()
+        .unwrap_or_else(|| path_ref.display_path().as_bytes());
+    let command = build_rm_delete_command(target)?;
+    let output =
+        exec_ssh_session_command(&manager, session_id, &command, RM_DELETE_TIMEOUT).await?;
+    ensure_success(output, "Failed to delete remote entry with rm")?;
+
+    tracing::debug!(
+        target: "user_action",
+        action = "delete_with_rm",
+        entity = "remote_entry",
+        session_id = %session_id,
+        remote_path = path,
+        "User deleted remote entry with rm"
+    );
+
+    Ok(())
+}
+
+async fn ensure_rm_delete_session(manager: &SessionManager, session_id: &str) -> AppResult<()> {
+    let sessions = manager.sessions.lock().await;
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| AppError::SessionNotFound(format!("Session '{session_id}' not found")))?;
+
+    if session.info.session_type != SessionType::SSH {
+        return Err(AppError::Config(
+            "rm deletion requires an SSH session".to_string(),
+        ));
+    }
+    if !session.info.remote_file_browser_enabled {
+        return Err(AppError::Config(
+            "Remote file browser is disabled for this SSH connection".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn build_rm_delete_command(target: &[u8]) -> AppResult<Vec<u8>> {
+    validate_rm_delete_target(target)?;
+
+    let quoted_target = sh_quote_bytes(target);
+    let mut command = b"rm -rf -- ".to_vec();
+    command.extend_from_slice(&quoted_target);
+    Ok(command)
+}
+
+fn validate_rm_delete_target(target: &[u8]) -> AppResult<()> {
+    if target.is_empty() || target.contains(&0) {
+        return Err(AppError::Config(
+            "Refusing to delete an empty or invalid remote path".to_string(),
+        ));
+    }
+
+    let normalized = target
+        .iter()
+        .rposition(|byte| *byte != b'/')
+        .map(|index| &target[..=index])
+        .unwrap_or_default();
+
+    if normalized.is_empty() || normalized == b"/" {
+        return Err(AppError::Config(
+            "Refusing to delete the remote root directory".to_string(),
+        ));
+    }
+    if !normalized.starts_with(b"/") {
+        return Err(AppError::Config(
+            "rm deletion requires an absolute remote path".to_string(),
+        ));
+    }
+    if normalized
+        .split(|byte| *byte == b'/')
+        .any(|part| part == b"." || part == b"..")
+    {
+        return Err(AppError::Config(
+            "Refusing to delete a remote path containing '.' or '..'".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn sh_quote_bytes(value: &[u8]) -> Vec<u8> {
+    let mut quoted = Vec::with_capacity(value.len() + 2);
+    quoted.push(b'\'');
+    for byte in value {
+        if *byte == b'\'' {
+            quoted.extend_from_slice(b"'\\''");
+        } else {
+            quoted.push(*byte);
+        }
+    }
+    quoted.push(b'\'');
+    quoted
+}
+
 pub async fn rename_remote_file(
     manager: Arc<SessionManager>,
     session_id: &str,
@@ -1566,8 +1682,8 @@ pub async fn upload_local_directory(
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_local_copy_temp, commit_local_copy_temp, get_home_dir,
-        ssh_endpoint_fingerprint_from_config,
+        build_rm_delete_command, cleanup_local_copy_temp, commit_local_copy_temp, get_home_dir,
+        ssh_endpoint_fingerprint_from_config, validate_rm_delete_target,
     };
     use crate::config::{AiExecutionProfile, ProxySettings, SftpSettings};
     use crate::core::ssh::{SshAuth, SshConfig};
@@ -1581,6 +1697,45 @@ mod tests {
         let path = std::env::temp_dir().join(format!("nyaterm-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).expect("create temp test dir");
         path
+    }
+
+    #[test]
+    fn rm_delete_command_quotes_shell_metacharacters() {
+        let command = build_rm_delete_command(b"/tmp/a b'c;$()").expect("build rm delete command");
+
+        assert_eq!(command, b"rm -rf -- '/tmp/a b'\\''c;$()'");
+    }
+
+    #[test]
+    fn rm_delete_command_preserves_non_utf8_path_bytes() {
+        let command = build_rm_delete_command(b"/tmp/file-\xff").expect("build rm delete command");
+        let mut expected = b"rm -rf -- '/tmp/file-".to_vec();
+        expected.push(0xff);
+        expected.push(b'\'');
+
+        assert_eq!(command, expected);
+    }
+
+    #[test]
+    fn rm_delete_rejects_unsafe_targets() {
+        let unsafe_targets: &[&[u8]] = &[
+            b"",
+            b"/",
+            b"////",
+            b".",
+            b"..",
+            b"relative/path",
+            b"/tmp/../etc",
+            b"/tmp/./file",
+            b"/tmp/bad\0path",
+        ];
+
+        for target in unsafe_targets {
+            assert!(
+                validate_rm_delete_target(target).is_err(),
+                "target should be rejected: {target:?}"
+            );
+        }
     }
 
     fn test_ssh_config(host: &str, port: u16, username: &str) -> SshConfig {
