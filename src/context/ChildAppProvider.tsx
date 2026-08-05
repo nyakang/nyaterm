@@ -112,7 +112,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     tab_right_click_action: DEFAULT_TAB_RIGHT_CLICK_ACTION,
   },
   transfer: {
-    editor_type: "external",
+    editor_type: "internal",
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",
@@ -356,6 +356,10 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
     () => ({ tabId: "", createRequestId: crypto.randomUUID() }),
     [],
   );
+  const openFileInPane = useCallback(
+    (_sessionId: string, _fileName: string, _path: string, _size: number, _type: string) => {},
+    [],
+  );
   const noopPaneConnecting = useCallback(() => null, []);
   const noopBoolean = useCallback(() => false, []);
   const noopAsync = useCallback(async () => {}, []);
@@ -371,6 +375,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       setActiveTabId: noop,
       addTab: noopString,
       addPendingTab: noopPendingTab,
+      openFileInPane,
       updateTabSession: noop,
       markTabConnectionFailed: noop,
       updatePaneSession: noop,
@@ -416,6 +421,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       noop,
       noopString,
       noopPendingTab,
+      openFileInPane,
       noopPaneConnecting,
       noopBoolean,
       noopAsync,

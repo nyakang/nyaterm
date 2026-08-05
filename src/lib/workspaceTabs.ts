@@ -40,6 +40,8 @@ export function createSessionPane(
     connecting: overrides?.connecting,
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
+    viewType: overrides?.viewType,
+    fileMetadata: overrides?.fileMetadata,
   };
 }
 
@@ -227,6 +229,13 @@ function serializePane(node: PaneNode): RestorablePaneNode {
       title: node.name,
       session_type: node.type,
       connection_id: node.connectionId,
+      view_type: node.viewType,
+      file_metadata: node.fileMetadata
+        ? {
+            remote_path: node.fileMetadata.remotePath,
+            size: node.fileMetadata.size,
+          }
+        : undefined,
     };
   }
 
@@ -296,6 +305,13 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       connectionId: node.connection_id,
       connecting: true,
       createRequestId: crypto.randomUUID(),
+      viewType: node.view_type,
+      fileMetadata: node.file_metadata
+        ? {
+            remotePath: node.file_metadata.remote_path,
+            size: node.file_metadata.size,
+          }
+        : undefined,
     };
   }
 

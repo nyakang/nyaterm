@@ -3,7 +3,13 @@ import { EditorView } from "@codemirror/view";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import Papa from "papaparse";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/types/src/display/api";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdChevronLeft,
@@ -12,9 +18,11 @@ import {
   MdFitScreen,
   MdKeyboardArrowDown,
   MdKeyboardArrowUp,
+  MdOutlineCheckCircle,
   MdRestartAlt,
   MdRotateLeft,
   MdRotateRight,
+  MdSave,
   MdUnfoldMore,
   MdZoomIn,
   MdZoomOut,
@@ -22,6 +30,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { codeMirrorFileViewExtensions } from "@/lib/codeMirrorFileView";
@@ -88,6 +97,7 @@ export function FilePreviewContent({
   const [state, setState] = useState<PreviewLoadState>({ status: "idle" });
   const requestIdRef = useRef(0);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
+  const [loadedMtime, setLoadedMtime] = useState(data.mtime);
 
   useEffect(() => {
     onLoadStateChangeRef.current = onLoadStateChange;
@@ -146,10 +156,15 @@ export function FilePreviewContent({
             file: file as RemoteBinaryFile,
           });
         } else {
+          const textFile = file as RemoteTextFile;
+          // 将文件真实 mtime 提升到状态层，供编辑器组件使用
+          if (textFile.mtime !== undefined) {
+            setLoadedMtime(textFile.mtime);
+          }
           setState({
             status: "text",
             kind: previewKind,
-            file: file as RemoteTextFile,
+            file: textFile,
           });
         }
         notify({ status: "ready", kind: previewKind });
@@ -168,17 +183,18 @@ export function FilePreviewContent({
 
   return (
     <div className={cn("h-full min-h-0 overflow-hidden", className)}>
-      {renderPreviewBody(state, data.name, t, active)}
+      {renderPreviewBody(state, { ...data, mtime: loadedMtime }, t, active)}
     </div>
   );
 }
 
 function renderPreviewBody(
   state: PreviewLoadState,
-  fileName: string,
+  data: FilePreviewContentData,
   t: ReturnType<typeof useTranslation>["t"],
   active: boolean,
 ) {
+  const fileName = data.name;
   switch (state.status) {
     case "idle":
     case "loading":
@@ -202,8 +218,8 @@ function renderPreviewBody(
       if (state.kind === "csv") {
         return <CsvPreview content={state.file.content} extension={getFileExtension(fileName)} />;
       }
-      if (state.kind === "json") return <JsonPreview content={state.file.content} />;
-      return <TextPreview content={state.file.content} fileName={fileName} />;
+      if (state.kind === "json") return <JsonPreview content={state.file.content} data={data} />;
+      return <TextPreview content={state.file.content} fileName={fileName} data={data} />;
   }
 }
 
@@ -623,7 +639,7 @@ function CsvPreview({ content, extension }: { content: string; extension: string
   );
 }
 
-function JsonPreview({ content }: { content: string }) {
+function JsonPreview({ content, data }: { content: string; data?: FilePreviewContentData }) {
   const { t } = useTranslation();
   const formatted = useMemo(() => {
     try {
@@ -643,7 +659,7 @@ function JsonPreview({ content }: { content: string }) {
           {formatted.error}
         </div>
       )}
-      <TextPreview content={formatted.content} language="json" />
+      <TextPreview content={formatted.content} language="json" data={data} />
     </div>
   );
 }
@@ -652,38 +668,157 @@ function TextPreview({
   content,
   fileName,
   language,
+  data,
 }: {
   content: string;
   fileName?: string;
   language?: string;
+  data?: FilePreviewContentData;
 }) {
   return (
-    <ReadOnlyCodeMirror
+    <EditableCodeMirror
       content={content}
-      language={language ?? languageFromFilename(fileName ?? "")}
+      language={language ?? languageFromFilename(fileName ?? data?.name ?? "")}
+      data={data}
     />
   );
 }
 
-function ReadOnlyCodeMirror({ content, language }: { content: string; language: string }) {
+function EditableCodeMirror({
+  content,
+  language,
+  data,
+}: {
+  content: string;
+  language: string;
+  data?: FilePreviewContentData;
+}) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const mtimeRef = useRef(data?.mtime ?? 0);
+  const initialContentRef = useRef(content);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (data?.mtime && data.mtime > 0) {
+      mtimeRef.current = data.mtime;
+    }
+    initialContentRef.current = content;
+    setIsDirty(false);
+  }, [content, data?.mtime]);
+
+  const handleSaveRef = useRef<() => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    if (!data) return;
+    handleSaveRef.current = async () => {
+      if (!viewRef.current) return;
+      const currentDoc = viewRef.current.state.doc.toString();
+      setIsSaving(true);
+      try {
+        const backend = data.backend ?? "remote";
+        const command = backend === "local" ? "write_local_file_text" : "write_remote_file_text";
+        const res = await invoke<{ status?: string; mtime?: number }>(command, {
+          sessionId: data.sessionId,
+          path: data.path,
+          content: currentDoc,
+          expectedMtime: mtimeRef.current > 0 ? mtimeRef.current : undefined,
+          force: true,
+        });
+
+        if (res && res.status === "conflict") {
+          toast.error("Save conflict: a newer version exists on the server.");
+          return;
+        }
+
+        if (res && typeof res.mtime === "number") {
+          mtimeRef.current = res.mtime;
+        }
+        initialContentRef.current = currentDoc;
+        setIsDirty(false);
+        setLastSavedTime(new Date().toLocaleTimeString());
+      } catch (err) {
+        toast.error(`Save failed: ${getErrorMessage(err) || String(err)}`);
+      } finally {
+        setIsSaving(false);
+      }
+    };
+  }, [data]);
 
   useEffect(() => {
     const parent = parentRef.current;
     if (!parent) return;
 
+    const updateListener = EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        const newDoc = update.state.doc.toString();
+        setIsDirty(newDoc !== initialContentRef.current);
+      }
+    });
+
     const view = new EditorView({
       parent,
       state: EditorState.create({
         doc: content,
-        extensions: codeMirrorFileViewExtensions(language, { editable: false }),
+        extensions: codeMirrorFileViewExtensions(language, {
+          editable: true,
+          updateListener,
+          onSave: () => {
+            handleSaveRef.current();
+          },
+        }),
       }),
     });
+    viewRef.current = view;
 
-    return () => view.destroy();
+    return () => {
+      viewRef.current = null;
+      view.destroy();
+    };
   }, [content, language]);
 
-  return <div ref={parentRef} className="h-full min-h-0 bg-background/60" />;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b bg-muted/40 px-3 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 font-mono">
+          <span>{data?.name ?? "Text"}</span>
+          <span className="text-[10px] opacity-60">({language})</span>
+          {isDirty ? (
+            <span className="flex items-center gap-1 text-amber-500 font-medium">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              Unsaved (Mod-S)
+            </span>
+          ) : isSaving ? (
+            <span className="flex items-center gap-1 text-primary animate-pulse font-medium">
+              Saving...
+            </span>
+          ) : lastSavedTime ? (
+            <span className="flex items-center gap-1 text-emerald-500/90 font-medium">
+              <MdOutlineCheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+              Saved {lastSavedTime}
+            </span>
+          ) : null}
+        </div>
+        {data && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 gap-1 px-2 text-xs"
+            disabled={!isDirty || isSaving}
+            onClick={() => void handleSaveRef.current()}
+            title="Save File (Ctrl+S / Cmd+S)"
+          >
+            <MdSave className="h-3.5 w-3.5" />
+            Save
+          </Button>
+        )}
+      </div>
+      <div ref={parentRef} className="h-full min-h-0 flex-1 bg-background/60" />
+    </div>
+  );
 }
 
 function PdfPreview({ file }: { file: RemoteBinaryFile }) {

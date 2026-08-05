@@ -47,7 +47,7 @@ fn default_transfer_threads() -> u32 {
     3
 }
 fn default_editor_type() -> String {
-    "external".to_string()
+    "internal".to_string()
 }
 fn default_duplicate_strategy() -> String {
     "ask".to_string()
@@ -105,6 +105,6 @@ mod tests {
         .unwrap();
 
         assert!(!settings.recording_auto_start);
-        assert_eq!(settings.editor_type, "external");
+        assert_eq!(settings.editor_type, "internal");
     }
 }

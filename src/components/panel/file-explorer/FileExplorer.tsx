@@ -76,7 +76,7 @@ import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
+import { openAutoUpload, openFilePreview } from "@/lib/windowManager";
 import type {
   AICustomActionConfig,
   FileEntry,
@@ -620,7 +620,7 @@ function FileExplorerPane({
   onSendEntriesToTarget,
 }: FileExplorerPaneProps) {
   const { t } = useTranslation();
-  const { appSettings, updateUi, savedConnections, tabs, syncGroups, broadcastToAll } = useApp();
+  const { appSettings, updateUi, savedConnections, tabs, syncGroups, broadcastToAll, openFileInPane } = useApp();
   const { enqueueDownloads, enqueueUploads } = useTransfer();
   const hasSshSession = !!activeSessionId && activeSessionType === "SSH";
   const hasLocalSession = !!activeSessionId && activeSessionType === "Local";
@@ -1760,15 +1760,26 @@ function FileExplorerPane({
   const handlePreview = async (entry: FileEntry) => {
     if (!activeSessionId || entry.is_dir) return;
     try {
-      await openFilePreview({
-        sessionId: activeSessionId,
-        backend: explorerBackendRef.current,
-        path: getEntryFullPath(entry),
-        name: entry.name,
-        size: entry.size,
-        mtime: entry.mtime,
-        target: fileWindowTarget,
-      });
+      if (appSettings.transfer.editor_type === "internal") {
+        openFileInPane(
+          activeSessionId,
+          entry.name,
+          getEntryFullPath(entry),
+          entry.size,
+          activeSessionType ?? "SSH",
+          activeConnectionId ?? undefined,
+        );
+      } else {
+        await openFilePreview({
+          sessionId: activeSessionId,
+          backend: explorerBackendRef.current,
+          path: getEntryFullPath(entry),
+          name: entry.name,
+          size: entry.size,
+          mtime: entry.mtime,
+          target: fileWindowTarget,
+        });
+      }
     } catch (error) {
       toast.error(getErrorMessage(error) || t("filePreview.openFailed"));
     }
@@ -2483,22 +2494,16 @@ function FileExplorerPane({
     }
   };
 
-  const openInternalEditor = async (entry: FileEntry) => {
+  const openInternalEditor = (entry: FileEntry) => {
     if (!activeSessionId || entry.is_dir) return;
-    try {
-      await openRemoteFileEditor({
-        sessionId: activeSessionId,
-        backend: explorerBackendRef.current,
-        path: getEntryFullPath(entry),
-        name: entry.name,
-        size: entry.size,
-        mtime: entry.mtime,
-        target: fileWindowTarget,
-      });
-    } catch (error) {
-      toast.error(getErrorMessage(error) || t("fileExplorer.openInternalFailed"));
-      await handleOpenExternal(entry);
-    }
+    openFileInPane(
+      activeSessionId,
+      entry.name,
+      getEntryFullPath(entry),
+      entry.size,
+      activeSessionType ?? "SSH",
+      activeConnectionId ?? undefined,
+    );
   };
 
   const handleOpenInternal = async (entry: FileEntry) => {
@@ -2532,11 +2537,11 @@ function FileExplorerPane({
   };
 
   const handleOpenDefault = async (entry: FileEntry) => {
-    if ((appSettings.transfer.editor_type || "external") === "internal") {
-      await handleOpenInternal(entry);
+    if ((appSettings.transfer.editor_type || "internal") === "external") {
+      await handleOpenExternal(entry);
       return;
     }
-    await handleOpenExternal(entry);
+    await handleOpenInternal(entry);
   };
 
   const displayPath = currentPath || homeDir || "~";
@@ -2827,7 +2832,7 @@ function FileExplorerPane({
                           selectedCount={selectedRealFiles.length}
                           isParentDirectoryEntry={isParentDirectoryEntry(entry)}
                           activeSessionId={activeSessionId}
-                          editorType={appSettings.transfer.editor_type || "external"}
+                          editorType={appSettings.transfer.editor_type || "internal"}
                           columnTemplate={fileListGridTemplate}
                           rowWidth={fileListTableWidth}
                           onSelectionStart={handleSelectionStart}
