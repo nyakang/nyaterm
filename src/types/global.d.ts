@@ -78,6 +78,7 @@ export interface SessionPane {
   fileMetadata?: {
     remotePath: string;
     size: number;
+    mtime?: number;
   };
 }
 
@@ -417,6 +418,7 @@ export interface RestorableSessionPane {
   file_metadata?: {
     remote_path: string;
     size: number;
+    mtime?: number;
   };
 }
 

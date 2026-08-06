@@ -234,6 +234,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
         ? {
             remote_path: node.fileMetadata.remotePath,
             size: node.fileMetadata.size,
+            mtime: node.fileMetadata.mtime,
           }
         : undefined,
     };
@@ -310,6 +311,7 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
         ? {
             remotePath: node.file_metadata.remote_path,
             size: node.file_metadata.size,
+            mtime: node.file_metadata.mtime,
           }
         : undefined,
     };

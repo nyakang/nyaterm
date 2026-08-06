@@ -127,15 +127,15 @@ export function TransferTab() {
         <SettingSelect
           label={t("settings.editorType")}
           desc={t("settings.editorTypeDesc")}
-          value={transfer.editor_type || "internal"}
+          value={transfer.editor_type || "external"}
           controlClassName="max-w-sm"
           onValueChange={(v) => update({ editor_type: v as "external" | "internal" })}
         >
-          <SelectItem value="internal">{t("settings.editorTypeInternal")}</SelectItem>
           <SelectItem value="external">{t("settings.editorTypeExternal")}</SelectItem>
+          <SelectItem value="internal">{t("settings.editorTypeInternal")}</SelectItem>
         </SettingSelect>
 
-        {(transfer.editor_type || "internal") === "external" && (
+        {(transfer.editor_type || "external") === "external" && (
           <PathPickerInput
             label={t("settings.defaultEditor")}
             desc={t("settings.defaultEditorDesc")}

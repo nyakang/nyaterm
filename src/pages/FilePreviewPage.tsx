@@ -269,7 +269,7 @@ export default function FilePreviewPage() {
 
   if (!initialData) return null;
 
-  const activeKind = activeTab ? getFilePreviewKind(activeTab.name) : "unsupported";
+  const activeKind = activeTab ? getFilePreviewKind(activeTab.name) : "text";
   const activeMtimeText = formatPreviewMtime(activeTab?.mtime);
   const activeStatusText =
     activeTab?.loadStatus === "loading"

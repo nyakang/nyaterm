@@ -19,7 +19,6 @@ type ChildWindowStateKey =
   | "quick-command"
   | "proxy"
   | "tunnel"
-  | "file-editor"
   | "file-preview"
   | "note-editor";
 
@@ -38,7 +37,6 @@ interface ChildWindowOptions {
 const MAIN_WINDOW_LABEL = "main";
 const MAIN_WINDOW_PREFIX = "main-";
 const AUTO_UPLOAD_WINDOW_PREFIX = "auto-upload-";
-const FILE_EDITOR_WINDOW_PREFIX = "file-editor-";
 const FILE_PREVIEW_WINDOW_PREFIX = "file-preview-";
 const NOTE_EDITOR_WINDOW_PREFIX = "note-editor-";
 const AUTO_UPLOAD_OWNER_SEPARATOR = "--";
@@ -698,41 +696,6 @@ export interface FileWindowTarget {
   kind: "remote" | "local";
   label: string;
   detail?: string;
-}
-
-export interface RemoteFileEditorWindowData {
-  sessionId: string;
-  backend?: "remote" | "local";
-  path?: string;
-  remotePath?: string;
-  name: string;
-  size: number;
-  mtime: number;
-  target?: FileWindowTarget;
-}
-
-export function openRemoteFileEditor(data: RemoteFileEditorWindowData) {
-  const label = `${FILE_EDITOR_WINDOW_PREFIX}${ownerToken()}`;
-  const url = `index.html?window=file-editor&owner=${encodeURIComponent(ownerMainWindowLabel)}&data=${encodeURIComponent(JSON.stringify(data))}`;
-  return openChildWindow({
-    label,
-    title: i18n.t("fileEditor.title"),
-    url,
-    kind: "modeless",
-    parentLabel: ownerMainWindowLabel,
-    width: 980,
-    height: 720,
-    stateKey: "file-editor",
-  }).then((win) => {
-    const payload = { targetLabel: label, data };
-    emit("remote-file-editor-open", payload);
-    window.setTimeout(() => {
-      void win.show().catch(() => {});
-      void win.setFocus().catch(() => {});
-      emit("remote-file-editor-open", payload);
-    }, 120);
-    return win;
-  });
 }
 
 export interface FilePreviewWindowData {

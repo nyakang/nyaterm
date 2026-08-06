@@ -3,13 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import Papa from "papaparse";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/types/src/display/api";
-import {
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdChevronLeft,
@@ -18,6 +12,8 @@ import {
   MdFitScreen,
   MdKeyboardArrowDown,
   MdKeyboardArrowUp,
+  MdLockOutline,
+  MdModeEdit,
   MdOutlineCheckCircle,
   MdRestartAlt,
   MdRotateLeft,
@@ -40,16 +36,16 @@ import { cn } from "@/lib/utils";
 import {
   type FileExplorerBackendKind,
   type FilePreviewKind,
+  CSV_PREVIEW_MAX_BYTES,
   getFileExtension,
   getFilePreviewKind,
   imageMimeFromFilename,
   languageFromFilename,
   type RemoteBinaryFile,
   type RemoteTextFile,
+  TEXT_PREVIEW_MAX_BYTES,
 } from "./model";
 
-const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
-const CSV_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 const BINARY_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
 const CSV_ROW_HEIGHT = 30;
 const IMAGE_WHEEL_ZOOM_STEP = 0.001;
@@ -98,6 +94,11 @@ export function FilePreviewContent({
   const requestIdRef = useRef(0);
   const onLoadStateChangeRef = useRef(onLoadStateChange);
   const [loadedMtime, setLoadedMtime] = useState(data.mtime);
+  const [reloadCount, setReloadCount] = useState(0);
+
+  const handleReloadRequest = useCallback(() => {
+    setReloadCount((count) => count + 1);
+  }, []);
 
   useEffect(() => {
     onLoadStateChangeRef.current = onLoadStateChange;
@@ -111,20 +112,6 @@ export function FilePreviewContent({
     const notify = (summary: FilePreviewLoadSummary) => {
       onLoadStateChangeRef.current?.(summary);
     };
-
-    if (previewKind === "unsupported") {
-      setState({
-        status: "error",
-        kind: previewKind,
-        message: t("filePreview.unsupported"),
-      });
-      notify({
-        status: "error",
-        kind: previewKind,
-        message: t("filePreview.unsupported"),
-      });
-      return;
-    }
 
     setState({ status: "loading" });
     notify({ status: "loading", kind: previewKind });
@@ -179,11 +166,11 @@ export function FilePreviewContent({
         });
         notify({ status: "error", kind: previewKind, message });
       });
-  }, [data.backend, data.name, data.path, data.sessionId, reloadKey, t]);
+  }, [data.backend, data.name, data.path, data.sessionId, reloadCount, reloadKey]);
 
   return (
     <div className={cn("h-full min-h-0 overflow-hidden", className)}>
-      {renderPreviewBody(state, { ...data, mtime: loadedMtime }, t, active)}
+      {renderPreviewBody(state, { ...data, mtime: loadedMtime }, t, active, handleReloadRequest)}
     </div>
   );
 }
@@ -193,6 +180,7 @@ function renderPreviewBody(
   data: FilePreviewContentData,
   t: ReturnType<typeof useTranslation>["t"],
   active: boolean,
+  onReloadRequest: () => void,
 ) {
   const fileName = data.name;
   switch (state.status) {
@@ -211,15 +199,34 @@ function renderPreviewBody(
           <ImagePreview file={state.file} fileName={fileName} />
         ) : null
       ) : (
-        <PdfPreview file={state.file} />
+        <PdfPreview file={state.file} fileName={fileName} />
       );
     case "text":
-      if (state.kind === "markdown") return <MarkdownPreview content={state.file.content} />;
-      if (state.kind === "csv") {
-        return <CsvPreview content={state.file.content} extension={getFileExtension(fileName)} />;
+      if (state.kind === "markdown") {
+        return <MarkdownPreview content={state.file.content} fileName={fileName} />;
       }
-      if (state.kind === "json") return <JsonPreview content={state.file.content} data={data} />;
-      return <TextPreview content={state.file.content} fileName={fileName} data={data} />;
+      if (state.kind === "csv") {
+        return (
+          <CsvPreview
+            content={state.file.content}
+            extension={getFileExtension(fileName)}
+            fileName={fileName}
+          />
+        );
+      }
+      if (state.kind === "json") {
+        return (
+          <JsonPreview content={state.file.content} data={data} onReloadRequest={onReloadRequest} />
+        );
+      }
+      return (
+        <TextPreview
+          content={state.file.content}
+          fileName={fileName}
+          data={data}
+          onReloadRequest={onReloadRequest}
+        />
+      );
   }
 }
 
@@ -267,7 +274,7 @@ function ImagePreview({ file, fileName }: { file: RemoteBinaryFile; fileName: st
     >
       {({ centerView, resetTransform, zoomIn, zoomOut }) => (
         <div className="flex h-full min-h-0 flex-col">
-          <PreviewToolbar>
+          <FileViewHeader fileName={fileName} editable={false}>
             <Button
               type="button"
               variant="ghost"
@@ -345,7 +352,7 @@ function ImagePreview({ file, fileName }: { file: RemoteBinaryFile; fileName: st
             >
               <MdRestartAlt className="h-4 w-4" />
             </Button>
-          </PreviewToolbar>
+          </FileViewHeader>
           <div className="min-h-0 flex-1 bg-background/60">
             <TransformComponent
               wrapperClass="!h-full !w-full"
@@ -372,47 +379,65 @@ function ImagePreview({ file, fileName }: { file: RemoteBinaryFile; fileName: st
   );
 }
 
-function MarkdownPreview({ content }: { content: string }) {
+function FileModeBadge({ editable }: { editable: boolean }) {
+  const { t } = useTranslation();
+  return editable ? (
+    <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-primary/80">
+      <MdModeEdit className="h-3 w-3" />
+      {t("fileEditor.editable")}
+    </span>
+  ) : (
+    <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-muted-foreground">
+      <MdLockOutline className="h-3 w-3" />
+      {t("fileEditor.readOnly")}
+    </span>
+  );
+}
+
+function MarkdownPreview({ content, fileName }: { content: string; fileName?: string }) {
   return (
-    <div className="terminal-scroll h-full overflow-auto bg-background/60 p-4 text-sm leading-6">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        skipHtml
-        components={{
-          a: ({ children, href }) => (
-            <a
-              className="text-primary underline underline-offset-2"
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {children}
-            </a>
-          ),
-          img: ({ alt }) => (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-              {alt || "image"}
-            </span>
-          ),
-          pre: ({ children }) => (
-            <pre className="terminal-scroll my-3 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5">
-              {children}
-            </pre>
-          ),
-          code: ({ children }) => (
-            <code className="rounded bg-muted/40 px-1 py-0.5 font-mono text-xs">{children}</code>
-          ),
-          table: ({ children }) => (
-            <div className="terminal-scroll my-3 overflow-auto">
-              <table className="w-full border-collapse text-left text-xs">{children}</table>
-            </div>
-          ),
-          th: ({ children }) => <th className="border px-2 py-1 font-medium">{children}</th>,
-          td: ({ children }) => <td className="border px-2 py-1">{children}</td>,
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+    <div className="flex h-full min-h-0 flex-col">
+      <FileViewHeader fileName={fileName} editable={false} />
+      <div className="terminal-scroll min-h-0 flex-1 overflow-auto bg-background/60 p-4 text-sm leading-6">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          skipHtml
+          components={{
+            a: ({ children, href }) => (
+              <a
+                className="text-primary underline underline-offset-2"
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {children}
+              </a>
+            ),
+            img: ({ alt }) => (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                {alt || "image"}
+              </span>
+            ),
+            pre: ({ children }) => (
+              <pre className="terminal-scroll my-3 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5">
+                {children}
+              </pre>
+            ),
+            code: ({ children }) => (
+              <code className="rounded bg-muted/40 px-1 py-0.5 font-mono text-xs">{children}</code>
+            ),
+            table: ({ children }) => (
+              <div className="terminal-scroll my-3 overflow-auto">
+                <table className="w-full border-collapse text-left text-xs">{children}</table>
+              </div>
+            ),
+            th: ({ children }) => <th className="border px-2 py-1 font-medium">{children}</th>,
+            td: ({ children }) => <td className="border px-2 py-1">{children}</td>,
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
@@ -447,7 +472,15 @@ function compareCsvCells(leftValue: unknown, rightValue: unknown, direction: Csv
   );
 }
 
-function CsvPreview({ content, extension }: { content: string; extension: string }) {
+function CsvPreview({
+  content,
+  extension,
+  fileName,
+}: {
+  content: string;
+  extension: string;
+  fileName?: string;
+}) {
   const { t } = useTranslation();
   const [firstRowHeader, setFirstRowHeader] = useState(true);
   const [sortColumnIndex, setSortColumnIndex] = useState<number | null>(null);
@@ -526,18 +559,18 @@ function CsvPreview({ content, extension }: { content: string; extension: string
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PreviewToolbar>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+      <FileViewHeader fileName={fileName} editable={false}>
+        <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           <Checkbox
             checked={firstRowHeader}
             onCheckedChange={(checked) => setFirstRowHeader(checked === true)}
           />
           {t("filePreview.firstRowHeader")}
         </label>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {t("filePreview.csvRows", { count: sortedRows.length })}
         </span>
-      </PreviewToolbar>
+      </FileViewHeader>
       <div
         ref={scrollParentRef}
         className="terminal-scroll min-h-0 flex-1 overflow-auto bg-background/60"
@@ -639,7 +672,15 @@ function CsvPreview({ content, extension }: { content: string; extension: string
   );
 }
 
-function JsonPreview({ content, data }: { content: string; data?: FilePreviewContentData }) {
+function JsonPreview({
+  content,
+  data,
+  onReloadRequest,
+}: {
+  content: string;
+  data?: FilePreviewContentData;
+  onReloadRequest: () => void;
+}) {
   const { t } = useTranslation();
   const formatted = useMemo(() => {
     try {
@@ -659,7 +700,12 @@ function JsonPreview({ content, data }: { content: string; data?: FilePreviewCon
           {formatted.error}
         </div>
       )}
-      <TextPreview content={formatted.content} language="json" data={data} />
+      <TextPreview
+        content={formatted.content}
+        language="json"
+        data={data}
+        onReloadRequest={onReloadRequest}
+      />
     </div>
   );
 }
@@ -669,17 +715,20 @@ function TextPreview({
   fileName,
   language,
   data,
+  onReloadRequest,
 }: {
   content: string;
   fileName?: string;
   language?: string;
   data?: FilePreviewContentData;
+  onReloadRequest: () => void;
 }) {
   return (
     <EditableCodeMirror
       content={content}
       language={language ?? languageFromFilename(fileName ?? data?.name ?? "")}
       data={data}
+      onReloadRequest={onReloadRequest}
     />
   );
 }
@@ -688,16 +737,20 @@ function EditableCodeMirror({
   content,
   language,
   data,
+  onReloadRequest,
 }: {
   content: string;
   language: string;
   data?: FilePreviewContentData;
+  onReloadRequest: () => void;
 }) {
+  const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const mtimeRef = useRef(data?.mtime ?? 0);
+  const sizeRef = useRef(data?.size ?? 0);
   const initialContentRef = useRef(content);
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
@@ -705,47 +758,68 @@ function EditableCodeMirror({
     if (data?.mtime && data.mtime > 0) {
       mtimeRef.current = data.mtime;
     }
+    if (data?.size && data.size > 0) {
+      sizeRef.current = data.size;
+    }
     initialContentRef.current = content;
     setIsDirty(false);
-  }, [content, data?.mtime]);
+  }, [content, data?.mtime, data?.size]);
 
-  const handleSaveRef = useRef<() => Promise<void>>(async () => {});
+  const handleSaveRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (!data) return;
-    handleSaveRef.current = async () => {
+    handleSaveRef.current = async (force = false) => {
       if (!viewRef.current) return;
       const currentDoc = viewRef.current.state.doc.toString();
       setIsSaving(true);
       try {
         const backend = data.backend ?? "remote";
         const command = backend === "local" ? "write_local_file_text" : "write_remote_file_text";
-        const res = await invoke<{ status?: string; mtime?: number }>(command, {
+        const res = await invoke<{ status?: string; mtime?: number; size?: number }>(command, {
           sessionId: data.sessionId,
           path: data.path,
           content: currentDoc,
           expectedMtime: mtimeRef.current > 0 ? mtimeRef.current : undefined,
-          force: true,
+          expectedSize: sizeRef.current > 0 ? sizeRef.current : undefined,
+          force,
         });
 
         if (res && res.status === "conflict") {
-          toast.error("Save conflict: a newer version exists on the server.");
+          toast.error(t("fileEditor.conflictTitle"), {
+            description: t("fileEditor.conflictDesc"),
+            action: {
+              label: t("fileEditor.reload"),
+              onClick: () => onReloadRequest(),
+            },
+            cancel: {
+              label: t("fileEditor.forceSave"),
+              onClick: () => void handleSaveRef.current(true),
+            },
+          });
           return;
         }
 
         if (res && typeof res.mtime === "number") {
           mtimeRef.current = res.mtime;
         }
+        if (res && typeof res.size === "number") {
+          sizeRef.current = res.size;
+        } else {
+          sizeRef.current = new Blob([currentDoc]).size;
+        }
         initialContentRef.current = currentDoc;
         setIsDirty(false);
         setLastSavedTime(new Date().toLocaleTimeString());
       } catch (err) {
-        toast.error(`Save failed: ${getErrorMessage(err) || String(err)}`);
+        toast.error(t("fileEditor.saveFailed"), {
+          description: getErrorMessage(err) || String(err),
+        });
       } finally {
         setIsSaving(false);
       }
     };
-  }, [data]);
+  }, [data, onReloadRequest, t]);
 
   useEffect(() => {
     const parent = parentRef.current;
@@ -781,26 +855,22 @@ function EditableCodeMirror({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b bg-muted/40 px-3 text-xs text-muted-foreground">
-        <div className="flex items-center gap-2 font-mono">
-          <span>{data?.name ?? "Text"}</span>
-          <span className="text-[10px] opacity-60">({language})</span>
-          {isDirty ? (
-            <span className="flex items-center gap-1 text-amber-500 font-medium">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-              Unsaved (Mod-S)
-            </span>
-          ) : isSaving ? (
-            <span className="flex items-center gap-1 text-primary animate-pulse font-medium">
-              Saving...
-            </span>
-          ) : lastSavedTime ? (
-            <span className="flex items-center gap-1 text-emerald-500/90 font-medium">
-              <MdOutlineCheckCircle className="h-3.5 w-3.5 text-emerald-500" />
-              Saved {lastSavedTime}
-            </span>
-          ) : null}
-        </div>
+      <FileViewHeader fileName={data?.name} language={language} editable>
+        {isDirty ? (
+          <span className="flex items-center gap-1 text-amber-500 font-medium">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            {t("fileEditor.unsaved")} (Mod-S)
+          </span>
+        ) : isSaving ? (
+          <span className="flex items-center gap-1 text-primary animate-pulse font-medium">
+            {t("common.saving")}
+          </span>
+        ) : lastSavedTime ? (
+          <span className="flex items-center gap-1 text-emerald-500/90 font-medium">
+            <MdOutlineCheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+            {t("fileEditor.saved")} {lastSavedTime}
+          </span>
+        ) : null}
         {data && (
           <Button
             type="button"
@@ -809,19 +879,19 @@ function EditableCodeMirror({
             className="h-6 gap-1 px-2 text-xs"
             disabled={!isDirty || isSaving}
             onClick={() => void handleSaveRef.current()}
-            title="Save File (Ctrl+S / Cmd+S)"
+            title={t("fileEditor.saveAndClose")}
           >
             <MdSave className="h-3.5 w-3.5" />
-            Save
+            {t("fileEditor.saveAndClose")}
           </Button>
         )}
-      </div>
+      </FileViewHeader>
       <div ref={parentRef} className="h-full min-h-0 flex-1 bg-background/60" />
     </div>
   );
 }
 
-function PdfPreview({ file }: { file: RemoteBinaryFile }) {
+function PdfPreview({ file, fileName }: { file: RemoteBinaryFile; fileName?: string }) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
@@ -896,7 +966,7 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PreviewToolbar>
+      <FileViewHeader fileName={fileName} editable={false}>
         <Button
           type="button"
           variant="ghost"
@@ -946,7 +1016,7 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
         >
           <MdZoomIn className="h-4 w-4" />
         </Button>
-      </PreviewToolbar>
+      </FileViewHeader>
       <div className="terminal-scroll flex min-h-0 flex-1 justify-center overflow-auto bg-background/60 p-4">
         <canvas ref={canvasRef} className={cn("h-fit max-w-none bg-white shadow-sm")} />
       </div>
@@ -954,10 +1024,25 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
   );
 }
 
-function PreviewToolbar({ children }: { children: ReactNode }) {
+function FileViewHeader({
+  fileName,
+  language,
+  editable,
+  children,
+}: {
+  fileName?: string;
+  language?: string;
+  editable: boolean;
+  children?: ReactNode;
+}) {
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-background/80 px-2">
-      {children}
+    <div className="flex h-8 shrink-0 items-center gap-2 border-b bg-muted/40 px-3 text-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="truncate font-mono">{fileName ?? "Text"}</span>
+        {language && <span className="shrink-0 text-[10px] opacity-60">({language})</span>}
+        <FileModeBadge editable={editable} />
+      </div>
+      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
     </div>
   );
 }

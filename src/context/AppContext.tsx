@@ -85,6 +85,7 @@ interface AppContextType {
     fileSize: number,
     sessionType: SessionType,
     connectionId?: string,
+    mtime?: number,
   ) => void;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
@@ -294,7 +295,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     tab_right_click_action: DEFAULT_TAB_RIGHT_CLICK_ACTION,
   },
   transfer: {
-    editor_type: "internal",
+    editor_type: "external",
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",
@@ -799,11 +800,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fileSize: number,
       sessionType: SessionType,
       connectionId?: string,
+      mtime?: number,
     ) => {
       const pane = createSessionPane(fileName, sessionType, connectionId, {
         sessionId,
         viewType: "file",
-        fileMetadata: { remotePath, size: fileSize },
+        fileMetadata: { remotePath, size: fileSize, mtime: mtime ?? 0 },
       });
       const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
       const nextTabs = [...tabsRef.current, newTab];

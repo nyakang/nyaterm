@@ -269,7 +269,7 @@ function PaneNodeView({
             path: node.fileMetadata.remotePath,
             name: node.name,
             size: node.fileMetadata.size,
-            mtime: 0,
+            mtime: node.fileMetadata.mtime ?? 0,
           }}
           active={isActive}
           className="h-full w-full"

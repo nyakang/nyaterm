@@ -109,8 +109,8 @@ import {
   type FileSortMode,
   fileExplorerSessionCacheStore,
   getExplorerParentDirectory,
+  getFilePreviewKind,
   getLocalPathName,
-  getRemoteFileTextKind,
   type InlineRenameState,
   isParentDirectoryEntry,
   joinExplorerPath,
@@ -124,6 +124,8 @@ import {
   pushVisitedHistory,
   type RemoteTextFile,
   type ResolvedLocalDropPathEntry,
+  CSV_PREVIEW_MAX_BYTES,
+  TEXT_PREVIEW_MAX_BYTES,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
 
@@ -665,7 +667,6 @@ function FileExplorerPane({
   const [propertiesDialogData, setPropertiesDialogData] = useState<PropertiesDialogData | null>(
     null,
   );
-  const [unknownEditorEntry, setUnknownEditorEntry] = useState<FileEntry | null>(null);
   const [cwdTrackingActive, setCwdTrackingActive] = useState(false);
   const [visitedHistory, setVisitedHistory] = useState<string[]>([]);
   const alwaysUploadFilesRef = useRef<Set<string>>(new Set());
@@ -1760,26 +1761,15 @@ function FileExplorerPane({
   const handlePreview = async (entry: FileEntry) => {
     if (!activeSessionId || entry.is_dir) return;
     try {
-      if (appSettings.transfer.editor_type === "internal") {
-        openFileInPane(
-          activeSessionId,
-          entry.name,
-          getEntryFullPath(entry),
-          entry.size,
-          activeSessionType ?? "SSH",
-          activeConnectionId ?? undefined,
-        );
-      } else {
-        await openFilePreview({
-          sessionId: activeSessionId,
-          backend: explorerBackendRef.current,
-          path: getEntryFullPath(entry),
-          name: entry.name,
-          size: entry.size,
-          mtime: entry.mtime,
-          target: fileWindowTarget,
-        });
-      }
+      await openFilePreview({
+        sessionId: activeSessionId,
+        backend: explorerBackendRef.current,
+        path: getEntryFullPath(entry),
+        name: entry.name,
+        size: entry.size,
+        mtime: entry.mtime,
+        target: fileWindowTarget,
+      });
     } catch (error) {
       toast.error(getErrorMessage(error) || t("filePreview.openFailed"));
     }
@@ -2494,54 +2484,50 @@ function FileExplorerPane({
     }
   };
 
-  const openInternalEditor = (entry: FileEntry) => {
-    if (!activeSessionId || entry.is_dir) return;
-    openFileInPane(
-      activeSessionId,
-      entry.name,
-      getEntryFullPath(entry),
-      entry.size,
-      activeSessionType ?? "SSH",
-      activeConnectionId ?? undefined,
-    );
-  };
-
   const handleOpenInternal = async (entry: FileEntry) => {
     if (!activeSessionId || entry.is_dir) return;
 
-    const textKind = getRemoteFileTextKind(entry.name);
-    if (textKind === "text") {
-      await openInternalEditor(entry);
-      return;
+    // 通用判定：只有后端能按 UTF-8 文本读出的文件才进入内置标签编辑器。
+    // 读不出（二进制/非 UTF-8/超大）时回落为原有的下载 + 外部编辑器打开。
+    // 探测上限与标签页内的读取上限保持一致，避免"判定通过但渲染失败"。
+    const probeMaxBytes =
+      getFilePreviewKind(entry.name) === "csv" ? CSV_PREVIEW_MAX_BYTES : TEXT_PREVIEW_MAX_BYTES;
+    let textFile: RemoteTextFile | null = null;
+    try {
+      const command =
+        explorerBackendRef.current === "local" ? "read_local_file_text" : "read_remote_file_text";
+      textFile = await invoke<RemoteTextFile>(command, {
+        sessionId: activeSessionId,
+        path: getEntryFullPath(entry),
+        maxBytes: probeMaxBytes,
+      });
+    } catch {
+      textFile = null;
     }
 
-    if (textKind === "binary") {
+    if (!textFile) {
       toast.info(t("fileExplorer.binaryOpenExternal"));
       await handleOpenExternal(entry);
       return;
     }
 
-    setUnknownEditorEntry(entry);
-  };
-
-  const handleOpenUnknownExternal = async () => {
-    const entry = unknownEditorEntry;
-    setUnknownEditorEntry(null);
-    if (entry) await handleOpenExternal(entry);
-  };
-
-  const handleOpenUnknownInternal = async () => {
-    const entry = unknownEditorEntry;
-    setUnknownEditorEntry(null);
-    if (entry) await openInternalEditor(entry);
+    openFileInPane(
+      activeSessionId,
+      entry.name,
+      getEntryFullPath(entry),
+      textFile.size ?? entry.size,
+      activeSessionType ?? "SSH",
+      activeConnectionId ?? undefined,
+      textFile.mtime ?? 0,
+    );
   };
 
   const handleOpenDefault = async (entry: FileEntry) => {
-    if ((appSettings.transfer.editor_type || "internal") === "external") {
-      await handleOpenExternal(entry);
+    if ((appSettings.transfer.editor_type || "external") === "internal") {
+      await handleOpenInternal(entry);
       return;
     }
-    await handleOpenInternal(entry);
+    await handleOpenExternal(entry);
   };
 
   const displayPath = currentPath || homeDir || "~";
@@ -2832,7 +2818,7 @@ function FileExplorerPane({
                           selectedCount={selectedRealFiles.length}
                           isParentDirectoryEntry={isParentDirectoryEntry(entry)}
                           activeSessionId={activeSessionId}
-                          editorType={appSettings.transfer.editor_type || "internal"}
+                          editorType={appSettings.transfer.editor_type || "external"}
                           columnTemplate={fileListGridTemplate}
                           rowWidth={fileListTableWidth}
                           onSelectionStart={handleSelectionStart}
@@ -3061,13 +3047,11 @@ function FileExplorerPane({
         newItemDialogData={newItemDialogData}
         newSymlinkDialogData={newSymlinkDialogData}
         propertiesDialogData={propertiesDialogData}
-        unknownFileTypeEntry={unknownEditorEntry}
         onDeleteClose={() => setDeleteDialogData(null)}
         onMoveClose={() => setMoveDialogData(null)}
         onNewItemClose={() => setNewItemDialogData(null)}
         onNewSymlinkClose={() => setNewSymlinkDialogData(null)}
         onPropertiesClose={() => setPropertiesDialogData(null)}
-        onUnknownFileTypeClose={() => setUnknownEditorEntry(null)}
         onDeleteSuccess={() => {
           setSelectedFiles(new Set());
           lastSelectedRef.current = null;
@@ -3076,8 +3060,6 @@ function FileExplorerPane({
         onRefresh={refreshCurrentDirectory}
         onOpenDirectoryEntry={handleItemClick}
         onOpenDefault={(entry) => void handleOpenDefault(entry)}
-        onOpenUnknownFileExternal={() => void handleOpenUnknownExternal()}
-        onOpenUnknownFileInternal={() => void handleOpenUnknownInternal()}
       />
     </aside>
   );
