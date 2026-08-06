@@ -106,6 +106,7 @@ export default function SessionQuickSwitcher({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const searchRequestIdRef = useRef(0);
   const lastMatchedItemIdsRef = useRef<string[] | null>(null);
+  const itemButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [matchedItemIds, setMatchedItemIds] = useState<string[] | null>(null);
@@ -236,12 +237,22 @@ export default function SessionQuickSwitcher({
     () => (matchedItemIds ? matchedItemIds.flatMap((id) => itemById.get(id) ?? []) : items),
     [itemById, items, matchedItemIds],
   );
+  const selectedItemId = filteredItems[selectedIndex]?.id;
 
   useEffect(() => {
     setSelectedIndex((index) =>
       filteredItems.length === 0 ? 0 : Math.min(index, filteredItems.length - 1),
     );
   }, [filteredItems.length]);
+
+  useEffect(() => {
+    if (!open || !selectedItemId) return;
+
+    itemButtonRefs.current.get(selectedItemId)?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [open, selectedItemId]);
 
   const selectItem = (item: QuickSwitcherItem) => {
     if (item.kind === "session") {
@@ -311,6 +322,13 @@ export default function SessionQuickSwitcher({
             return (
               <button
                 key={item.id}
+                ref={(element) => {
+                  if (element) {
+                    itemButtonRefs.current.set(item.id, element);
+                  } else {
+                    itemButtonRefs.current.delete(item.id);
+                  }
+                }}
                 type="button"
                 className={`flex w-full items-center gap-3 px-3 py-2 text-left text-xs ${
                   selected ? "bg-primary/15" : "hover:bg-accent/70"

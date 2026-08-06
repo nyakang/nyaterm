@@ -409,7 +409,11 @@ export function PasswordManagementTab({
         </div>
       </div>
 
-      <Dialog open={editingId !== null} onOpenChange={(open) => !open && resetEdit()}>
+      <Dialog
+        disablePointerDismissal
+        open={editingId !== null}
+        onOpenChange={(open) => !open && resetEdit()}
+      >
         <DialogContent showCloseButton={false} className="max-w-xs">
           <DialogHeader>
             <DialogTitle>{isNew ? t("passwordManager.add") : t("common.edit")}</DialogTitle>

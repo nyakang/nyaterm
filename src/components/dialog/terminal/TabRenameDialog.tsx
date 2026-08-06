@@ -28,7 +28,7 @@ export default function TabRenameDialog({
   const { t } = useTranslation();
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={onOpenChange}>
       <DialogContent showCloseButton={false} className="max-w-xs">
         <DialogHeader>
           <DialogTitle className="text-sm">{t("tabCtx.renameTitle")}</DialogTitle>

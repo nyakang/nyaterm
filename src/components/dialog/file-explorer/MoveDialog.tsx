@@ -70,7 +70,7 @@ export default function MoveDialog({ data, onClose, onSuccess }: MoveDialogProps
   };
 
   return (
-    <Dialog open onOpenChange={(v) => !v && !isSubmitting && onClose()}>
+    <Dialog disablePointerDismissal open onOpenChange={(v) => !v && !isSubmitting && onClose()}>
       <DialogContent className="w-[min(24rem,calc(100vw-2rem))] sm:max-w-96">
         <DialogHeader className="min-w-0 pr-8">
           <DialogTitle

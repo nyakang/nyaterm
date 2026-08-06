@@ -30,8 +30,17 @@ impl QuickCommandsStore {
         let mut config = self.snapshot();
         let now = now_millis();
 
-        if let Some(category) = new_category {
+        if let Some(mut category) = new_category {
             if !config.categories.iter().any(|item| item.id == category.id) {
+                if category.sort_order == 0
+                    && config
+                        .categories
+                        .iter()
+                        .any(|item| item.parent_id == category.parent_id)
+                {
+                    category.sort_order =
+                        next_category_sort_order(&config.categories, category.parent_id.as_deref());
+                }
                 config.categories.push(category);
             }
         }
@@ -108,4 +117,17 @@ impl QuickCommandsStore {
     fn replace(&self, config: QuickCommandsConfig) {
         *self.config.write().unwrap() = config;
     }
+}
+
+fn next_category_sort_order(
+    categories: &[QuickCommandCategory],
+    parent_id: Option<&str>,
+) -> i32 {
+    categories
+        .iter()
+        .filter(|category| category.parent_id.as_deref() == parent_id)
+        .map(|category| category.sort_order)
+        .max()
+        .unwrap_or(-1)
+        + 1
 }

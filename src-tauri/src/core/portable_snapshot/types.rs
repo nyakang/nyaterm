@@ -297,6 +297,7 @@ impl PortableAppSettings {
         current.ui.left_width = ui_state.left_width;
         current.ui.right_width = ui_state.right_width;
         current.ui.quick_cmd_height = ui_state.quick_cmd_height;
+        current.ui.quick_cmd_category_width = ui_state.quick_cmd_category_width;
         current.ui.quick_cmd_selected_category = ui_state.quick_cmd_selected_category;
         current.ui.active_left_panel = ui_state.active_left_panel;
         current.ui.active_right_panel = ui_state.active_right_panel;

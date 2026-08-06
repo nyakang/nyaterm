@@ -234,7 +234,7 @@ export function ThemeDesignerDialog({
   const hasValidationErrors = validationErrors.length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="flex h-[min(760px,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[calc(100vw-2rem)] xl:w-[1120px] xl:max-w-[1120px]">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle className="flex items-center gap-2 text-sm">

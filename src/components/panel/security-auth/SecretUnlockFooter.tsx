@@ -139,6 +139,7 @@ export function SecretUnlockFooter({
       ) : null}
 
       <Dialog
+        disablePointerDismissal
         open={unlockOpen}
         onOpenChange={(open) => {
           setUnlockOpen(open);

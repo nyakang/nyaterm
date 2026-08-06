@@ -42,6 +42,9 @@ const isValidPort = (value: number) => Number.isInteger(value) && value >= 1 && 
 const DEFAULT_POST_LOGIN_DELAY_MS = 1000;
 const MIN_POST_LOGIN_DELAY_MS = 0;
 const MAX_POST_LOGIN_DELAY_MS = 60_000;
+const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
+const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
+const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -52,6 +55,7 @@ const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
 const DEFAULT_SFTP_SETTINGS: SftpSettings = {
   enabled: true,
   cwd_follow_mode: "shell_integration",
+  shell_detection_timeout_ms: DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
   filename_encoding: "",
 };
 
@@ -75,12 +79,19 @@ function normalizeSftpSettings(value: SavedConnection["sftp"] | undefined): Sftp
   return {
     enabled: value?.enabled ?? true,
     cwd_follow_mode: value?.cwd_follow_mode || "shell_integration",
+    shell_detection_timeout_ms:
+      value?.shell_detection_timeout_ms ?? DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
     filename_encoding: value?.filename_encoding || "",
   };
 }
 
 const isValidPostLoginDelay = (value: number) =>
   Number.isInteger(value) && value >= MIN_POST_LOGIN_DELAY_MS && value <= MAX_POST_LOGIN_DELAY_MS;
+
+const isValidSftpShellDetectionTimeout = (value: number) =>
+  Number.isInteger(value) &&
+  value >= MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS &&
+  value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
 export default function NewSessionPage() {
   const { t } = useTranslation();
@@ -470,6 +481,13 @@ export default function NewSessionPage() {
           defaultValue: "Delay must be between {{min}} and {{max}} ms",
         });
       }
+      if (!isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)) {
+        return t("dialog.sftpShellDetectionTimeoutInvalid", {
+          min: MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+          max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+          defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
+        });
+      }
     }
 
     if (currentTab === "telnet") {
@@ -509,6 +527,7 @@ export default function NewSessionPage() {
     serialPortName,
     shellPath,
     sshPort,
+    sftpSettings.shell_detection_timeout_ms,
     telnetPort,
     t,
     username,

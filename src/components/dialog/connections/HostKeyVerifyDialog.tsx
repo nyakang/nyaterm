@@ -88,6 +88,7 @@ export function HostKeyVerifyDialog({ request, onDone }: HostKeyVerifyDialogProp
 
   return (
     <Dialog
+      disablePointerDismissal
       open={!!request}
       onOpenChange={(open) => {
         if (!open) void handleReject();

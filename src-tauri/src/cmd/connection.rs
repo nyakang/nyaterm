@@ -50,6 +50,7 @@ pub fn save_connection(
     validate_proxy_jump_config(&connection, &cfg.connections)?;
     validate_local_terminal_config(&connection)?;
     validate_ssh_algorithm_config(&connection)?;
+    validate_sftp_settings_config(&connection)?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -255,6 +256,25 @@ fn validate_ssh_algorithm_config(connection: &SavedConnection) -> AppResult<()> 
     };
 
     crate::core::ssh::validate_ssh_algorithm_preferences(preferences)
+}
+
+fn validate_sftp_settings_config(connection: &SavedConnection) -> AppResult<()> {
+    if !matches!(connection.config, config::ConnectionType::Ssh { .. }) {
+        return Ok(());
+    }
+
+    let timeout_ms = connection.sftp.shell_detection_timeout_ms;
+    if !(config::MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS..=config::MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS)
+        .contains(&timeout_ms)
+    {
+        return Err(AppError::Config(format!(
+            "SFTP shell detection timeout must be between {} and {} ms",
+            config::MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+            config::MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS
+        )));
+    }
+
+    Ok(())
 }
 
 fn validate_local_terminal_config(connection: &SavedConnection) -> AppResult<()> {
@@ -469,7 +489,7 @@ mod tests {
         delete_group_from_config, resolve_private_key_for_save, resolve_text_secret_input,
         update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
         validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
-        validate_proxy_jump_config,
+        validate_proxy_jump_config, validate_sftp_settings_config,
     };
     use crate::config::{
         AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetDiskPurpose,
@@ -607,6 +627,29 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         let mut connection = ssh_connection(id, None);
         connection.group_id = group_id.map(str::to_string);
         connection
+    }
+
+    #[test]
+    fn validates_sftp_shell_detection_timeout_range() {
+        let mut connection = ssh_connection("conn-1", None);
+        connection.sftp.shell_detection_timeout_ms = 3000;
+        assert!(validate_sftp_settings_config(&connection).is_ok());
+
+        connection.sftp.shell_detection_timeout_ms = 0;
+        let error = validate_sftp_settings_config(&connection).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("SFTP shell detection timeout must be between")
+        );
+
+        connection.sftp.shell_detection_timeout_ms = 60_001;
+        let error = validate_sftp_settings_config(&connection).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("SFTP shell detection timeout must be between")
+        );
     }
 
     fn ssh_key_with_sources(

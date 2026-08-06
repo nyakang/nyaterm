@@ -145,6 +145,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     left_width: 256,
     right_width: 288,
     quick_cmd_height: 180,
+    quick_cmd_category_width: 176,
     quick_cmd_view_mode: "tile",
     quick_cmd_sort_mode: "created",
     quick_cmd_selected_category: "all",

@@ -28,7 +28,10 @@ const SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES: usize = 64 * 1024;
 /// Returns the detected [`ShellKind`], or `None` when the exec channel
 /// fails / returns empty output — which is the normal behaviour of
 /// non-standard "shells" such as JumpServer (koko).
-async fn detect_shell_type(handle: &mut client::Handle<SshHandler>) -> Option<ShellKind> {
+async fn detect_shell_type(
+    handle: &mut client::Handle<SshHandler>,
+    timeout_ms: u64,
+) -> Option<ShellKind> {
     let fut = async {
         let mut ch = handle.channel_open_session().await.ok()?;
         ch.exec(
@@ -53,7 +56,7 @@ async fn detect_shell_type(handle: &mut client::Handle<SshHandler>) -> Option<Sh
         }
     };
 
-    timeout(Duration::from_millis(1200), fut)
+    timeout(Duration::from_millis(timeout_ms), fut)
         .await
         .ok()
         .flatten()
@@ -206,6 +209,7 @@ pub(super) async fn open_shell_channel(
     session_id: &str,
     x11_fake_cookie_hex: Option<&str>,
     cwd_follow_mode: SftpCwdFollowMode,
+    shell_detection_timeout_ms: u64,
 ) -> AppResult<(
     russh::Channel<client::Msg>,
     Option<String>,
@@ -255,7 +259,7 @@ pub(super) async fn open_shell_channel(
             None
         }
         SftpCwdFollowMode::ShellIntegration | SftpCwdFollowMode::RcFile => {
-            match detect_shell_type(handle).await {
+            match detect_shell_type(handle, shell_detection_timeout_ms).await {
                 Some(shell_kind) => {
                     detected_shell = Some(shell_kind);
                     let script = if cwd_follow_mode == SftpCwdFollowMode::RcFile {

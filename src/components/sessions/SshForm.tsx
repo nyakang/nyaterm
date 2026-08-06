@@ -61,6 +61,9 @@ import type {
 } from "@/types/global";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
+const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
+const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
+const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 export type SshAuthMode = "none" | "password" | "key";
 type PasswordSource = "ask" | "direct" | "saved";
 
@@ -1175,6 +1178,34 @@ export function SshForm({
                         : t("dialog.sftpCwdFollowShellIntegrationDesc")}
                   </p>
                 </div>
+                <div className="mt-3 max-w-xs">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sftpShellDetectionTimeout")}
+                  </Label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <NumberInput
+                      className="min-w-0 flex-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                      value={
+                        sftpSettings.shell_detection_timeout_ms ??
+                        DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS
+                      }
+                      onChange={(shell_detection_timeout_ms) =>
+                        setSftpSettings({
+                          ...sftpSettings,
+                          shell_detection_timeout_ms,
+                        })
+                      }
+                      min={MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS}
+                      max={MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS}
+                      step={100}
+                      disabled={sftpSettings.cwd_follow_mode === "off"}
+                    />
+                    <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
+                  </div>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.sftpShellDetectionTimeoutDesc")}
+                  </p>
+                </div>
                 <div className="mt-3 max-w-md">
                   <Label className="text-xs font-medium text-foreground/80">
                     {t("dialog.sftpFilenameEncoding")}
@@ -1347,6 +1378,7 @@ export function SshForm({
       </Collapsible>
 
       <Dialog
+        disablePointerDismissal
         open={showKeyManagement}
         onOpenChange={(open) => {
           setShowKeyManagement(open);
@@ -1369,6 +1401,7 @@ export function SshForm({
         </DialogContent>
       </Dialog>
       <Dialog
+        disablePointerDismissal
         open={showPasswordManagement}
         onOpenChange={(open) => {
           setShowPasswordManagement(open);

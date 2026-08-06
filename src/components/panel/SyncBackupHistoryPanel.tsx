@@ -3,6 +3,8 @@ import type { TFunction } from "i18next";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  MdCloudDownload,
+  MdCloudUpload,
   MdContentCopy,
   MdExpandLess,
   MdExpandMore,
@@ -233,6 +235,30 @@ function SyncBackupHistoryPanel() {
     [refresh, t],
   );
 
+  const runSyncAction = useCallback(
+    async (actionKey: string, successMessage: string, task: () => Promise<void>) => {
+      if (!status.enabled) {
+        toast.error(t("settings.syncEnableFirst"));
+        return;
+      }
+
+      setRunningAction(actionKey);
+      try {
+        await task();
+        await refresh();
+        toast.success(successMessage);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      } finally {
+        setRunningAction(null);
+      }
+    },
+    [refresh, status.enabled, t],
+  );
+
+  const syncActionDisabled = loading || runningAction !== null || status.state === "running";
+  const canRunSyncAction = status.enabled && !syncActionDisabled;
+
   const kindLabels = useMemo(
     () => ({
       sync: t("settings.historyKindSync"),
@@ -258,15 +284,49 @@ function SyncBackupHistoryPanel() {
       <PanelHeader
         title={t("panel.syncBackupHistory")}
         actions={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void refresh()}
-            disabled={loading}
-            title={t("resourceMonitor.refresh")}
-          >
-            <MdRefresh className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() =>
+                void runSyncAction("push", t("settings.syncPushSuccess"), () =>
+                  invoke("sync_push_now"),
+                )
+              }
+              disabled={!canRunSyncAction}
+              title={t("settings.syncPushNow")}
+              aria-busy={runningAction === "push"}
+            >
+              <MdCloudUpload
+                className={cn("h-3.5 w-3.5", runningAction === "push" && "opacity-60")}
+              />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() =>
+                void runSyncAction("pull", t("settings.syncPullSuccess"), () =>
+                  invoke("sync_pull_now"),
+                )
+              }
+              disabled={!canRunSyncAction}
+              title={t("settings.syncPullNow")}
+              aria-busy={runningAction === "pull"}
+            >
+              <MdCloudDownload
+                className={cn("h-3.5 w-3.5", runningAction === "pull" && "opacity-60")}
+              />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => void refresh()}
+              disabled={loading}
+              title={t("resourceMonitor.refresh")}
+            >
+              <MdRefresh className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            </Button>
+          </>
         }
       />
 

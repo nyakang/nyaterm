@@ -54,7 +54,7 @@ export function CredentialEditorDialog({
   }, [open]);
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
       <DialogContent className="w-[min(640px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-5 py-3 pr-12">
           <DialogTitle className="text-sm">

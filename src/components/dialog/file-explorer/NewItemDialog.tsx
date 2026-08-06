@@ -97,7 +97,7 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
   };
 
   return (
-    <Dialog open onOpenChange={(v) => !v && !isSubmitting && onClose()}>
+    <Dialog disablePointerDismissal open onOpenChange={(v) => !v && !isSubmitting && onClose()}>
       <DialogContent className="w-[min(500px,calc(100vw-2rem))] sm:max-w-[500px] p-0 gap-0">
         <DialogHeader className="pl-5 pr-12 py-3 border-b">
           <DialogTitle className="text-sm">{t(titleKey)}</DialogTitle>

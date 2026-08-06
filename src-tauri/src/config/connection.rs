@@ -60,6 +60,11 @@ pub struct SftpSettings {
     pub enabled: bool,
     #[serde(default)]
     pub cwd_follow_mode: SftpCwdFollowMode,
+    #[serde(
+        default = "default_sftp_shell_detection_timeout_ms",
+        skip_serializing_if = "is_default_sftp_shell_detection_timeout_ms"
+    )]
+    pub shell_detection_timeout_ms: u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub filename_encoding: String,
 }
@@ -69,9 +74,21 @@ impl Default for SftpSettings {
         Self {
             enabled: true,
             cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
+            shell_detection_timeout_ms: default_sftp_shell_detection_timeout_ms(),
             filename_encoding: String::new(),
         }
     }
+}
+
+pub const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 100;
+pub const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 60_000;
+
+pub fn default_sftp_shell_detection_timeout_ms() -> u64 {
+    3000
+}
+
+fn is_default_sftp_shell_detection_timeout_ms(value: &u64) -> bool {
+    *value == default_sftp_shell_detection_timeout_ms()
 }
 
 fn is_default_sftp_settings(value: &SftpSettings) -> bool {
@@ -673,6 +690,27 @@ mod tests {
             connection.sftp.cwd_follow_mode,
             SftpCwdFollowMode::ShellIntegration
         );
+        assert_eq!(connection.sftp.shell_detection_timeout_ms, 3000);
+    }
+
+    #[test]
+    fn saved_connection_preserves_sftp_shell_detection_timeout() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Test",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "sftp": {
+                "enabled": true,
+                "cwd_follow_mode": "shell_integration",
+                "shell_detection_timeout_ms": 5000
+            }
+        }))
+        .expect("connection");
+
+        assert_eq!(connection.sftp.shell_detection_timeout_ms, 5000);
     }
 
     #[test]

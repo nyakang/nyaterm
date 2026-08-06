@@ -567,6 +567,7 @@ export function TelnetForm({
       </Collapsible>
 
       <Dialog
+        disablePointerDismissal
         open={showPasswordManagement}
         onOpenChange={(open) => {
           setShowPasswordManagement(open);

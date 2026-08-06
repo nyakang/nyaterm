@@ -287,6 +287,7 @@ export function SshAuthDialog({ request, onDone }: SshAuthDialogProps) {
   return (
     <>
       <Dialog
+        disablePointerDismissal
         open={!!request}
         onOpenChange={(open) => {
           if (!open) void handleCancel();
@@ -482,6 +483,7 @@ export function SshAuthDialog({ request, onDone }: SshAuthDialogProps) {
       </Dialog>
 
       <Dialog
+        disablePointerDismissal
         open={keyManagementOpen}
         onOpenChange={(open) => {
           setKeyManagementOpen(open);

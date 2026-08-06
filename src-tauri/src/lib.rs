@@ -115,6 +115,7 @@ pub fn run() {
             cmd::app::open_download_dir,
             cmd::app::open_log_dir,
             cmd::app::get_app_runtime_info,
+            cmd::app::get_support_info,
             cmd::app::get_app_lock_state,
             cmd::app::set_app_lock_state,
             cmd::app::open_child_window,

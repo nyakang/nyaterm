@@ -288,7 +288,11 @@ function ActiveSessions({
         )}
       </div>
 
-      <Dialog open={!!renameTabId} onOpenChange={(open) => !open && handleRenameClose()}>
+      <Dialog
+        disablePointerDismissal
+        open={!!renameTabId}
+        onOpenChange={(open) => !open && handleRenameClose()}
+      >
         <DialogContent showCloseButton={false} className="max-w-xs">
           <DialogHeader>
             <DialogTitle className="text-sm">{t("tabCtx.renameTitle")}</DialogTitle>

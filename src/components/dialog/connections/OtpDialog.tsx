@@ -124,6 +124,7 @@ export function OtpDialog({ request, onDone }: OtpDialogProps) {
 
   return (
     <Dialog
+      disablePointerDismissal
       open={!!request}
       onOpenChange={(open) => {
         if (!open) void handleCancel();

@@ -84,6 +84,7 @@ export default function DockerSudoPasswordDialog({
 
   return (
     <Dialog
+      disablePointerDismissal
       open={!!request}
       onOpenChange={(open) => {
         if (!open) void handleCancel();

@@ -46,6 +46,7 @@ import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
 import { getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
 import { buildAIContext, getTerminalContextProvider } from "@/lib/terminalContext";
 import { openSettings } from "@/lib/windowManager";
 import { collectSessionPanes } from "@/lib/workspaceTabs";
@@ -991,10 +992,21 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       try {
         const config = await invoke<QuickCommandsConfig>("get_quick_commands");
         const categoryName = card.category || t("ai.quickCommandCategory");
-        const existingCategory = config.categories.find((item) => item.name === categoryName);
+        const existingCategory = config.categories.find(
+          (item) => !item.parent_id && item.name === categoryName,
+        );
+        const baseCategoryId = slugCategory(categoryName);
+        let newCategoryId = baseCategoryId;
+        for (let index = 2; config.categories.some((item) => item.id === newCategoryId); index++) {
+          newCategoryId = `${baseCategoryId}-${index}`;
+        }
         const newCategory: QuickCommandCategory | undefined = existingCategory
           ? undefined
-          : { id: slugCategory(categoryName), name: categoryName };
+          : {
+              id: newCategoryId,
+              name: categoryName,
+              sort_order: getNextQuickCommandCategorySortOrder(config.categories, null),
+            };
         const categoryId = existingCategory?.id ?? newCategory?.id;
         const command: QuickCommand = {
           id: `ai-${crypto.randomUUID()}`,

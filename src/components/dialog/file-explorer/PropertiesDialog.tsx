@@ -212,7 +212,7 @@ export default function PropertiesDialog({ data, onClose, onSuccess }: Propertie
   };
 
   return (
-    <Dialog open onOpenChange={(v) => !v && !isSaving && onClose()}>
+    <Dialog disablePointerDismissal open onOpenChange={(v) => !v && !isSaving && onClose()}>
       <DialogContent className="w-[min(460px,calc(100vw-2rem))] sm:max-w-[460px] p-0 gap-0">
         <DialogHeader className="pl-5 pr-12 py-3 border-b">
           <DialogTitle className="text-sm flex items-center gap-2 min-w-0">

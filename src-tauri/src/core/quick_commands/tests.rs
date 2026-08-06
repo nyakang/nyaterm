@@ -39,6 +39,148 @@ mod tests {
         assert_eq!(stats.added_categories, 1);
         assert_eq!(config.commands[0].label, "List");
         assert_eq!(config.commands[0].category_id.as_deref(), Some("general"));
+        assert_eq!(config.categories[0].parent_id, None);
+    }
+
+    #[test]
+    fn imports_nyaterm_config_json_with_nested_categories() {
+        let raw = r#"{
+            "categories": [
+                {"id": "dev", "name": "Dev"},
+                {"id": "k8s", "name": "K8s", "parent_id": "dev"}
+            ],
+            "commands": [{
+                "id": "cmd-pods",
+                "label": "Pods",
+                "command": "kubectl get pods -A",
+                "category_id": "k8s",
+                "execution_mode": "execute"
+            }]
+        }"#;
+        let import_config = parse_nyaterm_import(raw).unwrap();
+        let mut config = empty_config();
+
+        let stats = merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(stats.added_commands, 1);
+        assert_eq!(stats.added_categories, 2);
+        assert_eq!(
+            config
+                .categories
+                .iter()
+                .find(|category| category.id == "k8s")
+                .unwrap()
+                .parent_id
+                .as_deref(),
+            Some("dev")
+        );
+    }
+
+    #[test]
+    fn imports_legacy_categories_without_parent_id() {
+        let cfg: QuickCommandsConfig = serde_json::from_str(
+            r#"{
+                "categories": [{"id": "general", "name": "General"}],
+                "commands": []
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.categories[0].parent_id, None);
+        assert_eq!(cfg.categories[0].sort_order, 0);
+    }
+
+    #[test]
+    fn imports_nyaterm_config_json_with_category_sort_order() {
+        let raw = r#"{
+            "categories": [
+                {"id": "dev", "name": "Dev", "sort_order": 2},
+                {"id": "ops", "name": "Ops", "sort_order": 1},
+                {"id": "k8s", "name": "K8s", "parent_id": "dev", "sort_order": 4}
+            ],
+            "commands": []
+        }"#;
+        let import_config = parse_nyaterm_import(raw).unwrap();
+        let mut config = empty_config();
+
+        let stats = merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(stats.added_categories, 3);
+        assert_eq!(
+            config
+                .categories
+                .iter()
+                .find(|category| category.id == "dev")
+                .unwrap()
+                .sort_order,
+            2
+        );
+        assert_eq!(
+            config
+                .categories
+                .iter()
+                .find(|category| category.id == "k8s")
+                .unwrap()
+                .sort_order,
+            4
+        );
+    }
+
+    #[test]
+    fn import_without_sort_order_preserves_existing_category_order() {
+        let mut config = QuickCommandsConfig {
+            commands: Vec::new(),
+            categories: vec![QuickCommandCategory {
+                id: "general".to_string(),
+                name: "General".to_string(),
+                parent_id: None,
+                sort_order: 7,
+            }],
+        };
+        let import_config = parse_nyaterm_import(
+            r#"{
+                "categories": [{"id": "general", "name": "General Updated"}],
+                "commands": []
+            }"#,
+        )
+        .unwrap();
+
+        let stats = merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(stats.added_categories, 0);
+        assert_eq!(config.categories[0].name, "General Updated");
+        assert_eq!(config.categories[0].sort_order, 7);
+    }
+
+    #[test]
+    fn imports_same_category_name_under_different_parents() {
+        let raw = r#"{
+            "categories": [
+                {"id": "dev", "name": "Dev"},
+                {"id": "ops", "name": "Ops"},
+                {"name": "Deploy", "parent_id": "dev"},
+                {"name": "Deploy", "parent_id": "ops"}
+            ],
+            "commands": []
+        }"#;
+        let import_config = parse_nyaterm_import(raw).unwrap();
+        let mut config = empty_config();
+
+        let stats = merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(stats.added_categories, 4);
+        let deploy_categories: Vec<_> = config
+            .categories
+            .iter()
+            .filter(|category| category.name == "Deploy")
+            .collect();
+        assert_eq!(deploy_categories.len(), 2);
+        assert!(deploy_categories
+            .iter()
+            .any(|category| category.parent_id.as_deref() == Some("dev")));
+        assert!(deploy_categories
+            .iter()
+            .any(|category| category.parent_id.as_deref() == Some("ops")));
     }
 
     #[test]

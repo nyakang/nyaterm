@@ -53,7 +53,7 @@ export default function MultiLinePasteDialog({
   }, [open, text]);
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent
         className="sm:max-w-xl"
         onOpenAutoFocus={(event) => {

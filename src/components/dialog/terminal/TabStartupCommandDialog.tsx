@@ -42,7 +42,7 @@ export default function TabStartupCommandDialog({
   }, [open]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={onOpenChange}>
       <DialogContent showCloseButton={false} className="max-w-md">
         <DialogHeader>
           <DialogTitle className="text-sm">{t("tabCtx.runCommandTitle")}</DialogTitle>

@@ -242,7 +242,7 @@ export default function SyncGroupDialog({ open, onClose }: SyncGroupDialogProps)
     : null;
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="w-[min(900px,calc(100vw-24px))] h-[min(500px,calc(100vh-56px))] flex flex-col gap-0 p-0 overflow-hidden">
         <DialogHeader className="px-5 py-4 border-b shrink-0">
           <div className="min-w-0">

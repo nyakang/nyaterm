@@ -228,6 +228,8 @@ pub struct UiConfig {
     pub right_width: f64,
     #[serde(default = "default_quick_cmd_height")]
     pub quick_cmd_height: f64,
+    #[serde(default = "default_quick_cmd_category_width")]
+    pub quick_cmd_category_width: f64,
     #[serde(default = "default_quick_cmd_view_mode")]
     pub quick_cmd_view_mode: String,
     #[serde(default = "default_quick_cmd_sort_mode")]
@@ -316,6 +318,10 @@ fn default_right_width() -> f64 {
 
 fn default_quick_cmd_height() -> f64 {
     180.0
+}
+
+fn default_quick_cmd_category_width() -> f64 {
+    176.0
 }
 
 fn default_quick_cmd_view_mode() -> String {
@@ -407,6 +413,7 @@ impl Default for UiConfig {
             left_width: default_left_width(),
             right_width: default_right_width(),
             quick_cmd_height: default_quick_cmd_height(),
+            quick_cmd_category_width: default_quick_cmd_category_width(),
             quick_cmd_view_mode: default_quick_cmd_view_mode(),
             quick_cmd_sort_mode: default_quick_cmd_sort_mode(),
             quick_cmd_selected_category: default_quick_cmd_selected_category(),

@@ -452,7 +452,7 @@ function GroupNameDialog({
   };
 
   return (
-    <Dialog open={!!state} onOpenChange={onOpenChange}>
+    <Dialog disablePointerDismissal open={!!state} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
           <DialogTitle>

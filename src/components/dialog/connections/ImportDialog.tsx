@@ -302,6 +302,7 @@ export default function ImportDialog({ open, onClose }: ImportDialogProps) {
         </DialogContent>
       </Dialog>
       <Dialog
+        disablePointerDismissal
         open={windtermImportPath !== null}
         onOpenChange={(v) => {
           if (!v && !windtermImporting) {

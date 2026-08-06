@@ -277,6 +277,7 @@ async fn create_ssh_session_inner(
             &session_id,
             x11_config.as_ref().map(|cfg| cfg.fake_cookie_hex.as_str()),
             config.sftp.cwd_follow_mode.clone(),
+            config.sftp.shell_detection_timeout_ms,
         )
         .await?;
     drop(handle);
@@ -436,6 +437,7 @@ pub async fn create_multiplexed_ssh_session(
             &session_id,
             None,
             config.sftp.cwd_follow_mode.clone(),
+            config.sftp.shell_detection_timeout_ms,
         )
         .await?;
     drop(handle);

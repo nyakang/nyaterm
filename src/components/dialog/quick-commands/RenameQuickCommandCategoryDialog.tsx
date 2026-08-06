@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { hasQuickCommandCategorySiblingName } from "@/lib/quickCommandCategories";
 import type { QuickCommandCategory } from "@/types/global";
 
 interface RenameQuickCommandCategoryDialogProps {
@@ -36,10 +37,14 @@ export default function RenameQuickCommandCategoryDialog({
   }, [category]);
 
   const trimmedName = name.trim();
-  const hasDuplicateName = categories.some(
-    (item) =>
-      item.id !== category?.id && item.name.trim().toLowerCase() === trimmedName.toLowerCase(),
-  );
+  const hasDuplicateName = category
+    ? hasQuickCommandCategorySiblingName(
+        categories,
+        category.parent_id ?? null,
+        trimmedName,
+        category.id,
+      )
+    : false;
   const isUnchanged = !!category && trimmedName === category.name;
   const errorMessage =
     submitted && !trimmedName
@@ -58,6 +63,7 @@ export default function RenameQuickCommandCategoryDialog({
 
   return (
     <Dialog
+      disablePointerDismissal
       open={!!category}
       onOpenChange={(open) => {
         if (!open) onCancel();
@@ -66,7 +72,9 @@ export default function RenameQuickCommandCategoryDialog({
       <DialogContent showCloseButton={false} className="max-w-sm">
         <form className="space-y-4" onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle className="text-sm">{t("quickCommands.renameCategory")}</DialogTitle>
+            <DialogTitle className="text-sm">
+              {t("quickCommands.renameCategory")}
+            </DialogTitle>
             <DialogDescription className="sr-only">
               {t("quickCommands.renameCategory")}
             </DialogDescription>
@@ -81,7 +89,9 @@ export default function RenameQuickCommandCategoryDialog({
                 {t("quickCommands.categoryName")}
               </Label>
               {errorMessage && (
-                <span className="text-[0.6875rem] text-destructive">{errorMessage}</span>
+                <span className="text-[0.6875rem] text-destructive">
+                  {errorMessage}
+                </span>
               )}
             </div>
             <Input
@@ -89,7 +99,9 @@ export default function RenameQuickCommandCategoryDialog({
               autoFocus
               value={name}
               className={`h-9 text-sm ${
-                errorMessage ? "border-destructive focus-visible:ring-destructive" : ""
+                errorMessage
+                  ? "border-destructive focus-visible:ring-destructive"
+                  : ""
               }`}
               placeholder={t("quickCommands.categoryPlaceholder")}
               onChange={(event) => {
@@ -103,7 +115,10 @@ export default function RenameQuickCommandCategoryDialog({
             <Button type="button" variant="outline" onClick={onCancel}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" disabled={!trimmedName || hasDuplicateName || isUnchanged}>
+            <Button
+              type="submit"
+              disabled={!trimmedName || hasDuplicateName || isUnchanged}
+            >
               {t("common.confirm")}
             </Button>
           </DialogFooter>

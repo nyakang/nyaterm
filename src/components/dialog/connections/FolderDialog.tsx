@@ -30,7 +30,7 @@ export default function FolderDialog({
   const { t } = useTranslation();
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onCancel()}>
+    <Dialog disablePointerDismissal open={open} onOpenChange={(v) => !v && onCancel()}>
       <DialogContent showCloseButton={false} className="max-w-xs">
         <DialogHeader>
           <DialogTitle className="text-sm">

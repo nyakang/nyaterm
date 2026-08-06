@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd } from "react-icons/md";
+import { MdAdd, MdCheck, MdExpandMore } from "react-icons/md";
 import { QUICK_ICONS } from "@/components/icons";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { Button } from "@/components/ui/button";
@@ -22,12 +22,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import {
+  buildQuickCommandCategoryPath,
+  buildQuickCommandCategoryTree,
+  flattenVisibleQuickCommandCategoryTree,
+  getNextQuickCommandCategorySortOrder,
+  hasQuickCommandCategorySiblingName,
+} from "@/lib/quickCommandCategories";
 import { cn, parseJsonSearchParam } from "@/lib/utils";
 import type { QuickCommand, QuickCommandCategory } from "@/types/global";
 
@@ -82,7 +93,9 @@ function QuickCommandScriptEditor({
 
   const measureLineHeights = useCallback(() => {
     const nextHeights = lineRows.map(
-      (_line, index) => measureLineRefs.current[index]?.offsetHeight || SCRIPT_EDITOR_LINE_HEIGHT,
+      (_line, index) =>
+        measureLineRefs.current[index]?.offsetHeight ||
+        SCRIPT_EDITOR_LINE_HEIGHT,
     );
 
     setLineHeights((current) => {
@@ -179,20 +192,38 @@ export default function QuickCommandPage() {
   const dataParam = params.get("data");
   const initialData = parseJsonSearchParam<QuickCommand>(dataParam);
 
-  const [savedCategories, setSavedCategories] = useState<QuickCommandCategory[]>([]);
+  const [savedCategories, setSavedCategories] = useState<
+    QuickCommandCategory[]
+  >([]);
   const [label, setLabel] = useState(initialData?.label || "");
   const [command, setCommand] = useState(initialData?.command || "");
-  const [categoryId, setCategoryId] = useState(initialData?.category_id || "none");
+  const [categoryId, setCategoryId] = useState(
+    initialData?.category_id || "none",
+  );
   const [categorySearchQuery, setCategorySearchQuery] = useState("");
+  const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryParentId, setNewCategoryParentId] = useState<string | null>(
+    null,
+  );
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
-  const [description, setDescription] = useState(initialData?.description || "");
+  const [description, setDescription] = useState(
+    initialData?.description || "",
+  );
   const [colorTag, setColorTag] = useState(initialData?.color_tag || "default");
-  const [iconTag, setIconTag] = useState<string | undefined>(initialData?.icon_tag);
+  const [iconTag, setIconTag] = useState<string | undefined>(
+    initialData?.icon_tag,
+  );
   const [pinned, setPinned] = useState(initialData?.pinned || false);
   const [executionMode, setExecutionMode] = useState<"execute" | "append">(
     (initialData?.execution_mode as "execute" | "append") || "execute",
   );
-  const [errors, setErrors] = useState<{ label?: string; command?: string; general?: string }>({});
+  const [errors, setErrors] = useState<{
+    label?: string;
+    category?: string;
+    command?: string;
+    general?: string;
+  }>({});
 
   const [saving, setSaving] = useState(false);
 
@@ -202,17 +233,95 @@ export default function QuickCommandPage() {
       .catch((e) => setErrors((p) => ({ ...p, general: getErrorMessage(e) })));
   }, []);
 
-  const filteredCategories = savedCategories.filter((c) =>
-    c.name.toLowerCase().includes(categorySearchQuery.toLowerCase()),
+  const categoryTreeRows = useMemo(() => {
+    const tree = buildQuickCommandCategoryTree(savedCategories, []);
+    return flattenVisibleQuickCommandCategoryTree(
+      tree,
+      new Set(savedCategories.map((category) => category.id)),
+    );
+  }, [savedCategories]);
+  const categorySearchText = categorySearchQuery.trim().toLowerCase();
+  const filteredCategoryRows = categorySearchText
+    ? categoryTreeRows.filter(({ node }) => {
+        const path = buildQuickCommandCategoryPath(
+          savedCategories,
+          node.category.id,
+        );
+        return (
+          node.category.name.toLowerCase().includes(categorySearchText) ||
+          path.toLowerCase().includes(categorySearchText)
+        );
+      })
+    : categoryTreeRows;
+  const newCategoryDraftParentId =
+    categoryId !== "none" && categoryId !== "new" ? categoryId : null;
+  const newCategoryDraftParentLabel = newCategoryDraftParentId
+    ? buildQuickCommandCategoryPath(savedCategories, newCategoryDraftParentId) ||
+      newCategoryDraftParentId
+    : "";
+  const newCategoryDraftDuplicate = hasQuickCommandCategorySiblingName(
+    savedCategories,
+    newCategoryDraftParentId,
+    newCategoryDraftName,
   );
-  const exactMatchExists = savedCategories.some(
-    (c) => c.name.toLowerCase() === categorySearchQuery.trim().toLowerCase(),
-  );
+  const newCategoryParentLabel = newCategoryParentId
+    ? buildQuickCommandCategoryPath(savedCategories, newCategoryParentId) ||
+      newCategoryParentId
+    : t("quickCommands.rootCategory");
+  const selectedCategoryLabel =
+    categoryId === "new"
+      ? newCategoryParentId
+        ? `${newCategoryParentLabel} / ${newCategoryName}`
+        : newCategoryName
+      : categoryId === "none"
+        ? t("quickCommands.uncategorized")
+        : buildQuickCommandCategoryPath(savedCategories, categoryId) ||
+          categoryId;
+  const newCategoryDuplicate =
+    categoryId === "new" &&
+    hasQuickCommandCategorySiblingName(
+      savedCategories,
+      newCategoryParentId,
+      newCategoryName,
+    );
+
+  const selectExistingCategory = (id: string) => {
+    setCategoryId(id);
+    setNewCategoryName("");
+    setNewCategoryParentId(null);
+    setErrors((p) => ({ ...p, category: undefined }));
+    setShowCategoryDropdown(false);
+    setCategorySearchQuery("");
+  };
+  const selectNewCategory = () => {
+    const name = newCategoryDraftName.trim();
+    if (!name) return;
+    if (newCategoryDraftDuplicate) {
+      setErrors((p) => ({
+        ...p,
+        category: t("quickCommands.categoryNameDuplicated"),
+      }));
+      return;
+    }
+    setNewCategoryName(name);
+    setNewCategoryParentId(newCategoryDraftParentId);
+    setCategoryId("new");
+    setErrors((p) => ({ ...p, category: undefined }));
+    setShowCategoryDropdown(false);
+    setCategorySearchQuery("");
+    setNewCategoryDraftName("");
+  };
 
   const handleSave = async () => {
-    const newErrors: { label?: string; command?: string } = {};
+    const newErrors: { label?: string; category?: string; command?: string } =
+      {};
     if (!label.trim()) {
       newErrors.label = t("quickCommands.errorLabelRequired");
+    }
+    if (categoryId === "new" && !newCategoryName.trim()) {
+      newErrors.category = t("quickCommands.categoryNameRequired");
+    } else if (newCategoryDuplicate) {
+      newErrors.category = t("quickCommands.categoryNameDuplicated");
     }
     if (!command.trim()) {
       newErrors.command = t("quickCommands.errorCommandRequired");
@@ -224,9 +333,17 @@ export default function QuickCommandPage() {
 
     let finalCategoryId = categoryId === "none" ? undefined : categoryId;
     let newCategory: QuickCommandCategory | undefined;
-    if (categoryId === "new" && categorySearchQuery.trim()) {
+    if (categoryId === "new" && newCategoryName.trim()) {
       const newId = crypto.randomUUID();
-      newCategory = { id: newId, name: categorySearchQuery.trim() };
+      newCategory = {
+        id: newId,
+        name: newCategoryName.trim(),
+        parent_id: newCategoryParentId || undefined,
+        sort_order: getNextQuickCommandCategorySortOrder(
+          savedCategories,
+          newCategoryParentId,
+        ),
+      };
       finalCategoryId = newId;
     }
 
@@ -263,7 +380,11 @@ export default function QuickCommandPage() {
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground">
       <ChildWindowHeader
-        title={initialData ? t("quickCommands.editCommand") : t("quickCommands.addCommand")}
+        title={
+          initialData
+            ? t("quickCommands.editCommand")
+            : t("quickCommands.addCommand")
+        }
         onClose={handleClose}
       />
 
@@ -271,11 +392,16 @@ export default function QuickCommandPage() {
         <div className="flex shrink-0 flex-col gap-4 md:flex-row">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex justify-between items-center">
-              <Label htmlFor="qc-label" className="text-xs text-muted-foreground">
+              <Label
+                htmlFor="qc-label"
+                className="text-xs text-muted-foreground"
+              >
                 {t("quickCommands.labelName")}
               </Label>
               {errors.label && (
-                <span className="text-[0.6875rem] text-destructive">{errors.label}</span>
+                <span className="text-[0.6875rem] text-destructive">
+                  {errors.label}
+                </span>
               )}
             </div>
             <Input
@@ -291,14 +417,27 @@ export default function QuickCommandPage() {
           </div>
 
           <div className="min-w-0 flex-1 space-y-1.5">
-            <Label htmlFor="qc-category" className="text-xs text-muted-foreground">
-              {t("quickCommands.category")}
-            </Label>
+            <div className="flex justify-between items-center">
+              <Label
+                htmlFor="qc-category"
+                className="text-xs text-muted-foreground"
+              >
+                {t("quickCommands.category")}
+              </Label>
+              {errors.category && (
+                <span className="text-[0.6875rem] text-destructive">
+                  {errors.category}
+                </span>
+              )}
+            </div>
             <Popover
               open={showCategoryDropdown}
               onOpenChange={(open) => {
                 setShowCategoryDropdown(open);
-                if (!open) setCategorySearchQuery("");
+                if (!open) {
+                  setCategorySearchQuery("");
+                  setNewCategoryDraftName("");
+                }
               }}
             >
               <PopoverTrigger asChild>
@@ -307,13 +446,16 @@ export default function QuickCommandPage() {
                   variant="outline"
                   className="w-full h-9 justify-between text-sm font-normal px-3"
                 >
-                  <span className={categoryId !== "none" ? "" : "text-muted-foreground truncate"}>
-                    {categoryId === "new"
-                      ? categorySearchQuery.trim()
-                      : categoryId === "none"
-                        ? t("quickCommands.uncategorized")
-                        : savedCategories.find((c) => c.id === categoryId)?.name || categoryId}
+                  <span
+                    className={
+                      categoryId !== "none"
+                        ? "truncate"
+                        : "text-muted-foreground truncate"
+                    }
+                  >
+                    {selectedCategoryLabel}
                   </span>
+                  <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent
@@ -330,51 +472,116 @@ export default function QuickCommandPage() {
                     value={categorySearchQuery}
                     onChange={(e) => setCategorySearchQuery(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && categorySearchQuery.trim() && !exactMatchExists) {
-                        setCategoryId("new");
-                        setShowCategoryDropdown(false);
+                      if (e.key === "Enter" && categorySearchQuery.trim()) {
+                        const exactRow = filteredCategoryRows.find(
+                          ({ node }) => {
+                            const path = buildQuickCommandCategoryPath(
+                              savedCategories,
+                              node.category.id,
+                            );
+                            return (
+                              node.category.name.toLowerCase() ===
+                                categorySearchText ||
+                              path.toLowerCase() === categorySearchText
+                            );
+                          },
+                        );
+                        if (exactRow) {
+                          selectExistingCategory(exactRow.node.category.id);
+                        }
                         e.preventDefault();
                       }
                     }}
                   />
                 </div>
-                <div className="max-h-48 overflow-y-auto terminal-scroll py-1">
+                <div className="max-h-64 overflow-y-auto terminal-scroll py-1">
                   {!categorySearchQuery && (
-                    <div
-                      className={`px-3 py-2 text-sm cursor-pointer transition-colors hover:bg-accent ${categoryId === "none" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
+                    <button
+                      type="button"
+                      className={`flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${categoryId === "none" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
                       onClick={() => {
                         setCategoryId("none");
+                        setNewCategoryName("");
+                        setNewCategoryParentId(null);
+                        setErrors((p) => ({ ...p, category: undefined }));
                         setShowCategoryDropdown(false);
                         setCategorySearchQuery("");
                       }}
                     >
-                      {t("quickCommands.uncategorized")}
-                    </div>
+                      <span className="min-w-0 flex-1 truncate">
+                        {t("quickCommands.uncategorized")}
+                      </span>
+                      {categoryId === "none" && (
+                        <MdCheck className="shrink-0 text-sm text-primary" />
+                      )}
+                    </button>
                   )}
-                  {filteredCategories.map((c) => (
-                    <div
-                      key={c.id}
-                      className={`px-3 py-2 text-sm cursor-pointer transition-colors hover:bg-accent ${categoryId === c.id ? "bg-primary/15 text-primary" : ""}`}
-                      onClick={() => {
-                        setCategoryId(c.id);
-                        setShowCategoryDropdown(false);
-                        setCategorySearchQuery("");
-                      }}
+                  {filteredCategoryRows.map(({ node, depth }) => (
+                    <button
+                      type="button"
+                      key={node.category.id}
+                      className={`flex w-full min-w-0 items-center gap-2 py-2 pr-3 text-left text-sm transition-colors hover:bg-accent ${categoryId === node.category.id ? "bg-primary/15 text-primary" : ""}`}
+                      style={{ paddingLeft: `${depth * 0.85 + 0.75}rem` }}
+                      onClick={() => selectExistingCategory(node.category.id)}
                     >
-                      {c.name}
-                    </div>
+                      <span
+                        className="block min-w-0 flex-1 truncate"
+                        title={buildQuickCommandCategoryPath(
+                          savedCategories,
+                          node.category.id,
+                        )}
+                      >
+                        {node.category.name}
+                      </span>
+                      {categoryId === node.category.id && (
+                        <MdCheck className="shrink-0 text-sm text-primary" />
+                      )}
+                    </button>
                   ))}
-                  {categorySearchQuery.trim() && !exactMatchExists && (
-                    <div
-                      className="px-3 py-2 text-sm cursor-pointer transition-colors hover:bg-accent text-primary flex items-center"
-                      onClick={() => {
-                        setCategoryId("new");
-                        setShowCategoryDropdown(false);
+                </div>
+                <div className="border-t p-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      className="h-7 min-w-0 flex-1 text-xs"
+                      placeholder={t("quickCommands.newCategoryPlaceholder")}
+                      value={newCategoryDraftName}
+                      onChange={(e) => {
+                        setNewCategoryDraftName(e.target.value);
+                        setErrors((p) => ({ ...p, category: undefined }));
                       }}
+                      onKeyDown={(e) => {
+                        if (
+                          e.key === "Enter" &&
+                          newCategoryDraftName.trim() &&
+                          !newCategoryDraftDuplicate
+                        ) {
+                          selectNewCategory();
+                          e.preventDefault();
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      disabled={
+                        !newCategoryDraftName.trim() ||
+                        newCategoryDraftDuplicate
+                      }
+                      onClick={selectNewCategory}
                     >
-                      {t("quickCommands.createCategory", { name: categorySearchQuery.trim() })}
-                    </div>
-                  )}
+                      <MdAdd className="text-sm" />
+                    </Button>
+                  </div>
+                  <p className="px-1 pt-1 text-[0.6875rem] leading-snug text-muted-foreground">
+                    {newCategoryDraftDuplicate
+                      ? t("quickCommands.categoryNameDuplicated")
+                      : newCategoryDraftParentLabel
+                        ? t("quickCommands.newCategoryParentHint", {
+                            category: newCategoryDraftParentLabel,
+                          })
+                        : t("quickCommands.newCategoryRootHint")}
+                  </p>
                 </div>
               </PopoverContent>
             </Popover>
@@ -422,7 +629,12 @@ export default function QuickCommandPage() {
                 <div className="w-6 h-6 rounded-full border-2 border-foreground scale-110 shadow-sm flex items-center justify-center bg-secondary">
                   {(() => {
                     const iconDef = QUICK_ICONS[iconTag];
-                    return <iconDef.icon className="text-xs" style={{ color: iconDef.color }} />;
+                    return (
+                      <iconDef.icon
+                        className="text-xs"
+                        style={{ color: iconDef.color }}
+                      />
+                    );
                   })()}
                 </div>
               )}
@@ -447,7 +659,10 @@ export default function QuickCommandPage() {
                           setColorTag("default");
                         }}
                       >
-                        <iconDef.icon className="text-base" style={{ color: iconDef.color }} />
+                        <iconDef.icon
+                          className="text-base"
+                          style={{ color: iconDef.color }}
+                        />
                       </DropdownMenuItem>
                     ))}
                   </div>
@@ -462,7 +677,12 @@ export default function QuickCommandPage() {
             >
               {t("quickCommands.pin")}
             </Label>
-            <Switch checked={pinned} onCheckedChange={setPinned} id="qc-pinned" className="mr-1" />
+            <Switch
+              checked={pinned}
+              onCheckedChange={setPinned}
+              id="qc-pinned"
+              className="mr-1"
+            />
           </div>
         </div>
 
@@ -473,7 +693,9 @@ export default function QuickCommandPage() {
           </Label>
           <Tabs
             value={executionMode}
-            onValueChange={(val) => setExecutionMode(val as "execute" | "append")}
+            onValueChange={(val) =>
+              setExecutionMode(val as "execute" | "append")
+            }
             className="w-full"
           >
             <TabsList className="grid w-full grid-cols-2 h-8">
@@ -495,11 +717,16 @@ export default function QuickCommandPage() {
         {/* Script / Command */}
         <div className="flex min-h-32 flex-1 flex-col gap-1.5">
           <div className="flex justify-between items-center">
-            <Label htmlFor="qc-command" className="text-xs text-muted-foreground">
+            <Label
+              htmlFor="qc-command"
+              className="text-xs text-muted-foreground"
+            >
               {t("quickCommands.commandScript")}
             </Label>
             {errors.command && (
-              <span className="text-[0.6875rem] text-destructive">{errors.command}</span>
+              <span className="text-[0.6875rem] text-destructive">
+                {errors.command}
+              </span>
             )}
           </div>
           <QuickCommandScriptEditor
@@ -522,10 +749,20 @@ export default function QuickCommandPage() {
 
       {/* Footer */}
       <div className="flex shrink-0 flex-row gap-2 border-t px-5 py-3 justify-end items-center">
-        <Button variant="ghost" size="sm" className="text-xs px-4" onClick={handleClose}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-xs px-4"
+          onClick={handleClose}
+        >
           {t("dialog.cancel")}
         </Button>
-        <Button size="sm" className="text-xs px-4" onClick={handleSave} disabled={saving}>
+        <Button
+          size="sm"
+          className="text-xs px-4"
+          onClick={handleSave}
+          disabled={saving}
+        >
           {saving ? t("dialog.saving") : t("dialog.save")}
         </Button>
       </div>
