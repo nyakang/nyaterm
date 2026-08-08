@@ -33,11 +33,15 @@ export default function AssetCardGrid({
   onEditConnection,
 }: AssetCardGridProps) {
   const [columnCount, setColumnCount] = useState(1);
-  const rows = useMemo(() => chunkRecords(records, columnCount), [columnCount, records]);
-  const { containerRef, visibleItems, paddingTop, paddingBottom, onScroll } = useVirtualList(rows, {
-    itemHeight: ASSET_CARD_ROW_HEIGHT + ASSET_CARD_GAP,
-    overscan: 5,
-  });
+  const rows = useMemo(
+    () => chunkRecords(records, columnCount),
+    [columnCount, records],
+  );
+  const { containerRef, visibleItems, paddingTop, paddingBottom, onScroll } =
+    useVirtualList(rows, {
+      itemHeight: ASSET_CARD_ROW_HEIGHT + ASSET_CARD_GAP,
+      overscan: 5,
+    });
 
   useEffect(() => {
     const container = containerRef.current;
@@ -96,7 +100,10 @@ function AssetCardRow({
   onEditConnection: (connection: SavedConnection) => void;
 }) {
   const rowKey = row.map((record) => record.connection.id).join(":");
-  const spacerKeys = createSpacerKeys(rowKey || `row-${rowIndex}`, columnCount - row.length);
+  const spacerKeys = createSpacerKeys(
+    rowKey || `row-${rowIndex}`,
+    columnCount - row.length,
+  );
 
   return (
     <div
@@ -145,13 +152,17 @@ function AssetCard({
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 78%, transparent)",
         color: "var(--df-text)",
-        backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 36%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--df-bg-panel) 36%, transparent)",
       }}
+      onDoubleClick={() => void onConnectConnection(connection)}
     >
       <div className="flex min-w-0 items-start gap-2.5 px-3 py-2.5">
         <AssetConnectionIcon connection={connection} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{connection.name}</div>
+          <div className="truncate text-sm font-semibold">
+            {connection.name}
+          </div>
           <div
             className="mt-0.5 truncate font-mono text-xs"
             style={{ color: "var(--df-text-muted)" }}
@@ -171,18 +182,31 @@ function AssetCard({
         className="grid min-h-0 flex-1 grid-cols-2 gap-x-3 gap-y-2 px-3 pb-2 text-xs"
         style={{ color: "var(--df-text-muted)" }}
       >
-        <Metric label={t("assets.cpu")} value={formatCpuSummary(asset, labels)} />
-        <Metric label={t("assets.memory")} value={formatBytes(asset?.memory_bytes, labels)} />
-        <Metric label={t("assets.storage")} value={formatDiskSummary(asset?.disks, labels)} />
+        <Metric
+          label={t("assets.cpu")}
+          value={formatCpuSummary(asset, labels)}
+        />
+        <Metric
+          label={t("assets.memory")}
+          value={formatBytes(asset?.memory_bytes, labels)}
+        />
+        <Metric
+          label={t("assets.storage")}
+          value={formatDiskSummary(asset?.disks, labels)}
+        />
         <Metric
           label={t("assets.accelerators")}
-          value={formatAccelerators(asset?.accelerators, labels, { maxItems: 1 })}
+          value={formatAccelerators(asset?.accelerators, labels, {
+            maxItems: 1,
+          })}
         />
       </div>
 
       <div
         className="flex min-h-9 shrink-0 items-center justify-end gap-1.5 border-t px-2.5"
-        style={{ borderColor: "color-mix(in srgb, var(--df-border) 70%, transparent)" }}
+        style={{
+          borderColor: "color-mix(in srgb, var(--df-border) 70%, transparent)",
+        }}
       >
         <CardActionButton
           label={t("savedConnections.connect")}
@@ -206,7 +230,10 @@ function AssetCard({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[0.625rem]" style={{ color: "var(--df-text-dimmed)" }}>
+      <div
+        className="truncate text-[0.625rem]"
+        style={{ color: "var(--df-text-dimmed)" }}
+      >
         {label}
       </div>
       <div className="truncate">{value}</div>
@@ -232,7 +259,8 @@ function CardActionButton({
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 78%, transparent)",
         color: "var(--df-text-muted)",
-        backgroundColor: "color-mix(in srgb, var(--df-bg-terminal) 42%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--df-bg-terminal) 42%, transparent)",
       }}
       onClick={onClick}
     >
@@ -241,7 +269,10 @@ function CardActionButton({
   );
 }
 
-function chunkRecords(records: AssetRecord[], columnCount: number): AssetRecord[][] {
+function chunkRecords(
+  records: AssetRecord[],
+  columnCount: number,
+): AssetRecord[][] {
   const rows: AssetRecord[][] = [];
   const safeColumnCount = Math.max(1, columnCount);
   for (let index = 0; index < records.length; index += safeColumnCount) {

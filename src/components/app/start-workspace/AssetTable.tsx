@@ -1,6 +1,10 @@
 import type { TFunction } from "i18next";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useMemo, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useMemo,
+  useState,
+} from "react";
 import { MdEdit, MdLink } from "react-icons/md";
 import { useVirtualList } from "@/hooks/useVirtualList";
 import type { SavedConnection } from "@/types/global";
@@ -67,15 +71,20 @@ export default function AssetTable({
   onConnectConnection,
   onEditConnection,
 }: AssetTableProps) {
-  const [columnWidths, setColumnWidths] =
-    useState<Record<AssetTableColumnKey, number>>(DEFAULT_COLUMN_WIDTHS);
+  const [columnWidths, setColumnWidths] = useState<
+    Record<AssetTableColumnKey, number>
+  >(DEFAULT_COLUMN_WIDTHS);
   const { containerRef, visibleItems, paddingTop, paddingBottom, onScroll } =
     useVirtualList<AssetRecord>(records, {
       itemHeight: ASSET_TABLE_ROW_HEIGHT,
       overscan: 8,
     });
   const tableMinWidth = useMemo(
-    () => ASSET_TABLE_COLUMNS.reduce((total, column) => total + columnWidths[column], 0),
+    () =>
+      ASSET_TABLE_COLUMNS.reduce(
+        (total, column) => total + columnWidths[column],
+        0,
+      ),
     [columnWidths],
   );
 
@@ -91,9 +100,14 @@ export default function AssetTable({
     const minWidth = MIN_COLUMN_WIDTHS[columnKey];
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
-      const nextWidth = Math.max(minWidth, Math.round(startWidth + moveEvent.clientX - startX));
+      const nextWidth = Math.max(
+        minWidth,
+        Math.round(startWidth + moveEvent.clientX - startX),
+      );
       setColumnWidths((current) =>
-        current[columnKey] === nextWidth ? current : { ...current, [columnKey]: nextWidth },
+        current[columnKey] === nextWidth
+          ? current
+          : { ...current, [columnKey]: nextWidth },
       );
     };
 
@@ -119,7 +133,11 @@ export default function AssetTable({
       >
         <colgroup>
           {ASSET_TABLE_COLUMNS.map((column) => (
-            <col key={column} data-asset-column={column} style={{ width: columnWidths[column] }} />
+            <col
+              key={column}
+              data-asset-column={column}
+              style={{ width: columnWidths[column] }}
+            />
           ))}
         </colgroup>
         <thead className="sticky top-0 z-[2]">
@@ -144,7 +162,9 @@ export default function AssetTable({
               sortState={sortState}
               onSortChange={onSortChange}
               width={columnWidths.address}
-              onResizeStart={(event) => handleColumnResizeStart("address", event)}
+              onResizeStart={(event) =>
+                handleColumnResizeStart("address", event)
+              }
             />
             <SortableHeaderCell
               label={t("assets.cpu")}
@@ -162,7 +182,9 @@ export default function AssetTable({
               onSortChange={onSortChange}
               className="asset-col-memory"
               width={columnWidths.memory}
-              onResizeStart={(event) => handleColumnResizeStart("memory", event)}
+              onResizeStart={(event) =>
+                handleColumnResizeStart("memory", event)
+              }
             />
             <SortableHeaderCell
               label={t("assets.storage")}
@@ -171,7 +193,9 @@ export default function AssetTable({
               onSortChange={onSortChange}
               className="asset-col-storage"
               width={columnWidths.storage}
-              onResizeStart={(event) => handleColumnResizeStart("storage", event)}
+              onResizeStart={(event) =>
+                handleColumnResizeStart("storage", event)
+              }
             />
             <SortableHeaderCell
               label={t("assets.accelerators")}
@@ -180,7 +204,9 @@ export default function AssetTable({
               onSortChange={onSortChange}
               className="asset-col-accelerators"
               width={columnWidths.accelerators}
-              onResizeStart={(event) => handleColumnResizeStart("accelerators", event)}
+              onResizeStart={(event) =>
+                handleColumnResizeStart("accelerators", event)
+              }
             />
             <HeaderCell
               className="asset-col-actions sticky right-0 z-[3] text-right"
@@ -201,6 +227,7 @@ export default function AssetTable({
                 style={{
                   color: "var(--df-text)",
                 }}
+                onDoubleClick={() => void onConnectConnection(connection)}
               >
                 <BodyCell>
                   <div className="flex min-w-0 items-center gap-2.5">
@@ -219,7 +246,9 @@ export default function AssetTable({
                   </div>
                 </BodyCell>
                 <BodyCell>{formatAssetAddress(connection, labels)}</BodyCell>
-                <BodyCell className="asset-col-cpu">{formatCpuSummary(asset, labels)}</BodyCell>
+                <BodyCell className="asset-col-cpu">
+                  {formatCpuSummary(asset, labels)}
+                </BodyCell>
                 <BodyCell className="asset-col-memory">
                   {formatBytes(asset?.memory_bytes, labels)}
                 </BodyCell>
@@ -227,7 +256,9 @@ export default function AssetTable({
                   {formatDiskSummary(asset?.disks, labels)}
                 </BodyCell>
                 <BodyCell className="asset-col-accelerators">
-                  {formatAccelerators(asset?.accelerators, labels, { maxItems: 2 })}
+                  {formatAccelerators(asset?.accelerators, labels, {
+                    maxItems: 2,
+                  })}
                 </BodyCell>
                 <BodyCell className="asset-col-actions sticky right-0 text-right">
                   <div className="flex justify-end gap-1">
@@ -314,10 +345,18 @@ function SortableHeaderCell({
   onResizeStart: (event: ReactPointerEvent<HTMLSpanElement>) => void;
 }) {
   const active = sortState?.key === sortKey;
-  const SortIcon = !active ? ChevronsUpDown : sortState.direction === "asc" ? ArrowUp : ArrowDown;
+  const SortIcon = !active
+    ? ChevronsUpDown
+    : sortState.direction === "asc"
+      ? ArrowUp
+      : ArrowDown;
 
   return (
-    <HeaderCell className={className} width={width} onResizeStart={onResizeStart}>
+    <HeaderCell
+      className={className}
+      width={width}
+      onResizeStart={onResizeStart}
+    >
       <button
         type="button"
         className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-[var(--df-bg-hover)]"
@@ -331,7 +370,13 @@ function SortableHeaderCell({
   );
 }
 
-function BodyCell({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function BodyCell({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <td
       className={`border-b px-3 py-2 align-middle ${className}`}
@@ -365,7 +410,8 @@ function ActionButton({
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 78%, transparent)",
         color: "var(--df-text-muted)",
-        backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 50%, transparent)",
+        backgroundColor:
+          "color-mix(in srgb, var(--df-bg-panel) 50%, transparent)",
       }}
       onClick={onClick}
     >

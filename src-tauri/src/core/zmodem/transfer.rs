@@ -311,6 +311,15 @@ impl ZmodemTransfer {
         };
         sender.set_file_options(conflict_mode.file_options());
 
+        // Discard the auto-queued ZRQINIT: the remote `rz` already sent
+        // ZRINIT proactively, so sending ZRQINIT back would confuse it.
+        // We skip directly to feeding the buffered ZRINIT and starting the
+        // first file.
+        {
+            let n = sender.drain_outgoing().len();
+            sender.advance_outgoing(n);
+        }
+
         self.state = TransferState::Sending {
             sender,
             files,
@@ -321,14 +330,12 @@ impl ZmodemTransfer {
         };
 
         let mut actions = Vec::new();
-        // 1. Drain the Sender's initial outgoing bytes (ZRQINIT).
-        actions.extend(self.drain_outgoing());
-        // 2. Feed the buffered remote ZRINIT so the Sender knows the
+        // 1. Feed the buffered remote ZRINIT so the Sender knows the
         //    receiver's capabilities.
         actions.extend(self.feed_incoming(&buffered));
-        // 3. Start the first file (prepares ZFILE frame).
+        // 2. Start the first file (prepares ZFILE frame).
         actions.extend(self.start_next_send_file());
-        // 4. Drain the ZFILE frame.
+        // 3. Drain the ZFILE frame.
         actions.extend(self.drain_outgoing());
         actions
     }

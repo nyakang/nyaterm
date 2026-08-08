@@ -127,25 +127,28 @@ export function createZmodemEventHandler(
     pendingProgress = null;
     lastProgressWriteAt = Date.now();
 
+    const fileName = payload.fileName ?? payload.file_name ?? uploadFileName;
+    const bytesTransferred = payload.bytesTransferred ?? payload.bytes_transferred ?? 0;
+    const totalSize = payload.totalSize ?? payload.total_size ?? 0;
+    const percent = totalSize > 0 ? Math.round((bytesTransferred / totalSize) * 100) : 0;
+    const t = getT();
+
     if (payload.direction === "upload") {
-      const fileName = payload.fileName ?? payload.file_name ?? uploadFileName;
       if (fileName) {
         uploadFileName = fileName;
       }
       if (!uploadStarted) {
         uploadStarted = true;
         uploadToastId = toast.message(
-          getT()("fileTransfer.uploadStarted", { name: uploadFileName || fileName }),
+          t("fileTransfer.uploadStarted", { name: uploadFileName || fileName }),
         );
       }
+      terminal.write(
+        `\r\x1b[36m[ZMODEM] ${t("zmodem.uploading", { fileName: uploadFileName || fileName, percent })}\x1b[K`,
+      );
       return;
     }
 
-    const fileName = payload.fileName ?? payload.file_name ?? "";
-    const bytesTransferred = payload.bytesTransferred ?? payload.bytes_transferred ?? 0;
-    const totalSize = payload.totalSize ?? payload.total_size ?? 0;
-    const percent = totalSize > 0 ? Math.round((bytesTransferred / totalSize) * 100) : 0;
-    const t = getT();
     terminal.write(`\r\x1b[36m[ZMODEM] ${t("zmodem.downloading", { fileName, percent })}\x1b[K`);
   };
 

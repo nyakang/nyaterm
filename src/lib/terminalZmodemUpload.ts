@@ -270,6 +270,7 @@ async function resolveUnverifiedZmodemUpload(
   duplicateStrategy: string,
 ): Promise<ConflictProbeResult> {
   if (duplicateStrategy === "skip") {
+    toast.message(i18n.t("zmodem.sftpProbeSkipped"));
     return { paths: [], probeSkipped: true, conflictMode: "skip" };
   }
 
