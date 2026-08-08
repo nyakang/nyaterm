@@ -72,6 +72,14 @@ export interface SessionPane {
   createRequestId?: string;
   /** Populated when session creation failed and the pane should stay visible as an error state. */
   connectError?: string;
+  /** The type of content to display in this pane, defaults to "terminal". */
+  viewType?: "terminal" | "file";
+  /** Metadata used when viewType is "file". */
+  fileMetadata?: {
+    remotePath: string;
+    size: number;
+    mtime?: number;
+  };
 }
 
 /** Split node containing two child panes. */
@@ -406,6 +414,12 @@ export interface RestorableSessionPane {
   title: string;
   session_type: SessionType | "local";
   connection_id?: string;
+  view_type?: "terminal" | "file";
+  file_metadata?: {
+    remote_path: string;
+    size: number;
+    mtime?: number;
+  };
 }
 
 /** Saved split pane for startup restoration. */

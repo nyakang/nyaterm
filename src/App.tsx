@@ -1492,7 +1492,10 @@ function App() {
 
   const closePaneBackendSession = useCallback(
     async (
-      pane: Pick<SessionPane, "connecting" | "connectError" | "sessionId" | "createRequestId">,
+      pane: Pick<
+        SessionPane,
+        "connecting" | "connectError" | "sessionId" | "createRequestId" | "viewType"
+      >,
     ) => {
       if (pane.connecting) {
         if (pane.createRequestId) {
@@ -1512,6 +1515,10 @@ function App() {
       }
 
       if (pane.connectError) {
+        return true;
+      }
+
+      if (pane.viewType === "file") {
         return true;
       }
 

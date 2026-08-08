@@ -71,6 +71,7 @@ export interface CursorPosition {
 interface FileViewExtensionOptions {
   editable?: boolean;
   updateListener?: Extension;
+  onSave?: () => void;
 }
 
 const fileViewHighlightStyle = HighlightStyle.define([
@@ -251,7 +252,7 @@ export function getCursorPosition(state: EditorState): CursorPosition {
 
 export function codeMirrorFileViewExtensions(
   language: string,
-  { editable = true, updateListener }: FileViewExtensionOptions = {},
+  { editable = true, updateListener, onSave }: FileViewExtensionOptions = {},
 ) {
   const extensions: Extension[] = [
     lineNumbers(),
@@ -293,8 +294,14 @@ export function codeMirrorFileViewExtensions(
       ".cm-cursor, .cm-dropCursor": {
         borderLeftColor: "var(--foreground)",
       },
-      ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-        backgroundColor: "color-mix(in srgb, var(--primary) 28%, transparent)",
+      ".cm-selectionLayer": {
+        zIndex: "2",
+      },
+      ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, & ::selection, .cm-content ::selection": {
+        backgroundColor: "color-mix(in srgb, var(--primary, #3b82f6) 38%, var(--background, #0d1117)) !important",
+      },
+      ".cm-content ::selection": {
+        color: "inherit !important",
       },
       ".cm-scroller": {
         fontFamily: "var(--font-mono), 'JetBrains Mono', monospace",
@@ -320,8 +327,14 @@ export function codeMirrorFileViewExtensions(
       ".cm-activeLine": {
         backgroundColor: "color-mix(in srgb, var(--muted) 22%, transparent)",
       },
+      "&:has(.cm-selectionBackground) .cm-activeLine": {
+        backgroundColor: "transparent !important",
+      },
       ".cm-activeLineGutter": {
         backgroundColor: "color-mix(in srgb, var(--muted) 32%, transparent)",
+      },
+      "&:has(.cm-selectionBackground) .cm-activeLineGutter": {
+        backgroundColor: "transparent !important",
       },
       ".cm-tooltip": {
         borderColor: "var(--border)",
@@ -359,6 +372,19 @@ export function codeMirrorFileViewExtensions(
   ];
 
   if (editable) {
+    if (onSave) {
+      extensions.push(
+        keymap.of([
+          {
+            key: "Mod-s",
+            run: () => {
+              onSave();
+              return true;
+            },
+          },
+        ]),
+      );
+    }
     extensions.splice(
       3,
       0,

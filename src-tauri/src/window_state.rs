@@ -20,7 +20,6 @@ const NEW_SESSION_WINDOW_KEY: &str = "new-session";
 const QUICK_COMMAND_WINDOW_KEY: &str = "quick-command";
 const PROXY_WINDOW_KEY: &str = "proxy";
 const TUNNEL_WINDOW_KEY: &str = "tunnel";
-const FILE_EDITOR_WINDOW_KEY: &str = "file-editor";
 const FILE_PREVIEW_WINDOW_KEY: &str = "file-preview";
 const NOTE_EDITOR_WINDOW_KEY: &str = "note-editor";
 const AUTO_UPLOAD_WINDOW_PREFIX: &str = "auto-upload-";
@@ -112,7 +111,6 @@ pub enum ChildWindowStateKey {
     QuickCommand,
     Proxy,
     Tunnel,
-    FileEditor,
     FilePreview,
     NoteEditor,
 }
@@ -125,7 +123,6 @@ impl ChildWindowStateKey {
             Self::QuickCommand => QUICK_COMMAND_WINDOW_KEY,
             Self::Proxy => PROXY_WINDOW_KEY,
             Self::Tunnel => TUNNEL_WINDOW_KEY,
-            Self::FileEditor => FILE_EDITOR_WINDOW_KEY,
             Self::FilePreview => FILE_PREVIEW_WINDOW_KEY,
             Self::NoteEditor => NOTE_EDITOR_WINDOW_KEY,
         }
@@ -138,7 +135,6 @@ impl ChildWindowStateKey {
             Self::QuickCommand => (540.0, 640.0),
             Self::Proxy => (520.0, 560.0),
             Self::Tunnel => (680.0, 640.0),
-            Self::FileEditor => (980.0, 720.0),
             Self::FilePreview => (1080.0, 760.0),
             Self::NoteEditor => (980.0, 760.0),
         }
@@ -253,9 +249,6 @@ pub fn child_window_state_key_for_label(label: &str) -> Option<ChildWindowStateK
     }
     if is_scoped_child_label(label, TUNNEL_WINDOW_KEY) {
         return Some(ChildWindowStateKey::Tunnel);
-    }
-    if label.starts_with(&format!("{FILE_EDITOR_WINDOW_KEY}-")) {
-        return Some(ChildWindowStateKey::FileEditor);
     }
     if label.starts_with(&format!("{FILE_PREVIEW_WINDOW_KEY}-")) {
         return Some(ChildWindowStateKey::FilePreview);
@@ -616,17 +609,17 @@ mod tests {
                 "height": 800,
                 "maximized": false,
                 "children": {
-                    "file-editor": { "width": 1100, "height": 760, "maximized": true }
+                    "file-preview": { "width": 1100, "height": 760, "maximized": true }
                 }
             }"#,
         )
         .unwrap();
         let state = doc
             .children
-            .get(ChildWindowStateKey::FileEditor.as_str())
+            .get(ChildWindowStateKey::FilePreview.as_str())
             .cloned()
             .unwrap()
-            .normalized(980.0, 720.0);
+            .normalized(1080.0, 760.0);
 
         assert_eq!(state.width, 1100.0);
         assert_eq!(state.height, 760.0);
@@ -672,10 +665,6 @@ mod tests {
         assert_eq!(
             child_window_state_key_for_label("tunnel-main-abc"),
             Some(ChildWindowStateKey::Tunnel)
-        );
-        assert_eq!(
-            child_window_state_key_for_label("file-editor-abc"),
-            Some(ChildWindowStateKey::FileEditor)
         );
         assert_eq!(
             child_window_state_key_for_label("file-preview-abc"),

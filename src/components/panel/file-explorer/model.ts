@@ -313,20 +313,10 @@ const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   zsh: "shell",
 };
 
-export const TEXT_EXTENSIONS = new Set([
-  ...Object.keys(LANGUAGE_BY_EXTENSION).map((extension) => extension.toLocaleLowerCase()),
-  "asc",
-  "csv",
-  "env",
-  "gitignore",
-  "gitattributes",
-  "gitmodules",
-  "pem",
-  "pub",
-  "service",
-  "socket",
-  "timer",
-]);
+/** Maximum bytes the internal editor / text preview will read. */
+export const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+/** Maximum bytes for CSV/TSV tabular previews. */
+export const CSV_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 
 const SHELL_TEXT_BASENAMES = new Set([
   "bash_profile",
@@ -358,16 +348,6 @@ const CONFIG_TEXT_BASENAMES = new Set([
   "wgetrc",
 ]);
 
-const SPECIAL_TEXT_BASENAMES = new Set([
-  ...SHELL_TEXT_BASENAMES,
-  ...CONFIG_TEXT_BASENAMES,
-  "cmakelists.txt",
-  "dockerfile",
-  "makefile",
-  "gnumakefile",
-  "justfile",
-]);
-
 export function getLocalPathName(path: string, fallback: string) {
   return path.split(/[\\/]/).pop() || fallback;
 }
@@ -380,20 +360,19 @@ export function getFileExtension(name: string) {
   return index > 0 ? baseName.slice(index + 1) : "";
 }
 
-export type FilePreviewKind =
-  | "image"
-  | "markdown"
-  | "csv"
-  | "json"
-  | "text"
-  | "pdf"
-  | "unsupported";
+export type FilePreviewKind = "image" | "markdown" | "csv" | "json" | "text" | "pdf";
 
 export const IMAGE_PREVIEW_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
 export const MARKDOWN_PREVIEW_EXTENSIONS = new Set(["md", "markdown", "mdx"]);
 export const CSV_PREVIEW_EXTENSIONS = new Set(["csv", "tsv"]);
 export const JSON_PREVIEW_EXTENSIONS = new Set(["json", "jsonc", "json5"]);
 
+/**
+ * Chooses how a file is rendered. Only image/pdf need a binary read; every
+ * other file is rendered as text. Whether a file is actually readable as
+ * text is decided by the backend read (`read_*_file_text`), never by
+ * filename heuristics here.
+ */
 export function getFilePreviewKind(name: string): FilePreviewKind {
   const ext = getFileExtension(name);
   if (IMAGE_PREVIEW_EXTENSIONS.has(ext)) return "image";
@@ -401,8 +380,7 @@ export function getFilePreviewKind(name: string): FilePreviewKind {
   if (CSV_PREVIEW_EXTENSIONS.has(ext)) return "csv";
   if (JSON_PREVIEW_EXTENSIONS.has(ext)) return "json";
   if (ext === "pdf") return "pdf";
-  if (isKnownTextFile(name)) return "text";
-  return "unsupported";
+  return "text";
 }
 
 export function imageMimeFromFilename(name: string) {
@@ -430,27 +408,6 @@ export function isKnownBinaryFile(name: string) {
 
 function getNormalizedBaseName(name: string) {
   return name.split(/[\\/]/).pop()?.toLocaleLowerCase() || name.toLocaleLowerCase();
-}
-
-export function isKnownTextFile(name: string) {
-  const baseName = getNormalizedBaseName(name);
-  const normalized = baseName.replace(/^\.+/, "");
-  const ext = getFileExtension(name);
-
-  return (
-    (!!ext && TEXT_EXTENSIONS.has(ext)) ||
-    SPECIAL_TEXT_BASENAMES.has(normalized) ||
-    baseName.endsWith(".dockerfile") ||
-    baseName.endsWith(".nginx.conf") ||
-    baseName === "docker-compose.yml" ||
-    baseName === "docker-compose.yaml"
-  );
-}
-
-export function getRemoteFileTextKind(name: string): "text" | "binary" | "unknown" {
-  if (isKnownTextFile(name)) return "text";
-  if (isKnownBinaryFile(name)) return "binary";
-  return "unknown";
 }
 
 export function languageFromFilename(name: string) {

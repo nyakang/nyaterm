@@ -77,6 +77,16 @@ interface AppContextType {
     extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
     options?: { afterTabId?: string },
   ) => PendingTabCreation;
+  /** Opens a file editor as a new native tab. */
+  openFileInPane: (
+    sessionId: string,
+    fileName: string,
+    remotePath: string,
+    fileSize: number,
+    sessionType: SessionType,
+    connectionId?: string,
+    mtime?: number,
+  ) => void;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
   /** Mark the active pane in a tab as failed while keeping the tab visible. */
@@ -782,6 +792,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitTabs, setActiveTabId],
   );
 
+  const openFileInPane = useCallback(
+    (
+      sessionId: string,
+      fileName: string,
+      remotePath: string,
+      fileSize: number,
+      sessionType: SessionType,
+      connectionId?: string,
+      mtime?: number,
+    ) => {
+      const pane = createSessionPane(fileName, sessionType, connectionId, {
+        sessionId,
+        viewType: "file",
+        fileMetadata: { remotePath, size: fileSize, mtime: mtime ?? 0 },
+      });
+      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
+      const nextTabs = [...tabsRef.current, newTab];
+      void commitTabs(nextTabs);
+      setActiveTabId(newTab.id);
+    },
+    [commitTabs, setActiveTabId],
+  );
+
   const updateTabSession = useCallback(
     (tabId: string, sessionId: string) => {
       const tab = tabsRef.current.find((item) => item.id === tabId);
@@ -1253,6 +1286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveTabId,
       addTab,
       addPendingTab,
+      openFileInPane,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
@@ -1300,6 +1334,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveTabId,
       addTab,
       addPendingTab,
+      openFileInPane,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,

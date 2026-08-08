@@ -13,6 +13,7 @@ import {
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
 import { isSplitPane } from "@/lib/workspaceTabs";
+import { FilePreviewContent } from "@/components/panel/file-explorer/FilePreviewContent";
 import type { PaneNode, SplitPane, Tab } from "@/types/global";
 import XTerminal from "./XTerminal";
 
@@ -260,6 +261,19 @@ function PaneNodeView({
             </Button>
           ) : null}
         </div>
+      ) : node.viewType === "file" && node.fileMetadata ? (
+        <FilePreviewContent
+          data={{
+            sessionId: node.sessionId,
+            backend: node.type === "Local" ? "local" : "remote",
+            path: node.fileMetadata.remotePath,
+            name: node.name,
+            size: node.fileMetadata.size,
+            mtime: node.fileMetadata.mtime ?? 0,
+          }}
+          active={isActive}
+          className="h-full w-full"
+        />
       ) : (
         <PaneXTerminal
           sessionId={node.sessionId}
