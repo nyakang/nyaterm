@@ -184,6 +184,7 @@ pub fn run() {
             cmd::session::create_temporary_ssh_session,
             cmd::session::create_multiplexed_ssh_session,
             cmd::session::create_local_session,
+            cmd::session::create_local_command_session,
             cmd::session::create_telnet_session,
             cmd::session::create_serial_session,
             cmd::rdp::create_rdp_session,

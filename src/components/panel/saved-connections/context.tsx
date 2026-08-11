@@ -1,5 +1,8 @@
 import type { TFunction } from "i18next";
-import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { createContext, useContext } from "react";
 import type { NewSessionTarget } from "@/lib/windowManager";
 import type { Group, SavedConnection } from "@/types/global";
@@ -42,12 +45,25 @@ export interface SavedConnectionsContextValue {
   handleConnect: (conn: SavedConnection) => void;
   handleConnectOnly: (conn: SavedConnection) => void;
   handleConnectSelected: () => void;
+  handlePingHost: (conn: SavedConnection) => void;
   handleCopyConnection: (conn: SavedConnection) => void;
-  requestMoveConnectionToGroup: (conn: SavedConnection, groupId: string | null) => void;
+  requestMoveConnectionToGroup: (
+    conn: SavedConnection,
+    groupId: string | null,
+  ) => void;
   requestMoveSelectedConnectionsToGroup: (groupId: string | null) => void;
-  handleConnectionSelectionStart: (conn: SavedConnection, event: ReactMouseEvent) => void;
-  handleConnectionContextMenu: (conn: SavedConnection, event: ReactMouseEvent) => void;
-  registerConnectionElement: (id: string, element: HTMLDivElement | null) => void;
+  handleConnectionSelectionStart: (
+    conn: SavedConnection,
+    event: ReactMouseEvent,
+  ) => void;
+  handleConnectionContextMenu: (
+    conn: SavedConnection,
+    event: ReactMouseEvent,
+  ) => void;
+  registerConnectionElement: (
+    id: string,
+    element: HTMLDivElement | null,
+  ) => void;
   onEditConnection: (
     conn: SavedConnection,
     autoConnect?: boolean,
@@ -65,17 +81,37 @@ export interface SavedConnectionsContextValue {
   requestOpenGroupConnections: (node: GroupNode) => void;
 
   // Drag handlers
-  handleDragStart: (e: React.DragEvent, type: "connection" | "group", id: string) => void;
+  handleDragStart: (
+    e: React.DragEvent,
+    type: "connection" | "group",
+    id: string,
+  ) => void;
   handleDragEnd: () => void;
-  handleDragEnterItem: (e: React.DragEvent, id: string, type: "connection" | "group") => void;
-  handleDragOverItem: (e: React.DragEvent, id: string, type: "connection" | "group") => void;
-  handleDragLeaveItem: (e: React.DragEvent, id: string, type: "connection" | "group") => void;
+  handleDragEnterItem: (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => void;
+  handleDragOverItem: (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => void;
+  handleDragLeaveItem: (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => void;
   handleDropItem: (
     e: React.DragEvent,
     id: string,
     tgtType: "connection" | "group",
   ) => Promise<void>;
-  handlePointerDragStart: (e: ReactPointerEvent, type: "connection" | "group", id: string) => void;
+  handlePointerDragStart: (
+    e: ReactPointerEvent,
+    type: "connection" | "group",
+    id: string,
+  ) => void;
   handlePointerDragMove: (e: ReactPointerEvent) => void;
   handlePointerDragEnd: (e: ReactPointerEvent) => void;
   handlePointerDragCancel: (e: ReactPointerEvent) => void;
@@ -83,7 +119,8 @@ export interface SavedConnectionsContextValue {
   t: TFunction;
 }
 
-export const SavedConnectionsContext = createContext<SavedConnectionsContextValue | null>(null);
+export const SavedConnectionsContext =
+  createContext<SavedConnectionsContextValue | null>(null);
 
 export const useSavedConnectionsContext = () => {
   const ctx = useContext(SavedConnectionsContext);

@@ -1,6 +1,13 @@
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MdContentCopy, MdDelete, MdDriveFileRenameOutline, MdEdit, MdLink } from "react-icons/md";
+import {
+  MdContentCopy,
+  MdDelete,
+  MdDriveFileRenameOutline,
+  MdEdit,
+  MdLink,
+  MdNetworkCheck,
+} from "react-icons/md";
 import { toast } from "sonner";
 import {
   ContextMenu,
@@ -9,7 +16,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { SavedConnection } from "@/types/global";
 import { resolveConnectionIcon } from "../../icons";
 import { useSavedConnectionsContext } from "./context";
@@ -43,18 +54,23 @@ function formatRequiredDetailValue(
   value: string | number | null | undefined,
   t: TFunction,
 ): string {
-  if (value === null || value === undefined) return t("savedConnections.notSet");
+  if (value === null || value === undefined)
+    return t("savedConnections.notSet");
   const text = String(value).trim();
   return text || t("savedConnections.notSet");
 }
 
-function formatOptionalDetailValue(value: string | number | null | undefined): string | null {
+function formatOptionalDetailValue(
+  value: string | number | null | undefined,
+): string | null {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text || null;
 }
 
-function getCopyDetailValue(value: string | number | null | undefined): string | undefined {
+function getCopyDetailValue(
+  value: string | number | null | undefined,
+): string | undefined {
   if (value === null || value === undefined) return undefined;
   const text = String(value).trim();
   return text || undefined;
@@ -102,7 +118,8 @@ function getConnectionDetailRows(
   t: TFunction,
 ): ConnectionDetailRow[] {
   const description =
-    formatOptionalDetailValue(conn.description) ?? t("savedConnections.noDescription");
+    formatOptionalDetailValue(conn.description) ??
+    t("savedConnections.noDescription");
 
   switch (conn.type) {
     case "local_terminal": {
@@ -169,8 +186,10 @@ function getConnectionDetailRows(
       ];
       const parity = formatOptionalDetailValue(conn.parity);
       const stopBits = formatOptionalDetailValue(conn.stop_bits);
-      if (parity) rows.push({ label: t("savedConnections.parity"), value: parity });
-      if (stopBits) rows.push({ label: t("savedConnections.stopBits"), value: stopBits });
+      if (parity)
+        rows.push({ label: t("savedConnections.parity"), value: parity });
+      if (stopBits)
+        rows.push({ label: t("savedConnections.stopBits"), value: stopBits });
       rows.push({
         label: t("savedConnections.description"),
         value: description,
@@ -292,7 +311,11 @@ function ConnectionDetailsTooltip({
   );
 }
 
-export default function ConnectionItem({ conn, indented, depth = 0 }: ConnectionItemProps) {
+export default function ConnectionItem({
+  conn,
+  indented,
+  depth = 0,
+}: ConnectionItemProps) {
   const {
     isDragEnabled,
     isPointerDragEnabled,
@@ -304,6 +327,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleConnect,
     handleConnectOnly,
     handleConnectSelected,
+    handlePingHost,
     handleCopyConnection,
     requestMoveConnectionToGroup,
     handleConnectionSelectionStart,
@@ -326,7 +350,8 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     t,
   } = useSavedConnectionsContext();
 
-  const isTarget = dragTarget?.id === conn.id && dragTarget.type === "connection";
+  const isTarget =
+    dragTarget?.id === conn.id && dragTarget.type === "connection";
   const showBefore = isTarget && dragTarget.position === "before";
   const showAfter = isTarget && dragTarget.position === "after";
   const iconDef = resolveConnectionIcon(conn.icon);
@@ -338,7 +363,9 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
       ? t("savedConnections.connectSelected")
       : t("savedConnections.connect");
   const directConnectLabel = t("savedConnections.connect");
-  const iconStyle = { color: isSelected || isKeyboardActive ? "var(--df-primary)" : iconDef.color };
+  const iconStyle = {
+    color: isSelected || isKeyboardActive ? "var(--df-primary)" : iconDef.color,
+  };
   const indentLeft = indented ? `${8 + depth * 16 + 16}px` : "0.5rem";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsOpenTimerRef = useRef<number | null>(null);
@@ -470,15 +497,25 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
               : undefined
           }
           onDragEnter={
-            isDragEnabled ? (e) => handleDragEnterItem(e, conn.id, "connection") : undefined
+            isDragEnabled
+              ? (e) => handleDragEnterItem(e, conn.id, "connection")
+              : undefined
           }
           onDragOver={
-            isDragEnabled ? (e) => handleDragOverItem(e, conn.id, "connection") : undefined
+            isDragEnabled
+              ? (e) => handleDragOverItem(e, conn.id, "connection")
+              : undefined
           }
           onDragLeave={
-            isDragEnabled ? (e) => handleDragLeaveItem(e, conn.id, "connection") : undefined
+            isDragEnabled
+              ? (e) => handleDragLeaveItem(e, conn.id, "connection")
+              : undefined
           }
-          onDrop={isDragEnabled ? (e) => handleDropItem(e, conn.id, "connection") : undefined}
+          onDrop={
+            isDragEnabled
+              ? (e) => handleDropItem(e, conn.id, "connection")
+              : undefined
+          }
           onDragEnd={
             isDragEnabled
               ? () => {
@@ -497,13 +534,17 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <div
             className={`group/item relative flex min-w-full w-max items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition-colors df-hover ${isTarget && dragTarget.position === "inside" ? "ring-1 ring-primary/60" : ""}`}
             style={{
-              ...(indented ? { paddingLeft: `${8 + depth * 16 + 16}px` } : undefined),
+              ...(indented
+                ? { paddingLeft: `${8 + depth * 16 + 16}px` }
+                : undefined),
               backgroundColor: isSelected
                 ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
                 : isKeyboardActive
                   ? "color-mix(in srgb, var(--df-primary) 7%, transparent)"
                   : undefined,
-              boxShadow: isKeyboardActive ? "inset 0 0 0 1px var(--df-primary)" : undefined,
+              boxShadow: isKeyboardActive
+                ? "inset 0 0 0 1px var(--df-primary)"
+                : undefined,
             }}
             onMouseDown={(e) => {
               closeAndSuppressDetails();
@@ -530,7 +571,9 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
                     className="shrink-0 whitespace-nowrap text-xs font-medium"
                     style={{
                       color:
-                        isSelected || isKeyboardActive ? "var(--df-primary)" : "var(--df-text)",
+                        isSelected || isKeyboardActive
+                          ? "var(--df-primary)"
+                          : "var(--df-text)",
                     }}
                   >
                     {conn.name}
@@ -621,6 +664,15 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
         >
           <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.edit")}
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => {
+            closeAndSuppressDetails();
+            handlePingHost(conn);
+          }}
+        >
+          <MdNetworkCheck className="text-[0.875rem] text-muted-foreground mr-2" />
+          {t("savedConnections.pingHost")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem

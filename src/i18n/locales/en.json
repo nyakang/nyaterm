@@ -1573,6 +1573,8 @@
     "openAllConnections": "Open All",
     "openAllConnectionsConfirm": "Open all {{count}} connections in folder '{{name}}'?",
     "parity": "Parity",
+    "pingHost": "Ping host",
+    "pingNoHost": "This connection has no host to ping",
     "port": "Port",
     "rename": "Rename",
     "renameFolder": "Rename Folder",

@@ -1570,6 +1570,8 @@
     "openAllConnections": "開啟全部連線",
     "openAllConnectionsConfirm": "確定要開啟資料夾「{{name}}」中的 {{count}} 個連線嗎？",
     "parity": "校驗位",
+    "pingHost": "Ping 主機",
+    "pingNoHost": "該連線沒有主機位址可 Ping",
     "port": "埠",
     "rename": "重新命名",
     "renameFolder": "重新命名資料夾",

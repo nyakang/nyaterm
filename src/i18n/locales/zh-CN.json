@@ -1572,6 +1572,8 @@
     "openAllConnections": "打开全部连接",
     "openAllConnectionsConfirm": "确定要打开文件夹「{{name}}」中的 {{count}} 个连接吗？",
     "parity": "校验位",
+    "pingHost": "Ping 主机",
+    "pingNoHost": "该连接没有主机地址可 Ping",
     "port": "端口",
     "rename": "重命名",
     "renameFolder": "重命名文件夹",

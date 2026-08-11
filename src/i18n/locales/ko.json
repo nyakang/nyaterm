@@ -1572,6 +1572,8 @@
     "openAllConnections": "모두 열기",
     "openAllConnectionsConfirm": "폴더 '{{name}}' 안의 연결 {{count}}개를 모두 열까요?",
     "parity": "패리티",
+    "pingHost": "Ping 호스트",
+    "pingNoHost": "이 연결에는 Ping할 호스트가 없습니다",
     "port": "포트",
     "rename": "이름 바꾸기",
     "renameFolder": "폴더 이름 바꾸기",

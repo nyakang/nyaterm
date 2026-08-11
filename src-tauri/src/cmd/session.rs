@@ -224,6 +224,47 @@ pub async fn create_local_session(
 }
 
 #[tauri::command]
+pub async fn create_local_command_session(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<SessionManager>>,
+    recording_state: tauri::State<'_, Arc<RecordingManager>>,
+    shell_path: String,
+    shell_args: String,
+    name: String,
+    create_request_id: Option<String>,
+) -> AppResult<String> {
+    let pending_creation = state.begin_session_creation(create_request_id).await;
+    let (guard, _cancel_rx) = match pending_creation {
+        Some((guard, cancel_rx)) => (Some(guard), Some(cancel_rx)),
+        None => (None, None),
+    };
+    let config = Some(core::LocalSessionConfig {
+        connection_id: None,
+        shell_path,
+        shell_args,
+        working_dir: None,
+        name,
+        encoding: config::load_app_settings(&app)
+            .map(|settings| settings.interaction.default_encoding)
+            .unwrap_or_else(|_| "UTF-8".to_string()),
+    });
+    let session_id = core::create_local_session(
+        app.clone(),
+        state.inner().clone(),
+        config,
+        Some(window.label().to_string()),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
+    )
+    .await?;
+    drop(guard);
+    Ok(session_id)
+}
+
+#[tauri::command]
 pub async fn create_telnet_session(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,

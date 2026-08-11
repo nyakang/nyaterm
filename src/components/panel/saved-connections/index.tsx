@@ -1,5 +1,13 @@
-import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
+import { emit } from "@tauri-apps/api/event";
 import { BiExport, BiImport } from "react-icons/bi";
 import {
   MdAdd,
@@ -40,7 +48,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useConfigTransfer } from "@/hooks/useConfigTransfer";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
@@ -60,7 +72,10 @@ import {
   type SortMode,
 } from "./context";
 import GroupNodeItem from "./GroupNodeItem";
-import { MoveToGroupContextMenu, MoveToGroupDropdownMenu } from "./MoveToGroupMenu";
+import {
+  MoveToGroupContextMenu,
+  MoveToGroupDropdownMenu,
+} from "./MoveToGroupMenu";
 
 interface SavedConnectionsProps {
   onTemporarySshLink: () => void;
@@ -91,7 +106,9 @@ interface PointerSavedDragState {
 
 function shouldUsePointerSavedConnectionsDrag() {
   if (typeof navigator === "undefined") return false;
-  return /Mac/.test(navigator.platform) && /AppleWebKit/.test(navigator.userAgent);
+  return (
+    /Mac/.test(navigator.platform) && /AppleWebKit/.test(navigator.userAgent)
+  );
 }
 
 function areStringSetsEqual(left: Set<string>, right: Set<string>) {
@@ -102,7 +119,11 @@ function areStringSetsEqual(left: Set<string>, right: Set<string>) {
   return true;
 }
 
-function HeaderActionButton({ tooltip, children, ...props }: HeaderActionButtonProps) {
+function HeaderActionButton({
+  tooltip,
+  children,
+  ...props
+}: HeaderActionButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -122,7 +143,17 @@ export default function SavedConnections({
   onEditConnection,
   onConnectConnection,
 }: SavedConnectionsProps) {
-  const { savedConnections, savedGroups, refreshConnections, appSettings, updateUi } = useApp();
+  const {
+    savedConnections,
+    savedGroups,
+    refreshConnections,
+    appSettings,
+    updateUi,
+    addPendingTab,
+    updateTabSession,
+    hasTab,
+    recordRecentConnection,
+  } = useApp();
   const { t } = useTranslation();
   const { handleExport, passwordAlert } = useConfigTransfer();
   const panelRootRef = useRef<HTMLDivElement | null>(null);
@@ -131,21 +162,30 @@ export default function SavedConnections({
   // Tracks in-flight connections to prevent duplicate invocations (not shown in UI)
   const connectingIdsRef = useRef<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [selectedConnectionIds, setSelectedConnectionIds] = useState<Set<string>>(new Set());
+  const [selectedConnectionIds, setSelectedConnectionIds] = useState<
+    Set<string>
+  >(new Set());
   const [filterText, setFilterText] = useState("");
-  const [keyboardActiveConnectionId, setKeyboardActiveConnectionId] = useState<string | null>(null);
+  const [keyboardActiveConnectionId, setKeyboardActiveConnectionId] = useState<
+    string | null
+  >(null);
   const searchExpandedBaseRef = useRef<Set<string> | null>(null);
   const searchAutoExpandedGroupIdsRef = useRef<Set<string>>(new Set());
   const previousKeywordRef = useRef("");
   const lastSelectedConnectionIdRef = useRef<string | null>(null);
   const connectionElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const sortMode = (appSettings.ui.saved_connections_sort_mode || "default") as SortMode;
+  const sortMode = (appSettings.ui.saved_connections_sort_mode ||
+    "default") as SortMode;
 
   // ── Dialog state ──────────────────────────────────────────────────────────
   const [deleteTargets, setDeleteTargets] = useState<SavedConnection[]>([]);
-  const [renamingConn, setRenamingConn] = useState<SavedConnection | null>(null);
+  const [renamingConn, setRenamingConn] = useState<SavedConnection | null>(
+    null,
+  );
   const [renameValue, setRenameValue] = useState("");
-  const [deleteFolderTarget, setDeleteFolderTarget] = useState<Group | null>(null);
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<Group | null>(
+    null,
+  );
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [openGroupTarget, setOpenGroupTarget] = useState<{
@@ -154,13 +194,18 @@ export default function SavedConnections({
   } | null>(null);
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [folderDialogName, setFolderDialogName] = useState("");
-  const [folderDialogParentId, setFolderDialogParentId] = useState<string | null>(null);
+  const [folderDialogParentId, setFolderDialogParentId] = useState<
+    string | null
+  >(null);
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
 
   // ── Drag state ────────────────────────────────────────────────────────────
   const [dragTarget, _setDragTarget] = useState<DragTarget | null>(null);
   const dragTargetRef = useRef<DragTarget | null>(null);
-  const dragSourceRef = useRef<{ type: "connection" | "group"; id: string } | null>(null);
+  const dragSourceRef = useRef<{
+    type: "connection" | "group";
+    id: string;
+  } | null>(null);
   const pointerDragRef = useRef<PointerSavedDragState | null>(null);
   const connectionsRef = useRef(savedConnections);
   const groupsRef = useRef(savedGroups);
@@ -169,9 +214,13 @@ export default function SavedConnections({
 
   const keyword = filterText.trim().toLowerCase();
   const isDragEnabled = sortMode === "default";
-  const isPointerDragEnabled = isDragEnabled && shouldUsePointerSavedConnectionsDrag();
+  const isPointerDragEnabled =
+    isDragEnabled && shouldUsePointerSavedConnectionsDrag();
   const connectionById = useMemo(
-    () => new Map(savedConnections.map((connection) => [connection.id, connection])),
+    () =>
+      new Map(
+        savedConnections.map((connection) => [connection.id, connection]),
+      ),
     [savedConnections],
   );
 
@@ -187,14 +236,20 @@ export default function SavedConnections({
       : savedConnections;
 
     const sortConns = (list: SavedConnection[]) => {
-      if (sortMode === "name-asc") return [...list].sort((a, b) => naturalCompare(a.name, b.name));
-      if (sortMode === "name-desc") return [...list].sort((a, b) => naturalCompare(b.name, a.name));
-      return [...list].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+      if (sortMode === "name-asc")
+        return [...list].sort((a, b) => naturalCompare(a.name, b.name));
+      if (sortMode === "name-desc")
+        return [...list].sort((a, b) => naturalCompare(b.name, a.name));
+      return [...list].sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+      );
     };
 
     const sortGroups = (list: Group[]) => {
-      if (sortMode === "name-asc") return [...list].sort((a, b) => naturalCompare(a.name, b.name));
-      if (sortMode === "name-desc") return [...list].sort((a, b) => naturalCompare(b.name, a.name));
+      if (sortMode === "name-asc")
+        return [...list].sort((a, b) => naturalCompare(a.name, b.name));
+      if (sortMode === "name-desc")
+        return [...list].sort((a, b) => naturalCompare(b.name, a.name));
       return [...list].sort((a, b) => a.sort_order - b.sort_order);
     };
 
@@ -214,7 +269,12 @@ export default function SavedConnections({
     const map: Record<string, GroupNode> = {};
     const sortedGroups = sortGroups(savedGroups);
     for (const g of sortedGroups) {
-      map[g.id] = { group: g, children: [], connections: connByGroup[g.id] || [], totalCount: 0 };
+      map[g.id] = {
+        group: g,
+        children: [],
+        connections: connByGroup[g.id] || [],
+        totalCount: 0,
+      };
     }
 
     const roots: GroupNode[] = [];
@@ -226,7 +286,8 @@ export default function SavedConnections({
 
     const computeTotal = (node: GroupNode): number => {
       node.totalCount =
-        node.connections.length + node.children.reduce((s, c) => s + computeTotal(c), 0);
+        node.connections.length +
+        node.children.reduce((s, c) => s + computeTotal(c), 0);
       return node.totalCount;
     };
     roots.forEach(computeTotal);
@@ -236,7 +297,10 @@ export default function SavedConnections({
       return node.connections.length > 0 || node.children.length > 0;
     };
 
-    return { rootNodes: keyword ? roots.filter(prune) : roots, ungrouped: noGroup };
+    return {
+      rootNodes: keyword ? roots.filter(prune) : roots,
+      ungrouped: noGroup,
+    };
   }, [savedConnections, savedGroups, keyword, sortMode]);
 
   useEffect(() => {
@@ -244,7 +308,9 @@ export default function SavedConnections({
       appSettings.ui.saved_connections_expanded_group_ids ?? [],
     );
     setExpandedGroups((prev) => {
-      return areStringSetsEqual(prev, persistedExpandedGroups) ? prev : persistedExpandedGroups;
+      return areStringSetsEqual(prev, persistedExpandedGroups)
+        ? prev
+        : persistedExpandedGroups;
     });
   }, [appSettings.ui.saved_connections_expanded_group_ids]);
 
@@ -337,7 +403,12 @@ export default function SavedConnections({
       .filter((connection): connection is SavedConnection => !!connection);
 
     return [...orderedVisible, ...hiddenSelected];
-  }, [connectionById, selectedConnectionIds, visibleConnectionIdSet, visibleConnectionIds]);
+  }, [
+    connectionById,
+    selectedConnectionIds,
+    visibleConnectionIdSet,
+    visibleConnectionIds,
+  ]);
 
   useEffect(() => {
     if (!keyword || visibleConnectionIds.length === 0) {
@@ -346,7 +417,9 @@ export default function SavedConnections({
     }
 
     setKeyboardActiveConnectionId((currentId) =>
-      currentId && visibleConnectionIdSet.has(currentId) ? currentId : visibleConnectionIds[0],
+      currentId && visibleConnectionIdSet.has(currentId)
+        ? currentId
+        : visibleConnectionIds[0],
     );
   }, [keyword, visibleConnectionIdSet, visibleConnectionIds]);
 
@@ -358,17 +431,23 @@ export default function SavedConnections({
       ?.scrollIntoView({ block: "nearest" });
   }, [keyboardActiveConnectionId, keyword]);
 
-  const registerConnectionElement = useCallback((id: string, element: HTMLDivElement | null) => {
-    if (element) {
-      connectionElementRefs.current.set(id, element);
-    } else {
-      connectionElementRefs.current.delete(id);
-    }
-  }, []);
+  const registerConnectionElement = useCallback(
+    (id: string, element: HTMLDivElement | null) => {
+      if (element) {
+        connectionElementRefs.current.set(id, element);
+      } else {
+        connectionElementRefs.current.delete(id);
+      }
+    },
+    [],
+  );
 
   const requestDeleteConnection = useCallback(
     (conn: SavedConnection) => {
-      if (selectedConnectionIds.has(conn.id) && selectedConnections.length > 1) {
+      if (
+        selectedConnectionIds.has(conn.id) &&
+        selectedConnections.length > 1
+      ) {
         setDeleteTargets(selectedConnections);
         return;
       }
@@ -386,23 +465,35 @@ export default function SavedConnections({
   const moveConnectionsToGroup = useCallback(
     async (connections: SavedConnection[], targetGroupId: string | null) => {
       const uniqueConnections = Array.from(
-        new Map(connections.map((connection) => [connection.id, connection])).values(),
+        new Map(
+          connections.map((connection) => [connection.id, connection]),
+        ).values(),
       );
       if (uniqueConnections.length === 0) return;
 
-      const movingIds = new Set(uniqueConnections.map((connection) => connection.id));
+      const movingIds = new Set(
+        uniqueConnections.map((connection) => connection.id),
+      );
       const targetSiblings = connectionsRef.current
         .filter(
           (connection) =>
-            (connection.group_id ?? null) === targetGroupId && !movingIds.has(connection.id),
+            (connection.group_id ?? null) === targetGroupId &&
+            !movingIds.has(connection.id),
         )
-        .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0));
-      const orderedTargetConnections = [...targetSiblings, ...uniqueConnections];
+        .sort(
+          (left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0),
+        );
+      const orderedTargetConnections = [
+        ...targetSiblings,
+        ...uniqueConnections,
+      ];
 
       try {
         await Promise.all(
           uniqueConnections
-            .filter((connection) => (connection.group_id ?? null) !== targetGroupId)
+            .filter(
+              (connection) => (connection.group_id ?? null) !== targetGroupId,
+            )
             .map((connection) =>
               invoke("save_connection", {
                 connection: { ...connection, group_id: targetGroupId },
@@ -433,7 +524,11 @@ export default function SavedConnections({
           message: "Move connections to group failed",
           error,
         });
-        toast.error(t("savedConnections.moveToGroupFailed", { error: getErrorMessage(error) }));
+        toast.error(
+          t("savedConnections.moveToGroupFailed", {
+            error: getErrorMessage(error),
+          }),
+        );
       }
     },
     [refreshConnections, t],
@@ -459,14 +554,19 @@ export default function SavedConnections({
   );
 
   useEffect(() => {
-    const validIds = new Set(savedConnections.map((connection) => connection.id));
+    const validIds = new Set(
+      savedConnections.map((connection) => connection.id),
+    );
 
     setSelectedConnectionIds((prev) => {
       const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
       return next.size === prev.size ? prev : next;
     });
 
-    if (lastSelectedConnectionIdRef.current && !validIds.has(lastSelectedConnectionIdRef.current)) {
+    if (
+      lastSelectedConnectionIdRef.current &&
+      !validIds.has(lastSelectedConnectionIdRef.current)
+    ) {
       lastSelectedConnectionIdRef.current = null;
     }
   }, [savedConnections]);
@@ -487,7 +587,10 @@ export default function SavedConnections({
     persistExpandedGroups(next);
   };
 
-  const allGroupIds = useMemo(() => new Set(savedGroups.map((group) => group.id)), [savedGroups]);
+  const allGroupIds = useMemo(
+    () => new Set(savedGroups.map((group) => group.id)),
+    [savedGroups],
+  );
 
   const allGroupsExpanded = useMemo(() => {
     if (savedGroups.length === 0) return false;
@@ -516,7 +619,9 @@ export default function SavedConnections({
     }
 
     const [start, end] =
-      anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+      anchorIndex < targetIndex
+        ? [anchorIndex, targetIndex]
+        : [targetIndex, anchorIndex];
     const next = additive ? new Set(baseSelection) : new Set<string>();
 
     for (let index = start; index <= end; index += 1) {
@@ -526,7 +631,10 @@ export default function SavedConnections({
     return next;
   };
 
-  const handleConnectionSelectionStart = (conn: SavedConnection, event: React.MouseEvent) => {
+  const handleConnectionSelectionStart = (
+    conn: SavedConnection,
+    event: React.MouseEvent,
+  ) => {
     if (event.button !== 0) return;
 
     if (keyword) {
@@ -535,13 +643,21 @@ export default function SavedConnections({
 
     const additive = event.ctrlKey || event.metaKey;
     setSelectedConnectionIds((prev) => {
-      const hasRangeAnchor = event.shiftKey && !!lastSelectedConnectionIdRef.current;
-      const anchor = hasRangeAnchor ? (lastSelectedConnectionIdRef.current ?? conn.id) : conn.id;
+      const hasRangeAnchor =
+        event.shiftKey && !!lastSelectedConnectionIdRef.current;
+      const anchor = hasRangeAnchor
+        ? (lastSelectedConnectionIdRef.current ?? conn.id)
+        : conn.id;
       const baseSelection = additive ? new Set(prev) : new Set<string>();
       let next: Set<string>;
 
       if (hasRangeAnchor) {
-        next = getConnectionRangeSelection(anchor, conn.id, baseSelection, additive);
+        next = getConnectionRangeSelection(
+          anchor,
+          conn.id,
+          baseSelection,
+          additive,
+        );
       } else if (additive) {
         next = new Set(prev);
         if (next.has(conn.id)) {
@@ -558,7 +674,10 @@ export default function SavedConnections({
     });
   };
 
-  const handleConnectionContextMenu = (conn: SavedConnection, _event: React.MouseEvent) => {
+  const handleConnectionContextMenu = (
+    conn: SavedConnection,
+    _event: React.MouseEvent,
+  ) => {
     setSelectedConnectionIds((prev) => {
       if (prev.has(conn.id)) {
         return prev;
@@ -575,7 +694,9 @@ export default function SavedConnections({
     try {
       await onConnectConnection(conn);
     } catch (e) {
-      toast.error(t("savedConnections.connectionFailed", { error: getErrorMessage(e) }));
+      toast.error(
+        t("savedConnections.connectionFailed", { error: getErrorMessage(e) }),
+      );
     } finally {
       connectingIdsRef.current.delete(conn.id);
     }
@@ -605,7 +726,37 @@ export default function SavedConnections({
     openConnections([conn]);
   };
 
-  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  const handlePingHost = async (conn: SavedConnection) => {
+    const host = conn.host?.trim();
+    if (!host) {
+      toast.error(t("savedConnections.pingNoHost"));
+      return;
+    }
+    const tabName = `ping ${host}`;
+    const pending = addPendingTab(tabName, "Local", conn.id);
+    const { tabId, createRequestId } = pending;
+    try {
+      const sessionId = await invoke<string>("create_local_command_session", {
+        shellPath: "ping",
+        shellArgs: host,
+        name: tabName,
+        createRequestId,
+      });
+      if (!hasTab(tabId)) return;
+      updateTabSession(tabId, sessionId);
+      recordRecentConnection(conn.id);
+      requestAnimationFrame(() => {
+        void emit(`focus-terminal-${sessionId}`);
+      });
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleSearchKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (!keyword || visibleConnectionIds.length === 0) return;
     if (event.nativeEvent.isComposing || event.key === "Process") return;
 
@@ -614,13 +765,18 @@ export default function SavedConnections({
       event.stopPropagation();
 
       setKeyboardActiveConnectionId((currentId) => {
-        const currentIndex = currentId ? visibleConnectionIds.indexOf(currentId) : -1;
+        const currentIndex = currentId
+          ? visibleConnectionIds.indexOf(currentId)
+          : -1;
         if (event.key === "ArrowDown") {
-          return visibleConnectionIds[(currentIndex + 1) % visibleConnectionIds.length];
+          return visibleConnectionIds[
+            (currentIndex + 1) % visibleConnectionIds.length
+          ];
         }
 
         return visibleConnectionIds[
-          (currentIndex - 1 + visibleConnectionIds.length) % visibleConnectionIds.length
+          (currentIndex - 1 + visibleConnectionIds.length) %
+            visibleConnectionIds.length
         ];
       });
       return;
@@ -629,7 +785,8 @@ export default function SavedConnections({
     if (event.key !== "Enter") return;
 
     const activeId =
-      keyboardActiveConnectionId && visibleConnectionIdSet.has(keyboardActiveConnectionId)
+      keyboardActiveConnectionId &&
+      visibleConnectionIdSet.has(keyboardActiveConnectionId)
         ? keyboardActiveConnectionId
         : visibleConnectionIds[0];
     const activeConnection = connectionById.get(activeId);
@@ -643,7 +800,12 @@ export default function SavedConnections({
   const handleCopyConnection = async (conn: SavedConnection) => {
     try {
       await invoke("save_connection", {
-        connection: { ...conn, id: "", name: `${conn.name} (copy)`, password: undefined },
+        connection: {
+          ...conn,
+          id: "",
+          name: `${conn.name} (copy)`,
+          password: undefined,
+        },
       });
       refreshConnections();
     } catch (e) {
@@ -682,7 +844,10 @@ export default function SavedConnections({
 
       if (
         !matchesKeyEvent(
-          resolveShortcutKeys("savedConnections.copySelected", appSettings.keybindings),
+          resolveShortcutKeys(
+            "savedConnections.copySelected",
+            appSettings.keybindings,
+          ),
           event,
         )
       ) {
@@ -705,10 +870,14 @@ export default function SavedConnections({
 
     try {
       await Promise.all(
-        deleteTargets.map((connection) => invoke("delete_connection", { id: connection.id })),
+        deleteTargets.map((connection) =>
+          invoke("delete_connection", { id: connection.id }),
+        ),
       );
       setSelectedConnectionIds((prev) => {
-        const next = new Set(Array.from(prev).filter((id) => !targetIds.has(id)));
+        const next = new Set(
+          Array.from(prev).filter((id) => !targetIds.has(id)),
+        );
         return next.size === prev.size ? prev : next;
       });
       if (
@@ -758,7 +927,9 @@ export default function SavedConnections({
     if (!folderDialogName.trim()) return;
     try {
       if (editingGroup) {
-        await invoke("save_group", { group: { ...editingGroup, name: folderDialogName.trim() } });
+        await invoke("save_group", {
+          group: { ...editingGroup, name: folderDialogName.trim() },
+        });
       } else {
         await invoke("save_group", {
           group: {
@@ -808,7 +979,11 @@ export default function SavedConnections({
     while (changed) {
       changed = false;
       savedGroups.forEach((group) => {
-        if (group.parent_id && groupIds.has(group.parent_id) && !groupIds.has(group.id)) {
+        if (
+          group.parent_id &&
+          groupIds.has(group.parent_id) &&
+          !groupIds.has(group.id)
+        ) {
           groupIds.add(group.id);
           changed = true;
         }
@@ -850,8 +1025,14 @@ export default function SavedConnections({
     const customPayload = dataTransfer?.getData(SAVED_CONNECTIONS_DRAG_MIME);
     if (customPayload) {
       try {
-        const parsed = JSON.parse(customPayload) as { type: string; id: string };
-        if ((parsed.type === "connection" || parsed.type === "group") && parsed.id) {
+        const parsed = JSON.parse(customPayload) as {
+          type: string;
+          id: string;
+        };
+        if (
+          (parsed.type === "connection" || parsed.type === "group") &&
+          parsed.id
+        ) {
           const source = {
             type: parsed.type,
             id: parsed.id,
@@ -893,7 +1074,11 @@ export default function SavedConnections({
     if (source.type === targetType && source.id === targetId) {
       return false;
     }
-    if (source.type === "group" && targetType === "group" && isDescendant(targetId, source.id)) {
+    if (
+      source.type === "group" &&
+      targetType === "group" &&
+      isDescendant(targetId, source.id)
+    ) {
       return false;
     }
     if (source.type === "group" && targetType === "connection") {
@@ -951,7 +1136,9 @@ export default function SavedConnections({
   ): DragTarget | null => {
     const elements = document.elementsFromPoint(clientX, clientY);
     for (const element of elements) {
-      const target = element.closest<HTMLElement>("[data-saved-drop-type][data-saved-drop-id]");
+      const target = element.closest<HTMLElement>(
+        "[data-saved-drop-type][data-saved-drop-id]",
+      );
       if (!target) continue;
 
       const type = target.dataset.savedDropType;
@@ -962,11 +1149,18 @@ export default function SavedConnections({
       return {
         id,
         type,
-        position: computeDropPositionFromPoint(target, clientY, type, source.type),
+        position: computeDropPositionFromPoint(
+          target,
+          clientY,
+          type,
+          source.type,
+        ),
       };
     }
 
-    const background = panelRootRef.current?.querySelector<HTMLElement>("[data-saved-drop-bg]");
+    const background = panelRootRef.current?.querySelector<HTMLElement>(
+      "[data-saved-drop-bg]",
+    );
     if (!background) return null;
     const rect = background.getBoundingClientRect();
     if (
@@ -982,13 +1176,22 @@ export default function SavedConnections({
       source.type === "connection"
         ? !connectionsRef.current.find((c) => c.id === source.id)?.group_id
         : !groupsRef.current.find((g) => g.id === source.id)?.parent_id;
-    return isAtRoot ? null : { id: null, type: "background", position: "inside" };
+    return isAtRoot
+      ? null
+      : { id: null, type: "background", position: "inside" };
   };
 
-  const handleDragStart = (e: React.DragEvent, type: "connection" | "group", id: string) => {
+  const handleDragStart = (
+    e: React.DragEvent,
+    type: "connection" | "group",
+    id: string,
+  ) => {
     e.stopPropagation();
     // WebKit-based runtimes may ignore HTML5 drops unless the drag carries real data.
-    e.dataTransfer.setData(SAVED_CONNECTIONS_DRAG_MIME, JSON.stringify({ type, id }));
+    e.dataTransfer.setData(
+      SAVED_CONNECTIONS_DRAG_MIME,
+      JSON.stringify({ type, id }),
+    );
     e.dataTransfer.setData("text/plain", `${type}:${id}`);
     e.dataTransfer.effectAllowed = "move";
     dragSourceRef.current = { type, id };
@@ -1005,7 +1208,8 @@ export default function SavedConnections({
     id: string,
   ) => {
     if (!isPointerDragEnabled) return;
-    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)
+      return;
 
     pointerDragRef.current = {
       type,
@@ -1058,11 +1262,16 @@ export default function SavedConnections({
     if (!state.dragging) return;
 
     const source = { type: state.type, id: state.id } as const;
-    const target = state.dragging ? resolvePointerItemTarget(e.clientX, e.clientY, source) : null;
+    const target = state.dragging
+      ? resolvePointerItemTarget(e.clientX, e.clientY, source)
+      : null;
     setDragTarget(null);
     dragSourceRef.current = null;
 
-    if ((target?.type === "connection" || target?.type === "group") && target.id) {
+    if (
+      (target?.type === "connection" || target?.type === "group") &&
+      target.id
+    ) {
       void submitItemDrop(source, target.id, target.type, target.position);
     } else if (target?.type === "background") {
       void dropSourceToRoot(source);
@@ -1084,7 +1293,11 @@ export default function SavedConnections({
     setDragTarget(null);
   };
 
-  const updateItemDragTarget = (e: React.DragEvent, id: string, type: "connection" | "group") => {
+  const updateItemDragTarget = (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => {
     e.preventDefault();
     e.stopPropagation();
     const source = resolveDragSource(e.dataTransfer);
@@ -1096,19 +1309,32 @@ export default function SavedConnections({
     e.dataTransfer.dropEffect = "move";
     const position = computeDropPosition(e, type, source.type);
     const prev = dragTargetRef.current;
-    if (prev?.id === id && prev.type === type && prev.position === position) return;
+    if (prev?.id === id && prev.type === type && prev.position === position)
+      return;
     setDragTarget({ id, type, position });
   };
 
-  const handleDragEnterItem = (e: React.DragEvent, id: string, type: "connection" | "group") => {
+  const handleDragEnterItem = (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => {
     updateItemDragTarget(e, id, type);
   };
 
-  const handleDragOverItem = (e: React.DragEvent, id: string, type: "connection" | "group") => {
+  const handleDragOverItem = (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => {
     updateItemDragTarget(e, id, type);
   };
 
-  const handleDragLeaveItem = (e: React.DragEvent, id: string, type: "connection" | "group") => {
+  const handleDragLeaveItem = (
+    e: React.DragEvent,
+    id: string,
+    type: "connection" | "group",
+  ) => {
     const related = e.relatedTarget as Node | null;
     if (related && (e.currentTarget as HTMLElement).contains(related)) return;
     const cur = dragTargetRef.current;
@@ -1136,9 +1362,14 @@ export default function SavedConnections({
               .filter((c) => c.group_id === id && c.id !== srcId)
               .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
             groupConns.push({ ...conn, group_id: id });
-            await invoke("save_connection", { connection: { ...conn, group_id: id } });
+            await invoke("save_connection", {
+              connection: { ...conn, group_id: id },
+            });
             await invoke("reorder_items", {
-              connections: groupConns.map((c, i) => ({ id: c.id, sort_order: i })),
+              connections: groupConns.map((c, i) => ({
+                id: c.id,
+                sort_order: i,
+              })),
               groups: [],
             });
             refreshConnections();
@@ -1153,7 +1384,10 @@ export default function SavedConnections({
             await invoke("save_group", { group: { ...grp, parent_id: id } });
             await invoke("reorder_items", {
               connections: [],
-              groups: groupChildren.map((g, i) => ({ id: g.id, sort_order: i })),
+              groups: groupChildren.map((g, i) => ({
+                id: g.id,
+                sort_order: i,
+              })),
             });
             refreshConnections();
           }
@@ -1166,13 +1400,21 @@ export default function SavedConnections({
           ? (connections.find((c) => c.id === id)?.group_id ?? null)
           : (groups.find((g) => g.id === id)?.parent_id ?? null);
 
-      const srcConn = srcType === "connection" ? connections.find((c) => c.id === srcId) : null;
-      const srcGrp = srcType === "group" ? groups.find((g) => g.id === srcId) : null;
+      const srcConn =
+        srcType === "connection"
+          ? connections.find((c) => c.id === srcId)
+          : null;
+      const srcGrp =
+        srcType === "group" ? groups.find((g) => g.id === srcId) : null;
 
       if (srcConn && (srcConn.group_id ?? null) !== targetParentId)
-        await invoke("save_connection", { connection: { ...srcConn, group_id: targetParentId } });
+        await invoke("save_connection", {
+          connection: { ...srcConn, group_id: targetParentId },
+        });
       if (srcGrp && (srcGrp.parent_id ?? null) !== targetParentId)
-        await invoke("save_group", { group: { ...srcGrp, parent_id: targetParentId } });
+        await invoke("save_group", {
+          group: { ...srcGrp, parent_id: targetParentId },
+        });
 
       const connsUpdates: { id: string; sort_order: number }[] = [];
       const groupsUpdates: { id: string; sort_order: number }[] = [];
@@ -1202,7 +1444,9 @@ export default function SavedConnections({
       } else {
         if (srcType === "connection" && srcConn) {
           const siblings = connections
-            .filter((c) => (c.group_id ?? null) === targetParentId && c.id !== srcId)
+            .filter(
+              (c) => (c.group_id ?? null) === targetParentId && c.id !== srcId,
+            )
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
           siblings.push(srcConn);
           siblings.forEach((c, i) => {
@@ -1210,7 +1454,9 @@ export default function SavedConnections({
           });
         } else if (srcType === "group" && srcGrp) {
           const siblings = groups
-            .filter((g) => (g.parent_id ?? null) === targetParentId && g.id !== srcId)
+            .filter(
+              (g) => (g.parent_id ?? null) === targetParentId && g.id !== srcId,
+            )
             .sort((a, b) => a.sort_order - b.sort_order);
           siblings.push(srcGrp);
           siblings.forEach((g, i) => {
@@ -1220,7 +1466,10 @@ export default function SavedConnections({
       }
 
       if (connsUpdates.length > 0 || groupsUpdates.length > 0)
-        await invoke("reorder_items", { connections: connsUpdates, groups: groupsUpdates });
+        await invoke("reorder_items", {
+          connections: connsUpdates,
+          groups: groupsUpdates,
+        });
       refreshConnections();
     } catch (err) {
       logger.error({
@@ -1244,7 +1493,12 @@ export default function SavedConnections({
     dragSourceRef.current = null;
     if (!source || !canDropOnItem(source, id, tgtType)) return;
 
-    await submitItemDrop(source, id, tgtType, computeDropPosition(e, tgtType, source.type));
+    await submitItemDrop(
+      source,
+      id,
+      tgtType,
+      computeDropPosition(e, tgtType, source.type),
+    );
   };
 
   const handleDragOverBg = (e: React.DragEvent) => {
@@ -1265,12 +1519,17 @@ export default function SavedConnections({
       setDragTarget({ id: null, type: "background", position: "inside" });
   };
 
-  async function dropSourceToRoot(source: { type: "connection" | "group"; id: string }) {
+  async function dropSourceToRoot(source: {
+    type: "connection" | "group";
+    id: string;
+  }) {
     try {
       if (source.type === "connection") {
         const conn = connectionsRef.current.find((c) => c.id === source.id);
         if (conn?.group_id) {
-          await invoke("save_connection", { connection: { ...conn, group_id: null } });
+          await invoke("save_connection", {
+            connection: { ...conn, group_id: null },
+          });
           const siblings = connectionsRef.current
             .filter((c) => !c.group_id && c.id !== source.id)
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -1318,7 +1577,11 @@ export default function SavedConnections({
   // ── Sort button helpers ───────────────────────────────────────────────────
   const cycleSortMode = () => {
     const next =
-      sortMode === "default" ? "name-asc" : sortMode === "name-asc" ? "name-desc" : "default";
+      sortMode === "default"
+        ? "name-asc"
+        : sortMode === "name-asc"
+          ? "name-desc"
+          : "default";
     updateUi({ saved_connections_sort_mode: next });
   };
   const sortTitle =
@@ -1344,6 +1607,7 @@ export default function SavedConnections({
     handleConnect,
     handleConnectOnly,
     handleConnectSelected,
+    handlePingHost,
     handleCopyConnection,
     requestMoveConnectionToGroup,
     requestMoveSelectedConnectionsToGroup,
@@ -1380,7 +1644,10 @@ export default function SavedConnections({
           title={t("panel.savedConnections")}
           actions={
             savedConnections.length > 0 ? (
-              <span className="text-[0.6875rem]" style={{ color: "var(--df-text-dimmed)" }}>
+              <span
+                className="text-[0.6875rem]"
+                style={{ color: "var(--df-text-dimmed)" }}
+              >
                 {savedConnections.length}
               </span>
             ) : null
@@ -1390,7 +1657,8 @@ export default function SavedConnections({
         <div
           className="nyaterm-wallpaper-transparent-surface flex items-center gap-1.5 px-2 py-1.5 shrink-0 border-b"
           style={{
-            borderColor: "color-mix(in srgb, var(--df-border) 40%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--df-border) 40%, transparent)",
             backgroundColor: "var(--df-bg-section-header)",
           }}
         >
@@ -1423,13 +1691,20 @@ export default function SavedConnections({
               variant="ghost"
               size="icon-sm"
               className="shrink-0 h-6 w-6 rounded-md p-0 transition-colors hover:bg-[var(--df-bg-hover)]"
-              style={{ color: sortActive ? "var(--df-primary)" : "var(--df-text-muted)" }}
+              style={{
+                color: sortActive
+                  ? "var(--df-primary)"
+                  : "var(--df-text-muted)",
+              }}
               tooltip={sortTitle}
               onClick={cycleSortMode}
             >
               <SortIcon
                 className="text-xs"
-                style={{ transform: sortMode === "name-desc" ? "scaleY(-1)" : undefined }}
+                style={{
+                  transform:
+                    sortMode === "name-desc" ? "scaleY(-1)" : undefined,
+                }}
               />
             </HeaderActionButton>
 
@@ -1482,7 +1757,9 @@ export default function SavedConnections({
                 {savedGroups.length > 0 && (
                   <>
                     <DropdownMenuItem
-                      onClick={allGroupsExpanded ? collapseAllGroups : expandAllGroups}
+                      onClick={
+                        allGroupsExpanded ? collapseAllGroups : expandAllGroups
+                      }
                       className="cursor-pointer gap-2 py-1.5 focus:bg-[var(--df-bg-hover)]"
                     >
                       {allGroupsExpanded ? (
@@ -1554,11 +1831,14 @@ export default function SavedConnections({
               data-saved-drop-bg
               className={`flex-1 overflow-x-auto overflow-y-auto p-1.5 text-xs space-y-0.5 terminal-scroll ${dragTarget?.type === "background" ? "ring-inset ring-2 ring-primary/20" : ""}`}
               onMouseDown={(event) => {
-                if (event.button !== 0 || event.target !== event.currentTarget) return;
+                if (event.button !== 0 || event.target !== event.currentTarget)
+                  return;
                 setSelectedConnectionIds(new Set());
                 lastSelectedConnectionIdRef.current = null;
               }}
-              onDragEnter={isDragEnabled ? (e) => e.preventDefault() : undefined}
+              onDragEnter={
+                isDragEnabled ? (e) => e.preventDefault() : undefined
+              }
               onDragOver={isDragEnabled ? handleDragOverBg : undefined}
               onDrop={isDragEnabled ? handleDropBg : undefined}
             >
@@ -1585,12 +1865,17 @@ export default function SavedConnections({
                     <div
                       className="mt-1 pt-1 border-t"
                       style={{
-                        borderColor: "color-mix(in srgb, var(--df-border) 50%, transparent)",
+                        borderColor:
+                          "color-mix(in srgb, var(--df-border) 50%, transparent)",
                       }}
                     />
                   )}
                   {ungrouped.map((conn) => (
-                    <ConnectionItem key={conn.id} conn={conn} indented={false} />
+                    <ConnectionItem
+                      key={conn.id}
+                      conn={conn}
+                      indented={false}
+                    />
                   ))}
                 </>
               )}
@@ -1613,7 +1898,10 @@ export default function SavedConnections({
               />
             )}
             {selectedConnections.length > 0 && (
-              <ContextMenuItem className="text-red-400" onClick={requestDeleteSelectedConnections}>
+              <ContextMenuItem
+                className="text-red-400"
+                onClick={requestDeleteSelectedConnections}
+              >
                 <MdDelete className="text-[0.875rem] mr-2" />
                 {selectedConnections.length > 1
                   ? t("savedConnections.deleteSelected")
@@ -1640,7 +1928,9 @@ export default function SavedConnections({
         {/* Dialogs */}
         <DeleteConnectionDialog
           open={deleteTargets.length > 0}
-          connectionName={deleteTargets.length === 1 ? deleteTargets[0]?.name : undefined}
+          connectionName={
+            deleteTargets.length === 1 ? deleteTargets[0]?.name : undefined
+          }
           count={deleteTargets.length}
           onConfirm={handleDeleteConfirm}
           onCancel={() => setDeleteTargets([])}
@@ -1678,7 +1968,10 @@ export default function SavedConnections({
           onConfirm={handleConfirmOpenGroupConnections}
           onCancel={() => setOpenGroupTarget(null)}
         />
-        <ImportDialog open={showImportDialog} onClose={() => setShowImportDialog(false)} />
+        <ImportDialog
+          open={showImportDialog}
+          onClose={() => setShowImportDialog(false)}
+        />
         {passwordAlert}
       </div>
     </SavedConnectionsContext.Provider>
