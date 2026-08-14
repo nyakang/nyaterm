@@ -390,6 +390,7 @@ Button_2_Action=whoami
                 created_at: Some(5),
                 use_count: Some(7),
                 sort_order: Some(3),
+                target_connection_ids: None,
             }],
             categories: Vec::new(),
         };

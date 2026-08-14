@@ -10,9 +10,10 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdCheck, MdExpandMore } from "react-icons/md";
+import { MdAdd, MdCheck, MdExpandMore, MdClear } from "react-icons/md";
 import { QUICK_ICONS } from "@/components/icons";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -22,11 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,7 +37,7 @@ import {
   hasQuickCommandCategorySiblingName,
 } from "@/lib/quickCommandCategories";
 import { cn, parseJsonSearchParam } from "@/lib/utils";
-import type { QuickCommand, QuickCommandCategory } from "@/types/global";
+import type { QuickCommand, QuickCommandCategory, SavedConnection } from "@/types/global";
 
 interface QuickCommandsConfig {
   commands: QuickCommand[];
@@ -93,9 +90,7 @@ function QuickCommandScriptEditor({
 
   const measureLineHeights = useCallback(() => {
     const nextHeights = lineRows.map(
-      (_line, index) =>
-        measureLineRefs.current[index]?.offsetHeight ||
-        SCRIPT_EDITOR_LINE_HEIGHT,
+      (_line, index) => measureLineRefs.current[index]?.offsetHeight || SCRIPT_EDITOR_LINE_HEIGHT,
     );
 
     setLineHeights((current) => {
@@ -193,9 +188,8 @@ export default function QuickCommandPage() {
   const initialData = parseJsonSearchParam<QuickCommand>(dataParam);
   const defaultCategoryId = initialData ? null : params.get("category_id");
 
-  const [savedCategories, setSavedCategories] = useState<
-    QuickCommandCategory[]
-  >([]);
+  const [savedCategories, setSavedCategories] = useState<QuickCommandCategory[]>([]);
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [label, setLabel] = useState(initialData?.label || "");
   const [command, setCommand] = useState(initialData?.command || "");
   const [categoryId, setCategoryId] = useState(
@@ -204,17 +198,17 @@ export default function QuickCommandPage() {
   const [categorySearchQuery, setCategorySearchQuery] = useState("");
   const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryParentId, setNewCategoryParentId] = useState<string | null>(
-    null,
-  );
+  const [newCategoryParentId, setNewCategoryParentId] = useState<string | null>(null);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
-  const [description, setDescription] = useState(
-    initialData?.description || "",
+  // 目标服务器：多选 saved connections。undefined 表示未设置（按原行为发送到活动会话）。
+  const [targetConnectionIds, setTargetConnectionIds] = useState<string[]>(
+    initialData?.target_connection_ids || [],
   );
+  const [showTargetConnectionsDropdown, setShowTargetConnectionsDropdown] = useState(false);
+  const [targetConnectionsSearchQuery, setTargetConnectionsSearchQuery] = useState("");
+  const [description, setDescription] = useState(initialData?.description || "");
   const [colorTag, setColorTag] = useState(initialData?.color_tag || "default");
-  const [iconTag, setIconTag] = useState<string | undefined>(
-    initialData?.icon_tag,
-  );
+  const [iconTag, setIconTag] = useState<string | undefined>(initialData?.icon_tag);
   const [pinned, setPinned] = useState(initialData?.pinned || false);
   const [executionMode, setExecutionMode] = useState<"execute" | "append">(
     (initialData?.execution_mode as "execute" | "append") || "execute",
@@ -229,8 +223,14 @@ export default function QuickCommandPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    invoke<QuickCommandsConfig>("get_quick_commands")
-      .then((cfg) => setSavedCategories(cfg.categories || []))
+    Promise.all([
+      invoke<QuickCommandsConfig>("get_quick_commands"),
+      invoke<SavedConnection[]>("get_saved_connections"),
+    ])
+      .then(([cfg, connections]) => {
+        setSavedCategories(cfg.categories || []);
+        setSavedConnections(connections || []);
+      })
       .catch((e) => setErrors((p) => ({ ...p, general: getErrorMessage(e) })));
   }, []);
 
@@ -244,10 +244,7 @@ export default function QuickCommandPage() {
   const categorySearchText = categorySearchQuery.trim().toLowerCase();
   const filteredCategoryRows = categorySearchText
     ? categoryTreeRows.filter(({ node }) => {
-        const path = buildQuickCommandCategoryPath(
-          savedCategories,
-          node.category.id,
-        );
+        const path = buildQuickCommandCategoryPath(savedCategories, node.category.id);
         return (
           node.category.name.toLowerCase().includes(categorySearchText) ||
           path.toLowerCase().includes(categorySearchText)
@@ -266,8 +263,7 @@ export default function QuickCommandPage() {
     newCategoryDraftName,
   );
   const newCategoryParentLabel = newCategoryParentId
-    ? buildQuickCommandCategoryPath(savedCategories, newCategoryParentId) ||
-      newCategoryParentId
+    ? buildQuickCommandCategoryPath(savedCategories, newCategoryParentId) || newCategoryParentId
     : t("quickCommands.rootCategory");
   const selectedCategoryLabel =
     categoryId === "new"
@@ -276,15 +272,33 @@ export default function QuickCommandPage() {
         : newCategoryName
       : categoryId === "none"
         ? t("quickCommands.uncategorized")
-        : buildQuickCommandCategoryPath(savedCategories, categoryId) ||
-          categoryId;
+        : buildQuickCommandCategoryPath(savedCategories, categoryId) || categoryId;
   const newCategoryDuplicate =
     categoryId === "new" &&
-    hasQuickCommandCategorySiblingName(
-      savedCategories,
-      newCategoryParentId,
-      newCategoryName,
-    );
+    hasQuickCommandCategorySiblingName(savedCategories, newCategoryParentId, newCategoryName);
+
+  // 目标服务器搜索/展示辅助
+  const targetConnSearchText = targetConnectionsSearchQuery.trim().toLowerCase();
+  const filteredSavedConnections = useMemo(() => {
+    if (!targetConnSearchText) return savedConnections;
+    return savedConnections.filter((c) => {
+      const name = c.name?.toLowerCase() || "";
+      const host = (c as unknown as { host?: string }).host?.toLowerCase() || "";
+      return name.includes(targetConnSearchText) || host.includes(targetConnSearchText);
+    });
+  }, [savedConnections, targetConnSearchText]);
+  const targetConnectionMap = useMemo(() => {
+    const map = new Map<string, SavedConnection>();
+    for (const c of savedConnections) map.set(c.id, c);
+    return map;
+  }, [savedConnections]);
+  const toggleTargetConnection = (id: string) => {
+    setTargetConnectionIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      return [...prev, id];
+    });
+  };
+  const clearTargetConnections = () => setTargetConnectionIds([]);
 
   const selectExistingCategory = (id: string) => {
     setCategoryId(id);
@@ -314,8 +328,7 @@ export default function QuickCommandPage() {
   };
 
   const handleSave = async () => {
-    const newErrors: { label?: string; category?: string; command?: string } =
-      {};
+    const newErrors: { label?: string; category?: string; command?: string } = {};
     if (!label.trim()) {
       newErrors.label = t("quickCommands.errorLabelRequired");
     }
@@ -340,10 +353,7 @@ export default function QuickCommandPage() {
         id: newId,
         name: newCategoryName.trim(),
         parent_id: newCategoryParentId || undefined,
-        sort_order: getNextQuickCommandCategorySortOrder(
-          savedCategories,
-          newCategoryParentId,
-        ),
+        sort_order: getNextQuickCommandCategorySortOrder(savedCategories, newCategoryParentId),
       };
       finalCategoryId = newId;
     }
@@ -359,6 +369,8 @@ export default function QuickCommandPage() {
       icon_tag: iconTag,
       pinned,
       execution_mode: executionMode,
+      // 目标服务器多选：有值时写入，空数组视为未设置，走默认的「当前活动会话」行为。
+      target_connection_ids: targetConnectionIds.length > 0 ? targetConnectionIds : undefined,
       updated_at: now,
       created_at: initialData?.created_at ?? now,
       use_count: initialData?.use_count,
@@ -382,11 +394,7 @@ export default function QuickCommandPage() {
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground">
       <ChildWindowHeader
-        title={
-          initialData
-            ? t("quickCommands.editCommand")
-            : t("quickCommands.addCommand")
-        }
+        title={initialData ? t("quickCommands.editCommand") : t("quickCommands.addCommand")}
         onClose={handleClose}
       />
 
@@ -394,16 +402,11 @@ export default function QuickCommandPage() {
         <div className="flex shrink-0 flex-col gap-4 md:flex-row">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex justify-between items-center">
-              <Label
-                htmlFor="qc-label"
-                className="text-xs text-muted-foreground"
-              >
+              <Label htmlFor="qc-label" className="text-xs text-muted-foreground">
                 {t("quickCommands.labelName")}
               </Label>
               {errors.label && (
-                <span className="text-[0.6875rem] text-destructive">
-                  {errors.label}
-                </span>
+                <span className="text-[0.6875rem] text-destructive">{errors.label}</span>
               )}
             </div>
             <Input
@@ -420,16 +423,11 @@ export default function QuickCommandPage() {
 
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex justify-between items-center">
-              <Label
-                htmlFor="qc-category"
-                className="text-xs text-muted-foreground"
-              >
+              <Label htmlFor="qc-category" className="text-xs text-muted-foreground">
                 {t("quickCommands.category")}
               </Label>
               {errors.category && (
-                <span className="text-[0.6875rem] text-destructive">
-                  {errors.category}
-                </span>
+                <span className="text-[0.6875rem] text-destructive">{errors.category}</span>
               )}
             </div>
             <Popover
@@ -450,9 +448,7 @@ export default function QuickCommandPage() {
                 >
                   <span
                     className={
-                      categoryId !== "none"
-                        ? "truncate"
-                        : "text-muted-foreground truncate"
+                      categoryId !== "none" ? "truncate" : "text-muted-foreground truncate"
                     }
                   >
                     {selectedCategoryLabel}
@@ -475,19 +471,16 @@ export default function QuickCommandPage() {
                     onChange={(e) => setCategorySearchQuery(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && categorySearchQuery.trim()) {
-                        const exactRow = filteredCategoryRows.find(
-                          ({ node }) => {
-                            const path = buildQuickCommandCategoryPath(
-                              savedCategories,
-                              node.category.id,
-                            );
-                            return (
-                              node.category.name.toLowerCase() ===
-                                categorySearchText ||
-                              path.toLowerCase() === categorySearchText
-                            );
-                          },
-                        );
+                        const exactRow = filteredCategoryRows.find(({ node }) => {
+                          const path = buildQuickCommandCategoryPath(
+                            savedCategories,
+                            node.category.id,
+                          );
+                          return (
+                            node.category.name.toLowerCase() === categorySearchText ||
+                            path.toLowerCase() === categorySearchText
+                          );
+                        });
                         if (exactRow) {
                           selectExistingCategory(exactRow.node.category.id);
                         }
@@ -528,10 +521,7 @@ export default function QuickCommandPage() {
                     >
                       <span
                         className="block min-w-0 flex-1 truncate"
-                        title={buildQuickCommandCategoryPath(
-                          savedCategories,
-                          node.category.id,
-                        )}
+                        title={buildQuickCommandCategoryPath(savedCategories, node.category.id)}
                       >
                         {node.category.name}
                       </span>
@@ -566,10 +556,7 @@ export default function QuickCommandPage() {
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      disabled={
-                        !newCategoryDraftName.trim() ||
-                        newCategoryDraftDuplicate
-                      }
+                      disabled={!newCategoryDraftName.trim() || newCategoryDraftDuplicate}
                       onClick={selectNewCategory}
                     >
                       <MdAdd className="text-sm" />
@@ -604,6 +591,143 @@ export default function QuickCommandPage() {
           />
         </div>
 
+        {/* Target Servers (One-Click Commands) */}
+        <div className="shrink-0 space-y-1.5">
+          <div className="flex justify-between items-center">
+            <Label className="text-xs text-muted-foreground">
+              {t("panel.oneClickCommands.targetConnections")}
+            </Label>
+            {targetConnectionIds.length > 0 && (
+              <button
+                type="button"
+                onClick={clearTargetConnections}
+                className="text-[0.6875rem] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              >
+                <MdClear className="text-xs" />
+                {t("panel.oneClickCommands.clearTargetConnections")}
+              </button>
+            )}
+          </div>
+          <Popover
+            open={showTargetConnectionsDropdown}
+            onOpenChange={(open) => {
+              setShowTargetConnectionsDropdown(open);
+              if (!open) setTargetConnectionsSearchQuery("");
+            }}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full h-auto min-h-9 justify-between text-sm font-normal px-3 py-2"
+              >
+                <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1 text-left">
+                  {targetConnectionIds.length === 0 ? (
+                    <span className="text-muted-foreground truncate">
+                      {t("panel.oneClickCommands.targetConnectionsPlaceholder")}
+                    </span>
+                  ) : (
+                    targetConnectionIds.map((id) => {
+                      const c = targetConnectionMap.get(id);
+                      return (
+                        <Badge
+                          key={id}
+                          variant="secondary"
+                          className="text-[0.6875rem] font-normal inline-flex items-center gap-1 pr-1"
+                        >
+                          <span className="max-w-[9rem] truncate">{c?.name || id}</span>
+                          <button
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTargetConnection(id);
+                            }}
+                            className="hover:text-destructive transition-colors"
+                            aria-label={`remove ${c?.name || id}`}
+                          >
+                            <MdClear className="text-[0.6875rem]" />
+                          </button>
+                        </Badge>
+                      );
+                    })
+                  )}
+                </div>
+                <MdExpandMore className="shrink-0 ml-2 text-xs text-muted-foreground" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="p-0 flex flex-col"
+              style={{ width: "var(--radix-popover-trigger-width)" }}
+              align="start"
+              sideOffset={4}
+            >
+              <div className="p-1 border-b">
+                <Input
+                  autoFocus
+                  className="h-8 text-sm bg-transparent border-none focus-visible:ring-0 shadow-none px-2"
+                  placeholder={t("panel.oneClickCommands.targetConnectionsSearch")}
+                  value={targetConnectionsSearchQuery}
+                  onChange={(e) => setTargetConnectionsSearchQuery(e.target.value)}
+                />
+              </div>
+              <div className="max-h-[220px] overflow-y-auto">
+                {filteredSavedConnections.length === 0 ? (
+                  <div className="px-3 py-4 text-xs text-center text-muted-foreground">
+                    {t("panel.oneClickCommands.targetConnectionsEmpty")}
+                  </div>
+                ) : (
+                  filteredSavedConnections.map((c) => {
+                    const checked = targetConnectionIds.includes(c.id);
+                    return (
+                      <button
+                        type="button"
+                        key={c.id}
+                        onClick={() => toggleTargetConnection(c.id)}
+                        className={`flex w-full min-w-0 flex-col items-start gap-1 px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${
+                          checked ? "bg-primary/15 text-primary" : ""
+                        }`}
+                      >
+                        <div className="flex w-full items-center gap-2">
+                          <span className="flex-1 min-w-0 truncate font-medium">{c.name}</span>
+                          {checked && <MdCheck className="shrink-0 text-sm text-primary" />}
+                        </div>
+                        <div className="w-full flex items-center justify-between gap-2 text-[0.6875rem] text-muted-foreground">
+                          <span className="truncate">
+                            {(c as unknown as { host?: string }).host
+                              ? `${(c as unknown as { host: string }).host}`
+                              : c.type}
+                          </span>
+                          <span className="shrink-0">{c.type}</span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              {targetConnectionIds.length > 0 && (
+                <div className="border-t px-3 py-1.5 text-[0.6875rem] text-muted-foreground flex justify-between items-center">
+                  <span>
+                    {t("panel.oneClickCommands.targetConnectionsSelected", {
+                      count: targetConnectionIds.length,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearTargetConnections}
+                    className="hover:text-destructive transition-colors"
+                  >
+                    {t("panel.oneClickCommands.clearTargetConnections")}
+                  </button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+          <p className="text-[0.6875rem] text-muted-foreground pl-1 mt-1">
+            {t("panel.oneClickCommands.targetConnectionsHint")}
+          </p>
+        </div>
+
         {/* Color Tag & Pinned */}
         <div className="flex shrink-0 flex-row items-center gap-4 border p-2 rounded-md bg-muted/20">
           <div className="min-w-0 flex-1 space-y-1">
@@ -631,12 +755,7 @@ export default function QuickCommandPage() {
                 <div className="w-6 h-6 rounded-full border-2 border-foreground scale-110 shadow-sm flex items-center justify-center bg-secondary">
                   {(() => {
                     const iconDef = QUICK_ICONS[iconTag];
-                    return (
-                      <iconDef.icon
-                        className="text-xs"
-                        style={{ color: iconDef.color }}
-                      />
-                    );
+                    return <iconDef.icon className="text-xs" style={{ color: iconDef.color }} />;
                   })()}
                 </div>
               )}
@@ -661,10 +780,7 @@ export default function QuickCommandPage() {
                           setColorTag("default");
                         }}
                       >
-                        <iconDef.icon
-                          className="text-base"
-                          style={{ color: iconDef.color }}
-                        />
+                        <iconDef.icon className="text-base" style={{ color: iconDef.color }} />
                       </DropdownMenuItem>
                     ))}
                   </div>
@@ -679,12 +795,7 @@ export default function QuickCommandPage() {
             >
               {t("quickCommands.pin")}
             </Label>
-            <Switch
-              checked={pinned}
-              onCheckedChange={setPinned}
-              id="qc-pinned"
-              className="mr-1"
-            />
+            <Switch checked={pinned} onCheckedChange={setPinned} id="qc-pinned" className="mr-1" />
           </div>
         </div>
 
@@ -695,9 +806,7 @@ export default function QuickCommandPage() {
           </Label>
           <Tabs
             value={executionMode}
-            onValueChange={(val) =>
-              setExecutionMode(val as "execute" | "append")
-            }
+            onValueChange={(val) => setExecutionMode(val as "execute" | "append")}
             className="w-full"
           >
             <TabsList className="grid w-full grid-cols-2 h-8">
@@ -719,16 +828,11 @@ export default function QuickCommandPage() {
         {/* Script / Command */}
         <div className="flex min-h-32 flex-1 flex-col gap-1.5">
           <div className="flex justify-between items-center">
-            <Label
-              htmlFor="qc-command"
-              className="text-xs text-muted-foreground"
-            >
+            <Label htmlFor="qc-command" className="text-xs text-muted-foreground">
               {t("quickCommands.commandScript")}
             </Label>
             {errors.command && (
-              <span className="text-[0.6875rem] text-destructive">
-                {errors.command}
-              </span>
+              <span className="text-[0.6875rem] text-destructive">{errors.command}</span>
             )}
           </div>
           <QuickCommandScriptEditor
@@ -751,20 +855,10 @@ export default function QuickCommandPage() {
 
       {/* Footer */}
       <div className="flex shrink-0 flex-row gap-2 border-t px-5 py-3 justify-end items-center">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-xs px-4"
-          onClick={handleClose}
-        >
+        <Button variant="ghost" size="sm" className="text-xs px-4" onClick={handleClose}>
           {t("dialog.cancel")}
         </Button>
-        <Button
-          size="sm"
-          className="text-xs px-4"
-          onClick={handleSave}
-          disabled={saving}
-        >
+        <Button size="sm" className="text-xs px-4" onClick={handleSave} disabled={saving}>
           {saving ? t("dialog.saving") : t("dialog.save")}
         </Button>
       </div>

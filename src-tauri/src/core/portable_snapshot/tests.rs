@@ -732,6 +732,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            target_connection_ids: None,
         });
         snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
         snapshot

@@ -37,6 +37,9 @@ pub struct QuickCommand {
     pub use_count: Option<u32>,
     #[serde(default)]
     pub sort_order: Option<i32>,
+    /// 一键命令：目标服务器连接 ID 列表。留空则沿用原行为（发送到当前活动会话）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_connection_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

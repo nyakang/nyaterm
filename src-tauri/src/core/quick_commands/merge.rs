@@ -135,6 +135,7 @@ fn merge_import(
             created_at: Some(now),
             use_count: None,
             sort_order: command.sort_order,
+            target_connection_ids: command.target_connection_ids,
         };
 
         if upsert_command(config, imported) {

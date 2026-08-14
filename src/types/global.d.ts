@@ -1010,6 +1010,8 @@ export interface QuickCommand {
   created_at?: number;
   use_count?: number;
   sort_order?: number;
+  /** 一键命令：目标服务器连接 ID 列表。留空则沿用原行为（发送到当前活动会话）。 */
+  target_connection_ids?: string[];
 }
 
 export interface QuickCommandsConfig {

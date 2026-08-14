@@ -10,6 +10,7 @@ import FileTransfer from "@/components/panel/file-explorer/FileTransfer";
 import GpuMonitor from "@/components/panel/GpuMonitor";
 import NetworkPanel from "@/components/panel/NetworkPanel";
 import NotesPanel from "@/components/panel/notes/NotesPanel";
+import OneClickCommands from "@/components/panel/OneClickCommands";
 import ProcessManager from "@/components/panel/ProcessManager";
 import RecordingPanel from "@/components/panel/RecordingPanel";
 import ResourceMonitor from "@/components/panel/ResourceMonitor";
@@ -21,7 +22,33 @@ import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { RecordingMode, RecordingStatus, SavedConnection, SessionInfo, SessionPane } from "@/types/global";
+import type {
+  RecordingMode,
+  RecordingStatus,
+  SavedConnection,
+  SessionInfo,
+  SessionPane,
+  Tab,
+} from "@/types/global";
+
+/** 一键命令面板的运行时上下文。 */
+export interface OneClickRuntime {
+  /** 当前全部 tabs（用于匹配已打开的会话 pane）。 */
+  tabs: Tab[];
+  /** 已保存的连接（用于未连接时按 connectionId 反查 SavedConnection）。 */
+  savedConnections: SavedConnection[];
+  /** 递归收集某个 tab root 下的所有 session pane。 */
+  collectSessionPanes: (root: unknown) => SessionPane[];
+  /** 发送到当前活动会话（target_connection_ids 为空时的回退）。 */
+  sendToCurrent: (command: string, execute: boolean) => void;
+  /** 自动建立连接并通过 startup_command 在连接就绪后执行。 */
+  connectAndRun: (
+    connection: SavedConnection,
+    startupCommand: { command: string; delay_ms?: number },
+  ) => Promise<void> | void;
+  /** 增加 quick command 使用次数。 */
+  incrementUseCount: (id: string) => void | Promise<void>;
+}
 
 interface AppPanelContentProps {
   panelId: string | null;
@@ -52,8 +79,13 @@ interface AppPanelContentProps {
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
   canReconnect: (sessionId: string) => boolean;
   onCommandSend: (command: string, execute?: boolean) => void;
-  onToggleSessionRecording: (session: SessionInfo, mode?: RecordingMode) => Promise<void> | void;
+  onToggleSessionRecording: (
+    session: SessionInfo,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
+  /** 一键命令面板的运行时上下文（由 App.tsx 注入）。 */
+  oneClickRuntime: OneClickRuntime;
 }
 
 export default function AppPanelContent({
@@ -83,10 +115,14 @@ export default function AppPanelContent({
   onCommandSend,
   onToggleSessionRecording,
   onSaveSessionTranscript,
+  oneClickRuntime,
 }: AppPanelContentProps) {
   const liveActivePane =
-    activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
-  const liveTerminalPane = liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
+    activePane && !activePane.connecting && !activePane.connectError
+      ? activePane
+      : null;
+  const liveTerminalPane =
+    liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
 
   const aiEverMounted = useRef(false);
   if (panelId === "aiAssistant") aiEverMounted.current = true;
@@ -99,13 +135,18 @@ export default function AppPanelContent({
             <div className="flex-1 min-h-0 overflow-hidden">
               <FileExplorer
                 activeSessionId={activeSessionId}
-                activeSessionType={liveTerminalPane ? liveTerminalPane.type : null}
+                activeSessionType={
+                  liveTerminalPane ? liveTerminalPane.type : null
+                }
                 activeConnectionId={liveTerminalPane?.connectionId ?? null}
                 activeSessionName={liveTerminalPane?.name ?? null}
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />
-            <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
+            <div
+              style={{ height: transferHeight }}
+              className="shrink-0 overflow-hidden"
+            >
               <FileTransfer activeSessionId={activeSessionId} />
             </div>
           </div>
@@ -114,6 +155,8 @@ export default function AppPanelContent({
         return <NetworkPanel />;
       case "notes":
         return <NotesPanel />;
+      case "oneClickCommands":
+        return <OneClickCommands runtime={oneClickRuntime} />;
       case "securityAuth":
         return <SecurityAuthPanel activeSessionId={activeSessionId} />;
       case "syncBackupHistory":
@@ -147,7 +190,12 @@ export default function AppPanelContent({
           />
         );
       case "commandHistory":
-        return <CommandHistory activeSessionId={activeSessionId} onCommandSend={onCommandSend} />;
+        return (
+          <CommandHistory
+            activeSessionId={activeSessionId}
+            onCommandSend={onCommandSend}
+          />
+        );
       case "resourceMonitor":
         return (
           <ResourceMonitor

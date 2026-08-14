@@ -50,6 +50,8 @@ struct QuickCommand {
     risk_level: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sort_order: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_connection_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -395,6 +397,7 @@ fn merge_import(
                 source,
                 risk_level,
                 sort_order: command.sort_order,
+                target_connection_ids: None,
             },
         );
         imported_commands += 1;
