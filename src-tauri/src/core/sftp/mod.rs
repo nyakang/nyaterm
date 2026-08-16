@@ -72,6 +72,16 @@ pub struct CopyFileEntryRequest {
     pub duplicate_strategy_override: Option<String>,
 }
 
+/// A remote entry to move (cut → paste). Mirrors the frontend clipboard entry
+/// shape so the frontend can pass its in-memory clipboard directly.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMoveEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+}
+
 fn is_remote_delete_not_found(error: &AppError) -> bool {
     match error {
         AppError::Sftp(SftpError::Status(status)) => status.status_code == StatusCode::NoSuchFile,
@@ -2079,6 +2089,67 @@ pub async fn delete_remote_file(
         remote_path = path,
         "User deleted remote entry"
     );
+
+    Ok(())
+}
+
+/// Move (cut → paste) remote entries into `target_dir`.
+///
+/// Unlike a plain `rename`, this supports both same-session and cross-session
+/// moves and uses copy-then-delete semantics: each entry is first copied with
+/// the same merge/overwrite behaviour as `copy_file_entry` (existing files are
+/// overwritten, existing directories are merged recursively), and only after a
+/// successful copy is the source entry deleted.
+///
+/// `duplicate_strategy` is forwarded to the copy pipeline so the user's
+/// configured conflict behaviour (skip / rename / ask with an overwrite prompt)
+/// still applies — in particular an "ask" strategy re-prompts before
+/// overwriting an existing file or merging into an existing directory.
+///
+/// The copy is performed via the existing `copy_file_entry` pipeline so
+/// transfer progress events flow through the regular transfer UI. If any entry
+/// fails to copy, previously copied/deleted entries are NOT rolled back (the
+/// caller pre-validates source existence); the error is returned so the
+/// frontend can surface what happened.
+pub async fn move_remote_entries(
+    app: tauri::AppHandle,
+    manager: Arc<SessionManager>,
+    source_session_id: &str,
+    target_session_id: &str,
+    target_dir: &str,
+    entries: Vec<RemoteMoveEntry>,
+    duplicate_strategy: Option<String>,
+) -> AppResult<()> {
+    ensure_local_session_kind(&manager, source_session_id, &CopyEndpointKind::Remote).await?;
+    ensure_local_session_kind(&manager, target_session_id, &CopyEndpointKind::Remote).await?;
+
+    for entry in entries {
+        let source_path = entry.path.clone();
+        let request = CopyFileEntryRequest {
+            source: CopyEndpoint {
+                session_id: source_session_id.to_string(),
+                kind: CopyEndpointKind::Remote,
+                path: source_path.clone(),
+            },
+            target: CopyEndpoint {
+                session_id: target_session_id.to_string(),
+                kind: CopyEndpointKind::Remote,
+                path: target_dir.to_string(),
+            },
+            file_name: entry.name.clone(),
+            is_directory: entry.is_directory,
+            transfer_id: None,
+            duplicate_strategy_override: duplicate_strategy.clone(),
+        };
+        copy_file_entry(app.clone(), manager.clone(), request).await?;
+        delete_remote_file(
+            manager.clone(),
+            source_session_id,
+            &source_path,
+            None,
+        )
+        .await?;
+    }
 
     Ok(())
 }

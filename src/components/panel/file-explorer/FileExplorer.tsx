@@ -24,6 +24,7 @@ import {
   MdArrowDropUp,
   MdClose,
   MdContentCopy,
+  MdContentPaste,
   MdCreateNewFolder,
   MdDriveFolderUpload,
   MdFolderOff,
@@ -71,9 +72,23 @@ import { openAIAssistant } from "@/lib/aiEvents";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
+import { showPasteConfirm } from "@/lib/pasteConfirmPrompt";
 import { sendSessionInput, sendSessionInputWithSync } from "@/lib/sessionInput";
+import {
+  clearSftpClipboard,
+  getOsClipboardHasFiles,
+  getSftpClipboard,
+  observeOsClipboard,
+  type SftpClipboardEntry,
+  type SftpClipboardMode,
+  type SftpClipboardState,
+  setSftpClipboard,
+  subscribeOsClipboard,
+  subscribeSftpClipboard,
+} from "@/lib/sftpClipboard";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
+import { findMissingRemoteEntries } from "@/lib/transferDuplicateResolution";
 import { cn, formatSize } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
 import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
@@ -628,7 +643,7 @@ function FileExplorerPane({
 }: FileExplorerPaneProps) {
   const { t } = useTranslation();
   const { appSettings, updateUi, savedConnections, tabs, syncGroups, broadcastToAll } = useApp();
-  const { enqueueDownloads, enqueueUploads } = useTransfer();
+  const { enqueueDownloads, enqueueUploads, enqueueCopies, transfers } = useTransfer();
   const hasSshSession = !!activeSessionId && activeSessionType === "SSH";
   const hasLocalSession = !!activeSessionId && activeSessionType === "Local";
   const explorerBackend: FileExplorerBackendKind = hasLocalSession ? "local" : "remote";
@@ -705,6 +720,7 @@ function FileExplorerPane({
   const [listScrollTop, setListScrollTop] = useState(0);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const refreshUploadCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPasteCopyRefreshRef = useRef<Array<{ ids: string[]; targetDir: string }>>([]);
 
   filesRef.current = files;
   activeSessionIdRef.current = activeSessionId;
@@ -1385,6 +1401,35 @@ function FileExplorerPane({
     };
   }, [refreshCurrentDirectory]);
 
+  useEffect(() => {
+    const pending = pendingPasteCopyRefreshRef.current;
+    if (pending.length === 0) {
+      return;
+    }
+
+    const statusById = new Map(transfers.map((transfer) => [transfer.id, transfer.status]));
+    const terminalStates = new Set(["completed", "error", "cancelled"]);
+    const stillPending: Array<{ ids: string[]; targetDir: string }> = [];
+    let changed = false;
+
+    for (const item of pending) {
+      const allTerminal = item.ids.every(
+        (id) => terminalStates.has(statusById.get(id) ?? "") || !statusById.has(id),
+      );
+      if (!allTerminal) {
+        stillPending.push(item);
+        continue;
+      }
+      changed = true;
+      clearDirectoryChildrenCacheForPath(activeSessionId, "remote", item.targetDir);
+      void refreshCurrentDirectory();
+    }
+
+    if (changed) {
+      pendingPasteCopyRefreshRef.current = stillPending;
+    }
+  }, [activeSessionId, refreshCurrentDirectory, transfers]);
+
   const visibleFiles = useMemo(
     () => (showHiddenFiles ? files : files.filter((entry) => !entry.name.startsWith("."))),
     [files, showHiddenFiles],
@@ -1803,6 +1848,199 @@ function FileExplorerPane({
     }));
   }, [updateUi]);
 
+  const isRemoteFileBrowser = explorerBackend === "remote";
+  const [activeSftpClipboard, setActiveSftpClipboard] = useState<SftpClipboardState | null>(() =>
+    getSftpClipboard(),
+  );
+  useEffect(() => subscribeSftpClipboard(() => setActiveSftpClipboard(getSftpClipboard())), []);
+  const [osClipboardHasFiles, setOsClipboardHasFiles] = useState(() => getOsClipboardHasFiles());
+  useEffect(() => {
+    if (!isRemoteFileBrowser) {
+      setOsClipboardHasFiles(false);
+      return;
+    }
+    return subscribeOsClipboard(() => setOsClipboardHasFiles(getOsClipboardHasFiles()));
+  }, [isRemoteFileBrowser]);
+  const canPaste =
+    isRemoteFileBrowser && ((activeSftpClipboard?.entries.length ?? 0) > 0 || osClipboardHasFiles);
+
+  const handleCopyEntries = useCallback(
+    (entries: FileEntry[], mode: SftpClipboardMode) => {
+      if (!activeSessionId || entries.length === 0 || isParentDirectoryEntry(entries[0])) return;
+      const clipboardEntries: SftpClipboardEntry[] = entries.map((entry) => ({
+        name: entry.name,
+        path: joinExplorerPath(currentPathRef.current, entry.name, "remote"),
+        isDirectory: entry.is_dir,
+      }));
+      setSftpClipboard({
+        sessionId: activeSessionId,
+        mode,
+        entries: clipboardEntries,
+      });
+    },
+    [activeSessionId],
+  );
+
+  const handleCopyCutFromContextMenu = useCallback(
+    (entry: FileEntry, mode: SftpClipboardMode) => {
+      const entries = isParentDirectoryEntry(entry)
+        ? []
+        : selectedFiles.size > 1 && selectedFiles.has(entry.name)
+          ? filteredSortedFiles.filter((file) => selectedFiles.has(file.name))
+          : [entry];
+      handleCopyEntries(entries, mode);
+    },
+    [filteredSortedFiles, handleCopyEntries, selectedFiles],
+  );
+
+  const handleCopySelected = useCallback(() => {
+    handleCopyEntries(selectedRealFiles, "copy");
+  }, [handleCopyEntries, selectedRealFiles]);
+
+  const handleCutSelected = useCallback(() => {
+    handleCopyEntries(selectedRealFiles, "cut");
+  }, [handleCopyEntries, selectedRealFiles]);
+
+  const handlePaste = useCallback(async () => {
+    if (!activeSessionId || !canBrowseFiles) return;
+    const backend = explorerBackendRef.current;
+    const targetDir = normalizeDirectoryPath(currentPathRef.current) || homeDirRef.current || "/";
+    if (backend !== "remote") {
+      toast.error(t("fileExplorer.pasteRemoteOnly"));
+      return;
+    }
+
+    // 1. SFTP in-memory clipboard (cp / mv semantics), unless the OS clipboard
+    // holds file paths copied more recently, in which case it wins.
+    const sftpClipboard = getSftpClipboard();
+    const osObservation = await observeOsClipboard();
+    const isSftpPaste =
+      sftpClipboard && sftpClipboard.entries.length > 0 && !osObservation.isNewerThanSftp;
+
+    if (isSftpPaste) {
+      const { sessionId: sourceSessionId, mode, entries } = sftpClipboard;
+      if (sourceSessionId === activeSessionId) {
+        const sourceParent = getExplorerParentDirectory(entries[0].path, "remote");
+        if (sourceParent && sourceParent === normalizeExplorerPath(targetDir, "remote")) {
+          toast.info(t("fileExplorer.pasteSameDirectory"));
+          return;
+        }
+      }
+
+      const missingSources = await findMissingRemoteEntries(sourceSessionId, entries);
+      if (missingSources.length > 0) {
+        toast.error(
+          t("fileExplorer.pasteSourceMissing", {
+            count: missingSources.length,
+            names: missingSources.map((entry) => entry.name).join(", "),
+          }),
+        );
+        clearSftpClipboard();
+        return;
+      }
+
+      const confirmed = await showPasteConfirm({
+        action: mode === "cut" ? "move" : "copy",
+        count: entries.length,
+        targetDir,
+        fileNames: entries.map((entry) => entry.name),
+      });
+      if (!confirmed) {
+        return;
+      }
+
+      if (mode === "cut") {
+        try {
+          await invoke("move_remote_entries", {
+            sourceSessionId,
+            targetSessionId: activeSessionId,
+            targetDir,
+            entries: entries.map((entry) => ({
+              name: entry.name,
+              path: entry.path,
+              isDirectory: entry.isDirectory,
+            })),
+            duplicateStrategy: appSettings.transfer.duplicate_strategy,
+          });
+        } catch (error) {
+          toast.error(getErrorMessage(error) || String(error));
+        } finally {
+          clearSftpClipboard();
+          invalidateDirectoryChildrenCache(targetDir);
+          await loadDirectory(targetDir, { history: "preserve" });
+        }
+        return;
+      }
+
+      const copyIds = enqueueCopies(
+        entries.map((entry) => ({
+          fileName: entry.name,
+          kind: entry.isDirectory ? "directory" : "file",
+          source: {
+            sessionId: sourceSessionId,
+            kind: "remote",
+            path: entry.path,
+          },
+          target: {
+            sessionId: activeSessionId,
+            kind: "remote",
+            path: targetDir,
+          },
+        })),
+      );
+      if (copyIds.length > 0) {
+        pendingPasteCopyRefreshRef.current.push({ ids: copyIds, targetDir });
+      }
+      return;
+    }
+
+    // 2. OS clipboard file paths → upload to this directory.
+    if (osObservation.hasFiles) {
+      let resolved: ResolvedLocalDropPathEntry[] = [];
+      try {
+        resolved = await resolveLocalDropPaths(osObservation.paths);
+      } catch (error) {
+        toast.error(getErrorMessage(error) || String(error));
+        return;
+      }
+      const skippedCount = osObservation.paths.length - resolved.length;
+      if (skippedCount > 0) {
+        toast.warning(t("fileExplorer.pasteSourceMissingSkipped", { count: skippedCount }));
+      }
+      if (resolved.length === 0) {
+        return;
+      }
+
+      const confirmedUpload = await showPasteConfirm({
+        action: "upload",
+        count: resolved.length,
+        targetDir,
+        fileNames: resolved.map((entry) => getLocalPathName(entry.path, entry.path)),
+      });
+      if (!confirmedUpload) {
+        return;
+      }
+
+      uploadLocalEntriesToTarget(
+        { sessionId: activeSessionId, remoteDir: targetDir },
+        resolved.map((entry) => ({ path: entry.path, isDir: entry.isDir })),
+      );
+      return;
+    }
+
+    toast.info(t("fileExplorer.pasteClipboardEmpty"));
+  }, [
+    activeSessionId,
+    appSettings.transfer.duplicate_strategy,
+    canBrowseFiles,
+    enqueueCopies,
+    invalidateDirectoryChildrenCache,
+    loadDirectory,
+    resolveLocalDropPaths,
+    t,
+    uploadLocalEntriesToTarget,
+  ]);
+
   const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
     if (
@@ -1875,6 +2113,44 @@ function FileExplorerPane({
       event.preventDefault();
       event.stopPropagation();
       beginInlineRename(selectedRealFiles[0]);
+      return;
+    }
+
+    if (isRemoteFileBrowser && selectedRealFiles.length > 0) {
+      if (
+        matchesKeyEvent(
+          resolveShortcutKeys("fileExplorer.copy", appSettings.keybindings),
+          event.nativeEvent,
+        )
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleCopySelected();
+        return;
+      }
+      if (
+        matchesKeyEvent(
+          resolveShortcutKeys("fileExplorer.cut", appSettings.keybindings),
+          event.nativeEvent,
+        )
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleCutSelected();
+        return;
+      }
+    }
+
+    if (
+      isRemoteFileBrowser &&
+      matchesKeyEvent(
+        resolveShortcutKeys("fileExplorer.paste", appSettings.keybindings),
+        event.nativeEvent,
+      )
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      void handlePaste();
       return;
     }
 
@@ -2866,6 +3142,11 @@ function FileExplorerPane({
                           onUpload={handleUploadFiles}
                           onUploadFolder={handleUploadFolder}
                           onDownload={handleDownloadFromContextMenu}
+                          onCopy={(entry) => handleCopyCutFromContextMenu(entry, "copy")}
+                          onCut={(entry) => handleCopyCutFromContextMenu(entry, "cut")}
+                          onPaste={() => void handlePaste()}
+                          showSftpClipboardActions={isRemoteFileBrowser}
+                          pasteDisabled={!canPaste}
                           showPeerSendAction={!!peerEndpoint && !!onSendEntries}
                           onSendToPeer={handleSendToPeer}
                           sendTargetOptions={sendTargetOptions}
@@ -2963,6 +3244,15 @@ function FileExplorerPane({
                 <MdLink className="mr-2 h-4 w-4" />
                 {t("fileExplorer.newSymlink")}
               </ContextMenuItem>
+            )}
+            {isRemoteFileBrowser && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem disabled={!canPaste} onClick={() => void handlePaste()}>
+                  <MdContentPaste className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.cmPaste")}
+                </ContextMenuItem>
+              </>
             )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleCopyCurrentPath}>

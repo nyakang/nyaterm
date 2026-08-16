@@ -4,6 +4,8 @@ import {
   MdAutoAwesome,
   MdBookmarkAdd,
   MdContentCopy,
+  MdContentCut,
+  MdContentPaste,
   MdCopyAll,
   MdDelete,
   MdDownload,
@@ -59,6 +61,11 @@ interface FileListItemProps {
   onUpload: () => void;
   onUploadFolder: () => void;
   onDownload: (entry: FileEntry) => void;
+  onCopy: (entry: FileEntry) => void;
+  onCut: (entry: FileEntry) => void;
+  onPaste: () => void;
+  showSftpClipboardActions: boolean;
+  pasteDisabled: boolean;
   showPeerSendAction?: boolean;
   onSendToPeer?: (entry: FileEntry) => void;
   sendTargetOptions?: Array<{
@@ -119,6 +126,11 @@ export function FileListItem({
   onUpload,
   onUploadFolder,
   onDownload,
+  onCopy,
+  onCut,
+  onPaste,
+  showSftpClipboardActions,
+  pasteDisabled,
   showPeerSendAction = false,
   onSendToPeer,
   sendTargetOptions = [],
@@ -448,6 +460,23 @@ export function FileListItem({
                 <ContextMenuItem onClick={() => onDownload(entry)}>
                   <MdDownload className="text-[0.875rem] text-muted-foreground mr-2" />
                   {t("fileExplorer.cmDownload")}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            )}
+            {showSftpClipboardActions && (
+              <>
+                <ContextMenuItem onClick={() => onCopy(entry)}>
+                  <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmCopy")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onCut(entry)}>
+                  <MdContentCut className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmCut")}
+                </ContextMenuItem>
+                <ContextMenuItem disabled={pasteDisabled} onClick={onPaste}>
+                  <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmPaste")}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
               </>

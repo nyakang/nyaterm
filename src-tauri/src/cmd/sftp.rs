@@ -297,6 +297,28 @@ pub async fn copy_file_entry(
 }
 
 #[tauri::command]
+pub async fn move_remote_entries(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SessionManager>>,
+    source_session_id: String,
+    target_session_id: String,
+    target_dir: String,
+    entries: Vec<sftp::RemoteMoveEntry>,
+    duplicate_strategy: Option<String>,
+) -> AppResult<()> {
+    sftp::move_remote_entries(
+        app,
+        state.inner().clone(),
+        &source_session_id,
+        &target_session_id,
+        &target_dir,
+        entries,
+        duplicate_strategy,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn pause_transfer(app: tauri::AppHandle, transfer_id: String) -> AppResult<()> {
     sftp::pause_transfer(app, &transfer_id).await
 }

@@ -8,6 +8,7 @@ import NewItemDialog, {
 import NewSymlinkDialog, {
   type NewSymlinkDialogData,
 } from "@/components/dialog/file-explorer/NewSymlinkDialog";
+import { PasteConfirmDialog } from "@/components/dialog/file-explorer/PasteConfirmDialog";
 import PropertiesDialog, {
   type PropertiesDialogData,
 } from "@/components/dialog/file-explorer/PropertiesDialog";
@@ -120,6 +121,8 @@ export function FileExplorerDialogs({
           onOpenInternal={onOpenUnknownFileInternal}
         />
       )}
+
+      <PasteConfirmDialog />
     </>
   );
 }

@@ -8,6 +8,7 @@ pub mod connection;
 pub mod credential;
 pub mod docker;
 pub mod external_open;
+pub mod file_clipboard;
 pub mod gpu;
 pub mod importer;
 pub mod local_fs;

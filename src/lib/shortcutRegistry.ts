@@ -217,6 +217,27 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
 
   // --- File Explorer ---
   {
+    id: "fileExplorer.copy",
+    category: "fileExplorer",
+    labelKey: "settings.shortcutLabels.copyFiles",
+    defaultKeys: "ctrl+c, meta+c",
+    contextual: true,
+  },
+  {
+    id: "fileExplorer.cut",
+    category: "fileExplorer",
+    labelKey: "settings.shortcutLabels.cutFiles",
+    defaultKeys: "ctrl+x, meta+x",
+    contextual: true,
+  },
+  {
+    id: "fileExplorer.paste",
+    category: "fileExplorer",
+    labelKey: "settings.shortcutLabels.pasteFiles",
+    defaultKeys: "ctrl+v, meta+v",
+    contextual: true,
+  },
+  {
     id: "fileExplorer.rename",
     category: "fileExplorer",
     labelKey: "settings.shortcutLabels.renameFile",

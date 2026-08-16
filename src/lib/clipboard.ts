@@ -40,6 +40,10 @@ export async function readClipboardPathPayload(): Promise<ClipboardPathPayload |
   return invoke<ClipboardPathPayload | null>("read_clipboard_path_payload");
 }
 
+export async function readClipboardFilePaths(): Promise<string[]> {
+  return invoke<string[]>("read_clipboard_file_paths");
+}
+
 export async function uploadClipboardImageToSsh(
   sessionId: string,
 ): Promise<RemoteClipboardImagePayload | null> {
