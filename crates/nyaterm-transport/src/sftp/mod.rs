@@ -640,7 +640,7 @@ impl SftpService {
             return Err(anyhow::anyhow!("SFTP is disabled for this SSH profile"));
         }
         if let Some(multiplex) = self.multiplex.as_ref() {
-            multiplex.block_on(operation)
+            multiplex.block_on_after_interactive_ready(operation)
         } else {
             run_sftp_operation(operation)
         }

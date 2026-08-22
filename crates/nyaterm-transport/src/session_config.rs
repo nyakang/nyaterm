@@ -573,8 +573,31 @@ pub enum SshAgentPromptAction {
     Cancel,
 }
 
+/// A live SSH Agent authentication prompt that can be updated while signing.
+pub trait SshAgentPromptRequest: Send + Sync {
+    /// Blocks until the UI supplies an action or the prompt times out.
+    fn wait_action(&self) -> Result<SshAgentPromptAction, String>;
+
+    /// Changes the visible request from the pending state to a failed state.
+    fn mark_failed(&self, prompt: &SshAgentPrompt) -> Result<(), String>;
+
+    /// Resolves and removes the request from the UI.
+    fn finish(&self);
+}
+
 pub trait SshAgentPromptProvider: Send + Sync {
     fn request_action(&self, prompt: &SshAgentPrompt) -> Result<SshAgentPromptAction, String>;
+
+    /// Starts a request that can be observed while the Agent operation runs.
+    ///
+    /// Returning `Ok(None)` keeps compatibility with providers that only
+    /// support the legacy failure-then-prompt flow.
+    fn begin_request(
+        &self,
+        _prompt: &SshAgentPrompt,
+    ) -> Result<Option<Arc<dyn SshAgentPromptRequest>>, String> {
+        Ok(None)
+    }
 }
 
 pub trait SshOtpProvider: Send + Sync {

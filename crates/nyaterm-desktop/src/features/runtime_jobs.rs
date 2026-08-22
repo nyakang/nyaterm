@@ -11,7 +11,7 @@ use nyaterm_store::{StoreBlockingClient, StoreDomain};
 use nyaterm_transport::{
     DockerComposeService, DockerContainerDetails, RemoteDockerOverview, RemoteGpuOverview,
     RemoteNpuOverview, RemoteProcess, RemoteStats, SessionInfo, SessionKind, SshMultiplexHandle,
-    SshSessionConfig, SshTunnelInfo,
+    SshSessionConfig, SshSessionStartHandle, SshTunnelInfo,
 };
 
 use crate::models::SessionLaunchConfig;
@@ -28,6 +28,7 @@ pub(in crate::features) struct SessionStartResult {
 pub(in crate::features) struct SessionStartSuccess {
     pub(in crate::features) session_info: SessionInfo,
     pub(in crate::features) multiplex_handle: Option<SshMultiplexHandle>,
+    pub(in crate::features) ssh_start_handle: Option<SshSessionStartHandle>,
     pub(in crate::features) launch_config: Option<SessionLaunchConfig>,
 }
 

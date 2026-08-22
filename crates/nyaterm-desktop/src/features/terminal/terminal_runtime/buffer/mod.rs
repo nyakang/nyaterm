@@ -17,9 +17,8 @@ use crate::models::{
     TerminalFrameOutputEvent, TerminalFrameOutputSubmission, TerminalFrameParts,
     TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
     TerminalFrameSnapshotEvent, TerminalSearchMode, TerminalViewState, TerminalWindowNode,
-    WorkspacePaneNode, append_terminal_ui_output_tail, terminal_action_link_matcher_key,
-    terminal_frame_scroll_window_extra_rows, terminal_frame_search_result_is_current,
-    terminal_snapshot_matches_grid_geometry,
+    WorkspacePaneNode, terminal_action_link_matcher_key, terminal_frame_scroll_window_extra_rows,
+    terminal_frame_search_result_is_current, terminal_snapshot_matches_grid_geometry,
 };
 
 use super::view_io::terminal_visual_display_offset;
@@ -867,6 +866,7 @@ impl NyaTermApp {
                     view.apply_terminal_background_frame_parts(
                         None,
                         None,
+                        &visible_text,
                         protocol_state,
                         skipped_output_bytes,
                         revision,
@@ -875,9 +875,6 @@ impl NyaTermApp {
                         view.output_burst_bytes =
                             view.output_burst_bytes.saturating_add(accepted_bytes);
                         view.enter_render_degraded_mode();
-                    }
-                    if !visible_text.is_empty() && !view.render_degraded {
-                        append_terminal_ui_output_tail(&mut view.output, &visible_text);
                     }
                     if view.scroll_offset > 0 {
                         view.has_new_while_scrolled = true;
@@ -893,6 +890,7 @@ impl NyaTermApp {
                     } else {
                         None
                     },
+                    &visible_text,
                     protocol_state,
                     skipped_output_bytes,
                     revision,

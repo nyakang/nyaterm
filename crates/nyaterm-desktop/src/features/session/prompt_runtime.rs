@@ -25,10 +25,7 @@ impl NyaTermApp {
         let Some(request) = self.session.prompts.take_agent() else {
             return;
         };
-        let target = format!(
-            "{}@{}:{}",
-            request.prompt.username, request.prompt.host, request.prompt.port
-        );
+        let target = request.target();
         let _ = request.response_tx.send(action);
         self.shell.set_status(match action {
             SshAgentPromptAction::Retry => {
@@ -379,8 +376,10 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn drain_agent_prompts(&mut self) -> bool {
+        let changed = self.session.prompt_take_agent_changed();
+        let reconciled = self.session.prompt_reconcile_agent();
         let Some(target) = self.session.prompts.activate_next_agent() else {
-            return false;
+            return changed || reconciled;
         };
         self.shell
             .set_status(format!("SSH Agent approval required for {target}"));

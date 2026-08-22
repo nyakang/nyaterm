@@ -11,7 +11,12 @@ const COMMAND_MARKER_PREFIX: &str = "7777;NyaTermCommand:";
 const LEGACY_READY_MARKER_PREFIX: &str = "7777;DflyReady:";
 const LEGACY_COMMAND_MARKER_PREFIX: &str = "7777;DflyCommand:";
 const MAX_OSC_BUF: usize = 64 * 1024;
+const INITIAL_PROMPT_TAIL_LIMIT: usize = 1024;
 const SUPPRESSED_OUTPUT_LIMIT: usize = 64 * 1024;
+// Keep each PTY write below the smallest canonical input queue observed on
+// macOS. Newline-aware chunking preserves complete shell statements while
+// avoiding dropped bytes when the remote shell is briefly not scheduled.
+const SHELL_INJECTION_CHUNK_SIZE: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ShellKind {
@@ -83,6 +88,11 @@ pub(super) struct SshShellIntegrationState {
     stripper: OscStripper,
     suppress_started_at: Option<Instant>,
     suppressed_visible_bytes: usize,
+    initial_prompt_seen: bool,
+    initial_prompt_tail: Vec<u8>,
+    initial_prompt_pattern: Vec<u8>,
+    suppress_initial_prompt_after_ready: bool,
+    post_ready_prompt_buffer: Vec<u8>,
 }
 
 impl SshShellIntegrationState {
@@ -102,7 +112,34 @@ impl SshShellIntegrationState {
             stripper: OscStripper::new(&ready_marker, legacy_ready_marker.as_deref()),
             suppress_started_at: None,
             suppressed_visible_bytes: 0,
+            initial_prompt_seen: false,
+            initial_prompt_tail: Vec::new(),
+            initial_prompt_pattern: Vec::new(),
+            suppress_initial_prompt_after_ready: false,
+            post_ready_prompt_buffer: Vec::new(),
         }
+    }
+
+    /// Creates the initial phase used while shell detection runs in parallel
+    /// with the interactive PTY reader.
+    pub(super) fn waiting_for_integration(
+        ready_marker: String,
+        legacy_ready_marker: Option<String>,
+    ) -> Self {
+        let mut state = Self::new(None, ready_marker, legacy_ready_marker);
+        state.phase = SshShellIntegrationPhase::WaitInitial;
+        state
+    }
+
+    /// Completes asynchronous shell integration preparation without hiding
+    /// bytes that were already forwarded from the login banner.
+    pub(super) fn set_integration_script(&mut self, script: Option<Vec<u8>>) {
+        self.pending_script = script;
+        self.phase = if self.pending_script.is_some() {
+            SshShellIntegrationPhase::WaitInitial
+        } else {
+            SshShellIntegrationPhase::Normal
+        };
     }
 
     pub(super) fn is_normal(&self) -> bool {
@@ -117,15 +154,42 @@ impl SshShellIntegrationState {
         self.phase == SshShellIntegrationPhase::WaitInitial
     }
 
+    /// Returns whether the shell has rendered the prompt that terminates the
+    /// initial login/banner burst. Do not start the integration write before
+    /// this point: a slow PAM/MOTD response can arrive after the first PTY
+    /// packet, and entering suppression early would hide that response.
+    pub(super) fn initial_prompt_seen(&self) -> bool {
+        self.initial_prompt_seen
+    }
+
     pub(super) fn should_inject_on_initial_delay(&self) -> bool {
-        self.phase == SshShellIntegrationPhase::WaitInitial && self.pending_script.is_some()
+        self.is_waiting_initial() && self.pending_script.is_some()
     }
 
     pub(super) async fn inject(&mut self, channel: &mut russh::Channel<client::Msg>) {
         let Some(script) = self.pending_script.take() else {
             return;
         };
-        if channel.data_bytes(script).await.is_ok() {
+        let mut sent = 0;
+        let mut success = true;
+        while sent < script.len() {
+            let mut end = (sent + SHELL_INJECTION_CHUNK_SIZE).min(script.len());
+            if end < script.len()
+                && let Some(newline) = script[sent..end].iter().rposition(|byte| *byte == b'\n')
+            {
+                end = sent + newline + 1;
+            }
+            if channel
+                .data_bytes(script[sent..end].to_vec())
+                .await
+                .is_err()
+            {
+                success = false;
+                break;
+            }
+            sent = end;
+        }
+        if success {
             self.phase = SshShellIntegrationPhase::Suppressing;
             self.suppress_started_at = Some(Instant::now());
         } else {
@@ -152,12 +216,36 @@ impl SshShellIntegrationState {
         self.suppress_started_at = None;
         self.pending_script = None;
         self.suppressed_visible_bytes = 0;
+        self.initial_prompt_seen = false;
+        self.initial_prompt_tail.clear();
+        self.initial_prompt_pattern.clear();
+        self.suppress_initial_prompt_after_ready = false;
+        self.post_ready_prompt_buffer.clear();
     }
 
     pub(super) fn filter_output(&mut self, bytes: &[u8]) -> SshIntegrationOutput {
         match self.phase {
-            SshShellIntegrationPhase::Normal => self.stripper.push(bytes).into_output(),
-            SshShellIntegrationPhase::WaitInitial => self.stripper.push(bytes).into_output(),
+            SshShellIntegrationPhase::Normal => {
+                let result = self.stripper.push(bytes);
+                if self.suppress_initial_prompt_after_ready {
+                    let visible = self.filter_post_ready_prompt(result.visible);
+                    return SshIntegrationOutput {
+                        visible,
+                        cwd_paths: result.cwd_paths,
+                        accepted_commands: result.accepted_commands,
+                    };
+                }
+                result.into_output()
+            }
+            SshShellIntegrationPhase::WaitInitial => {
+                let result = self.stripper.push(bytes);
+                // Match the Tauri transport by exposing initial remote output immediately. The
+                // caller waits for the initial burst to become quiet before injecting. Remember
+                // a prompt that was already rendered; the prompt emitted after our ready marker
+                // is then suppressed instead of dropping the banner or the original prompt.
+                self.remember_initial_visible(&result.visible);
+                result.into_output()
+            }
             SshShellIntegrationPhase::Suppressing => {
                 if self.timeout_expired() {
                     return self.force_normal_after_timeout();
@@ -166,8 +254,16 @@ impl SshShellIntegrationState {
                 let cwd_paths = result.cwd_paths;
                 let accepted_commands = result.accepted_commands;
                 if result.ready {
-                    let visible = result.visible_after_ready;
+                    let suppress_prompt_after_ready = self.initial_prompt_seen;
+                    let initial_prompt_pattern = self.initial_prompt_pattern.clone();
                     self.force_normal();
+                    self.suppress_initial_prompt_after_ready = suppress_prompt_after_ready;
+                    self.initial_prompt_pattern = initial_prompt_pattern;
+                    let visible = if suppress_prompt_after_ready {
+                        self.filter_post_ready_prompt(result.visible_after_ready)
+                    } else {
+                        result.visible_after_ready
+                    };
                     SshIntegrationOutput {
                         visible,
                         cwd_paths,
@@ -187,6 +283,158 @@ impl SshShellIntegrationState {
             }
         }
     }
+
+    fn remember_initial_visible(&mut self, visible: &[u8]) {
+        if visible.is_empty() {
+            return;
+        }
+        self.initial_prompt_tail.extend_from_slice(visible);
+        if self.initial_prompt_tail.len() > INITIAL_PROMPT_TAIL_LIMIT {
+            let trim = self
+                .initial_prompt_tail
+                .len()
+                .saturating_sub(INITIAL_PROMPT_TAIL_LIMIT);
+            self.initial_prompt_tail.drain(..trim);
+        }
+        if let Some(prompt) = trailing_shell_prompt(&self.initial_prompt_tail) {
+            self.initial_prompt_seen = true;
+            self.initial_prompt_pattern = strip_terminal_prompt_controls(prompt);
+        }
+    }
+
+    fn filter_post_ready_prompt(&mut self, visible: Vec<u8>) -> Vec<u8> {
+        self.post_ready_prompt_buffer.extend_from_slice(&visible);
+        if self.post_ready_prompt_buffer.len() > INITIAL_PROMPT_TAIL_LIMIT {
+            self.suppress_initial_prompt_after_ready = false;
+            return std::mem::take(&mut self.post_ready_prompt_buffer);
+        }
+
+        if let Some(line_start) = trailing_shell_prompt_start(&self.post_ready_prompt_buffer)
+            && (self.initial_prompt_pattern.is_empty()
+                || self.is_initial_prompt_candidate(&self.post_ready_prompt_buffer[line_start..]))
+        {
+            self.post_ready_prompt_buffer.truncate(line_start);
+            self.suppress_initial_prompt_after_ready = false;
+            return std::mem::take(&mut self.post_ready_prompt_buffer);
+        }
+
+        let line_start = self
+            .post_ready_prompt_buffer
+            .iter()
+            .rposition(|byte| *byte == b'\n' || *byte == b'\r')
+            .map_or(0, |index| index.saturating_add(1));
+        let candidate = &self.post_ready_prompt_buffer[line_start..];
+        if !self.is_initial_prompt_candidate(candidate) {
+            self.suppress_initial_prompt_after_ready = false;
+            return std::mem::take(&mut self.post_ready_prompt_buffer);
+        }
+
+        let mut prefix = self.post_ready_prompt_buffer.split_off(line_start);
+        std::mem::swap(&mut prefix, &mut self.post_ready_prompt_buffer);
+        prefix
+    }
+
+    fn is_initial_prompt_candidate(&self, candidate: &[u8]) -> bool {
+        let clean = strip_terminal_prompt_controls(candidate);
+        if self.initial_prompt_pattern.is_empty() {
+            return is_shell_prompt_candidate(candidate);
+        }
+        self.initial_prompt_pattern.starts_with(&clean)
+    }
+}
+
+fn trailing_shell_prompt_start(visible: &[u8]) -> Option<usize> {
+    let line_start = visible
+        .iter()
+        .rposition(|byte| *byte == b'\n' || *byte == b'\r')
+        .map_or(0, |index| index.saturating_add(1));
+    looks_like_shell_prompt(&visible[line_start..]).then_some(line_start)
+}
+
+fn trailing_shell_prompt(visible: &[u8]) -> Option<&[u8]> {
+    let line_start = trailing_shell_prompt_start(visible)?;
+    Some(&visible[line_start..])
+}
+
+fn looks_like_shell_prompt(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || bytes.len() > INITIAL_PROMPT_TAIL_LIMIT {
+        return false;
+    }
+    let clean = strip_terminal_prompt_controls(bytes);
+    let text = String::from_utf8_lossy(&clean);
+    let trimmed = text.trim();
+    let Some(marker) = trimmed.chars().last() else {
+        return false;
+    };
+    if !matches!(marker, '$' | '#' | '%' | '>' | '❯' | '➜' | 'λ') {
+        return false;
+    }
+    let prefix_with_spacing = &trimmed[..trimmed.len().saturating_sub(marker.len_utf8())];
+    let prefix = prefix_with_spacing.trim_end();
+    let has_prompt_separator = prefix.contains(['@', ':', '/', '\\', '~']);
+    // A space before a bare marker is much more likely to be ordinary output
+    // (for example, "price $") than a shell prompt. Keep path/host-shaped
+    // prompts such as "user@host:~$" and Windows-style "PS C:\\>".
+    if prefix_with_spacing.chars().any(char::is_whitespace) && !has_prompt_separator {
+        return false;
+    }
+    // A single-token suffix such as "100%", "done#" or "status$" is not
+    // distinctive enough to identify a shell prompt. Bare markers remain
+    // valid for shells configured with a minimal PS1.
+    prefix.is_empty() || has_prompt_separator
+}
+
+fn is_shell_prompt_candidate(bytes: &[u8]) -> bool {
+    if bytes.len() > INITIAL_PROMPT_TAIL_LIMIT {
+        return false;
+    }
+    let clean = strip_terminal_prompt_controls(bytes);
+    !clean
+        .iter()
+        .any(|byte| byte.is_ascii_control() && *byte != b'\t')
+}
+
+fn strip_terminal_prompt_controls(bytes: &[u8]) -> Vec<u8> {
+    let mut clean = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            if !bytes[index].is_ascii_control() || bytes[index] == b'\t' {
+                clean.push(bytes[index]);
+            }
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+        match bytes.get(index).copied() {
+            Some(b'[') => {
+                index += 1;
+                while let Some(byte) = bytes.get(index).copied() {
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            Some(b']') => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\x07' {
+                        index += 1;
+                        break;
+                    }
+                    if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    clean
 }
 
 impl OscResult {
@@ -253,8 +501,7 @@ async fn open_ssh_exec_channel(
     command: &str,
 ) -> anyhow::Result<russh::Channel<client::Msg>> {
     match handle {
-        SshShellHandle::Dedicated(handle) => open_ssh_exec_channel_on_handle(handle, command).await,
-        SshShellHandle::Multiplexed(handle) => {
+        SshShellHandle::Dedicated(handle) | SshShellHandle::Multiplexed(handle) => {
             let handle = handle.lock().await;
             open_ssh_exec_channel_on_handle(&handle, command).await
         }
@@ -370,7 +617,19 @@ pub(super) fn ssh_shell_injection_script(
         ),
         ShellKind::PosixSh | ShellKind::Unknown => return None,
     };
-    Some(format!("{prefix}{script}{suffix}"))
+    // Parse the complete injection as one Bash/Zsh command. Interactive shells may
+    // execute PROMPT_COMMAND between physical PTY writes; a here-document keeps the
+    // helper definitions ahead of the DEBUG trap and prevents partially parsed
+    // function bodies from reaching the prompt. It also avoids the PTY line-buffer
+    // limit that truncates a single quoted eval payload on some macOS shells.
+    let body = format!("{script}{suffix}");
+    match shell {
+        ShellKind::Bash | ShellKind::Zsh => Some(format!(
+            "{prefix}eval \"$(cat <<'NYATERM_INJECTION_EOF'\n{body}\nNYATERM_INJECTION_EOF\n)\"\n"
+        )),
+        ShellKind::Fish => Some(format!("{prefix}{body}")),
+        ShellKind::PosixSh | ShellKind::Unknown => None,
+    }
 }
 
 pub(super) fn activation_script(
@@ -1273,6 +1532,17 @@ mod tests {
         )
     }
 
+    #[test]
+    fn prompt_heuristic_rejects_sentence_like_output() {
+        assert!(!super::looks_like_shell_prompt(b"price $"));
+        assert!(!super::looks_like_shell_prompt(b"build finished >"));
+        assert!(!super::looks_like_shell_prompt(b"100%"));
+        assert!(!super::looks_like_shell_prompt(b"done#"));
+        assert!(!super::looks_like_shell_prompt(b"status$"));
+        assert!(super::looks_like_shell_prompt(b"user@host:~$ "));
+        assert!(super::looks_like_shell_prompt(b"PS C:\\> "));
+    }
+
     fn mark_injection_sent(state: &mut SshShellIntegrationState) {
         state.phase = SshShellIntegrationPhase::Suppressing;
         state.pending_script = None;
@@ -1280,7 +1550,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_initial_passes_first_output_and_keeps_injection_pending() {
+    fn wait_initial_forwards_first_output_and_keeps_injection_pending() {
         let mut state = shell_integration_state("session-1");
 
         let output = state.filter_output(b"Welcome to Ubuntu\r\nLast login: today\r\n");
@@ -1291,6 +1561,25 @@ mod tests {
         );
         assert!(output.cwd_paths.is_empty());
         assert!(output.accepted_commands.is_empty());
+        assert!(state.is_waiting_initial());
+        assert!(state.should_inject_on_initial_delay());
+    }
+
+    #[test]
+    fn async_preparation_keeps_banner_visible_before_script_is_available() {
+        let ready_marker = build_ssh_ready_marker("session-1");
+        let legacy_ready_marker = build_legacy_ssh_ready_marker(&ready_marker);
+        let mut state =
+            SshShellIntegrationState::waiting_for_integration(ready_marker, legacy_ready_marker);
+
+        let output = state.filter_output(b"Welcome\r\nuser@host:~$ ");
+
+        assert_eq!(output.visible, b"Welcome\r\nuser@host:~$ ");
+        assert!(state.is_waiting_initial());
+        assert!(!state.should_inject_on_initial_delay());
+
+        state.set_integration_script(Some(b"integration\n".to_vec()));
+
         assert!(state.is_waiting_initial());
         assert!(state.should_inject_on_initial_delay());
     }
@@ -1351,6 +1640,97 @@ mod tests {
         );
         assert_eq!(count_subsequence(&visible, b"root@host:~# "), 1);
         assert!(state.is_normal());
+    }
+
+    #[test]
+    fn initial_prompt_is_not_repeated_after_immediate_injection() {
+        let mut state = shell_integration_state("session-1");
+        let mut visible = Vec::new();
+
+        let initial = state.filter_output(b"Welcome to Debian\r\nuser@host:~$ ");
+        visible.extend_from_slice(&initial.visible);
+
+        mark_injection_sent(&mut state);
+        let ready = state.filter_output(b"\x1b]7777;NyaTermReady:session-1\x07user@host:~$ ");
+        visible.extend_from_slice(&ready.visible);
+
+        assert_eq!(count_subsequence(&visible, b"user@host:~$ "), 1);
+    }
+
+    #[test]
+    fn initial_colored_prompt_is_not_repeated_after_ready_marker() {
+        let mut state = shell_integration_state("session-1");
+        let initial = state
+            .filter_output(b"Debian banner\r\n\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~\x1b[00m$ ");
+        assert!(!initial.visible.is_empty());
+
+        mark_injection_sent(&mut state);
+        let ready = state.filter_output(
+            b"\x1b]7777;NyaTermReady:session-1\x07\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~\x1b[00m$ ",
+        );
+
+        assert!(ready.visible.is_empty());
+        assert_eq!(count_subsequence(&initial.visible, b"user@host"), 1);
+    }
+
+    #[test]
+    fn initial_prompt_seen_survives_fragmented_banner_output() {
+        let mut state = shell_integration_state("session-1");
+        let first = state.filter_output(b"Debian banner\r\nuser@host:~$ ");
+        assert!(first.visible.ends_with(b"user@host:~$ "));
+
+        // A later banner chunk must not clear the fact that the prompt was already rendered.
+        let second = state.filter_output(b"\r\n");
+        assert_eq!(second.visible, b"\r\n");
+
+        mark_injection_sent(&mut state);
+        let ready = state.filter_output(b"\x1b]7777;NyaTermReady:session-1\x07user@host:~$ ");
+        assert!(ready.visible.is_empty());
+    }
+
+    #[test]
+    fn initial_prompt_is_not_repeated_when_ready_prompt_is_split() {
+        let mut state = shell_integration_state("session-1");
+        let initial = state.filter_output(b"Debian banner\r\nuser@host:~$ ");
+        assert!(initial.visible.ends_with(b"user@host:~$ "));
+
+        mark_injection_sent(&mut state);
+        let ready = state.filter_output(b"\x1b]7777;NyaTermReady:session-1\x07");
+        assert!(ready.visible.is_empty());
+        assert!(state.is_normal());
+
+        let prompt = state.filter_output(b"user@host:~$ ");
+        assert!(prompt.visible.is_empty());
+    }
+
+    #[test]
+    fn initial_prompt_is_not_repeated_when_ready_prompt_is_split_into_multiple_chunks() {
+        let mut state = shell_integration_state("session-1");
+        let initial = state.filter_output(b"Debian banner\r\nuser@host:~$ ");
+        assert!(initial.visible.ends_with(b"user@host:~$ "));
+
+        mark_injection_sent(&mut state);
+        let ready_prefix = state.filter_output(b"\x1b]7777;NyaTermReady:session-1\x07user@host:");
+        let ready_middle = state.filter_output(b"~");
+        let ready_suffix = state.filter_output(b"$ ");
+
+        assert!(ready_prefix.visible.is_empty());
+        assert!(ready_middle.visible.is_empty());
+        assert!(ready_suffix.visible.is_empty());
+    }
+
+    #[test]
+    fn normal_output_after_ready_is_not_buffered_as_a_prompt_prefix() {
+        let mut state = shell_integration_state("session-1");
+        let initial = state.filter_output(b"Debian banner\r\nuser@host:~$ ");
+        assert!(initial.visible.ends_with(b"user@host:~$ "));
+
+        mark_injection_sent(&mut state);
+        let ready = state.filter_output(b"\x1b]7777;NyaTermReady:session-1\x07\r\n");
+        assert_eq!(ready.visible, b"\r\n");
+
+        let output = state.filter_output(b"status$");
+        assert_eq!(output.visible, b"status$");
     }
 
     #[test]

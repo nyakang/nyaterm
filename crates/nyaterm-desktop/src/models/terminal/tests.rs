@@ -146,6 +146,7 @@ fn apply_output_frame_to_view(view: &mut TerminalViewState, frame: TerminalFrame
         view.apply_terminal_background_frame_parts(
             None,
             None,
+            &visible_text,
             protocol_state,
             skipped_output_bytes,
             revision,
@@ -801,12 +802,13 @@ fn terminal_background_frame_apply_skips_render_work() {
     view.apply_terminal_background_frame_parts(
         frame.snapshot.clone(),
         frame.action_links.clone(),
+        &frame.visible_text,
         frame.protocol_state,
         frame.skipped_output_bytes,
         frame.revision,
     );
 
-    assert_eq!(view.output, "");
+    assert_eq!(view.output, "x");
     assert_eq!(view.screen_revision, frame.revision);
     assert!(view.frame_snapshot.is_some());
     assert_eq!(view.output_burst_bytes, 0);
@@ -1118,6 +1120,76 @@ fn terminal_frame_visible_text_event_keeps_only_tail_for_ui() {
         })
         .expect("recording history search should succeed");
     assert_eq!(recorded.total, 1);
+}
+
+#[test]
+fn terminal_frame_seed_does_not_replace_live_output() {
+    let mut session = TerminalFrameSession::new("UTF-8", 1000);
+    let recording_manager = Arc::new(nyaterm_transport::RecordingManager::new());
+    let recording_pipeline =
+        super::super::RecordingWritePipeline::spawn(Arc::clone(&recording_manager));
+
+    let _ = session.process_output(
+        "s1".to_string(),
+        b"new banner\r\n".to_vec(),
+        "UTF-8".to_string(),
+        1000,
+        &recording_pipeline.writer(),
+    );
+
+    session.seed("old reconnect seed\r\n".to_string(), "UTF-8", 1000);
+
+    let snapshot = session.screen.viewport_snapshot(0);
+    assert!(
+        snapshot
+            .rows()
+            .iter()
+            .any(|row| row.text.contains("new banner")),
+        "live output should survive a late reconnect seed"
+    );
+    assert!(
+        snapshot
+            .rows()
+            .iter()
+            .all(|row| !row.text.contains("old reconnect seed")),
+        "late seed must not replace the live screen"
+    );
+}
+
+#[test]
+fn terminal_frame_control_output_does_not_block_reconnect_seed() {
+    let mut session = TerminalFrameSession::new("UTF-8", 1000);
+    let recording_manager = Arc::new(nyaterm_transport::RecordingManager::new());
+    let recording_pipeline =
+        super::super::RecordingWritePipeline::spawn(Arc::clone(&recording_manager));
+
+    let _ = session.process_output(
+        "s1".to_string(),
+        b"\x1b]0;remote".to_vec(),
+        "UTF-8".to_string(),
+        1000,
+        &recording_pipeline.writer(),
+    );
+    assert!(!session.output_seen);
+    let _ = session.process_output(
+        "s1".to_string(),
+        b" title\x07".to_vec(),
+        "UTF-8".to_string(),
+        1000,
+        &recording_pipeline.writer(),
+    );
+    assert!(!session.output_seen);
+
+    session.seed("reconnect seed\r\n".to_string(), "UTF-8", 1000);
+
+    let snapshot = session.screen.viewport_snapshot(0);
+    assert!(
+        snapshot
+            .rows()
+            .iter()
+            .any(|row| row.text.contains("reconnect seed")),
+        "control-only output must not block the initial reconnect seed"
+    );
 }
 
 #[test]
@@ -2592,6 +2664,34 @@ fn terminal_frame_command_queue_stops_after_sender_drop() {
 fn tick_through_calm_window(view: &mut TerminalViewState, start: Instant) {
     view.tick_performance_overlay(false, start);
     view.tick_performance_overlay(false, start + TERMINAL_RENDER_DEGRADATION_RECOVERY_CALM);
+}
+
+#[test]
+fn terminal_frame_keeps_output_tail_while_render_is_degraded() {
+    let mut view = TerminalViewState::new();
+    assert!(view.render_degraded);
+
+    apply_output_frame_to_view(
+        &mut view,
+        TerminalFrameOutputEvent {
+            session_id: "s1".to_string(),
+            visible_text: "Debian banner\r\nuser@host:~$ ".to_string(),
+            recording_text_bytes: 0,
+            snapshot: Some(Arc::new(TerminalScreen::default().viewport_snapshot(0))),
+            action_links: None,
+            protocol_state: TerminalProtocolState::default(),
+            effects: TerminalEffects::default(),
+            command_running: false,
+            accepted_bytes: 1,
+            skipped_output_bytes: 0,
+            revision: 1,
+            snapshot_duration: Duration::ZERO,
+            snapshot_stats: Default::default(),
+            process_duration: Duration::ZERO,
+        },
+    );
+
+    assert_eq!(view.output, "Debian banner\r\nuser@host:~$ ");
 }
 
 #[test]

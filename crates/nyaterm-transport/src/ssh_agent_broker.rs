@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use futures::future::join_all;
@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
-use crate::ssh_agent::{DynamicAgentStream, connect_agent_stream};
+use crate::ShellEnvironmentCache;
+use crate::ssh_agent::{DynamicAgentStream, connect_agent_stream_with_environment_until};
 use crate::{
     SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
     SshAgentStoredKeyProvider, SshAgentStoredKeySnapshot,
@@ -32,7 +33,9 @@ const MAX_AGENT_CHANNELS: usize = 16;
 const MAX_SIGN_CONCURRENCY: usize = 32;
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
+// The timeout includes one login-shell environment initialization (up to ten
+// seconds) and the subsequent Agent socket connection.
+const IDENTITY_TIMEOUT: Duration = Duration::from_secs(15);
 const SIGN_TIMEOUT: Duration = Duration::from_secs(60);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const SESSION_BIND_EXTENSION: &[u8] = b"session-bind@openssh.com";
@@ -158,10 +161,20 @@ pub async fn preview_identities(
     config: &SshAgentForwardingConfig,
     provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
 ) -> SshAgentIdentityPreviewResponse {
+    preview_identities_with_environment(config, provider, ShellEnvironmentCache::global()).await
+}
+
+/// Enumerates identities using the supplied shell environment cache.
+pub async fn preview_identities_with_environment(
+    config: &SshAgentForwardingConfig,
+    provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> SshAgentIdentityPreviewResponse {
     if !config.enabled {
         return SshAgentIdentityPreviewResponse::default();
     }
-    let (mut external, mut endpoint_errors) = connect_external_upstreams(config).await;
+    let (mut external, mut endpoint_errors) =
+        connect_external_upstreams(config, shell_environment).await;
     let mut state = collect_identities(config, provider, &mut external, false).await;
     endpoint_errors.extend(state.endpoint_errors);
     state.endpoint_errors = endpoint_errors;
@@ -181,6 +194,15 @@ pub fn preview_identities_blocking(
     config: &SshAgentForwardingConfig,
     provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
 ) -> SshAgentIdentityPreviewResponse {
+    preview_identities_blocking_with_environment(config, provider, ShellEnvironmentCache::global())
+}
+
+/// Runs identity preview with a shared shell environment cache.
+pub fn preview_identities_blocking_with_environment(
+    config: &SshAgentForwardingConfig,
+    provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> SshAgentIdentityPreviewResponse {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -191,7 +213,11 @@ pub fn preview_identities_blocking(
             return SshAgentIdentityPreviewResponse::default();
         }
     };
-    runtime.block_on(preview_identities(config, provider))
+    runtime.block_on(preview_identities_with_environment(
+        config,
+        provider,
+        shell_environment,
+    ))
 }
 
 pub(crate) fn try_acquire_agent_channel_permit() -> Option<OwnedSemaphorePermit> {
@@ -261,11 +287,14 @@ pub async fn serve_channel<S>(
     stream: S,
     config: SshAgentForwardingConfig,
     provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
     permit: OwnedSemaphorePermit,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if let Err(error) = serve_channel_inner(stream, config, provider, permit).await {
+    if let Err(error) =
+        serve_channel_inner(stream, config, provider, shell_environment, permit).await
+    {
         tracing::debug!(%error, "SSH Agent forwarding broker closed");
     }
 }
@@ -274,13 +303,14 @@ async fn serve_channel_inner<S>(
     mut stream: S,
     config: SshAgentForwardingConfig,
     provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
     _permit: OwnedSemaphorePermit,
 ) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut first = true;
-    let (mut external, _) = connect_external_upstreams(&config).await;
+    let (mut external, _) = connect_external_upstreams(&config, shell_environment).await;
     let initial_revision = provider
         .as_ref()
         .filter(|_| config.sources.stored_keys)
@@ -482,14 +512,21 @@ async fn load_stored_identities_bounded(
 
 async fn connect_external_upstreams(
     config: &SshAgentForwardingConfig,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> (Vec<ExternalUpstream>, Vec<SshAgentEndpointPreviewError>) {
     let attempts = join_all(
         configured_external_endpoints(config)
             .into_iter()
             .map(|spec| async {
-                let result =
-                    tokio::time::timeout(IDENTITY_TIMEOUT, connect_agent_stream(&spec.endpoint))
-                        .await;
+                let result = tokio::time::timeout(
+                    IDENTITY_TIMEOUT,
+                    connect_agent_stream_with_environment_until(
+                        &spec.endpoint,
+                        Some(shell_environment.clone()),
+                        Instant::now() + IDENTITY_TIMEOUT,
+                    ),
+                )
+                .await;
                 (spec, result)
             }),
     )
@@ -504,8 +541,11 @@ async fn connect_external_upstreams(
                 stream,
                 healthy: true,
             }),
-            Ok(Err(error)) => {
-                tracing::debug!(endpoint_index = spec.endpoint_index, %error, "SSH Agent endpoint connection failed");
+            Ok(Err(_error)) => {
+                tracing::debug!(
+                    endpoint_index = spec.endpoint_index,
+                    "SSH Agent endpoint connection failed"
+                );
                 errors.push(endpoint_error(spec.endpoint_index, &spec.endpoint, false));
             }
             Err(_) => errors.push(endpoint_error(spec.endpoint_index, &spec.endpoint, false)),
@@ -1038,9 +1078,9 @@ mod tests {
         serve_channel_inner, sign_request, write_frame,
     };
     use crate::{
-        SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
-        SshAgentForwardingSources, SshAgentStoredKey, SshAgentStoredKeyProvider,
-        SshAgentStoredKeySnapshot,
+        ShellEnvironmentCache, SshAgentEndpoint, SshAgentForwardingConfig,
+        SshAgentForwardingPolicy, SshAgentForwardingSources, SshAgentStoredKey,
+        SshAgentStoredKeyProvider, SshAgentStoredKeySnapshot,
     };
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -1243,7 +1283,13 @@ mod tests {
         };
         let (mut client, server) = tokio::io::duplex(4096);
         let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
-        let broker = tokio::spawn(serve_channel_inner(server, config, Some(provider), permit));
+        let broker = tokio::spawn(serve_channel_inner(
+            server,
+            config,
+            Some(provider),
+            ShellEnvironmentCache::global(),
+            permit,
+        ));
 
         write_frame(&mut client, &[11]).await.unwrap();
         assert_eq!(

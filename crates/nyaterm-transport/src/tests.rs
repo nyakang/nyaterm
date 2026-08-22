@@ -1,6 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -177,6 +179,9 @@ fn local_session_echoes_output() {
         return;
     }
 
+    #[cfg(unix)]
+    let _pty_guard = pty_test_guard();
+
     let manager = SessionManager::new();
     let info = manager
         .create_local_session(LocalSessionConfig {
@@ -211,6 +216,9 @@ fn local_session_info_preserves_working_dir() {
     if cfg!(target_os = "windows") {
         return;
     }
+
+    #[cfg(unix)]
+    let _pty_guard = pty_test_guard();
 
     let dir = std::env::temp_dir().join(format!("nyaterm-local-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -262,6 +270,9 @@ fn resize_updates_session_info() {
     if cfg!(target_os = "windows") {
         return;
     }
+
+    #[cfg(unix)]
+    let _pty_guard = pty_test_guard();
 
     let manager = SessionManager::new();
     let info = manager
@@ -644,7 +655,8 @@ fn ssh_shell_integration_script_emits_osc7_and_ready_marker() {
     )
     .expect("bash script");
 
-    assert!(script.contains("printf '\\033]7;file://%s%s\\007'"));
+    assert!(script.contains("eval \"$(cat <<'NYATERM_INJECTION_EOF'"));
+    assert!(script.contains("file://%s%s"));
     assert!(script.contains("NyaTermCommand"));
     assert!(script.contains("NyaTermReady:session-1"));
 }
@@ -700,10 +712,25 @@ fn cwd_only_shell_scripts_omit_semantic_markers_and_bash_debug_trap() {
 }
 
 #[cfg(unix)]
+static PTY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(unix)]
+fn pty_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    // macOS shares a small amount of terminal state between pseudo-terminal
+    // children. Serializing all transport PTY tests avoids timing-dependent
+    // failures when the full suite runs in parallel.
+    PTY_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(unix)]
 fn run_bash_injection_history_probe(
     mode: super::ShellIntegrationMode,
     history_initially_enabled: bool,
 ) -> Option<String> {
+    let _probe_guard = pty_test_guard();
     if std::process::Command::new("bash")
         .arg("--version")
         .output()
@@ -789,10 +816,26 @@ fn run_bash_injection_history_probe(
     commands.push_str(
         "case $- in *h*) printf '__NYATERM_HISTORY_STATE__:enabled\\n' ;; *) printf '__NYATERM_HISTORY_STATE__:disabled\\n' ;; esac\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nHISTTIMEFORMAT= builtin history\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
     );
-    writer
-        .write_all(commands.as_bytes())
-        .expect("write bash history probe commands");
-    writer.flush().expect("flush bash history probe commands");
+    // Match the transport's bounded, newline-aware PTY writes. A single large
+    // write can exceed macOS Bash's canonical input queue and leave a
+    // here-document unfinished.
+    let mut sent = 0;
+    while sent < commands.len() {
+        let mut end = (sent + 512).min(commands.len());
+        if end < commands.len()
+            && let Some(newline) = commands.as_bytes()[sent..end]
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+        {
+            end = sent + newline + 1;
+        }
+        writer
+            .write_all(&commands.as_bytes()[sent..end])
+            .expect("write bash history probe commands");
+        writer.flush().expect("flush bash history probe commands");
+        sent = end;
+        std::thread::sleep(Duration::from_millis(2));
+    }
 
     let child_deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
@@ -801,7 +844,10 @@ fn run_bash_injection_history_probe(
         }
         if Instant::now() >= child_deadline {
             let _ = child.kill();
-            panic!("interactive bash history probe timed out");
+            let captured =
+                String::from_utf8_lossy(&output.lock().expect("bash history probe output lock"))
+                    .into_owned();
+            panic!("interactive bash history probe timed out; output: {captured:?}");
         }
         std::thread::sleep(Duration::from_millis(10));
     };

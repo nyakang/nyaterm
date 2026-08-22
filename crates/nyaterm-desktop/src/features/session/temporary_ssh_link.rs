@@ -225,7 +225,7 @@ impl NyaTermApp {
             ssh_algorithms: None,
             sftp: nyaterm_transport::SftpSettings::default(),
             terminal_shell_integration: self.settings.summary().terminal_zebra_stripes_enabled,
-            deferred_pty: true,
+            deferred_pty: false,
             keep_alive_interval_secs,
             cols: 80,
             rows: 24,

@@ -1,12 +1,14 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use gpui::{App, Bounds, Context, Pixels, Point, px};
+use gpui::{App, Bounds, Context, FontFeatures, FontWeight, Pixels, Point, px};
 
 use nyaterm_core::TerminalViewportInsets;
 use nyaterm_terminal::TerminalSnapshot;
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::terminal_timestamp_format_width_chars;
+use crate::features::shell::ResolvedAppearanceFont;
 use crate::features::terminal::terminal_surface_entity::{
     TerminalVisualScrollGeometry, terminal_effective_visual_scroll_offset_px,
     terminal_snapshot_anchor_row_for_display_offset,
@@ -14,6 +16,73 @@ use crate::features::terminal::terminal_surface_entity::{
 use crate::models::TerminalCellPos;
 
 use super::{CELL_WIDTH_RATIO, LINE_HEIGHT_RATIO};
+use crate::features::terminal::state::TerminalFontMetricsCache;
+
+fn terminal_font_with_features(
+    descriptor: &ResolvedAppearanceFont,
+    weight: FontWeight,
+) -> gpui::Font {
+    let mut font = descriptor.font();
+    font.features = FontFeatures::disable_ligatures();
+    font.weight = weight;
+    font
+}
+
+fn measure_terminal_font(
+    text_system: &gpui::TextSystem,
+    descriptor: &ResolvedAppearanceFont,
+    size: Pixels,
+    weight: FontWeight,
+) -> Option<f32> {
+    let font = terminal_font_with_features(descriptor, weight);
+    let font_id = text_system.resolve_font(&font);
+    let resolved = text_system.get_font_for_id(font_id)?;
+
+    // TextSystem silently falls back to the global UI font when the requested family is missing.
+    // Reject that result before a proportional font reaches the fixed-width terminal painter.
+    if !resolved
+        .family
+        .as_str()
+        .eq_ignore_ascii_case(font.family.as_str())
+    {
+        return None;
+    }
+
+    let widths = ['i', 'W', '0', 'm']
+        .into_iter()
+        .filter_map(|ch| {
+            text_system
+                .advance(font_id, size, ch)
+                .ok()
+                .map(|size| size.width)
+        })
+        .map(f32::from)
+        .collect::<Vec<_>>();
+    if widths.len() != 4
+        || widths
+            .iter()
+            .any(|width| !width.is_finite() || *width <= 1.0)
+    {
+        return None;
+    }
+
+    let min_width = widths.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_width = widths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if max_width - min_width > (max_width * 0.02).max(0.25) {
+        return None;
+    }
+
+    // The forced-width layout must agree with the raw glyph advance. A large discrepancy is
+    // another sign that this font's platform shaping path cannot be used for terminal cells.
+    let shaped_zero_width = f32::from(text_system.layout_width(font_id, size, '0'));
+    if !shaped_zero_width.is_finite()
+        || (shaped_zero_width - widths[2]).abs() > (widths[2] * 0.05).max(0.5)
+    {
+        return None;
+    }
+
+    Some(widths[2])
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn terminal_cell_size(&self) -> (f32, f32) {
@@ -43,16 +112,44 @@ impl NyaTermApp {
 
     /// Refresh monospaced cell metrics from GPUI TextSystem for the configured terminal font.
     pub(in crate::features) fn refresh_terminal_cell_metrics(&mut self, cx: &App) {
-        let font_size = self.settings.summary().terminal_font_size.max(8) as f32;
+        let settings = self.settings.summary();
+        let font_size = settings.terminal_font_size.max(8) as f32;
         let text_system = cx.text_system();
-        let font_id = text_system.resolve_font(&self.gpui_terminal_font().font());
         let size = px(font_size);
-        let measured_w = text_system
-            .ch_advance(font_id, size)
-            .or_else(|_| text_system.em_advance(font_id, size))
-            .ok()
-            .map(f32::from)
-            .filter(|w| w.is_finite() && *w > 1.0);
+        let configured_font = self.gpui_configured_terminal_font();
+        let weight = FontWeight(settings.terminal_font_weight as f32);
+        let cached = self
+            .terminal
+            .layout
+            .font_metrics_cache
+            .as_ref()
+            .filter(|cache| {
+                cache.configured_family == settings.terminal_font_family
+                    && cache.font_size == settings.terminal_font_size
+                    && cache.font_weight == settings.terminal_font_weight
+            })
+            .cloned();
+        let (terminal_font, measured_w, override_font) = if let Some(cache) = cached {
+            let descriptor = cache
+                .resolved_font
+                .clone()
+                .unwrap_or_else(|| configured_font.clone());
+            let font = terminal_font_with_features(&descriptor, weight);
+            (font, cache.cell_width, cache.resolved_font)
+        } else {
+            let result =
+                self.resolve_terminal_font_metrics(text_system, configured_font, size, weight);
+            self.terminal.layout.font_metrics_cache = Some(TerminalFontMetricsCache {
+                configured_family: settings.terminal_font_family.clone(),
+                font_size: settings.terminal_font_size,
+                font_weight: settings.terminal_font_weight,
+                resolved_font: result.2.clone(),
+                cell_width: result.1,
+            });
+            result
+        };
+        self.terminal.set_terminal_font_override(override_font);
+        let font_id = text_system.resolve_font(&terminal_font);
         let ascent = f32::from(text_system.ascent(font_id, size));
         let descent = f32::from(text_system.descent(font_id, size)).abs();
         let font_line = (ascent + descent).max(font_size + 2.);
@@ -62,11 +159,80 @@ impl NyaTermApp {
         } else {
             (font_size * LINE_HEIGHT_RATIO).max(font_line)
         };
-        let cell_w = measured_w.unwrap_or_else(|| (font_size * CELL_WIDTH_RATIO).max(4.));
+        let cell_w = measured_w;
         let next = (cell_w, cell_h);
         if self.terminal.layout.cell_metrics != Some(next) {
             self.terminal.layout.cell_metrics = Some(next);
         }
+    }
+
+    fn resolve_terminal_font_metrics(
+        &self,
+        text_system: &gpui::TextSystem,
+        configured_font: ResolvedAppearanceFont,
+        size: Pixels,
+        weight: FontWeight,
+    ) -> (gpui::Font, f32, Option<ResolvedAppearanceFont>) {
+        if let Some(width) = measure_terminal_font(text_system, &configured_font, size, weight) {
+            let font = terminal_font_with_features(&configured_font, weight);
+            return (font, width, None);
+        }
+
+        let mut candidates = Vec::<ResolvedAppearanceFont>::new();
+        let mut seen_families = HashSet::new();
+        let mut add_candidate = |candidate: ResolvedAppearanceFont| {
+            let family = candidate.family.trim().to_ascii_lowercase();
+            if !family.is_empty() && seen_families.insert(family) {
+                candidates.push(candidate);
+            }
+        };
+        // Preserve the user's fallback order before applying platform defaults.
+        for family in &configured_font.fallback_families {
+            add_candidate(configured_font.with_primary_family(family));
+        }
+        for family in self.settings.terminal_font_options() {
+            add_candidate(self.gpui_terminal_font_for_family(family));
+        }
+        #[cfg(target_os = "macos")]
+        for family in ["Menlo", "Monaco", "SF Mono"] {
+            add_candidate(self.gpui_terminal_font_for_family(family));
+        }
+        #[cfg(target_os = "windows")]
+        for family in ["Consolas", "Cascadia Mono"] {
+            add_candidate(self.gpui_terminal_font_for_family(family));
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        for family in ["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono"] {
+            add_candidate(self.gpui_terminal_font_for_family(family));
+        }
+        // Enumerate the system only after preferred candidates. The result is
+        // still evaluated once and then retained by font_metrics_cache.
+        for family in text_system.all_font_names() {
+            add_candidate(self.gpui_terminal_font_for_family(&family));
+        }
+
+        for candidate in candidates {
+            if let Some(width) = measure_terminal_font(text_system, &candidate, size, weight) {
+                let font = terminal_font_with_features(&candidate, weight);
+                tracing::warn!(
+                    configured_font = %configured_font.family,
+                    fallback_font = %candidate.family,
+                    "configured terminal font is unavailable or not monospaced; using a local fallback"
+                );
+                return (font, width, Some(candidate));
+            }
+        }
+
+        let font = terminal_font_with_features(&configured_font, weight);
+        let font_id = text_system.resolve_font(&font);
+        let width = text_system
+            .ch_advance(font_id, size)
+            .or_else(|_| text_system.em_advance(font_id, size))
+            .ok()
+            .map(f32::from)
+            .filter(|width| width.is_finite() && *width > 1.0)
+            .unwrap_or(8.0);
+        (font, width, None)
     }
 
     pub(in crate::features) fn terminal_content_insets(&self) -> TerminalViewportInsets {

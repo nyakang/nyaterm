@@ -6,7 +6,7 @@ use crate::models::{
 };
 use crate::terminal::initial_terminal_screen;
 use gpui::{AppContext as _, Context};
-use nyaterm_core::{AppRuntime, uuid};
+use nyaterm_core::{AppRuntime, ConnectionType, SavedConnection, SshAgentEndpoint, uuid};
 use nyaterm_store::{BootstrapSnapshot, StoreBlockingClient, StoreUiClient};
 #[cfg(test)]
 use nyaterm_store::{LoadBootstrap, StoreConfig, StoreRuntime};
@@ -82,6 +82,7 @@ impl NyaTermApp {
             ai_audit_count,
             open_tabs,
         } = bootstrap;
+        let shell_environment_variables = configured_shell_environment_variables(&connections);
         let store_status = (
             database_path.display().to_string(),
             "redb connection store online".to_string(),
@@ -146,6 +147,12 @@ impl NyaTermApp {
         let mut terminal_screen = initial_terminal_screen();
         terminal_screen.set_encoding(&settings.interaction_default_encoding);
         let session_manager = Arc::new(SessionManager::new());
+        let shell_environment = session_manager.shell_environment();
+        cx.background_executor()
+            .spawn(async move {
+                let _ = shell_environment.warm(&shell_environment_variables).await;
+            })
+            .detach();
         let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer);
         let session_event_bridge = SessionEventBridge::spawn(
             Arc::clone(&session_manager),
@@ -347,4 +354,36 @@ impl NyaTermApp {
             .expect("load test bootstrap");
         Self::from_bootstrap(runtime, stores, bootstrap, store_ui, store_blocking, cx)
     }
+}
+
+fn configured_shell_environment_variables(connections: &[SavedConnection]) -> Vec<String> {
+    let mut variables = std::collections::BTreeSet::from(["SSH_AUTH_SOCK".to_string()]);
+    for connection in connections {
+        let ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        } = &connection.config
+        else {
+            continue;
+        };
+        let mut collect_endpoint = |endpoint: &SshAgentEndpoint| {
+            if let SshAgentEndpoint::Environment { variable } = endpoint {
+                if let Ok(variable) =
+                    nyaterm_transport::normalize_environment_variable_name(variable)
+                {
+                    variables.insert(variable);
+                }
+            }
+        };
+        if let Some(endpoint) = auth_agent_endpoint {
+            collect_endpoint(endpoint);
+        }
+        if let Some(config) = agent_forwarding_config {
+            for endpoint in &config.sources.external_agent_endpoints {
+                collect_endpoint(endpoint);
+            }
+        }
+    }
+    variables.into_iter().collect()
 }

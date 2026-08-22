@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use gpui::{
-    App, Bounds, ContentMask, Element, ElementId, Font, FontFallbacks, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style,
-    TextRun, Window, fill, font, point, px, relative, rgb, rgba, size,
+    App, Bounds, ContentMask, Element, ElementId, Font, FontFallbacks, FontFeatures,
+    GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine,
+    SharedString, Style, TextRun, Window, fill, font, point, px, relative, rgb, rgba, size,
 };
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{
@@ -1228,6 +1228,11 @@ impl Element for NyaTerminalElement {
         let font_size = px(self.font_size.max(8.));
         let mut base_font = font(SharedString::from(self.font_family.clone()));
         base_font.fallbacks = self.font_fallbacks.clone();
+        // Terminal cells advance by character columns, while font ligatures can
+        // collapse several characters into one glyph. Disable contextual
+        // ligatures so GPUI's fixed-width shaping keeps one glyph position per
+        // terminal cell and does not shift the remainder of a row.
+        base_font.features = FontFeatures::disable_ligatures();
         let keyword_rules_key = if let Some(highlights) = self.keyword_highlights.as_ref() {
             highlights.rules_key()
         } else if self.keyword_rules.is_empty() {

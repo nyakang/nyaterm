@@ -5,7 +5,7 @@ use gpui::Context;
 use nyaterm_core::{AiExecutionProfile, uuid};
 use nyaterm_transport::{
     LocalSessionConfig, SerialSessionConfig, SessionInfo, SessionKind, SessionManager,
-    SshSessionConfig, TelnetSessionConfig, open_ssh_multiplex_handle,
+    SshSessionConfig, TelnetSessionConfig, open_ssh_multiplex_handle_with_environment,
 };
 
 use super::super::state::{failed_session_start_display_name, pending_session_start_display_name};
@@ -195,6 +195,10 @@ impl NyaTermApp {
             tab_placement,
         } = options;
         let kind = session_kind_for_launch_config(&launch_config);
+        let multiplex_key = match &launch_config {
+            SessionLaunchConfig::Ssh(config) => Some(ssh_multiplex_key(config)),
+            _ => None,
+        };
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
                 connection_name: connection_name.clone(),
@@ -208,7 +212,7 @@ impl NyaTermApp {
                 insert_index,
                 seed_output,
                 startup_command,
-                multiplex_key: None,
+                multiplex_key,
                 source_connection_id,
                 reconnect_session_id,
                 workspace_split,
@@ -225,11 +229,14 @@ impl NyaTermApp {
         std::thread::spawn(move || {
             let worker_started_at = Instant::now();
             let result = create_session_from_launch_config(&session_manager, launch_config.clone())
-                .map(|session_info| SessionStartSuccess {
-                    session_info,
-                    multiplex_handle: None,
-                    launch_config: Some(launch_config),
-                })
+                .map(
+                    |(session_info, multiplex_handle, ssh_start_handle)| SessionStartSuccess {
+                        session_info,
+                        multiplex_handle,
+                        ssh_start_handle,
+                        launch_config: Some(launch_config),
+                    },
+                )
                 .map_err(|error| error.to_string());
             let worker_finished_at = Instant::now();
             let _ = session_start_tx.unbounded_send(SessionStartResult {
@@ -265,7 +272,10 @@ impl NyaTermApp {
             workspace_split,
             tab_placement,
         } = options;
-        config.deferred_pty = true;
+        // Open the PTY as soon as the registration barrier is released. The terminal
+        // surface sends its actual viewport resize after layout; waiting for that command
+        // here adds a fixed startup delay before the first remote bytes can be read.
+        config.deferred_pty = false;
         let geometry_session_hint = after_session_id
             .as_deref()
             .or(reconnect_session_id.as_deref());
@@ -277,6 +287,7 @@ impl NyaTermApp {
             config.pixel_width = geometry.pixel_width;
             config.pixel_height = geometry.pixel_height;
         }
+        let multiplex_key = ssh_multiplex_key(&config);
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
                 connection_name: connection_name.clone(),
@@ -290,7 +301,7 @@ impl NyaTermApp {
                 insert_index,
                 seed_output,
                 startup_command,
-                multiplex_key: None,
+                multiplex_key: Some(multiplex_key),
                 source_connection_id,
                 reconnect_session_id,
                 workspace_split,
@@ -306,14 +317,17 @@ impl NyaTermApp {
         let request_id_for_worker = request_id.clone();
         std::thread::spawn(move || {
             let worker_started_at = Instant::now();
-            let result = session_manager
-                .create_ssh_session(config.clone())
-                .map(|info| SessionStartSuccess {
-                    session_info: info,
-                    multiplex_handle: None,
+            let result = (|| {
+                let (session_info, multiplex, ssh_start_handle) = session_manager
+                    .create_ssh_session_with_shared_handle_deferred(config.clone())
+                    .map_err(|error| error.to_string())?;
+                Ok(SessionStartSuccess {
+                    session_info,
+                    multiplex_handle: Some(multiplex),
+                    ssh_start_handle: Some(ssh_start_handle),
                     launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config))),
                 })
-                .map_err(|error| error.to_string());
+            })();
             let worker_finished_at = Instant::now();
             let _ = session_start_tx.unbounded_send(SessionStartResult {
                 request_id: request_id_for_worker,
@@ -352,7 +366,8 @@ impl NyaTermApp {
             workspace_split,
             tab_placement,
         } = options;
-        config.deferred_pty = true;
+        // Reused SSH channels follow the same immediate PTY-open path as fresh connections.
+        config.deferred_pty = false;
         let geometry_session_hint = after_session_id
             .as_deref()
             .or(reconnect_session_id.as_deref());
@@ -397,15 +412,19 @@ impl NyaTermApp {
             let result = (|| {
                 let multiplex = match existing_multiplex {
                     Some(handle) if !handle.is_closed() => handle,
-                    _ => open_ssh_multiplex_handle(config.clone())
-                        .map_err(|error| error.to_string())?,
+                    _ => open_ssh_multiplex_handle_with_environment(
+                        config.clone(),
+                        session_manager.shell_environment(),
+                    )
+                    .map_err(|error| error.to_string())?,
                 };
-                let info = session_manager
-                    .create_ssh_session_with_multiplex(config.clone(), multiplex.clone())
+                let (info, ssh_start_handle) = session_manager
+                    .create_ssh_session_with_multiplex_deferred(config.clone(), multiplex.clone())
                     .map_err(|error| error.to_string())?;
                 Ok(SessionStartSuccess {
                     session_info: info,
                     multiplex_handle: Some(multiplex),
+                    ssh_start_handle: Some(ssh_start_handle),
                     launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config))),
                 })
             })();
@@ -522,6 +541,7 @@ impl NyaTermApp {
                 self.shell.clear_last_connect_failure();
                 let session_info = success.session_info;
                 let session_id = session_info.id.clone();
+                let ssh_start_handle = success.ssh_start_handle;
                 let reconnect_session_id = pending
                     .as_ref()
                     .and_then(|pending| pending.reconnect_session_id.clone());
@@ -618,6 +638,12 @@ impl NyaTermApp {
                     self.seed_terminal_frame_session(&session_id, seed_output.clone(), &encoding);
                     self.terminal
                         .seed_session_view(session_id.clone(), seed_output, &encoding);
+                }
+                // Keep the authenticated transport paused until the session metadata, frame
+                // pipeline, and reconnect seed are installed, so the first banner cannot race
+                // the UI registration path.
+                if let Some(ssh_start_handle) = ssh_start_handle {
+                    ssh_start_handle.start();
                 }
                 if tab_placement.is_none()
                     && fallback_insert_index.is_none()
@@ -766,12 +792,27 @@ const SESSION_START_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
 fn create_session_from_launch_config(
     session_manager: &SessionManager,
     launch_config: SessionLaunchConfig,
-) -> Result<SessionInfo, nyaterm_transport::SessionError> {
+) -> Result<
+    (
+        SessionInfo,
+        Option<nyaterm_transport::SshMultiplexHandle>,
+        Option<nyaterm_transport::SshSessionStartHandle>,
+    ),
+    nyaterm_transport::SessionError,
+> {
     match launch_config {
-        SessionLaunchConfig::Local(config) => session_manager.create_local_session(config),
-        SessionLaunchConfig::Ssh(config) => session_manager.create_ssh_session(*config),
-        SessionLaunchConfig::Telnet(config) => session_manager.create_telnet_session(config),
-        SessionLaunchConfig::Serial(config) => session_manager.create_serial_session(config),
+        SessionLaunchConfig::Local(config) => session_manager
+            .create_local_session(config)
+            .map(|info| (info, None, None)),
+        SessionLaunchConfig::Ssh(config) => session_manager
+            .create_ssh_session_with_shared_handle_deferred(*config)
+            .map(|(info, handle, start)| (info, Some(handle), Some(start))),
+        SessionLaunchConfig::Telnet(config) => session_manager
+            .create_telnet_session(config)
+            .map(|info| (info, None, None)),
+        SessionLaunchConfig::Serial(config) => session_manager
+            .create_serial_session(config)
+            .map(|info| (info, None, None)),
         SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_) => {
             unreachable!("remote desktop sessions are created by RemoteDesktopFeatureState")
         }

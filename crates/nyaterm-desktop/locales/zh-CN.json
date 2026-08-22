@@ -2194,6 +2194,9 @@
   },
   "sshAuth": {
     "agentPromptTitle": "SSH Agent 需要处理",
+    "agentWaitingTitle": "等待 SSH Agent 授权",
+    "agentFailedTitle": "SSH Agent 认证失败",
+    "agentApprovalWaiting": "请确认硬件密钥、PIN 或 SSH Agent 授权请求。",
     "agentConnectFailed": "无法连接配置的 SSH Agent。请确认 Agent 正在运行，然后重试。",
     "agentIdentitiesFailed": "SSH Agent 未提供可用身份。请解锁或加载密钥，然后重试。",
     "agentApprovalRequired": "请确认硬件密钥、PIN 或 SSH Agent 授权请求，然后重试。",

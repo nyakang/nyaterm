@@ -17,6 +17,7 @@ use super::assist_state::TerminalAssistState;
 use super::terminal_surface::TerminalScrollbarDragState;
 use super::terminal_surface_entity::TerminalSurface;
 use super::window_state::TerminalWindowState;
+use crate::features::shell::ResolvedAppearanceFont;
 use crate::models::{
     ActionLinkMenuState, ActionLinkTooltipState, MultiLinePasteDraft, RecordingHistorySearchEvent,
     RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
@@ -129,6 +130,22 @@ pub(super) struct TerminalLayoutState {
     pub(super) session_scrollbar_track_bounds: HashMap<String, gpui::Bounds<gpui::Pixels>>,
     pub(super) scale_factor: f32,
     pub(super) cell_metrics: Option<(f32, f32)>,
+    pub(super) font_metrics_cache: Option<TerminalFontMetricsCache>,
+    /// Runtime-only fallback when the configured terminal font is unavailable or proportional.
+    pub(super) terminal_font_override: Option<ResolvedAppearanceFont>,
+}
+
+/// Cached terminal-font validation for one configured family/size/weight tuple.
+///
+/// Font enumeration and glyph measurement are expensive TextSystem operations. Keep
+/// the result in runtime state, while leaving the persisted appearance unchanged.
+#[derive(Clone, Debug)]
+pub(super) struct TerminalFontMetricsCache {
+    pub(super) configured_family: String,
+    pub(super) font_size: u16,
+    pub(super) font_weight: u16,
+    pub(super) resolved_font: Option<ResolvedAppearanceFont>,
+    pub(super) cell_width: f32,
 }
 
 /// Terminal actions overlay and context menu.
@@ -228,6 +245,8 @@ impl TerminalFeatureState {
                 session_scrollbar_track_bounds: HashMap::new(),
                 scale_factor,
                 cell_metrics: None,
+                font_metrics_cache: None,
+                terminal_font_override: None,
             },
             menus: TerminalMenuState {
                 actions_open: false,
@@ -342,6 +361,19 @@ impl TerminalFeatureState {
 
     pub(in crate::features) fn invalidate_cell_metrics(&mut self) {
         self.layout.cell_metrics = None;
+        self.layout.font_metrics_cache = None;
+        self.layout.terminal_font_override = None;
+    }
+
+    pub(in crate::features) fn terminal_font_override(&self) -> Option<&ResolvedAppearanceFont> {
+        self.layout.terminal_font_override.as_ref()
+    }
+
+    pub(in crate::features) fn set_terminal_font_override(
+        &mut self,
+        font: Option<ResolvedAppearanceFont>,
+    ) {
+        self.layout.terminal_font_override = font;
     }
 
     pub(in crate::features) fn move_session_surface_bounds(&mut self, from: &str, to: String) {

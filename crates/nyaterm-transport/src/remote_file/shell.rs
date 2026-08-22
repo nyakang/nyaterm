@@ -129,7 +129,7 @@ impl ShellRemote {
             .map_err(|_| anyhow::anyhow!("remote file operation timed out"))?
         };
         if let Some(multiplex) = self.multiplex.as_ref() {
-            multiplex.block_on(operation)
+            multiplex.block_on_after_interactive_ready(operation)
         } else {
             crate::run_ssh_exec_operation(operation)
         }

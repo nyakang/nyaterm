@@ -384,6 +384,14 @@ impl SessionFeatureState {
         self.prompts.active_agent()
     }
 
+    pub(in crate::features) fn prompt_take_agent_changed(&self) -> bool {
+        self.prompts.take_agent_changed()
+    }
+
+    pub(in crate::features) fn prompt_reconcile_agent(&mut self) -> bool {
+        self.prompts.reconcile_agent()
+    }
+
     pub(in crate::features) fn prompt_has_active_credential(&self) -> bool {
         self.prompts.has_active_credential()
     }
@@ -742,10 +750,17 @@ impl SessionFeatureState {
         config: SshSessionConfig,
         preference_store: std::sync::Arc<dyn RemoteFileBackendPreferenceStore>,
     ) -> anyhow::Result<RemoteFileService> {
-        if let Some(service) = self.protocols.remote_files.get(session_id) {
-            return Ok(service.clone());
-        }
         let multiplex = self.ssh_multiplex_handle_for_session(session_id);
+        if let Some(service) = self.protocols.remote_files.get(session_id) {
+            // A transfer browser can be opened while the session-start event is
+            // still being drained. Rebuild a previously dedicated service once
+            // the authenticated shared handle is registered, otherwise SFTP
+            // would silently create a second SSH connection.
+            if multiplex.is_none() || service.is_multiplexed() {
+                return Ok(service.clone());
+            }
+            self.protocols.remote_files.remove(session_id);
+        }
         let service =
             RemoteFileService::with_preference_store(config, multiplex, preference_store)?;
         self.protocols
@@ -1738,6 +1753,22 @@ impl SessionPromptState {
         Some(request)
     }
 
+    pub(in crate::features) fn take_agent_changed(&self) -> bool {
+        self.agent_prompts.take_changed()
+    }
+
+    pub(in crate::features) fn reconcile_agent(&mut self) -> bool {
+        if self
+            .active_agent_prompt
+            .as_ref()
+            .is_some_and(AgentPromptRequest::is_resolved)
+        {
+            self.active_agent_prompt = None;
+            return true;
+        }
+        false
+    }
+
     pub(in crate::features) fn keyboard_interactive_otp_id(&self) -> Option<String> {
         self.active_keyboard_interactive_prompt
             .as_ref()
@@ -1903,10 +1934,7 @@ impl SessionPromptState {
             return None;
         }
         let request = self.agent_prompts.pop_pending()?;
-        let target = format!(
-            "{}@{}:{}",
-            request.prompt.username, request.prompt.host, request.prompt.port
-        );
+        let target = request.target();
         self.active_agent_prompt = Some(request);
         Some(target)
     }

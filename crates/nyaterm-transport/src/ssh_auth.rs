@@ -4,24 +4,53 @@
 //! heuristics and auto-fill rules are unchanged; this only moves the code.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::{MethodKind, client};
 
 use super::{
-    SshAgentPrompt, SshAgentPromptAction, SshAgentPromptPhase, SshClientHandler,
-    SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason, SshKeyAuthConfig,
-    SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest, SshSessionConfig,
+    SshAgentPrompt, SshAgentPromptAction, SshAgentPromptPhase, SshAgentPromptRequest,
+    SshClientHandler, SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason,
+    SshKeyAuthConfig, SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest,
+    SshSessionConfig,
 };
-use crate::ssh_agent::connect_agent_client;
+use crate::ssh_agent::connect_agent_client_with_environment_until;
+use crate::{ShellEnvironmentCache, ssh_agent::AGENT_CONNECTION_TIMEOUT};
+
+/// Marks a user-selected retry that requires a fresh SSH transport.
+#[derive(Debug)]
+pub(super) struct SshAgentRetry;
+
+impl std::fmt::Display for SshAgentRetry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SSH Agent authentication retry requested")
+    }
+}
+
+impl std::error::Error for SshAgentRetry {}
+
+pub(super) fn is_agent_retry(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<SshAgentRetry>().is_some()
+}
+
+struct AgentPromptFinishGuard(Arc<dyn SshAgentPromptRequest>);
+
+impl Drop for AgentPromptFinishGuard {
+    fn drop(&mut self) {
+        // A cancelled transport future must resolve the UI request as well.
+        self.0.finish();
+    }
+}
 
 pub(super) async fn authenticate_ssh(
     handle: &mut client::Handle<SshClientHandler>,
     config: &SshSessionConfig,
+    agent_attempt: u32,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> anyhow::Result<()> {
     if config.agent_auth {
-        return authenticate_ssh_agent(handle, config).await;
+        return authenticate_ssh_agent(handle, config, agent_attempt, shell_environment).await;
     }
     if let Some(key_auth) = config.key_auth.as_ref() {
         return authenticate_ssh_key(handle, config, key_auth).await;
@@ -72,15 +101,32 @@ pub(super) async fn authenticate_ssh(
 async fn authenticate_ssh_agent(
     handle: &mut client::Handle<SshClientHandler>,
     config: &SshSessionConfig,
+    attempt: u32,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> anyhow::Result<()> {
-    const MAX_AGENT_ATTEMPTS: u32 = 3;
-    for attempt in 1..=MAX_AGENT_ATTEMPTS {
-        match authenticate_ssh_agent_once(handle, config).await {
+    let Some(provider) = config.agent_prompt_provider.as_ref() else {
+        return authenticate_ssh_agent_once(handle, config, shell_environment)
+            .await
+            .map_err(|failure| failure.error);
+    };
+
+    let pending_prompt = SshAgentPrompt {
+        host: config.host.clone(),
+        port: config.port,
+        username: config.username.clone(),
+        connection_name: config.name.clone(),
+        phase: SshAgentPromptPhase::Sign,
+        attempt,
+        message: String::new(),
+    };
+    let request = provider
+        .begin_request(&pending_prompt)
+        .map_err(|error| anyhow::anyhow!("SSH Agent prompt failed: {error}"))?;
+
+    let Some(request) = request else {
+        match authenticate_ssh_agent_once(handle, config, shell_environment.clone()).await {
             Ok(()) => return Ok(()),
             Err(failure) => {
-                let Some(provider) = config.agent_prompt_provider.as_ref() else {
-                    return Err(failure.error);
-                };
                 let action = provider
                     .request_action(&SshAgentPrompt {
                         host: config.host.clone(),
@@ -93,18 +139,78 @@ async fn authenticate_ssh_agent(
                     })
                     .map_err(|error| anyhow::anyhow!("SSH Agent prompt failed: {error}"))?;
                 match action {
-                    SshAgentPromptAction::Retry if attempt < MAX_AGENT_ATTEMPTS => continue,
-                    SshAgentPromptAction::Retry => {
-                        anyhow::bail!("SSH Agent authentication failed after {attempt} attempts")
-                    }
+                    SshAgentPromptAction::Retry => return Err(SshAgentRetry.into()),
                     SshAgentPromptAction::Cancel => {
                         anyhow::bail!("SSH Agent authentication was cancelled")
                     }
                 }
             }
         }
+    };
+
+    let _prompt_guard = AgentPromptFinishGuard(Arc::clone(&request));
+    let waiter = Arc::clone(&request);
+    let mut action_task = tokio::task::spawn_blocking(move || waiter.wait_action());
+    tokio::select! {
+        result = authenticate_ssh_agent_once(handle, config, shell_environment.clone()) => {
+            match result {
+                Ok(()) => {
+                    request.finish();
+                    let _ = action_task.await;
+                    Ok(())
+                }
+                Err(failure) => {
+                    let failed_prompt = SshAgentPrompt {
+                        host: config.host.clone(),
+                        port: config.port,
+                        username: config.username.clone(),
+                        connection_name: config.name.clone(),
+                        phase: failure.phase,
+                        attempt,
+                        message: failure.error.to_string(),
+                    };
+                    if let Err(error) = request.mark_failed(&failed_prompt) {
+                        request.finish();
+                        return Err(anyhow::anyhow!("SSH Agent prompt failed: {error}"));
+                    }
+                    let action = match action_task.await {
+                        Ok(Ok(action)) => action,
+                        Ok(Err(error)) => {
+                            request.finish();
+                            return Err(anyhow::anyhow!("SSH Agent prompt failed: {error}"));
+                        }
+                        Err(error) => {
+                            request.finish();
+                            return Err(anyhow::anyhow!("SSH Agent prompt task failed: {error}"));
+                        }
+                    };
+                    request.finish();
+                    match action {
+                        SshAgentPromptAction::Retry => Err(SshAgentRetry.into()),
+                        SshAgentPromptAction::Cancel => {
+                            anyhow::bail!("SSH Agent authentication was cancelled")
+                        }
+                    }
+                }
+            }
+        }
+        action = &mut action_task => {
+            request.finish();
+            let action = match action {
+                Ok(result) => result
+                    .map_err(|error| anyhow::anyhow!("SSH Agent prompt failed: {error}"))?,
+                Err(error) => {
+                    return Err(anyhow::anyhow!("SSH Agent prompt task failed: {error}"));
+                }
+            };
+            match action {
+                SshAgentPromptAction::Retry => Err(SshAgentRetry.into()),
+                SshAgentPromptAction::Cancel => {
+                    anyhow::bail!("SSH Agent authentication was cancelled")
+                }
+            }
+        }
     }
-    unreachable!("the bounded SSH Agent authentication loop always returns")
 }
 
 struct SshAgentFailure {
@@ -115,10 +221,16 @@ struct SshAgentFailure {
 async fn authenticate_ssh_agent_once(
     handle: &mut client::Handle<SshClientHandler>,
     config: &SshSessionConfig,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> Result<(), SshAgentFailure> {
+    let deadline = Instant::now() + AGENT_CONNECTION_TIMEOUT;
     let mut agent = tokio::time::timeout(
-        Duration::from_secs(5),
-        connect_agent_client(&config.agent_endpoint),
+        AGENT_CONNECTION_TIMEOUT,
+        connect_agent_client_with_environment_until(
+            &config.agent_endpoint,
+            Some(shell_environment),
+            deadline,
+        ),
     )
     .await
     .map_err(|_| SshAgentFailure {
@@ -162,12 +274,21 @@ async fn authenticate_ssh_agent_once(
         .map_err(|_| SshAgentFailure {
             phase: SshAgentPromptPhase::Sign,
             error: anyhow::anyhow!(
-                "SSH Agent signing timed out; approve the hardware key, PIN, or agent request"
+                "SSH Agent signing timed out after 60 seconds. Confirm the hardware key, enter its PIN, or approve the request in your SSH Agent, then retry."
             ),
         })?
         .map_err(|error| SshAgentFailure {
             phase: SshAgentPromptPhase::Sign,
-            error: anyhow::anyhow!("SSH Agent signing failed: {error}"),
+            error: if matches!(
+                &error,
+                russh::AgentAuthError::Key(russh::keys::Error::AgentFailure)
+            ) {
+                anyhow::anyhow!(
+                    "SSH Agent rejected the signing request. Confirm the hardware key, PIN, or SSH Agent approval, then retry."
+                )
+            } else {
+                anyhow::anyhow!("SSH Agent signing failed: {error}")
+            },
         })?;
         if result.success() {
             return Ok(());

@@ -178,6 +178,11 @@ impl RemoteFileService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Returns whether remote operations use an already-authenticated SSH link.
+    pub fn is_multiplexed(&self) -> bool {
+        self.multiplex.is_some()
+    }
+
     pub fn endpoint_key(&self) -> String {
         format!(
             "{}:{}:{}",

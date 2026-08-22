@@ -13,10 +13,10 @@ use nyaterm_ui::NyaScrollable;
 
 use crate::features::formatting::download_file_name_from_remote_path;
 use crate::features::session::{
-    AgentPromptRequest, CredentialPromptState, HostKeyPromptChoice, HostKeyPromptIssue,
-    HostKeyPromptRequest, KeyboardInteractivePromptState, SftpDuplicatePromptState,
-    credential_prompt_target, credential_text_input_id, keyboard_interactive_text_input_id,
-    unix_seconds_now,
+    AgentPromptRequest, AgentPromptState, CredentialPromptState, HostKeyPromptChoice,
+    HostKeyPromptIssue, HostKeyPromptRequest, KeyboardInteractivePromptState,
+    SftpDuplicatePromptState, credential_prompt_target, credential_text_input_id,
+    keyboard_interactive_text_input_id, unix_seconds_now,
 };
 use crate::features::view_widgets::{dialog_action_button, full_window_input_layer};
 use crate::features::{
@@ -32,14 +32,26 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
-        let phase = match request.prompt.phase {
-            SshAgentPromptPhase::Connect => t!("sshAuth.agentConnectFailed"),
-            SshAgentPromptPhase::ListIdentities => t!("sshAuth.agentIdentitiesFailed"),
-            SshAgentPromptPhase::Sign => t!("sshAuth.agentApprovalRequired"),
+        let snapshot = request.snapshot();
+        let pending = snapshot.state == AgentPromptState::Pending;
+        let retryable = !pending;
+        let title = if pending {
+            t!("sshAuth.agentWaitingTitle")
+        } else {
+            t!("sshAuth.agentFailedTitle")
+        };
+        let phase = if pending {
+            t!("sshAuth.agentApprovalWaiting")
+        } else {
+            match snapshot.prompt.phase {
+                SshAgentPromptPhase::Connect => t!("sshAuth.agentConnectFailed"),
+                SshAgentPromptPhase::ListIdentities => t!("sshAuth.agentIdentitiesFailed"),
+                SshAgentPromptPhase::Sign => t!("sshAuth.agentApprovalRequired"),
+            }
         };
         let target = format!(
             "{}@{}:{}",
-            request.prompt.username, request.prompt.host, request.prompt.port
+            snapshot.prompt.username, snapshot.prompt.host, snapshot.prompt.port
         );
         div()
             .id(SharedString::from(format!("agent-dialog-{}", request.id)))
@@ -59,12 +71,7 @@ impl NyaTermApp {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight(700.))
-                            .child(t!("sshAuth.agentPromptTitle")),
-                    )
+                    .child(div().text_sm().font_weight(FontWeight(700.)).child(title))
                     .child(div().text_xs().text_color(rgb(palette.text)).child(target))
                     .child(
                         div()
@@ -72,12 +79,14 @@ impl NyaTermApp {
                             .text_color(rgb(palette.text_muted))
                             .child(phase),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child(request.prompt.message.clone()),
-                    ),
+                    .when(!pending, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(palette.text_muted))
+                                .child(snapshot.prompt.message.clone()),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -92,15 +101,17 @@ impl NyaTermApp {
                             this.resolve_agent_prompt(SshAgentPromptAction::Cancel, cx);
                         }),
                     ))
-                    .child(dialog_action_button(
-                        palette,
-                        format!("agent-retry-{}", request.id),
-                        t!("common.retry"),
-                        false,
-                        cx.listener(|this, _, _, cx| {
-                            this.resolve_agent_prompt(SshAgentPromptAction::Retry, cx);
-                        }),
-                    )),
+                    .when(retryable, |this| {
+                        this.child(dialog_action_button(
+                            palette,
+                            format!("agent-retry-{}", request.id),
+                            t!("common.retry"),
+                            false,
+                            cx.listener(|this, _, _, cx| {
+                                this.resolve_agent_prompt(SshAgentPromptAction::Retry, cx);
+                            }),
+                        ))
+                    }),
             )
     }
 

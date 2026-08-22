@@ -21,6 +21,8 @@ const TERMINAL_FONT_SIZE_MAX: i16 = 72;
 pub(in crate::features) struct ResolvedAppearanceFont {
     pub family: String,
     pub fallbacks: Option<FontFallbacks>,
+    /// Ordered family names used to rebuild the descriptor after runtime fallback.
+    pub fallback_families: Vec<String>,
 }
 
 impl ResolvedAppearanceFont {
@@ -28,6 +30,22 @@ impl ResolvedAppearanceFont {
         let mut font = font(SharedString::from(self.family.clone()));
         font.fallbacks = self.fallbacks.clone();
         font
+    }
+
+    pub(in crate::features) fn with_primary_family(&self, family: &str) -> Self {
+        let fallback_families = self
+            .fallback_families
+            .iter()
+            .filter(|candidate| !candidate.eq_ignore_ascii_case(family))
+            .cloned()
+            .collect::<Vec<_>>();
+        let fallbacks = (!fallback_families.is_empty())
+            .then(|| FontFallbacks::from_fonts(fallback_families.clone()));
+        Self {
+            family: family.to_string(),
+            fallbacks,
+            fallback_families,
+        }
     }
 }
 
@@ -47,11 +65,25 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn gpui_terminal_font(&self) -> ResolvedAppearanceFont {
+        self.terminal
+            .terminal_font_override()
+            .cloned()
+            .unwrap_or_else(|| self.gpui_configured_terminal_font())
+    }
+
+    pub(in crate::features) fn gpui_configured_terminal_font(&self) -> ResolvedAppearanceFont {
         gpui_platform_font(
             &self.settings.summary().terminal_font_family,
             gpui_terminal_font_fallback(),
             true,
         )
+    }
+
+    pub(in crate::features) fn gpui_terminal_font_for_family(
+        &self,
+        family: &str,
+    ) -> ResolvedAppearanceFont {
+        gpui_platform_font(family, gpui_terminal_font_fallback(), true)
     }
 
     pub(in crate::features) fn gpui_ui_font(&self) -> ResolvedAppearanceFont {
@@ -812,10 +844,12 @@ fn gpui_platform_font_for_target(
         .first()
         .cloned()
         .unwrap_or_else(|| fallback.to_string());
-    let fallbacks = families.into_iter().skip(1).collect::<Vec<_>>();
+    let fallback_families = families.into_iter().skip(1).collect::<Vec<_>>();
     ResolvedAppearanceFont {
         family,
-        fallbacks: (!fallbacks.is_empty()).then(|| FontFallbacks::from_fonts(fallbacks)),
+        fallbacks: (!fallback_families.is_empty())
+            .then(|| FontFallbacks::from_fonts(fallback_families.clone())),
+        fallback_families,
     }
 }
 
@@ -917,6 +951,23 @@ mod tests {
                 .as_ref()
                 .map(|fallbacks| fallbacks.fallback_list()),
             Some(["Maple Mono CN".to_string(), "Consolas".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn promoting_configured_fallback_keeps_remaining_fallback_order() {
+        let font = gpui_platform_font_for_target(
+            "Missing Primary, JetBrains Mono, Maple Mono CN",
+            "Consolas",
+            true,
+            true,
+        );
+        let promoted = font.with_primary_family("JetBrains Mono");
+
+        assert_eq!(promoted.family, "JetBrains Mono");
+        assert_eq!(
+            promoted.fallback_families,
+            ["Maple Mono CN".to_string(), "Consolas".to_string()]
         );
     }
 

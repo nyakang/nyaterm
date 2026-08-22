@@ -70,6 +70,17 @@ impl TerminalFeatureState {
         output: String,
         encoding: &str,
     ) {
+        // A live frame can arrive before the session-start result is drained.
+        // Preserve that newer screen instead of replacing it with the reconnect
+        // seed and losing the login banner.
+        if self
+            .view
+            .views
+            .get(&session_id)
+            .is_some_and(|view| !view.output.is_empty())
+        {
+            return;
+        }
         self.view.views.insert(
             session_id,
             TerminalViewState::from_output_with_encoding(output, encoding),

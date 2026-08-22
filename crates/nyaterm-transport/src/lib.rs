@@ -23,6 +23,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc as tokio_mpsc;
 
 mod ascend_npu;
+mod environment;
 mod gpu;
 mod local_fs;
 mod rdp;
@@ -41,7 +42,7 @@ mod telnet_prompts;
 #[cfg(test)]
 use ssh_algorithms::defaults_from_preferred;
 use ssh_algorithms::resolve_preferred_algorithms;
-use ssh_auth::authenticate_ssh;
+use ssh_auth::{authenticate_ssh, is_agent_retry};
 use telnet_prompts::{
     compile_optional_regex, default_failure_regex, default_password_regex, default_success_regex,
     default_username_regex, default_wake_regex, last_chars, last_login_regex, last_non_empty_line,
@@ -52,6 +53,8 @@ use telnet_prompts::{has_password_prompt, has_username_prompt};
 mod ssh_shell_integration;
 mod tunnel;
 mod x11;
+
+use environment::{default_shell, should_use_interactive_login_args};
 
 pub use tunnel::{SshTunnelConfig, SshTunnelInfo, SshTunnelManager, SshTunnelMode};
 pub use x11::{
@@ -64,11 +67,15 @@ mod sftp_transfer_types;
 mod trzsz;
 mod zmodem;
 
+pub use environment::{
+    EnvironmentValue, ShellEnvironmentCache, ShellEnvironmentError,
+    normalize_environment_variable_name,
+};
 pub use session_config::{
     LocalSessionConfig, SerialSessionConfig, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
     SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAgentForwardingSources, SshAgentPrompt,
-    SshAgentPromptAction, SshAgentPromptPhase, SshAgentPromptProvider, SshAgentStoredKey,
-    SshAgentStoredKeyProvider, SshAgentStoredKeySnapshot, SshAlgorithmMode,
+    SshAgentPromptAction, SshAgentPromptPhase, SshAgentPromptProvider, SshAgentPromptRequest,
+    SshAgentStoredKey, SshAgentStoredKeyProvider, SshAgentStoredKeySnapshot, SshAlgorithmMode,
     SshAlgorithmPreferences, SshCredentialPrompt, SshCredentialPromptKind,
     SshCredentialPromptReason, SshCredentialProvider, SshHostKey, SshHostKeyDecision,
     SshHostKeyVerifier, SshKeyAuthConfig, SshKeyboardInteractivePrompt,
@@ -100,6 +107,7 @@ pub use sftp_transfer_types::{
 pub use ssh_agent_broker::{
     SshAgentEndpointPreviewError, SshAgentEndpointPreviewErrorCode, SshAgentIdentityPreview,
     SshAgentIdentityPreviewResponse, preview_identities, preview_identities_blocking,
+    preview_identities_blocking_with_environment, preview_identities_with_environment,
 };
 pub use ssh_algorithms::{
     SshAlgorithmDefaults, SshAlgorithmListKind, SshAlgorithmOption, SshAlgorithmRisk,
@@ -205,6 +213,32 @@ pub struct SshMultiplexHandle {
 type SharedSshHandle = Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>;
 type ForwardedTcpIpRegistry = Arc<tokio::sync::Mutex<ForwardedTcpIpDispatch>>;
 
+/// Starts an SSH channel after its desktop session has been registered.
+///
+/// The transport manager must insert the channel before it can return the
+/// session id, but the PTY reader must not run before GPUI has created the
+/// corresponding terminal frame state. Keeping this sender in the start
+/// result gives the desktop layer the same registration-before-IO ordering as
+/// the Tauri implementation.
+pub struct SshSessionStartHandle {
+    start_tx: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl SshSessionStartHandle {
+    fn new(start_tx: tokio::sync::oneshot::Sender<()>) -> Self {
+        Self {
+            start_tx: Some(start_tx),
+        }
+    }
+
+    /// Releases the worker to open/read the interactive PTY channel.
+    pub fn start(mut self) {
+        if let Some(start_tx) = self.start_tx.take() {
+            let _ = start_tx.send(());
+        }
+    }
+}
+
 struct SshMultiplexInner {
     runtime: Arc<tokio::runtime::Runtime>,
     target: SharedSshHandle,
@@ -214,7 +248,13 @@ struct SshMultiplexInner {
     /// handles with different forwarding policies must never be shared.
     agent_forwarding_config: Option<SshAgentForwardingConfig>,
     agent_stored_key_revision: Option<u64>,
+    shell_environment: Arc<ShellEnvironmentCache>,
     forwarded_tcpip: ForwardedTcpIpRegistry,
+    /// Remote operations wait until the owning interactive PTY reader has
+    /// started.  Before that point a second channel could race the desktop
+    /// registration barrier and make the first login burst invisible.
+    interactive_ready: Arc<AtomicBool>,
+    interactive_ready_notify: Arc<tokio::sync::Notify>,
     closed: AtomicBool,
 }
 
@@ -272,26 +312,29 @@ impl SshMultiplexHandle {
     }
 
     pub fn disconnect(&self) -> anyhow::Result<()> {
+        self.inner.runtime.block_on(self.disconnect_async())
+    }
+
+    async fn disconnect_async(&self) -> anyhow::Result<()> {
         if self.inner.closed.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
+        self.inner.interactive_ready_notify.notify_waiters();
         let target = self.inner.target.clone();
         let jumps = self.inner.jumps.clone();
-        self.inner.runtime.block_on(async move {
-            let _ = target
+        let _ = target
+            .lock()
+            .await
+            .disconnect(Disconnect::ByApplication, "ssh multiplex closed", "en")
+            .await;
+        for jump in jumps {
+            let _ = jump
                 .lock()
                 .await
                 .disconnect(Disconnect::ByApplication, "ssh multiplex closed", "en")
                 .await;
-            for jump in jumps {
-                let _ = jump
-                    .lock()
-                    .await
-                    .disconnect(Disconnect::ByApplication, "ssh multiplex closed", "en")
-                    .await;
-            }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     fn target_handle(&self) -> SharedSshHandle {
@@ -300,6 +343,35 @@ impl SshMultiplexHandle {
 
     fn forwarded_tcpip_registry(&self) -> ForwardedTcpIpRegistry {
         self.inner.forwarded_tcpip.clone()
+    }
+
+    fn shell_environment(&self) -> Arc<ShellEnvironmentCache> {
+        self.inner.shell_environment.clone()
+    }
+
+    fn mark_interactive_ready(&self) {
+        self.inner.interactive_ready.store(true, Ordering::Release);
+        self.inner.interactive_ready_notify.notify_waiters();
+    }
+
+    pub(crate) async fn wait_for_interactive_ready(&self) -> anyhow::Result<()> {
+        tokio::time::timeout(INTERACTIVE_READY_TIMEOUT, async {
+            loop {
+                if self.is_closed() {
+                    anyhow::bail!("SSH multiplex handle is closed");
+                }
+                if self.inner.interactive_ready.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                let notified = self.inner.interactive_ready_notify.notified();
+                if self.inner.interactive_ready.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                notified.await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for SSH interactive shell readiness"))?
     }
 
     fn block_on<T, F>(&self, operation: F) -> anyhow::Result<T>
@@ -311,6 +383,52 @@ impl SshMultiplexHandle {
             anyhow::bail!("SSH multiplex handle is closed");
         }
         self.inner.runtime.block_on(operation)
+    }
+
+    pub(crate) fn block_on_after_interactive_ready<T, F>(&self, operation: F) -> anyhow::Result<T>
+    where
+        F: Future<Output = anyhow::Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let ready_handle = self.clone();
+        self.block_on(async move {
+            ready_handle.wait_for_interactive_ready().await?;
+            operation.await
+        })
+    }
+}
+
+fn connected_ssh_multiplex_handle(
+    config: &SshSessionConfig,
+    runtime: Arc<tokio::runtime::Runtime>,
+    target: SharedSshHandle,
+    jumps: Vec<SharedSshHandle>,
+    forwarded_tcpip: ForwardedTcpIpRegistry,
+    interactive_ready: bool,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> SshMultiplexHandle {
+    let info = SshMultiplexInfo {
+        name: config.name.clone(),
+        host: config.host.clone(),
+        port: config.port,
+        username: config.username.clone(),
+        proxy: config.proxy.clone(),
+        jump_count: jumps.len(),
+    };
+    SshMultiplexHandle {
+        inner: Arc::new(SshMultiplexInner {
+            runtime,
+            target,
+            jumps,
+            info,
+            agent_forwarding_config: effective_agent_forwarding_config(config),
+            agent_stored_key_revision: current_agent_stored_key_revision(config),
+            shell_environment,
+            forwarded_tcpip,
+            interactive_ready: Arc::new(AtomicBool::new(interactive_ready)),
+            interactive_ready_notify: Arc::new(tokio::sync::Notify::new()),
+            closed: AtomicBool::new(false),
+        }),
     }
 }
 
@@ -327,8 +445,14 @@ fn forwarded_tcpip_sender_for(
 }
 
 pub fn open_ssh_multiplex_handle(config: SshSessionConfig) -> anyhow::Result<SshMultiplexHandle> {
-    let agent_forwarding_config = effective_agent_forwarding_config(&config);
-    let agent_stored_key_revision = current_agent_stored_key_revision(&config);
+    open_ssh_multiplex_handle_with_environment(config, ShellEnvironmentCache::global())
+}
+
+/// Opens an SSH multiplex handle using a shared shell environment cache.
+pub fn open_ssh_multiplex_handle_with_environment(
+    config: SshSessionConfig,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> anyhow::Result<SshMultiplexHandle> {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -341,30 +465,23 @@ pub fn open_ssh_multiplex_handle(config: SshSessionConfig) -> anyhow::Result<Ssh
         &config,
         Some(forwarded_tcpip.clone()),
         None,
+        shell_environment.clone(),
     ))?;
-    let info = SshMultiplexInfo {
-        name: config.name,
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        proxy: config.proxy,
-        jump_count: jumps.len(),
-    };
-    Ok(SshMultiplexHandle {
-        inner: Arc::new(SshMultiplexInner {
-            runtime,
-            target: Arc::new(tokio::sync::Mutex::new(target)),
-            jumps: jumps
-                .into_iter()
-                .map(|jump| Arc::new(tokio::sync::Mutex::new(jump)))
-                .collect(),
-            info,
-            agent_forwarding_config,
-            agent_stored_key_revision,
-            forwarded_tcpip,
-            closed: AtomicBool::new(false),
-        }),
-    })
+    let jumps = jumps
+        .into_iter()
+        .map(|jump| Arc::new(tokio::sync::Mutex::new(jump)))
+        .collect();
+    Ok(connected_ssh_multiplex_handle(
+        &config,
+        runtime,
+        Arc::new(tokio::sync::Mutex::new(target)),
+        jumps,
+        forwarded_tcpip,
+        // This handle is created specifically for independent remote
+        // operations; no interactive PTY owns a readiness barrier for it.
+        true,
+        shell_environment,
+    ))
 }
 
 impl std::fmt::Debug for SshTunnelConfig {
@@ -391,10 +508,12 @@ struct ForwardedTcpIpChannel {
 
 const MIT_MAGIC_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
 const XAUTH_TIMEOUT: Duration = Duration::from_secs(2);
+const INTERACTIVE_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, ManagedSession>>,
     event_queue: SessionEventQueue,
+    shell_environment: Arc<ShellEnvironmentCache>,
 }
 
 enum ManagedSession {
@@ -529,26 +648,31 @@ enum SshCommand {
 }
 
 struct OpenSshShellSession {
-    handle: Option<client::Handle<SshClientHandler>>,
+    handle: Option<SharedSshHandle>,
     channel: russh::Channel<client::Msg>,
-    jump_handles: Vec<client::Handle<SshClientHandler>>,
+    jump_handles: Vec<SharedSshHandle>,
     disconnect_on_close: bool,
     x11_forwarder: Option<X11Forwarder>,
     local_notice: Option<Vec<u8>>,
     injection_script: Option<Vec<u8>>,
+    integration_future: Option<SshIntegrationPreparation>,
     ready_marker: String,
     legacy_ready_marker: Option<String>,
     shell_kind: Option<ShellKind>,
 }
 
+type SshIntegrationPreparation = Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>;
+
+#[derive(Clone)]
 enum SshShellHandle {
-    Dedicated(client::Handle<SshClientHandler>),
+    Dedicated(SharedSshHandle),
     Multiplexed(SharedSshHandle),
 }
 
 struct PendingOpenSshShellSession {
     handle: SshShellHandle,
-    jump_handles: Vec<client::Handle<SshClientHandler>>,
+    forwarded_tcpip: ForwardedTcpIpRegistry,
+    jump_handles: Vec<SharedSshHandle>,
     disconnect_on_close: bool,
     x11_config: Option<X11ForwardingConfig>,
     x11_rx: Option<tokio_mpsc::UnboundedReceiver<X11ChannelOpen>>,
@@ -576,7 +700,14 @@ impl SessionManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             event_queue: SessionEventQueue::new(),
+            shell_environment: ShellEnvironmentCache::global(),
         }
+    }
+
+    /// Returns the shared shell environment cache used by this manager's SSH
+    /// sessions and forwarding channels.
+    pub fn shell_environment(&self) -> Arc<ShellEnvironmentCache> {
+        self.shell_environment.clone()
     }
 
     pub fn create_local_session(
@@ -738,7 +869,34 @@ impl SessionManager {
         &self,
         config: SshSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
-        self.create_ssh_session_inner(config, None)
+        let (info, _, start_handle) = self.create_ssh_session_inner(config, None)?;
+        start_handle.start();
+        Ok(info)
+    }
+
+    pub fn create_ssh_session_with_shared_handle(
+        &self,
+        config: SshSessionConfig,
+    ) -> Result<(SessionInfo, SshMultiplexHandle), SessionError> {
+        let (info, handle, start_handle) =
+            self.create_ssh_session_with_shared_handle_deferred(config)?;
+        start_handle.start();
+        Ok((info, handle))
+    }
+
+    /// Creates an SSH session whose PTY remains paused until the desktop has
+    /// registered the session and terminal frame state.
+    pub fn create_ssh_session_with_shared_handle_deferred(
+        &self,
+        config: SshSessionConfig,
+    ) -> Result<(SessionInfo, SshMultiplexHandle, SshSessionStartHandle), SessionError> {
+        let addr = format!("{}:{}", config.host, config.port);
+        let (info, handle, start_handle) = self.create_ssh_session_inner(config, None)?;
+        let handle = handle.ok_or_else(|| SessionError::CreateSsh {
+            addr,
+            source: anyhow::anyhow!("SSH session did not expose a reusable handle"),
+        })?;
+        Ok((info, handle, start_handle))
     }
 
     pub fn create_ssh_session_with_multiplex(
@@ -746,20 +904,41 @@ impl SessionManager {
         config: SshSessionConfig,
         multiplex: SshMultiplexHandle,
     ) -> Result<SessionInfo, SessionError> {
+        let (info, start_handle) =
+            self.create_ssh_session_with_multiplex_deferred(config, multiplex)?;
+        start_handle.start();
+        Ok(info)
+    }
+
+    /// Opens an interactive channel on an existing authenticated connection,
+    /// keeping its PTY paused until the desktop registration is complete.
+    pub fn create_ssh_session_with_multiplex_deferred(
+        &self,
+        config: SshSessionConfig,
+        multiplex: SshMultiplexHandle,
+    ) -> Result<(SessionInfo, SshSessionStartHandle), SessionError> {
         multiplex
             .ensure_matches_config(&config)
             .map_err(|source| SessionError::CreateSsh {
                 addr: format!("{}:{}", config.host, config.port),
                 source,
             })?;
-        self.create_ssh_session_inner(config, Some(multiplex))
+        let (info, _, start_handle) = self.create_ssh_session_inner(config, Some(multiplex))?;
+        Ok((info, start_handle))
     }
 
     fn create_ssh_session_inner(
         &self,
         config: SshSessionConfig,
         multiplex: Option<SshMultiplexHandle>,
-    ) -> Result<SessionInfo, SessionError> {
+    ) -> Result<
+        (
+            SessionInfo,
+            Option<SshMultiplexHandle>,
+            SshSessionStartHandle,
+        ),
+        SessionError,
+    > {
         let session_id = uuid::Uuid::new_v4().to_string();
         let addr = format!("{}:{}", config.host, config.port);
         validate_ssh_algorithm_preferences(config.ssh_algorithms.as_ref()).map_err(|source| {
@@ -770,6 +949,11 @@ impl SessionManager {
         })?;
         let (command_tx, command_rx) = tokio_mpsc::unbounded_channel();
         let (ready_tx, ready_rx) = mpsc::channel();
+        // Keep the IO loop behind a registration barrier. Tauri registers the
+        // session before spawning its reader; without the equivalent handshake
+        // here, the first MOTD bytes can arrive before the GPUI frame session
+        // and reconnect seed are installed.
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let event_queue = self.event_queue.clone();
         let worker_config = config.clone();
         let worker_session_id = session_id.clone();
@@ -781,11 +965,12 @@ impl SessionManager {
                 ready_tx,
                 event_queue,
                 multiplex,
+                start_rx,
             );
         });
 
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
+        let shared_handle = match ready_rx.recv() {
+            Ok(Ok(handle)) => handle,
             Ok(Err(message)) => {
                 let _ = worker_thread.join();
                 return Err(SessionError::CreateSsh {
@@ -800,7 +985,7 @@ impl SessionManager {
                     source: anyhow::anyhow!("SSH worker exited before readiness: {error}"),
                 });
             }
-        }
+        };
 
         let info = SessionInfo {
             id: session_id.clone(),
@@ -822,7 +1007,11 @@ impl SessionManager {
             .map_err(|_| SessionError::LockPoisoned)?
             .insert(session_id, ManagedSession::Ssh(session));
 
-        Ok(info)
+        // The manager now owns the channel. Keep the worker paused until the
+        // desktop registers the matching session/frame state; dropping this
+        // handle on a failed start closes the worker's start receiver and
+        // releases its pending SSH resources.
+        Ok((info, shared_handle, SshSessionStartHandle::new(start_tx)))
     }
 
     pub fn create_serial_session(
@@ -1514,52 +1703,36 @@ fn run_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
     command_rx: tokio_mpsc::UnboundedReceiver<SshCommand>,
-    ready_tx: mpsc::Sender<Result<(), String>>,
+    ready_tx: mpsc::Sender<Result<Option<SshMultiplexHandle>, String>>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
+    start_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("nyaterm-ssh")
         .build()
     {
-        Ok(runtime) => runtime,
+        Ok(runtime) => Arc::new(runtime),
         Err(error) => {
             let _ = ready_tx.send(Err(format!("failed to start SSH runtime: {error}")));
             return;
         }
     };
 
+    let runtime_for_worker = runtime.clone();
+    let wait_for_open_commands = config.deferred_pty;
     runtime.block_on(async move {
-        if config.deferred_pty {
-            run_deferred_ssh_worker(
-                session_id,
-                config,
-                command_rx,
-                ready_tx,
-                event_queue,
-                multiplex,
-            )
-            .await;
-            return;
-        }
-
-        let open_session = match open_ssh_shell(&session_id, &config, multiplex.as_ref()).await {
-            Ok(session) => {
-                let _ = ready_tx.send(Ok(()));
-                session
-            }
-            Err(error) => {
-                let _ = ready_tx.send(Err(error.to_string()));
-                return;
-            }
-        };
-        run_open_ssh_shell_session(
+        run_deferred_ssh_worker(
             session_id,
-            open_session,
+            config,
             command_rx,
+            ready_tx,
             event_queue,
-            VecDeque::new(),
+            multiplex,
+            runtime_for_worker,
+            start_rx,
+            wait_for_open_commands,
         )
         .await;
     });
@@ -1569,51 +1742,92 @@ async fn run_deferred_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
     mut command_rx: tokio_mpsc::UnboundedReceiver<SshCommand>,
-    ready_tx: mpsc::Sender<Result<(), String>>,
+    ready_tx: mpsc::Sender<Result<Option<SshMultiplexHandle>, String>>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
+    runtime: Arc<tokio::runtime::Runtime>,
+    start_rx: tokio::sync::oneshot::Receiver<()>,
+    wait_for_open_commands: bool,
 ) {
-    let pending_session = match open_pending_ssh_shell(&config, multiplex.as_ref()).await {
-        Ok(session) => {
-            let _ = ready_tx.send(Ok(()));
-            session
-        }
+    // Keep SFTP and other multiplexed operations behind the interactive shell
+    // setup.  Opening another channel during this window can change the
+    // ordering of the PTY startup burst that contains the login banner.
+    let multiplex_for_ready = multiplex.clone();
+    let shell_environment = multiplex
+        .as_ref()
+        .map(SshMultiplexHandle::shell_environment)
+        .unwrap_or_else(ShellEnvironmentCache::global);
+    let pending_session = match open_pending_ssh_shell(
+        &config,
+        multiplex.as_ref(),
+        shell_environment.clone(),
+    )
+    .await
+    {
+        Ok(session) => session,
         Err(error) => {
+            // A reused authenticated connection remains usable even when this
+            // session cannot open its interactive channel. Wake other remote
+            // operations instead of leaving them parked behind this failed
+            // startup attempt.
+            if let Some(handle) = multiplex_for_ready.as_ref() {
+                handle.mark_interactive_ready();
+            }
             let _ = ready_tx.send(Err(error.to_string()));
             return;
         }
     };
+    let shared_handle = match &pending_session.handle {
+        SshShellHandle::Dedicated(target) => Some(connected_ssh_multiplex_handle(
+            &config,
+            runtime,
+            target.clone(),
+            pending_session.jump_handles.clone(),
+            pending_session.forwarded_tcpip.clone(),
+            false,
+            shell_environment,
+        )),
+        SshShellHandle::Multiplexed(_) => None,
+    };
+    let worker_handle = shared_handle.clone();
+    let _ = ready_tx.send(Ok(shared_handle));
+    if start_rx.await.is_err() {
+        disconnect_pending_ssh_shell(pending_session, worker_handle.clone()).await;
+        return;
+    }
     let mut pending_session = Some(pending_session);
     let mut dimensions = SshPtyDimensions::from_config(&config);
     let mut pending_writes = VecDeque::new();
-    let mut fallback = Box::pin(tokio::time::sleep(Duration::from_millis(750)));
+    if wait_for_open_commands {
+        let mut fallback = Box::pin(tokio::time::sleep(Duration::from_millis(750)));
 
-    loop {
-        tokio::select! {
-            command = command_rx.recv() => {
-                match command {
-                    Some(SshCommand::Write(data)) => {
-                        pending_writes.push_back(data);
-                    }
-                    Some(SshCommand::Resize {
-                        cols,
-                        rows,
-                        pixel_width,
-                        pixel_height,
-                    }) => {
-                        dimensions = SshPtyDimensions::new(cols, rows, pixel_width, pixel_height);
-                        break;
-                    }
-                    Some(SshCommand::Close) | None => {
-                        if let Some(session) = pending_session.take() {
-                            disconnect_pending_ssh_shell(session).await;
+        loop {
+            tokio::select! {
+                command = command_rx.recv() => {
+                    match command {
+                        Some(SshCommand::Write(data)) => {
+                            pending_writes.push_back(data);
                         }
-                        return;
+                        Some(SshCommand::Resize {
+                            cols,
+                            rows,
+                            pixel_width,
+                            pixel_height,
+                        }) => {
+                            dimensions = SshPtyDimensions::new(cols, rows, pixel_width, pixel_height);
+                            break;
+                        }
+                        Some(SshCommand::Close) | None => {
+                            if let Some(session) = pending_session.take() {
+                                disconnect_pending_ssh_shell(session, worker_handle.clone()).await;
+                            }
+                            return;
+                        }
                     }
                 }
-            }
-            _ = &mut fallback => {
-                break;
+                _ = &mut fallback => {
+                    break;
+                }
             }
         }
     }
@@ -1622,22 +1836,34 @@ async fn run_deferred_ssh_worker(
         return;
     };
     if drain_deferred_ssh_open_commands(&mut command_rx, &mut dimensions, &mut pending_writes) {
-        disconnect_pending_ssh_shell(pending_session).await;
+        disconnect_pending_ssh_shell(pending_session, worker_handle.clone()).await;
         return;
     }
     match open_ssh_shell_from_pending(&session_id, &config, pending_session, dimensions).await {
         Ok(open_session) => {
+            let interactive_ready_handle = worker_handle
+                .clone()
+                .or_else(|| multiplex_for_ready.clone());
             run_open_ssh_shell_session(
                 session_id,
                 open_session,
                 command_rx,
                 event_queue,
                 pending_writes,
+                worker_handle,
+                interactive_ready_handle,
             )
             .await;
         }
         Err(error) => {
             send_session_error(&event_queue, &session_id, error);
+            if let Some(handle) = worker_handle {
+                let _ = handle.disconnect_async().await;
+            } else if let Some(handle) = multiplex_for_ready {
+                // The shared authenticated connection remains usable for other
+                // sessions even when this interactive channel failed to open.
+                handle.mark_interactive_ready();
+            }
         }
     }
 }
@@ -1673,6 +1899,8 @@ async fn run_open_ssh_shell_session(
     mut command_rx: tokio_mpsc::UnboundedReceiver<SshCommand>,
     event_queue: SessionEventQueue,
     mut pending_writes: VecDeque<Vec<u8>>,
+    shared_handle: Option<SshMultiplexHandle>,
+    interactive_ready_handle: Option<SshMultiplexHandle>,
 ) {
     let OpenSshShellSession {
         handle,
@@ -1682,12 +1910,25 @@ async fn run_open_ssh_shell_session(
         x11_forwarder,
         local_notice,
         injection_script,
+        integration_future,
         ready_marker,
         legacy_ready_marker,
         shell_kind: _shell_kind,
     } = open_session;
-    let mut shell_integration =
-        SshShellIntegrationState::new(injection_script, ready_marker, legacy_ready_marker);
+    let mut integration_future = integration_future;
+    let mut shell_integration = if integration_future.is_some() {
+        SshShellIntegrationState::waiting_for_integration(ready_marker, legacy_ready_marker)
+    } else {
+        SshShellIntegrationState::new(injection_script, ready_marker, legacy_ready_marker)
+    };
+    // The PTY reader is now running before this handle is exposed to SFTP and
+    // other remote operations.  Once the reader owns the channel, opening a
+    // second channel cannot hide the login banner; keeping the old
+    // post-injection gate here only adds an avoidable startup round trip.
+    if let Some(handle) = interactive_ready_handle.as_ref() {
+        handle.mark_interactive_ready();
+    }
+    let mut interactive_ready_marked = false;
     if let Some(notice) = local_notice {
         event_queue.push(SessionEvent::Output {
             session_id: session_id.clone(),
@@ -1698,51 +1939,36 @@ async fn run_open_ssh_shell_session(
         spawn_x11_forwarder(event_queue.clone(), session_id.clone(), forwarder);
     }
 
-    if shell_integration.is_normal() {
-        while let Some(data) = pending_writes.pop_front() {
-            if let Err(error) = channel.data_bytes(data).await {
-                send_session_error(&event_queue, &session_id, error);
-                disconnect_open_ssh_shell(handle, jump_handles, disconnect_on_close).await;
-                return;
-            }
-        }
-    }
-
-    let initial_inject_delay = tokio::time::sleep(Duration::from_millis(500));
+    // Keep the initial phase open long enough for a delayed PTY/login banner to arrive. A reused
+    // SSH transport may split the banner across several channel messages; injecting immediately
+    // after the first message would put the shell in suppression mode and discard the remaining
+    // banner. The quiet deadline is refreshed for each initial output chunk, while the fallback
+    // deadline still guarantees that a silent shell cannot block initialization forever.
+    const INITIAL_INJECT_FALLBACK: Duration = Duration::from_secs(5);
+    // A PTY can deliver the first prompt before a delayed PAM/MOTD chunk. Only
+    // inject after the prompt is observed and the stream has been quiet for a
+    // short settling window; otherwise the integration write would suppress
+    // a late login banner. The deadline is refreshed for every chunk, and the
+    // 500 ms window matches the Tauri transport's initial injection delay.
+    const INITIAL_OUTPUT_QUIET: Duration = Duration::from_millis(500);
+    let initial_inject_delay = tokio::time::sleep(INITIAL_INJECT_FALLBACK);
     tokio::pin!(initial_inject_delay);
+    let initial_output_quiet_delay = tokio::time::sleep(INITIAL_INJECT_FALLBACK);
+    tokio::pin!(initial_output_quiet_delay);
+    let mut initial_output_seen = false;
+    let mut initial_output_log_count = 0_u8;
     let inject_timeout = tokio::time::sleep(Duration::from_secs(30));
     tokio::pin!(inject_timeout);
 
     loop {
         tokio::select! {
-            _ = &mut initial_inject_delay, if shell_integration.should_inject_on_initial_delay() => {
-                shell_integration.inject(&mut channel).await;
-                inject_timeout
-                    .as_mut()
-                    .reset(tokio::time::Instant::now() + Duration::from_secs(30));
-                if shell_integration.is_normal() {
-                    while let Some(data) = pending_writes.pop_front() {
-                        if let Err(error) = channel.data_bytes(data).await {
-                            send_session_error(&event_queue, &session_id, error);
-                            break;
-                        }
-                    }
-                }
-            }
-            _ = &mut inject_timeout, if shell_integration.is_suppressing() => {
-                let output = shell_integration.force_normal_after_timeout();
-                push_ssh_integration_output(&event_queue, &session_id, output);
-                while let Some(data) = pending_writes.pop_front() {
-                    if let Err(error) = channel.data_bytes(data).await {
-                        send_session_error(&event_queue, &session_id, error);
-                        break;
-                    }
-                }
-            }
+            // Keep command/channel handling ahead of the injection deadlines. Initial output is
+            // forwarded first so the login banner remains visible before integration starts.
+            biased;
             command = command_rx.recv() => {
                 match command {
                     Some(SshCommand::Write(data)) => {
-                        if !shell_integration.is_normal() {
+                        if !shell_integration.is_normal() || !interactive_ready_marked {
                             pending_writes.push_back(data);
                         } else if let Err(error) = channel.data_bytes(data).await {
                                 send_session_error(&event_queue, &session_id, error);
@@ -1775,24 +2001,143 @@ async fn run_open_ssh_shell_session(
                     }
                 }
             }
+            integration_script = async {
+                integration_future
+                    .as_mut()
+                    .expect("integration future guarded by select")
+                    .as_mut()
+                    .await
+            }, if integration_future.is_some() => {
+                integration_future = None;
+                let integration_enabled = integration_script.is_some();
+                shell_integration.set_integration_script(integration_script);
+                tracing::info!(
+                    diagnostic = "ssh_integration_prepared",
+                    session_id = %session_id,
+                    integration_enabled,
+                    "SSH shell integration preparation completed while PTY was readable"
+                );
+                if !integration_enabled && !initial_output_seen {
+                    // A shell that produced no initial bytes does not need the five-second
+                    // silent-shell fallback. Give the no-integration path the same short
+                    // readiness window as an ordinary prompt burst.
+                    initial_output_seen = true;
+                    initial_output_quiet_delay
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + INITIAL_OUTPUT_QUIET);
+                } else if integration_enabled && !initial_output_seen {
+                    // Do not retain the old five-second fallback after detection has completed.
+                    // If the shell stays silent, sending the integration script after the short
+                    // window is sufficient and keeps SFTP startup responsive.
+                    initial_output_seen = true;
+                    initial_inject_delay
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + INITIAL_OUTPUT_QUIET);
+                }
+            }
             message = channel.wait() => {
                 match message {
-                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                        let was_waiting_initial = shell_integration.is_waiting_initial();
+                    Some(ChannelMsg::Data { data }) => {
+                        let was_suppressing = shell_integration.is_suppressing();
                         let output = shell_integration.filter_output(&data);
+                        let visible_bytes = output.visible.len();
                         push_ssh_integration_output(&event_queue, &session_id, output);
-                        if was_waiting_initial && shell_integration.is_waiting_initial() {
-                            shell_integration.inject(&mut channel).await;
-                            inject_timeout
-                                .as_mut()
-                                .reset(tokio::time::Instant::now() + Duration::from_secs(30));
+                        if was_suppressing && shell_integration.is_normal() {
+                            mark_ssh_interactive_ready_once(
+                                interactive_ready_handle.as_ref(),
+                                &mut interactive_ready_marked,
+                            );
+                            tracing::info!(
+                                diagnostic = "ssh_integration_ready",
+                                session_id = %session_id,
+                                channel_kind = "data",
+                                raw_bytes = data.len(),
+                                visible_bytes,
+                                "SSH shell integration ready marker reached the terminal"
+                            );
                         }
-                        if shell_integration.is_normal() {
-                            while let Some(data) = pending_writes.pop_front() {
-                                if let Err(error) = channel.data_bytes(data).await {
-                                    send_session_error(&event_queue, &session_id, error);
-                                    break;
-                                }
+                        let is_initial_output = shell_integration.is_waiting_initial()
+                            || (shell_integration.is_normal() && !interactive_ready_marked);
+                        if is_initial_output {
+                            initial_output_seen = true;
+                            // Treat every initial chunk as evidence that the remote login burst
+                            // is still active. The fallback is a quiet-period deadline, not an
+                            // absolute deadline from channel creation; slow PAM/MOTD output must
+                            // not be hidden merely because shell detection took a few seconds.
+                            initial_inject_delay.as_mut().reset(
+                                tokio::time::Instant::now() + INITIAL_INJECT_FALLBACK,
+                            );
+                            initial_output_quiet_delay.as_mut().reset(
+                                tokio::time::Instant::now() + INITIAL_OUTPUT_QUIET,
+                            );
+                            if initial_output_log_count < 8
+                                || shell_integration.initial_prompt_seen()
+                            {
+                                initial_output_log_count = initial_output_log_count.saturating_add(1);
+                                tracing::info!(
+                                    diagnostic = "ssh_initial_output",
+                                    session_id = %session_id,
+                                    channel_kind = "data",
+                                    raw_bytes = data.len(),
+                                    visible_bytes,
+                                    prompt_seen = shell_integration.initial_prompt_seen(),
+                                    "SSH initial terminal output reached integration"
+                                );
+                            }
+                        }
+                        if shell_integration.is_normal()
+                            && interactive_ready_marked
+                            && !flush_ssh_pending_writes(
+                                &mut channel,
+                                &mut pending_writes,
+                                &event_queue,
+                                &session_id,
+                            )
+                            .await
+                        {
+                            break;
+                        }
+                    }
+                    // PTY stderr is delivered as extended data by some servers. Keep it
+                    // visible verbatim, matching Tauri, and never let it trigger or corrupt
+                    // the shell-integration state machine.
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        let was_suppressing = shell_integration.is_suppressing();
+                        event_queue.push(SessionEvent::Output {
+                            session_id: session_id.clone(),
+                            data: data.to_vec(),
+                        });
+                        if was_suppressing {
+                            tracing::debug!(
+                                diagnostic = "ssh_integration_extended_data",
+                                session_id = %session_id,
+                                raw_bytes = data.len(),
+                                "SSH extended data arrived while shell integration was suppressing output"
+                            );
+                        }
+                        let is_initial_output = shell_integration.is_waiting_initial()
+                            || (shell_integration.is_normal() && !interactive_ready_marked);
+                        if is_initial_output {
+                            initial_output_seen = true;
+                            initial_inject_delay.as_mut().reset(
+                                tokio::time::Instant::now() + INITIAL_INJECT_FALLBACK,
+                            );
+                            initial_output_quiet_delay.as_mut().reset(
+                                tokio::time::Instant::now() + INITIAL_OUTPUT_QUIET,
+                            );
+                            if initial_output_log_count < 8
+                                || shell_integration.initial_prompt_seen()
+                            {
+                                initial_output_log_count = initial_output_log_count.saturating_add(1);
+                                tracing::info!(
+                                    diagnostic = "ssh_initial_output",
+                                    session_id = %session_id,
+                                    channel_kind = "extended_data",
+                                    raw_bytes = data.len(),
+                                    visible_bytes = data.len(),
+                                    prompt_seen = shell_integration.initial_prompt_seen(),
+                                    "SSH initial terminal output reached integration"
+                                );
                             }
                         }
                     }
@@ -1827,10 +2172,158 @@ async fn run_open_ssh_shell_session(
                     Some(_) => {}
                 }
             }
+            _ = &mut initial_output_quiet_delay,
+                if initial_output_seen
+                    && ((shell_integration.initial_prompt_seen()
+                        && shell_integration.should_inject_on_initial_delay())
+                        || (shell_integration.is_normal() && !interactive_ready_marked)) =>
+            {
+                if shell_integration.should_inject_on_initial_delay() {
+                    // Initial output has been quiet long enough to be considered a complete login
+                    // banner/prompt burst. Inject only after forwarding that burst in full.
+                    tracing::info!(
+                        diagnostic = "ssh_integration_inject",
+                        session_id = %session_id,
+                        reason = "initial_output_quiet",
+                        "sending SSH shell integration script"
+                    );
+                    shell_integration.inject(&mut channel).await;
+                    // The banner has already been forwarded and the integration write is now
+                    // in flight. Other channels can safely reuse the authenticated SSH
+                    // connection; waiting for the ready marker would add another network RTT.
+                    mark_ssh_interactive_ready_once(
+                        interactive_ready_handle.as_ref(),
+                        &mut interactive_ready_marked,
+                    );
+                    inject_timeout
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_secs(30));
+                } else {
+                    // Without shell integration there is no marker to wait for. A quiet initial
+                    // stream is the only safe point at which SFTP may reuse this connection.
+                    mark_ssh_interactive_ready_once(
+                        interactive_ready_handle.as_ref(),
+                        &mut interactive_ready_marked,
+                    );
+                }
+                if shell_integration.is_normal() {
+                    // A failed integration write transitions directly back to normal.
+                    mark_ssh_interactive_ready_once(
+                        interactive_ready_handle.as_ref(),
+                        &mut interactive_ready_marked,
+                    );
+                }
+                if shell_integration.is_normal() && interactive_ready_marked
+                    && !flush_ssh_pending_writes(
+                        &mut channel,
+                        &mut pending_writes,
+                        &event_queue,
+                        &session_id,
+                    )
+                    .await
+                {
+                    break;
+                }
+            }
+            _ = &mut initial_inject_delay,
+                if shell_integration.should_inject_on_initial_delay()
+                    || (shell_integration.is_normal()
+                        && !interactive_ready_marked
+                        && !initial_output_seen) =>
+            {
+                if shell_integration.should_inject_on_initial_delay() {
+                    // No output arrived during the fallback window. Inject now so a quiet shell
+                    // can still finish setup without waiting for a prompt that may never be emitted.
+                    tracing::info!(
+                        diagnostic = "ssh_integration_inject",
+                        session_id = %session_id,
+                        reason = "initial_output_fallback",
+                        "sending SSH shell integration script"
+                    );
+                    shell_integration.inject(&mut channel).await;
+                    inject_timeout
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + Duration::from_secs(30));
+                } else {
+                    // A silent shell has no banner to wait for, so use the fallback deadline to
+                    // release operations that share the authenticated connection.
+                    mark_ssh_interactive_ready_once(
+                        interactive_ready_handle.as_ref(),
+                        &mut interactive_ready_marked,
+                    );
+                }
+                if shell_integration.is_normal() {
+                    // A failed integration write transitions directly back to normal.
+                    mark_ssh_interactive_ready_once(
+                        interactive_ready_handle.as_ref(),
+                        &mut interactive_ready_marked,
+                    );
+                }
+                if shell_integration.is_normal() && interactive_ready_marked
+                    && !flush_ssh_pending_writes(
+                        &mut channel,
+                        &mut pending_writes,
+                        &event_queue,
+                        &session_id,
+                    )
+                    .await
+                {
+                    break;
+                }
+            }
+            _ = &mut inject_timeout, if shell_integration.is_suppressing() => {
+                let output = shell_integration.force_normal_after_timeout();
+                push_ssh_integration_output(&event_queue, &session_id, output);
+                mark_ssh_interactive_ready_once(
+                    interactive_ready_handle.as_ref(),
+                    &mut interactive_ready_marked,
+                );
+                if !flush_ssh_pending_writes(
+                    &mut channel,
+                    &mut pending_writes,
+                    &event_queue,
+                    &session_id,
+                )
+                .await
+                {
+                    break;
+                }
+            }
         }
     }
 
-    disconnect_open_ssh_shell(handle, jump_handles, disconnect_on_close).await;
+    // Release waiters even if the remote closes before emitting a ready marker.
+    // A failed shell must not leave SFTP blocked forever.
+    mark_ssh_interactive_ready_once(
+        interactive_ready_handle.as_ref(),
+        &mut interactive_ready_marked,
+    );
+    disconnect_open_ssh_shell(shared_handle, handle, jump_handles, disconnect_on_close).await;
+}
+
+fn mark_ssh_interactive_ready_once(handle: Option<&SshMultiplexHandle>, marked: &mut bool) {
+    if *marked {
+        return;
+    }
+    if let Some(handle) = handle {
+        handle.mark_interactive_ready();
+    }
+    *marked = true;
+}
+
+async fn flush_ssh_pending_writes(
+    channel: &mut russh::Channel<client::Msg>,
+    pending_writes: &mut VecDeque<Vec<u8>>,
+    event_queue: &SessionEventQueue,
+    session_id: &str,
+) -> bool {
+    while let Some(data) = pending_writes.pop_front() {
+        if let Err(error) = channel.data_bytes(data).await {
+            send_session_error(event_queue, session_id, error);
+            return false;
+        }
+    }
+    true
 }
 
 fn push_ssh_integration_output(
@@ -1858,24 +2351,10 @@ fn push_ssh_integration_output(
     }
 }
 
-async fn open_ssh_shell(
-    session_id: &str,
-    config: &SshSessionConfig,
-    multiplex: Option<&SshMultiplexHandle>,
-) -> anyhow::Result<OpenSshShellSession> {
-    let pending = open_pending_ssh_shell(config, multiplex).await?;
-    open_ssh_shell_from_pending(
-        session_id,
-        config,
-        pending,
-        SshPtyDimensions::from_config(config),
-    )
-    .await
-}
-
 async fn open_pending_ssh_shell(
     config: &SshSessionConfig,
     multiplex: Option<&SshMultiplexHandle>,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> anyhow::Result<PendingOpenSshShellSession> {
     tracing::debug!(
         stage = "connection",
@@ -1896,21 +2375,49 @@ async fn open_pending_ssh_shell(
     } else {
         (None, None)
     };
-    let (handle, jump_handles, disconnect_on_close) = if let Some(multiplex) = multiplex {
+    let (handle, forwarded_tcpip, jump_handles, disconnect_on_close) = if let Some(multiplex) =
+        multiplex
+    {
         multiplex.ensure_matches_config(config)?;
         if x11_tx.is_some() {
             anyhow::bail!("X11 forwarding is not supported for multiplexed SSH shell sessions");
         }
         let handle = multiplex.target_handle();
-        (SshShellHandle::Multiplexed(handle), Vec::new(), false)
+        (
+            SshShellHandle::Multiplexed(handle),
+            multiplex.forwarded_tcpip_registry(),
+            Vec::new(),
+            false,
+        )
     } else {
-        let (handle, jump_handles) =
-            open_authenticated_ssh_handle_with_channel_senders(config, None, x11_tx).await?;
-        (SshShellHandle::Dedicated(handle), jump_handles, true)
+        // Keep the forwarding registry attached to the authenticated client's
+        // handler and expose the same registry through the reusable handle.
+        // Otherwise tunnels opened after the terminal would share SSH auth but
+        // could not receive forwarded TCP/IP channels on that connection.
+        let forwarded_tcpip = Arc::new(tokio::sync::Mutex::new(ForwardedTcpIpDispatch::default()));
+        let (handle, jump_handles) = open_authenticated_ssh_handle_with_sender_registry(
+            config,
+            Some(forwarded_tcpip.clone()),
+            x11_tx,
+            shell_environment,
+        )
+        .await?;
+        let handle = Arc::new(tokio::sync::Mutex::new(handle));
+        let jump_handles = jump_handles
+            .into_iter()
+            .map(|jump| Arc::new(tokio::sync::Mutex::new(jump)))
+            .collect();
+        (
+            SshShellHandle::Dedicated(handle),
+            forwarded_tcpip,
+            jump_handles,
+            true,
+        )
     };
 
     Ok(PendingOpenSshShellSession {
         handle,
+        forwarded_tcpip,
         jump_handles,
         disconnect_on_close,
         x11_config,
@@ -1930,12 +2437,14 @@ async fn open_ssh_shell_from_pending(
         disconnect_on_close,
         x11_config,
         x11_rx,
+        ..
     } = pending;
     let ready_marker = build_ssh_ready_marker(session_id);
     let legacy_ready_marker = build_legacy_ssh_ready_marker(&ready_marker);
     let channel = match &mut handle {
-        SshShellHandle::Dedicated(handle) => handle.channel_open_session().await?,
-        SshShellHandle::Multiplexed(handle) => handle.lock().await.channel_open_session().await?,
+        SshShellHandle::Dedicated(handle) | SshShellHandle::Multiplexed(handle) => {
+            handle.lock().await.channel_open_session().await?
+        }
     };
     if effective_agent_forwarding_config(config).is_some_and(|forwarding| forwarding.enabled) {
         channel.agent_forward(false).await?;
@@ -1979,7 +2488,7 @@ async fn open_ssh_shell_from_pending(
         rows = dimensions.rows,
         "SSH PTY accepted"
     );
-    channel.request_shell(true).await?;
+    channel.request_shell(false).await?;
     tracing::debug!(
         stage = "shell",
         host = %config.host,
@@ -1989,29 +2498,46 @@ async fn open_ssh_shell_from_pending(
     );
     let cwd_follow_mode = config.effective_cwd_follow_mode();
     let terminal_shell_integration = config.effective_terminal_shell_integration();
-    let shell_kind =
-        if terminal_shell_integration || !matches!(cwd_follow_mode, SftpCwdFollowMode::Off) {
-            detect_ssh_shell_type(
-                &handle,
-                config.shell_integration_detection_timeout_ms(cwd_follow_mode),
-            )
-            .await
-        } else {
-            None
-        };
-    let injection_script = match shell_kind {
-        Some(kind) => {
-            build_ssh_shell_integration_script(
-                &handle,
-                kind,
-                &ready_marker,
+    let integration_future = if terminal_shell_integration
+        || !matches!(cwd_follow_mode, SftpCwdFollowMode::Off)
+    {
+        let integration_handle = handle.clone();
+        let integration_ready_marker = ready_marker.clone();
+        let detection_timeout_ms = config.shell_integration_detection_timeout_ms(cwd_follow_mode);
+        let install_timeout_ms = config.sftp.shell_detection_timeout_ms;
+        Some(Box::pin(async move {
+            let started_at = Instant::now();
+            let shell_kind = detect_ssh_shell_type(&integration_handle, detection_timeout_ms).await;
+            tracing::info!(
+                diagnostic = "ssh_shell_detection",
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                detected = shell_kind.is_some(),
+                timeout_ms = detection_timeout_ms,
+                "SSH shell detection completed without blocking the PTY reader"
+            );
+            let Some(shell_kind) = shell_kind else {
+                return None;
+            };
+            let script = build_ssh_shell_integration_script(
+                &integration_handle,
+                shell_kind,
+                &integration_ready_marker,
                 terminal_shell_integration,
                 cwd_follow_mode,
-                config.sftp.shell_detection_timeout_ms,
+                install_timeout_ms,
             )
-            .await
-        }
-        None => None,
+            .await;
+            tracing::info!(
+                diagnostic = "ssh_integration_prepare",
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                shell = ?shell_kind,
+                integration_enabled = script.is_some(),
+                "SSH shell integration script prepared asynchronously"
+            );
+            script
+        }) as SshIntegrationPreparation)
+    } else {
+        None
     };
     tracing::debug!(
         stage = "integration",
@@ -2019,9 +2545,10 @@ async fn open_ssh_shell_from_pending(
         port = config.port,
         profile = ?config.profile,
         cwd_follow_mode = ?cwd_follow_mode,
-        shell_detected = shell_kind.is_some(),
-        integration_enabled = injection_script.is_some(),
-        "resolved SSH shell integration"
+        integration_pending = integration_future.is_some(),
+        integration_enabled = terminal_shell_integration
+            || !matches!(cwd_follow_mode, SftpCwdFollowMode::Off),
+        "started SSH shell integration preparation"
     );
     let handle = match handle {
         SshShellHandle::Dedicated(handle) => Some(handle),
@@ -2034,22 +2561,34 @@ async fn open_ssh_shell_from_pending(
         disconnect_on_close,
         x11_forwarder,
         local_notice,
-        injection_script,
+        injection_script: None,
+        integration_future,
         ready_marker,
         legacy_ready_marker,
-        shell_kind,
+        shell_kind: None,
     })
 }
 
-async fn disconnect_pending_ssh_shell(session: PendingOpenSshShellSession) {
+async fn disconnect_pending_ssh_shell(
+    session: PendingOpenSshShellSession,
+    shared_handle: Option<SshMultiplexHandle>,
+) {
     if session.disconnect_on_close {
+        if let Some(handle) = shared_handle {
+            let _ = handle.disconnect_async().await;
+            return;
+        }
         if let SshShellHandle::Dedicated(handle) = session.handle {
             let _ = handle
+                .lock()
+                .await
                 .disconnect(Disconnect::ByApplication, "session closed", "en")
                 .await;
         }
         for jump_handle in session.jump_handles {
             let _ = jump_handle
+                .lock()
+                .await
                 .disconnect(Disconnect::ByApplication, "session closed", "en")
                 .await;
         }
@@ -2057,18 +2596,27 @@ async fn disconnect_pending_ssh_shell(session: PendingOpenSshShellSession) {
 }
 
 async fn disconnect_open_ssh_shell(
-    handle: Option<client::Handle<SshClientHandler>>,
-    jump_handles: Vec<client::Handle<SshClientHandler>>,
+    shared_handle: Option<SshMultiplexHandle>,
+    handle: Option<SharedSshHandle>,
+    jump_handles: Vec<SharedSshHandle>,
     disconnect_on_close: bool,
 ) {
     if disconnect_on_close {
+        if let Some(handle) = shared_handle {
+            let _ = handle.disconnect_async().await;
+            return;
+        }
         if let Some(handle) = handle {
             let _ = handle
+                .lock()
+                .await
                 .disconnect(Disconnect::ByApplication, "session closed", "en")
                 .await;
         }
         for jump_handle in jump_handles {
             let _ = jump_handle
+                .lock()
+                .await
                 .disconnect(Disconnect::ByApplication, "session closed", "en")
                 .await;
         }
@@ -2121,20 +2669,45 @@ type SshHandleChain = (
 fn open_authenticated_ssh_handle(
     config: &SshSessionConfig,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
-    open_authenticated_ssh_handle_with_channel_senders(config, None, None)
+    open_authenticated_ssh_handle_with_environment(config, ShellEnvironmentCache::global())
+}
+
+fn open_authenticated_ssh_handle_with_environment(
+    config: &SshSessionConfig,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
+    open_authenticated_ssh_handle_with_channel_senders(config, None, None, shell_environment)
 }
 
 fn open_authenticated_ssh_handle_with_forwarded_tx(
     config: &SshSessionConfig,
     forwarded_tcpip_tx: Option<tokio_mpsc::UnboundedSender<ForwardedTcpIpChannel>>,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
-    open_authenticated_ssh_handle_with_channel_senders(config, forwarded_tcpip_tx, None)
+    open_authenticated_ssh_handle_with_forwarded_tx_and_environment(
+        config,
+        forwarded_tcpip_tx,
+        ShellEnvironmentCache::global(),
+    )
+}
+
+fn open_authenticated_ssh_handle_with_forwarded_tx_and_environment(
+    config: &SshSessionConfig,
+    forwarded_tcpip_tx: Option<tokio_mpsc::UnboundedSender<ForwardedTcpIpChannel>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
+    open_authenticated_ssh_handle_with_channel_senders(
+        config,
+        forwarded_tcpip_tx,
+        None,
+        shell_environment,
+    )
 }
 
 fn open_authenticated_ssh_handle_with_channel_senders(
     config: &SshSessionConfig,
     forwarded_tcpip_tx: Option<tokio_mpsc::UnboundedSender<ForwardedTcpIpChannel>>,
     x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
     let forwarded_tcpip = forwarded_tcpip_tx.map(|tx| {
         Arc::new(tokio::sync::Mutex::new(ForwardedTcpIpDispatch {
@@ -2142,77 +2715,162 @@ fn open_authenticated_ssh_handle_with_channel_senders(
             by_listener: HashMap::new(),
         }))
     });
-    open_authenticated_ssh_handle_with_sender_registry(config, forwarded_tcpip, x11_tx)
+    open_authenticated_ssh_handle_with_sender_registry(
+        config,
+        forwarded_tcpip,
+        x11_tx,
+        shell_environment,
+    )
 }
 
 fn open_authenticated_ssh_handle_with_sender_registry(
     config: &SshSessionConfig,
     forwarded_tcpip: Option<ForwardedTcpIpRegistry>,
     x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
     Box::pin(async move {
-        if let Some(jump_config) = config.proxy_jump.as_deref() {
-            let (jump_handle, mut jump_handles) =
-                open_authenticated_ssh_handle(jump_config).await?;
-            let direct_channel = tokio::time::timeout(
-                Duration::from_secs(30),
-                jump_handle.channel_open_direct_tcpip(
-                    &config.host,
-                    config.port.into(),
-                    "127.0.0.1",
-                    0,
-                ),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("SSH ProxyJump direct-tcpip open timed out"))??;
-            let mut handle = tokio::time::timeout(
-                Duration::from_secs(30),
-                client::connect_stream(
-                    ssh_client_config(config)?,
-                    direct_channel.into_stream(),
-                    SshClientHandler {
-                        host: config.host.clone(),
-                        port: config.port,
-                        verifier: config.host_key_verifier.clone(),
-                        forwarded_tcpip: forwarded_tcpip.clone(),
-                        x11_tx: x11_tx.clone(),
-                        agent_forwarding_config: effective_agent_forwarding_config(config),
-                        agent_stored_key_provider: config.agent_stored_key_provider.clone(),
-                    },
-                ),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("SSH ProxyJump target connection timed out"))??;
-            authenticate_ssh(&mut handle, config).await?;
-            tracing::debug!(
-                stage = "authentication",
-                host = %config.host,
-                port = config.port,
-                profile = ?config.profile,
-                via_jump = true,
-                "SSH authentication completed"
-            );
-            jump_handles.push(jump_handle);
-            return Ok((handle, jump_handles));
+        // Retry is an explicit user action from the prompt. Keep creating a
+        // fresh authenticated transport until the user cancels or a
+        // non-retryable transport error is returned.
+        let mut agent_attempt = 1_u32;
+        loop {
+            let result = async {
+                if let Some(jump_config) = config.proxy_jump.as_deref() {
+                    let (jump_handle, mut jump_handles) =
+                        open_authenticated_ssh_handle_with_environment(
+                            jump_config,
+                            shell_environment.clone(),
+                        )
+                        .await?;
+                    let direct_channel = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        jump_handle.channel_open_direct_tcpip(
+                            &config.host,
+                            config.port.into(),
+                            "127.0.0.1",
+                            0,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("SSH ProxyJump direct-tcpip open timed out"))??;
+                    let mut handle = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        client::connect_stream(
+                            ssh_client_config(config)?,
+                            direct_channel.into_stream(),
+                            SshClientHandler {
+                                host: config.host.clone(),
+                                port: config.port,
+                                verifier: config.host_key_verifier.clone(),
+                                forwarded_tcpip: forwarded_tcpip.clone(),
+                                x11_tx: x11_tx.clone(),
+                                agent_forwarding_config: effective_agent_forwarding_config(config),
+                                agent_stored_key_provider: config.agent_stored_key_provider.clone(),
+                                shell_environment: shell_environment.clone(),
+                            },
+                        ),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("SSH ProxyJump target connection timed out"))??;
+                    let authentication = authenticate_ssh(
+                        &mut handle,
+                        config,
+                        agent_attempt,
+                        shell_environment.clone(),
+                    )
+                    .await;
+                    if let Err(error) = &authentication
+                        && is_agent_retry(error)
+                    {
+                        let _ = handle
+                            .disconnect(
+                                Disconnect::ByApplication,
+                                "SSH Agent authentication retry",
+                                "en",
+                            )
+                            .await;
+                        let _ = jump_handle
+                            .disconnect(
+                                Disconnect::ByApplication,
+                                "SSH Agent authentication retry",
+                                "en",
+                            )
+                            .await;
+                        for jump in &jump_handles {
+                            let _ = jump
+                                .disconnect(
+                                    Disconnect::ByApplication,
+                                    "SSH Agent authentication retry",
+                                    "en",
+                                )
+                                .await;
+                        }
+                    }
+                    authentication?;
+                    tracing::debug!(
+                        stage = "authentication",
+                        host = %config.host,
+                        port = config.port,
+                        profile = ?config.profile,
+                        via_jump = true,
+                        "SSH authentication completed"
+                    );
+                    jump_handles.push(jump_handle);
+                    Ok((handle, jump_handles))
+                } else {
+                    let mut handle = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        connect_ssh_transport(
+                            config,
+                            forwarded_tcpip.clone(),
+                            x11_tx.clone(),
+                            shell_environment.clone(),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("SSH connection timed out"))??;
+
+                    let authentication = authenticate_ssh(
+                        &mut handle,
+                        config,
+                        agent_attempt,
+                        shell_environment.clone(),
+                    )
+                    .await;
+                    if let Err(error) = &authentication
+                        && is_agent_retry(error)
+                    {
+                        let _ = handle
+                            .disconnect(
+                                Disconnect::ByApplication,
+                                "SSH Agent authentication retry",
+                                "en",
+                            )
+                            .await;
+                    }
+                    authentication?;
+                    tracing::debug!(
+                        stage = "authentication",
+                        host = %config.host,
+                        port = config.port,
+                        profile = ?config.profile,
+                        via_jump = false,
+                        "SSH authentication completed"
+                    );
+                    Ok((handle, Vec::new()))
+                }
+            }
+            .await;
+
+            match result {
+                Err(error) if is_agent_retry(&error) => {
+                    agent_attempt = agent_attempt.saturating_add(1);
+                    continue;
+                }
+                result => return result,
+            }
         }
-
-        let mut handle = tokio::time::timeout(
-            Duration::from_secs(30),
-            connect_ssh_transport(config, forwarded_tcpip.clone(), x11_tx.clone()),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("SSH connection timed out"))??;
-
-        authenticate_ssh(&mut handle, config).await?;
-        tracing::debug!(
-            stage = "authentication",
-            host = %config.host,
-            port = config.port,
-            profile = ?config.profile,
-            via_jump = false,
-            "SSH authentication completed"
-        );
-        Ok((handle, Vec::new()))
     })
 }
 
@@ -2220,6 +2878,7 @@ async fn connect_ssh_transport(
     config: &SshSessionConfig,
     forwarded_tcpip: Option<ForwardedTcpIpRegistry>,
     x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
 ) -> anyhow::Result<client::Handle<SshClientHandler>> {
     let handler = SshClientHandler {
         host: config.host.clone(),
@@ -2229,6 +2888,7 @@ async fn connect_ssh_transport(
         x11_tx,
         agent_forwarding_config: effective_agent_forwarding_config(config),
         agent_stored_key_provider: config.agent_stored_key_provider.clone(),
+        shell_environment,
     };
     let Some(proxy) = config.proxy.as_ref() else {
         return client::connect(
@@ -2480,6 +3140,7 @@ struct SshClientHandler {
     x11_tx: Option<tokio_mpsc::UnboundedSender<X11ChannelOpen>>,
     agent_forwarding_config: Option<SshAgentForwardingConfig>,
     agent_stored_key_provider: Option<Arc<dyn SshAgentStoredKeyProvider>>,
+    shell_environment: Arc<ShellEnvironmentCache>,
 }
 
 impl client::Handler for SshClientHandler {
@@ -2611,8 +3272,14 @@ impl client::Handler for SshClientHandler {
         };
         if is_raw_relay_compatible(&config) {
             let endpoint = config.sources.external_agent_endpoints[0].clone();
+            let shell_environment = self.shell_environment.clone();
             tokio::spawn(async move {
-                let Ok(agent_stream) = ssh_agent::connect_agent_stream(&endpoint).await else {
+                let Ok(agent_stream) = ssh_agent::connect_agent_stream_with_environment(
+                    &endpoint,
+                    Some(shell_environment),
+                )
+                .await
+                else {
                     reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
                     let _ = channel.close().await;
                     return;
@@ -2624,9 +3291,17 @@ impl client::Handler for SshClientHandler {
             return Ok(());
         }
         let provider = self.agent_stored_key_provider.clone();
+        let shell_environment = self.shell_environment.clone();
         tokio::spawn(async move {
             reply.accept().await;
-            ssh_agent_broker::serve_channel(channel.into_stream(), config, provider, permit).await;
+            ssh_agent_broker::serve_channel(
+                channel.into_stream(),
+                config,
+                provider,
+                shell_environment,
+                permit,
+            )
+            .await;
         });
         Ok(())
     }
@@ -2963,23 +3638,6 @@ fn utf8_env_or(name: &str, fallback: &str) -> String {
             normalized.contains("utf-8") || normalized.contains("utf8")
         })
         .unwrap_or_else(|| fallback.to_string())
-}
-
-fn default_shell() -> String {
-    if cfg!(target_os = "windows") {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string())
-    } else {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-    }
-}
-
-fn should_use_interactive_login_args(program: &str) -> bool {
-    let name = program
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(program)
-        .to_ascii_lowercase();
-    matches!(name.as_str(), "bash" | "zsh" | "fish")
 }
 
 pub type SharedSessionManager = Arc<SessionManager>;

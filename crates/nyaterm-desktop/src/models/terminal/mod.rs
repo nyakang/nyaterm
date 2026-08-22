@@ -998,9 +998,10 @@ impl TerminalViewState {
             skipped_output_bytes,
             revision,
         } = parts;
-        // UI output tail is only used for copy/export helpers. Skip rebuilding a
-        // large String during output pressure / degraded paint so frame apply stays cheap.
-        if !visible_text.is_empty() && !self.render_degraded {
+        // Keep the bounded UI output tail even while paint is degraded. The tail
+        // is used as reconnect seed/copy input, and append_terminal_ui_output_tail
+        // trims it to a fixed size, so retaining it does not grow without bound.
+        if !visible_text.is_empty() {
             append_terminal_ui_output_tail(&mut self.output, visible_text);
         }
         let old_scrollback_len = self.scrollback_len_for_anchor();
@@ -1051,12 +1052,16 @@ impl TerminalViewState {
         &mut self,
         snapshot: Option<Arc<TerminalSnapshot>>,
         action_links: Option<TerminalFrameActionLinks>,
+        visible_text: &str,
         protocol_state: TerminalProtocolState,
         skipped_output_bytes: usize,
         revision: u64,
     ) {
         // Hidden sessions keep protocol/revision current without retaining a full
-        // viewport snapshot until the surface becomes visible again.
+        // viewport snapshot until the surface becomes visible again. Keep the
+        // bounded text tail so reconnects do not lose a banner that arrived before
+        // the replacement terminal surface was attached.
+        append_terminal_ui_output_tail(&mut self.output, visible_text);
         if let Some(snapshot) = snapshot {
             self.frame_snapshot = Some(snapshot);
             self.frame_action_links = action_links;
@@ -1346,6 +1351,10 @@ impl TerminalFramePipeline {
         if data.is_empty() {
             return;
         }
+        // Wake the GPUI frame consumer as soon as the processor publishes the
+        // resulting event; otherwise the first login burst waits for the
+        // runtime tick instead of taking the existing event-wake path.
+        self.event_queue.arm_wake(TERMINAL_FRAME_EVENT_WAKE_OUTPUT);
         let _ = self.command_tx.send_many(terminal_frame_output_commands(
             TerminalFrameOutputSubmission {
                 session_id: session_id.into(),
@@ -1360,6 +1369,9 @@ impl TerminalFramePipeline {
         if outputs.is_empty() {
             return;
         }
+        // Keep batched output on the same low-latency wake path as a single
+        // submission. The session bridge normally uses this batch method.
+        self.event_queue.arm_wake(TERMINAL_FRAME_EVENT_WAKE_OUTPUT);
         let commands = outputs.into_iter().flat_map(terminal_frame_output_commands);
         let _ = self.command_tx.send_many(commands);
     }
@@ -1839,7 +1851,10 @@ struct TerminalFrameSession {
     screen: TerminalScreen,
     output_decoder: TerminalOutputDecoder,
     recording_decoder: TerminalOutputDecoder,
+    visible_output_filter: TerminalVisibleOutputFilter,
     revision: u64,
+    /// True after live backend output has produced visible terminal text.
+    output_seen: bool,
     /// When false, output frames omit full viewport_snapshot (hidden tabs).
     include_live_snapshot: bool,
     action_link_cache: Option<TerminalFrameActionLinks>,
@@ -1858,7 +1873,9 @@ impl TerminalFrameSession {
             screen,
             output_decoder,
             recording_decoder,
+            visible_output_filter: TerminalVisibleOutputFilter::default(),
             revision: 0,
+            output_seen: false,
             // New sessions start high-priority until UI reports visibility.
             include_live_snapshot: true,
             action_link_cache: None,
@@ -1873,6 +1890,12 @@ impl TerminalFrameSession {
     }
 
     fn seed(&mut self, output: String, encoding: &str, scrollback_limit: usize) {
+        // A deferred SSH worker can emit its first banner before the UI drains
+        // the start result. Do not let the later reconnect seed reset that live
+        // screen and erase the banner that is already visible in the pipeline.
+        if self.output_seen {
+            return;
+        }
         self.screen = terminal_screen_from_output(&output);
         self.screen.set_encoding(encoding);
         self.screen.set_scrollback_limit(scrollback_limit);
@@ -1880,7 +1903,9 @@ impl TerminalFrameSession {
         self.output_decoder.set_encoding(encoding);
         self.recording_decoder = TerminalOutputDecoder::default();
         self.recording_decoder.set_encoding(encoding);
+        self.visible_output_filter.reset();
         self.revision = self.revision.saturating_add(1);
+        self.output_seen = false;
         self.action_link_cache = None;
     }
 
@@ -1942,14 +1967,37 @@ impl TerminalFrameSession {
         recording_writer: &RecordingWriteHandle,
     ) -> TerminalAdvanceResult {
         self.set_encoding_and_limit(encoding, scrollback_limit);
+        if data.len() > TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP {
+            self.visible_output_filter.reset();
+        }
+        // Once a visible chunk has arrived, the seed guard is permanently
+        // decided for this session; avoid a second byte scan on every later
+        // output frame.
+        let visible_output_filter = (!self.output_seen).then_some(&mut self.visible_output_filter);
         let result = terminal_advance_result(
             &mut self.screen,
             &mut self.output_decoder,
             &mut self.recording_decoder,
+            visible_output_filter,
             session_id,
             data,
             recording_writer,
         );
+        let first_live_output = !self.output_seen && result.visible_content_changed;
+        if result.visible_content_changed {
+            self.output_seen = true;
+        }
+        if first_live_output {
+            tracing::info!(
+                diagnostic = "terminal_first_live_output",
+                session_id,
+                raw_bytes = data.len(),
+                accepted_bytes = result.accepted_bytes,
+                visible_text_bytes = result.visible_text.len(),
+                skipped_output_bytes = result.skipped_output_bytes,
+                "first live terminal output reached the frame processor"
+            );
+        }
         self.revision = self.revision.saturating_add(1);
         result
     }
@@ -2246,6 +2294,68 @@ struct TerminalAdvanceResult {
     effects: TerminalEffects,
     accepted_bytes: usize,
     skipped_output_bytes: usize,
+    visible_content_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TerminalVisibleOutputState {
+    #[default]
+    Ground,
+    Escape,
+    Csi,
+    ControlString,
+}
+
+#[derive(Debug, Default)]
+struct TerminalVisibleOutputFilter {
+    state: TerminalVisibleOutputState,
+}
+
+impl TerminalVisibleOutputFilter {
+    fn reset(&mut self) {
+        self.state = TerminalVisibleOutputState::Ground;
+    }
+
+    /// Tracks ANSI control strings across PTY chunks without allocating text.
+    fn contains_visible_text(&mut self, bytes: &[u8]) -> bool {
+        let mut visible = false;
+        for &byte in bytes {
+            match self.state {
+                TerminalVisibleOutputState::Ground => match byte {
+                    0x1b => self.state = TerminalVisibleOutputState::Escape,
+                    0x9b => self.state = TerminalVisibleOutputState::Csi,
+                    0x90 | 0x98 | 0x9d | 0x9e | 0x9f => {
+                        self.state = TerminalVisibleOutputState::ControlString;
+                    }
+                    0x20..=0x7e | 0xa0..=0xff => visible = true,
+                    _ => {}
+                },
+                TerminalVisibleOutputState::Escape => {
+                    self.state = match byte {
+                        b'[' => TerminalVisibleOutputState::Csi,
+                        b']' | b'P' | b'^' | b'_' | b'X' => {
+                            TerminalVisibleOutputState::ControlString
+                        }
+                        0x1b => TerminalVisibleOutputState::Escape,
+                        _ => TerminalVisibleOutputState::Ground,
+                    };
+                }
+                TerminalVisibleOutputState::Csi => {
+                    if byte == 0x1b {
+                        self.state = TerminalVisibleOutputState::Escape;
+                    } else if (0x40..=0x7e).contains(&byte) {
+                        self.state = TerminalVisibleOutputState::Ground;
+                    }
+                }
+                TerminalVisibleOutputState::ControlString => match byte {
+                    0x07 | 0x9c => self.state = TerminalVisibleOutputState::Ground,
+                    0x1b => self.state = TerminalVisibleOutputState::Escape,
+                    _ => {}
+                },
+            }
+        }
+        visible
+    }
 }
 
 #[derive(Debug, Default)]
@@ -2275,6 +2385,7 @@ fn terminal_advance_result(
     screen: &mut TerminalScreen,
     output_decoder: &mut TerminalOutputDecoder,
     recording_decoder: &mut TerminalOutputDecoder,
+    visible_output_filter: Option<&mut TerminalVisibleOutputFilter>,
     session_id: &str,
     data: &[u8],
     recording_writer: &RecordingWriteHandle,
@@ -2283,6 +2394,9 @@ fn terminal_advance_result(
     let recording_text_bytes = recording_text.len();
     recording_writer.write_output(session_id.to_string(), recording_text);
     let (feed, skipped_output_bytes) = protect_terminal_output_burst(screen, output_decoder, data);
+    let visible_content_changed = visible_output_filter
+        .map(|filter| filter.contains_visible_text(feed))
+        .unwrap_or(false);
     screen.advance(feed);
     // Only the tail is ever kept, so cap inside the decoder rather than
     // building a whole burst's worth of text and draining it back down.
@@ -2295,6 +2409,7 @@ fn terminal_advance_result(
         effects,
         accepted_bytes: feed.len(),
         skipped_output_bytes,
+        visible_content_changed,
     }
 }
 

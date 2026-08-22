@@ -2194,6 +2194,9 @@
   },
   "sshAuth": {
     "agentPromptTitle": "SSH Agent needs attention",
+    "agentWaitingTitle": "Waiting for SSH Agent approval",
+    "agentFailedTitle": "SSH Agent authentication failed",
+    "agentApprovalWaiting": "Approve the hardware key, PIN, or SSH Agent request.",
     "agentConnectFailed": "Could not connect to the configured SSH Agent. Check that it is running, then retry.",
     "agentIdentitiesFailed": "The SSH Agent did not provide a usable identity. Unlock or load a key, then retry.",
     "agentApprovalRequired": "Approve the hardware key, PIN, or SSH Agent request, then retry.",

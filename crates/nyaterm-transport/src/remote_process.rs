@@ -228,7 +228,7 @@ impl SshProcessService {
         timeout: Duration,
     ) -> anyhow::Result<RemoteCommandOutput> {
         if let Some(multiplex) = self.multiplex.clone() {
-            return multiplex.block_on(exec_ssh_command_with_multiplex(
+            return multiplex.block_on_after_interactive_ready(exec_ssh_command_with_multiplex(
                 multiplex.clone(),
                 command,
                 timeout,
