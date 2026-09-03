@@ -875,10 +875,18 @@ export function openQuickCommand(editJson?: string, options?: { categoryId?: str
   } else if (options?.categoryId) {
     params.set("category_id", options.categoryId);
   }
+  let isEdit = false;
+  if (editJson) {
+    try {
+      isEdit = !!JSON.parse(editJson).id;
+    } catch {
+      isEdit = false;
+    }
+  }
   const url = `index.html?${params.toString()}`;
   return openChildWindow({
     label: scopedModalLabel("quick-command"),
-    title: i18n.t(editJson ? "quickCommands.editCommand" : "quickCommands.addCommand"),
+    title: i18n.t(isEdit ? "quickCommands.editCommand" : "quickCommands.addCommand"),
     url,
     parentLabel: ownerMainWindowLabel,
     width: 540,

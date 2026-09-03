@@ -53,7 +53,7 @@ pub async fn get_terminal_cwd(
     };
 
     let cached = cwd_arc.lock().await;
-    if let Some(cwd) = cached.as_ref() {
+    if let Some(cwd) = cached.operational_path.as_ref() {
         return Ok(cwd.clone());
     }
 
@@ -75,5 +75,5 @@ pub async fn try_get_terminal_cwd(
         session.cwd.clone()
     };
 
-    Ok(cwd_arc.lock().await.clone())
+    Ok(cwd_arc.lock().await.operational_path.clone())
 }

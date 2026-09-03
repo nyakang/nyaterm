@@ -44,6 +44,7 @@ import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
 import { resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import { classifyAIStreamControlEvent } from "@/lib/aiStreamEvent";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
@@ -835,9 +836,19 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
               return;
             }
 
-            if (payload.type === "done") {
+            const controlEvent = classifyAIStreamControlEvent(payload.type);
+            if (controlEvent.kind === "warning") {
+              const warning =
+                payload.error === "codex_mcp_fallback"
+                  ? t("ai.codexMcpFallback")
+                  : (payload.error ?? t("ai.requestFailed"));
+              toast.warning(warning);
+              return;
+            }
+
+            if (controlEvent.kind === "done") {
               if (payload.sessionId) bindRealSessionId(payload.sessionId);
-              cleanupStreamListener(requestStreamId);
+              if (controlEvent.terminatesStream) cleanupStreamListener(requestStreamId);
               const newMsgId = payload.message?.id;
               if (payload.message) {
                 updateMessagesForSession(resolvedSessionId, (prev) =>
@@ -860,19 +871,24 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
               return;
             }
 
-            if (payload.type === "error") {
-              cleanupStreamListener(requestStreamId);
+            if (controlEvent.kind === "error") {
+              const errorMessage = payload.error?.startsWith("claude_mcp_unavailable:")
+                ? t("ai.claudeMcpUnavailable", {
+                    reason: payload.error.slice("claude_mcp_unavailable:".length),
+                  })
+                : (payload.error ?? t("ai.requestFailed"));
+              if (controlEvent.terminatesStream) cleanupStreamListener(requestStreamId);
               updateMessagesForSession(resolvedSessionId, (prev) =>
                 prev.map((message) =>
                   message.id === assistantId
                     ? {
                         ...message,
-                        content: payload.error ?? t("ai.requestFailed"),
+                        content: errorMessage,
                       }
                     : message,
                 ),
               );
-              toast.error(payload.error ?? t("ai.requestFailed"));
+              toast.error(errorMessage);
             }
           },
         );
@@ -1919,7 +1935,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                 isComposingRef.current = false;
               }}
               onKeyDown={(event) => {
-                const isComposing = isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
+                const isComposing =
+                  isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
                 if (showMentionPopover) {
                   if (event.key === "Escape") {
                     event.preventDefault();

@@ -8,7 +8,7 @@ import {
   DRAG_EVENT_CAPTURE_OPTIONS,
   getDragEventPosition,
   getExternalFileDropBridge,
-  isDropPositionInsideElement,
+  isDropPositionTopmostWithinElement,
   isExternalFileDragEvent,
   logExternalDropBridgeFailure,
   type NativeFileDropEventPayload,
@@ -62,7 +62,7 @@ export function useTerminalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
         getDragEventPosition(event),
         containerRef.current,
       );
@@ -94,7 +94,7 @@ export function useTerminalFileDrop({
 
       if (
         leftWindow ||
-        !isDropPositionInsideElement(getDragEventPosition(event), containerRef.current)
+        !isDropPositionTopmostWithinElement(getDragEventPosition(event), containerRef.current)
       ) {
         resetExternalDropHover();
       }
@@ -106,7 +106,10 @@ export function useTerminalFileDrop({
       }
 
       const dropPosition = getDragEventPosition(event);
-      const isOverDropTarget = isDropPositionInsideElement(dropPosition, containerRef.current);
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
+        dropPosition,
+        containerRef.current,
+      );
       resetExternalDropHover();
 
       if (!isOverDropTarget) {
@@ -209,7 +212,10 @@ export function useTerminalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(payload.position, containerRef.current);
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
+        payload.position,
+        containerRef.current,
+      );
       const isActive = enabledRef.current && isOverDropTarget;
 
       if (payload.kind === "enter" || payload.kind === "over") {
@@ -262,7 +268,10 @@ export function useTerminalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(payload.position, containerRef.current);
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
+        payload.position,
+        containerRef.current,
+      );
       const isActive = enabledRef.current && isOverDropTarget;
 
       if (payload.type === "enter" || payload.type === "over") {

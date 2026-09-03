@@ -158,9 +158,11 @@ Together these files define the full user flow through settings state, Tauri com
 User-facing UI text uses `react-i18next`. Locale files are in:
 
 - `src/i18n/locales/zh-CN.json`
+- `src/i18n/locales/zh-TW.json`
 - `src/i18n/locales/en.json`
+- `src/i18n/locales/ko.json`
 
-Whenever you add or change visible UI text, update both locale files.
+When adding or modifying user-visible text, update all locale files, and run `pnpm i18n:check` before committing to validate the JSON format.
 
 ## UI component conventions
 

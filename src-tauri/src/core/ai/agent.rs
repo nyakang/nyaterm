@@ -14,12 +14,15 @@ use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+use crate::config::AiExecutionProfile;
 use crate::config::{
-    AgentCommandExecutionMode, AiAgentKind, AiExecutionProfile, AiPermissionMode, AiSettings,
-    RiskLevel,
+    AgentCommandExecutionMode, AiAgentKind, AiPermissionMode, AiSettings, RiskLevel,
 };
-use crate::core::capture;
-use crate::core::session::{SessionCommand, SessionManager, SessionType};
+use crate::core::capabilities::{
+    TerminalExecuteRequest, TerminalExecutionPresentation, execute_terminal_command,
+};
+use crate::core::session::{SessionManager, SessionType};
 use crate::core::ssh::SshConnectionHandles;
 use crate::error::{AppError, AppResult};
 use crate::utils::process::hide_window;
@@ -36,8 +39,8 @@ use super::redaction::{redact_context, redact_sensitive_text};
 use super::stream::{active_streams, emit_stream_event, is_cancelled};
 use super::types::{
     AgentActionKind, AgentLlmResponse, AgentStepAction, AgentStepPayload, AgentStepStatus,
-    AiCaptureEvent, AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload,
-    AiTerminalTarget, AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
+    AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload, AiTerminalTarget,
+    AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
 };
 
 // ---------------------------------------------------------------------------
@@ -95,95 +98,6 @@ const DEFAULT_AGENT_STEP_TIMEOUT_MS: u64 = 30_000;
 const TOOL_EXECUTE_COMMAND: &str = "execute_command";
 const TOOL_FINAL_ANSWER: &str = "final_answer";
 
-struct ForegroundCaptureGuard {
-    app: AppHandle,
-    session_manager: Arc<SessionManager>,
-    terminal_session_id: String,
-    marker_id: String,
-    capture_event: String,
-    finished: bool,
-}
-
-impl ForegroundCaptureGuard {
-    fn new(
-        app: &AppHandle,
-        session_manager: Arc<SessionManager>,
-        terminal_session_id: &str,
-        marker_id: String,
-    ) -> Self {
-        Self {
-            app: app.clone(),
-            session_manager,
-            terminal_session_id: terminal_session_id.to_string(),
-            capture_event: format!("ai-capture-{terminal_session_id}"),
-            marker_id,
-            finished: false,
-        }
-    }
-
-    fn finish(
-        &mut self,
-        output: String,
-        exit_code: Option<i32>,
-        duration_ms: u64,
-        truncated: bool,
-    ) {
-        self.finished = true;
-        let _ = self.app.emit(
-            &self.capture_event,
-            AiCaptureEvent::CommandEnd {
-                output,
-                exit_code,
-                duration_ms,
-                truncated,
-            },
-        );
-    }
-
-    async fn cancel_capture(&self) {
-        let _ = self
-            .session_manager
-            .send_command(
-                &self.terminal_session_id,
-                SessionCommand::CancelCapture {
-                    marker_id: self.marker_id.clone(),
-                },
-            )
-            .await;
-    }
-}
-
-impl Drop for ForegroundCaptureGuard {
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-
-        let app = self.app.clone();
-        let capture_event = self.capture_event.clone();
-        let session_manager = self.session_manager.clone();
-        let terminal_session_id = self.terminal_session_id.clone();
-        let marker_id = self.marker_id.clone();
-        tokio::spawn(async move {
-            let _ = session_manager
-                .send_command(
-                    &terminal_session_id,
-                    SessionCommand::CancelCapture { marker_id },
-                )
-                .await;
-            let _ = app.emit(
-                &capture_event,
-                AiCaptureEvent::CommandEnd {
-                    output: "AI command capture was cancelled before completion.".to_string(),
-                    exit_code: None,
-                    duration_ms: 0,
-                    truncated: false,
-                },
-            );
-        });
-    }
-}
-
 fn emit_agent_step(app: &AppHandle, stream_id: &str, payload: AgentStepPayload) {
     let _ = app.emit(format!("ai-stream-{stream_id}").as_str(), payload);
 }
@@ -232,192 +146,28 @@ async fn execute_command_on_session(
     step_index: u16,
     terminal_output_lines: u16,
 ) -> AppResult<CommandObservation> {
-    tracing::debug!(
-        terminal_session_id = %terminal_session_id,
-        timeout_ms,
-        command_preview = %safe_command_preview(command),
-        "Preparing to execute agent command via PTY capture"
-    );
-
-    let session_info = session_manager.session_info(terminal_session_id).await?;
-    let profile = session_info.ai_execution_profile;
-    tracing::debug!(
-        terminal_session_id = %terminal_session_id,
-        session_type = ?session_info.session_type,
-        ai_execution_profile = ?profile,
-        "Resolved AI agent execution profile"
-    );
-
-    if matches!(
-        profile,
-        AiExecutionProfile::Auto | AiExecutionProfile::SendOnly
-    ) {
-        return send_command_without_capture(
-            app,
-            session_manager.as_ref(),
-            terminal_session_id,
-            command,
-            language,
-            step_index,
-            terminal_output_lines,
-        )
-        .await;
-    }
-
-    if profile == AiExecutionProfile::Disabled {
-        return Err(AppError::Config(
-            agent_execution_disabled_message(language).to_string(),
-        ));
-    }
-
-    let marker_id = uuid::Uuid::new_v4().to_string();
-    let wrapped =
-        capture::build_capture_command(profile, &marker_id, command).ok_or_else(|| {
-            AppError::Config(format!(
-                "AI execution profile {:?} does not support captured execution",
-                profile
-            ))
-        })?;
-    let (tx, rx) = oneshot::channel();
-
-    let capture_event = format!("ai-capture-{terminal_session_id}");
-    let _ = app.emit(
-        &capture_event,
-        AiCaptureEvent::CommandStart {
+    let result = execute_terminal_command(
+        session_manager,
+        TerminalExecuteRequest {
+            session_id: terminal_session_id.to_string(),
             command: command.to_string(),
+            timeout_ms,
+        },
+        Some(TerminalExecutionPresentation {
+            app: app.clone(),
             step_index,
-        },
-    );
-    let mut capture_guard = ForegroundCaptureGuard::new(
-        app,
-        session_manager.clone(),
-        terminal_session_id,
-        marker_id.clone(),
-    );
-
-    session_manager
-        .send_command(
-            terminal_session_id,
-            SessionCommand::CaptureExec {
-                marker_id: marker_id.clone(),
-                wrapped_command: wrapped.into_bytes(),
-                result_tx: tx,
-            },
-        )
-        .await?;
-
-    let timeout_dur = Duration::from_millis(timeout_ms);
-    let result = match tokio::time::timeout(timeout_dur, rx).await {
-        Ok(Ok(captured)) => {
-            let output = strip_ansi_escapes(&captured.output);
-            tracing::debug!(
-                terminal_session_id = %terminal_session_id,
-                marker_id = %marker_id,
-                exit_code = ?captured.exit_code,
-                duration_ms = captured.duration_ms,
-                output_len = output.len(),
-                "PTY capture completed"
-            );
-            Ok(CommandObservation {
-                output,
-                exit_code: captured.exit_code,
-                duration_ms: captured.duration_ms,
-            })
-        }
-        Ok(Err(_)) => {
-            capture_guard.cancel_capture().await;
-            tracing::warn!(
-                terminal_session_id = %terminal_session_id,
-                marker_id = %marker_id,
-                "PTY capture channel closed without result"
-            );
-            Err(AppError::Channel(
-                "Capture channel closed — session may have disconnected".to_string(),
-            ))
-        }
-        Err(_) => {
-            capture_guard.cancel_capture().await;
-            tracing::warn!(
-                terminal_session_id = %terminal_session_id,
-                marker_id = %marker_id,
-                timeout_ms,
-                "PTY capture timed out"
-            );
-            Ok(CommandObservation {
-                output: "(command timed out — markers not detected in PTY output)".to_string(),
-                exit_code: None,
-                duration_ms: timeout_ms,
-            })
-        }
-    };
-
-    let (terminal_output, truncated) = match &result {
-        Ok(obs) => truncate_output_for_terminal(&obs.output, terminal_output_lines),
-        Err(e) => (e.to_string(), false),
-    };
-
-    capture_guard.finish(
-        terminal_output,
-        result.as_ref().ok().and_then(|o| o.exit_code),
-        result.as_ref().map(|o| o.duration_ms).unwrap_or(0),
-        truncated,
-    );
-
-    result
-}
-
-async fn send_command_without_capture(
-    app: &AppHandle,
-    session_manager: &SessionManager,
-    terminal_session_id: &str,
-    command: &str,
-    language: &str,
-    step_index: u16,
-    terminal_output_lines: u16,
-) -> AppResult<CommandObservation> {
-    let started = Instant::now();
-    let capture_event = format!("ai-capture-{terminal_session_id}");
-    let _ = app.emit(
-        &capture_event,
-        AiCaptureEvent::CommandStart {
-            command: command.to_string(),
-            step_index,
-        },
-    );
-
-    let mut bytes = command.as_bytes().to_vec();
-    bytes.push(b'\n');
-    session_manager
-        .send_command(
-            terminal_session_id,
-            SessionCommand::Write {
-                data: bytes,
-                automated: true,
-                origin: crate::core::InputOrigin::AiAgent,
-                sensitivity: crate::core::InputSensitivity::Normal,
-            },
-        )
-        .await?;
-
-    let observation = CommandObservation {
-        output: agent_send_only_observation(language).to_string(),
-        exit_code: None,
-        duration_ms: started.elapsed().as_millis() as u64,
-    };
-    let (terminal_output, truncated) =
-        truncate_output_for_terminal(&observation.output, terminal_output_lines);
-
-    let _ = app.emit(
-        &capture_event,
-        AiCaptureEvent::CommandEnd {
-            output: terminal_output,
-            exit_code: None,
-            duration_ms: observation.duration_ms,
-            truncated,
-        },
-    );
-
-    Ok(observation)
+            max_lines: terminal_output_lines,
+            send_only_output: Some(agent_send_only_observation(language).to_string()),
+            disabled_error: Some(agent_execution_disabled_message(language).to_string()),
+        }),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await?;
+    Ok(CommandObservation {
+        output: result.output,
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+    })
 }
 
 enum BackgroundExecutionTarget {
@@ -451,7 +201,7 @@ async fn resolve_background_execution_target(
         SessionType::Local => {
             let cwd_arc = session.cwd.clone();
             drop(sessions);
-            let cwd = cwd_arc.lock().await.clone();
+            let cwd = cwd_arc.lock().await.safe_local_execution_cwd();
             Ok(BackgroundExecutionTarget::Local { cwd })
         }
         ref session_type => Ok(BackgroundExecutionTarget::Unsupported(session_type.clone())),
@@ -600,23 +350,6 @@ fn merge_command_output(stdout: &str, stderr: &str) -> String {
     }
 }
 
-fn truncate_output_for_terminal(output: &str, max_lines: u16) -> (String, bool) {
-    if max_lines == 0 {
-        return (String::new(), !output.is_empty());
-    }
-    let lines: Vec<&str> = output.lines().collect();
-    if lines.len() <= max_lines as usize {
-        (output.to_string(), false)
-    } else {
-        let truncated_output = lines[..max_lines as usize].join("\n");
-        (truncated_output, true)
-    }
-}
-
-fn strip_ansi_escapes(input: &str) -> String {
-    strip_ansi_escapes::strip_str(input)
-}
-
 fn truncate_for_log(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let truncated: String = chars.by_ref().take(max_chars).collect();
@@ -635,6 +368,7 @@ fn safe_command_preview(command: &str) -> String {
 struct RiskAssessment {
     model_risk: RiskLevel,
     local_risk: RiskLevel,
+    local_auto_executable: bool,
     effective_risk: RiskLevel,
     risk_reason: Option<String>,
 }
@@ -841,188 +575,14 @@ fn risk_label(risk: &RiskLevel) -> &'static str {
     }
 }
 
-fn normalize_command(command: &str) -> String {
-    command
-        .trim()
-        .replace("\r\n", "\n")
-        .replace('\n', " ")
-        .to_ascii_lowercase()
-}
-
-fn command_contains_any(command: &str, patterns: &[&str]) -> bool {
-    patterns.iter().any(|pattern| command.contains(pattern))
-}
-
-fn is_root_rm_command(command: &str) -> bool {
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    if tokens.first() != Some(&"rm") {
-        return false;
-    }
-    let has_recursive_force = tokens
-        .iter()
-        .any(|token| token.starts_with('-') && token.contains('r') && token.contains('f'));
-    has_recursive_force
-        && tokens
-            .iter()
-            .skip(1)
-            .any(|token| matches!(*token, "/" | "/*" | "--no-preserve-root"))
-}
-
-fn is_dangerous_dd_command(command: &str) -> bool {
-    command.starts_with("dd ") && command.contains("of=/dev/")
-}
-
-fn assess_local_command_risk(command: &str) -> (RiskLevel, String) {
-    let normalized = normalize_command(command);
-    let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    if compact.is_empty() {
-        return (RiskLevel::Medium, "empty command".to_string());
-    }
-
-    if is_root_rm_command(&compact) || is_dangerous_dd_command(&compact) {
-        return (
-            RiskLevel::Critical,
-            "matches irreversible or system-disruptive command pattern".to_string(),
-        );
-    }
-
-    let critical_patterns = [
-        "mkfs",
-        "wipefs",
-        ":(){",
-        "shutdown",
-        "poweroff",
-        "reboot",
-        "halt",
-        "systemctl stop ssh",
-        "systemctl stop sshd",
-        "service ssh stop",
-        "service sshd stop",
-    ];
-    if command_contains_any(&compact, &critical_patterns) {
-        return (
-            RiskLevel::Critical,
-            "matches irreversible or system-disruptive command pattern".to_string(),
-        );
-    }
-
-    let high_patterns = [
-        "rm -r",
-        "rm -f",
-        " rmdir ",
-        " chmod -r",
-        " chown -r",
-        "systemctl restart",
-        "systemctl stop",
-        "service ",
-        "apt install",
-        "apt remove",
-        "apt purge",
-        "yum install",
-        "yum remove",
-        "dnf install",
-        "dnf remove",
-        "pacman -s",
-        "pacman -r",
-        "brew install",
-        "brew uninstall",
-        "npm install -g",
-        "pip install",
-        "docker rm",
-        "docker rmi",
-        "docker system prune",
-        "kubectl delete",
-        "kubectl drain",
-        "kubectl apply",
-        "kubectl replace",
-        "git reset --hard",
-        "git clean -fd",
-    ];
-    if compact.starts_with("sudo ") || command_contains_any(&compact, &high_patterns) {
-        return (
-            RiskLevel::High,
-            "matches privileged, destructive, restart, package, container, or cluster mutation pattern"
-                .to_string(),
-        );
-    }
-
-    let medium_patterns = [
-        " > ",
-        ">>",
-        " tee ",
-        " touch ",
-        " mkdir ",
-        " cp ",
-        " mv ",
-        " chmod ",
-        " chown ",
-        " setfacl ",
-        " export ",
-        "git checkout",
-        "git switch",
-        "git pull",
-        "git merge",
-        "npm run",
-        "make install",
-    ];
-    if command_contains_any(&format!(" {compact} "), &medium_patterns) {
-        return (
-            RiskLevel::Medium,
-            "matches local write or state-changing command pattern".to_string(),
-        );
-    }
-
-    let readonly_prefixes = [
-        "ls",
-        "pwd",
-        "whoami",
-        "id",
-        "uname",
-        "cat",
-        "less",
-        "head",
-        "tail",
-        "grep",
-        "rg",
-        "find",
-        "df",
-        "du",
-        "free",
-        "top",
-        "ps",
-        "ss",
-        "netstat",
-        "ip ",
-        "journalctl",
-        "systemctl status",
-        "docker ps",
-        "docker logs",
-        "kubectl get",
-        "kubectl describe",
-        "git status",
-        "git log",
-        "git diff",
-    ];
-    if readonly_prefixes
-        .iter()
-        .any(|prefix| compact == prefix.trim() || compact.starts_with(&format!("{prefix} ")))
-    {
-        return (
-            RiskLevel::Low,
-            "matches read-only diagnostic pattern".to_string(),
-        );
-    }
-
-    (
-        RiskLevel::Medium,
-        "no explicit read-only pattern matched; defaulting to medium".to_string(),
-    )
+fn assess_local_command_risk(command: &str) -> (RiskLevel, String, bool) {
+    let risk = crate::core::capabilities::assess_command_risk(command);
+    (risk.level, risk.reason, risk.auto_executable)
 }
 
 fn assess_agent_command_risk(parsed: &AgentLlmResponse, command: &str) -> RiskAssessment {
     let model_risk = parsed.risk_level.clone().unwrap_or(RiskLevel::Medium);
-    let (local_risk, local_reason) = assess_local_command_risk(command);
+    let (local_risk, local_reason, local_auto_executable) = assess_local_command_risk(command);
     let effective_risk = max_risk(model_risk.clone(), local_risk.clone());
     let risk_reason = parsed
         .risk_reason
@@ -1034,6 +594,7 @@ fn assess_agent_command_risk(parsed: &AgentLlmResponse, command: &str) -> RiskAs
     RiskAssessment {
         model_risk,
         local_risk,
+        local_auto_executable,
         effective_risk,
         risk_reason,
     }
@@ -1077,13 +638,23 @@ fn decide_agent_command_execution(
 
 fn decide_external_agent_command_execution(
     mode: &AiPermissionMode,
+    assessment: &RiskAssessment,
 ) -> (ApprovalDecision, Option<String>) {
     match mode {
         AiPermissionMode::Observer | AiPermissionMode::Confirm => (
             ApprovalDecision::NeedsApproval,
             Some("external agent permission mode requires confirmation".to_string()),
         ),
-        AiPermissionMode::Auto => (ApprovalDecision::Auto, None),
+        AiPermissionMode::Auto
+            if assessment.local_auto_executable && assessment.effective_risk < RiskLevel::High =>
+        {
+            (ApprovalDecision::Auto, None)
+        }
+        AiPermissionMode::Auto => (
+            ApprovalDecision::NeedsApproval,
+            Some("safe auto requires confirmation for unknown or high-risk commands".to_string()),
+        ),
+        AiPermissionMode::FullAccess => (ApprovalDecision::Auto, None),
     }
 }
 
@@ -1180,6 +751,16 @@ fn append_agent_command_audit(
             inserted_to_terminal: false,
             executed,
             blocked,
+            source: None,
+            client: None,
+            capability: None,
+            session_id: None,
+            permission_mode: (request.agent_kind != AiAgentKind::Nyaterm)
+                .then(|| request.permission_mode.clone()),
+            approval_decision: None,
+            success: None,
+            duration_ms: None,
+            error: None,
         },
     );
 }
@@ -1214,7 +795,7 @@ pub(super) async fn run_external_agent_command_step(
     let (decision, approval_reason) = if request.agent_kind == AiAgentKind::Nyaterm {
         decide_agent_command_execution(settings, &assessment)
     } else {
-        decide_external_agent_command_execution(&request.permission_mode)
+        decide_external_agent_command_execution(&request.permission_mode, &assessment)
     };
 
     if request.agent_kind != AiAgentKind::Nyaterm
@@ -1844,16 +1425,32 @@ mod tests {
 
     #[test]
     fn external_agent_permission_modes_are_explicit() {
+        let safe = assess_agent_command_risk(&parsed_response(None), "ls -la");
+        let high = assess_agent_command_risk(&parsed_response(None), "sudo reboot");
+        let unknown = assess_agent_command_risk(&parsed_response(None), "custom-deploy production");
+
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Observer).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Observer, &safe).0,
             ApprovalDecision::NeedsApproval
         );
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Confirm).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Confirm, &safe).0,
             ApprovalDecision::NeedsApproval
         );
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Auto).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &safe).0,
+            ApprovalDecision::Auto
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &high).0,
+            ApprovalDecision::NeedsApproval
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &unknown).0,
+            ApprovalDecision::NeedsApproval
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::FullAccess, &high).0,
             ApprovalDecision::Auto
         );
     }
@@ -1868,11 +1465,13 @@ mod tests {
 
     #[tokio::test]
     async fn background_execution_rejects_unsupported_session_types() {
-        use crate::core::{SessionHandle, SessionInfo};
-        use tokio::sync::{Mutex, mpsc};
+        use crate::core::{
+            DynamicTitleCapabilities, SessionHandle, SessionInfo, session_command_channel,
+        };
+        use tokio::sync::Mutex;
 
         let manager = SessionManager::new();
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, _cmd_rx) = session_command_channel("serial-1");
         manager
             .add_session(SessionHandle {
                 info: SessionInfo {
@@ -1885,14 +1484,16 @@ mod tests {
                     owner_window_label: None,
                     ai_execution_profile: AiExecutionProfile::SendOnly,
                     injection_active: false,
+                    dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                     remote_file_browser_enabled: false,
                     remote_stats_enabled: false,
                     ssh_profile: None,
                 },
                 cmd_tx,
+                startup_input_barrier: None,
                 ssh_config: None,
                 ssh_handle: None,
-                cwd: Arc::new(Mutex::new(None)),
+                cwd: Arc::new(Mutex::new(Default::default())),
                 remote_fs: None,
             })
             .await;

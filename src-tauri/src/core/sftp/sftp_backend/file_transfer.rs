@@ -355,7 +355,8 @@ pub(super) async fn download_remote_file_inner_with_controller(
         &controller.build_event("started", 0, None),
     );
 
-    let (request_kib, pipeline_depth, max_concurrent_writes) = sftp_pipeline_config(ts);
+    let (request_kib, pipeline_depth, max_concurrent_writes) =
+        sftp_pipeline_config(ts, backend.pipeline_depth_override);
     let chunk_size = sftp_payload_size(request_kib) as u64;
     let transfer_started = Instant::now();
 
@@ -550,7 +551,8 @@ pub(super) async fn upload_local_file_inner_with_controller(
         &controller.build_event("started", 0, None),
     );
 
-    let (request_kib, pipeline_depth, max_concurrent_writes) = sftp_pipeline_config(ts);
+    let (request_kib, pipeline_depth, max_concurrent_writes) =
+        sftp_pipeline_config(ts, backend.pipeline_depth_override);
     let chunk_size = sftp_payload_size(request_kib);
     let transfer_started = Instant::now();
 

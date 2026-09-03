@@ -1,4 +1,3 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { Terminal } from "@xterm/xterm";
 import { logger } from "@/lib/logger";
 import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
@@ -6,6 +5,7 @@ import {
   Dec2026FrameGate,
   resolveDec2026FrameGateMode,
 } from "./dec2026FrameGate";
+import { outputAckCoordinator } from "./outputAckCoordinator";
 import {
   TerminalOutputDrain,
   type TerminalOutputDrainMode,
@@ -20,6 +20,7 @@ interface MutableRef<T> {
 
 interface CreateXTerminalOutputControllerParams {
   sessionId: string;
+  terminalGeneration: number;
   terminal: Terminal;
   outputDrainRef: MutableRef<TerminalOutputDrain<{
     beforeLine: number;
@@ -44,6 +45,7 @@ interface CreateXTerminalOutputControllerParams {
 
 export function createXTerminalOutputController({
   sessionId,
+  terminalGeneration,
   terminal,
   outputDrainRef,
   frameGateRef,
@@ -60,6 +62,10 @@ export function createXTerminalOutputController({
   setOutputPressureMode,
   exitOverloadedMode,
 }: CreateXTerminalOutputControllerParams) {
+  const outputAckLease = outputAckCoordinator.acquire(
+    sessionId,
+    terminalGeneration,
+  );
   const isAlternateScreenActive = () =>
     terminal.buffer.active.type === "alternate" ||
     alternateScreenTrackerRef.current.isAlternateScreenActive();
@@ -99,8 +105,7 @@ export function createXTerminalOutputController({
   };
 
   const sendOutputAck = (bytes: number) => {
-    if (bytes <= 0) return;
-    tauriInvoke("ack_session_output", { sessionId, bytes }).catch(() => {});
+    outputAckLease.ack(bytes);
   };
 
   const maybeRecoverPerformanceMode = () => {
@@ -311,6 +316,7 @@ export function createXTerminalOutputController({
     flushFrameGateAndDrain("status_notice");
 
   return {
+    outputAckLease,
     outputScheduler,
     outputDrain,
     frameGate,

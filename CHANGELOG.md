@@ -4,6 +4,133 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.8] - 2026-09-03
+
+### Added
+
+- **ssh:** Prune NyaTerm's Bash shell-integration injection commands from remote command history, including shells with `cmdhist` disabled.
+
+### Changed
+
+- **editor:** Restyle the built-in editor's search panel with theme-aware controls, focus rings, and checkbox accents.
+- **ssh:** Keep shell-integration injection lines within remote Linux PTY canonical-input limits.
+
+## [1.2.7] - 2026-09-02
+
+### Added
+
+- **editor:** Add Ctrl+mouse-wheel font zoom in the built-in file editor.
+- **quick-commands:** Add a terminal context-menu action to save the current selection as a quick command.
+- **terminal:** Add dynamic terminal tab titles.
+- **sftp:** Add shared helpers for directory listing and file-stat commands.
+- **ai:** Improve AI stream control event handling and add localized MCP error messages.
+
+### Fixed
+
+- **file-drop:** Only accept the topmost eligible element as the drop target, improving nested drop-zone detection.
+- **quick-commands:** Preserve the terminal selection while saving it as a quick command.
+- **terminal:** Scroll to the cursor when typing with a selection and restore focus after switching tabs.
+- **terminal:** Restore tab titles when waking a hibernated session fails.
+- **rdp:** Preserve the configured jump host when editing an RDP connection.
+
+## [1.2.6] - 2026-09-01
+
+### Added
+
+- **mcp:** Add the NyaTerm MCP sidecar, active-session reporting, session-open requests, permission modes, and Windows ACL-based discovery support.
+- **security:** Split screen locking into independent startup-lock and idle-lock settings.
+- **ssh:** Add SSH config import with `ProxyJump` and multi-hop connection support.
+- **sftp:** Add configurable pipeline depth and symlink-target management in file properties.
+- **terminal:** Add configurable right-click actions and an action to save selected text as a quick command.
+- **asset-monitoring:** Improve incremental asset patches and session validation.
+
+### Changed
+
+- **terminal:** Streamline tab context-menu behavior and improve terminal refresh and keyword-highlighting effects.
+- **dependencies:** Update Tauri and Rust dependencies and add the Windows security features required by MCP discovery.
+- **network:** Refresh tunnel row and runtime badge layout and styling.
+- **i18n:** Add translations for MCP permissions, SFTP pipeline depth, terminal actions, symlink targets, and lock settings.
+
+### Fixed
+
+- **clipboard:** Support paste from Windows clipboard history in the terminal.
+- **serial-send:** Preserve panel input when the serial send panel is hidden and shown again.
+- **editor:** Reuse the terminal selection color in the built-in file editor.
+- **ai:** Prevent IME composition Enter from submitting an AI prompt.
+
+### Performance
+
+- **terminal:** Add output acknowledgement coordination, snapshot restoration, and more reliable refresh behavior.
+
+### Documentation
+
+- **development:** Document all four locale files used by the project.
+
+## [1.2.5] - 2026-08-24
+
+### Added
+
+- **terminal:** Add session hibernation and output control, image rendering, foreground-frame fallback, and improved background draining.
+- **credential-autofill:** Detect credential prompts and offer saved credential completion.
+- **file-explorer:** Automatically synchronize the file browser with the terminal working directory.
+- **zmodem:** Improve upload conflict handling and surface remote upload refusals.
+- **send-command-panel:** Add an all-windows target and an option to clear serial input after sending.
+- **settings:** Add drag-and-drop ordering for terminal font stacks.
+- **windows-7:** Add fixed WebView2 runtime support and dedicated Windows 7 build workflows.
+- **ai-settings:** Add selectable API formats, improve model handling, and update the default Ollama URL.
+- **remote-desktop:** Add proxy and jump-host selection for RDP and VNC connections and improve RDP error reporting.
+- **custom-icons:** Add custom connection icon management.
+- **ssh:** Add SSH runtime modes for external invocation and protocol-link handling.
+- **activity-bar:** Add visibility management and reset actions.
+- **floating-panels:** Add floating mode and persisted floating-panel state.
+- **quick-commands:** Add command-variable parsing and interactive value resolution.
+- **editor:** Add configurable internal/external file-open modes.
+- **session:** Add external local-session invocation with working-directory validation.
+
+### Changed
+
+- **terminal:** Improve transparent background handling and event-listener lifecycle management.
+- **app:** Improve child-window lifecycle handling on macOS and consolidate overlay dialogs.
+- **ai:** Improve session-history request tracking and error handling.
+- **i18n:** Add and update localized text for the new settings and workflows across all supported languages.
+
+### Fixed
+
+- **terminal:** Reset the running-command state when OSC 133 reports command boundaries.
+- **webview:** Add guarded hard-reload shortcut handling.
+- **ai:** Prevent IME composition Enter from triggering prompt submission.
+
+### Documentation
+
+- **ssh:** Document local terminal invocation, connection link formats, and RDP/VNC proxy and jump-host support.
+
+## [1.2.4] - 2026-08-17
+
+### Added
+
+- **file-editor:** Add text document editing with unsaved-change protection and safe close handling.
+- **sftp:** Classify text files for editor opening while preserving underlying SFTP errors.
+- **ssh:** Add configurable SSH Agent forwarding.
+- **file-explorer:** Add a move dialog with validation and tests.
+- **terminal-session:** Improve working-directory handling for local and WSL commands.
+- **child-window:** Add a drag-only macOS header region and recoverable child-window command queues.
+
+### Fixed
+
+- **saved-connections:** Prevent duplicate folder submissions.
+- **context-menu:** Prevent right-click from activating menu items.
+- **local-terminal:** Improve shell-path input behavior and localization.
+- **macos:** Align child-window traffic-light controls more consistently.
+
+### Performance
+
+- **terminal:** Add alternate-screen tracking, output scheduling, and the DEC 2026 frame gate.
+- **window:** Reduce child-window startup work and loading time.
+
+### Documentation
+
+- **ssh:** Document external invocation and supported protocol links.
+
 ## [1.2.3] - 2026-08-13
 
 ### Added

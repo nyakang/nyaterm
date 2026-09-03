@@ -59,6 +59,43 @@ impl RemotePathRef {
     pub(crate) fn raw_path(&self) -> Option<&[u8]> {
         self.raw_path.as_deref()
     }
+
+    pub(crate) fn sibling(&self, file_name: &str) -> Self {
+        let display_path = sibling_path(self.display_path().as_bytes(), file_name.as_bytes())
+            .map_or_else(
+                || file_name.to_string(),
+                |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+            );
+        let raw_path = self
+            .raw_path()
+            .and_then(|path| sibling_path(path, file_name.as_bytes()));
+        Self {
+            display_path,
+            raw_path,
+        }
+    }
+}
+
+fn sibling_path(path: &[u8], file_name: &[u8]) -> Option<Vec<u8>> {
+    if file_name.is_empty() {
+        return None;
+    }
+    let parent = path
+        .iter()
+        .rposition(|byte| *byte == b'/')
+        .map(|index| &path[..index])
+        .unwrap_or_default();
+    let mut sibling = Vec::with_capacity(parent.len() + file_name.len() + 1);
+    if parent.is_empty() {
+        if path.starts_with(b"/") {
+            sibling.push(b'/');
+        }
+    } else {
+        sibling.extend_from_slice(parent);
+        sibling.push(b'/');
+    }
+    sibling.extend_from_slice(file_name);
+    Some(sibling)
 }
 
 pub(crate) fn raw_path_token(raw_path: &[u8]) -> String {
@@ -76,6 +113,7 @@ pub struct FileProperties {
     pub name: String,
     pub is_dir: bool,
     pub is_symlink: bool,
+    pub symlink_target: Option<String>,
     pub size: u64,
     pub permissions: String,
     pub owner: String,
@@ -534,6 +572,24 @@ mod tests {
     }
 
     #[test]
+    fn remote_path_sibling_preserves_raw_parent_bytes() {
+        let raw_path = b"/remote/\x80dir/\x81link";
+        let token = raw_path_token(raw_path);
+        let path_ref =
+            RemotePathRef::new("/remote/display-dir/display-link", Some(&token)).unwrap();
+        let sibling = path_ref.sibling(".nyaterm-link-test");
+
+        assert_eq!(
+            sibling.raw_path().unwrap(),
+            b"/remote/\x80dir/.nyaterm-link-test"
+        );
+        assert_eq!(
+            sibling.display_path(),
+            "/remote/display-dir/.nyaterm-link-test"
+        );
+    }
+
+    #[test]
     fn percent_encodes_windows_invalid_characters() {
         assert_eq!(
             sanitize_download_file_name_for_platform("a<b>:c\"d|e?f*.txt", true),
@@ -674,6 +730,7 @@ mod tests {
             name: "file".to_string(),
             is_dir: false,
             is_symlink: false,
+            symlink_target: None,
             size: 0,
             permissions: permissions.to_string(),
             owner: owner.to_string(),

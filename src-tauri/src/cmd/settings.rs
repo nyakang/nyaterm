@@ -69,16 +69,52 @@ pub fn get_app_settings(app: tauri::AppHandle) -> AppResult<config::AppSettings>
 pub async fn save_app_settings(
     app: tauri::AppHandle,
     manager: tauri::State<'_, Arc<CloudSyncManager>>,
+    mcp_manager: tauri::State<'_, Arc<crate::core::mcp::McpManager>>,
     settings: config::AppSettings,
     allow_master_password_change: Option<bool>,
+    owner_window_label: Option<String>,
 ) -> AppResult<()> {
+    let previous_mcp = config::load_app_settings(&app)?.ai.external_mcp;
+    let next_mcp = settings.ai.external_mcp.clone();
+    let external_owner = if previous_mcp != next_mcp && next_mcp.enabled {
+        let owner = owner_window_label.ok_or_else(|| {
+            AppError::Config("External MCP requires an owner main-window label.".into())
+        })?;
+        crate::cmd::mcp::validate_owner_window(&app, &owner)?;
+        Some(owner)
+    } else {
+        None
+    };
     persist_app_settings(
         &app,
         manager.inner(),
         settings,
         allow_master_password_change.unwrap_or(false),
     )
-    .await
+    .await?;
+    if previous_mcp != next_mcp {
+        if next_mcp.enabled {
+            let owner = external_owner.expect("validated External MCP owner");
+            if let Err(error) = mcp_manager.configure_external(next_mcp, &owner).await {
+                let rollback_mcp = previous_mcp.clone();
+                let _ = crate::storage::update_settings_doc(
+                    crate::storage::SettingsDocKey::AppSettings,
+                    |stored: &mut config::AppSettings| {
+                        stored.ai.external_mcp = rollback_mcp;
+                        Ok(())
+                    },
+                );
+                if previous_mcp.enabled {
+                    let _ = mcp_manager.configure_external(previous_mcp, &owner).await;
+                }
+                let _ = app.emit("settings-changed", ());
+                return Err(error);
+            }
+        } else {
+            mcp_manager.disable_external(false).await?;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

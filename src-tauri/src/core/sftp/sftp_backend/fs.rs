@@ -166,6 +166,17 @@ impl RemoteFs for SftpBackend {
         let raw_path = self.remote_path_bytes(path);
         let attrs = sftp.symlink_metadata_bytes(raw_path.clone()).await?;
         let is_symlink = sftp_attrs_is_symlink(&attrs);
+        let symlink_target = if is_symlink {
+            match sftp.read_link_bytes(raw_path.clone()).await {
+                Ok(target) => Some(self.decode_path_from_sftp(&target)),
+                Err(error) => {
+                    let _ = sftp.close().await;
+                    return Err(error.into());
+                }
+            }
+        } else {
+            None
+        };
         let target_attrs = if is_symlink {
             sftp.metadata_bytes(raw_path).await.ok()
         } else {
@@ -213,6 +224,7 @@ impl RemoteFs for SftpBackend {
             name,
             is_dir,
             is_symlink,
+            symlink_target,
             size: attrs.size.unwrap_or(0),
             permissions,
             owner,
@@ -326,8 +338,21 @@ impl RemoteFs for SftpBackend {
     }
 
     async fn create_symlink(&self, link_path: &str, target_path: &str) -> AppResult<()> {
+        let link_path = RemotePathRef::new(link_path, None)?;
+        self.create_symlink_ref(&link_path, target_path).await
+    }
+
+    async fn create_symlink_ref(
+        &self,
+        link_path: &RemotePathRef,
+        target_path: &str,
+    ) -> AppResult<()> {
         let sftp = self.open_sftp().await?;
-        sftp.symlink_openssh(target_path, link_path).await?;
+        sftp.symlink_openssh_bytes(
+            self.encode_path_for_sftp(target_path),
+            self.remote_path_bytes(link_path),
+        )
+        .await?;
         let _ = sftp.close().await;
         Ok(())
     }
@@ -802,7 +827,7 @@ impl RemoteFs for SftpBackend {
             .map(|s| s.transfer)
             .unwrap_or_default();
         let (request_kib, pipeline_depth, max_concurrent_writes) =
-            sftp_pipeline_config(&transfer_settings);
+            sftp_pipeline_config(&transfer_settings, self.pipeline_depth_override);
         let transfer_started = Instant::now();
         let directory_controller = create_directory_transfer_controller(
             transfer_id,
@@ -901,7 +926,7 @@ impl RemoteFs for SftpBackend {
         let _ = sftp_for_check.close().await;
 
         let (request_kib, pipeline_depth, max_concurrent_writes) =
-            sftp_pipeline_config(transfer_settings);
+            sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
         let transfer_started = Instant::now();
         let directory_controller = create_directory_transfer_controller(
             transfer_id,

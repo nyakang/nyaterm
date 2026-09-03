@@ -18,6 +18,10 @@ struct ExecResult {
     stderr: Vec<u8>,
 }
 
+fn parse_find_symlink_target(output: &[u8]) -> String {
+    String::from_utf8_lossy(output.strip_suffix(&[0]).unwrap_or(output)).into_owned()
+}
+
 impl ScpEnhancedBackend {
     pub(crate) fn new(ssh_handle: Arc<SshConnectionHandles>) -> Self {
         Self { ssh_handle }
@@ -731,6 +735,17 @@ impl RemoteFs for ScpEnhancedBackend {
 
         let is_dir = file_type.contains("directory");
         let is_symlink = file_type.contains("symbolic link") || file_type.contains("symlink");
+        let symlink_target = if is_symlink {
+            let output = self
+                .exec_ok(&format!(
+                    "LC_ALL=C find {} -maxdepth 0 -printf '%l\\0'",
+                    sh_quote(path)
+                ))
+                .await?;
+            Some(parse_find_symlink_target(&output))
+        } else {
+            None
+        };
         let is_symlink_to_dir = is_symlink
             && self
                 .exec(&format!("test -d {}", sh_quote(path)))
@@ -752,6 +767,7 @@ impl RemoteFs for ScpEnhancedBackend {
             name,
             is_dir,
             is_symlink,
+            symlink_target,
             size,
             permissions,
             owner,
@@ -1321,5 +1337,27 @@ impl RemoteFs for ScpEnhancedBackend {
             .await
             .map(|metadata| metadata.len())
             .map_err(|error| AppError::Channel(format!("Failed to read copied file size: {error}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_find_symlink_target;
+
+    #[test]
+    fn find_target_parser_preserves_relative_and_trailing_spaces() {
+        assert_eq!(
+            parse_find_symlink_target(b"../release/v2\0"),
+            "../release/v2"
+        );
+        assert_eq!(parse_find_symlink_target(b"release v3  \0"), "release v3  ");
+    }
+
+    #[test]
+    fn find_target_parser_accepts_dangling_target_text() {
+        assert_eq!(
+            parse_find_symlink_target(b"missing-release\0"),
+            "missing-release"
+        );
     }
 }

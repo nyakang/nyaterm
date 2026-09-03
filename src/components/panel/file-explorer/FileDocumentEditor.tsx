@@ -15,7 +15,9 @@ import {
   registerFileDocument,
   updateFileDocumentState,
 } from "@/lib/fileDocumentRegistry";
+import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
+import { clampFileEditorFontSize } from "@/lib/fileEditorFontSize";
 import { formatSize } from "@/lib/utils";
 import type { FileDocumentPane } from "@/types/global";
 import { languageFromFilename, type TextFileOpenResult } from "./model";
@@ -35,6 +37,10 @@ interface FileDocumentEditorProps {
 
 export default function FileDocumentEditor({ pane, active }: FileDocumentEditorProps) {
   const { t } = useTranslation();
+  const { appSettings } = useApp();
+  const editorFontSize = clampFileEditorFontSize(
+    appSettings.transfer.internal_editor_font_size,
+  );
   const editorParentRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const suppressUpdateRef = useRef(false);
@@ -239,6 +245,7 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
     <div
       className="flex h-full min-h-0 flex-col bg-background/60"
       data-file-document-mode="edit"
+      data-file-editor-root="true"
       onKeyDown={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
           event.preventDefault();
@@ -285,7 +292,11 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
           {error}
         </div>
       ) : null}
-      <div ref={editorParentRef} className="min-h-0 flex-1" />
+      <div
+        ref={editorParentRef}
+        className="min-h-0 flex-1"
+        style={{ fontSize: `${editorFontSize}px` }}
+      />
       <div className="flex h-7 shrink-0 items-center justify-between border-t px-3 text-[11px] text-muted-foreground">
         <span>{languageFromFilename(pane.name || pane.file.path).toLocaleUpperCase()}</span>
         <span className="flex items-center gap-2">

@@ -26,7 +26,7 @@ pub async fn create_telnet_session(
         client_timestamp: None,
     });
     let session_id = uuid::Uuid::new_v4().to_string();
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+    let (cmd_tx, cmd_rx) = session_command_channel(session_id.clone());
     let output_control_tx = cmd_tx.clone();
 
     let session_info = SessionInfo {
@@ -39,15 +39,17 @@ pub async fn create_telnet_session(
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::SendOnly,
         injection_active: false,
+        dynamic_title_capabilities: DynamicTitleCapabilities::default(),
         remote_file_browser_enabled: false,
         remote_stats_enabled: false,
         ssh_profile: None,
     };
 
-    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(None));
+    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(Default::default()));
     let session_handle = SessionHandle {
         info: session_info.clone(),
         cmd_tx,
+        startup_input_barrier: None,
         ssh_config: None,
         ssh_handle: None,
         cwd,

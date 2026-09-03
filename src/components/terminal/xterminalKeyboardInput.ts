@@ -2,6 +2,57 @@ import type { SessionType } from "@/types/global";
 
 const LEGACY_CTRL_KEYS = new Set([" ", "@", "[", "\\", "]", "^", "_", "?"]);
 
+export type XTerminalDataOrigin = "keyboard" | "terminal_response";
+
+export function resolveXTerminalDataOrigin(
+  trackedOrigin: XTerminalDataOrigin,
+  data: string,
+  canObserveUserInput: boolean,
+  expectedFocusReport: "\x1b[I" | "\x1b[O" | null,
+): XTerminalDataOrigin {
+  return !canObserveUserInput && data === expectedFocusReport
+    ? "terminal_response"
+    : trackedOrigin;
+}
+
+export function createXTerminalDataOriginTracker() {
+  let nextDataWasUserInput = false;
+  let userEventDepth = 0;
+  let deferredGeneration = 0;
+  return {
+    markUserInput() {
+      deferredGeneration += 1;
+      nextDataWasUserInput = true;
+    },
+    markDeferredUserInput() {
+      const generation = ++deferredGeneration;
+      nextDataWasUserInput = true;
+      // xterm schedules IME extraction with setTimeout(0) from the target
+      // handler. A nested timer runs after that extraction, but still clears a
+      // cancelled composition before unrelated terminal responses arrive.
+      setTimeout(() => {
+        setTimeout(() => {
+          if (deferredGeneration === generation) {
+            nextDataWasUserInput = false;
+          }
+        }, 0);
+      }, 0);
+    },
+    beginUserInputEvent() {
+      userEventDepth += 1;
+    },
+    endUserInputEvent() {
+      userEventDepth = Math.max(0, userEventDepth - 1);
+    },
+    consume(): XTerminalDataOrigin {
+      const wasUserInput = nextDataWasUserInput || userEventDepth > 0;
+      nextDataWasUserInput = false;
+      deferredGeneration += 1;
+      return wasUserInput ? "keyboard" : "terminal_response";
+    },
+  };
+}
+
 export function getCtrlPrintableCsiuInput(e: KeyboardEvent): string | null {
   if (!e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return null;
 

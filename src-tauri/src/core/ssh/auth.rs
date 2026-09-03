@@ -495,6 +495,13 @@ fn resolve_saved_ssh_config(
         ),
         sftp: conn.sftp.clone(),
         encoding,
+        dynamic_tab_title: matches!(
+            &conn.config,
+            crate::config::ConnectionType::Ssh {
+                dynamic_tab_title: true,
+                ..
+            }
+        ),
     })
 }
 

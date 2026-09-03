@@ -92,7 +92,11 @@ import {
   increaseTerminalFontSizeDelta,
   resetTerminalFontSizeDelta,
 } from "@/lib/terminalFontSize";
-import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
+import {
+  getActivePane,
+  getActiveSessionTabDisplayName,
+} from "@/lib/workspaceTabs";
+import { getDynamicTitle, useDynamicTitles } from "@/lib/dynamicTabTitles";
 import type {
   AppearanceSettings,
   RemoteGpuOverview,
@@ -759,6 +763,7 @@ export default function Header({
   );
   const [hardwarePage, setHardwarePage] = useState({ gpu: 0, npu: 0 });
   const { t, i18n } = useTranslation();
+  useDynamicTitles();
   const { handleExport, passwordAlert } = useConfigTransfer();
   const lastMacosMenuSpecRef = useRef("");
   const nativeMenuActionRef = useRef<(actionId: string) => void>(() => {});
@@ -767,7 +772,9 @@ export default function Header({
   const activeConnection = activePane?.connectionId
     ? savedConnections?.find((c) => c.id === activePane.connectionId)
     : undefined;
-  const activeDisplayName = activeTab ? getTabDisplayName(activeTab) : "NyaTerm";
+  const activeDisplayName = activeTab
+    ? getActiveSessionTabDisplayName(activeTab, getDynamicTitle)
+    : "NyaTerm";
   const terminalZoomEnabled = appSettings.interaction.terminal_zoom_enabled;
   const headerStatusMode = normalizeHeaderStatusMode(appSettings.ui.header_status_mode);
   const headerStatusVisible = appSettings.ui.header_status_visible !== false;

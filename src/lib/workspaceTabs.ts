@@ -7,6 +7,7 @@ import type {
   RestorablePaneNode,
   RestorableTab,
   SessionPane,
+  SessionTitleSnapshot,
   SessionType,
   SplitPane,
   Tab,
@@ -298,12 +299,40 @@ export function getActivePane(tab: Tab): SessionPane | null {
   );
 }
 
-export function getTabDisplayName(tab: Tab): string {
-  return tab.customName || getActivePane(tab)?.name || "Session";
+export function getTabDisplayName(
+  tab: Tab,
+  dynamicTitle?: string | null,
+): string {
+  if (tab.customName) return tab.customName;
+  const activePane = getActivePane(tab);
+  const dynamic = dynamicTitle?.trim();
+  if (activePane?.paneKind === "terminal" && dynamic) return dynamic;
+  return activePane?.name || "Session";
 }
 
 export function getTabActiveSessionId(tab: Tab) {
   return getActivePane(tab)?.sessionId ?? null;
+}
+
+/** Resolve the display name from the active pane's dynamic-title snapshot. */
+export function getActiveSessionTabDisplayName(
+  tab: Tab,
+  getDynamicTitle: (sessionId: string | null) => string | null | undefined,
+): string {
+  return getTabDisplayName(tab, getDynamicTitle(getTabActiveSessionId(tab)));
+}
+
+/** Resolve a row whose identity is a session, without changing legacy rows. */
+export function getSessionRowDisplayName(
+  tab: Tab,
+  sessionName: string,
+  dynamicSnapshot: SessionTitleSnapshot | null | undefined,
+): string {
+  if (tab.customName) return tab.customName;
+  if (dynamicSnapshot?.enabled) {
+    return dynamicSnapshot.effectiveTitle || sessionName;
+  }
+  return getTabDisplayName(tab);
 }
 
 export function getTabActiveConnectionId(tab: Tab) {

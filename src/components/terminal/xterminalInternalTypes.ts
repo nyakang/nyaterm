@@ -3,6 +3,11 @@ import type { ZmodemEventPayload } from "./zmodemTerminalEvents";
 
 export interface XTermInternalTrimSource {
   _core?: {
+    coreService?: {
+      onUserInput?: (listener: () => void) => {
+        dispose: () => void;
+      };
+    };
     _bufferService?: {
       buffers?: {
         normal?: {

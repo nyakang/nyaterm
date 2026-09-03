@@ -23,7 +23,9 @@ pub use history::{
     get_ai_sessions, rebind_ai_session,
 };
 pub use model::{list_model_names, list_model_names_for_settings};
+pub(crate) use redaction::redact_sensitive_text;
 pub use stream::{cancel_chat_stream, start_chat_stream};
+pub(crate) use types::AiCaptureEvent;
 pub use types::{
     AiAuditLog, AiChatRequest, AiMessage, AiModelDiscovery, AiSession, AiSessionScope,
     AiStreamStart, AppendAiAuditRequest,

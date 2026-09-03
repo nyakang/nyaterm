@@ -51,6 +51,10 @@ impl ZmodemDetector {
         ZmodemDetectResult::NoMatch { passthrough }
     }
 
+    pub fn has_pending_prefix(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub fn reset(&mut self) {
         self.pending.clear();
         self.pending_starts_at_line_start = true;
@@ -183,4 +187,3 @@ fn hex_digit(b: u8) -> Option<u8> {
 // ---------------------------------------------------------------------------
 // Transfer state machine
 // ---------------------------------------------------------------------------
-

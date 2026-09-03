@@ -4,7 +4,15 @@ import type { RemoteNpuOverview } from "@/types/global";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 
+interface OwnedRemoteNpuOverviewState {
+  sessionId: string;
+  overview: RemoteNpuOverview | null;
+  error: boolean;
+  isManualRefreshing: boolean;
+}
+
 export interface RemoteNpuOverviewState {
+  sessionId: string | null;
   overview: RemoteNpuOverview | null;
   error: boolean;
   isManualRefreshing: boolean;
@@ -16,89 +24,153 @@ export function useRemoteNpuOverview(
   enabled: boolean,
   intervalSeconds: number,
 ): RemoteNpuOverviewState {
-  const [overview, setOverview] = useState<RemoteNpuOverview | null>(null);
-  const [error, setError] = useState(false);
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const [state, setState] = useState<OwnedRemoteNpuOverviewState | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fetchingRef = useRef(false);
+  const activeSessionRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
+  const fetchingGenerationRef = useRef<number | null>(null);
   const failCountRef = useRef(0);
   const unavailableSessionRef = useRef<string | null>(null);
   const pollIntervalMs = Math.max(3, intervalSeconds) * 1000;
+  const requestedSessionId = enabled ? activeSessionId : null;
 
-  const fetchOverview = useCallback(async (sessionId: string, manual = false) => {
-    if (!manual && unavailableSessionRef.current === sessionId) return null;
-    if (fetchingRef.current) return null;
-    fetchingRef.current = true;
-    if (manual) setIsManualRefreshing(true);
+  activeSessionRef.current = requestedSessionId;
 
-    try {
-      const data = await invoke<RemoteNpuOverview>("get_remote_ascend_npu_overview", {
-        sessionId,
-      });
-      setOverview(data);
-      setError(false);
-      failCountRef.current = 0;
+  const isCurrentRequest = useCallback(
+    (sessionId: string, generation: number) =>
+      activeSessionRef.current === sessionId && generationRef.current === generation,
+    [],
+  );
 
-      if (data.available) {
-        unavailableSessionRef.current = null;
-      } else {
-        unavailableSessionRef.current = sessionId;
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
+  const fetchOverview = useCallback(
+    async (sessionId: string, generation: number, manual = false) => {
+      if (!isCurrentRequest(sessionId, generation)) return null;
+      if (!manual && unavailableSessionRef.current === sessionId) return null;
+      if (fetchingGenerationRef.current === generation) return null;
+      fetchingGenerationRef.current = generation;
+      if (manual) {
+        setState((current) =>
+          current?.sessionId === sessionId ? { ...current, isManualRefreshing: true } : current,
+        );
+      }
+
+      try {
+        const data = await invoke<RemoteNpuOverview>("get_remote_ascend_npu_overview", {
+          sessionId,
+        });
+        if (!isCurrentRequest(sessionId, generation)) return null;
+
+        setState((current) => ({
+          sessionId,
+          overview: data,
+          error: false,
+          isManualRefreshing: current?.sessionId === sessionId ? current.isManualRefreshing : false,
+        }));
+        failCountRef.current = 0;
+
+        if (data.available) {
+          unavailableSessionRef.current = null;
+        } else {
+          unavailableSessionRef.current = sessionId;
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+        }
+
+        return data;
+      } catch {
+        if (!isCurrentRequest(sessionId, generation)) return null;
+
+        failCountRef.current += 1;
+        const clearOverview = failCountRef.current >= MAX_CONSECUTIVE_FAILURES;
+        setState((current) => ({
+          sessionId,
+          overview: clearOverview || current?.sessionId !== sessionId ? null : current.overview,
+          error: true,
+          isManualRefreshing: current?.sessionId === sessionId ? current.isManualRefreshing : false,
+        }));
+        return null;
+      } finally {
+        if (fetchingGenerationRef.current === generation) {
+          fetchingGenerationRef.current = null;
+        }
+        if (manual && isCurrentRequest(sessionId, generation)) {
+          setState((current) =>
+            current?.sessionId === sessionId ? { ...current, isManualRefreshing: false } : current,
+          );
         }
       }
-
-      return data;
-    } catch {
-      failCountRef.current += 1;
-      setError(true);
-      if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
-        setOverview(null);
-      }
-      return null;
-    } finally {
-      fetchingRef.current = false;
-      if (manual) setIsManualRefreshing(false);
-    }
-  }, []);
+    },
+    [isCurrentRequest],
+  );
 
   const refresh = useCallback(() => {
-    if (!enabled || !activeSessionId) return;
-    void fetchOverview(activeSessionId, true).then((data) => {
-      if (!data?.available || pollRef.current) return;
-      pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
+    if (!requestedSessionId) return;
+    const generation = generationRef.current;
+    void fetchOverview(requestedSessionId, generation, true).then((data) => {
+      if (
+        !data?.available ||
+        !isCurrentRequest(requestedSessionId, generation) ||
+        pollRef.current
+      ) {
+        return;
+      }
+      pollRef.current = setInterval(
+        () => void fetchOverview(requestedSessionId, generation),
+        pollIntervalMs,
+      );
     });
-  }, [activeSessionId, enabled, fetchOverview, pollIntervalMs]);
+  }, [fetchOverview, isCurrentRequest, pollIntervalMs, requestedSessionId]);
 
   useEffect(() => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    fetchingGenerationRef.current = null;
+
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
 
-    if (!enabled || !activeSessionId) {
-      setOverview(null);
-      setError(false);
-      failCountRef.current = 0;
-      unavailableSessionRef.current = null;
-      return;
+    failCountRef.current = 0;
+    unavailableSessionRef.current = null;
+
+    if (!requestedSessionId) {
+      setState(null);
+      return () => {
+        if (generationRef.current === generation) generationRef.current += 1;
+      };
     }
 
-    if (unavailableSessionRef.current !== activeSessionId) {
-      void fetchOverview(activeSessionId);
-    }
-    if (unavailableSessionRef.current === activeSessionId) return;
-
-    pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
+    setState({
+      sessionId: requestedSessionId,
+      overview: null,
+      error: false,
+      isManualRefreshing: false,
+    });
+    void fetchOverview(requestedSessionId, generation);
+    pollRef.current = setInterval(
+      () => void fetchOverview(requestedSessionId, generation),
+      pollIntervalMs,
+    );
 
     return () => {
+      if (generationRef.current === generation) generationRef.current += 1;
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
     };
-  }, [activeSessionId, enabled, fetchOverview, pollIntervalMs]);
+  }, [fetchOverview, pollIntervalMs, requestedSessionId]);
 
-  return { overview, error, isManualRefreshing, refresh };
+  const visibleState = state?.sessionId === requestedSessionId ? state : null;
+
+  return {
+    sessionId: visibleState?.sessionId ?? null,
+    overview: visibleState?.overview ?? null,
+    error: visibleState?.error ?? false,
+    isManualRefreshing: visibleState?.isManualRefreshing ?? false,
+    refresh,
+  };
 }

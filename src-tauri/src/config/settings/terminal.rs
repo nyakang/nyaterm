@@ -90,6 +90,8 @@ pub struct TerminalSettings {
     pub show_multi_line_paste_dialog: bool,
     #[serde(default = "default_true")]
     pub paste_image_as_path: bool,
+    #[serde(default = "default_false")]
+    pub reconnect_restore_cwd: bool,
 }
 
 fn default_scrollback() -> u32 {
@@ -156,6 +158,7 @@ impl Default for TerminalSettings {
             timestamp_format: default_timestamp_format(),
             show_multi_line_paste_dialog: true,
             paste_image_as_path: true,
+            reconnect_restore_cwd: false,
         }
     }
 }
@@ -174,6 +177,18 @@ mod tests {
 
         assert_eq!(settings.keep_alive_mode, "compatible");
         assert_eq!(settings.keep_alive_interval, 60);
+    }
+
+    #[test]
+    fn missing_reconnect_restore_cwd_defaults_to_false() {
+        let settings: TerminalSettings = serde_json::from_value(serde_json::json!({
+            "scrollback_lines": 5000,
+            "keep_alive_interval": 60
+        }))
+        .expect("legacy terminal settings deserialize");
+
+        assert!(!settings.reconnect_restore_cwd);
+        assert!(!TerminalSettings::default().reconnect_restore_cwd);
     }
 
     #[test]

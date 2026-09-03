@@ -427,6 +427,12 @@ async fn file_entry_from_path(path: &Path, name: String) -> AppResult<FileEntry>
 
 async fn file_properties_from_path(path: &Path) -> AppResult<FileProperties> {
     let symlink_metadata = tokio::fs::symlink_metadata(path).await?;
+    let is_symlink = symlink_metadata.file_type().is_symlink();
+    let symlink_target = if is_symlink {
+        Some(path_to_string(tokio::fs::read_link(path).await?))
+    } else {
+        None
+    };
     let metadata = tokio::fs::metadata(path)
         .await
         .unwrap_or_else(|_| symlink_metadata.clone());
@@ -438,7 +444,8 @@ async fn file_properties_from_path(path: &Path) -> AppResult<FileProperties> {
     Ok(FileProperties {
         name,
         is_dir: metadata.is_dir(),
-        is_symlink: symlink_metadata.file_type().is_symlink(),
+        is_symlink,
+        symlink_target,
         size: if metadata.is_dir() { 0 } else { metadata.len() },
         permissions: permissions_string(&metadata, metadata.is_dir()),
         owner: owner_string(&metadata),
@@ -560,8 +567,10 @@ async fn set_local_mode_if_supported(_path: &str, _mode: Option<String>) -> AppR
 mod tests {
     use super::*;
     use crate::config::AiExecutionProfile;
-    use crate::core::{SessionCommand, SessionHandle, SessionInfo};
-    use tokio::sync::{Mutex, mpsc};
+    use crate::core::{
+        DynamicTitleCapabilities, SessionHandle, SessionInfo, session_command_channel,
+    };
+    use tokio::sync::Mutex;
 
     fn temp_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nyaterm-local-fs-{name}-{}", uuid::Uuid::new_v4()))
@@ -781,9 +790,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn regular_file_properties_have_no_symlink_target() {
+        let root = temp_test_dir("regular-properties");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let file = root.join("file.txt");
+        tokio::fs::write(&file, b"hello").await.unwrap();
+
+        let properties = file_properties_from_path(&file).await.unwrap();
+        assert!(!properties.is_symlink);
+        assert_eq!(properties.symlink_target, None);
+
+        cleanup(&root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_symlink_properties_preserve_relative_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("dangling-symlink-properties");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let link = root.join("current");
+        symlink("../missing-release", &link).unwrap();
+
+        let properties = file_properties_from_path(&link).await.unwrap();
+        assert!(properties.is_symlink);
+        assert_eq!(
+            properties.symlink_target.as_deref(),
+            Some("../missing-release")
+        );
+
+        cleanup(&root).await;
+    }
+
+    #[tokio::test]
     async fn ensure_local_session_rejects_non_local_sessions() {
         let manager = SessionManager::new();
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, _cmd_rx) = session_command_channel("ssh-1");
         manager
             .add_session(SessionHandle {
                 info: SessionInfo {
@@ -796,14 +839,16 @@ mod tests {
                     owner_window_label: None,
                     ai_execution_profile: AiExecutionProfile::default(),
                     injection_active: true,
+                    dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                     remote_file_browser_enabled: true,
                     remote_stats_enabled: true,
                     ssh_profile: None,
                 },
                 cmd_tx,
+                startup_input_barrier: None,
                 ssh_config: None,
                 ssh_handle: None,
-                cwd: Arc::new(Mutex::new(None)),
+                cwd: Arc::new(Mutex::new(Default::default())),
                 remote_fs: None,
             })
             .await;

@@ -385,7 +385,7 @@ fn rebuild_root_menu(
     menu.append(&settings_item)?;
     menu.append(&minimize_to_tray)?;
 
-    if settings.security.enable_screen_lock {
+    if settings.security.enable_startup_lock || settings.security.enable_idle_lock {
         let lock_screen = new_menu_item(app, MENU_LOCK_SCREEN, strings.lock_screen, true)?;
         menu.append(&lock_screen)?;
     }

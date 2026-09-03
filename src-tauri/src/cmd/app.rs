@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
@@ -294,6 +295,14 @@ pub fn set_app_lock_state(
             "app-lock-state-changed",
             AppLockStateChangedPayload { locked },
         );
+        if locked {
+            if let Some(manager) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
+                let manager = manager.inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    manager.cancel_pending_approvals().await;
+                });
+            }
+        }
     }
     locked
 }

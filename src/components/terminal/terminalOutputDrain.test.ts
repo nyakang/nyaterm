@@ -538,4 +538,19 @@ describe("TerminalOutputDrain", () => {
     await expect(drain.waitForIdle(100)).resolves.toBe(true);
     expect(writes.join("")).toBe("\x1b[?25lxx\x1b[?25h");
   });
+
+  it("waitForIdle has a hard timeout when xterm never calls back", async () => {
+    const { advance, drain, pendingWriteCallbacks } = createHarness({
+      autoCompleteWrites: false,
+    });
+
+    drain.setMode("hibernating");
+    drain.enqueue({ data: "blocked", bytes: 7 });
+    const idle = drain.waitForIdle(100);
+    await settle();
+    expect(pendingWriteCallbacks).toHaveLength(1);
+
+    advance(100);
+    await expect(idle).resolves.toBe(false);
+  });
 });

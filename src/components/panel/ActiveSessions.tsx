@@ -28,7 +28,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
-import { findTabBySessionId, getTabDisplayName } from "@/lib/workspaceTabs";
+import { findTabBySessionId, getSessionRowDisplayName } from "@/lib/workspaceTabs";
+import { useDynamicTitles } from "@/lib/dynamicTabTitles";
 import type { SessionInfo } from "@/types/global";
 
 interface ActiveSessionsProps {
@@ -46,6 +47,7 @@ function ActiveSessions({
   canReconnect,
 }: ActiveSessionsProps) {
   const { t } = useTranslation();
+  const dynamicTitles = useDynamicTitles();
   const { tabs, updateTab } = useApp();
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [search, setSearch] = useState("");
@@ -104,10 +106,16 @@ function ActiveSessions({
         return {
           session,
           tab,
-          displayName: tab ? getTabDisplayName(tab) : session.name,
+          displayName: tab
+            ? getSessionRowDisplayName(
+                tab,
+                session.name,
+                dynamicTitles.get(session.id),
+              )
+            : session.name,
         };
       }),
-    [sessions, tabs],
+    [sessions, tabs, dynamicTitles],
   );
 
   const query = search.trim().toLowerCase();

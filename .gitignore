@@ -15,6 +15,7 @@ dist
 dist-ssr
 *.local
 target/
+src-tauri/binaries/nyaterm-mcp-*
 temp/
 
 # Editor directories and files

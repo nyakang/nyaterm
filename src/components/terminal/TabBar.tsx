@@ -41,6 +41,8 @@ import {
 import {
   collectSessionPanes,
   getActivePane,
+  getActiveSessionTabDisplayName,
+  getTabActiveSessionId,
   getTabDisplayName,
 } from "@/lib/workspaceTabs";
 import type {
@@ -50,6 +52,11 @@ import type {
   Tab,
 } from "@/types/global";
 import { useApp } from "../../context/AppContext";
+import {
+  getDynamicTitle,
+  getDynamicTitleSnapshot,
+  useDynamicTitles,
+} from "@/lib/dynamicTabTitles";
 import { resolveConnectionIcon } from "../icons";
 import {
   DropdownMenu,
@@ -329,6 +336,7 @@ function TabBar({
   onMoveTabHere,
 }: TabBarProps) {
   const { t } = useTranslation();
+  useDynamicTitles();
   const {
     appSettings,
     savedConnections,
@@ -600,7 +608,7 @@ function TabBar({
   );
 
   const handleRenameTab = useCallback((tab: Tab) => {
-    setRenameValue(getTabDisplayName(tab));
+    setRenameValue(getActiveSessionTabDisplayName(tab, getDynamicTitle));
     setRenameTab(tab);
   }, []);
 
@@ -629,7 +637,9 @@ function TabBar({
   const handleCopyTabName = useCallback(
     async (tab: Tab) => {
       try {
-        await navigator.clipboard.writeText(getTabDisplayName(tab));
+        await navigator.clipboard.writeText(
+          getActiveSessionTabDisplayName(tab, getDynamicTitle),
+        );
         toast.success(t("tabCtx.nameCopied"));
       } catch {
         toast.error(t("tabCtx.copyFailed"));
@@ -1180,12 +1190,22 @@ function TabBar({
       : showUnreadIndicator
         ? "var(--df-link)"
         : undefined;
-    const displayName = getTabDisplayName(tab);
+    const activePane = getActivePane(tab);
+    const activeSessionId = getTabActiveSessionId(tab);
+    const dynamicSnapshot = getDynamicTitleSnapshot(activeSessionId);
+    const displayName = getTabDisplayName(
+      tab,
+      dynamicSnapshot?.effectiveTitle ?? null,
+    );
+    const cwdPresentation =
+      activePane?.paneKind === "terminal" && dynamicSnapshot?.enabled
+        ? dynamicSnapshot.cwd
+        : null;
     const isDirty = collectSessionPanes(tab.root).some(
       (pane) =>
         pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,
     );
-    const activePaneIsFile = getActivePane(tab)?.paneKind === "file";
+    const activePaneIsFile = activePane?.paneKind === "file";
     const accentColor = tab.tabColor;
     const conn = getTabConnection(tab, savedConnections);
     const canCopyIp = !!getTabServerIp(tab, savedConnections);
@@ -1209,6 +1229,7 @@ function TabBar({
       value: string,
       label: string,
       copiedMessage: string,
+      copyValue = value,
     ) => (
       <div className="flex min-w-0 items-center gap-2 text-[var(--df-text-muted)]">
         <span className="min-w-0 truncate">{value}</span>
@@ -1219,7 +1240,7 @@ function TabBar({
           onClick={(event) => {
             event.stopPropagation();
             navigator.clipboard
-              .writeText(value)
+              .writeText(copyValue)
               .then(() => toast.success(copiedMessage))
               .catch(() => toast.error(t("tabCtx.copyFailed")));
           }}
@@ -1236,7 +1257,8 @@ function TabBar({
       groupPath ||
       isDisconnected ||
       showUnreadIndicator ||
-      isDirty ? (
+      isDirty ||
+      cwdPresentation ? (
         <div className="flex max-w-[260px] min-w-0 flex-col gap-1">
           {isDirty && (
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-primary)]">
@@ -1288,6 +1310,13 @@ function TabBar({
               t("tabCtx.copySshAddress"),
               t("tabCtx.sshAddressCopied"),
             )}
+          {cwdPresentation &&
+            renderTooltipCopyRow(
+              cwdPresentation.displayPath,
+              t("tabCtx.copyWorkingDirectory"),
+              t("tabCtx.workingDirectoryCopied"),
+              cwdPresentation.copyValue,
+            )}
         </div>
       ) : undefined;
 
@@ -1314,6 +1343,7 @@ function TabBar({
             return;
           }
           onTabChange(tab.id);
+          focusOpenTabTerminal(tab);
         }}
         onDoubleClick={(event) => {
           if (
@@ -1529,7 +1559,7 @@ function TabBar({
 
   const renderOpenTabMenuItem = (tab: Tab, index: number) => {
     const isActive = activeTabId === tab.id;
-    const displayName = getTabDisplayName(tab);
+    const displayName = getActiveSessionTabDisplayName(tab, getDynamicTitle);
     const isDirty = collectSessionPanes(tab.root).some(
       (pane) =>
         pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,

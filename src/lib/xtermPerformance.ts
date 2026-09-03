@@ -4,20 +4,24 @@ export const XTERM_PERFORMANCE_CONFIG = {
   highlighting: {
     /** Debounce delay in ms before re-scanning after new output is written. */
     debounceMs: 80,
-    /** Throttle interval in ms for scroll-triggered viewport refreshes. */
-    throttleMs: 80,
+    /** Idle delay before refreshing highlights after viewport scrolling stops. */
+    scrollIdleDebounceMs: 120,
+    /** Idle delay before rebuilding highlights after a suspended terminal resumes. */
+    resumeIdleDelayMs: 150,
     /** Lines above and below the viewport to keep decorated on most platforms. */
-    overscanLines: 50,
+    overscanLines: 15,
     /** macOS WebView benefits from a slightly smaller highlighted active zone. */
-    macosOverscanLines: 40,
+    macosOverscanLines: 10,
     /** Hard cap for total keyword highlight decorations held by one terminal. */
     maxDecorations: 1_000,
     /** Hard cap for new keyword highlight decorations created by one refresh. */
-    maxDecorationsPerRefresh: 500,
+    maxDecorationsPerRefresh: 100,
     /** Hard cap for accepted keyword highlight matches on one physical line. */
     maxMatchesPerLine: 20,
     /** Main-thread time budget for one viewport refresh. */
-    maxRefreshTimeMs: 12,
+    maxRefreshTimeMs: 3,
+    /** Maximum immutable scrollback rows retained in the regex match LRU. */
+    maxCachedMatchLines: 3_000,
   },
   output: {
     /** Backlog threshold where terminal side work should start yielding to rendering/input. */

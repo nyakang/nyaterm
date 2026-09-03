@@ -1,6 +1,6 @@
 [package]
 name = "nyaterm"
-version = "1.2.5"
+version = "1.2.8"
 description = "A modern remote terminal workspace built with Tauri, React, and Rust."
 authors = ["Kang"]
 edition = "2024"
@@ -85,6 +85,7 @@ tokio = { version = "1", features = ["test-util"] }
 
 [dependencies]
 nyaterm-otp = { path = "crates/otp" }
+nyaterm-mcp-protocol = { path = "crates/nyaterm-mcp-protocol" }
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -98,7 +99,9 @@ tokio = { version = "1", features = [
     "time",
     "fs",
     "process",
+    "net",
 ] }
+tokio-util = { version = "0.7", features = ["rt"] }
 russh = { path = "vendor/russh/russh", default-features = false, features = ["des", "dsa", "flate2", "ring", "rsa"] }
 russh-sftp = { path = "vendor/russh-sftp" }
 ssh-key = { version = "0.6", features = ["ed25519", "std"] }
@@ -112,6 +115,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tracing-appender = "0.2"
 nucleo-matcher = "0.3"
 dirs = "6.0.0"
+whoami = "1"
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = "0.1"
@@ -199,6 +203,9 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 [target.'cfg(not(windows))'.dependencies]
 ironrdp = { version = "0.17", default-features = false, features = ["rustls"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 ironrdp = { version = "0.17", default-features = false, features = ["native-tls"] }
 webview2-com = "0.38.2"
@@ -207,6 +214,9 @@ webview2-com = "0.38.2"
 window-vibrancy = "0.6"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",

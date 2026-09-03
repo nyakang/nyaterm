@@ -44,6 +44,7 @@ fn sample_connection(id: &str, group_id: Option<&str>, sort_order: i32) -> Saved
             legacy_agent_forwarding: None,
             agent_forwarding_config: None,
             encoding: String::new(),
+            dynamic_tab_title: false,
         },
         group_id: group_id.map(str::to_string),
         description: None,

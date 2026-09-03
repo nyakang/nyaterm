@@ -30,6 +30,7 @@ mod tests {
       "host": "web-01.example.com",
       "port": 22,
       "username": "deploy",
+      "dynamic_tab_title": true,
       "auth": { "mode": "password", "password": "replace-me" }
     },
     {
@@ -72,7 +73,8 @@ mod tests {
       "type": "local_terminal",
       "shell_path": "pwsh.exe",
       "shell_args": "-NoLogo",
-      "working_dir": "C:\\Users\\me"
+      "working_dir": "C:\\Users\\me",
+      "dynamic_tab_title": true
     }
   ]
 }
@@ -568,6 +570,13 @@ mod tests {
 
         let direct_auth = prepared.connections[0].auth.as_ref().expect("direct auth");
         assert_eq!(direct_auth.mode, "password");
+        assert!(matches!(
+            &prepared.connections[0].config,
+            ConnectionType::Ssh {
+                dynamic_tab_title: true,
+                ..
+            }
+        ));
         assert!(direct_auth.password_id.is_none());
         assert_ne!(direct_auth.password.as_deref(), Some("replace-me"));
 
@@ -589,6 +598,7 @@ mod tests {
             ConnectionType::LocalTerminal {
                 shell_path,
                 shell_args,
+                dynamic_tab_title: true,
                 ..
             } if shell_path == "pwsh.exe" && shell_args == "-NoLogo"
         ));

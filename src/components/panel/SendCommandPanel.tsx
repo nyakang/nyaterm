@@ -506,44 +506,28 @@ export default function SendCommandPanel({
   }, [cancelSend]);
 
   useEffect(() => {
-    const fallbackTarget: TargetSelectValue =
-      currentTargetSessionId || targetKind === "serial"
-        ? "current"
-        : shellSessionIds.length > 0
-          ? "all"
-          : "current";
-
     if (isGroupTarget(target) && !groupTargetByValue.has(target)) {
-      setTarget(fallbackTarget);
+      setTarget("current");
       return;
     }
 
     if (isSessionTarget(target) && !sessionTargetByValue.has(target)) {
-      setTarget(fallbackTarget);
+      setTarget("current");
       return;
     }
 
     if (target === "allWindows" && allWindowSessionIds.length === 0) {
-      setTarget(fallbackTarget);
+      setTarget("current");
       return;
     }
 
     if (targetKind === "serial" && target === "all") {
       setTarget("current");
-      return;
-    }
-
-    if (targetKind !== "shell") return;
-    if (currentTargetSessionId || target !== "current") return;
-    if (shellSessionIds.length > 0) {
-      setTarget("all");
     }
   }, [
     allWindowSessionIds.length,
-    currentTargetSessionId,
     groupTargetByValue,
     sessionTargetByValue,
-    shellSessionIds.length,
     target,
     targetKind,
   ]);

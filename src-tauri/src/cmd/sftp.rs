@@ -230,6 +230,24 @@ pub async fn create_remote_symlink(
 }
 
 #[tauri::command]
+pub async fn update_remote_symlink_target(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    path: String,
+    raw_path_token: Option<String>,
+    target_path: String,
+) -> AppResult<()> {
+    sftp::update_remote_symlink_target(
+        state.inner().clone(),
+        &session_id,
+        &path,
+        raw_path_token.as_deref(),
+        &target_path,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn chmod_remote_file(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,

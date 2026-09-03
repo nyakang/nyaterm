@@ -48,6 +48,25 @@ export function isDropPositionInsideElement(
   );
 }
 
+export function isDropPositionTopmostWithinElement(
+  position: { x: number; y: number },
+  element: HTMLElement | null,
+) {
+  if (!isDropPositionInsideElement(position, element) || !element) {
+    return false;
+  }
+
+  const elementFromPoint = element.ownerDocument.elementFromPoint;
+  if (typeof elementFromPoint !== "function") {
+    return false;
+  }
+
+  const topmostElement = elementFromPoint.call(element.ownerDocument, position.x, position.y);
+  return (
+    topmostElement === element || (topmostElement !== null && element.contains(topmostElement))
+  );
+}
+
 export function isExternalFileDragEvent(event: DragEvent) {
   const dataTransfer = event.dataTransfer;
   if (!dataTransfer) {

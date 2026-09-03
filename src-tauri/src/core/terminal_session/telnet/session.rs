@@ -36,8 +36,8 @@ async fn telnet_session_task(
     app: AppHandle,
     session_id: String,
     manager: Arc<SessionManager>,
-    mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
-    output_control_tx: mpsc::UnboundedSender<SessionCommand>,
+    mut cmd_rx: SessionCommandReceiver,
+    output_control_tx: SessionCommandSender,
     config: TelnetSessionConfig,
     connection_id: Option<String>,
     encoding: String,
@@ -401,8 +401,8 @@ async fn telnet_session_task(
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(SessionCommand::Attach) => {
-                        output.attach();
+                    Some(SessionCommand::AttachConfirmed { ack }) => {
+                        output.attach_confirmed(ack);
                     }
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();

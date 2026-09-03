@@ -51,6 +51,8 @@ pub(crate) struct SftpBackend {
     path_cache: Arc<RwLock<HashMap<String, Vec<u8>>>>,
     /// Encoding for this connection (e.g., "UTF-8", "GBK")
     encoding: String,
+    /// Optional per-session override for single-file SFTP request pipelining.
+    pipeline_depth_override: Option<u32>,
 }
 
 #[derive(Default)]

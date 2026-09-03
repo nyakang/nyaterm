@@ -101,6 +101,8 @@ enum NyatermJsonSession {
         sort_order: i32,
         #[serde(default)]
         icon: Option<String>,
+        #[serde(default)]
+        dynamic_tab_title: bool,
     },
     LocalTerminal {
         name: String,
@@ -118,6 +120,8 @@ enum NyatermJsonSession {
         sort_order: i32,
         #[serde(default)]
         icon: Option<String>,
+        #[serde(default)]
+        dynamic_tab_title: bool,
     },
     Telnet {
         name: String,

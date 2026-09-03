@@ -29,6 +29,7 @@ fn fallback_windows_terminal_shell(args: Vec<String>) -> ShellCommandSpec {
     ShellCommandSpec {
         program: resolve_program_for_spawn("powershell.exe"),
         args,
+        resolution_source: ShellResolutionSource::WindowsTerminalFallback,
     }
 }
 
@@ -97,13 +98,18 @@ fn windows_terminal_profile_commandline(profile: &serde_json::Value) -> Option<S
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if name.contains("powershell") {
+    // Dynamic WT profiles often omit `commandline` and identify their host
+    // solely through `source`. Resolve source before the localized/display
+    // name so PowerShell Core is never downgraded to Windows PowerShell 5.1.
+    if source == "windows.terminal.powershellcore" {
+        Some("pwsh.exe".to_string())
+    } else if source.contains("wsl") || name.contains("ubuntu") || name.contains("debian") {
+        Some("wsl.exe".to_string())
+    } else if name.contains("powershell") {
         Some("powershell.exe".to_string())
     } else if name.contains("command prompt") || name.contains("cmd") || name.contains("命令提示符")
     {
         Some("cmd.exe".to_string())
-    } else if source.contains("wsl") || name.contains("ubuntu") || name.contains("debian") {
-        Some("wsl.exe".to_string())
     } else {
         None
     }
@@ -125,6 +131,7 @@ fn shell_spec_from_windows_commandline(
     Some(ShellCommandSpec {
         program: resolve_program_for_spawn(&program),
         args: parts,
+        resolution_source: ShellResolutionSource::WindowsTerminalProfile,
     })
 }
 

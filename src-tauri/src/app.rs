@@ -456,6 +456,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     .count();
 
                 if remaining_main_windows > 0 {
+                    notify_mcp_owner_window_closed(window);
                     crate::tray::schedule_refresh(window.app_handle());
                     return;
                 }
@@ -473,6 +474,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     }
                 }
 
+                notify_mcp_owner_window_closed(window);
                 prepare_app_shutdown(window.app_handle());
             }
             _ => {}
@@ -498,5 +500,18 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             }
         }
         _ => {}
+    }
+}
+
+fn notify_mcp_owner_window_closed(window: &tauri::Window) {
+    if let Some(manager) = window
+        .app_handle()
+        .try_state::<Arc<crate::core::mcp::McpManager>>()
+    {
+        let manager = manager.inner().clone();
+        let label = window.label().to_string();
+        tauri::async_runtime::spawn(async move {
+            manager.owner_window_closed(&label).await;
+        });
     }
 }

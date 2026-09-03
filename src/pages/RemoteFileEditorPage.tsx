@@ -36,6 +36,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
+import { useFileEditorZoom } from "@/hooks/useFileEditorZoom";
 import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
 import {
   type CursorPosition,
@@ -44,6 +45,7 @@ import {
   getDisplayLanguage,
 } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
+import { clampFileEditorFontSize } from "@/lib/fileEditorFontSize";
 import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { cn, formatSize, parseJsonSearchParam } from "@/lib/utils";
@@ -162,7 +164,11 @@ function formatTargetLabel(target?: FileWindowTarget) {
 
 export default function RemoteFileEditorPage() {
   const { t } = useTranslation();
-  const { appSettings } = useApp();
+  const { appSettings, updateAppSettings } = useApp();
+  useFileEditorZoom(updateAppSettings);
+  const editorFontSize = clampFileEditorFontSize(
+    appSettings.transfer.internal_editor_font_size,
+  );
   const initialData = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return parseJsonSearchParam<RemoteFileEditorData>(params.get("data"));
@@ -659,7 +665,10 @@ export default function RemoteFileEditorPage() {
     : t("fileEditor.title");
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground"
+      data-file-editor-root="true"
+    >
       <ChildWindowHeader
         title={activeHeaderTitle}
         icon={<MdDescription className="text-base" />}
@@ -856,7 +865,11 @@ export default function RemoteFileEditorPage() {
               {t("common.loading")}
             </div>
           )}
-          <div ref={editorParentRef} className="h-full min-h-0" />
+          <div
+            ref={editorParentRef}
+            className="h-full min-h-0"
+            style={{ fontSize: `${editorFontSize}px` }}
+          />
         </div>
 
         <div className="flex h-6 shrink-0 items-center justify-between gap-3 border-t bg-muted/15 px-3 font-mono text-[11px] text-muted-foreground">

@@ -7,6 +7,7 @@ import AppLayout from "./components/app/AppLayout";
 import AppPanelContent from "./components/app/AppPanelContent";
 import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
 import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
+import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
@@ -22,6 +23,7 @@ import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
+import { useMcpActiveSession } from "./hooks/useMcpActiveSession";
 import { useModalChildWindows } from "./hooks/useModalChildWindows";
 import { useRemoteGpuOverview } from "./hooks/useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./hooks/useRemoteNpuOverview";
@@ -29,6 +31,7 @@ import { useRemoteStats } from "./hooks/useRemoteStats";
 import { useSecurityPromptQueue } from "./hooks/useSecurityPromptQueue";
 import { useSessionRuntimeState } from "./hooks/useSessionRuntimeState";
 import { resolveDisplayKeys } from "./hooks/useShortcutMap";
+import { useFileEditorZoom } from "./hooks/useFileEditorZoom";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useTabStatusIndicators } from "./hooks/useUnreadTabs";
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
@@ -55,16 +58,20 @@ import {
   sendStartupCommandToSession,
 } from "./lib/appSessionFactory";
 import {
+  buildReconnectCwdStartupCommand,
+  carryOverSessionCwd,
+} from "./lib/terminalSessionCwd";
+import {
   buildPanelOpenUpdate,
-  canUseFloatingPanel,
   canCreateSessionFromPane,
+  canUseFloatingPanel,
   clearUnavailableFloatingPanels,
   collectActiveNonSerialSessionIds,
   EXCLUSIVE_PANEL_IDS,
   type FloatingPanelsState,
+  getItemSide,
   getSideOpenPanels,
   getSideOverlayPanel,
-  getItemSide,
   getVisibleActivityIds,
   hasLiveSession,
   isActivityItemAvailable,
@@ -142,13 +149,20 @@ import {
   findSessionPaneById,
   findTabBySessionId,
   getActivePane,
+  getActiveSessionTabDisplayName,
   getReleasedSessionIds,
-  getTabDisplayName,
 } from "./lib/workspaceTabs";
+import {
+  getDynamicTitle,
+  startDynamicTitles,
+  useDynamicTitles,
+} from "./lib/dynamicTabTitles";
 import type {
   AppSettings,
   AssetMetadata,
   CloudConflictPreview,
+  McpSessionOpenCancel,
+  McpSessionOpenRequest,
   PaneSplitDirection,
   RecordingMode,
   SavedConnection,
@@ -175,6 +189,12 @@ function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
 function App() {
   useMacSelectionGuard();
+  // Keep dynamic session titles (local PTY shell integration) flowing for the
+  // main window's tab labels and window title.
+  const dynamicTitles = useDynamicTitles();
+  useEffect(() => {
+    startDynamicTitles();
+  }, []);
 
   const {
     tabs,
@@ -316,7 +336,7 @@ function App() {
 
   // Idle auto-lock
   useIdleLock(
-    appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
+    appSettings.security.enable_idle_lock ? appSettings.security.idle_lock_minutes : 0,
     isLocked,
     () => setIsLocked(true),
   );
@@ -774,7 +794,9 @@ function App() {
   }, [handleOpenPanel]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
-  const activeTabName = activeTab ? getTabDisplayName(activeTab).trim() : "";
+  const activeTabName = activeTab
+    ? getActiveSessionTabDisplayName(activeTab, getDynamicTitle).trim()
+    : "";
   const windowTitle = activeTabName ? `${activeTabName} - NyaTerm` : "NyaTerm";
   const activePane = activeTab ? getActivePane(activeTab) : null;
   const activeConnection = activePane?.connectionId
@@ -820,11 +842,18 @@ function App() {
   }, [savedConnections, tabs]);
 
   const handleAssetMonitoringPatch = useCallback(
-    (sessionId: string, patch: AssetMetadata) => {
-      const connectionId = savedSshConnectionIdBySessionId.get(sessionId);
+    (sourceSessionId: string, targetSessionId: string, patch: AssetMetadata) => {
+      if (sourceSessionId !== targetSessionId) return;
+
+      const connectionId = savedSshConnectionIdBySessionId.get(targetSessionId);
       if (!connectionId) return;
 
-      recordAssetMonitoringPatch(assetMonitoringCacheRef.current, sessionId, connectionId, patch);
+      recordAssetMonitoringPatch(assetMonitoringCacheRef.current, {
+        sourceSessionId,
+        targetSessionId,
+        connectionId,
+        patch,
+      });
     },
     [savedSshConnectionIdBySessionId],
   );
@@ -832,6 +861,17 @@ function App() {
   const flushAssetMonitoringCache = useCallback(async (sessionId: string) => {
     const entry = assetMonitoringCacheRef.current.get(sessionId);
     if (!entry || assetMonitoringFlushesRef.current.has(sessionId)) return;
+    if (entry.sessionId !== sessionId) {
+      assetMonitoringCacheRef.current.delete(sessionId);
+      logger.warn({
+        domain: "session.lifecycle",
+        event: "asset.owner_mismatch",
+        message: "Discarded monitored asset snapshot with a mismatched session owner",
+        ids: { connection_id: entry.connectionId, session_id: sessionId },
+        data: { source_session_id: entry.sessionId },
+      });
+      return;
+    }
 
     assetMonitoringFlushesRef.current.add(sessionId);
     try {
@@ -936,6 +976,9 @@ function App() {
       options?: {
         failureContext?: string;
         runtimeModeOverride?: SshRuntimeMode;
+        propagateError?: boolean;
+        onPending?: (pending: { tabId: string; createRequestId: string }) => void;
+        onSuccess?: (sessionId: string) => void;
       },
     ) => {
       const pending = addPendingTab(
@@ -947,6 +990,7 @@ function App() {
         { display: getRemoteDesktopPaneDisplay(connection) },
       );
       const { tabId, createRequestId } = pending;
+      options?.onPending?.({ tabId, createRequestId });
 
       try {
         const sessionId = await createSessionForConnection(
@@ -963,8 +1007,10 @@ function App() {
         focusTerminalSession(sessionId);
         recordRecentConnection(connection.id);
         updateAutoIconForSessionStart(connection.id, sessionId);
+        options?.onSuccess?.(sessionId);
       } catch (error) {
         if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          if (options?.propagateError) throw error;
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -980,6 +1026,7 @@ function App() {
           sourceTabId: tabId,
         });
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+        if (options?.propagateError) throw error;
       }
     },
     [
@@ -993,6 +1040,89 @@ function App() {
       updateTabSession,
     ],
   );
+
+  const mcpSessionOpenRequestsRef = useRef(
+    new Map<string, { tabId: string; createRequestId: string }>(),
+  );
+  const cancelledMcpSessionOpenRequestsRef = useRef(new Set<string>());
+  useEffect(() => {
+    let disposed = false;
+    let unlistenOpen: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+
+    void listen<McpSessionOpenRequest>("mcp-session-open-request", ({ payload }) => {
+      if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+      void (async () => {
+        const connections = savedConnections.some((item) => item.id === payload.connectionId)
+          ? savedConnections
+          : await invoke<SavedConnection[]>("get_saved_connections");
+        if (cancelledMcpSessionOpenRequestsRef.current.delete(payload.requestId)) return;
+        const connection = connections.find((item) => item.id === payload.connectionId);
+        if (!connection || connection.type === "rdp" || connection.type === "vnc") {
+          await invoke("respond_mcp_session_open", {
+            requestId: payload.requestId,
+            sessionId: null,
+            error: "The saved connection does not exist or is not a supported terminal connection.",
+          });
+          return;
+        }
+
+        let openedSessionId: string | null = null;
+        await connectSavedConnection(connection, {
+          failureContext: "MCP session open failed",
+          propagateError: true,
+          onPending: (pending) => {
+            mcpSessionOpenRequestsRef.current.set(payload.requestId, pending);
+          },
+          onSuccess: (sessionId) => {
+            openedSessionId = sessionId;
+          },
+        });
+        await invoke("respond_mcp_session_open", {
+          requestId: payload.requestId,
+          sessionId: openedSessionId,
+          error: openedSessionId ? null : "The MCP session-open request did not create a session.",
+        });
+      })()
+        .catch((error) => {
+          void invoke("respond_mcp_session_open", {
+            requestId: payload.requestId,
+            sessionId: null,
+            error: getErrorMessage(error),
+          }).catch(() => {});
+        })
+        .finally(() => {
+          mcpSessionOpenRequestsRef.current.delete(payload.requestId);
+          cancelledMcpSessionOpenRequestsRef.current.delete(payload.requestId);
+        });
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenOpen = dispose;
+    });
+
+    void listen<McpSessionOpenCancel>("mcp-session-open-cancel", ({ payload }) => {
+      if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+      const pending = mcpSessionOpenRequestsRef.current.get(payload.requestId);
+      if (!pending) {
+        cancelledMcpSessionOpenRequestsRef.current.add(payload.requestId);
+        return;
+      }
+      mcpSessionOpenRequestsRef.current.delete(payload.requestId);
+      closeTabs([pending.tabId]);
+      void invoke("cancel_session_creation", {
+        createRequestId: pending.createRequestId,
+      }).catch(() => {});
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenCancel = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenOpen?.();
+      unlistenCancel?.();
+    };
+  }, [closeTabs, connectSavedConnection, savedConnections]);
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
@@ -1034,18 +1164,11 @@ function App() {
 
   const connectExternalLocalSession = useCallback(
     async (workingDir: string | null) => {
-      const pending = addPendingTab(
-        t("menu.newLocalTerminal"),
-        "Local",
-        undefined,
-      );
+      const pending = addPendingTab(t("menu.newLocalTerminal"), "Local", undefined);
       const { tabId, createRequestId } = pending;
 
       try {
-        const sessionId = await createExternalLocalSession(
-          workingDir,
-          createRequestId,
-        );
+        const sessionId = await createExternalLocalSession(workingDir, createRequestId);
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1481,7 +1604,7 @@ function App() {
   const handleUpdateWindowSplitRatio = useCallback((splitId: string, ratio: number) => {
     setTerminalWindows((current) =>
       current ? updateTerminalWindowSplitRatio(current, splitId, ratio) : current,
-    );
+      );
   }, []);
 
   const handleActivatePane = useCallback(
@@ -1931,15 +2054,21 @@ function App() {
     appSettings.interaction.terminal_zoom_enabled,
   );
 
+  useFileEditorZoom(updateAppSettings);
+
   const handleOpenSettings = useCallback(() => {
     openSettings();
   }, []);
 
   const handleLockScreen = useCallback(() => {
-    if (appSettings.security.enable_screen_lock) {
+    if (appSettings.security.enable_startup_lock || appSettings.security.enable_idle_lock) {
       setIsLocked(true);
     }
-  }, [appSettings.security.enable_screen_lock, setIsLocked]);
+  }, [
+    appSettings.security.enable_idle_lock,
+    appSettings.security.enable_startup_lock,
+    setIsLocked,
+  ]);
 
   const persistWorkspaceLayoutNow = useCallback(async () => {
     if (!settingsLoaded || !startupRestoreComplete || !terminalWindowsRestoredRef.current) {
@@ -2330,6 +2459,20 @@ function App() {
     toast.info(t("tabCtx.fileSessionInUse"));
   }, [t]);
 
+  const buildPaneReconnectCwdStartupCommand = useCallback(
+    (pane: Pick<SessionPane, "sessionId">) =>
+      appSettings.terminal.reconnect_restore_cwd ?? false
+        ? buildReconnectCwdStartupCommand(
+            pane.sessionId,
+            appSettings.interaction.duplicate_session_command_delay_ms,
+          )
+        : undefined,
+    [
+      appSettings.terminal.reconnect_restore_cwd,
+      appSettings.interaction.duplicate_session_command_delay_ms,
+    ],
+  );
+
   const handleReconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
@@ -2348,12 +2491,18 @@ function App() {
           }).catch(() => {});
         }
         const reconnectContent = capturePaneReconnectContent(pane);
+        const reconnectCwdStartupCommand = buildPaneReconnectCwdStartupCommand(pane);
         const closed = await closePaneBackendSession(pane);
         if (!closed) {
           throw new Error("close_session_failed");
         }
 
-        const newSessionId = await createSessionForPane(pane);
+        const newSessionId = await createSessionForPane(
+          pane,
+          undefined,
+          reconnectCwdStartupCommand,
+        );
+        carryOverSessionCwd(pane.sessionId, newSessionId);
         if (!hasPane(tab.id, pane.id)) {
           await closeStaleCreatedSession(newSessionId);
           return;
@@ -2390,6 +2539,7 @@ function App() {
       }
     },
     [
+      buildPaneReconnectCwdStartupCommand,
       closePaneBackendSession,
       hasFileDocumentDependency,
       hasPane,
@@ -2441,12 +2591,18 @@ function App() {
           }).catch(() => {});
         }
         const reconnectContent = capturePaneReconnectContent(pane);
+        const reconnectCwdStartupCommand = buildPaneReconnectCwdStartupCommand(pane);
         const closed = await closePaneBackendSession(pane);
         if (!closed) {
           throw new Error("close_session_failed");
         }
 
-        const newSessionId = await createSessionForPane(pane);
+        const newSessionId = await createSessionForPane(
+          pane,
+          undefined,
+          reconnectCwdStartupCommand,
+        );
+        carryOverSessionCwd(pane.sessionId, newSessionId);
         if (!hasPane(tab.id, pane.id)) {
           await closeStaleCreatedSession(newSessionId);
           return;
@@ -2483,6 +2639,7 @@ function App() {
       }
     },
     [
+      buildPaneReconnectCwdStartupCommand,
       closePaneBackendSession,
       hasFileDocumentDependency,
       hasPane,
@@ -2613,12 +2770,18 @@ function App() {
           }).catch(() => {});
         }
         const reconnectContent = capturePaneReconnectContent(pane);
+        const reconnectCwdStartupCommand = buildPaneReconnectCwdStartupCommand(pane);
         const closed = await closePaneBackendSession(pane);
         if (!closed) {
           throw new Error("close_session_failed");
         }
 
-        const newSessionId = await createSessionForPane(pane);
+        const newSessionId = await createSessionForPane(
+          pane,
+          undefined,
+          reconnectCwdStartupCommand,
+        );
+        carryOverSessionCwd(pane.sessionId, newSessionId);
         if (!hasPane(tabId, paneId)) {
           await closeStaleCreatedSession(newSessionId);
           return;
@@ -2656,6 +2819,7 @@ function App() {
       }
     },
     [
+      buildPaneReconnectCwdStartupCommand,
       closePaneBackendSession,
       hasFileDocumentDependency,
       hasPane,
@@ -2964,7 +3128,12 @@ function App() {
         owner_window_label: session?.owner_window_label ?? null,
         ai_execution_profile: session?.ai_execution_profile ?? "auto",
         injection_active: session?.injection_active ?? false,
-        remote_file_browser_enabled: session?.remote_file_browser_enabled ?? false,
+        dynamic_title_enabled: session?.dynamic_title_enabled ?? false,
+        dynamic_title_integration_active:
+          session?.dynamic_title_integration_active ?? false,
+        trusted_initial_title: session?.trusted_initial_title ?? null,
+        remote_file_browser_enabled:
+          session?.remote_file_browser_enabled ?? false,
         remote_stats_enabled: session?.remote_stats_enabled ?? false,
         ssh_profile: session?.ssh_profile ?? null,
       });
@@ -3047,6 +3216,7 @@ function App() {
     !activePane.connectError
       ? activePane.sessionId
       : null;
+  useMcpActiveSession(activeSessionId);
   const activeSshSessionId =
     activePane &&
     activePane.paneKind === "terminal" &&
@@ -3063,12 +3233,14 @@ function App() {
     ? liveSessionsById?.get(activeLiveSshSessionId)
     : null;
   const activeStatsSessionId =
-    activeLiveSshSessionId && (activeLiveSshSessionInfo?.remote_stats_enabled ?? true)
+    activeLiveSshSessionId &&
+    (activeLiveSshSessionInfo?.remote_stats_enabled ?? true) &&
+    activeConnection?.ssh_profile !== "network_device"
       ? activeLiveSshSessionId
       : null;
   const activeRemoteStatsEnabled = remoteStatsEnabled && Boolean(activeStatsSessionId);
   const remoteStats = useRemoteStats(
-    activeLiveSshSessionId,
+    activeStatsSessionId,
     activeRemoteStatsEnabled,
     uiConfig.remote_stats_interval ?? 3,
   );
@@ -3080,40 +3252,68 @@ function App() {
     (uiConfig.show_ascend_npu_monitor ?? false) ||
     (headerStatusVisible && headerStatusMode === "npu");
   const gpuOverviewState = useRemoteGpuOverview(
-    activeLiveSshSessionId,
+    activeStatsSessionId,
     gpuOverviewEnabled && Boolean(activeStatsSessionId),
     uiConfig.gpu_monitor_interval ?? 3,
   );
   const npuOverviewState = useRemoteNpuOverview(
-    activeLiveSshSessionId,
+    activeStatsSessionId,
     npuOverviewEnabled && Boolean(activeStatsSessionId),
     uiConfig.ascend_npu_monitor_interval ?? 3,
   );
 
   useEffect(() => {
-    if (!activeStatsSessionId || !remoteStats.stats) return;
+    if (
+      !activeStatsSessionId ||
+      !remoteStats.stats ||
+      remoteStats.sessionId !== activeStatsSessionId
+    ) {
+      return;
+    }
 
     const patch = buildAssetPatchFromRemoteStats(remoteStats.stats);
     if (patch) {
-      handleAssetMonitoringPatch(activeStatsSessionId, patch);
+      handleAssetMonitoringPatch(remoteStats.sessionId, activeStatsSessionId, patch);
     }
-  }, [activeStatsSessionId, handleAssetMonitoringPatch, remoteStats.stats]);
+  }, [activeStatsSessionId, handleAssetMonitoringPatch, remoteStats.sessionId, remoteStats.stats]);
   useEffect(() => {
-    if (!activeStatsSessionId || !gpuOverviewState.overview) return;
+    if (
+      !activeStatsSessionId ||
+      !gpuOverviewState.overview ||
+      gpuOverviewState.sessionId !== activeStatsSessionId
+    ) {
+      return;
+    }
 
     const patch = buildAssetPatchFromGpuOverview(gpuOverviewState.overview);
     if (patch) {
-      handleAssetMonitoringPatch(activeStatsSessionId, patch);
+      handleAssetMonitoringPatch(gpuOverviewState.sessionId, activeStatsSessionId, patch);
     }
-  }, [activeStatsSessionId, gpuOverviewState.overview, handleAssetMonitoringPatch]);
+  }, [
+    activeStatsSessionId,
+    gpuOverviewState.overview,
+    gpuOverviewState.sessionId,
+    handleAssetMonitoringPatch,
+  ]);
   useEffect(() => {
-    if (!activeStatsSessionId || !npuOverviewState.overview) return;
+    if (
+      !activeStatsSessionId ||
+      !npuOverviewState.overview ||
+      npuOverviewState.sessionId !== activeStatsSessionId
+    ) {
+      return;
+    }
 
     const patch = buildAssetPatchFromNpuOverview(npuOverviewState.overview);
     if (patch) {
-      handleAssetMonitoringPatch(activeStatsSessionId, patch);
+      handleAssetMonitoringPatch(npuOverviewState.sessionId, activeStatsSessionId, patch);
     }
-  }, [activeStatsSessionId, handleAssetMonitoringPatch, npuOverviewState.overview]);
+  }, [
+    activeStatsSessionId,
+    handleAssetMonitoringPatch,
+    npuOverviewState.overview,
+    npuOverviewState.sessionId,
+  ]);
 
   const activeSerialSessionId =
     activePane &&
@@ -3167,7 +3367,11 @@ function App() {
             targetsById.set(pane.sessionId, {
               id: pane.sessionId,
               name: pane.name,
-              tabName: getTabDisplayName(tab),
+              tabName: getActiveSessionTabDisplayName(
+                tab,
+                (sessionId) =>
+                  dynamicTitles.get(sessionId ?? "")?.effectiveTitle ?? null,
+              ),
               type: pane.type,
               ownerWindowLabel: currentWindowLabel,
             });
@@ -3191,7 +3395,7 @@ function App() {
     }
 
     return [...targetsById.values()];
-  }, [liveSessionsById, tabsById, terminalWindows]);
+  }, [liveSessionsById, tabsById, terminalWindows, dynamicTitles]);
 
   const activeBottomPanel = uiConfig.show_serial_send_panel
     ? "serialSend"
@@ -3217,14 +3421,18 @@ function App() {
           name: pane.name,
           sessionType: pane.type,
           connectionName: connection?.name,
-          tabName: getTabDisplayName(tab),
+          tabName: getActiveSessionTabDisplayName(
+            tab,
+            (sessionId) =>
+              dynamicTitles.get(sessionId ?? "")?.effectiveTitle ?? null,
+          ),
           connecting: pane.connecting,
           connectError: pane.connectError,
         });
       }
     }
     return sessions;
-  }, [savedConnections, tabs]);
+  }, [savedConnections, tabs, dynamicTitles]);
 
   const handleCloseSessionQuickSwitcher = useCallback(() => {
     setShowSessionQuickSwitcher(false);
@@ -3744,6 +3952,7 @@ function App() {
           onRequestClose: handleRequestWindowClose,
         }}
       />
+      <McpApprovalHost />
       <AppOverlayDialogs
         t={t}
         showSessionQuickSwitcher={showSessionQuickSwitcher}

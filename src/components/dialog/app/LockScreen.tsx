@@ -19,7 +19,7 @@ interface LockScreenProps {
 }
 
 /**
- * Full-screen overlay shown when the app has been locked due to inactivity.
+ * Full-screen overlay shown when the app has been locked at startup or due to inactivity.
  * If a lock password is set, the user must enter it to unlock (verified by backend).
  * Otherwise, clicking the unlock button is sufficient.
  */

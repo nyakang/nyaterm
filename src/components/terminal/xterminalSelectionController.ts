@@ -16,6 +16,9 @@ interface InstallXTerminalSelectionControllerParams {
   terminal: Terminal;
   containerEl: HTMLDivElement;
   isMacOS: boolean;
+  isWindows: boolean;
+  activeRef: MutableRef<boolean>;
+  visibleRef: MutableRef<boolean>;
   terminalAppSettingsRef: MutableRef<TerminalAppSettings>;
   pendingSearchSelectionRef: MutableRef<boolean>;
   searchSelectionTextRef: MutableRef<string | null>;
@@ -41,6 +44,9 @@ export function installXTerminalSelectionController({
   terminal,
   containerEl,
   isMacOS,
+  isWindows,
+  activeRef,
+  visibleRef,
   terminalAppSettingsRef,
   pendingSearchSelectionRef,
   searchSelectionTextRef,
@@ -59,6 +65,7 @@ export function installXTerminalSelectionController({
   pasteClipboard,
 }: InstallXTerminalSelectionControllerParams) {
   let primaryMouseDown: { x: number; y: number } | null = null;
+  let terminalHasFocus = document.activeElement === terminal.textarea;
 
   const resetTerminalPointerState = (
     options: { clearSelection?: boolean } = {},
@@ -223,6 +230,16 @@ export function installXTerminalSelectionController({
     resetTerminalPointerState();
   };
 
+  const handleTerminalFocus = () => {
+    terminalHasFocus = true;
+  };
+
+  const handleTerminalBlur = (e: FocusEvent) => {
+    if (e.relatedTarget !== null && document.hasFocus()) {
+      terminalHasFocus = false;
+    }
+  };
+
   const handleTerminalWindowBlur = () => {
     resetTerminalPointerState({ clearSelection: true });
   };
@@ -233,6 +250,29 @@ export function installXTerminalSelectionController({
     }
   };
 
+  // Windows clipboard history injects Ctrl+V with an empty KeyboardEvent.code.
+  const handleSyntheticWinVPaste = (e: KeyboardEvent) => {
+    if (
+      !isWindows ||
+      !terminalHasFocus ||
+      !isTerminalAlive() ||
+      !activeRef.current ||
+      !visibleRef.current ||
+      !e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey ||
+      e.metaKey ||
+      e.code !== "" ||
+      (e.key !== "v" && e.key !== "V")
+    ) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    pasteClipboard().catch(() => {});
+  };
+
   containerEl.addEventListener("mousedown", handleTerminalMouseDown);
   containerEl.addEventListener("mouseup", handleTerminalMouseUp);
   containerEl.addEventListener("pointercancel", handleTerminalPointerCancel);
@@ -240,6 +280,11 @@ export function installXTerminalSelectionController({
   containerEl.addEventListener("dragstart", handleTerminalDragStart);
   if (isMacOS) {
     document.addEventListener("mousemove", handleMacReleasedMouseMove, true);
+  }
+  if (isWindows) {
+    terminal.textarea?.addEventListener("focus", handleTerminalFocus);
+    terminal.textarea?.addEventListener("blur", handleTerminalBlur);
+    window.addEventListener("keydown", handleSyntheticWinVPaste, true);
   }
   window.addEventListener("blur", handleTerminalWindowBlur);
   document.addEventListener("visibilitychange", handleTerminalVisibilityChange);
@@ -260,6 +305,11 @@ export function installXTerminalSelectionController({
           handleMacReleasedMouseMove,
           true,
         );
+      }
+      if (isWindows) {
+        terminal.textarea?.removeEventListener("focus", handleTerminalFocus);
+        terminal.textarea?.removeEventListener("blur", handleTerminalBlur);
+        window.removeEventListener("keydown", handleSyntheticWinVPaste, true);
       }
       window.removeEventListener("blur", handleTerminalWindowBlur);
       document.removeEventListener(

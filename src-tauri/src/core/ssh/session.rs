@@ -11,8 +11,8 @@ use crate::config::{
     SshRuntimeMode, effective_cwd_follow_mode_for_runtime,
 };
 use crate::core::{
-    SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
-    SharedCwd,
+    DynamicTitleCapabilities, SessionHandle, SessionInfo, SessionManager, SessionReadyHook,
+    SessionType, SharedCwd, session_command_channel,
 };
 use crate::error::{AppError, AppResult};
 use std::future::Future;
@@ -462,7 +462,7 @@ async fn create_ssh_session_inner(
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let diagnostics = SshDiagnosticContext::new(Some(session_id.clone()));
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+    let (cmd_tx, cmd_rx) = session_command_channel(session_id.clone());
 
     let x11_config = if config.x11_forwarding {
         Some(super::x11_forwarding::prepare_x11_forwarding(&config.x11_display).await)
@@ -542,12 +542,13 @@ async fn create_ssh_session_inner(
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::Posix,
         injection_active,
+        dynamic_title_capabilities: DynamicTitleCapabilities::new(config.dynamic_tab_title, None),
         remote_file_browser_enabled: capabilities.remote_file_browser_enabled,
         remote_stats_enabled: capabilities.remote_stats_enabled,
         ssh_profile: Some(config.ssh_profile.clone()),
     };
 
-    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(None));
+    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(Default::default()));
     let ssh_config_arc: Arc<dyn std::any::Any + Send + Sync> = Arc::new(config.clone());
     let ssh_handle_arc: Arc<dyn std::any::Any + Send + Sync> = ssh_connection.clone();
     let output_control_tx = cmd_tx.clone();
@@ -555,6 +556,7 @@ async fn create_ssh_session_inner(
     let session_handle = SessionHandle {
         info: session_info.clone(),
         cmd_tx,
+        startup_input_barrier: None,
         ssh_config: Some(ssh_config_arc),
         ssh_handle: Some(ssh_handle_arc),
         cwd: cwd.clone(),
@@ -688,7 +690,7 @@ pub async fn create_multiplexed_ssh_session(
         shell_detection_timeout_ms = config.sftp.shell_detection_timeout_ms,
         "SSH session initialization starting"
     );
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+    let (cmd_tx, cmd_rx) = session_command_channel(session_id.clone());
 
     if config.x11_forwarding {
         let connection_id = config.connection_id.clone().ok_or_else(|| {
@@ -738,12 +740,13 @@ pub async fn create_multiplexed_ssh_session(
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::Posix,
         injection_active,
+        dynamic_title_capabilities: DynamicTitleCapabilities::new(config.dynamic_tab_title, None),
         remote_file_browser_enabled: capabilities.remote_file_browser_enabled,
         remote_stats_enabled: capabilities.remote_stats_enabled,
         ssh_profile: Some(config.ssh_profile.clone()),
     };
 
-    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(None));
+    let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(Default::default()));
     let ssh_config_arc: Arc<dyn std::any::Any + Send + Sync> = Arc::new(config.clone());
     let ssh_handle_arc: Arc<dyn std::any::Any + Send + Sync> = ssh_connection.clone();
     let output_control_tx = cmd_tx.clone();
@@ -751,6 +754,7 @@ pub async fn create_multiplexed_ssh_session(
     let session_handle = SessionHandle {
         info: session_info.clone(),
         cmd_tx,
+        startup_input_barrier: None,
         ssh_config: Some(ssh_config_arc),
         ssh_handle: Some(ssh_handle_arc),
         cwd: cwd.clone(),
@@ -884,6 +888,7 @@ mod tests {
             terminal_type: SshTerminalType::default(),
             sftp: SftpSettings::default(),
             encoding: "UTF-8".to_string(),
+            dynamic_tab_title: false,
         }
     }
 

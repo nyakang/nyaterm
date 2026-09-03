@@ -7,7 +7,10 @@ import {
   matchesKeyEvent,
   resolveIndexedKeys,
 } from "@/lib/shortcutRegistry";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
+import {
+  markTerminalUserInput,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
 import {
   applyTerminalInputData,
   type TerminalInputState,
@@ -91,6 +94,11 @@ export function installXTerminalKeyboardController({
   syncSuggestionsWithInputState,
   lastSelectionRef,
 }: InstallXTerminalKeyboardControllerParams) {
+  const inputFromKeyboardController = (data: string) => {
+    markTerminalUserInput(terminal);
+    terminal.input(data, true);
+  };
+
   const getDirectInputDataFromKeyEvent = (e: KeyboardEvent) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return null;
     if (e.key === "Dead" || e.key === "Process" || e.key === "Unidentified")
@@ -262,9 +270,21 @@ export function installXTerminalKeyboardController({
     }
 
     if (terminal.hasSelection() && !getSmartCursorSelectedInputRange()) {
+      // The selection is preserved by design while typing (it is only cleared
+      // on mouse click), so input is sent with wasUserInput=false to skip
+      // xterm's selection clearing. That also skips xterm's scrollOnUserInput,
+      // so scroll back to the cursor explicitly to keep the prompt visible.
+      const inputPreservingSelection = (data: string) => {
+        markTerminalUserInput(terminal);
+        terminal.input(data, false);
+        const buffer = terminal.buffer.active;
+        if (buffer.baseY !== buffer.viewportY) {
+          terminal.scrollToBottom();
+        }
+      };
       if (directInputData) {
         e.preventDefault();
-        terminal.input(directInputData, false);
+        inputPreservingSelection(directInputData);
         return false;
       }
       if (
@@ -274,12 +294,12 @@ export function installXTerminalKeyboardController({
         !e.altKey
       ) {
         e.preventDefault();
-        terminal.input("\x7f", false);
+        inputPreservingSelection("\x7f");
         return false;
       }
       if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        terminal.input("\r", false);
+        inputPreservingSelection("\r");
         return false;
       }
       if (
@@ -290,7 +310,7 @@ export function installXTerminalKeyboardController({
         !e.shiftKey
       ) {
         e.preventDefault();
-        terminal.input("\x1b[D", false);
+        inputPreservingSelection("\x1b[D");
         return false;
       }
       if (
@@ -301,7 +321,7 @@ export function installXTerminalKeyboardController({
         !e.shiftKey
       ) {
         e.preventDefault();
-        terminal.input("\x1b[C", false);
+        inputPreservingSelection("\x1b[C");
         return false;
       }
       if (
@@ -312,7 +332,7 @@ export function installXTerminalKeyboardController({
         !e.shiftKey
       ) {
         e.preventDefault();
-        terminal.input("\x1b[A", false);
+        inputPreservingSelection("\x1b[A");
         return false;
       }
       if (
@@ -323,7 +343,7 @@ export function installXTerminalKeyboardController({
         !e.shiftKey
       ) {
         e.preventDefault();
-        terminal.input("\x1b[B", false);
+        inputPreservingSelection("\x1b[B");
         return false;
       }
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
@@ -358,65 +378,65 @@ export function installXTerminalKeyboardController({
         const keyLower = e.key.toLowerCase();
         if (ctrlCharMap[keyLower]) {
           e.preventDefault();
-          terminal.input(ctrlCharMap[keyLower], false);
+          inputPreservingSelection(ctrlCharMap[keyLower]);
           return false;
         }
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          terminal.input("\x1b[1;5D", false);
+          inputPreservingSelection("\x1b[1;5D");
           return false;
         }
         if (e.key === "ArrowRight") {
           e.preventDefault();
-          terminal.input("\x1b[1;5C", false);
+          inputPreservingSelection("\x1b[1;5C");
           return false;
         }
         if (e.key === "ArrowUp") {
           e.preventDefault();
-          terminal.input("\x1b[1;5A", false);
+          inputPreservingSelection("\x1b[1;5A");
           return false;
         }
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          terminal.input("\x1b[1;5B", false);
+          inputPreservingSelection("\x1b[1;5B");
           return false;
         }
       }
       if ((e.altKey || e.metaKey) && !e.ctrlKey && !e.shiftKey) {
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          terminal.input("\x1b[1;3D", false);
+          inputPreservingSelection("\x1b[1;3D");
           return false;
         }
         if (e.key === "ArrowRight") {
           e.preventDefault();
-          terminal.input("\x1b[1;3C", false);
+          inputPreservingSelection("\x1b[1;3C");
           return false;
         }
         if (e.key === "ArrowUp") {
           e.preventDefault();
-          terminal.input("\x1b[1;3A", false);
+          inputPreservingSelection("\x1b[1;3A");
           return false;
         }
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          terminal.input("\x1b[1;3B", false);
+          inputPreservingSelection("\x1b[1;3B");
           return false;
         }
         const keyLower = e.key.toLowerCase();
         if (keyLower === "b") {
           e.preventDefault();
-          terminal.input("\x1bb", false);
+          inputPreservingSelection("\x1bb");
           return false;
         }
         if (keyLower === "f") {
           e.preventDefault();
-          terminal.input("\x1bf", false);
+          inputPreservingSelection("\x1bf");
           return false;
         }
         if (keyLower === "d") {
           e.preventDefault();
-          terminal.input("\x1bd", false);
+          inputPreservingSelection("\x1bd");
           return false;
         }
       }
@@ -500,7 +520,7 @@ export function installXTerminalKeyboardController({
     const ctrlPrintableInput = getCtrlPrintableCsiuInput(e);
     if (ctrlPrintableInput) {
       e.preventDefault();
-      terminal.input(ctrlPrintableInput, false);
+      inputFromKeyboardController(ctrlPrintableInput);
       return false;
     }
 

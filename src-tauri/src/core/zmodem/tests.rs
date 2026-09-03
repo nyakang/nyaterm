@@ -333,6 +333,16 @@ mod tests {
     }
 
     #[test]
+    fn reports_single_line_start_zpad_as_pending_startup_risk() {
+        let mut detector = ZmodemDetector::new();
+        match detector.feed(b"*") {
+            ZmodemDetectResult::NoMatch { passthrough } => assert!(passthrough.is_empty()),
+            ZmodemDetectResult::Detected { .. } => panic!("unexpected early detection"),
+        }
+        assert!(detector.has_pending_prefix());
+    }
+
+    #[test]
     fn detects_rz_zhex_upload_header_split_after_prompt_text() {
         let mut detector = ZmodemDetector::new();
         match detector.feed(b"\x18z waiting to receive.**") {
@@ -341,6 +351,7 @@ mod tests {
             }
             ZmodemDetectResult::Detected { .. } => panic!("unexpected early detection"),
         }
+        assert!(detector.has_pending_prefix());
 
         assert_eq!(
             detected_direction(detector.feed(b"\x18B01")),
@@ -355,6 +366,7 @@ mod tests {
             ZmodemDetectResult::NoMatch { passthrough } => assert!(passthrough.is_empty()),
             ZmodemDetectResult::Detected { .. } => panic!("unexpected early detection"),
         }
+        assert!(detector.has_pending_prefix());
 
         assert_eq!(
             detected_direction(detector.feed(b"1rest")),

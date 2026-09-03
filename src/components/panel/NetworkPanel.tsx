@@ -251,7 +251,10 @@ function TunnelRow({
     <div className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-accent">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <div className="truncate text-sm font-medium" style={{ color: "var(--df-text)" }}>
+          <div
+            className="min-w-0 flex-1 truncate text-sm font-medium"
+            style={{ color: "var(--df-text)" }}
+          >
             {tunnel.name || endpoint}
           </div>
           <TunnelRuntimeBadge state={runtimeState} enabled={tunnel.is_open} />
@@ -326,7 +329,12 @@ function TunnelRuntimeBadge({ state, enabled }: { state?: TunnelRuntimeState; en
       error: "bg-destructive/10 text-destructive",
     }[status] ?? "bg-muted text-muted-foreground";
   const badge = (
-    <span className={cn("rounded-full px-2 py-0.5 text-[0.625rem] font-medium", className)}>
+    <span
+      className={cn(
+        "shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[0.625rem] font-medium",
+        className,
+      )}
+    >
       {label}
     </span>
   );

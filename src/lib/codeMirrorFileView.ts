@@ -276,7 +276,6 @@ export function codeMirrorFileViewExtensions(
         height: "100%",
         backgroundColor: "var(--background)",
         color: "var(--foreground)",
-        fontSize: "13px",
       },
       "&.cm-focused": {
         outline: "none",
@@ -294,7 +293,7 @@ export function codeMirrorFileViewExtensions(
         borderLeftColor: "var(--foreground)",
       },
       ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-        backgroundColor: "color-mix(in srgb, var(--primary) 28%, transparent)",
+        backgroundColor: "var(--df-terminal-selection, var(--df-primary)) !important",
       },
       ".cm-scroller": {
         fontFamily: "var(--font-mono), 'JetBrains Mono', monospace",
@@ -318,7 +317,15 @@ export function codeMirrorFileViewExtensions(
         opacity: "0.8",
       },
       ".cm-activeLine": {
-        backgroundColor: "color-mix(in srgb, var(--muted) 22%, transparent)",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          inset: "0",
+          zIndex: "-3",
+          backgroundColor: "color-mix(in srgb, var(--muted) 22%, transparent)",
+        },
+        position: "relative",
+        backgroundColor: "transparent",
       },
       ".cm-activeLineGutter": {
         backgroundColor: "color-mix(in srgb, var(--muted) 32%, transparent)",
@@ -348,12 +355,37 @@ export function codeMirrorFileViewExtensions(
         borderRadius: "0.25rem",
         padding: "0.125rem 0.375rem",
       },
-      ".cm-search button": {
-        backgroundColor: "color-mix(in srgb, var(--muted) 50%, transparent)",
+      ".cm-search input::placeholder": {
+        color: "var(--muted-foreground)",
+      },
+      ".cm-search input[type=checkbox]": {
+        accentColor: "var(--primary)",
+      },
+      ".cm-search .cm-button": {
+        backgroundColor: "var(--secondary)",
+        backgroundImage: "none",
         color: "var(--foreground)",
         border: "1px solid var(--border)",
         borderRadius: "0.25rem",
         padding: "0.125rem 0.375rem",
+      },
+      ".cm-search .cm-button:hover": {
+        backgroundColor: "color-mix(in srgb, var(--primary) 14%, var(--secondary))",
+        borderColor: "color-mix(in srgb, var(--primary) 45%, var(--border))",
+      },
+      ".cm-search .cm-button:active": {
+        backgroundColor: "color-mix(in srgb, var(--primary) 22%, var(--secondary))",
+        backgroundImage: "none",
+      },
+      ".cm-search input:focus-visible, .cm-search button:focus-visible": {
+        outline: "2px solid var(--ring)",
+        outlineOffset: "1px",
+      },
+      ".cm-search button[name=close]": {
+        color: "var(--muted-foreground)",
+      },
+      ".cm-search button[name=close]:hover": {
+        color: "var(--foreground)",
       },
     }),
   ];

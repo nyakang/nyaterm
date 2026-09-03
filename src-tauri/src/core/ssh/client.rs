@@ -61,6 +61,9 @@ pub struct SshConfig {
     /// Character encoding for terminal I/O (e.g. "UTF-8", "GBK").
     #[serde(default = "default_encoding")]
     pub encoding: String,
+    /// Allow sanitized remote OSC 0/2 titles to decorate this saved SSH tab.
+    #[serde(default)]
+    pub dynamic_tab_title: bool,
 }
 
 fn default_encoding() -> String {

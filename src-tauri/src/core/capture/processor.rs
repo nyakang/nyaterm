@@ -16,6 +16,7 @@ struct ActiveCapture {
     phase: CapturePhase,
     start_time: Instant,
     result_tx: Option<oneshot::Sender<CapturedOutput>>,
+    source_truncated: bool,
 }
 
 /// Shared processor that all IO loops (SSH, PTY, Telnet, Serial) can use to
@@ -46,6 +47,7 @@ impl OutputCaptureProcessor {
                 phase: CapturePhase::WaitingForStart,
                 start_time: Instant::now(),
                 result_tx: Some(result_tx),
+                source_truncated: false,
             },
         );
     }
@@ -103,7 +105,7 @@ impl OutputCaptureProcessor {
             if let Some(capture_id) = self.any_in_phase(CapturePhase::Capturing) {
                 if let Some(pos) = remaining.find(MARKER_PREFIX) {
                     if let Some(cap) = self.active.get_mut(&capture_id) {
-                        cap.buffer.push_str(&remaining[..pos]);
+                        append_capture_output(cap, &remaining[..pos]);
                     }
                     let candidate = &remaining[pos..];
                     if self.is_possible_marker_prefix(candidate) {
@@ -111,7 +113,7 @@ impl OutputCaptureProcessor {
                         remaining = "";
                     } else if pos == 0 {
                         if let Some(cap) = self.active.get_mut(&capture_id) {
-                            cap.buffer.push_str(MARKER_PREFIX);
+                            append_capture_output(cap, MARKER_PREFIX);
                         }
                         remaining = &remaining[MARKER_PREFIX.len()..];
                     } else {
@@ -119,7 +121,7 @@ impl OutputCaptureProcessor {
                     }
                 } else {
                     if let Some(cap) = self.active.get_mut(&capture_id) {
-                        cap.buffer.push_str(remaining);
+                        append_capture_output(cap, remaining);
                     }
                     remaining = "";
                 }
@@ -221,6 +223,7 @@ impl OutputCaptureProcessor {
                 output,
                 exit_code,
                 duration_ms: capture.start_time.elapsed().as_millis() as u64,
+                source_truncated: capture.source_truncated,
             });
         }
 
@@ -264,6 +267,20 @@ impl OutputCaptureProcessor {
                     .all(|ch| ch.is_ascii_digit() || ch == '-')
         })
     }
+}
+
+fn append_capture_output(capture: &mut ActiveCapture, text: &str) {
+    let available = MAX_CAPTURE_BYTES.saturating_sub(capture.buffer.len());
+    if text.len() <= available {
+        capture.buffer.push_str(text);
+        return;
+    }
+    let mut end = available.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    capture.buffer.push_str(&text[..end]);
+    capture.source_truncated = true;
 }
 
 struct MatchResult<'a> {

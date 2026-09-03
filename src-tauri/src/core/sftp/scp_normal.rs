@@ -300,16 +300,44 @@ async fn exec_command_with_stdin(
     })
 }
 
+fn split_ls_fields(line: &str) -> Option<(Vec<&str>, &str)> {
+    let bytes = line.as_bytes();
+    let mut fields = Vec::with_capacity(8);
+    let mut cursor = 0;
+    while fields.len() < 8 {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if start == cursor {
+            return None;
+        }
+        fields.push(&line[start..cursor]);
+    }
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    (cursor < bytes.len()).then(|| (fields, &line[cursor..]))
+}
+
+fn list_dir_command(path: &str) -> String {
+    format!("LC_ALL=C ls -la -n -- {}", sh_quote(path))
+}
+
+fn stat_command(path: &str) -> String {
+    format!("LC_ALL=C ls -lad -n -- {}", sh_quote(path))
+}
+
 fn parse_ls_line(line: &str) -> Option<FileEntry> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with("total ") {
+    let line = line.trim_start();
+    if line.trim_end().is_empty() || line.starts_with("total ") {
         return None;
     }
 
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 9 {
-        return None;
-    }
+    let (parts, raw_name) = split_ls_fields(line)?;
 
     let perms = parts[0];
     if perms.len() < 10 {
@@ -323,8 +351,6 @@ fn parse_ls_line(line: &str) -> Option<FileEntry> {
     let group = parts[3].to_string();
     let size: u64 = parts[4].parse().unwrap_or(0);
 
-    // parts[5..8] are month/day/time-or-year; everything from index 8 onward is the name
-    let raw_name = parts[8..].join(" ");
     if raw_name.is_empty() {
         return None;
     }
@@ -336,7 +362,7 @@ fn parse_ls_line(line: &str) -> Option<FileEntry> {
             raw_name.to_string()
         }
     } else {
-        raw_name
+        raw_name.to_string()
     };
 
     if name == "." || name == ".." {
@@ -365,14 +391,13 @@ fn remote_child_path(parent: &str, name: &str) -> String {
 }
 
 fn parse_ls_line_to_properties(line: &str, path: &str) -> AppResult<FileProperties> {
-    let line = line.trim();
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 9 {
+    let line = line.trim_start();
+    let Some((parts, raw_name)) = split_ls_fields(line) else {
         return Err(AppError::Channel(format!(
             "Failed to parse stat output for '{}'",
             path
         )));
-    }
+    };
 
     let perms = parts[0];
     if perms.len() < 10 {
@@ -389,21 +414,27 @@ fn parse_ls_line_to_properties(line: &str, path: &str) -> AppResult<FileProperti
     let group = parts[3].to_string();
     let size: u64 = parts[4].parse().unwrap_or(0);
 
-    let raw_name = parts[8..].join(" ");
-    let name = if is_symlink {
+    let (name, symlink_target) = if is_symlink {
         if let Some(pos) = raw_name.find(" -> ") {
-            raw_name[..pos].to_string()
+            (
+                raw_name[..pos].to_string(),
+                Some(raw_name[pos + " -> ".len()..].to_string()),
+            )
         } else {
-            raw_name.to_string()
+            return Err(AppError::Channel(format!(
+                "Symbolic link target was missing from stat output for '{}'",
+                path
+            )));
         }
     } else {
-        raw_name
+        (raw_name.to_string(), None)
     };
 
     Ok(FileProperties {
         name,
         is_dir,
         is_symlink,
+        symlink_target,
         size,
         permissions: perms.to_string(),
         owner: owner.clone(),
@@ -419,11 +450,7 @@ async fn stat_remote_properties(
     ssh_handle: &Arc<SshConnectionHandles>,
     path: &str,
 ) -> AppResult<FileProperties> {
-    let result = exec_command(
-        ssh_handle,
-        &format!("LC_ALL=C ls -lad -- {}", sh_quote(path)),
-    )
-    .await?;
+    let result = exec_command(ssh_handle, &stat_command(path)).await?;
     if result.exit_code != Some(0) {
         let stderr_text = String::from_utf8_lossy(&result.stderr);
         return Err(AppError::Channel(format!(
@@ -865,9 +892,7 @@ impl RemoteFs for ScpNormalBackend {
 
     async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
         let listing_path = remote_dir_listing_path(path);
-        let output = self
-            .exec_ok(&format!("LC_ALL=C ls -la -- {}", sh_quote(&listing_path)))
-            .await?;
+        let output = self.exec_ok(&list_dir_command(&listing_path)).await?;
         let mut entries = Vec::new();
         for line in output.lines() {
             if let Some(mut entry) = parse_ls_line(line) {
@@ -885,9 +910,7 @@ impl RemoteFs for ScpNormalBackend {
     }
 
     async fn stat(&self, path: &str) -> AppResult<FileProperties> {
-        let output = self
-            .exec_ok(&format!("LC_ALL=C ls -lad -- {}", sh_quote(path)))
-            .await?;
+        let output = self.exec_ok(&stat_command(path)).await?;
         let line = output
             .lines()
             .find(|l| !l.trim().is_empty() && !l.starts_with("total "))
@@ -1530,5 +1553,96 @@ impl RemoteFs for ScpNormalBackend {
             .await
             .map(|metadata| metadata.len())
             .map_err(|error| AppError::Channel(format!("Failed to read copied file size: {error}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{list_dir_command, parse_ls_line, parse_ls_line_to_properties, stat_command};
+
+    #[test]
+    fn ls_parser_handles_numeric_owner_and_group() {
+        let entry = parse_ls_line("-rw-r--r-- 1 1000 100513 203 Aug 3 16:37 .zshrc").unwrap();
+        assert_eq!(entry.name, ".zshrc");
+        assert_eq!(entry.owner, "1000");
+        assert_eq!(entry.group, "100513");
+        assert_eq!(entry.size, 203);
+        assert!(!entry.is_dir);
+    }
+
+    #[test]
+    fn ls_parser_keeps_hidden_directory_name() {
+        let entry = parse_ls_line("drwx------ 4 1000 100513 4096 Sep 1 09:31 .copilot").unwrap();
+        assert_eq!(entry.name, ".copilot");
+        assert!(entry.is_dir);
+    }
+
+    #[test]
+    fn ls_parser_keeps_spaces_in_file_name() {
+        let entry =
+            parse_ls_line("-rw-r--r-- 1 1000 100513 123 Sep 1 09:31 hello world.txt").unwrap();
+        assert_eq!(entry.name, "hello world.txt");
+        assert!(!entry.is_dir);
+    }
+
+    #[test]
+    fn ls_parser_keeps_spaces_in_directory_name() {
+        let entry = parse_ls_line("drwxr-xr-x 2 1000 100513 4096 Sep 1 09:31 My Folder").unwrap();
+        assert_eq!(entry.name, "My Folder");
+        assert!(entry.is_dir);
+    }
+
+    #[test]
+    fn ls_parser_strips_symlink_target_from_name() {
+        let entry =
+            parse_ls_line("lrwxrwxrwx 1 1000 100513 11 Aug 29 12:00 current -> releases/v2")
+                .unwrap();
+        assert_eq!(entry.name, "current");
+        assert!(entry.is_symlink);
+    }
+
+    #[test]
+    fn ls_commands_request_numeric_owner_and_group() {
+        assert_eq!(
+            list_dir_command("/home/user/My Folder"),
+            "LC_ALL=C ls -la -n -- '/home/user/My Folder'"
+        );
+        assert_eq!(
+            stat_command("/home/user/My Folder"),
+            "LC_ALL=C ls -lad -n -- '/home/user/My Folder'"
+        );
+    }
+
+    #[test]
+    fn ls_properties_parser_keeps_relative_symlink_target() {
+        let props = parse_ls_line_to_properties(
+            "lrwxrwxrwx 1 root root 11 Aug 29 12:00 current -> releases/v2",
+            "/opt/app/current",
+        )
+        .unwrap();
+        assert_eq!(props.name, "current");
+        assert!(props.is_symlink);
+        assert_eq!(props.symlink_target.as_deref(), Some("releases/v2"));
+    }
+
+    #[test]
+    fn ls_properties_parser_keeps_dangling_and_spaced_target() {
+        let props = parse_ls_line_to_properties(
+            "lrwxrwxrwx 1 root root 19 Aug 29 12:00 current -> missing release  ",
+            "/opt/app/current",
+        )
+        .unwrap();
+        assert_eq!(props.symlink_target.as_deref(), Some("missing release  "));
+    }
+
+    #[test]
+    fn ls_properties_parser_sets_no_target_for_regular_file() {
+        let props = parse_ls_line_to_properties(
+            "-rw-r--r-- 1 root root 12 Aug 29 12:00 config.toml",
+            "/opt/app/config.toml",
+        )
+        .unwrap();
+        assert!(!props.is_symlink);
+        assert_eq!(props.symlink_target, None);
     }
 }

@@ -109,4 +109,19 @@ mod tests {
         assert_eq!(captured.output, "hello");
         assert_eq!(captured.exit_code, Some(9));
     }
+
+    #[tokio::test]
+    async fn caps_large_capture_output_at_the_source() {
+        let mut proc = OutputCaptureProcessor::new();
+        let rx = register_capture(&mut proc, "large");
+
+        assert!(proc.process("__DF_CMD_START_large__\n").is_empty());
+        assert!(proc.process(&"猫".repeat(MAX_CAPTURE_BYTES)).is_empty());
+        assert!(proc.process("__DF_CMD_END_large_0__\n").is_empty());
+
+        let captured = rx.await.unwrap();
+        assert!(captured.output.len() <= MAX_CAPTURE_BYTES);
+        assert!(captured.source_truncated);
+        assert!(captured.output.is_char_boundary(captured.output.len()));
+    }
 }

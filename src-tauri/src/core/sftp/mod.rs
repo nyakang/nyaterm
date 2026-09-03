@@ -92,6 +92,7 @@ pub(crate) struct AutoRemoteFs {
     ssh_handle: Arc<SshConnectionHandles>,
     cache_key: String,
     sftp_encoding: String,
+    sftp_pipeline_depth_override: Option<u32>,
 }
 
 impl AutoRemoteFs {
@@ -101,12 +102,14 @@ impl AutoRemoteFs {
         port: u16,
         username: &str,
         sftp_encoding: &str,
+        sftp_pipeline_depth_override: Option<u32>,
     ) -> Self {
         Self {
             inner: RwLock::new(None),
             ssh_handle,
             cache_key: cache_key(host, port, username),
             sftp_encoding: sftp_encoding.to_string(),
+            sftp_pipeline_depth_override,
         }
     }
 
@@ -151,6 +154,7 @@ impl AutoRemoteFs {
                 return Ok(Box::new(SftpBackend::new(
                     self.ssh_handle.clone(),
                     &self.sftp_encoding,
+                    self.sftp_pipeline_depth_override,
                 )));
             }
             Err(e) => {
@@ -198,6 +202,7 @@ impl AutoRemoteFs {
                         Box::new(SftpBackend::new(
                             self.ssh_handle.clone(),
                             &self.sftp_encoding,
+                            self.sftp_pipeline_depth_override,
                         ))
                     })
             }
@@ -237,6 +242,7 @@ async fn get_ssh_info(
     String,
     String,
     String,
+    Option<u32>,
 )> {
     let sessions = manager.sessions.lock().await;
     let session = sessions
@@ -251,7 +257,7 @@ async fn get_ssh_info(
         .downcast::<SshConnectionHandles>()
         .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?;
 
-    let (host, port, username, encoding, sftp_encoding) =
+    let (host, port, username, encoding, sftp_encoding, sftp_pipeline_depth_override) =
         if let Some(ref cfg_any) = session.ssh_config {
             if let Some(cfg) = cfg_any.downcast_ref::<crate::core::ssh::SshConfig>() {
                 let sftp_encoding = if cfg.sftp.filename_encoding.trim().is_empty() {
@@ -265,6 +271,7 @@ async fn get_ssh_info(
                     cfg.username.clone(),
                     cfg.encoding.clone(),
                     sftp_encoding,
+                    cfg.sftp.pipeline_depth,
                 )
             } else {
                 (
@@ -273,6 +280,7 @@ async fn get_ssh_info(
                     "unknown".to_string(),
                     "UTF-8".to_string(),
                     "UTF-8".to_string(),
+                    None,
                 )
             }
         } else {
@@ -282,10 +290,19 @@ async fn get_ssh_info(
                 "unknown".to_string(),
                 "UTF-8".to_string(),
                 "UTF-8".to_string(),
+                None,
             )
         };
 
-    Ok((ssh_handle, host, port, username, encoding, sftp_encoding))
+    Ok((
+        ssh_handle,
+        host,
+        port,
+        username,
+        encoding,
+        sftp_encoding,
+        sftp_pipeline_depth_override,
+    ))
 }
 
 async fn get_or_create_auto_fs(
@@ -307,7 +324,7 @@ async fn get_or_create_auto_fs(
         }
     }
 
-    let (ssh_handle, host, port, username, _encoding, sftp_encoding) =
+    let (ssh_handle, host, port, username, _encoding, sftp_encoding, sftp_pipeline_depth_override) =
         get_ssh_info(manager, session_id).await?;
     let auto_fs = Arc::new(AutoRemoteFs::new(
         ssh_handle,
@@ -315,6 +332,7 @@ async fn get_or_create_auto_fs(
         port,
         &username,
         &sftp_encoding,
+        sftp_pipeline_depth_override,
     ));
 
     {
@@ -2319,6 +2337,31 @@ pub async fn create_remote_symlink(
     Ok(())
 }
 
+pub async fn update_remote_symlink_target(
+    manager: Arc<SessionManager>,
+    session_id: &str,
+    path: &str,
+    raw_path_token: Option<&str>,
+    target_path: &str,
+) -> AppResult<()> {
+    let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
+    let guard = auto_fs.backend().await?;
+    let fs = guard.as_ref().unwrap();
+    let path_ref = RemotePathRef::new(path, raw_path_token)?;
+    fs.update_symlink_target_ref(&path_ref, target_path).await?;
+
+    tracing::debug!(
+        target: "user_action",
+        action = "update",
+        entity = "remote_symlink",
+        session_id = %session_id,
+        remote_path = path,
+        "User changed remote symbolic link target"
+    );
+
+    Ok(())
+}
+
 pub async fn chmod_remote_file(
     manager: Arc<SessionManager>,
     session_id: &str,
@@ -2422,11 +2465,14 @@ mod tests {
     };
     use crate::config::{AiExecutionProfile, ProxySettings, SftpSettings};
     use crate::core::ssh::{SshAuth, SshConfig};
-    use crate::core::{SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType};
+    use crate::core::{
+        DynamicTitleCapabilities, SessionHandle, SessionInfo, SessionManager, SessionType,
+        session_command_channel,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, mpsc};
+    use tokio::sync::Mutex;
 
     fn temp_test_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("nyaterm-{name}-{}", uuid::Uuid::new_v4()));
@@ -2457,6 +2503,7 @@ mod tests {
             terminal_type: Default::default(),
             sftp: SftpSettings::default(),
             encoding: "UTF-8".to_string(),
+            dynamic_tab_title: false,
         }
     }
 
@@ -2595,7 +2642,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_remote_file_browser_rejects_sftp_commands() {
         let manager = Arc::new(SessionManager::new());
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, _cmd_rx) = session_command_channel("ssh-disabled-files");
         manager
             .add_session(SessionHandle {
                 info: SessionInfo {
@@ -2608,14 +2655,16 @@ mod tests {
                     owner_window_label: None,
                     ai_execution_profile: AiExecutionProfile::Posix,
                     injection_active: true,
+                    dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                     remote_file_browser_enabled: false,
                     remote_stats_enabled: true,
                     ssh_profile: None,
                 },
                 cmd_tx,
+                startup_input_barrier: None,
                 ssh_config: None,
                 ssh_handle: None,
-                cwd: Arc::new(Mutex::new(None)),
+                cwd: Arc::new(Mutex::new(Default::default())),
                 remote_fs: None,
             })
             .await;

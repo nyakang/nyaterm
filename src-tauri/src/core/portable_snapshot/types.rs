@@ -367,6 +367,8 @@ impl PortableAppSettings {
         mut current: AppSettings,
         snapshot_kind: &PortableSnapshotKind,
     ) -> AppSettings {
+        let mut snapshot_security = self.security;
+        snapshot_security.migrate_legacy_screen_lock();
         let master_password = current.security.master_password.clone();
         let ui_state = current.ui.clone();
         let device_appearance = current.appearance.clone();
@@ -377,7 +379,7 @@ impl PortableAppSettings {
         current.proxy = self.proxy;
         current.search = self.search;
         current.translation = self.translation;
-        current.security = self.security;
+        current.security = snapshot_security;
         current.security.master_password = master_password;
         current.terminal = self.terminal;
         current.interaction = self.interaction;

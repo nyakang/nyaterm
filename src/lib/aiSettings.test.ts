@@ -14,3 +14,13 @@ describe("aiSettings Ollama defaults", () => {
     expect(credential?.base_url).toBe("http://localhost:11434/");
   });
 });
+
+describe("External MCP defaults", () => {
+  it("starts disabled with confirm-scoped persistent storage", () => {
+    expect(DEFAULT_AI_SETTINGS.external_mcp).toEqual({
+      enabled: false,
+      permission_mode: "confirm",
+      session_scope: "current_window",
+    });
+  });
+});

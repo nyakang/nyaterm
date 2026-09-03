@@ -83,7 +83,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   security: {
     use_os_keyring: true,
-    enable_screen_lock: false,
+    enable_startup_lock: false,
+    enable_idle_lock: false,
     idle_lock_minutes: 0,
     host_key_policy: "prompt",
   },
@@ -110,11 +111,12 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     timestamp_format: "[HH:mm:ss]",
     show_multi_line_paste_dialog: true,
     paste_image_as_path: true,
+    reconnect_restore_cwd: false,
   },
   interaction: {
     copy_on_select: false,
     allow_osc52_clipboard_write: false,
-    right_click_paste: false,
+    terminal_right_click_action: "menu",
     terminal_zoom_enabled: true,
     command_suggestions_enabled: true,
     command_suggestion_min_chars: DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
@@ -145,6 +147,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   transfer: {
     editor_type: "external",
     internal_editor_display: "workspace",
+    internal_editor_font_size: 13,
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",
@@ -317,7 +320,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   }, [appSettings.ui?.language]);
 
   useIdleLock(
-    appSettings.security.enable_screen_lock
+    appSettings.security.enable_idle_lock
       ? appSettings.security.idle_lock_minutes
       : 0,
     isLocked,

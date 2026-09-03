@@ -311,6 +311,15 @@ impl SftpSession {
         }
     }
 
+    /// Reads a symbolic link using raw bytes for the link path and target.
+    pub async fn read_link_bytes(&self, path_bytes: Vec<u8>) -> SftpResult<Vec<u8>> {
+        let name = self.session.readlink_bytes(path_bytes).await?;
+        match name.files.first() {
+            Some(file) => Ok(file.filename_bytes.clone()),
+            None => Err(Error::UnexpectedBehavior("no file".to_owned())),
+        }
+    }
+
     /// Removes the specified folder.
     pub async fn remove_dir<P: Into<String>>(&self, path: P) -> SftpResult<()> {
         self.session.rmdir(path).await.map(|_| ())
@@ -371,6 +380,18 @@ impl SftpSession {
         L: Into<String>,
     {
         self.session.symlink_openssh(target, link).await.map(|_| ())
+    }
+
+    /// Creates an OpenSSH-compatible symlink using raw bytes for both paths.
+    pub async fn symlink_openssh_bytes(
+        &self,
+        target_bytes: Vec<u8>,
+        link_bytes: Vec<u8>,
+    ) -> SftpResult<()> {
+        self.session
+            .symlink_openssh_bytes(target_bytes, link_bytes)
+            .await
+            .map(|_| ())
     }
 
     /// Queries metadata about the remote file.

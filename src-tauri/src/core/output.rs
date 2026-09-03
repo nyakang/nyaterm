@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{Duration, sleep};
 
-use super::SessionCommand;
+use super::{SessionCommand, SessionCommandSender};
 
 const OUTPUT_FLUSH_INTERVAL_MS: u64 = 4;
 const OUTPUT_NORMAL_BATCH_BYTES: usize = 64 * 1024;
@@ -54,7 +53,10 @@ struct FlushResult {
 /// renderer/IPC backlog is too high.
 pub struct SessionOutputCoalescer {
     sink: Arc<OutputSink>,
-    flow_control_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
+    flow_control_tx: Option<SessionCommandSender>,
+    /// Serializes all sink emissions so concurrent producer/attach threads
+    /// cannot interleave terminal output chunks out of order.
+    emit_lock: Mutex<()>,
     state: Mutex<OutputState>,
 }
 
@@ -62,9 +64,18 @@ impl SessionOutputCoalescer {
     pub fn for_app(
         app: AppHandle,
         output_event: String,
-        flow_control_tx: mpsc::UnboundedSender<SessionCommand>,
+        flow_control_tx: SessionCommandSender,
     ) -> Arc<Self> {
+        let session_id = output_event
+            .strip_prefix("terminal-output-")
+            .map(str::to_string);
+        let session_manager = app
+            .try_state::<Arc<crate::core::SessionManager>>()
+            .map(|state| state.inner().clone());
         Self::with_flow_sink(flow_control_tx, move |payload| {
+            if let (Some(manager), Some(session_id)) = (&session_manager, &session_id) {
+                manager.append_recent_output(session_id, &payload.data);
+            }
             let _ = app.emit(&output_event, &payload);
         })
     }
@@ -77,22 +88,50 @@ impl SessionOutputCoalescer {
         Arc::new(Self {
             sink: Arc::new(sink),
             flow_control_tx: None,
+            emit_lock: Mutex::new(()),
             state: Mutex::new(OutputState::default()),
         })
     }
 
-    pub fn with_flow_sink<F>(
-        flow_control_tx: mpsc::UnboundedSender<SessionCommand>,
-        sink: F,
-    ) -> Arc<Self>
+    pub fn with_flow_sink<F>(flow_control_tx: SessionCommandSender, sink: F) -> Arc<Self>
     where
         F: Fn(TerminalOutputPayload) + Send + Sync + 'static,
     {
         Arc::new(Self {
             sink: Arc::new(sink),
             flow_control_tx: Some(flow_control_tx),
+            emit_lock: Mutex::new(()),
             state: Mutex::new(OutputState::default()),
         })
+    }
+
+    fn lock_emit(&self) -> MutexGuard<'_, ()> {
+        match self.emit_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("session output sink mutex was poisoned; recovering");
+                let guard = poisoned.into_inner();
+                self.emit_lock.clear_poison();
+                guard
+            }
+        }
+    }
+
+    fn emit_payload(&self, payload: TerminalOutputPayload) {
+        let _emit_guard = self.lock_emit();
+        (self.sink)(payload);
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, OutputState> {
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => {
+                tracing::warn!("session output state mutex was poisoned; recovering");
+                let state = poisoned.into_inner();
+                self.state.clear_poison();
+                state
+            }
+        }
     }
 
     pub fn push(self: &Arc<Self>, text: impl AsRef<str>) {
@@ -108,7 +147,7 @@ impl SessionOutputCoalescer {
         let mut flush_now = false;
         let mut close_for_overflow = false;
         let flow_change = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             let was_empty = state.pending.is_empty();
             state.pending_bytes = state.pending_bytes.saturating_add(text.len());
             state.pending.push_back(text);
@@ -150,7 +189,7 @@ impl SessionOutputCoalescer {
         }
 
         let (flow_change, schedule_timer) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.unacked_bytes = state.unacked_bytes.saturating_sub(bytes);
             let flow_change = update_flow_state(&mut state);
             let schedule_timer = if state.attached
@@ -173,22 +212,42 @@ impl SessionOutputCoalescer {
         }
     }
 
-    pub fn attach(self: &Arc<Self>) {
-        let result = {
-            let mut state = self.state.lock().unwrap();
-            state.attached = true;
-            state.unacked_bytes = 0;
-            state.next_flush_id = state.next_flush_id.wrapping_add(1);
-            state.scheduled_flush_id = None;
-            flush_from_state(&mut state)
-        };
+    pub fn is_attached(&self) -> bool {
+        self.lock_state().attached
+    }
 
-        self.apply_flush_result(result);
+    #[cfg(test)]
+    pub fn attach(self: &Arc<Self>) {
+        let (ack, _ack_rx) = tokio::sync::oneshot::channel();
+        self.attach_confirmed(ack);
+    }
+
+    pub fn attach_confirmed(self: &Arc<Self>, ack: tokio::sync::oneshot::Sender<()>) {
+        let mut state = self.lock_state();
+        state.attached = true;
+        state.unacked_bytes = 0;
+        state.next_flush_id = state.next_flush_id.wrapping_add(1);
+        state.scheduled_flush_id = None;
+
+        // Attach may race PTY push. Serialize against every other sink
+        // emission, then hold the state lock while draining; a competing push
+        // queues after the detached backlog instead of overtaking it before
+        // the renderer settles/publishes title state.
+        let emit_guard = self.lock_emit();
+        while let Some(payload) = take_pending_batch(&mut state) {
+            (self.sink)(payload);
+        }
+        drop(emit_guard);
+        let flow_change = update_flow_state(&mut state);
+        drop(state);
+
+        self.send_flow_change(flow_change);
+        let _ = ack.send(());
     }
 
     pub fn detach(self: &Arc<Self>) {
         let flow_change = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.attached = false;
             state.unacked_bytes = 0;
             state.next_flush_id = state.next_flush_id.wrapping_add(1);
@@ -201,7 +260,7 @@ impl SessionOutputCoalescer {
 
     pub fn close(self: &Arc<Self>) {
         let result = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.next_flush_id = state.next_flush_id.wrapping_add(1);
             state.scheduled_flush_id = None;
             flush_all_from_state(&mut state)
@@ -220,7 +279,7 @@ impl SessionOutputCoalescer {
 
     fn flush_if_scheduled(self: &Arc<Self>, flush_id: u64) {
         let result = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             if state.scheduled_flush_id != Some(flush_id) {
                 return;
             }
@@ -238,7 +297,7 @@ impl SessionOutputCoalescer {
 
     fn flush_pending(self: &Arc<Self>) {
         let result = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             if !state.attached {
                 return;
             }
@@ -253,12 +312,12 @@ impl SessionOutputCoalescer {
 
     fn apply_flush_result(self: &Arc<Self>, result: FlushResult) {
         if let Some(payload) = result.payload {
-            (self.sink)(payload);
+            self.emit_payload(payload);
         }
         self.send_flow_change(result.flow_change);
         if result.reschedule {
             let flush_id = {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.lock_state();
                 if !state.attached || state.pending.is_empty() || state.scheduled_flush_id.is_some()
                 {
                     None
@@ -467,9 +526,9 @@ mod tests {
         OUTPUT_NORMAL_BATCH_BYTES, OUTPUT_PAUSE_HIGH_WATERMARK_BYTES,
         OUTPUT_RESUME_LOW_WATERMARK_BYTES, SessionOutputCoalescer, TerminalOutputPayload,
     };
-    use crate::core::SessionCommand;
+    use crate::core::{SessionCommand, session_command_channel};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::mpsc;
+    use std::time::Duration as StdDuration;
     use tokio::time::{Duration, Instant, advance, sleep};
 
     fn collect_sink() -> (
@@ -505,6 +564,42 @@ mod tests {
             .iter()
             .map(|payload| payload.bytes)
             .sum()
+    }
+
+    #[test]
+    fn every_output_state_entrypoint_recovers_from_a_poisoned_mutex() {
+        let (_emitted, sink) = collect_sink();
+        let output = SessionOutputCoalescer::with_sink(sink);
+        let poison = |output: &Arc<SessionOutputCoalescer>| {
+            let poisoned_output = output.clone();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _guard = poisoned_output.state.lock().expect("lock output state");
+                panic!("poison output state");
+            }));
+        };
+
+        output.attach();
+        poison(&output);
+        output.detach();
+        assert!(!output.is_attached());
+
+        poison(&output);
+        output.attach();
+        assert!(output.is_attached());
+
+        poison(&output);
+        output.ack(1);
+        output.detach();
+        poison(&output);
+        output.push_owned("queued while detached".to_string());
+        assert_eq!(
+            output.lock_state().pending_bytes,
+            "queued while detached".len()
+        );
+
+        poison(&output);
+        output.close();
+        assert!(!output.state.is_poisoned());
     }
 
     #[tokio::test]
@@ -602,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn high_and_low_watermarks_pause_and_resume_once() {
         let (emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-flow-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.attach();
@@ -651,6 +746,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attach_ack_waits_until_every_detached_batch_reaches_the_sink() {
+        let (emitted, sink) = collect_sink();
+        let output = SessionOutputCoalescer::with_sink(sink);
+        output.push_owned("a".repeat(OUTPUT_FLOOD_BATCH_BYTES));
+        output.push_owned("b".repeat(OUTPUT_FLOOD_BATCH_BYTES));
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        output.attach_confirmed(ack_tx);
+        ack_rx.await.expect("attach acknowledgement");
+
+        let emitted = emitted.lock().unwrap();
+        assert!(emitted.len() >= 2);
+        let combined = emitted
+            .iter()
+            .map(|payload| payload.data.as_str())
+            .collect::<String>();
+        assert_eq!(
+            combined,
+            format!(
+                "{}{}",
+                "a".repeat(OUTPUT_FLOOD_BATCH_BYTES),
+                "b".repeat(OUTPUT_FLOOD_BATCH_BYTES)
+            )
+        );
+    }
+
+    #[test]
+    fn attach_replay_cannot_be_overtaken_by_a_concurrent_push() {
+        let emitted = Arc::new(Mutex::new(Vec::<String>::new()));
+        let emitted_sink = emitted.clone();
+        let output = SessionOutputCoalescer::with_sink(move |payload| {
+            std::thread::sleep(StdDuration::from_millis(10));
+            emitted_sink.lock().unwrap().push(payload.data);
+        });
+        output.push_owned("old-title\n".to_string());
+
+        // Large enough to trigger an immediate size flush (no async timer),
+        // so its emission is fully synchronous after attach drains.
+        let new_payload = format!("new-title\n{}", "n".repeat(OUTPUT_NORMAL_BATCH_BYTES));
+        let pusher = output.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(StdDuration::from_millis(5));
+            pusher.push_owned(new_payload);
+        });
+
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        output.attach_confirmed(ack_tx);
+        handle.join().expect("join concurrent push");
+        assert!(ack_rx.try_recv().is_ok());
+
+        // The racing push blocks on the state lock during replay and emits
+        // after it, so the detached backlog stays first in sink order.
+        let emitted = emitted.lock().unwrap();
+        let data = emitted.concat();
+        let old = data.find("old-title").expect("old title");
+        let new = data.find("new-title").expect("new title");
+        assert!(old < new, "{data:?}");
+    }
+
+    #[tokio::test]
     async fn detached_pending_output_is_preserved_until_attach() {
         let (emitted, sink) = collect_sink();
         let output = SessionOutputCoalescer::with_sink(sink);
@@ -672,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn catastrophic_backlog_sends_explicit_close_instead_of_dropping() {
         let (_emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-close-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.push_owned("x".repeat(OUTPUT_CATASTROPHIC_BACKLOG_BYTES));
@@ -687,7 +842,7 @@ mod tests {
     #[tokio::test]
     async fn attach_clears_stale_unacked_bytes() {
         let (emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-resume-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.attach();

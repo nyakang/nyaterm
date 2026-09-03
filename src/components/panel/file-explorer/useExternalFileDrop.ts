@@ -9,7 +9,7 @@ import {
   DRAG_EVENT_CAPTURE_OPTIONS,
   getDragEventPosition,
   getExternalFileDropBridge,
-  isDropPositionInsideElement,
+  isDropPositionTopmostWithinElement,
   isExternalFileDragEvent,
   type NativeFileDropEventPayload,
 } from "@/lib/nativeFileDrop";
@@ -56,7 +56,7 @@ export function useExternalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
         getDragEventPosition(event),
         listContainerRef.current,
       );
@@ -91,7 +91,7 @@ export function useExternalFileDrop({
 
       if (
         leftWindow ||
-        !isDropPositionInsideElement(getDragEventPosition(event), listContainerRef.current)
+        !isDropPositionTopmostWithinElement(getDragEventPosition(event), listContainerRef.current)
       ) {
         resetExternalDropHover();
       }
@@ -103,7 +103,10 @@ export function useExternalFileDrop({
       }
 
       const dropPosition = getDragEventPosition(event);
-      const isOverDropTarget = isDropPositionInsideElement(dropPosition, listContainerRef.current);
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
+        dropPosition,
+        listContainerRef.current,
+      );
       resetExternalDropHover();
 
       const currentSessionId = activeSessionIdRef.current;
@@ -228,7 +231,7 @@ export function useExternalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
         payload.position,
         listContainerRef.current,
       );
@@ -295,7 +298,7 @@ export function useExternalFileDrop({
         return;
       }
 
-      const isOverDropTarget = isDropPositionInsideElement(
+      const isOverDropTarget = isDropPositionTopmostWithinElement(
         payload.position,
         listContainerRef.current,
       );

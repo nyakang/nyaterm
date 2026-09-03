@@ -179,14 +179,26 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   waitForIdle(timeoutMs: number) {
     const deadline = this.timers.now() + timeoutMs;
     return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.timers.clearTimeout(hardTimeout);
+        resolve(value);
+      };
+      const hardTimeout = this.timers.setTimeout(
+        () => finish(false),
+        Math.max(0, timeoutMs),
+      );
       const poll = () => {
+        if (settled) return;
         if (this.disposed) {
-          resolve(false);
+          finish(false);
           return;
         }
 
-        if (this.timers.now() > deadline) {
-          resolve(false);
+        if (this.timers.now() >= deadline) {
+          finish(false);
           return;
         }
 
@@ -194,6 +206,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
           const payload = dequeueOutputChunk(this.queue, this.options.getWriteChunkBytes());
           if (payload) {
             void this.writePayload(payload).then(() => {
+              if (settled) return;
               this.flushPendingAck(true);
               poll();
             });
@@ -207,7 +220,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
         }
 
         this.flushPendingAck(true);
-        resolve(this.queue.bytes === 0 && this.writingBytes === 0);
+        finish(this.queue.bytes === 0 && this.writingBytes === 0);
       };
 
       this.cancelForeground();

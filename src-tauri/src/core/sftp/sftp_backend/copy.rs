@@ -480,7 +480,8 @@ impl SftpBackend {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let settings = copy_transfer_settings(app);
-        let (request_kib, pipeline_depth, max_concurrent_writes) = sftp_pipeline_config(&settings);
+        let (request_kib, pipeline_depth, max_concurrent_writes) =
+            sftp_pipeline_config(&settings, self.pipeline_depth_override);
         let chunk_size = sftp_payload_size(request_kib);
         let started = Instant::now();
         let controller = create_child_file_transfer_controller(
@@ -632,6 +633,9 @@ impl SftpBackend {
     ) -> AppResult<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        let settings = copy_transfer_settings(app);
+        let (request_kib, pipeline_depth, max_concurrent_writes) =
+            sftp_pipeline_config(&settings, self.pipeline_depth_override);
         let controller = create_child_file_transfer_controller(
             transfer_id,
             source_session_id,
@@ -656,50 +660,88 @@ impl SftpBackend {
                 })?;
             }
 
-            let sftp = self.open_sftp().await?;
-            let total_size = sftp
+            let sftp = self
+                .open_sftp_with_client_config(sftp_client_config(
+                    request_kib,
+                    max_concurrent_writes,
+                ))
+                .await?;
+            let remote_size = sftp
                 .metadata(source_path)
                 .await
                 .ok()
-                .and_then(|attrs| attrs.size)
-                .unwrap_or(0);
+                .and_then(|attrs| attrs.size);
+            let total_size = remote_size.unwrap_or(0);
             controller.update_progress(0, total_size);
-            let mut source_file = sftp.open(source_path).await.map_err(|error| {
-                AppError::Channel(format!("Source connection read open failed: {error}"))
-            })?;
             let mut temp_file = tokio::fs::File::create(&temp).await.map_err(|error| {
                 AppError::Channel(format!("Failed to create temporary target file: {error}"))
             })?;
-            let mut buffer = vec![0_u8; 512 * 1024];
-            let mut bytes_written = 0_u64;
-            let mut last_progress = Instant::now();
+            let temp_path = temp.to_string_lossy().to_string();
 
-            loop {
-                wait_for_transfer_ready(&controller).await?;
-                let read = source_file.read(&mut buffer).await.map_err(|error| {
-                    AppError::Channel(format!(
-                        "Source connection disconnected or read failed for {source_path}: {error}"
-                    ))
+            let bytes_written = if let Some(total_size) = remote_size {
+                if total_size > 0 {
+                    let _ = temp_file.set_len(total_size).await;
+                }
+                download_known_size_to_local_file(
+                    &sftp,
+                    source_path,
+                    &temp_path,
+                    &mut temp_file,
+                    total_size,
+                    request_kib,
+                    pipeline_depth,
+                    pipeline_depth,
+                    &controller,
+                    None,
+                    &self.path_cache,
+                    |current, _delta| controller.update_progress(current, total_size),
+                    |current| {
+                        controller.update_progress(current, total_size);
+                        let _ = app.emit(
+                            "transfer-event",
+                            &controller.build_event("progress", total_size, None),
+                        );
+                    },
+                )
+                .await?
+            } else {
+                let mut source_file = sftp.open(source_path).await.map_err(|error| {
+                    AppError::Channel(format!("Source connection read open failed: {error}"))
                 })?;
-                if read == 0 {
-                    break;
-                }
-                temp_file
-                    .write_all(&buffer[..read])
-                    .await
-                    .map_err(|error| {
-                        AppError::Channel(format!("Failed to write temporary target file: {error}"))
+                let mut buffer = vec![0_u8; sftp_payload_size(request_kib)];
+                let mut bytes_written = 0_u64;
+                let mut last_progress = Instant::now();
+                loop {
+                    wait_for_transfer_ready(&controller).await?;
+                    let read = source_file.read(&mut buffer).await.map_err(|error| {
+                        AppError::Channel(format!(
+                            "Source connection disconnected or read failed for {source_path}: {error}"
+                        ))
                     })?;
-                bytes_written = bytes_written.saturating_add(read as u64);
-                controller.update_progress(bytes_written, total_size);
-                if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
-                    last_progress = Instant::now();
-                    let _ = app.emit(
-                        "transfer-event",
-                        &controller.build_event("progress", total_size, None),
-                    );
+                    if read == 0 {
+                        break;
+                    }
+                    temp_file
+                        .write_all(&buffer[..read])
+                        .await
+                        .map_err(|error| {
+                            AppError::Channel(format!(
+                                "Failed to write temporary target file: {error}"
+                            ))
+                        })?;
+                    bytes_written = bytes_written.saturating_add(read as u64);
+                    controller.update_progress(bytes_written, 0);
+                    if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                        last_progress = Instant::now();
+                        let _ = app.emit(
+                            "transfer-event",
+                            &controller.build_event("progress", 0, None),
+                        );
+                    }
                 }
-            }
+                close_download_remote_file(source_file, source_path, &temp_path, None).await?;
+                bytes_written
+            };
             temp_file.flush().await.map_err(|error| {
                 AppError::Channel(format!("Failed to flush temporary target file: {error}"))
             })?;
@@ -945,7 +987,8 @@ impl SftpBackend {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let settings = copy_transfer_settings(app);
-        let (request_kib, pipeline_depth, max_concurrent_writes) = sftp_pipeline_config(&settings);
+        let (request_kib, pipeline_depth, max_concurrent_writes) =
+            sftp_pipeline_config(&settings, self.pipeline_depth_override);
         let chunk_size = sftp_payload_size(request_kib);
         let started = Instant::now();
         let controller = create_directory_transfer_controller(
@@ -1123,7 +1166,8 @@ impl SftpBackend {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let settings = copy_transfer_settings(app);
-        let (request_kib, pipeline_depth, max_concurrent_writes) = sftp_pipeline_config(&settings);
+        let (request_kib, pipeline_depth, max_concurrent_writes) =
+            sftp_pipeline_config(&settings, self.pipeline_depth_override);
         let started = Instant::now();
         let controller = create_directory_transfer_controller(
             transfer_id,

@@ -67,10 +67,12 @@ docs: update installation guide
 
 ## Internationalization
 
-When adding or modifying UI text, update both:
+When adding or modifying UI text, update all:
 
-- `src/i18n/locales/zh-CN.json`
-- `src/i18n/locales/en.json`
+- `src/i18n/locales/zh-CN.json` — Simplified Chinese
+- `src/i18n/locales/zh-TW.json` — Traditional Chinese
+- `src/i18n/locales/en.json` — English
+- `src/i18n/locales/ko.json` — Korean
 
 ## License
 

@@ -383,7 +383,7 @@ export default function QuickCommandPage() {
     <div className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground">
       <ChildWindowHeader
         title={
-          initialData
+          initialData?.id
             ? t("quickCommands.editCommand")
             : t("quickCommands.addCommand")
         }

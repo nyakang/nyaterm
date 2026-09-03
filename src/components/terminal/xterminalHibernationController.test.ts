@@ -36,6 +36,7 @@ function createHarness(
     sessionType?: SessionType;
     lastOutputActivityAt?: number;
     flushFrameGateAndDrain?: (reason: string) => Promise<boolean>;
+    reconnectSnapshot?: TerminalReconnectSnapshot | null;
   } = {},
 ) {
   let now = 0;
@@ -65,6 +66,7 @@ function createHarness(
   const setTerminalGeneration = vi.fn();
   const updateOutputDrainMode = vi.fn();
   const repaintVisibleTerminal = vi.fn();
+  const beginSnapshotRestore = vi.fn();
   const flushFrameGateAndDrain =
     options.flushFrameGateAndDrain ?? vi.fn(async () => true);
 
@@ -112,7 +114,8 @@ function createHarness(
     enterDisconnectedStateIfAttachSessionMissing: () => false,
     updateOutputDrainMode,
     flushFrameGateAndDrain,
-    captureReconnectSnapshot: () => null,
+    captureReconnectSnapshot: () => options.reconnectSnapshot ?? null,
+    beginSnapshotRestore,
     setTerminalReady,
     setHibernated,
     setTerminalGeneration,
@@ -148,6 +151,7 @@ function createHarness(
 
   return {
     advance,
+    beginSnapshotRestore,
     controller,
     flushFrameGateAndDrain,
     hibernatedRef,
@@ -182,6 +186,26 @@ describe("createXTerminalHibernationController", () => {
     expect(hibernationPhaseRef.current).toBe("hibernated");
     expect(hibernatedRef.current).toBe(true);
     expect(setHibernated).toHaveBeenCalledWith(true);
+  });
+
+  it("starts snapshot restore before disposing a hibernated renderer", async () => {
+    const snapshot: TerminalReconnectSnapshot = {
+      content: "preserved terminal history",
+      lineTimestamps: [],
+      captureStartLine: 0,
+      captureEndLine: 0,
+    };
+    const { advance, beginSnapshotRestore, setHibernated } = createHarness({
+      reconnectSnapshot: snapshot,
+    });
+
+    advance(XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs);
+    await settle();
+
+    expect(beginSnapshotRestore).toHaveBeenCalledWith(snapshot);
+    expect(beginSnapshotRestore.mock.invocationCallOrder[0]).toBeLessThan(
+      setHibernated.mock.invocationCallOrder[0],
+    );
   });
 
   it("does not hibernate while hidden output activity continues", async () => {
@@ -243,7 +267,9 @@ describe("createXTerminalHibernationController", () => {
 
   it("never hibernates a visible terminal from output idleness", async () => {
     const { advance, controller, repaintVisibleTerminal, timers } =
-      createHarness({ visible: true });
+      createHarness({
+        visible: true,
+      });
 
     expect(timers.size).toBe(0);
     expect(repaintVisibleTerminal).toHaveBeenCalled();
@@ -286,7 +312,9 @@ describe("createXTerminalHibernationController", () => {
       .mockResolvedValueOnce(true)
       .mockReturnValueOnce(afterDetachDrain.promise);
     const { advance, controller, hibernatedRef, hibernationPhaseRef } =
-      createHarness({ flushFrameGateAndDrain });
+      createHarness({
+        flushFrameGateAndDrain,
+      });
 
     advance(XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs);
     await settle();

@@ -7,7 +7,10 @@ import {
   createSessionPane,
   createWorkspaceTab,
   findOpenFileDocument,
+  getActiveSessionTabDisplayName,
   getReleasedSessionIds,
+  getSessionRowDisplayName,
+  getTabDisplayName,
   replaceSessionReferences,
   restoreTabFromPersistence,
   serializeTabsForPersistence,
@@ -394,5 +397,84 @@ describe("workspaceTabs temporary session metadata", () => {
       session_type: "Telnet",
     });
     expect(serialized.root?.kind === "leaf" && serialized.root.connection_id).toBeUndefined();
+  });
+});
+
+describe("workspaceTabs dynamic titles", () => {
+  const localTab = () =>
+    createWorkspaceTab(createSessionPane("Local Terminal", "Local"), 0);
+
+  it("prefers custom name over a resolved dynamic title", () => {
+    const tab = { ...localTab(), customName: "pinned" };
+    expect(getTabDisplayName(tab, "vim — /home/user")).toBe("pinned");
+  });
+
+  it("uses the active session's dynamic title through the shared resolver", () => {
+    const tab = localTab();
+    const activeSessionId =
+      tab.root.kind === "leaf" ? tab.root.sessionId : null;
+    expect(
+      getActiveSessionTabDisplayName(tab, (sessionId) =>
+        sessionId === activeSessionId ? "cargo build" : null,
+      ),
+    ).toBe("cargo build");
+  });
+
+  it("falls back to the static name when no resolved title exists", () => {
+    expect(getTabDisplayName(localTab(), null)).toBe("Local Terminal");
+    expect(getTabDisplayName(localTab(), "   ")).toBe("Local Terminal");
+  });
+
+  it("uses each enabled session's own title in session-identity rows", () => {
+    const first = createSessionPane("First", "Local", undefined, {
+      id: "pane-first",
+      sessionId: "session-first",
+    });
+    const second = createSessionPane("Second", "Local", undefined, {
+      id: "pane-second",
+      sessionId: "session-second",
+    });
+    const tab = createWorkspaceTab(first, 0);
+    tab.root = splitSessionPane(tab.root, first.id, "vertical", second);
+    tab.activePaneId = first.id;
+
+    expect(
+      getSessionRowDisplayName(tab, "Second", {
+        applicationTitle: null,
+        cwd: null,
+        effectiveTitle: "~/second-project",
+        enabled: true,
+      }),
+    ).toBe("~/second-project");
+    expect(
+      getSessionRowDisplayName(tab, "Second", {
+        applicationTitle: null,
+        cwd: null,
+        effectiveTitle: null,
+        enabled: false,
+      }),
+    ).toBe("First");
+  });
+
+  it("does not persist dynamic title policy in workspace tabs", () => {
+    const [serialized] = serializeTabsForPersistence([localTab()]);
+    expect(serialized).not.toHaveProperty("dynamic_title");
+  });
+
+  it("ignores a legacy per-tab dynamic title field when restoring", () => {
+    const restored = restoreTabFromPersistence(
+      {
+        title: "Local Terminal",
+        session_type: "Local",
+        dynamic_title: true,
+        root: {
+          kind: "leaf",
+          title: "Local Terminal",
+          session_type: "Local",
+        },
+      } as RestorableTab & { dynamic_title?: boolean },
+      0,
+    );
+    expect(restored).not.toHaveProperty("dynamicTitle");
   });
 });

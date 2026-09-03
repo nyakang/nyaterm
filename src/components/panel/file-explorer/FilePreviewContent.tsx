@@ -777,7 +777,13 @@ function ReadOnlyCodeMirror({
     return () => view.destroy();
   }, [content, language]);
 
-  return <div ref={parentRef} className="h-full min-h-0 bg-background/60" />;
+  return (
+    <div
+      ref={parentRef}
+      className="h-full min-h-0 bg-background/60"
+      style={{ fontSize: "13px" }}
+    />
+  );
 }
 
 function PdfPreview({ file }: { file: RemoteBinaryFile }) {

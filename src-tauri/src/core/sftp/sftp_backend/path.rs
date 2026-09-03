@@ -3,12 +3,17 @@
 use super::*;
 
 impl SftpBackend {
-    pub(crate) fn new(ssh_handle: Arc<SshConnectionHandles>, encoding: &str) -> Self {
+    pub(crate) fn new(
+        ssh_handle: Arc<SshConnectionHandles>,
+        encoding: &str,
+        pipeline_depth_override: Option<u32>,
+    ) -> Self {
         Self {
             ssh_handle,
             identity_cache: Arc::new(RwLock::new(RemoteIdentityCache::default())),
             path_cache: Arc::new(RwLock::new(HashMap::new())),
             encoding: encoding.to_string(),
+            pipeline_depth_override,
         }
     }
 

@@ -6,6 +6,7 @@
 use super::history::{CommandHistoryStore, sanitize_history_command};
 use super::{InputOrigin, InputSensitivity, RecordingManager};
 use crate::config::{AiExecutionProfile, SshProfile};
+use crate::core::capabilities::RecentOutputStore;
 use crate::core::capture::CapturedOutput;
 use crate::core::zmodem::{ZmodemPreparedUpload, ZmodemUploadConflictMode};
 use crate::error::{AppError, AppResult};
@@ -15,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
 use time::format_description::well_known::Rfc3339;
@@ -25,8 +26,64 @@ use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 const HISTORY_SAVE_DEBOUNCE: Duration = Duration::from_millis(100);
 const HISTORY_EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 const MAX_PENDING_CONFIRMATIONS: usize = 256;
+const COMMAND_QUEUE_HIGH_THRESHOLD: usize = 100;
+const COMMAND_QUEUE_CRITICAL_THRESHOLD: usize = 1000;
+const COMMAND_QUEUE_HIGH_RESET_THRESHOLD: usize = 50;
+const COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD: usize = 500;
 
-pub type SharedCwd = Arc<Mutex<Option<String>>>;
+/// Safe, backend-resolved cwd values used by the dynamic-title UI.
+///
+/// This is intentionally separate from the legacy cwd projection: existing
+/// `cwd-changed-*` consumers keep their released string semantics, while new
+/// presentation consumers receive a validated, bounded representation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CwdPresentation {
+    /// Compact path/URI already formatted for a tab title.
+    pub title: String,
+    /// Full safe value shown in the tab tooltip.
+    pub display_path: String,
+    /// Exact shell-oriented path for ordinary locations, otherwise an encoded URI.
+    pub copy_value: String,
+    /// Host-native filesystem path for operational consumers. `None` means
+    /// the location is presentation-only (unsafe bytes or an unmappable shell path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operational_path: Option<String>,
+    /// True when `copy_value` is an encoded URI rather than a native path.
+    pub copy_as_uri: bool,
+}
+
+/// Single in-memory cwd record with compatibility, operational and strict
+/// presentation projections. All three are replaced under one lock.
+#[derive(Debug, Default, Clone)]
+pub struct SessionCwdState {
+    pub legacy_path: Option<String>,
+    pub operational_path: Option<String>,
+    pub presentation: Option<CwdPresentation>,
+}
+
+impl SessionCwdState {
+    pub fn safe_local_execution_cwd(&self) -> Option<String> {
+        self.operational_path.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionCwdReplacement {
+    pub legacy_path: Option<String>,
+    pub operational_path: Option<String>,
+    pub presentation: Option<CwdPresentation>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionCwdChanges {
+    pub operational_changed: bool,
+    pub operational_path: Option<String>,
+    pub presentation_changed: bool,
+    pub presentation: Option<CwdPresentation>,
+}
+
+pub type SharedCwd = Arc<Mutex<SessionCwdState>>;
 pub type SessionReadyHook = Arc<dyn Fn(&SessionInfo) + Send + Sync>;
 
 pub(crate) fn normalize_cwd_path(path: &str) -> String {
@@ -49,16 +106,32 @@ pub(crate) async fn update_cwd_if_changed(cwd: &SharedCwd, next_path: &str) -> O
     }
 
     let mut cached = cwd.lock().await;
-    let unchanged = cached
-        .as_deref()
-        .is_some_and(|current| normalize_cwd_path(current) == normalized);
-
-    if unchanged {
-        return None;
+    let operational_changed = cached.operational_path.as_deref() != Some(normalized.as_str());
+    cached.legacy_path = Some(normalized.clone());
+    cached.operational_path = Some(normalized.clone());
+    if operational_changed {
+        Some(normalized)
+    } else {
+        None
     }
+}
 
-    *cached = Some(normalized.clone());
-    Some(normalized)
+pub(crate) async fn replace_cwd_state(
+    cwd: &SharedCwd,
+    replacement: SessionCwdReplacement,
+) -> SessionCwdChanges {
+    let mut cached = cwd.lock().await;
+    let operational_changed = cached.operational_path != replacement.operational_path;
+    let presentation_changed = cached.presentation != replacement.presentation;
+    cached.legacy_path = replacement.legacy_path;
+    cached.operational_path = replacement.operational_path.clone();
+    cached.presentation = replacement.presentation.clone();
+    SessionCwdChanges {
+        operational_changed,
+        operational_path: replacement.operational_path,
+        presentation_changed,
+        presentation: replacement.presentation,
+    }
 }
 
 fn is_windows_drive_root(path: &str) -> bool {
@@ -74,6 +147,39 @@ pub enum SessionType {
     Local,
     Telnet,
     Serial,
+}
+
+/// Runtime-only dynamic-title policy and integration capabilities.
+///
+/// This is flattened into [`SessionInfo`] so the established frontend wire
+/// fields remain top-level and backward compatible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DynamicTitleCapabilities {
+    /// Whether application-provided dynamic titles may be promoted to the tab.
+    /// This is copied from the saved connection at session creation time.
+    #[serde(default, rename = "dynamic_title_enabled")]
+    pub enabled: bool,
+    /// Whether the selected shell received NyaTerm's dynamic-title/cwd hooks.
+    /// Passive OSC title handling may still work when this is false.
+    #[serde(default, rename = "dynamic_title_integration_active")]
+    pub integration_active: bool,
+    /// Trusted Windows Local executable identity used for initial ConPTY filtering.
+    #[serde(
+        default,
+        rename = "trusted_initial_title",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub trusted_initial_title: Option<String>,
+}
+
+impl DynamicTitleCapabilities {
+    pub fn new(enabled: bool, trusted_initial_title: Option<String>) -> Self {
+        Self {
+            enabled,
+            integration_active: false,
+            trusted_initial_title,
+        }
+    }
 }
 
 /// Metadata for a session exposed to the frontend.
@@ -92,10 +198,12 @@ pub struct SessionInfo {
     /// Effective AI command execution profile for this session.
     #[serde(default)]
     pub ai_execution_profile: AiExecutionProfile,
-    /// True when backend terminal-path tracking is available for this session.
-    /// Currently this is enabled for sessions that can report directory changes to the backend.
+    /// True when the released backend shell integration expects private
+    /// command-confirmation events. Dynamic-title cwd hooks are independent.
     #[serde(default)]
     pub injection_active: bool,
+    #[serde(flatten)]
+    pub dynamic_title_capabilities: DynamicTitleCapabilities,
     /// True when the remote file browser is enabled for this session.
     #[serde(default = "default_remote_file_browser_enabled")]
     pub remote_file_browser_enabled: bool,
@@ -124,8 +232,10 @@ pub(crate) fn now_session_started_at() -> String {
 
 /// Commands sent from the frontend to a session's I/O loop.
 pub enum SessionCommand {
-    /// Frontend listener is ready — flush buffered output and start emitting.
-    Attach,
+    /// Attach and acknowledge only after the backend has flushed its buffered
+    /// output into the frontend event queue. Used by hibernation replay so
+    /// dynamic title publication resumes after the attach boundary.
+    AttachConfirmed { ack: oneshot::Sender<()> },
     /// Frontend renderer has been hibernated; keep the session alive but stop emitting output.
     DetachRenderer,
     /// Input to send to the terminal.
@@ -165,10 +275,401 @@ pub enum SessionCommand {
     ZmodemCancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCommandQueueSnapshot {
+    pub queued_commands: u64,
+    pub processed_commands: u64,
+    pub current_pending: usize,
+    pub max_pending_observed: usize,
+}
+
+struct SessionCommandQueueMetrics {
+    session_id: String,
+    queued_commands: AtomicU64,
+    processed_commands: AtomicU64,
+    current_pending: AtomicUsize,
+    max_pending_observed: AtomicUsize,
+    pressure_tier: AtomicU8,
+}
+
+impl SessionCommandQueueMetrics {
+    fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            queued_commands: AtomicU64::new(0),
+            processed_commands: AtomicU64::new(0),
+            current_pending: AtomicUsize::new(0),
+            max_pending_observed: AtomicUsize::new(0),
+            pressure_tier: AtomicU8::new(0),
+        }
+    }
+
+    fn reserve_enqueue(&self) -> usize {
+        self.queued_commands
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1))
+            })
+            .unwrap_or(u64::MAX);
+        let previous = self
+            .current_pending
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1))
+            })
+            .unwrap_or(usize::MAX);
+        previous.saturating_add(1)
+    }
+
+    fn commit_enqueue(&self, pending: usize) {
+        let mut observed = self.max_pending_observed.load(Ordering::Relaxed);
+        while pending > observed {
+            match self.max_pending_observed.compare_exchange_weak(
+                observed,
+                pending,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => observed = actual,
+            }
+        }
+        self.maybe_log_pressure(pending);
+    }
+
+    fn rollback_enqueue(&self) {
+        saturating_atomic_sub_u64(&self.queued_commands, 1);
+        let pending = saturating_atomic_sub_usize(&self.current_pending, 1);
+        self.relax_pressure_tier(pending);
+    }
+
+    fn mark_processed(&self) {
+        self.processed_commands
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1))
+            })
+            .ok();
+        let pending = saturating_atomic_sub_usize(&self.current_pending, 1);
+        self.relax_pressure_tier(pending);
+    }
+
+    fn clear_pending(&self) {
+        self.current_pending.store(0, Ordering::Relaxed);
+        self.pressure_tier.store(0, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> SessionCommandQueueSnapshot {
+        SessionCommandQueueSnapshot {
+            queued_commands: self.queued_commands.load(Ordering::Relaxed),
+            processed_commands: self.processed_commands.load(Ordering::Relaxed),
+            current_pending: self.current_pending.load(Ordering::Relaxed),
+            max_pending_observed: self.max_pending_observed.load(Ordering::Relaxed),
+        }
+    }
+
+    fn maybe_log_pressure(&self, pending: usize) {
+        let next_tier = if pending >= COMMAND_QUEUE_CRITICAL_THRESHOLD {
+            2
+        } else if pending >= COMMAND_QUEUE_HIGH_THRESHOLD {
+            1
+        } else {
+            return;
+        };
+        let previous_tier = self.pressure_tier.fetch_max(next_tier, Ordering::Relaxed);
+        if previous_tier >= next_tier {
+            return;
+        }
+
+        let (event, threshold) = if next_tier == 2 {
+            (
+                "command_queue_pressure.critical",
+                COMMAND_QUEUE_CRITICAL_THRESHOLD,
+            )
+        } else {
+            ("command_queue_pressure.high", COMMAND_QUEUE_HIGH_THRESHOLD)
+        };
+        let snapshot = self.snapshot();
+        crate::observability::log_rate_limited(StructuredLog {
+            level: StructuredLogLevel::Warn,
+            domain: "session.command".to_string(),
+            event: event.to_string(),
+            message: "Session command queue pressure exceeded a diagnostic threshold".to_string(),
+            ids: Some(json!({ "session_id": self.session_id })),
+            data: Some(json!({
+                "threshold": threshold,
+                "queued_commands": snapshot.queued_commands,
+                "processed_commands": snapshot.processed_commands,
+                "current_pending": snapshot.current_pending,
+                "max_pending_observed": snapshot.max_pending_observed,
+            })),
+            error: None,
+            client_timestamp: None,
+        });
+    }
+
+    fn relax_pressure_tier(&self, pending: usize) {
+        let tier = self.pressure_tier.load(Ordering::Relaxed);
+        if pending < COMMAND_QUEUE_HIGH_RESET_THRESHOLD {
+            self.pressure_tier.store(0, Ordering::Relaxed);
+        } else if tier >= 2 && pending < COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD {
+            self.pressure_tier.store(1, Ordering::Relaxed);
+        }
+    }
+}
+
+fn saturating_atomic_sub_usize(value: &AtomicUsize, amount: usize) -> usize {
+    value
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_sub(amount))
+        })
+        .map(|previous| previous.saturating_sub(amount))
+        .unwrap_or(0)
+}
+
+fn saturating_atomic_sub_u64(value: &AtomicU64, amount: u64) -> u64 {
+    value
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_sub(amount))
+        })
+        .map(|previous| previous.saturating_sub(amount))
+        .unwrap_or(0)
+}
+
+pub struct SessionCommandSender {
+    sender: mpsc::UnboundedSender<SessionCommand>,
+    metrics: Arc<SessionCommandQueueMetrics>,
+}
+
+impl Clone for SessionCommandSender {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            metrics: self.metrics.clone(),
+        }
+    }
+}
+
+impl SessionCommandSender {
+    pub fn send(
+        &self,
+        command: SessionCommand,
+    ) -> Result<(), mpsc::error::SendError<SessionCommand>> {
+        let pending = self.metrics.reserve_enqueue();
+        match self.sender.send(command) {
+            Ok(()) => {
+                self.metrics.commit_enqueue(pending);
+                Ok(())
+            }
+            Err(error) => {
+                self.metrics.rollback_enqueue();
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn snapshot(&self) -> SessionCommandQueueSnapshot {
+        self.metrics.snapshot()
+    }
+}
+
+pub struct SessionCommandReceiver {
+    receiver: mpsc::UnboundedReceiver<SessionCommand>,
+    metrics: Arc<SessionCommandQueueMetrics>,
+}
+
+impl SessionCommandReceiver {
+    pub async fn recv(&mut self) -> Option<SessionCommand> {
+        let command = self.receiver.recv().await;
+        if command.is_some() {
+            self.metrics.mark_processed();
+        }
+        command
+    }
+
+    pub fn try_recv(&mut self) -> Result<SessionCommand, mpsc::error::TryRecvError> {
+        let command = self.receiver.try_recv();
+        if command.is_ok() {
+            self.metrics.mark_processed();
+        }
+        command
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
+    pub fn blocking_recv(&mut self) -> Option<SessionCommand> {
+        let command = self.receiver.blocking_recv();
+        if command.is_some() {
+            self.metrics.mark_processed();
+        }
+        command
+    }
+
+    #[cfg(test)]
+    pub fn snapshot(&self) -> SessionCommandQueueSnapshot {
+        self.metrics.snapshot()
+    }
+}
+
+impl Drop for SessionCommandReceiver {
+    fn drop(&mut self) {
+        self.metrics.clear_pending();
+    }
+}
+
+pub fn session_command_channel(
+    session_id: impl Into<String>,
+) -> (SessionCommandSender, SessionCommandReceiver) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let metrics = Arc::new(SessionCommandQueueMetrics::new(session_id.into()));
+    (
+        SessionCommandSender {
+            sender,
+            metrics: metrics.clone(),
+        },
+        SessionCommandReceiver { receiver, metrics },
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupInputBarrierPhase {
+    Pending,
+    Injected,
+    Cancelled,
+}
+
+#[derive(Debug)]
+struct StartupInputBarrierState {
+    phase: StartupInputBarrierPhase,
+    pending_terminal_queries: usize,
+    pending_terminal_writes: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartupInjectionAttempt<T> {
+    Injected(T),
+    WaitForTerminalResponse,
+    Cancelled,
+}
+
+/// Orders Local startup injection against real input before it is enqueued.
+/// The mutex is held across the short PTY source-command write, so either the
+/// input cancellation wins first or the complete injection write wins first.
+pub struct StartupInputBarrier {
+    state: StdMutex<StartupInputBarrierState>,
+}
+
+impl StartupInputBarrier {
+    pub fn new() -> Self {
+        Self {
+            state: StdMutex::new(StartupInputBarrierState {
+                phase: StartupInputBarrierPhase::Pending,
+                pending_terminal_queries: 0,
+                pending_terminal_writes: 0,
+            }),
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, StartupInputBarrierState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn cancel_pending(&self) -> bool {
+        let mut state = self.lock_state();
+        if state.phase != StartupInputBarrierPhase::Pending {
+            return false;
+        }
+        state.phase = StartupInputBarrierPhase::Cancelled;
+        true
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.lock_state().phase == StartupInputBarrierPhase::Cancelled
+    }
+
+    pub fn cancel_for_input(&self, origin: InputOrigin) -> bool {
+        if origin == InputOrigin::TerminalResponse {
+            return false;
+        }
+        let mut state = self.lock_state();
+        if state.phase == StartupInputBarrierPhase::Pending {
+            state.phase = StartupInputBarrierPhase::Cancelled;
+        }
+        state.phase == StartupInputBarrierPhase::Cancelled
+    }
+
+    pub fn note_terminal_queries(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let mut state = self.lock_state();
+        if state.phase == StartupInputBarrierPhase::Pending {
+            state.pending_terminal_queries = state.pending_terminal_queries.saturating_add(count);
+        }
+    }
+
+    pub fn note_terminal_response_enqueued(&self) {
+        let mut state = self.lock_state();
+        if state.phase == StartupInputBarrierPhase::Pending
+            && state.pending_terminal_writes < state.pending_terminal_queries
+        {
+            state.pending_terminal_writes = state.pending_terminal_writes.saturating_add(1);
+        }
+    }
+
+    pub fn resolve_terminal_response(&self) -> bool {
+        let mut state = self.lock_state();
+        let matched_query = state.pending_terminal_queries > 0;
+        if matched_query {
+            state.pending_terminal_queries -= 1;
+            state.pending_terminal_writes = state.pending_terminal_writes.saturating_sub(1);
+        }
+        matched_query
+    }
+
+    pub fn has_pending_terminal_query(&self) -> bool {
+        let state = self.lock_state();
+        state.phase == StartupInputBarrierPhase::Pending
+            && (state.pending_terminal_queries > 0 || state.pending_terminal_writes > 0)
+    }
+
+    pub fn try_inject<T, E>(
+        &self,
+        inject: impl FnOnce() -> Result<T, E>,
+    ) -> Result<StartupInjectionAttempt<T>, E> {
+        let mut state = self.lock_state();
+        match state.phase {
+            StartupInputBarrierPhase::Cancelled | StartupInputBarrierPhase::Injected => {
+                return Ok(StartupInjectionAttempt::Cancelled);
+            }
+            StartupInputBarrierPhase::Pending
+                if state.pending_terminal_queries > 0 || state.pending_terminal_writes > 0 =>
+            {
+                return Ok(StartupInjectionAttempt::WaitForTerminalResponse);
+            }
+            StartupInputBarrierPhase::Pending => {}
+        }
+        match inject() {
+            Ok(value) => {
+                state.phase = StartupInputBarrierPhase::Injected;
+                Ok(StartupInjectionAttempt::Injected(value))
+            }
+            Err(error) => {
+                state.phase = StartupInputBarrierPhase::Cancelled;
+                Err(error)
+            }
+        }
+    }
+}
+
 /// Handle to an active session; used to send commands and access SSH config for SFTP.
 pub struct SessionHandle {
     pub info: SessionInfo,
-    pub cmd_tx: mpsc::UnboundedSender<SessionCommand>,
+    pub cmd_tx: SessionCommandSender,
+    /// Local Bash/Zsh only: producer-side input/injection ordering barrier.
+    pub startup_input_barrier: Option<Arc<StartupInputBarrier>>,
     /// SSH-specific: stores config for potential reconnection.
     #[allow(dead_code)]
     pub ssh_config: Option<Arc<dyn Any + Send + Sync>>,
@@ -216,6 +717,7 @@ pub struct SessionManager {
     pending_creations: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     app_handle: OnceLock<tauri::AppHandle>,
     recording_manager: OnceLock<Arc<RecordingManager>>,
+    recent_output: Arc<RecentOutputStore>,
 }
 
 impl SessionManager {
@@ -233,6 +735,7 @@ impl SessionManager {
             pending_creations: Arc::new(Mutex::new(HashMap::new())),
             app_handle: OnceLock::new(),
             recording_manager: OnceLock::new(),
+            recent_output: Arc::new(RecentOutputStore::default()),
         }
     }
 
@@ -322,6 +825,7 @@ impl SessionManager {
     pub async fn remove_session(&self, id: &str) -> bool {
         let removed = self.sessions.lock().await.remove(id).is_some();
         if removed {
+            self.recent_output.remove(id);
             self.flush_pending_submission(id).await;
             self.command_submissions.lock().await.remove(id);
             self.pending_zmodem_uploads.lock().await.remove(id);
@@ -350,16 +854,23 @@ impl SessionManager {
 
     /// Sends a command to a session's I/O loop; errors if session not found.
     pub async fn send_command(&self, id: &str, cmd: SessionCommand) -> AppResult<()> {
-        if let SessionCommand::Write {
-            origin,
-            sensitivity,
-            ..
-        } = &cmd
-        {
-            let _ = (*origin, *sensitivity);
-        }
         let sessions = self.sessions.lock().await;
         if let Some(handle) = sessions.get(id) {
+            if let SessionCommand::Write {
+                origin,
+                sensitivity,
+                ..
+            } = &cmd
+            {
+                let _ = *sensitivity;
+                if let Some(barrier) = handle.startup_input_barrier.as_ref() {
+                    if *origin == InputOrigin::TerminalResponse {
+                        barrier.note_terminal_response_enqueued();
+                    } else {
+                        barrier.cancel_for_input(*origin);
+                    }
+                }
+            }
             handle
                 .cmd_tx
                 .send(cmd)
@@ -385,6 +896,56 @@ impl SessionManager {
             .get(id)
             .map(|handle| handle.info.clone())
             .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", id)))
+    }
+
+    /// Returns the best-effort working directory currently tracked for a session.
+    pub async fn session_cwd(&self, id: &str) -> AppResult<Option<String>> {
+        let cwd = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(id)
+                .map(|handle| handle.cwd.clone())
+                .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", id)))?
+        };
+        Ok(cwd.lock().await.legacy_path.clone())
+    }
+
+    pub fn append_recent_output(&self, session_id: &str, text: &str) {
+        self.recent_output.append(session_id, text);
+    }
+
+    pub fn recent_output(&self, session_id: &str, lines: usize) -> String {
+        self.recent_output.read(session_id, lines)
+    }
+
+    /// Returns the validated dynamic-title cwd presentation for a session.
+    pub async fn session_cwd_presentation(&self, id: &str) -> Option<CwdPresentation> {
+        let cwd = self.sessions.lock().await.get(id)?.cwd.clone();
+        cwd.lock().await.presentation.clone()
+    }
+
+    /// Updates a Local session's runtime integration capability after its
+    /// session-bound ready marker is observed.
+    pub async fn set_dynamic_title_integration_active(&self, id: &str, active: bool) {
+        let changed = {
+            let mut sessions = self.sessions.lock().await;
+            let Some(session) = sessions.get_mut(id) else {
+                return;
+            };
+            if session.info.dynamic_title_capabilities.integration_active == active {
+                false
+            } else {
+                session.info.dynamic_title_capabilities.integration_active = active;
+                true
+            }
+        };
+
+        if changed {
+            if let Some(app) = self.app_handle.get() {
+                let _ = app.emit("sessions-changed", ());
+                crate::tray::schedule_refresh(app);
+            }
+        }
     }
 
     /// Appends a command to persistent history and schedules a coalesced save.
@@ -431,12 +992,50 @@ impl SessionManager {
         }
     }
 
-    /// Records a shell-confirmed command emitted by the backend integration
-    /// channel. Duplicate confirmations are ignored once the matching pending
-    /// candidate has already been consumed.
-    pub async fn confirm_command_submission(&self, session_id: &str, command: String) {
+    /// Registers a candidate only when this session awaits a shell marker.
+    /// Used for synchronized peer input so non-shell peers retain their
+    /// released no-registration behavior.
+    pub async fn register_confirmation_candidate(&self, session_id: &str, command: String) -> bool {
         let Some(command) = sanitize_history_command(&command) else {
-            return;
+            return false;
+        };
+        let overflow_flush = {
+            let mut submissions = self.command_submissions.lock().await;
+            let Some(state) = submissions.get_mut(session_id) else {
+                return false;
+            };
+            if !state.awaits_shell_event || state.confirmation_overflow_degraded {
+                return false;
+            }
+            state.pending_candidates.push_back(command);
+            if state.pending_candidates.len() > MAX_PENDING_CONFIRMATIONS {
+                state.awaits_shell_event = false;
+                state.confirmation_overflow_degraded = true;
+                state.last_shell_event = None;
+                Some(state.pending_candidates.drain(..).collect::<Vec<_>>())
+            } else {
+                None
+            }
+        };
+
+        if let Some(commands) = overflow_flush {
+            log_confirmation_overflow(session_id, commands.len(), 0);
+            for command in commands {
+                self.record_command_transcript(session_id, &command);
+                self.add_history_entry(command).await;
+            }
+            return false;
+        }
+        true
+    }
+
+    /// Records a shell-confirmed command emitted by the backend integration
+    /// channel. A marker is only authoritative when it exactly matches a
+    /// pending client-side candidate; unmatched remote output is ignored.
+    /// Returns true only when a pending candidate was consumed.
+    pub async fn confirm_command_submission(&self, session_id: &str, command: String) -> bool {
+        let Some(command) = sanitize_history_command(&command) else {
+            return false;
         };
 
         let should_add = {
@@ -444,27 +1043,24 @@ impl SessionManager {
             let state = submissions.entry(session_id.to_string()).or_default();
 
             if state.confirmation_overflow_degraded {
-                None
-            } else if let Some(index) = state
+                return false;
+            }
+            let Some(index) = state
                 .pending_candidates
                 .iter()
                 .position(|pending| pending == &command)
-            {
-                state.pending_candidates.remove(index);
-                state.last_shell_event = Some(command.clone());
-                Some(command)
-            } else if state.last_shell_event.as_deref() == Some(command.as_str()) {
-                None
-            } else {
-                state.last_shell_event = Some(command.clone());
-                Some(command)
-            }
+            else {
+                return false;
+            };
+
+            state.pending_candidates.remove(index);
+            state.last_shell_event = Some(command.clone());
+            command
         };
 
-        if let Some(command) = should_add {
-            self.record_command_transcript(session_id, &command);
-            self.add_history_entry(command).await;
-        }
+        self.record_command_transcript(session_id, &should_add);
+        self.add_history_entry(should_add).await;
+        true
     }
 
     /// Flushes any pending client candidate when a shell-capable session ends
@@ -771,16 +1367,20 @@ mod tests {
     use crate::config::AiExecutionProfile;
 
     use super::{
-        SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType,
-        normalize_cwd_path, now_session_started_at,
+        COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD, COMMAND_QUEUE_CRITICAL_THRESHOLD,
+        COMMAND_QUEUE_HIGH_RESET_THRESHOLD, CwdPresentation, DynamicTitleCapabilities, InputOrigin,
+        SessionCommand, SessionCommandSender, SessionCwdReplacement, SessionCwdState,
+        SessionHandle, SessionInfo, SessionManager, SessionType, StartupInjectionAttempt,
+        StartupInputBarrier, normalize_cwd_path, now_session_started_at, replace_cwd_state,
+        session_command_channel,
     };
     use std::fs;
-    use std::sync::Arc;
+    use std::sync::{Arc, atomic::Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{Mutex, mpsc};
+    use tokio::sync::Mutex;
 
     fn test_handle(id: &str, session_type: SessionType, injection_active: bool) -> SessionHandle {
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, _cmd_rx) = session_command_channel(id);
         test_handle_with_sender(id, session_type, injection_active, cmd_tx)
     }
 
@@ -788,7 +1388,7 @@ mod tests {
         id: &str,
         session_type: SessionType,
         injection_active: bool,
-        cmd_tx: mpsc::UnboundedSender<SessionCommand>,
+        cmd_tx: SessionCommandSender,
     ) -> SessionHandle {
         SessionHandle {
             info: SessionInfo {
@@ -801,14 +1401,16 @@ mod tests {
                 owner_window_label: None,
                 ai_execution_profile: AiExecutionProfile::Auto,
                 injection_active,
+                dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                 remote_file_browser_enabled: true,
                 remote_stats_enabled: true,
                 ssh_profile: None,
             },
             cmd_tx,
+            startup_input_barrier: None,
             ssh_config: None,
             ssh_handle: None,
-            cwd: Arc::new(Mutex::new(None)),
+            cwd: Arc::new(Mutex::new(Default::default())),
             remote_fs: None,
         }
     }
@@ -819,6 +1421,153 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("nyaterm-session-history-{name}-{nanos}.json"))
+    }
+
+    #[test]
+    fn dynamic_title_capabilities_keep_the_flat_session_wire_contract() {
+        let mut info = test_handle("wire", SessionType::Local, false).info;
+        info.dynamic_title_capabilities =
+            DynamicTitleCapabilities::new(true, Some("pwsh.exe".to_string()));
+        info.dynamic_title_capabilities.integration_active = true;
+
+        let value = serde_json::to_value(&info).expect("serialize SessionInfo");
+        assert_eq!(value["dynamic_title_enabled"], true);
+        assert_eq!(value["dynamic_title_integration_active"], true);
+        assert_eq!(value["trusted_initial_title"], "pwsh.exe");
+        assert!(value.get("dynamic_title_capabilities").is_none());
+
+        let decoded: SessionInfo =
+            serde_json::from_value(value).expect("deserialize flattened SessionInfo");
+        assert_eq!(
+            decoded.dynamic_title_capabilities,
+            info.dynamic_title_capabilities
+        );
+    }
+
+    #[test]
+    fn startup_input_barrier_orders_cancellation_and_injection() {
+        let cancelled = StartupInputBarrier::new();
+        assert!(cancelled.cancel_for_input(InputOrigin::Keyboard));
+        assert_eq!(
+            cancelled.try_inject(|| Ok::<_, ()>(())).unwrap(),
+            StartupInjectionAttempt::Cancelled
+        );
+
+        let injected = Arc::new(StartupInputBarrier::new());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let injection_barrier = injected.clone();
+        let injection = std::thread::spawn(move || {
+            injection_barrier.try_inject(|| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok::<_, ()>(())
+            })
+        });
+        started_rx.recv().unwrap();
+        let input_barrier = injected.clone();
+        let input =
+            std::thread::spawn(move || input_barrier.cancel_for_input(InputOrigin::Keyboard));
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            injection.join().unwrap().unwrap(),
+            StartupInjectionAttempt::Injected(())
+        );
+        assert!(!input.join().unwrap());
+        assert!(!injected.cancel_pending());
+
+        let query = StartupInputBarrier::new();
+        query.note_terminal_queries(1);
+        query.note_terminal_response_enqueued();
+        assert_eq!(
+            query.try_inject(|| Ok::<_, ()>(())).unwrap(),
+            StartupInjectionAttempt::WaitForTerminalResponse
+        );
+        assert!(query.resolve_terminal_response());
+        assert_eq!(
+            query.try_inject(|| Ok::<_, ()>(())).unwrap(),
+            StartupInjectionAttempt::Injected(())
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_marks_real_input_before_enqueuing_it() {
+        let manager = SessionManager::new();
+        let barrier = Arc::new(StartupInputBarrier::new());
+        let (cmd_tx, mut cmd_rx) = session_command_channel("local-startup");
+        let mut handle =
+            test_handle_with_sender("local-startup", SessionType::Local, false, cmd_tx);
+        handle.startup_input_barrier = Some(barrier.clone());
+        manager.add_session(handle).await;
+
+        manager
+            .send_command(
+                "local-startup",
+                SessionCommand::Write {
+                    data: b"x".to_vec(),
+                    automated: false,
+                    origin: InputOrigin::Keyboard,
+                    sensitivity: super::InputSensitivity::Normal,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(barrier.is_cancelled());
+        assert!(matches!(
+            cmd_rx.try_recv(),
+            Ok(SessionCommand::Write { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn cwd_replacement_updates_operational_and_presentation_atomically() {
+        let cwd = Arc::new(Mutex::new(SessionCwdState {
+            legacy_path: Some("/legacy-a".to_string()),
+            operational_path: Some("C:\\safe-a".to_string()),
+            presentation: Some(CwdPresentation {
+                title: "safe-a".to_string(),
+                display_path: "C:\\safe-a".to_string(),
+                copy_value: "C:\\safe-a".to_string(),
+                operational_path: Some("C:\\safe-a".to_string()),
+                copy_as_uri: false,
+            }),
+        }));
+        let changes = replace_cwd_state(
+            &cwd,
+            SessionCwdReplacement {
+                legacy_path: Some("/legacy-b%2".to_string()),
+                operational_path: Some("/legacy-b%2".to_string()),
+                presentation: None,
+            },
+        )
+        .await;
+        assert!(changes.operational_changed);
+        assert!(changes.presentation_changed);
+        let state = cwd.lock().await;
+        assert_eq!(state.legacy_path.as_deref(), Some("/legacy-b%2"));
+        assert_eq!(state.operational_path.as_deref(), Some("/legacy-b%2"));
+        assert!(state.presentation.is_none());
+        assert_eq!(
+            state.safe_local_execution_cwd().as_deref(),
+            Some("/legacy-b%2")
+        );
+    }
+
+    #[test]
+    fn local_execution_cwd_uses_only_host_operational_path() {
+        let cwd = SessionCwdState {
+            legacy_path: Some("/shell/path".to_string()),
+            operational_path: None,
+            presentation: Some(CwdPresentation {
+                title: "shell".to_string(),
+                display_path: "/shell/path".to_string(),
+                copy_value: "/shell/path".to_string(),
+                operational_path: None,
+                copy_as_uri: false,
+            }),
+        };
+        assert!(cwd.safe_local_execution_cwd().is_none());
     }
 
     #[test]
@@ -859,6 +1608,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unmatched_shell_marker_cannot_inject_history() {
+        let manager = SessionManager::new();
+        manager
+            .add_session(test_handle("ssh-untrusted", SessionType::SSH, true))
+            .await;
+
+        assert!(
+            !manager
+                .confirm_command_submission("ssh-untrusted", "forged command".to_string())
+                .await
+        );
+        assert!(manager.get_all_history().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn synchronized_confirmation_candidate_only_queues_shell_sessions() {
+        let manager = SessionManager::new();
+        manager
+            .add_session(test_handle("ssh-peer", SessionType::SSH, true))
+            .await;
+        manager
+            .add_session(test_handle("local-peer", SessionType::Local, false))
+            .await;
+
+        assert!(
+            manager
+                .register_confirmation_candidate("ssh-peer", "uptime".to_string())
+                .await
+        );
+        assert!(
+            !manager
+                .register_confirmation_candidate("local-peer", "uptime".to_string())
+                .await
+        );
+        assert!(manager.get_all_history().await.is_empty());
+
+        assert!(
+            manager
+                .confirm_command_submission("ssh-peer", "uptime".to_string())
+                .await
+        );
+        assert_eq!(manager.get_all_history().await, vec!["uptime".to_string()]);
+    }
+
+    #[tokio::test]
     async fn direct_session_adds_submission_immediately() {
         let manager = SessionManager::new();
         manager
@@ -891,7 +1685,7 @@ mod tests {
     #[tokio::test]
     async fn sends_output_pause_and_resume_commands() {
         let manager = SessionManager::new();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("local-flow");
         manager
             .add_session(test_handle_with_sender(
                 "local-flow",
@@ -927,6 +1721,80 @@ mod tests {
             cmd_rx.recv().await,
             Some(SessionCommand::AckOutput { bytes: 4096 })
         ));
+    }
+
+    #[test]
+    fn command_queue_metrics_track_enqueue_process_and_max_pending() {
+        let (cmd_tx, mut cmd_rx) = session_command_channel("queue-pressure");
+        for _ in 0..1001 {
+            cmd_tx
+                .send(SessionCommand::AckOutput { bytes: 1 })
+                .expect("enqueue command");
+        }
+
+        assert_eq!(
+            cmd_tx.snapshot(),
+            super::SessionCommandQueueSnapshot {
+                queued_commands: 1001,
+                processed_commands: 0,
+                current_pending: 1001,
+                max_pending_observed: 1001,
+            }
+        );
+
+        for _ in 0..1001 {
+            assert!(cmd_rx.try_recv().is_ok());
+        }
+        assert_eq!(
+            cmd_rx.snapshot(),
+            super::SessionCommandQueueSnapshot {
+                queued_commands: 1001,
+                processed_commands: 1001,
+                current_pending: 0,
+                max_pending_observed: 1001,
+            }
+        );
+    }
+
+    #[test]
+    fn command_queue_metrics_roll_back_failed_send_and_clear_on_receiver_drop() {
+        let (closed_tx, closed_rx) = session_command_channel("closed-queue");
+        drop(closed_rx);
+        assert!(closed_tx.send(SessionCommand::Close).is_err());
+        assert_eq!(closed_tx.snapshot().queued_commands, 0);
+        assert_eq!(closed_tx.snapshot().current_pending, 0);
+
+        let (cmd_tx, cmd_rx) = session_command_channel("abandoned-queue");
+        cmd_tx
+            .send(SessionCommand::AckOutput { bytes: 1 })
+            .expect("enqueue command");
+        cmd_tx
+            .send(SessionCommand::AckOutput { bytes: 2 })
+            .expect("enqueue command");
+        drop(cmd_rx);
+        assert_eq!(cmd_tx.snapshot().current_pending, 0);
+        assert_eq!(cmd_tx.snapshot().max_pending_observed, 2);
+    }
+
+    #[test]
+    fn command_queue_pressure_tiers_rearm_with_hysteresis() {
+        let (cmd_tx, mut cmd_rx) = session_command_channel("queue-hysteresis");
+        for _ in 0..COMMAND_QUEUE_CRITICAL_THRESHOLD {
+            cmd_tx
+                .send(SessionCommand::AckOutput { bytes: 1 })
+                .expect("enqueue command");
+        }
+        assert_eq!(cmd_tx.metrics.pressure_tier.load(Ordering::Relaxed), 2);
+
+        for _ in 0..=(COMMAND_QUEUE_CRITICAL_THRESHOLD - COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD) {
+            cmd_rx.try_recv().expect("dequeue command");
+        }
+        assert_eq!(cmd_tx.metrics.pressure_tier.load(Ordering::Relaxed), 1);
+
+        while cmd_tx.snapshot().current_pending >= COMMAND_QUEUE_HIGH_RESET_THRESHOLD {
+            cmd_rx.try_recv().expect("dequeue command");
+        }
+        assert_eq!(cmd_tx.metrics.pressure_tier.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

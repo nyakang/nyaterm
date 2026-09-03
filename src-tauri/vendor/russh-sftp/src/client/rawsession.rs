@@ -935,6 +935,25 @@ impl RawSftpSession {
                 ReadLink {
                     id,
                     path: path.into(),
+                    path_bytes: None,
+                }
+                .into(),
+            )
+            .await?;
+
+        into_with_status!(result, Name)
+    }
+
+    pub async fn readlink_bytes(&self, path_bytes: Vec<u8>) -> SftpResult<Name> {
+        let id = self.use_next_id();
+        let path = String::from_utf8_lossy(&path_bytes).into_owned();
+        let result = self
+            .request(
+                Some(id),
+                ReadLink {
+                    id,
+                    path,
+                    path_bytes: Some(path_bytes),
                 }
                 .into(),
             )
@@ -956,6 +975,8 @@ impl RawSftpSession {
                     id,
                     linkpath: path.into(),
                     targetpath: target.into(),
+                    linkpath_bytes: None,
+                    targetpath_bytes: None,
                 }
                 .into(),
             )
@@ -977,6 +998,33 @@ impl RawSftpSession {
                     id,
                     linkpath: target.into(),
                     targetpath: link.into(),
+                    linkpath_bytes: None,
+                    targetpath_bytes: None,
+                }
+                .into(),
+            )
+            .await?;
+
+        into_status!(result)
+    }
+
+    pub async fn symlink_openssh_bytes(
+        &self,
+        target_bytes: Vec<u8>,
+        link_bytes: Vec<u8>,
+    ) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let linkpath = String::from_utf8_lossy(&target_bytes).into_owned();
+        let targetpath = String::from_utf8_lossy(&link_bytes).into_owned();
+        let result = self
+            .request(
+                Some(id),
+                Symlink {
+                    id,
+                    linkpath,
+                    targetpath,
+                    linkpath_bytes: Some(target_bytes),
+                    targetpath_bytes: Some(link_bytes),
                 }
                 .into(),
             )

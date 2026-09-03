@@ -110,6 +110,7 @@ fn prepare_nyaterm_json_session(
             description,
             sort_order,
             icon,
+            dynamic_tab_title,
         } => {
             validate_port(port, "ssh session")?;
             let context = format!("ssh session '{name}'");
@@ -125,6 +126,7 @@ fn prepare_nyaterm_json_session(
                     legacy_agent_forwarding: None,
                     agent_forwarding_config: None,
                     encoding: String::new(),
+                    dynamic_tab_title,
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),
@@ -147,6 +149,7 @@ fn prepare_nyaterm_json_session(
             description,
             sort_order,
             icon,
+            dynamic_tab_title,
         } => {
             let context = format!("local_terminal session '{name}'");
             Ok(PreparedJsonConnection {
@@ -157,6 +160,7 @@ fn prepare_nyaterm_json_session(
                     working_dir: normalize_optional_string(working_dir),
                     ai_execution_profile: AiExecutionProfile::Auto,
                     encoding: String::new(),
+                    dynamic_tab_title,
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),

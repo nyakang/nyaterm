@@ -1,5 +1,27 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
+
+/** Backend-authoritative, runtime-only cwd values safe for presentation/copy. */
+export type SessionCwdPresentation = {
+  title: string;
+  displayPath: string;
+  copyValue: string;
+  /** Host-native path for filesystem consumers; absent for presentation-only locations. */
+  operationalPath?: string | null;
+  copyAsUri: boolean;
+};
+
+export type SessionTitleSnapshot = {
+  /** Sanitized application-provided OSC 0/2 title. */
+  applicationTitle: string | null;
+  /** Validated Local cwd presentation; SSH cwd is never promoted. */
+  cwd: SessionCwdPresentation | null;
+  /** Final policy-resolved title, or null when static fallback should win. */
+  effectiveTitle: string | null;
+  /** Saved-connection policy copied into this runtime session. */
+  enabled: boolean;
+};
+
 export type WorkspaceSessionType = SessionType | "RDP" | "VNC";
 export type WorkspacePaneKind = "terminal" | "remote-desktop" | "file";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
@@ -73,8 +95,14 @@ export interface SessionInfo {
   connected: boolean;
   owner_window_label?: string | null;
   ai_execution_profile: AIExecutionProfile;
-  /** True when backend terminal-path tracking is available for this session. */
+  /** True when backend shell command-confirmation integration is active. */
   injection_active: boolean;
+  /** Whether application/remote dynamic titles may be promoted. */
+  dynamic_title_enabled: boolean;
+  /** Whether the selected shell received NyaTerm dynamic-title/cwd hooks. */
+  dynamic_title_integration_active: boolean;
+  /** Trusted resolved Windows executable identity for initial ConPTY filtering. */
+  trusted_initial_title?: string | null;
   /** True when the remote file browser is enabled for this session. */
   remote_file_browser_enabled: boolean;
   /** True when Linux-style remote resource stats are enabled for this session. */
@@ -213,6 +241,7 @@ export interface SshConfig {
   terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   encoding?: string;
+  dynamic_tab_title?: boolean;
 }
 
 /** SSH authentication: none, password, private key (PEM content), or SSH Agent. */
@@ -430,6 +459,8 @@ export interface SftpSettings {
   cwd_follow_mode: SftpCwdFollowMode;
   shell_detection_timeout_ms: number;
   filename_encoding?: string;
+  /** Override SFTP single-file pipeline depth. Undefined means automatic. */
+  pipeline_depth?: number;
 }
 
 export type AlgorithmRisk = "modern" | "legacy" | "insecure";
@@ -497,6 +528,8 @@ export interface SavedConnection {
   shell_path?: string;
   shell_args?: string;
   working_dir?: string;
+  /** Show the session's live window title / cwd as the tab label. */
+  dynamic_tab_title?: boolean;
   /** Legacy saved value; runtime sessions now resolve the effective AI execution profile automatically. */
   ai_execution_profile?: AIExecutionProfile;
   /** Serial fields (present when type === "serial"). */
@@ -1275,7 +1308,8 @@ export interface TranslateResult {
 
 export interface SecuritySettings {
   use_os_keyring: boolean;
-  enable_screen_lock: boolean;
+  enable_startup_lock: boolean;
+  enable_idle_lock: boolean;
   idle_lock_minutes: number;
   master_password?: string;
   host_key_policy: string;
@@ -1327,11 +1361,13 @@ export interface TerminalSettings {
   timestamp_format: string;
   show_multi_line_paste_dialog: boolean;
   paste_image_as_path: boolean;
+  reconnect_restore_cwd: boolean;
 }
 
 export interface TransferSettings {
   editor_type: "external" | "internal";
   internal_editor_display: "workspace" | "window";
+  internal_editor_font_size: number;
   download_threads: number;
   upload_threads: number;
   duplicate_strategy: string;
@@ -1361,7 +1397,13 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
 export type AIAgentKind = "nyaterm" | "codex" | "claude_code";
-export type AIPermissionMode = "observer" | "confirm" | "auto";
+export type AIPermissionMode = "observer" | "confirm" | "auto" | "full_access";
+export type ExternalMcpSessionScope = "current_window" | "all_sessions";
+export interface ExternalMcpSettings {
+  enabled: boolean;
+  permission_mode: AIPermissionMode;
+  session_scope: ExternalMcpSessionScope;
+}
 export type AIReasoningEffort =
   | "auto"
   | "none"
@@ -1476,6 +1518,41 @@ export interface AISettings {
   agent_smart_auto_execute_max_risk: RiskLevel;
   codex: CodexIntegrationSettings;
   claude_code: ClaudeCodeIntegrationSettings;
+  external_mcp: ExternalMcpSettings;
+}
+
+export interface McpRuntimeStatus {
+  enabled: boolean;
+  running: boolean;
+  error?: string | null;
+  ownerWindowLabel?: string | null;
+  scopedSessionCount: number;
+  connectionCount: number;
+  port?: number | null;
+  generation?: string | null;
+}
+
+export interface McpApprovalRequest {
+  requestId: string;
+  client: string;
+  capability: string;
+  sessionId?: string | null;
+  sessionName?: string | null;
+  connectionId?: string | null;
+  connectionName?: string | null;
+  parameterSummary: string;
+  risk: RiskLevel;
+}
+
+export interface McpSessionOpenRequest {
+  requestId: string;
+  connectionId: string;
+  targetWindowLabel: string;
+}
+
+export interface McpSessionOpenCancel {
+  requestId: string;
+  targetWindowLabel: string;
 }
 
 export interface AIContext {
@@ -1578,7 +1655,7 @@ export interface AIStreamStart {
 }
 
 export interface AIStreamEventPayload {
-  type: "start" | "delta" | "reasoning_delta" | "done" | "error";
+  type: "start" | "delta" | "reasoning_delta" | "warning" | "done" | "error";
   streamId: string;
   sessionId?: string;
   textDelta?: string;
@@ -1668,7 +1745,7 @@ export interface TunnelRuntimeState {
 export interface InteractionSettings {
   copy_on_select: boolean;
   allow_osc52_clipboard_write: boolean;
-  right_click_paste: boolean;
+  terminal_right_click_action: "none" | "menu" | "paste";
   terminal_zoom_enabled: boolean;
   command_suggestions_enabled: boolean;
   command_suggestion_min_chars: number;
@@ -1717,6 +1794,7 @@ export interface FileProperties {
   name: string;
   is_dir: boolean;
   is_symlink: boolean;
+  symlink_target?: string | null;
   size: number;
   permissions: string;
   owner: string;
@@ -1852,4 +1930,24 @@ export interface CloudSyncHistoryEntry {
   revision?: string | null;
   duration_ms?: number | null;
   message: string;
+}
+
+// ── SSH Config Import ─────────────────────────────────────────────────────────
+
+export interface SshConfigHop {
+  host: string;
+  port: number;
+  user: string;
+  isTarget: boolean;
+}
+
+export interface SshConfigEntry {
+  alias: string;
+  host: string;
+  port: number;
+  user: string;
+  identityFile?: string | null;
+  proxyJump?: string | null;
+  hops: SshConfigHop[];
+  hostKeyAlias?: string | null;
 }

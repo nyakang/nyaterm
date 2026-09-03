@@ -390,6 +390,24 @@ pub struct AiAuditLog {
     pub executed: bool,
     #[serde(default)]
     pub blocked: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<AiPermissionMode>,
+    #[serde(default)]
+    pub approval_decision: Option<String>,
+    #[serde(default)]
+    pub success: Option<bool>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
     pub created_at: String,
 }
 
@@ -411,6 +429,24 @@ pub struct AppendAiAuditRequest {
     pub executed: bool,
     #[serde(default)]
     pub blocked: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<AiPermissionMode>,
+    #[serde(default)]
+    pub approval_decision: Option<String>,
+    #[serde(default)]
+    pub success: Option<bool>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

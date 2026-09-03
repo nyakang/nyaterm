@@ -1,13 +1,9 @@
-fn build_shell_command(
-    shell_path: &str,
-    shell_args: &str,
-) -> Result<(CommandBuilder, String), String> {
-    let spec = resolve_shell_command(shell_path, shell_args)?;
+fn build_shell_command_from_spec(spec: &ShellCommandSpec) -> (CommandBuilder, String) {
     let mut builder = CommandBuilder::new(&spec.program);
     if !spec.args.is_empty() {
         builder.args(spec.args.iter().map(String::as_str));
     }
-    Ok((builder, spec.program))
+    (builder, spec.program.clone())
 }
 
 fn default_local_shell_args(program: &str) -> Vec<String> {
@@ -27,6 +23,26 @@ fn default_local_shell_args(program: &str) -> Vec<String> {
     }
 }
 
+fn default_shell_spec() -> ShellCommandSpec {
+    #[cfg(target_os = "windows")]
+    {
+        ShellCommandSpec {
+            program: resolve_program_for_spawn("powershell.exe"),
+            args: Vec::new(),
+            resolution_source: ShellResolutionSource::Direct,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        ShellCommandSpec {
+            args: default_local_shell_args(&program),
+            program,
+            resolution_source: ShellResolutionSource::Direct,
+        }
+    }
+}
+
 fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellCommandSpec, String> {
     let raw_program = shell_path.trim();
     let program = trim_wrapping_quotes(raw_program);
@@ -40,6 +56,7 @@ fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellComm
                 args
             },
             program: shell_name,
+            resolution_source: ShellResolutionSource::Direct,
         });
     }
 
@@ -54,6 +71,7 @@ fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellComm
         return Ok(ShellCommandSpec {
             program: resolve_program_for_spawn(program),
             args,
+            resolution_source: ShellResolutionSource::Direct,
         });
     }
 
@@ -61,6 +79,7 @@ fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellComm
         return Ok(ShellCommandSpec {
             program: resolve_program_for_spawn(program),
             args: default_local_shell_args(program),
+            resolution_source: ShellResolutionSource::Direct,
         });
     }
 
@@ -72,6 +91,7 @@ fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellComm
     Ok(ShellCommandSpec {
         program: resolve_program_for_spawn(&legacy_program),
         args: legacy_parts,
+        resolution_source: ShellResolutionSource::Direct,
     })
 }
 

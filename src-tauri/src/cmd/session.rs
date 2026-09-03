@@ -138,6 +138,7 @@ fn normalize_temporary_ssh_config(mut config: ssh::SshConfig, encoding: &str) ->
     config.proxy_jump = None;
     config.post_login = None;
     config.ssh_algorithms = None;
+    config.dynamic_tab_title = false;
     if config.ssh_profile == crate::config::SshProfile::NetworkDevice
         && config.terminal_type == crate::config::SshTerminalType::Xterm256Color
     {
@@ -198,6 +199,7 @@ pub async fn create_local_session(
                 shell_path,
                 shell_args,
                 working_dir: saved_working_dir,
+                dynamic_tab_title,
                 ..
             } => {
                 let (working_dir, fail_on_missing_working_dir) =
@@ -210,6 +212,7 @@ pub async fn create_local_session(
                     fail_on_missing_working_dir,
                     name: conn.name,
                     encoding,
+                    dynamic_tab_title,
                 })
             }
             _ => None,
@@ -226,6 +229,7 @@ pub async fn create_local_session(
             fail_on_missing_working_dir: true,
             name: "Local Terminal".to_string(),
             encoding,
+            dynamic_tab_title: false,
         })
     } else {
         None
@@ -1004,9 +1008,13 @@ pub async fn attach_session(
         client_timestamp: None,
     });
 
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
     state
-        .send_command(&session_id, SessionCommand::Attach)
+        .send_command(&session_id, SessionCommand::AttachConfirmed { ack: ack_tx })
+        .await?;
+    ack_rx
         .await
+        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))
 }
 
 #[tauri::command]
@@ -1104,6 +1112,14 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
+pub async fn get_session_cwd_presentation(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Option<crate::core::CwdPresentation>> {
+    Ok(state.session_cwd_presentation(&session_id).await)
+}
+
+#[tauri::command]
 pub async fn add_command_history(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
@@ -1123,6 +1139,17 @@ pub async fn register_command_submission(
         .register_command_submission(&session_id, command)
         .await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn register_command_confirmation_candidate(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    command: String,
+) -> AppResult<bool> {
+    Ok(state
+        .register_confirmation_candidate(&session_id, command)
+        .await)
 }
 
 #[tauri::command]

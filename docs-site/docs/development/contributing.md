@@ -72,7 +72,9 @@ docs: update installation guide
 添加或修改 UI 文本时，请同时更新：
 
 - `src/i18n/locales/zh-CN.json` — 简体中文
+- `src/i18n/locales/zh-TW.json` — 繁體中文
 - `src/i18n/locales/en.json` — English
+- `src/i18n/locales/ko.json` — 한국어
 
 ## 许可证
 

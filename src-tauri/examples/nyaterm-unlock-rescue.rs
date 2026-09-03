@@ -47,8 +47,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(Value::as_object_mut)
                 .ok_or("settings.security is missing or not an object")?;
 
-            let was_enabled = security
-                .get("enable_screen_lock")
+            let was_startup_enabled = security
+                .get("enable_startup_lock")
+                .or_else(|| security.get("enable_screen_lock"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let was_idle_enabled = security
+                .get("enable_idle_lock")
+                .or_else(|| security.get("enable_screen_lock"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let old_idle = security
@@ -56,7 +62,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
 
-            (settings, was_enabled, old_idle)
+            (settings, was_startup_enabled || was_idle_enabled, old_idle)
         };
 
         let security = settings
@@ -65,7 +71,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(Value::as_object_mut)
             .ok_or("settings.security is missing or not an object")?;
 
-        security.insert("enable_screen_lock".to_string(), Value::Bool(false));
+        security.insert("enable_startup_lock".to_string(), Value::Bool(false));
+        security.insert("enable_idle_lock".to_string(), Value::Bool(false));
+        security.remove("enable_screen_lock");
         security.insert(
             "idle_lock_minutes".to_string(),
             Value::Number(serde_json::Number::from(0)),

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
   buildAssetPatchFromNpuOverview,
   buildAssetPatchFromRemoteStats,
   mergeMonitoringAssetPatch,
   recordAssetMonitoringPatch,
-  type AssetMonitoringCacheEntry,
 } from "@/lib/assetMonitoring";
 import type {
   AssetMetadata,
@@ -38,15 +38,27 @@ describe("asset monitoring cache", () => {
   it("records patches in memory without requiring a save callback", () => {
     const cache = new Map<string, AssetMonitoringCacheEntry>();
 
-    recordAssetMonitoringPatch(cache, "session-1", "conn-1", {
-      hostname: "node-01",
+    recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-1",
+      targetSessionId: "session-1",
+      connectionId: "conn-1",
+      patch: { hostname: "node-01" },
     });
-    recordAssetMonitoringPatch(cache, "session-1", "conn-1", {
-      cpu_cores: 16,
+    recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-1",
+      targetSessionId: "session-1",
+      connectionId: "conn-1",
+      patch: { cpu_cores: 16 },
     });
-    recordAssetMonitoringPatch(cache, "session-2", "conn-2", null);
+    recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-2",
+      targetSessionId: "session-2",
+      connectionId: "conn-2",
+      patch: null,
+    });
 
     expect(cache.get("session-1")).toEqual({
+      sessionId: "session-1",
       connectionId: "conn-1",
       lastAssetPatch: {
         hostname: "node-01",
@@ -54,6 +66,43 @@ describe("asset monitoring cache", () => {
       },
     });
     expect(cache.has("session-2")).toBe(false);
+  });
+
+  it("rejects patches whose source session does not match the target session", () => {
+    const cache = new Map<string, AssetMonitoringCacheEntry>();
+
+    const recorded = recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-a",
+      targetSessionId: "session-b",
+      connectionId: "conn-b",
+      patch: { os_name: "Ubuntu" },
+    });
+
+    expect(recorded).toBe(false);
+    expect(cache.size).toBe(0);
+  });
+
+  it("does not merge a previous connection patch when a session key is rebound", () => {
+    const cache = new Map<string, AssetMonitoringCacheEntry>();
+
+    recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-1",
+      targetSessionId: "session-1",
+      connectionId: "conn-old",
+      patch: { os_name: "Ubuntu", cpu_cores: 8 },
+    });
+    recordAssetMonitoringPatch(cache, {
+      sourceSessionId: "session-1",
+      targetSessionId: "session-1",
+      connectionId: "conn-new",
+      patch: { hostname: "switch-1" },
+    });
+
+    expect(cache.get("session-1")).toEqual({
+      sessionId: "session-1",
+      connectionId: "conn-new",
+      lastAssetPatch: { hostname: "switch-1" },
+    });
   });
 
   it("maps GPU and NPU overviews to their own accelerator types", () => {

@@ -7,7 +7,8 @@ pub(super) const SFTP_MAX_REQUEST_KIB: usize = 256;
 pub(super) const SFTP_PIPELINE_TARGET_KIB: usize = 1024;
 pub(super) const SFTP_WRITE_PIPELINE_TARGET_KIB: usize = 2048;
 pub(super) const SFTP_MIN_PIPELINE_DEPTH: usize = 4;
-pub(super) const SFTP_MAX_PIPELINE_DEPTH: usize = 16;
+pub(super) const SFTP_AUTO_MAX_PIPELINE_DEPTH: usize = 16;
+pub(super) const SFTP_USER_MAX_PIPELINE_DEPTH: usize = 64;
 pub(super) const SFTP_MIN_CONCURRENT_WRITES: usize = 8;
 pub(super) const SFTP_MAX_CONCURRENT_WRITES: usize = 16;
 pub(super) const SFTP_PACKET_OVERHEAD_RESERVE: usize = 1024;
@@ -27,15 +28,22 @@ pub(super) const SFTP_CHANNEL_OPEN_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(300),
 ];
 
-pub(super) fn sftp_pipeline_config(ts: &crate::config::TransferSettings) -> (usize, usize, usize) {
+pub(super) fn sftp_pipeline_config(
+    ts: &crate::config::TransferSettings,
+    pipeline_depth_override: Option<u32>,
+) -> (usize, usize, usize) {
     let request_kib =
         (ts.transfer_buffer_size as usize).clamp(SFTP_MIN_REQUEST_KIB, SFTP_MAX_REQUEST_KIB);
-    let pipeline_depth = SFTP_PIPELINE_TARGET_KIB
+    let automatic_pipeline_depth = SFTP_PIPELINE_TARGET_KIB
         .div_ceil(request_kib)
-        .clamp(SFTP_MIN_PIPELINE_DEPTH, SFTP_MAX_PIPELINE_DEPTH);
-    let max_concurrent_writes = SFTP_WRITE_PIPELINE_TARGET_KIB
+        .clamp(SFTP_MIN_PIPELINE_DEPTH, SFTP_AUTO_MAX_PIPELINE_DEPTH);
+    let automatic_max_concurrent_writes = SFTP_WRITE_PIPELINE_TARGET_KIB
         .div_ceil(request_kib)
         .clamp(SFTP_MIN_CONCURRENT_WRITES, SFTP_MAX_CONCURRENT_WRITES);
+    let pipeline_depth_override = pipeline_depth_override
+        .map(|value| (value as usize).clamp(SFTP_MIN_PIPELINE_DEPTH, SFTP_USER_MAX_PIPELINE_DEPTH));
+    let pipeline_depth = pipeline_depth_override.unwrap_or(automatic_pipeline_depth);
+    let max_concurrent_writes = pipeline_depth_override.unwrap_or(automatic_max_concurrent_writes);
     (request_kib, pipeline_depth, max_concurrent_writes)
 }
 

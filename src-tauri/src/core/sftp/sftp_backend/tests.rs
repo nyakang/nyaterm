@@ -193,6 +193,48 @@ fn write_text_permission_restore_skips_missing_permission_attrs() {
     assert_eq!(permissions_to_preserve_after_write(None), None);
 }
 
+fn transfer_settings_with_request_kib(request_kib: u32) -> crate::config::TransferSettings {
+    crate::config::TransferSettings {
+        transfer_buffer_size: request_kib,
+        ..crate::config::TransferSettings::default()
+    }
+}
+
+#[test]
+fn automatic_pipeline_config_keeps_existing_depths() {
+    let cases = [(64, 16, 16), (128, 8, 16), (256, 4, 8)];
+
+    for (request_kib, expected_download_depth, expected_concurrent_writes) in cases {
+        let settings = transfer_settings_with_request_kib(request_kib);
+        assert_eq!(
+            sftp_pipeline_config(&settings, None),
+            (
+                request_kib as usize,
+                expected_download_depth,
+                expected_concurrent_writes,
+            )
+        );
+    }
+}
+
+#[test]
+fn manual_pipeline_depth_overrides_downloads_and_uploads() {
+    for request_kib in [64, 128, 256] {
+        let settings = transfer_settings_with_request_kib(request_kib);
+        assert_eq!(
+            sftp_pipeline_config(&settings, Some(32)),
+            (request_kib as usize, 32, 32)
+        );
+    }
+}
+
+#[test]
+fn manual_pipeline_depth_is_defensively_clamped() {
+    let settings = transfer_settings_with_request_kib(128);
+    assert_eq!(sftp_pipeline_config(&settings, Some(1)), (128, 4, 4));
+    assert_eq!(sftp_pipeline_config(&settings, Some(128)), (128, 64, 64));
+}
+
 #[test]
 fn directory_concurrency_keeps_at_least_one_worker() {
     let concurrency = sftp_directory_concurrency(Some(2));
@@ -211,6 +253,14 @@ fn directory_pipeline_keeps_existing_depth_without_server_limit() {
 fn directory_pipeline_respects_server_handle_budget() {
     assert_eq!(
         sftp_directory_download_pipeline_cap(Some(128), 2, 16, 16),
+        15
+    );
+}
+
+#[test]
+fn directory_pipeline_caps_manual_depth_to_server_handle_budget() {
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(128), 2, 16, 64),
         15
     );
 }

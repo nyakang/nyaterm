@@ -9,8 +9,16 @@ import type {
 } from "@/types/global";
 
 export interface AssetMonitoringCacheEntry {
+  sessionId: string;
   connectionId: string;
   lastAssetPatch: AssetMetadata;
+}
+
+export interface RecordAssetMonitoringPatchOptions {
+  sourceSessionId: string;
+  targetSessionId: string;
+  connectionId: string;
+  patch: AssetMetadata | null;
 }
 
 const UNKNOWN_VALUES = new Set(["", "-", "unknown", "n/a", "null"]);
@@ -165,15 +173,16 @@ function mergeAcceleratorTypes(
 
 export function recordAssetMonitoringPatch(
   cache: Map<string, AssetMonitoringCacheEntry>,
-  sessionId: string,
-  connectionId: string,
-  patch: AssetMetadata | null,
-) {
-  if (!patch) return;
+  { sourceSessionId, targetSessionId, connectionId, patch }: RecordAssetMonitoringPatchOptions,
+): boolean {
+  if (!patch || sourceSessionId !== targetSessionId) return false;
 
-  const current = cache.get(sessionId);
-  cache.set(sessionId, {
+  const current = cache.get(targetSessionId);
+  const canMerge = current?.sessionId === targetSessionId && current.connectionId === connectionId;
+  cache.set(targetSessionId, {
+    sessionId: targetSessionId,
     connectionId,
-    lastAssetPatch: mergeMonitoringAssetPatch(current?.lastAssetPatch, patch),
+    lastAssetPatch: mergeMonitoringAssetPatch(canMerge ? current.lastAssetPatch : undefined, patch),
   });
+  return true;
 }

@@ -1,19 +1,5 @@
 fn platform_default_shell() -> (CommandBuilder, String) {
-    #[cfg(target_os = "windows")]
-    {
-        let shell = resolve_program_for_spawn("powershell.exe");
-        (CommandBuilder::new(&shell), shell)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-        let mut builder = CommandBuilder::new(&shell);
-        let default_args = default_local_shell_args(&shell);
-        if !default_args.is_empty() {
-            builder.args(default_args.iter().map(String::as_str));
-        }
-        (builder, shell)
-    }
+    build_shell_command_from_spec(&default_shell_spec())
 }
 
 #[cfg(target_os = "macos")]

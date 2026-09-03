@@ -69,11 +69,11 @@ src-tauri/src/cmd/
 `src-tauri/src/core/session.rs` 中的 `SessionManager` 是会话中心：
 
 - 注册 / 移除活动会话
-- 向具体 session 的 I/O loop 发送 `Write` / `Resize` / `Close` / `Attach` 命令
+- 向具体 session 的 I/O loop 发送 `Write` / `Resize` / `Close` / `AttachConfirmed` 命令
 - 管理命令历史与模糊搜索存储
 - 发出 `sessions-changed`、`command-history-changed` 等事件
 
-它暴露给前端的会话元信息中，还包含 `injection_active`，用于标识当前会话是否支持终端路径跟踪等增强能力。
+它暴露给前端的会话元信息中包含 `injection_active`（命令确认能力），并通过独立的 `dynamic_title_enabled`、`dynamic_title_integration_active` 和 `trusted_initial_title` 字段描述动态标签策略与运行时集成能力。
 
 ## 会话实现
 

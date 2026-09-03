@@ -60,15 +60,20 @@ runs:
       shell: pwsh
       run: pnpm install --frozen-lockfile
 
-    - name: Build frontend
-      shell: pwsh
-      run: pnpm build
-
     - name: Install Win7 Rust toolchain
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly-2026-07-22
         components: rust-src
+
+    - name: Build frontend and Win7 MCP sidecar
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $env:NYATERM_MCP_TARGET = $env:WIN7_TARGET
+        $env:NYATERM_MCP_BUILD_STD = "std,panic_abort"
+        pnpm build
 
     - name: Rust cache
       uses: swatinem/rust-cache@v2
@@ -82,19 +87,7 @@ runs:
 
     - name: Enable Win7-only Cargo patches
       shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-
-        New-Item -ItemType Directory -Force -Path ".cargo" | Out-Null
-        @'
-        [patch.crates-io]
-        webview2-com-sys = { path = "src-tauri/vendor/webview2-com-sys" }
-        windows-core = { path = "src-tauri/vendor/windows-core" }
-        '@ | Set-Content -LiteralPath ".cargo/config.toml" -Encoding UTF8
-
-        cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
-        Write-Host "Enabled Win7-only Cargo patches:"
-        Get-Content -LiteralPath ".cargo/config.toml"
+      run: ./.github/scripts/enable-win7-cargo-patches.ps1
 
     - name: Print build metadata
       shell: pwsh

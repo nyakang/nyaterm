@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub struct InteractionSettings {
     pub copy_on_select: bool,
     pub allow_osc52_clipboard_write: bool,
-    pub right_click_paste: bool,
+    pub terminal_right_click_action: String,
     pub terminal_zoom_enabled: bool,
     pub command_suggestions_enabled: bool,
     pub command_suggestion_min_chars: usize,
@@ -23,6 +23,7 @@ pub struct InteractionSettings {
 struct InteractionSettingsWire {
     copy_on_select: Option<bool>,
     allow_osc52_clipboard_write: Option<bool>,
+    terminal_right_click_action: Option<String>,
     right_click_paste: Option<bool>,
     terminal_zoom_enabled: Option<bool>,
     command_suggestions_enabled: Option<bool>,
@@ -58,6 +59,28 @@ fn default_encoding() -> String {
     "UTF-8".to_string()
 }
 
+fn default_terminal_right_click_action() -> String {
+    "menu".to_string()
+}
+
+fn normalize_terminal_right_click_action(
+    action: Option<String>,
+    legacy_right_click_paste: Option<bool>,
+) -> String {
+    if let Some(action) = action {
+        return match action.as_str() {
+            "none" | "menu" | "paste" => action,
+            _ => default_terminal_right_click_action(),
+        };
+    }
+
+    match legacy_right_click_paste {
+        Some(true) => "paste".to_string(),
+        Some(false) => "menu".to_string(),
+        None => "paste".to_string(),
+    }
+}
+
 fn default_tab_double_click_action() -> String {
     "disconnect_session".to_string()
 }
@@ -79,7 +102,7 @@ impl Default for InteractionSettings {
         Self {
             copy_on_select: false,
             allow_osc52_clipboard_write: false,
-            right_click_paste: false,
+            terminal_right_click_action: default_terminal_right_click_action(),
             terminal_zoom_enabled: true,
             command_suggestions_enabled: true,
             command_suggestion_min_chars: default_command_suggestion_min_chars(),
@@ -109,7 +132,10 @@ impl<'de> Deserialize<'de> for InteractionSettings {
             allow_osc52_clipboard_write: wire
                 .allow_osc52_clipboard_write
                 .unwrap_or(defaults.allow_osc52_clipboard_write),
-            right_click_paste: wire.right_click_paste.unwrap_or_else(default_true),
+            terminal_right_click_action: normalize_terminal_right_click_action(
+                wire.terminal_right_click_action,
+                wire.right_click_paste,
+            ),
             terminal_zoom_enabled: wire.terminal_zoom_enabled.unwrap_or_else(default_true),
             command_suggestions_enabled: wire
                 .command_suggestions_enabled
@@ -154,6 +180,7 @@ mod tests {
         assert_eq!(settings.tab_double_click_action, "disconnect_session");
         assert_eq!(settings.tab_middle_click_action, "rename_tab");
         assert_eq!(settings.tab_right_click_action, "none");
+        assert_eq!(settings.terminal_right_click_action, "menu");
         assert!(!settings.allow_osc52_clipboard_write);
         assert!(!settings.alt_as_meta);
         assert!(!settings.ime_compatibility);
@@ -177,6 +204,7 @@ mod tests {
         assert_eq!(settings.tab_middle_click_action, "rename_tab");
         assert_eq!(settings.tab_right_click_action, "none");
         assert_eq!(settings.duplicate_session_command_delay_ms, 1000);
+        assert_eq!(settings.terminal_right_click_action, "menu");
         assert!(!settings.allow_osc52_clipboard_write);
         assert!(!settings.alt_as_meta);
         assert!(!settings.ime_compatibility);
@@ -188,10 +216,63 @@ mod tests {
         let settings: InteractionSettings = serde_json::from_value(serde_json::json!({})).unwrap();
 
         assert!(settings.copy_on_select);
-        assert!(settings.right_click_paste);
+        assert_eq!(settings.terminal_right_click_action, "paste");
         assert!(settings.terminal_zoom_enabled);
         assert!(settings.command_suggestions_enabled);
         assert!(!settings.ime_compatibility);
+    }
+
+    #[test]
+    fn terminal_right_click_action_accepts_all_supported_values() {
+        for action in ["none", "menu", "paste"] {
+            let settings: InteractionSettings = serde_json::from_value(serde_json::json!({
+                "terminal_right_click_action": action
+            }))
+            .unwrap();
+
+            assert_eq!(settings.terminal_right_click_action, action);
+        }
+    }
+
+    #[test]
+    fn legacy_right_click_paste_migrates_to_terminal_right_click_action() {
+        let menu: InteractionSettings = serde_json::from_value(serde_json::json!({
+            "right_click_paste": false
+        }))
+        .unwrap();
+        let paste: InteractionSettings = serde_json::from_value(serde_json::json!({
+            "right_click_paste": true
+        }))
+        .unwrap();
+
+        assert_eq!(menu.terminal_right_click_action, "menu");
+        assert_eq!(paste.terminal_right_click_action, "paste");
+    }
+
+    #[test]
+    fn terminal_right_click_action_takes_precedence_and_normalizes_invalid_values() {
+        let explicit: InteractionSettings = serde_json::from_value(serde_json::json!({
+            "terminal_right_click_action": "none",
+            "right_click_paste": true
+        }))
+        .unwrap();
+        let invalid: InteractionSettings = serde_json::from_value(serde_json::json!({
+            "terminal_right_click_action": "invalid",
+            "right_click_paste": true
+        }))
+        .unwrap();
+
+        assert_eq!(explicit.terminal_right_click_action, "none");
+        assert_eq!(invalid.terminal_right_click_action, "menu");
+    }
+
+    #[test]
+    fn terminal_right_click_action_serialization_omits_legacy_field() {
+        let settings = InteractionSettings::default();
+        let value = serde_json::to_value(settings).unwrap();
+
+        assert_eq!(value["terminal_right_click_action"], "menu");
+        assert!(value.get("right_click_paste").is_none());
     }
 
     #[test]

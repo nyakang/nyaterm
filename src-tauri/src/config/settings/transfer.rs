@@ -9,6 +9,8 @@ pub struct TransferSettings {
     pub editor_type: String,
     #[serde(default = "default_internal_editor_display")]
     pub internal_editor_display: String,
+    #[serde(default = "default_internal_editor_font_size")]
+    pub internal_editor_font_size: u32,
     #[serde(default = "default_transfer_threads")]
     pub download_threads: u32,
     #[serde(default = "default_transfer_threads")]
@@ -54,6 +56,9 @@ fn default_editor_type() -> String {
 fn default_internal_editor_display() -> String {
     "workspace".to_string()
 }
+fn default_internal_editor_font_size() -> u32 {
+    13
+}
 fn default_duplicate_strategy() -> String {
     "ask".to_string()
 }
@@ -75,6 +80,7 @@ impl Default for TransferSettings {
         Self {
             editor_type: default_editor_type(),
             internal_editor_display: default_internal_editor_display(),
+            internal_editor_font_size: default_internal_editor_font_size(),
             download_threads: default_transfer_threads(),
             upload_threads: default_transfer_threads(),
             duplicate_strategy: default_duplicate_strategy(),
@@ -113,5 +119,6 @@ mod tests {
         assert!(!settings.recording_auto_start);
         assert_eq!(settings.editor_type, "external");
         assert_eq!(settings.internal_editor_display, "workspace");
+        assert_eq!(settings.internal_editor_font_size, 13);
     }
 }

@@ -371,6 +371,7 @@ export default function SettingsPage() {
         await invoke("save_app_settings", {
           settings: draftSettings,
           allowMasterPasswordChange,
+          ownerWindowLabel,
         });
         const nextSettings = await invoke<AppSettings>("get_app_settings");
         app.replaceAppSettings(nextSettings);
@@ -389,7 +390,15 @@ export default function SettingsPage() {
         setIsSaving(false);
       }
     },
-    [acceptSavedSettings, app, closeSettingsWindow, draftSettings, getDraftSaveBlockState, t],
+    [
+      acceptSavedSettings,
+      app,
+      closeSettingsWindow,
+      draftSettings,
+      getDraftSaveBlockState,
+      ownerWindowLabel,
+      t,
+    ],
   );
 
   const handleCancel = useCallback(async () => {

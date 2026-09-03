@@ -56,7 +56,7 @@ import type {
 import { invoke } from "../lib/invoke";
 import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
-import { isPrimaryMainWindow } from "../lib/windowManager";
+import { getOwnerMainWindowLabel, isPrimaryMainWindow } from "../lib/windowManager";
 import {
   AppContext,
   type PaneConnectingUpdates,
@@ -123,7 +123,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   security: {
     use_os_keyring: true,
-    enable_screen_lock: false,
+    enable_startup_lock: false,
+    enable_idle_lock: false,
     idle_lock_minutes: 0,
     host_key_policy: "prompt",
   },
@@ -150,11 +151,12 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     timestamp_format: "[HH:mm:ss]",
     show_multi_line_paste_dialog: true,
     paste_image_as_path: true,
+    reconnect_restore_cwd: false,
   },
   interaction: {
     copy_on_select: false,
     allow_osc52_clipboard_write: false,
-    right_click_paste: false,
+    terminal_right_click_action: "menu",
     terminal_zoom_enabled: true,
     command_suggestions_enabled: true,
     command_suggestion_min_chars: DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
@@ -184,6 +186,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   transfer: {
     editor_type: "external",
     internal_editor_display: "workspace",
+    internal_editor_font_size: 13,
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",
@@ -453,7 +456,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLoggerLevel(normalized.diagnostics.level);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
-        if (isPrimaryMainWindow() && normalized.security?.enable_screen_lock) {
+        if (isPrimaryMainWindow() && normalized.security?.enable_startup_lock) {
           setIsLocked(true);
         }
       })
@@ -1069,6 +1072,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const restoreSessionsForTabs = useCallback(
     (tabsToRestore: Tab[]) => {
+      const tasks: Promise<unknown>[] = [];
       tabsToRestore.forEach((tab) => {
         const panes = collectSessionPanes(tab.root);
 
@@ -1082,84 +1086,85 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing SSH connection id");
                 return;
               }
-              invoke<string>("create_ssh_session", {
+              tasks.push(invoke<string>("create_ssh_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "SSH", pane.connectionId, e),
-                );
+                ));
               break;
             case "Local":
-              invoke<string>("create_local_session", {
+              tasks.push(invoke<string>("create_local_session", {
                 connectionId: cid || null,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "Local", pane.connectionId, e),
-                );
+                ));
               break;
             case "Telnet":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing Telnet connection id");
                 return;
               }
-              invoke<string>("create_telnet_session", {
+              tasks.push(invoke<string>("create_telnet_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "Telnet", pane.connectionId, e),
-                );
+                ));
               break;
             case "Serial":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing Serial connection id");
                 return;
               }
-              invoke<string>("create_serial_session", {
+              tasks.push(invoke<string>("create_serial_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
-                );
+                ));
               break;
             case "VNC":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing VNC connection id");
                 return;
               }
-              invoke<string>("create_vnc_session", {
+              tasks.push(invoke<string>("create_vnc_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "VNC", pane.connectionId, e),
-                );
+                ));
               break;
             case "RDP":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing RDP connection id");
                 return;
               }
-              invoke<string>("create_rdp_session", {
+              tasks.push(invoke<string>("create_rdp_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "RDP", pane.connectionId, e),
-                );
+                ));
               break;
           }
         });
       });
+      return Promise.allSettled(tasks).then(() => undefined);
     },
     [handleRestoredSessionCreated, handleRestoredSessionFailed, hasPane, markPaneConnectionFailed],
   );
@@ -1168,8 +1173,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (hasRestored.current || !appSettingsLoaded.current || !lockStateLoaded) return;
 
     hasRestored.current = true;
+    const primaryWindow = isPrimaryMainWindow();
+    let restoreCompletionScheduled = false;
     if (
-      isPrimaryMainWindow() &&
+      primaryWindow &&
       appSettings.general.startup_restore &&
       appSettings.ui.open_tabs &&
       appSettings.ui.open_tabs.length > 0
@@ -1184,13 +1191,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveTabId(restoredTabs[restoredTabs.length - 1].id);
       }
 
-      if (appSettings.security.enable_screen_lock && isLocked) {
+      if (appSettings.security.enable_startup_lock && isLocked) {
         pendingLockedStartupRestoreTabsRef.current = restoredTabs;
       } else {
-        restoreSessionsForTabs(restoredTabs);
+        restoreCompletionScheduled = true;
+        void restoreSessionsForTabs(restoredTabs).then(() =>
+          invoke("notify_mcp_session_restore_complete", {
+            ownerWindowLabel: getOwnerMainWindowLabel(),
+          }),
+        );
       }
     }
 
+    if (
+      primaryWindow &&
+      !pendingLockedStartupRestoreTabsRef.current &&
+      !restoreCompletionScheduled
+    ) {
+      void invoke("notify_mcp_session_restore_complete", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
+      });
+    }
     setStartupRestoreComplete(true);
   }, [appSettings, isLocked, lockStateLoaded, restoreSessionsForTabs, setActiveTabId]);
 
@@ -1201,7 +1222,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!pendingTabs) return;
 
     pendingLockedStartupRestoreTabsRef.current = null;
-    restoreSessionsForTabs(pendingTabs);
+    void restoreSessionsForTabs(pendingTabs).then(() =>
+      invoke("notify_mcp_session_restore_complete", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
+      }),
+    );
   }, [isLocked, restoreSessionsForTabs]);
 
   const contextValue = useMemo(

@@ -7,6 +7,7 @@ import type {
   Terminal as XTerm,
 } from "@xterm/xterm";
 import type { ResolvedHighlightRule } from "./keywordHighlightPresets";
+import { logger } from "./logger";
 import { getKeywordHighlightPerformanceConfig, XTERM_PERFORMANCE_CONFIG } from "./xtermPerformance";
 
 interface CompiledRule {
@@ -17,6 +18,13 @@ interface CompiledRule {
 interface CachedDecoration {
   decoration: IDecoration;
   marker: IMarker;
+  lineY: number;
+}
+
+interface HighlightSpan {
+  cellStartCol: number;
+  cellWidth: number;
+  color: string;
 }
 
 interface LogicalLineSegment {
@@ -37,34 +45,52 @@ interface RefreshBudget {
   hitTotalDecorationLimit: boolean;
 }
 
+interface SpanScanResult {
+  spans: HighlightSpan[];
+  complete: boolean;
+}
+
+interface WrappedSpanScanResult {
+  spansByLine: Map<number, HighlightSpan[]>;
+  lineYs: number[];
+  complete: boolean;
+  cacheable: boolean;
+}
+
+type RefreshReason = "write" | "scroll_idle" | "resume" | "continuation" | "resize";
+
+interface RefreshStats {
+  cacheHits: number;
+  cacheMisses: number;
+  scannedLines: number;
+  decorationsCreated: number;
+  decorationsDisposed: number;
+}
+
 /**
  * Manages terminal decorations for keyword highlighting.
  *
  * Optimizations over a naive implementation:
- * - Overscan buffer: keeps decorations alive for configured rows above/below the
- *   viewport, eliminating highlight loss when scrolling back to recently-visited rows.
- * - Scanned-line memoization: scrollback content is immutable once written, so each line
- *   or fully-scrollback wrapped logical line is regex-matched exactly once. Subsequent
- *   passes just copy existing keys into requiredKeys without re-running regex/cell scans.
+ * - Overscan buffer: keeps a small decoration zone around the viewport.
+ * - Match LRU: immutable scrollback rows retain regex results independently from
+ *   short-lived xterm decorations, including rows with no matches.
  * - Fast ASCII path: skips building the wide-char cell map for lines with only ASCII chars.
  * - Deduplicates scroll/render events: onRender viewport-Y check replaces the redundant onScroll.
- * - Auto-invalidation: each decoration subscribes to its own onDispose so the cache and the
- *   per-line index stay consistent when xterm evicts lines from the scrollback buffer.
+ * - Auto-invalidation: each decoration subscribes to its own onDispose without
+ *   invalidating the independent match cache.
  * - Alternate buffer guard: clears decorations immediately when TUI apps (vim, htop) take over.
  */
 export class KeywordHighlighter implements IDisposable {
   private term: XTerm;
   private compiledRules: CompiledRule[] = [];
   private decorationCache = new Map<string, CachedDecoration>();
-  /** Maps absolute buffer line index → decoration keys on that line. */
-  private lineToKeys = new Map<number, string[]>();
-  /** Lines that have been fully scanned and whose results are memoized in lineToKeys. */
-  private scannedLines = new Set<number>();
+  /** Immutable absolute buffer line index → resolved highlight spans (including []). */
+  private lineMatchCache = new Map<number, HighlightSpan[]>();
   private writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private scrollThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+  private scrollDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private resumeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private resumeRefreshFrame: number | null = null;
   private continuationRefreshFrame: number | null = null;
-  private scrollThrottlePending = false;
   private enabled = false;
   private suspended = false;
   private highlightAcrossWrappedLines = false;
@@ -78,15 +104,15 @@ export class KeywordHighlighter implements IDisposable {
 
   private static readonly MAX_LOGICAL_LINE_SCAN_CHARS = 16 * 1024;
 
-  constructor(term: XTerm) {
+  constructor(term: XTerm, private readonly sessionId?: string) {
     this.term = term;
 
     this.disposables.push(
       this.term.onWriteParsed(() => this.triggerWriteRefresh()),
       this.term.onResize(() => {
-        this.clearAllDecorations();
+        this.invalidateAll();
         this.lastViewportY = -1;
-        this.triggerWriteRefresh();
+        this.triggerWriteRefresh("resize");
       }),
       this.term.onRender(() => {
         const currentViewportY = this.term.buffer.active?.viewportY ?? 0;
@@ -137,9 +163,9 @@ export class KeywordHighlighter implements IDisposable {
       }
     }
 
-    this.clearAllDecorations();
+    this.invalidateAll();
     if (this.enabled && this.compiledRules.length > 0) {
-      this.triggerWriteRefresh();
+      this.triggerWriteRefresh("write");
     }
   }
 
@@ -159,12 +185,12 @@ export class KeywordHighlighter implements IDisposable {
   }
 
   public releaseCaches(): void {
-    this.clearAllDecorations();
+    this.invalidateAll();
     this.lastViewportY = -1;
   }
 
   public dispose(): void {
-    this.clearAllDecorations();
+    this.invalidateAll();
     this.disposables.forEach((d) => {
       d.dispose();
     });
@@ -176,9 +202,13 @@ export class KeywordHighlighter implements IDisposable {
       clearTimeout(this.writeDebounceTimer);
       this.writeDebounceTimer = null;
     }
-    if (this.scrollThrottleTimer) {
-      clearTimeout(this.scrollThrottleTimer);
-      this.scrollThrottleTimer = null;
+    if (this.scrollDebounceTimer) {
+      clearTimeout(this.scrollDebounceTimer);
+      this.scrollDebounceTimer = null;
+    }
+    if (this.resumeRefreshTimer) {
+      clearTimeout(this.resumeRefreshTimer);
+      this.resumeRefreshTimer = null;
     }
     if (this.resumeRefreshFrame !== null) {
       cancelAnimationFrame(this.resumeRefreshFrame);
@@ -188,7 +218,6 @@ export class KeywordHighlighter implements IDisposable {
       cancelAnimationFrame(this.continuationRefreshFrame);
       this.continuationRefreshFrame = null;
     }
-    this.scrollThrottlePending = false;
   }
 
   /**
@@ -223,41 +252,43 @@ export class KeywordHighlighter implements IDisposable {
   private canRefresh(): boolean {
     if (!this.enabled || this.suspended || this.compiledRules.length === 0) return false;
     if (this.term.buffer.active.type === "alternate") {
-      this.clearAllDecorations();
+      this.invalidateAll();
       return false;
     }
     return true;
   }
 
   /** Debounced refresh for write/resize events (batches rapid output). */
-  private triggerWriteRefresh(): void {
+  private triggerWriteRefresh(reason: "write" | "resize" = "write"): void {
     if (!this.canRefresh()) return;
+    if (
+      this.scrollDebounceTimer !== null ||
+      this.resumeRefreshTimer !== null ||
+      this.resumeRefreshFrame !== null
+    ) {
+      return;
+    }
     if (this.writeDebounceTimer) clearTimeout(this.writeDebounceTimer);
     this.writeDebounceTimer = setTimeout(() => {
       this.writeDebounceTimer = null;
-      this.refreshViewport();
+      this.refreshViewport(reason);
     }, XTERM_PERFORMANCE_CONFIG.highlighting.debounceMs);
   }
 
-  /**
-   * Leading+trailing throttle for scroll events. Fires immediately on the
-   * first scroll, then at most once per throttle interval during continuous
-   * scrolling, with a trailing call after scrolling stops.
-   */
+  /** Pure trailing debounce: scrolling always preempts pending highlight work. */
   private triggerScrollRefresh(): void {
     if (!this.canRefresh()) return;
-    if (this.scrollThrottleTimer !== null) {
-      this.scrollThrottlePending = true;
-      return;
+    if (this.writeDebounceTimer !== null) {
+      clearTimeout(this.writeDebounceTimer);
+      this.writeDebounceTimer = null;
     }
-    this.refreshViewport();
-    this.scrollThrottleTimer = setTimeout(() => {
-      this.scrollThrottleTimer = null;
-      if (this.scrollThrottlePending) {
-        this.scrollThrottlePending = false;
-        this.triggerScrollRefresh();
-      }
-    }, XTERM_PERFORMANCE_CONFIG.highlighting.throttleMs);
+    this.cancelContinuationRefresh();
+    this.cancelResumeRefresh();
+    if (this.scrollDebounceTimer !== null) clearTimeout(this.scrollDebounceTimer);
+    this.scrollDebounceTimer = setTimeout(() => {
+      this.scrollDebounceTimer = null;
+      this.refreshViewport("scroll_idle");
+    }, XTERM_PERFORMANCE_CONFIG.highlighting.scrollIdleDebounceMs);
   }
 
   /**
@@ -266,43 +297,83 @@ export class KeywordHighlighter implements IDisposable {
    */
   private triggerResumeRefresh(): void {
     if (!this.canRefresh()) return;
-    if (this.resumeRefreshFrame !== null) return;
+    if (this.resumeRefreshTimer !== null || this.resumeRefreshFrame !== null) return;
 
-    this.resumeRefreshFrame = requestAnimationFrame(() => {
+    this.resumeRefreshTimer = setTimeout(() => {
+      this.resumeRefreshTimer = null;
+      if (!this.canRefresh() || this.scrollDebounceTimer !== null) return;
       this.resumeRefreshFrame = requestAnimationFrame(() => {
         this.resumeRefreshFrame = null;
-        this.refreshViewport();
+        this.refreshViewport("resume");
       });
-    });
+    }, XTERM_PERFORMANCE_CONFIG.highlighting.resumeIdleDelayMs);
   }
 
   private triggerContinuationRefresh(): void {
     if (!this.canRefresh()) return;
-    if (this.continuationRefreshFrame !== null) return;
+    if (this.continuationRefreshFrame !== null || this.scrollDebounceTimer !== null) return;
 
     this.continuationRefreshFrame = requestAnimationFrame(() => {
       this.continuationRefreshFrame = null;
-      this.refreshViewport();
+      this.refreshViewport("continuation");
     });
   }
 
-  /**
-   * Clear map before disposing so the per-decoration onDispose callbacks find
-   * an empty map and become no-ops, avoiding re-entrant mutation.
-   * Also resets the scanned-line memoization so all lines are re-scanned after
-   * a rule change, and tears down the trim-detection sentinel.
-   */
-  private clearAllDecorations(): void {
-    this.clearAllTimers();
+  private cancelContinuationRefresh(): void {
+    if (this.continuationRefreshFrame === null) return;
+    cancelAnimationFrame(this.continuationRefreshFrame);
+    this.continuationRefreshFrame = null;
+  }
+
+  private cancelResumeRefresh(): void {
+    if (this.resumeRefreshTimer !== null) {
+      clearTimeout(this.resumeRefreshTimer);
+      this.resumeRefreshTimer = null;
+    }
+    if (this.resumeRefreshFrame !== null) {
+      cancelAnimationFrame(this.resumeRefreshFrame);
+      this.resumeRefreshFrame = null;
+    }
+  }
+
+  /** Clear the map before disposal so onDispose callbacks are no-ops. */
+  private clearDecorations(): void {
     const entries = [...this.decorationCache.values()];
     this.decorationCache.clear();
-    this.lineToKeys.clear();
-    this.scannedLines.clear();
-    this.disposeSentinel();
-    this.bufferTrimmed = false;
     for (const { decoration, marker } of entries) {
       decoration.dispose();
       marker.dispose();
+    }
+  }
+
+  private clearMatchCache(): void {
+    this.lineMatchCache.clear();
+  }
+
+  private invalidateAll(): void {
+    this.clearAllTimers();
+    this.clearDecorations();
+    this.clearMatchCache();
+    this.disposeSentinel();
+    this.bufferTrimmed = false;
+  }
+
+  private getCachedMatches(lineY: number): HighlightSpan[] | undefined {
+    const spans = this.lineMatchCache.get(lineY);
+    if (spans === undefined) return undefined;
+    this.lineMatchCache.delete(lineY);
+    this.lineMatchCache.set(lineY, spans);
+    return spans;
+  }
+
+  private setCachedMatches(lineY: number, spans: HighlightSpan[]): void {
+    this.lineMatchCache.delete(lineY);
+    this.lineMatchCache.set(lineY, spans);
+    const maxLines = XTERM_PERFORMANCE_CONFIG.highlighting.maxCachedMatchLines;
+    while (this.lineMatchCache.size > maxLines) {
+      const oldest = this.lineMatchCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.lineMatchCache.delete(oldest);
     }
   }
 
@@ -437,13 +508,6 @@ export class KeywordHighlighter implements IDisposable {
     return false;
   }
 
-  private getLineYFromDecorationKey(key: string): number | null {
-    const separatorIndex = key.indexOf(":");
-    if (separatorIndex <= 0) return null;
-    const lineY = Number(key.slice(0, separatorIndex));
-    return Number.isFinite(lineY) ? lineY : null;
-  }
-
   private ensureDecoration(
     lineY: number,
     cellStartCol: number,
@@ -479,39 +543,27 @@ export class KeywordHighlighter implements IDisposable {
       element.style.pointerEvents = "none";
     });
 
-    // Auto-remove from cache and line index when xterm evicts the line
+    // Decoration lifetime never invalidates immutable regex match results.
     deco.onDispose(() => {
-      this.decorationCache.delete(key);
-      // Remove from line index so the line gets re-scanned if it reappears
-      const keys = this.lineToKeys.get(lineY);
-      if (keys) {
-        const filtered = keys.filter((k) => k !== key);
-        if (filtered.length === 0) {
-          this.lineToKeys.delete(lineY);
-          this.scannedLines.delete(lineY);
-        } else {
-          this.lineToKeys.set(lineY, filtered);
-        }
+      if (this.decorationCache.get(key)?.decoration === deco) {
+        this.decorationCache.delete(key);
       }
     });
 
-    this.decorationCache.set(key, { decoration: deco, marker });
+    this.decorationCache.set(key, { decoration: deco, marker, lineY });
     budget.createdDecorations++;
     return key;
   }
 
   private scanPhysicalLine(
     line: IBufferLine,
-    lineY: number,
-    cursorAbsoluteY: number,
-    requiredKeys: Set<string>,
     scratchCell: IBufferCell,
     config: KeywordHighlightPerformanceConfig,
     budget: RefreshBudget,
-  ): string[] {
+  ): SpanScanResult {
     const maxCols = Math.min(line.length, this.term.cols);
     const lineText = line.translateToString(true, 0, maxCols);
-    if (!lineText) return [];
+    if (!lineText) return { spans: [], complete: true };
 
     // Only build the wide-char map if actually needed (non-ASCII present)
     const hasMultibyte = /[^\u0000-\u00FF]/.test(lineText);
@@ -522,14 +574,16 @@ export class KeywordHighlighter implements IDisposable {
     // Track occupied characters in the string to prevent multi-rule overlapping
     const occupied = new Uint8Array(lineText.length);
 
-    const lineKeys: string[] = [];
+    const spans: HighlightSpan[] = [];
 
     for (const { regex, color } of this.compiledRules) {
-      if (lineKeys.length >= config.maxMatchesPerLine || this.isBudgetExhausted(budget)) break;
+      if (spans.length >= config.maxMatchesPerLine) break;
+      if (this.isBudgetExhausted(budget)) return { spans, complete: false };
       regex.lastIndex = 0;
 
       while (true) {
-        if (lineKeys.length >= config.maxMatchesPerLine || this.isBudgetExhausted(budget)) break;
+        if (spans.length >= config.maxMatchesPerLine) break;
+        if (this.isBudgetExhausted(budget)) return { spans, complete: false };
         const match = regex.exec(lineText);
         if (match === null) break;
 
@@ -557,49 +611,39 @@ export class KeywordHighlighter implements IDisposable {
 
         const cellStartCol = cellMap ? (cellMap[strStart] ?? strStart) : strStart;
         const cellEndCol = cellMap ? (cellMap[strEnd] ?? strEnd) : strEnd;
-        const key = this.ensureDecoration(
-          lineY,
+        const cellWidth = cellEndCol - cellStartCol;
+        if (cellWidth <= 0) continue;
+        spans.push({
           cellStartCol,
-          cellEndCol - cellStartCol,
+          cellWidth,
           color,
-          cursorAbsoluteY,
-          config,
-          budget,
-        );
-        if (!key) {
-          if (budget.hitLimit) break;
-          continue;
-        }
+        });
 
-        // Mark as occupied only after the highlight has been accepted.
+        // Match priority is independent from whether a decoration can be created this frame.
         for (let k = strStart; k < strEnd; k++) {
           occupied[k] = 1;
         }
-
-        requiredKeys.add(key);
-        lineKeys.push(key);
       }
     }
 
-    return lineKeys;
+    return { spans, complete: true };
   }
 
   private scanWrappedLogicalLine(
     buffer: XTerm["buffer"]["active"],
     startY: number,
     endY: number,
-    scanStart: number,
-    scanEnd: number,
-    cursorAbsoluteY: number,
-    requiredKeys: Set<string>,
     scratchCell: IBufferCell,
     config: KeywordHighlightPerformanceConfig,
     budget: RefreshBudget,
-  ): Map<number, string[]> {
+  ): WrappedSpanScanResult {
     const segments: LogicalLineSegment[] = [];
     let logicalLength = 0;
 
     for (let currentY = startY; currentY <= endY; currentY++) {
+      if (this.isBudgetExhausted(budget)) {
+        return { spansByLine: new Map(), lineYs: [], complete: false, cacheable: false };
+      }
       const line = buffer.getLine(currentY);
       if (!line) continue;
 
@@ -621,23 +665,31 @@ export class KeywordHighlighter implements IDisposable {
       });
     }
 
-    if (logicalLength === 0) return new Map();
+    const lineYs = segments.map((segment) => segment.lineY);
+    const emptyByLine = new Map(lineYs.map((lineY) => [lineY, [] as HighlightSpan[]]));
+    if (logicalLength === 0) {
+      return { spansByLine: emptyByLine, lineYs, complete: true, cacheable: true };
+    }
 
     const logicalText = segments.map((segment) => segment.text).join("");
     if (logicalText.length > KeywordHighlighter.MAX_LOGICAL_LINE_SCAN_CHARS) {
-      return new Map();
+      return { spansByLine: emptyByLine, lineYs, complete: true, cacheable: false };
     }
     const occupied = new Uint8Array(logicalText.length);
 
-    const lineKeysByLine = new Map<number, string[]>();
+    const spansByLine = emptyByLine;
     const acceptedMatchesByLine = new Map<number, number>();
 
     for (const { regex, color } of this.compiledRules) {
-      if (this.isBudgetExhausted(budget)) break;
+      if (this.isBudgetExhausted(budget)) {
+        return { spansByLine, lineYs, complete: false, cacheable: false };
+      }
       regex.lastIndex = 0;
 
       while (true) {
-        if (this.isBudgetExhausted(budget)) break;
+        if (this.isBudgetExhausted(budget)) {
+          return { spansByLine, lineYs, complete: false, cacheable: false };
+        }
         const match = regex.exec(logicalText);
         if (match === null) break;
 
@@ -660,11 +712,7 @@ export class KeywordHighlighter implements IDisposable {
         if (this.hasWrappedAnsiForegroundInRange(segments, strStart, strEnd, scratchCell)) continue;
 
         const matchedSegments = segments.filter(
-          (segment) =>
-            segment.lineY >= scanStart &&
-            segment.lineY <= scanEnd &&
-            segment.endIndex > strStart &&
-            segment.startIndex < strEnd,
+          (segment) => segment.endIndex > strStart && segment.startIndex < strEnd,
         );
         if (matchedSegments.length === 0) continue;
 
@@ -678,7 +726,7 @@ export class KeywordHighlighter implements IDisposable {
         }
         if (lineLimitReached) continue;
 
-        const createdKeys: Array<{ lineY: number; key: string }> = [];
+        const acceptedLineYs: number[] = [];
         for (const segment of matchedSegments) {
           const localStart = Math.max(strStart, segment.startIndex) - segment.startIndex;
           const localEnd = Math.min(strEnd, segment.endIndex) - segment.startIndex;
@@ -688,69 +736,75 @@ export class KeywordHighlighter implements IDisposable {
             ? (segment.cellMap[localStart] ?? localStart)
             : localStart;
           const cellEndCol = segment.cellMap ? (segment.cellMap[localEnd] ?? localEnd) : localEnd;
-          const key = this.ensureDecoration(
-            segment.lineY,
+          const cellWidth = cellEndCol - cellStartCol;
+          if (cellWidth <= 0) continue;
+          spansByLine.get(segment.lineY)?.push({
             cellStartCol,
-            cellEndCol - cellStartCol,
+            cellWidth,
             color,
-            cursorAbsoluteY,
-            config,
-            budget,
-          );
-          if (!key) {
-            if (budget.hitLimit) break;
-            continue;
-          }
-
-          requiredKeys.add(key);
-          createdKeys.push({ lineY: segment.lineY, key });
-
-          const lineKeys = lineKeysByLine.get(segment.lineY);
-          if (lineKeys) {
-            lineKeys.push(key);
-          } else {
-            lineKeysByLine.set(segment.lineY, [key]);
-          }
+          });
+          acceptedLineYs.push(segment.lineY);
         }
 
-        if (createdKeys.length === 0) {
-          if (budget.hitLimit) break;
-          continue;
-        }
+        if (acceptedLineYs.length === 0) continue;
 
         for (let k = strStart; k < strEnd; k++) {
           occupied[k] = 1;
         }
-        for (const { lineY } of createdKeys) {
+        for (const lineY of acceptedLineYs) {
           acceptedMatchesByLine.set(lineY, (acceptedMatchesByLine.get(lineY) ?? 0) + 1);
         }
       }
     }
 
-    return lineKeysByLine;
+    return { spansByLine, lineYs, complete: true, cacheable: true };
   }
 
-  private refreshViewport(): void {
+  private materializeSpans(
+    lineY: number,
+    spans: HighlightSpan[],
+    cursorAbsoluteY: number,
+    requiredKeys: Set<string>,
+    config: KeywordHighlightPerformanceConfig,
+    budget: RefreshBudget,
+  ): void {
+    for (const span of spans) {
+      const key = this.ensureDecoration(
+        lineY,
+        span.cellStartCol,
+        span.cellWidth,
+        span.color,
+        cursorAbsoluteY,
+        config,
+        budget,
+      );
+      if (key) requiredKeys.add(key);
+      if (budget.hitLimit) return;
+    }
+  }
+
+  private refreshViewport(reason: RefreshReason): void {
     if (!this.enabled || this.suspended || this.compiledRules.length === 0) return;
     if (!this.term?.buffer?.active) return;
 
     if (this.term.buffer.active.type === "alternate") {
-      this.clearAllDecorations();
+      this.invalidateAll();
       return;
     }
+
+    const refreshStartedAt = performance.now();
+    const stats: RefreshStats = {
+      cacheHits: 0,
+      cacheMisses: 0,
+      scannedLines: 0,
+      decorationsCreated: 0,
+      decorationsDisposed: 0,
+    };
 
     // When xterm trims the scrollback, all buffer indices shift and our caches
     // become stale. Detect this via the sentinel marker and wipe everything.
     if (this.bufferTrimmed) {
-      const entries = [...this.decorationCache.values()];
-      this.decorationCache.clear();
-      this.lineToKeys.clear();
-      this.scannedLines.clear();
-      this.bufferTrimmed = false;
-      for (const { decoration, marker } of entries) {
-        decoration.dispose();
-        marker.dispose();
-      }
+      this.invalidateAll();
     }
 
     if (!this.sentinelMarker) {
@@ -790,75 +844,38 @@ export class KeywordHighlighter implements IDisposable {
       processedLines.add(lineY);
 
       if (!this.highlightAcrossWrappedLines) {
-        if (lineY < screenStartY && this.scannedLines.has(lineY)) {
-          const cached = this.lineToKeys.get(lineY);
-          if (cached) {
-            let stale = false;
-            for (const k of cached) {
-              if (this.decorationCache.has(k)) {
-                requiredKeys.add(k);
-              } else {
-                stale = true;
-              }
-            }
-            if (!stale) continue;
-            this.scannedLines.delete(lineY);
-            this.lineToKeys.delete(lineY);
+        let spans: HighlightSpan[];
+        if (lineY < screenStartY) {
+          const cached = this.getCachedMatches(lineY);
+          if (cached !== undefined) {
+            stats.cacheHits++;
+            spans = cached;
           } else {
-            continue;
+            stats.cacheMisses++;
+            stats.scannedLines++;
+            const result = this.scanPhysicalLine(line, scratchCell, config, budget);
+            spans = result.spans;
+            if (result.complete) this.setCachedMatches(lineY, spans);
           }
+        } else {
+          stats.scannedLines++;
+          spans = this.scanPhysicalLine(line, scratchCell, config, budget).spans;
         }
-
-        const lineKeys = this.scanPhysicalLine(
-          line,
+        this.materializeSpans(
           lineY,
+          spans,
           cursorAbsoluteY,
           requiredKeys,
-          scratchCell,
           config,
           budget,
         );
-
-        // Only memoize scrollback lines — screen lines remain mutable
-        if (lineY < screenStartY) {
-          this.scannedLines.add(lineY);
-          if (lineKeys.length > 0) {
-            this.lineToKeys.set(lineY, lineKeys);
-          } else {
-            this.lineToKeys.delete(lineY);
-          }
-        }
         continue;
       }
 
       const { startY, endY } = this.getLogicalLineBounds(buffer, lineY, totalLines);
       const canMemoize = endY < screenStartY;
-
-      if (canMemoize && this.scannedLines.has(lineY)) {
-        const cached = this.lineToKeys.get(lineY);
-        if (cached) {
-          let stale = false;
-          for (const k of cached) {
-            if (this.decorationCache.has(k)) {
-              requiredKeys.add(k);
-            } else {
-              stale = true;
-            }
-          }
-          if (!stale) continue;
-          this.scannedLines.delete(lineY);
-          this.lineToKeys.delete(lineY);
-        } else {
-          continue;
-        }
-      }
-
-      // Wrapped-line mode can span multiple physical lines, so a logical line that
-      // touches the live screen cannot be memoized by individual scrollback rows.
-      if (!canMemoize && processedLogicalStarts.has(startY)) continue;
-      if (!canMemoize) {
-        processedLogicalStarts.add(startY);
-      }
+      if (processedLogicalStarts.has(startY)) continue;
+      processedLogicalStarts.add(startY);
       for (
         let processedY = Math.max(startY, scanStart);
         processedY <= Math.min(endY, scanEnd);
@@ -867,40 +884,69 @@ export class KeywordHighlighter implements IDisposable {
         processedLines.add(processedY);
       }
 
-      const lineKeysByLine = this.scanWrappedLogicalLine(
-        buffer,
-        startY,
-        endY,
-        scanStart,
-        scanEnd,
-        cursorAbsoluteY,
-        requiredKeys,
-        scratchCell,
-        config,
-        budget,
-      );
+      const logicalLineYs = Array.from({ length: endY - startY + 1 }, (_, index) => startY + index);
+      const allRowsCached =
+        canMemoize && logicalLineYs.every((cachedLineY) => this.lineMatchCache.has(cachedLineY));
 
-      if (canMemoize) {
-        for (let memoY = Math.max(startY, scanStart); memoY <= Math.min(endY, scanEnd); memoY++) {
-          this.scannedLines.add(memoY);
-          const lineKeys = lineKeysByLine.get(memoY);
-          if (lineKeys && lineKeys.length > 0) {
-            this.lineToKeys.set(memoY, lineKeys);
-          } else {
-            this.lineToKeys.delete(memoY);
+      let spansByLine: Map<number, HighlightSpan[]>;
+      if (allRowsCached) {
+        spansByLine = new Map();
+        for (const cachedLineY of logicalLineYs) {
+          const cached = this.getCachedMatches(cachedLineY);
+          if (cached !== undefined) {
+            stats.cacheHits++;
+            spansByLine.set(cachedLineY, cached);
           }
         }
+      } else {
+        if (canMemoize) stats.cacheMisses++;
+        stats.scannedLines += logicalLineYs.length;
+        const result = this.scanWrappedLogicalLine(
+          buffer,
+          startY,
+          endY,
+          scratchCell,
+          config,
+          budget,
+        );
+        spansByLine = result.spansByLine;
+        if (
+          canMemoize &&
+          result.complete &&
+          result.cacheable &&
+          result.lineYs.length <= config.maxCachedMatchLines
+        ) {
+          for (const cachedLineY of result.lineYs) this.lineMatchCache.delete(cachedLineY);
+          for (const cachedLineY of result.lineYs) {
+            this.setCachedMatches(cachedLineY, result.spansByLine.get(cachedLineY) ?? []);
+          }
+        }
+      }
+
+      for (
+        let visibleLineY = Math.max(startY, scanStart);
+        visibleLineY <= Math.min(endY, scanEnd);
+        visibleLineY++
+      ) {
+        this.materializeSpans(
+          visibleLineY,
+          spansByLine.get(visibleLineY) ?? [],
+          cursorAbsoluteY,
+          requiredKeys,
+          config,
+          budget,
+        );
+        if (budget.hitLimit) break;
       }
     }
 
     // Evict decorations that have drifted outside the overscan zone. If the refresh
     // hit a time/count budget, keep unprocessed in-zone lines to avoid flicker and churn.
     const staleKeys: string[] = [];
-    for (const key of this.decorationCache.keys()) {
+    for (const [key, entry] of this.decorationCache) {
       if (requiredKeys.has(key)) continue;
-      const lineY = this.getLineYFromDecorationKey(key);
-      const isOutsideScanZone = lineY === null || lineY < scanStart || lineY > scanEnd;
-      if (isOutsideScanZone || !budget.hitLimit || processedLines.has(lineY)) {
+      const isOutsideScanZone = entry.lineY < scanStart || entry.lineY > scanEnd;
+      if (isOutsideScanZone || !budget.hitLimit || processedLines.has(entry.lineY)) {
         staleKeys.push(key);
       }
     }
@@ -910,16 +956,29 @@ export class KeywordHighlighter implements IDisposable {
         this.decorationCache.delete(key); // remove before dispose to silence onDispose no-op
         entry.decoration.dispose();
         entry.marker.dispose();
+        stats.decorationsDisposed++;
       }
     }
 
-    // Also evict the line-index entries for lines now outside the zone so they
-    // are re-scanned if the user scrolls back to them later.
-    for (const lineY of this.scannedLines) {
-      if (lineY < scanStart || lineY > scanEnd) {
-        this.scannedLines.delete(lineY);
-        this.lineToKeys.delete(lineY);
-      }
+    stats.decorationsCreated = budget.createdDecorations;
+
+    if (import.meta.env.DEV) {
+      logger.debug({
+        domain: "terminal.input",
+        event: "terminal.keyword.refresh",
+        message: "Refreshed terminal keyword highlights",
+        ids: this.sessionId ? { session_id: this.sessionId } : undefined,
+        data: {
+          reason,
+          duration_ms: performance.now() - refreshStartedAt,
+          scanned_lines: stats.scannedLines,
+          cache_hits: stats.cacheHits,
+          cache_misses: stats.cacheMisses,
+          decorations_created: stats.decorationsCreated,
+          decorations_disposed: stats.decorationsDisposed,
+          match_cache_size: this.lineMatchCache.size,
+        },
+      });
     }
 
     if (budget.hitLimit && !budget.hitTotalDecorationLimit) {

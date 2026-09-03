@@ -17,6 +17,26 @@ export const DEFAULT_COMMAND_SUGGESTION_MAX_CHARS = 64;
 export const MIN_COMMAND_SUGGESTION_MAX_CHARS = 1;
 export const MAX_COMMAND_SUGGESTION_MAX_CHARS = 500;
 
+export const TERMINAL_RIGHT_CLICK_ACTIONS = ["none", "menu", "paste"] as const;
+
+export type TerminalRightClickAction = (typeof TERMINAL_RIGHT_CLICK_ACTIONS)[number];
+
+export const DEFAULT_TERMINAL_RIGHT_CLICK_ACTION: TerminalRightClickAction = "menu";
+
+export function isTerminalRightClickAction(value: unknown): value is TerminalRightClickAction {
+  return (
+    typeof value === "string" &&
+    TERMINAL_RIGHT_CLICK_ACTIONS.includes(value as TerminalRightClickAction)
+  );
+}
+
+export function normalizeTerminalRightClickAction(
+  value: unknown,
+  fallback: TerminalRightClickAction = DEFAULT_TERMINAL_RIGHT_CLICK_ACTION,
+): TerminalRightClickAction {
+  return isTerminalRightClickAction(value) ? value : fallback;
+}
+
 export const TAB_MOUSE_ACTIONS = [
   "none",
   "rename_tab",

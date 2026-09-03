@@ -16,8 +16,9 @@ pub use ai::{
     AiBackendKind, AiCustomActionConfig, AiMode, AiModelConfigItem, AiModelSource,
     AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile, AiReasoningEffort,
     AiSettings, ClaudeCodeIntegrationSettings, CodexIntegrationSettings, CodexThreadMode,
-    RiskLevel, ai_model_id_for_credential, ai_model_id_for_provider, decrypt_ai_settings,
-    encrypt_ai_settings, mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings,
+    ExternalMcpSessionScope, ExternalMcpSettings, RiskLevel, ai_model_id_for_credential,
+    ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings, mask_ai_settings,
+    merge_masked_ai_settings, normalize_ai_settings,
 };
 pub use appearance::{AppearanceSettings, TerminalColorsConfig, ThemeColorsConfig, ThemeConfig};
 pub use diagnostics::{DiagnosticsLogLevel, DiagnosticsSettings};
@@ -94,6 +95,10 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
             interaction.contains_key("mac_ime_compatibility")
                 && !interaction.contains_key("ime_compatibility")
         });
+    let has_legacy_terminal_right_click_action = raw_settings
+        .get("interaction")
+        .and_then(|interaction| interaction.as_object())
+        .is_some_and(|interaction| !interaction.contains_key("terminal_right_click_action"));
 
     let mut migrated = false;
     let mut secrets_ready_for_persist = true;
@@ -125,6 +130,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     if normalize_ai_settings(&mut settings.ai) {
         migrated = true;
     }
+    if settings.security.migrate_legacy_screen_lock() {
+        migrated = true;
+    }
     if migrate_terminal_timestamp_format(&raw_settings, &mut settings.terminal) {
         migrated = true;
     }
@@ -145,6 +153,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
         migrated = true;
     }
     if has_legacy_mac_ime_compatibility {
+        migrated = true;
+    }
+    if has_legacy_terminal_right_click_action {
         migrated = true;
     }
 

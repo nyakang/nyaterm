@@ -18,14 +18,19 @@ import type { AppSettings, KeywordHighlightRule } from "../types/global";
 export function useKeywordHighlighter(
   terminal: Terminal | null,
   terminalSettings: AppSettings["terminal"],
-  _sessionId: string,
+  sessionId: string,
   isDark: boolean,
-  suspended = false,
+  options: {
+    suspended?: boolean;
+    releaseCachesAfterDelay?: boolean;
+  } = {},
 ): void {
   const highlighterRef = useRef<KeywordHighlighter | null>(null);
   const cacheReleaseTimerRef = useRef<number | null>(null);
   const [highlighterInstance, setHighlighterInstance] = useState<KeywordHighlighter | null>(null);
   const enabled = terminalSettings.keyword_highlights_enabled ?? false;
+  const suspended = options.suspended ?? false;
+  const releaseCachesAfterDelay = options.releaseCachesAfterDelay ?? false;
 
   // Merge user rules (higher priority) + built-in rules (lower priority).
   // User rules carry two color fields; pick the right one for the current theme
@@ -62,7 +67,7 @@ export function useKeywordHighlighter(
 
     if (!terminal) return;
 
-    const highlighter = new KeywordHighlighter(terminal);
+    const highlighter = new KeywordHighlighter(terminal, sessionId);
     highlighterRef.current = highlighter;
     setHighlighterInstance(highlighter);
 
@@ -71,7 +76,7 @@ export function useKeywordHighlighter(
       highlighterRef.current = null;
       setHighlighterInstance((current) => (current === highlighter ? null : current));
     };
-  }, [terminal, enabled]);
+  }, [terminal, enabled, sessionId]);
 
   // Re-push rules whenever settings change or theme family switches.
   useEffect(() => {
@@ -97,7 +102,7 @@ export function useKeywordHighlighter(
       cacheReleaseTimerRef.current = null;
     }
 
-    if (suspended) {
+    if (suspended && releaseCachesAfterDelay) {
       cacheReleaseTimerRef.current = window.setTimeout(() => {
         cacheReleaseTimerRef.current = null;
         highlighterInstance.releaseCaches();
@@ -110,5 +115,5 @@ export function useKeywordHighlighter(
         cacheReleaseTimerRef.current = null;
       }
     };
-  }, [highlighterInstance, suspended]);
+  }, [highlighterInstance, releaseCachesAfterDelay, suspended]);
 }

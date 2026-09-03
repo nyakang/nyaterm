@@ -36,7 +36,8 @@ export type InputOrigin =
   | "ai_agent"
   | "credential_autofill"
   | "otp_autofill"
-  | "sync_input";
+  | "sync_input"
+  | "terminal_response";
 
 export type InputSensitivity = "normal" | "secret";
 
@@ -176,7 +177,9 @@ export async function sendSessionInput(
 
 /**
  * Send input to a session and broadcast to all sync-group peers.
- * Peers receive raw `write_to_session` only (no preview / history registration).
+ * Peers do not emit frontend preview/history UI, but an executable command
+ * candidate is registered with the backend before write so session-bound shell
+ * confirmation remains exact-match and synchronized SSH history is not lost.
  */
 export async function sendSessionInputWithSync(
   sessionId: string,
@@ -188,14 +191,23 @@ export async function sendSessionInputWithSync(
 
   if (peerSessionIds.length > 0) {
     await Promise.allSettled(
-      peerSessionIds.map((sid) =>
-        invoke("write_to_session", {
+      peerSessionIds.map(async (sid) => {
+        if (options.registerSubmission) {
+          await invoke("register_command_confirmation_candidate", {
+            sessionId: sid,
+            command: options.registerSubmission,
+          }).catch(() => {
+            // History confirmation is auxiliary; never block synchronized
+            // input to an otherwise live peer when registration is unavailable.
+          });
+        }
+        await invoke("write_to_session", {
           sessionId: sid,
           data,
           origin: "sync_input",
           sensitivity: options.sensitivity,
+        });
         }),
-      ),
     );
   }
 }

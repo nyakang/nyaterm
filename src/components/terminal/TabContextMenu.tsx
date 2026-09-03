@@ -178,6 +178,18 @@ export default function TabContextMenu({
     }
   }, [t, tab.id, tab.locked, updateTab]);
 
+  const handleRestoreAutomaticTitle = useCallback(async () => {
+    try {
+      await updateTab(
+        tab.id,
+        { customName: undefined },
+        { immediatePersist: true },
+      );
+    } catch {
+      toast.error(t("tabCtx.restoreAutomaticTitleFailed"));
+    }
+  }, [t, tab.id, updateTab]);
+
   const handleOpenAI = useCallback(
     (action: "explain_output" | "analyze_error") => {
       onActivateTab(tab.id);
@@ -245,6 +257,13 @@ export default function TabContextMenu({
           <MdDriveFileRenameOutline className={iconClass} />
           {t("tabCtx.rename")}
         </ContextMenuItem>
+
+        {tab.customName ? (
+          <ContextMenuItem onClick={() => void handleRestoreAutomaticTitle()}>
+            <MdAutoAwesome className={iconClass} />
+            {t("tabCtx.restoreAutomaticTitle")}
+          </ContextMenuItem>
+        ) : null}
 
         <ContextMenuItem onClick={() => void handleToggleLocked()}>
           {tab.locked ? (

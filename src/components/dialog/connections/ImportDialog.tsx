@@ -31,8 +31,9 @@ interface ImportSource {
   icon: string | ComponentType<{ className?: string }>;
   extensions?: string[];
   hint?: string;
-  type: "backup" | "sessions";
+  type: "backup" | "sessions" | "ssh_config";
   picker?: "file" | "directory";
+  labelKey?: string;
 }
 
 const IMPORT_SOURCES: ImportSource[] = [
@@ -108,6 +109,14 @@ const IMPORT_SOURCES: ImportSource[] = [
     hint: ".json",
     type: "sessions",
   },
+  {
+    id: "ssh_config",
+    name: "SSH Config",
+    icon: MdTerminal,
+    hint: "~/.ssh/config",
+    type: "ssh_config",
+    labelKey: "savedConnections.sshConfigSource",
+  },
 ];
 
 const SESSION_IMPORT_DOC_URLS = {
@@ -167,6 +176,27 @@ export default function ImportDialog({ open, onClose }: ImportDialogProps) {
 
     if (source.type === "backup") {
       await handleImport();
+      return;
+    }
+
+    if (source.id === "ssh_config") {
+      try {
+        const count = await invoke<number>("import_ssh_config_hosts");
+        if (count > 0) {
+          toast.success(t("savedConnections.importSuccess", { count }));
+        } else {
+          toast.info(t("savedConnections.importSuccess", { count: 0 }));
+        }
+        refreshConnections();
+      } catch (e) {
+        logger.error({
+          domain: "settings.persistence",
+          event: "sessions.import_ssh_config_failed",
+          message: "Import SSH config failed",
+          error: e,
+        });
+        toast.error(t("savedConnections.importFailed", { error: e }));
+      }
       return;
     }
 
@@ -268,7 +298,7 @@ export default function ImportDialog({ open, onClose }: ImportDialogProps) {
               >
                 {renderSourceIcon(source)}
                 <span className="text-xs font-medium" style={{ color: "var(--df-text)" }}>
-                  {source.name}
+                  {source.labelKey ? t(source.labelKey) : source.name}
                 </span>
                 {source.hint && (
                   <span

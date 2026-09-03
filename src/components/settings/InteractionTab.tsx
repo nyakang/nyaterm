@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { SelectItem } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useApp } from "@/context/AppContext";
 import {
   MAX_COMMAND_SUGGESTION_MAX_CHARS,
@@ -9,6 +10,7 @@ import {
   normalizeCommandSuggestionMaxChars,
   normalizeCommandSuggestionMinChars,
   normalizeTabMouseAction,
+  normalizeTerminalRightClickAction,
   TAB_MOUSE_ACTION_LABEL_KEYS,
   TAB_MOUSE_ACTIONS,
 } from "@/lib/interactionSettings";
@@ -73,11 +75,32 @@ export function InteractionTab() {
           />
         </SettingRow>
 
-        <SettingRow label={t("settings.rightClickPaste")} desc={t("settings.rightClickPasteDesc")}>
-          <SettingSwitch
-            checked={interaction.right_click_paste}
-            onChange={(v) => updateInteraction({ right_click_paste: v })}
-          />
+        <SettingRow
+          label={t("settings.terminalRightClickAction")}
+          desc={t("settings.terminalRightClickActionDesc")}
+        >
+          <Tabs
+            value={normalizeTerminalRightClickAction(
+              interaction.terminal_right_click_action,
+            )}
+            onValueChange={(value) =>
+              updateInteraction({
+                terminal_right_click_action: normalizeTerminalRightClickAction(value),
+              })
+            }
+          >
+            <TabsList className="grid w-52 grid-cols-3">
+              <TabsTrigger value="none">
+                {t("settings.terminalRightClickNone")}
+              </TabsTrigger>
+              <TabsTrigger value="menu">
+                {t("settings.terminalRightClickMenu")}
+              </TabsTrigger>
+              <TabsTrigger value="paste">
+                {t("settings.terminalRightClickPaste")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
         </SettingRow>
       </SettingSection>
 

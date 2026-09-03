@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import FloatingPanel from "@/components/app/FloatingPanel";
@@ -195,6 +196,9 @@ export default function AppLayout({
   const backgroundImagePath = appearance.background_image_path?.trim() ?? "";
   const [backgroundDataUrl, setBackgroundDataUrl] = useState("");
   const [serialSendRunning, setSerialSendRunning] = useState(false);
+  // Latch the first time the serial send panel is shown so it stays mounted
+  // (but hidden) afterwards, preserving the user's input across hide/show cycles.
+  const serialSendEverShownRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,7 +262,11 @@ export default function AppLayout({
   const leftMobileOpen = hasLeftActivityItems && mobile.leftOpen;
   const rightMobileOpen = hasRightActivityItems && mobile.rightOpen;
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
-  const serialSendMounted = serialSendVisible || serialSendRunning;
+  if (serialSendVisible) {
+    serialSendEverShownRef.current = true;
+  }
+  const serialSendMounted =
+    serialSendVisible || serialSendRunning || serialSendEverShownRef.current;
 
   useEffect(() => {
     const roots = [document.documentElement, document.body];

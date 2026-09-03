@@ -172,9 +172,11 @@ const sessionId = await invoke<string>('create_ssh_session', {
 界面文案使用 `react-i18next`，语言包位于：
 
 - `src/i18n/locales/zh-CN.json`
+- `src/i18n/locales/zh-TW.json`
 - `src/i18n/locales/en.json`
+- `src/i18n/locales/ko.json`
 
-新增或修改用户可见文本时，应同时更新两个 locale 文件。
+新增或修改用户可见文本时，应同时更新所有 locale 文件；提交前运行 `pnpm i18n:check` 校验 JSON 格式。
 
 ## UI 组件约定
 

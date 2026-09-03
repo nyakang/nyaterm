@@ -96,6 +96,7 @@ fn import_legacy_sessions(
                 legacy_agent_forwarding: None,
                 agent_forwarding_config: None,
                 encoding: String::new(),
+                dynamic_tab_title: false,
             },
             group_id,
             description: sess.description,

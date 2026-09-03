@@ -115,20 +115,34 @@ export function SecurityTab() {
 
       <SettingSection title={t("settings.sessionSecurity")} contentClassName="space-y-5">
         <SettingRow
-          label={t("settings.enableScreenLock")}
-          desc={t("settings.enableScreenLockDesc")}
+          label={t("settings.enableStartupLock")}
+          desc={t("settings.enableStartupLockDesc")}
         >
           <SettingSwitch
-            checked={appSettings.security.enable_screen_lock}
+            checked={appSettings.security.enable_startup_lock}
             onChange={(v) =>
               updateAppSettings({
-                security: { ...appSettings.security, enable_screen_lock: v },
+                security: { ...appSettings.security, enable_startup_lock: v },
               })
             }
           />
         </SettingRow>
 
-        {appSettings.security.enable_screen_lock && (
+        <SettingRow
+          label={t("settings.enableIdleLock")}
+          desc={t("settings.enableIdleLockDesc")}
+        >
+          <SettingSwitch
+            checked={appSettings.security.enable_idle_lock}
+            onChange={(v) =>
+              updateAppSettings({
+                security: { ...appSettings.security, enable_idle_lock: v },
+              })
+            }
+          />
+        </SettingRow>
+
+        {appSettings.security.enable_idle_lock && (
           <SettingRow
             label={t("settings.idleLockMinutes")}
             desc={t("settings.idleLockMinutesDesc")}

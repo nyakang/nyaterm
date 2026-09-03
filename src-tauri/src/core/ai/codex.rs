@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use nyaterm_mcp_protocol::MCP_TOOL_REGISTRY;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
@@ -21,15 +22,15 @@ use crate::utils::process::hide_window;
 
 use super::agent::{AgentApprovalManager, run_external_agent_command_step};
 use super::history::{
-    append_message, get_session_backend_metadata, save_user_message, set_session_backend_metadata,
-    set_session_external_session_id,
+    append_ai_audit, append_message, get_session_backend_metadata, save_user_message,
+    set_session_backend_metadata, set_session_external_session_id,
 };
 use super::prompt::build_agent_prompt;
 use super::redaction::{redact_context, redact_marker_values, redact_sensitive_text};
 use super::stream::{active_streams, emit_stream_event};
 use super::types::{
     AiChatRequest, AiMessage, AiMessageRole, AiModelDiscovery, AiSessionBackendMetadata,
-    AiStreamEventPayload, CommandObservation, now_rfc3339, uuid,
+    AiStreamEventPayload, AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
 };
 
 const CODEX_TERMINAL_TOOLS_VERSION: u16 = 1;
@@ -831,8 +832,65 @@ async fn run_codex_stream_inner(
         save_user_message(&app, &session_id, request)?;
     }
 
+    let use_nyaterm_mcp = settings.codex.tool_integration_mode.as_deref() == Some("nyaterm_mcp");
+    let mut mcp_fallback = false;
+    let mut mcp_credential = if use_nyaterm_mcp {
+        if let Some(mcp) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
+            let (scope, default_id) = codex_request_terminal_scope(request);
+            let owner =
+                if let Some(id) = default_id.as_deref().or(scope.first().map(String::as_str)) {
+                    session_manager
+                        .session_info(id)
+                        .await
+                        .ok()
+                        .and_then(|info| info.owner_window_label)
+                } else {
+                    None
+                };
+            match mcp
+                .create_ephemeral_credential(
+                    "codex_mcp",
+                    scope,
+                    default_id,
+                    request.permission_mode.clone(),
+                    owner,
+                )
+                .await
+            {
+                Ok(credential) => Some(credential),
+                Err(error) => {
+                    mcp_fallback = true;
+                    emit_codex_mcp_fallback(
+                        &app,
+                        &stream_id,
+                        &session_id,
+                        request,
+                        &error.to_string(),
+                    );
+                    None
+                }
+            }
+        } else {
+            mcp_fallback = true;
+            emit_codex_mcp_fallback(
+                &app,
+                &stream_id,
+                &session_id,
+                request,
+                "The NyaTerm MCP manager is unavailable.",
+            );
+            None
+        }
+    } else {
+        None
+    };
+
     let metadata = get_session_backend_metadata(&app, &session_id)?;
-    let thread_id = reusable_codex_thread_id(metadata.as_ref());
+    let thread_id = if mcp_credential.is_some() || mcp_fallback {
+        None
+    } else {
+        reusable_codex_thread_id(metadata.as_ref())
+    };
 
     let thread_id = if let Some(thread_id) = thread_id {
         manager
@@ -840,11 +898,29 @@ async fn run_codex_stream_inner(
             .await?;
         thread_id
     } else {
-        let params = codex_thread_start_params(
+        let params = codex_thread_start_params_with_mcp(
             selected_model_name.as_deref(),
             settings.codex.thread_mode == CodexThreadMode::Ephemeral,
+            mcp_credential.as_ref(),
         );
-        let response = manager.request("thread/start", params).await?;
+        let response = match manager.request("thread/start", params).await {
+            Ok(response) => response,
+            Err(error) if mcp_credential.is_some() => {
+                emit_codex_mcp_fallback(&app, &stream_id, &session_id, request, &error.to_string());
+                mcp_credential.take();
+                manager
+                    .request(
+                        "thread/start",
+                        codex_thread_start_params_with_mcp(
+                            selected_model_name.as_deref(),
+                            settings.codex.thread_mode == CodexThreadMode::Ephemeral,
+                            None,
+                        ),
+                    )
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
         let new_thread_id = response
             .get("thread")
             .and_then(|thread| thread.get("id"))
@@ -1174,7 +1250,16 @@ fn resolve_codex_model_name(settings: &AiSettings, request: &AiChatRequest) -> O
         .map(ToOwned::to_owned)
 }
 
+#[cfg(test)]
 fn codex_thread_start_params(model: Option<&str>, ephemeral: bool) -> Value {
+    codex_thread_start_params_with_mcp(model, ephemeral, None)
+}
+
+fn codex_thread_start_params_with_mcp(
+    model: Option<&str>,
+    ephemeral: bool,
+    credential: Option<&crate::core::mcp::EphemeralMcpCredential>,
+) -> Value {
     let mut params = json!({
         "cwd": null,
         "ephemeral": ephemeral,
@@ -1188,13 +1273,115 @@ fn codex_thread_start_params(model: Option<&str>, ephemeral: bool) -> Value {
         },
         "approvalsReviewer": "user",
         "sandbox": "read-only",
-        "developerInstructions": codex_developer_instructions(),
-        "dynamicTools": [terminal_tool_namespace()]
+        "developerInstructions": codex_developer_instructions()
     });
+    if let Some(credential) = credential {
+        params["config"] = codex_nyaterm_mcp_config(&credential.sidecar_path, credential.env());
+    } else {
+        params["dynamicTools"] = json!([terminal_tool_namespace()]);
+    }
     if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
         params["model"] = json!(model);
     }
     params
+}
+
+fn nyaterm_mcp_tool_names() -> Vec<&'static str> {
+    MCP_TOOL_REGISTRY
+        .iter()
+        .map(|definition| definition.tool)
+        .collect()
+}
+
+fn codex_nyaterm_mcp_config(sidecar_path: &Path, environment: HashMap<String, String>) -> Value {
+    json!({
+        "mcp_servers": {
+            "nyaterm": {
+                "command": sidecar_path,
+                "args": [],
+                "env": environment,
+                "required": true,
+                "enabled_tools": nyaterm_mcp_tool_names(),
+                "default_tools_approval_mode": "approve",
+            }
+        }
+    })
+}
+
+fn emit_codex_mcp_fallback(
+    app: &AppHandle,
+    stream_id: &str,
+    session_id: &str,
+    request: &AiChatRequest,
+    reason: &str,
+) {
+    let reason = redact_sensitive_text(reason);
+    tracing::warn!(
+        stream_id,
+        session_id,
+        permission_mode = ?request.permission_mode,
+        reason,
+        "Codex MCP integration failed; using the NyaTerm dynamic terminal tool"
+    );
+    emit_stream_event(
+        app,
+        stream_id,
+        AiStreamEventPayload {
+            event_type: "warning".to_string(),
+            stream_id: stream_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            text_delta: None,
+            reasoning_delta: None,
+            message: None,
+            command_cards: vec![],
+            usage: None,
+            error: Some("codex_mcp_fallback".to_string()),
+        },
+    );
+    let _ = append_ai_audit(
+        app,
+        AppendAiAuditRequest {
+            connection_id: request.connection_id.clone(),
+            action: "ai.codex_mcp_fallback".to_string(),
+            user_input: None,
+            generated_command: None,
+            risk_level: None,
+            inserted_to_terminal: false,
+            executed: false,
+            blocked: false,
+            source: Some("codex_mcp".to_string()),
+            client: Some("Codex".to_string()),
+            capability: None,
+            session_id: request.terminal_session_id.clone(),
+            permission_mode: Some(request.permission_mode.clone()),
+            approval_decision: Some("fallback".to_string()),
+            success: Some(false),
+            duration_ms: None,
+            error: Some(reason),
+        },
+    );
+}
+
+fn codex_request_terminal_scope(request: &AiChatRequest) -> (Vec<String>, Option<String>) {
+    let mut scope = request
+        .targets
+        .iter()
+        .map(|target| target.terminal_session_id.clone())
+        .collect::<HashSet<_>>();
+    if let Some(id) = request.terminal_session_id.as_ref() {
+        scope.insert(id.clone());
+    }
+    if let Some(id) = request.default_target_session_id.as_ref() {
+        scope.insert(id.clone());
+    }
+    let mut scope = scope.into_iter().collect::<Vec<_>>();
+    scope.sort();
+    let default_id = request
+        .default_target_session_id
+        .clone()
+        .or_else(|| request.terminal_session_id.clone())
+        .filter(|id| scope.contains(id));
+    (scope, default_id)
 }
 
 fn codex_turn_start_params(thread_id: &str, prompt: &str, model: Option<&str>) -> Value {
@@ -1387,6 +1574,36 @@ mod tests {
                 .get("developerInstructions")
                 .and_then(Value::as_str)
                 .is_some_and(|value| value.contains("nyaterm_terminal.execute_command"))
+        );
+    }
+
+    #[test]
+    fn codex_preapproves_only_registered_nyaterm_mcp_tools() {
+        let config = codex_nyaterm_mcp_config(
+            Path::new("nyaterm-mcp"),
+            HashMap::from([("NYATERM_MCP_TOKEN".to_string(), "secret".to_string())]),
+        );
+        let server = config
+            .pointer("/mcp_servers/nyaterm")
+            .expect("nyaterm MCP server config");
+        let enabled_tools = server["enabled_tools"]
+            .as_array()
+            .expect("enabled tool allow-list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            server["default_tools_approval_mode"].as_str(),
+            Some("approve")
+        );
+        assert_eq!(enabled_tools, nyaterm_mcp_tool_names());
+
+        let thread = codex_thread_start_params(None, false);
+        assert_eq!(thread["sandbox"].as_str(), Some("read-only"));
+        assert_eq!(
+            thread["approvalPolicy"]["granular"]["sandbox_approval"].as_bool(),
+            Some(false)
         );
     }
 

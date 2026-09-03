@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -31,19 +32,23 @@ import {
   supportsApiFormatSelection,
   supportsCustomModelDiscovery,
 } from "@/lib/aiSettings";
+import { writeClipboardText } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import type {
-  AICustomActionConfig,
   AIApiFormat,
+  AICustomActionConfig,
   AIModelConfigItem,
-  AIPermissionMode,
   AIProviderCredential,
   AIProviderKind,
   AISettings,
   ClaudeCodeIntegrationSettings,
   CodexIntegrationSettings,
+  ExternalMcpSettings,
+  McpRuntimeStatus,
 } from "@/types/global";
+import { AiPermissionSelect } from "./AiPermissionSelect";
 import {
   SettingFieldGrid,
   SettingInput,
@@ -131,6 +136,13 @@ interface ClaudeCodeCliStatus {
   error?: string | null;
   source?: string | null;
   checkedPaths?: string[];
+}
+
+interface McpClientConfigs {
+  sidecarPath: string;
+  codex: unknown;
+  claudeCode: unknown;
+  cursor: unknown;
 }
 
 interface ClaudeCodeAccountStatus {
@@ -292,6 +304,12 @@ export function AiAgentsTab() {
   const ai = appSettings.ai;
   const codex = normalizeCodexSettings(ai.codex);
   const claudeCode = normalizeClaudeCodeSettings(ai.claude_code);
+  const externalMcp: ExternalMcpSettings = ai.external_mcp ?? {
+    enabled: false,
+    permission_mode: "confirm",
+    session_scope: "current_window",
+  };
+  const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [accountStatus, setAccountStatus] = useState<CodexAccountStatus | null>(null);
   const [claudeCliStatus, setClaudeCliStatus] = useState<ClaudeCodeCliStatus | null>(null);
@@ -318,6 +336,61 @@ export function AiAgentsTab() {
         ai: { ...ai, claude_code: { ...claudeCode, ...patch } },
       }),
     [ai, claudeCode, updateAppSettings],
+  );
+
+  const updateExternalMcp = useCallback(
+    (patch: Partial<ExternalMcpSettings>) =>
+      updateAppSettings({
+        ai: { ...ai, external_mcp: { ...externalMcp, ...patch } },
+      }),
+    [ai, externalMcp, updateAppSettings],
+  );
+
+  const setExternalMcpEnabled = useCallback(
+    async (enabled: boolean) => {
+      try {
+        const status = await invoke<McpRuntimeStatus>("set_external_mcp_enabled", {
+          enabled,
+          ownerWindowLabel: getOwnerMainWindowLabel(),
+        });
+        setMcpStatus(status);
+        updateExternalMcp({ enabled });
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      }
+    },
+    [updateExternalMcp],
+  );
+
+  useEffect(() => {
+    void invoke<McpRuntimeStatus>("get_external_mcp_status")
+      .then(setMcpStatus)
+      .catch(() => {});
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<McpRuntimeStatus>("mcp-status-changed", (event) => {
+      if (!disposed) setMcpStatus(event.payload);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const copyMcpConfig = useCallback(
+    async (client: "codex" | "claudeCode" | "cursor") => {
+      try {
+        const configs = await invoke<McpClientConfigs>("get_external_mcp_client_configs");
+        await writeClipboardText(JSON.stringify(configs[client], null, 2));
+        toast.success(t("ai.externalMcpConfigCopied"));
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      }
+    },
+    [t],
   );
 
   const detect = useCallback(
@@ -543,19 +616,15 @@ export function AiAgentsTab() {
                   </SelectItem>
                 ))}
               </SettingSelect>
-              <SettingSelect
-                label={t("ai.permissionMode")}
+              <AiPermissionSelect
                 value={codex.permission_mode ?? "confirm"}
+                targetLabel="Codex"
                 onValueChange={(permission_mode) =>
                   updateCodex({
-                    permission_mode: permission_mode as AIPermissionMode,
+                    permission_mode,
                   })
                 }
-              >
-                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-              </SettingSelect>
+              />
             </SettingFieldGrid>
 
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
@@ -668,19 +737,15 @@ export function AiAgentsTab() {
                   })
                 }
               />
-              <SettingSelect
-                label={t("ai.permissionMode")}
+              <AiPermissionSelect
                 value={claudeCode.permission_mode ?? "confirm"}
+                targetLabel="Claude Code"
                 onValueChange={(permission_mode) =>
                   updateClaudeCode({
-                    permission_mode: permission_mode as AIPermissionMode,
+                    permission_mode,
                   })
                 }
-              >
-                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-              </SettingSelect>
+              />
             </SettingFieldGrid>
 
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
@@ -713,6 +778,74 @@ export function AiAgentsTab() {
               </Button>
             </div>
           </div>
+        </div>
+      </SettingSection>
+
+      <SettingSection title={t("ai.externalMcp")} contentClassName="space-y-4">
+        <SettingRow label={t("ai.externalMcpEnabled")} desc={t("ai.externalMcpDesc")}>
+          <div className="flex items-center gap-2">
+            <Badge variant={mcpStatus?.running ? "default" : "outline"}>
+              {mcpStatus?.error
+                ? t("ai.externalMcpError")
+                : mcpStatus?.running
+                  ? t("ai.externalMcpRunning")
+                  : t("ai.externalMcpDisabled")}
+            </Badge>
+            <SettingSwitch
+              checked={externalMcp.enabled}
+              onChange={(enabled) => void setExternalMcpEnabled(enabled)}
+            />
+          </div>
+        </SettingRow>
+        {mcpStatus?.error ? (
+          <div className="text-xs text-destructive">{mcpStatus.error}</div>
+        ) : null}
+        <SettingFieldGrid>
+          <AiPermissionSelect
+            value={externalMcp.permission_mode}
+            targetLabel={t("ai.externalMcp")}
+            onValueChange={(permission_mode) =>
+              updateExternalMcp({
+                permission_mode,
+              })
+            }
+          />
+          <SettingSelect
+            label={t("ai.externalMcpScope")}
+            value={externalMcp.session_scope}
+            onValueChange={(session_scope) =>
+              updateExternalMcp({
+                session_scope: session_scope as ExternalMcpSettings["session_scope"],
+              })
+            }
+          >
+            <SelectItem value="current_window">{t("ai.externalMcpCurrentWindow")}</SelectItem>
+            <SelectItem value="all_sessions">{t("ai.externalMcpAllSessions")}</SelectItem>
+          </SettingSelect>
+        </SettingFieldGrid>
+        <div className="text-xs text-muted-foreground">
+          {t("ai.externalMcpRuntimeSummary", {
+            window: mcpStatus?.ownerWindowLabel ?? "-",
+            sessions: mcpStatus?.scopedSessionCount ?? 0,
+            connections: mcpStatus?.connectionCount ?? 0,
+          })}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {(["codex", "claudeCode", "cursor"] as const).map((client) => (
+            <div key={client} className="rounded-md border border-border/70 p-3">
+              <div className="text-sm font-medium">
+                {client === "codex" ? "Codex" : client === "claudeCode" ? "Claude Code" : "Cursor"}
+              </div>
+              <Button
+                className="mt-3 w-full"
+                size="sm"
+                variant="outline"
+                onClick={() => void copyMcpConfig(client)}
+              >
+                {t("ai.externalMcpCopyConfig")}
+              </Button>
+            </div>
+          ))}
         </div>
       </SettingSection>
     </div>

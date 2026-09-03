@@ -18,10 +18,12 @@ mod utils;
 mod window_state;
 
 use std::sync::Arc;
+use tauri::Manager;
 
 use crate::cmd::app::AppLockState;
 use crate::cmd::docker::DockerSudoManager;
 use crate::core::ai::AgentApprovalManager;
+use crate::core::mcp::McpManager;
 use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::sftp::TransferDuplicateManager;
 use crate::core::ssh::{
@@ -59,6 +61,11 @@ pub fn run() {
     let app_lock_state = AppLockState::default();
     let external_open_state = external_open::ExternalOpenState::default();
     let portable_update_state = portable_updater::PortableUpdateState::default();
+    let mcp_manager = McpManager::new(
+        session_manager.clone(),
+        runtime.config_dir().to_path_buf(),
+        runtime.executable_dir().to_path_buf(),
+    );
 
     let builder = tauri::Builder::default();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -106,6 +113,7 @@ pub fn run() {
         .manage(transfer_duplicate_manager.clone())
         .manage(docker_sudo_manager.clone())
         .manage(remote_stats_sampler.clone())
+        .manage(mcp_manager.clone())
         .manage(app_lock_state)
         .manage(external_open_state)
         .manage(portable_update_state)
@@ -118,7 +126,14 @@ pub fn run() {
                 quick_commands_store,
                 cloud_sync_manager,
                 runtime_for_setup.clone(),
-            )
+            )?;
+            let manager = mcp_manager.clone();
+            let app_handle = a.handle().clone();
+            if let Err(error) = tauri::async_runtime::block_on(manager.initialize(app_handle)) {
+                tracing::error!("Failed to initialize External MCP bridge: {error}");
+                manager.record_startup_error(&error);
+            }
+            Ok(())
         })
         .on_window_event(app::on_window_event)
         .invoke_handler(tauri::generate_handler![
@@ -148,6 +163,13 @@ pub fn run() {
             cmd::ai::start_codex_login,
             cmd::ai::cancel_codex_login,
             cmd::ai::logout_codex,
+            cmd::mcp::get_external_mcp_status,
+            cmd::mcp::notify_mcp_session_restore_complete,
+            cmd::mcp::set_external_mcp_enabled,
+            cmd::mcp::respond_external_mcp_approval,
+            cmd::mcp::report_mcp_active_session,
+            cmd::mcp::respond_mcp_session_open,
+            cmd::mcp::get_external_mcp_client_configs,
             cmd::ai::detect_claude_code_cli,
             cmd::ai::get_claude_code_account_status,
             cmd::ai::respond_agent_step,
@@ -214,8 +236,10 @@ pub fn run() {
             cmd::session::detach_session_renderer,
             cmd::session::close_session,
             cmd::session::list_sessions,
+            cmd::session::get_session_cwd_presentation,
             cmd::session::add_command_history,
             cmd::session::register_command_submission,
+            cmd::session::register_command_confirmation_candidate,
             cmd::session::get_command_history,
             cmd::session::delete_command_history,
             cmd::session::fuzzy_search_history,
@@ -258,6 +282,7 @@ pub fn run() {
             cmd::sftp::create_remote_file,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
+            cmd::sftp::update_remote_symlink_target,
             cmd::sftp::chmod_remote_file,
             cmd::sftp::update_remote_file_attributes,
             cmd::sftp::download_remote_directory,
@@ -328,6 +353,10 @@ pub fn run() {
             cmd::translate::translate_text,
             cmd::importer::import_sessions,
             cmd::importer::import_termius_sessions,
+            cmd::ssh_config::list_ssh_config_hosts,
+            cmd::ssh_config::get_ssh_config,
+            cmd::ssh_config::resolve_ssh_host,
+            cmd::ssh_config::import_ssh_config_hosts,
             cmd::backup::export_config,
             cmd::backup::import_config,
             cmd::stats::get_remote_stats,
@@ -388,6 +417,14 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if matches!(
+                _event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                if let Some(manager) = _app.try_state::<Arc<McpManager>>() {
+                    manager.shutdown_cleanup();
+                }
+            }
             #[cfg(target_os = "macos")]
             if matches!(_event, tauri::RunEvent::Reopen { .. }) {
                 app::show_main_window(_app);

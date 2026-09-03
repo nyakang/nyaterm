@@ -348,6 +348,15 @@ pub fn append_ai_audit(app: &AppHandle, request: AppendAiAuditRequest) -> AppRes
         inserted_to_terminal: request.inserted_to_terminal,
         executed: request.executed,
         blocked: request.blocked,
+        source: request.source,
+        client: request.client,
+        capability: request.capability,
+        session_id: request.session_id,
+        permission_mode: request.permission_mode,
+        approval_decision: request.approval_decision,
+        success: request.success,
+        duration_ms: request.duration_ms,
+        error: request.error,
         created_at: now_rfc3339(),
     };
     storage::update_settings_doc::<AiAuditFile, _, _>(SettingsDocKey::AiAudit, |file| {

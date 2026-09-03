@@ -37,6 +37,16 @@ vi.mock("@/lib/codeMirrorFileView", () => ({
 vi.mock("@/lib/invoke", () => ({ invoke: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+vi.mock("@/context/AppContext", () => ({
+  useApp: () => ({
+    appSettings: {
+      transfer: {
+        internal_editor_font_size: 13,
+      },
+    },
+  }),
+}));
+
 function pane(): FileDocumentPane {
   return {
     id: "pane-file",

@@ -2,9 +2,9 @@ fn serial_session_thread(
     app: AppHandle,
     session_id: String,
     manager: Arc<SessionManager>,
-    mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
-    reader_shutdown_tx: mpsc::UnboundedSender<SessionCommand>,
-    output_control_tx: mpsc::UnboundedSender<SessionCommand>,
+    mut cmd_rx: SessionCommandReceiver,
+    reader_shutdown_tx: SessionCommandSender,
+    output_control_tx: SessionCommandSender,
     rt_handle: tokio::runtime::Handle,
     config: SerialConfig,
     connection_id: Option<String>,
@@ -191,8 +191,8 @@ fn serial_session_thread(
     // Command loop
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
-            SessionCommand::Attach => {
-                output.attach();
+            SessionCommand::AttachConfirmed { ack } => {
+                output.attach_confirmed(ack);
             }
             SessionCommand::DetachRenderer => {
                 output.detach();

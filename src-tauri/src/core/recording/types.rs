@@ -68,6 +68,7 @@ pub enum InputOrigin {
     CredentialAutofill,
     OtpAutofill,
     SyncInput,
+    TerminalResponse,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

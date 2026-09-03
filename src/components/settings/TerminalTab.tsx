@@ -240,6 +240,20 @@ export function TerminalTab() {
           }
         />
 
+        <SettingRow
+          label={t("settings.reconnectRestoreCwd")}
+          desc={t("settings.reconnectRestoreCwdDesc")}
+        >
+          <SettingSwitch
+            checked={appSettings.terminal.reconnect_restore_cwd ?? false}
+            onChange={(v) =>
+              updateAppSettings({
+                terminal: { ...appSettings.terminal, reconnect_restore_cwd: v },
+              })
+            }
+          />
+        </SettingRow>
+
         <SettingInput
           label={t("settings.x11Display")}
           desc={t("settings.x11DisplayDesc")}

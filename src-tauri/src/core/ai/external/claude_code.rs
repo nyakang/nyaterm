@@ -5,9 +5,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nyaterm_mcp_protocol::MCP_TOOL_REGISTRY;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
@@ -213,7 +214,51 @@ async fn run_claude_code_stream_inner(
         save_user_message(&app, &session_id, request)?;
     }
 
-    let invocation = build_claude_invocation(request, &settings, build_prompt(request, &settings));
+    let use_nyaterm_mcp =
+        settings.claude_code.tool_integration_mode.as_deref() == Some("nyaterm_mcp");
+    let mcp_credential = if use_nyaterm_mcp {
+        let manager = app
+            .try_state::<Arc<crate::core::mcp::McpManager>>()
+            .ok_or_else(|| claude_mcp_unavailable("The NyaTerm MCP manager is unavailable."))?;
+        let (scope, default_id) = request_terminal_scope(request);
+        let owner = if let Some(id) = default_id.as_deref().or(scope.first().map(String::as_str)) {
+            app.state::<Arc<crate::core::SessionManager>>()
+                .session_info(id)
+                .await
+                .ok()
+                .and_then(|info| info.owner_window_label)
+        } else {
+            None
+        };
+        Some(
+            manager
+                .create_ephemeral_credential(
+                    "claude_code_mcp",
+                    scope,
+                    default_id,
+                    request.permission_mode.clone(),
+                    owner,
+                )
+                .await
+                .map_err(|error| claude_mcp_unavailable(&error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let mut invocation =
+        build_claude_invocation(request, &settings, build_prompt(request, &settings));
+    if let Some(credential) = mcp_credential.as_ref() {
+        let config = serde_json::json!({
+            "mcpServers": {
+                "nyaterm": {
+                    "command": credential.sidecar_path,
+                    "args": [],
+                    "env": credential.env(),
+                }
+            }
+        });
+        append_claude_mcp_args(&mut invocation.args, config);
+    }
     let mut child = Command::new(&executable);
     hide_window(&mut child);
     for arg in &invocation.args {
@@ -261,9 +306,7 @@ async fn run_claude_code_stream_inner(
         .await
         .insert(turn_id.clone(), turn_cancel_tx);
 
-    tauri::async_runtime::spawn(async move {
-        read_claude_stderr(stderr).await;
-    });
+    let stderr_task = tauri::async_runtime::spawn(read_claude_stderr(stderr));
 
     let mut lines = BufReader::new(stdout).lines();
     let mut content = String::new();
@@ -329,12 +372,25 @@ async fn run_claude_code_stream_inner(
 
     runtime.active_turns.lock().await.remove(&turn_id);
     let status = child.wait().await.ok();
-    loop_result?;
+    let stderr_summary = stderr_task.await.unwrap_or_default();
+    if let Err(error) = loop_result {
+        if use_nyaterm_mcp && looks_like_mcp_error(&error.to_string(), &stderr_summary) {
+            return Err(claude_mcp_unavailable(&error_details(
+                &error.to_string(),
+                &stderr_summary,
+            )));
+        }
+        return Err(error);
+    }
     if status.as_ref().is_some_and(|status| !status.success()) {
-        return Err(AppError::Config(format!(
-            "Claude Code exited with {}",
-            status.unwrap()
-        )));
+        let details = error_details(
+            &format!("Claude Code exited with {}", status.as_ref().unwrap()),
+            &stderr_summary,
+        );
+        if use_nyaterm_mcp && looks_like_mcp_error(&details, &stderr_summary) {
+            return Err(claude_mcp_unavailable(&details));
+        }
+        return Err(AppError::Config(details));
     }
 
     active_streams().lock().unwrap().remove(&stream_id);
@@ -374,6 +430,43 @@ fn claude_permission_mode(mode: &AiPermissionMode) -> &'static str {
         AiPermissionMode::Observer => "plan",
         AiPermissionMode::Confirm => "manual",
         AiPermissionMode::Auto => "auto",
+        // Full access only bypasses NyaTerm's own capability approvals. Do not
+        // widen Claude Code's native local-tool permissions.
+        AiPermissionMode::FullAccess => "auto",
+    }
+}
+
+fn claude_nyaterm_mcp_tool_names() -> Vec<String> {
+    MCP_TOOL_REGISTRY
+        .iter()
+        .map(|definition| format!("mcp__nyaterm__{}", definition.tool))
+        .collect()
+}
+
+fn append_claude_mcp_args(args: &mut Vec<String>, config: Value) {
+    args.push("--mcp-config".into());
+    args.push(config.to_string());
+    args.push("--strict-mcp-config".into());
+    args.push("--allowedTools".into());
+    args.extend(claude_nyaterm_mcp_tool_names());
+}
+
+fn claude_mcp_unavailable(reason: &str) -> AppError {
+    let reason = sanitize_claude_log_line(&redact_sensitive_text(reason));
+    AppError::Config(format!("claude_mcp_unavailable:{}", reason))
+}
+
+fn looks_like_mcp_error(error: &str, stderr: &str) -> bool {
+    let details = format!("{error}\n{stderr}").to_ascii_lowercase();
+    details.contains("mcp") || details.contains("nyaterm")
+}
+
+fn error_details(error: &str, stderr: &str) -> String {
+    let stderr = stderr.trim();
+    if stderr.is_empty() || error.contains(stderr) {
+        error.to_string()
+    } else {
+        format!("{error}: {stderr}")
     }
 }
 
@@ -386,6 +479,28 @@ fn claude_system_context(request: &AiChatRequest) -> String {
     format!(
         "You are running inside NyaTerm. Use NyaTerm MCP tools for terminal sessions when available. Do not read SSH passwords, private keys, OAuth tokens, or internal app credentials. Do not create separate SSH connections to bypass NyaTerm SessionManager. Default terminal session: {default_target}."
     )
+}
+
+fn request_terminal_scope(request: &AiChatRequest) -> (Vec<String>, Option<String>) {
+    let mut scope = request
+        .targets
+        .iter()
+        .map(|target| target.terminal_session_id.clone())
+        .collect::<HashSet<_>>();
+    if let Some(id) = request.terminal_session_id.as_ref() {
+        scope.insert(id.clone());
+    }
+    if let Some(id) = request.default_target_session_id.as_ref() {
+        scope.insert(id.clone());
+    }
+    let mut scope = scope.into_iter().collect::<Vec<_>>();
+    scope.sort();
+    let default_id = request
+        .default_target_session_id
+        .clone()
+        .or_else(|| request.terminal_session_id.clone())
+        .filter(|id| scope.contains(id));
+    (scope, default_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -708,14 +823,20 @@ fn detect_error_message(prefix: &str, errors: &[String]) -> String {
     message
 }
 
-async fn read_claude_stderr(stderr: tokio::process::ChildStderr) {
+async fn read_claude_stderr(stderr: tokio::process::ChildStderr) -> String {
     let mut lines = BufReader::new(stderr).lines();
+    let mut recent = Vec::new();
     while let Ok(Some(line)) = lines.next_line().await {
         let sanitized = sanitize_claude_log_line(&line);
         if !sanitized.trim().is_empty() {
             tracing::debug!(target: "claude_code", message = %sanitized);
+            recent.push(sanitized.chars().take(512).collect::<String>());
+            if recent.len() > 20 {
+                recent.remove(0);
+            }
         }
     }
+    recent.join("\n")
 }
 
 fn sanitize_claude_log_line(line: &str) -> String {
@@ -825,6 +946,60 @@ mod tests {
         assert_eq!(
             arg_value(&invocation.args, "--model"),
             Some("claude-default-model")
+        );
+    }
+
+    #[test]
+    fn full_access_does_not_enable_claude_native_permission_bypass() {
+        let mut request = test_request();
+        request.permission_mode = AiPermissionMode::FullAccess;
+
+        let invocation =
+            build_claude_invocation(&request, &AiSettings::default(), "prompt".to_string());
+
+        assert_eq!(
+            arg_value(&invocation.args, "--permission-mode"),
+            Some("auto")
+        );
+        assert!(!invocation.args.iter().any(|arg| arg == "bypassPermissions"));
+    }
+
+    #[test]
+    fn claude_preapproves_only_registered_nyaterm_mcp_tools() {
+        let mut args = Vec::new();
+        append_claude_mcp_args(
+            &mut args,
+            serde_json::json!({ "mcpServers": { "nyaterm": {} } }),
+        );
+
+        assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
+        let allowed_index = args
+            .iter()
+            .position(|arg| arg == "--allowedTools")
+            .expect("allowed tools argument");
+        assert_eq!(
+            &args[allowed_index + 1..],
+            claude_nyaterm_mcp_tool_names().as_slice()
+        );
+        assert_eq!(args[allowed_index + 1..].len(), MCP_TOOL_REGISTRY.len());
+    }
+
+    #[test]
+    fn claude_mcp_errors_are_coded_and_sanitized() {
+        let error = claude_mcp_unavailable("api_key=secret sidecar failed");
+        let message = error.to_string();
+
+        assert!(message.contains("claude_mcp_unavailable:"));
+        assert!(!message.contains("secret"));
+        assert!(message.contains("api_key=[redacted]"));
+        assert!(looks_like_mcp_error("MCP initialization failed", ""));
+        assert!(looks_like_mcp_error(
+            "Claude Code exited with status 1",
+            "Failed to connect to server nyaterm"
+        ));
+        assert_eq!(
+            error_details("failed", "stderr details"),
+            "failed: stderr details"
         );
     }
 

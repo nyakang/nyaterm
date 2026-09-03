@@ -371,7 +371,8 @@ impl SftpBackend {
         directory_controller: &Arc<TransferController>,
         transfer_settings: &crate::config::TransferSettings,
     ) -> AppResult<LocalDirectoryInventory> {
-        let (request_kib, _, max_concurrent_writes) = sftp_pipeline_config(transfer_settings);
+        let (request_kib, _, max_concurrent_writes) =
+            sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
         let sftp = self
             .open_sftp_with_client_config(sftp_client_config(request_kib, max_concurrent_writes))
             .await?;
@@ -479,7 +480,8 @@ impl SftpBackend {
             });
         }
 
-        let (request_kib, _, max_concurrent_writes) = sftp_pipeline_config(transfer_settings);
+        let (request_kib, pipeline_depth, max_concurrent_writes) =
+            sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
         let pool = SftpSessionPool::new(
             self,
             concurrency.session_pool_size,
@@ -492,6 +494,8 @@ impl SftpBackend {
             inventory,
             directory_controller,
             transfer_settings,
+            request_kib,
+            pipeline_depth,
             concurrency,
             self.path_cache.clone(),
         )
@@ -517,7 +521,8 @@ impl SftpBackend {
             });
         }
 
-        let (request_kib, _, max_concurrent_writes) = sftp_pipeline_config(transfer_settings);
+        let (request_kib, _, max_concurrent_writes) =
+            sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
         let pool = SftpSessionPool::new(
             self,
             concurrency.session_pool_size,
@@ -530,6 +535,7 @@ impl SftpBackend {
             inventory,
             directory_controller.clone(),
             transfer_settings,
+            request_kib,
             concurrency,
         )
         .await;
@@ -653,11 +659,12 @@ pub(super) async fn run_download_directory_workers(
     inventory: RemoteDirectoryInventory,
     directory_controller: Arc<TransferController>,
     transfer_settings: &crate::config::TransferSettings,
+    request_kib: usize,
+    requested_pipeline_depth: usize,
     concurrency: SftpDirectoryConcurrency,
     path_cache: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 ) -> AppResult<DirectoryTransferSummary> {
     let worker_count = sftp_directory_file_concurrency(inventory.files.len(), concurrency);
-    let (_, requested_pipeline_depth, _) = sftp_pipeline_config(transfer_settings);
     let effective_pipeline_depth = sftp_directory_download_pipeline_cap(
         inventory.max_open_handles,
         concurrency.session_pool_size,
@@ -730,6 +737,8 @@ pub(super) async fn run_download_directory_workers(
                     &transfer_settings,
                     &completed_bytes,
                     total_size,
+                    request_kib,
+                    requested_pipeline_depth,
                     effective_pipeline_depth,
                     &path_cache,
                 )
@@ -809,6 +818,7 @@ pub(super) async fn run_upload_directory_workers(
     inventory: LocalDirectoryInventory,
     directory_controller: Arc<TransferController>,
     transfer_settings: &crate::config::TransferSettings,
+    request_kib: usize,
     concurrency: SftpDirectoryConcurrency,
 ) -> AppResult<DirectoryTransferSummary> {
     let worker_count = sftp_directory_file_concurrency(inventory.files.len(), concurrency);
@@ -855,6 +865,7 @@ pub(super) async fn run_upload_directory_workers(
                     &transfer_settings,
                     &completed_bytes,
                     total_size,
+                    request_kib,
                 )
                 .await?;
                 let completed = completed_count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -934,6 +945,8 @@ pub(super) async fn download_directory_file_with_session(
     transfer_settings: &crate::config::TransferSettings,
     completed_bytes: &Arc<AtomicU64>,
     total_size: u64,
+    request_kib: usize,
+    pipeline_depth: usize,
     max_pipeline_depth: usize,
     path_cache: &RwLock<HashMap<String, Vec<u8>>>,
 ) -> AppResult<u64> {
@@ -959,7 +972,6 @@ pub(super) async fn download_directory_file_with_session(
     }
 
     let mut bytes_transferred = 0u64;
-    let (request_kib, pipeline_depth, _) = sftp_pipeline_config(transfer_settings);
     let payload_bytes = sftp_payload_size(request_kib);
     if file.size > 0 {
         let app_for_progress = app.clone();
@@ -1029,6 +1041,7 @@ pub(super) async fn upload_directory_file_with_session(
     transfer_settings: &crate::config::TransferSettings,
     completed_bytes: &Arc<AtomicU64>,
     total_size: u64,
+    request_kib: usize,
 ) -> AppResult<u64> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1046,7 +1059,6 @@ pub(super) async fn upload_directory_file_with_session(
         ))
     })?;
 
-    let (request_kib, _, _) = sftp_pipeline_config(transfer_settings);
     let mut buf = vec![0u8; sftp_payload_size(request_kib)];
     let mut bytes_transferred = 0u64;
     let mut last_progress = Instant::now();
