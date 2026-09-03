@@ -585,6 +585,8 @@
     "rdpSecurity": "보안",
     "rdpUseNla": "네트워크 수준 인증",
     "rdpUseNlaDesc": "원격 호스트가 지원하면 NLA/CredSSP를 사용합니다.",
+    "rdpAdmin": "관리 세션",
+    "rdpAdminDesc": "콘솔(관리자) 세션에 연결합니다. 현재 RDP 엔진에서는 아직 적용되지 않습니다.",
     "rdpWidth": "너비",
     "recordingAutoStart": "로깅 자동 시작",
     "recordingAutoStartDesc": "이 연결을 열 때 로그 파일을 시작합니다.",

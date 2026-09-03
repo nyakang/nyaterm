@@ -586,6 +586,8 @@
     "rdpSecurity": "Security",
     "rdpUseNla": "Network Level Authentication",
     "rdpUseNlaDesc": "Use NLA/CredSSP when the remote host supports it.",
+    "rdpAdmin": "Administrative session",
+    "rdpAdminDesc": "Connect to the console (admin) session. Not yet enforced by the current RDP engine.",
     "rdpWidth": "Width",
     "recordingAutoStart": "Auto-start logging",
     "recordingAutoStartDesc": "Start a log file when this connection opens.",
