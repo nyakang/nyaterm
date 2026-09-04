@@ -121,6 +121,7 @@ struct CpuDelta {
 struct NetworkCounters {
     rx_bytes: u64,
     tx_bytes: u64,
+    top: bool,
 }
 
 #[derive(Clone)]
@@ -165,6 +166,8 @@ impl RemoteStatsSampler {
             apply_network_rates(previous, &parsed.networks, &mut stats);
         }
 
+        update_network_summary(&mut stats, &parsed.networks);
+
         samples.insert(
             session_id.to_string(),
             CachedRemoteSample {
@@ -174,7 +177,6 @@ impl RemoteStatsSampler {
             },
         );
 
-        update_network_summary(&mut stats);
         stats
     }
 
@@ -281,10 +283,23 @@ fn apply_network_rates(
     }
 }
 
-fn update_network_summary(stats: &mut RemoteStats) {
+fn update_network_summary(
+    stats: &mut RemoteStats,
+    networks: &BTreeMap<String, NetworkCounters>,
+) {
     stats.network_summary = NetworkSummaryInfo {
-        rx_bytes_per_sec: stats.networks.iter().map(|net| net.rx_bytes_per_sec).sum(),
-        tx_bytes_per_sec: stats.networks.iter().map(|net| net.tx_bytes_per_sec).sum(),
+        rx_bytes_per_sec: stats
+            .networks
+            .iter()
+            .filter(|net| networks.get(&net.nic).map_or(true, |c| c.top))
+            .map(|net| net.rx_bytes_per_sec)
+            .sum(),
+        tx_bytes_per_sec: stats
+            .networks
+            .iter()
+            .filter(|net| networks.get(&net.nic).map_or(true, |c| c.top))
+            .map(|net| net.tx_bytes_per_sec)
+            .sum(),
     };
 }
 
@@ -333,6 +348,8 @@ cpucoref=$base.cpucores;
 diskf=$base.disk;
 diskraw=$base.diskraw;
 dfraw=$base.dfraw;
+netrawf=$base.netraw;
+netoutf=$base.netout;
 
 trap "rm -f \"$base\".*" 0 HUP INT TERM;
 
@@ -513,24 +530,58 @@ NR>2 {
   split(a[2], f, /[ \t]+/);
   print nic "\t" f[1] "\t" f[9];
 }
-'"'"' /proc/net/dev 2>/dev/null | while IFS="$(printf "\t")" read -r nic rx tx; do
-    [ -n "$nic" ] || continue;
-    [ "$nic" != "lo" ] || continue;
-    case "$nic" in
-      docker*|veth*|br-*|virbr*|flannel*|cali*|tunl*|kube-ipvs0|cni*|zt*|tailscale*|wg*|tap*|vnet*)
-        continue;
-        ;;
-    esac;
-    [ -e "/sys/class/net/$nic/device" ] || continue;
+'"'"' /proc/net/dev 2>/dev/null >"$netrawf";
 
-    state=unknown;
-    if [ -r "/sys/class/net/$nic/operstate" ]; then
-      IFS= read -r state <"/sys/class/net/$nic/operstate" || state=unknown;
-    fi;
-    [ "$state" = "up" ] || continue;
+  emit_netdev() {
+    mode=$1;
+    while IFS="$(printf "\t")" read -r nic rx tx; do
+      [ -n "$nic" ] || continue;
+      [ "$nic" != "lo" ] || continue;
+      case "$nic" in
+        docker*|veth*|br-*|virbr*|flannel*|cali*|tunl*|kube-ipvs0|cni*|zt*|tailscale*|wg*|tap*|vnet*)
+          continue;
+          ;;
+      esac;
 
-    printf "NETDEV\t%s\t%s\t%s\t%s\n" "$nic" "$state" "${rx:-0}" "${tx:-0}";
-  done;
+      state=unknown;
+      if [ -r "/sys/class/net/$nic/operstate" ]; then
+        IFS= read -r state <"/sys/class/net/$nic/operstate" || state=unknown;
+      fi;
+      [ -n "$state" ] || state=unknown;
+      if [ "$state" = "down" ]; then continue; fi;
+
+      top=yes;
+      if [ -e "/sys/class/net/$nic/master" ]; then top=no; fi;
+      if [ "$top" = "yes" ]; then
+        aggregator=false;
+        if [ -d "/sys/class/net/$nic/brif" ]; then aggregator=true; fi;
+        if [ -d "/sys/class/net/$nic/bonding" ]; then aggregator=true; fi;
+        if [ -d "/sys/class/net/$nic/team" ]; then aggregator=true; fi;
+        if [ "$aggregator" = "false" ]; then
+          for lwr in /sys/class/net/$nic/lower_*; do
+            if [ -e "$lwr" ]; then top=no; break; fi;
+          done;
+        fi;
+      fi;
+
+      if [ "$mode" = "strict" ]; then
+        carrier=0;
+        if [ -r "/sys/class/net/$nic/carrier" ]; then
+          IFS= read -r carrier <"/sys/class/net/$nic/carrier" || carrier=0;
+        fi;
+        if [ "$state" != "up" ] && [ "$carrier" != "1" ]; then continue; fi;
+        if [ -e "/sys/class/net/$nic/master" ]; then continue; fi;
+      fi;
+
+      printf "NETDEV\t%s\t%s\t%s\t%s\t%s\n" "$nic" "$state" "${rx:-0}" "${tx:-0}" "$top";
+    done <"$netrawf";
+  };
+
+  emit_netdev strict >"$netoutf";
+  if [ ! -s "$netoutf" ]; then
+    emit_netdev loose >"$netoutf";
+  fi;
+  cat "$netoutf";
 fi;
 
 : >"$diskf";
@@ -673,7 +724,11 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
                 if cols[1] != "-" {
                     let rx_bytes = parse_u64_field(cols[3], "NETDEV rx bytes")?;
                     let tx_bytes = parse_u64_field(cols[4], "NETDEV tx bytes")?;
-                    networks.insert(cols[1].to_string(), NetworkCounters { rx_bytes, tx_bytes });
+                    let top = cols.get(5).map_or(true, |v| *v == "yes");
+                    networks.insert(
+                        cols[1].to_string(),
+                        NetworkCounters { rx_bytes, tx_bytes, top },
+                    );
                     stats.networks.push(NetworkInfo {
                         nic: cols[1].to_string(),
                         state: cols[2].to_string(),
@@ -718,7 +773,7 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
         }
     }
 
-    update_network_summary(&mut stats);
+    update_network_summary(&mut stats, &networks);
 
     Ok(ParsedRemoteStats {
         stats,
@@ -750,9 +805,11 @@ fn parse_u64_field(value: &str, field: &str) -> AppResult<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
-        CpuTicks, CpuUsageSource, RemoteStatsSampler, calculate_delta, parse_stats_output,
-        usage_percent,
+        CpuTicks, CpuUsageSource, NetworkCounters, NetworkInfo, RemoteStats, RemoteStatsSampler,
+        calculate_delta, parse_stats_output, update_network_summary, usage_percent,
     };
 
     fn cpu_line(model: &str, cores: u32) -> String {
@@ -861,6 +918,68 @@ mod tests {
         assert_eq!(placeholder_disk.cpu.usage, None);
         assert_eq!(placeholder_disk.network_summary.tx_bytes_per_sec, 0.0);
         assert!(placeholder_disk.disks.is_empty());
+    }
+
+    #[test]
+    fn network_summary_excludes_derived_interfaces() {
+        let mut stats = RemoteStats::default();
+        stats.networks = vec![
+            NetworkInfo {
+                nic: "eth0".to_string(),
+                state: "up".to_string(),
+                rx_bytes_per_sec: 100.0,
+                tx_bytes_per_sec: 200.0,
+            },
+            NetworkInfo {
+                nic: "eth0.100".to_string(),
+                state: "up".to_string(),
+                rx_bytes_per_sec: 40.0,
+                tx_bytes_per_sec: 50.0,
+            },
+        ];
+        let mut counters = BTreeMap::new();
+        counters.insert(
+            "eth0".to_string(),
+            NetworkCounters { rx_bytes: 0, tx_bytes: 0, top: true },
+        );
+        counters.insert(
+            "eth0.100".to_string(),
+            NetworkCounters { rx_bytes: 0, tx_bytes: 0, top: false },
+        );
+
+        update_network_summary(&mut stats, &counters);
+
+        assert_eq!(stats.network_summary.rx_bytes_per_sec, 100.0);
+        assert_eq!(stats.network_summary.tx_bytes_per_sec, 200.0);
+    }
+
+    #[test]
+    fn network_summary_treats_missing_top_field_as_top_level() {
+        let mut stats = RemoteStats::default();
+        stats.networks = vec![
+            NetworkInfo {
+                nic: "eth0".to_string(),
+                state: "up".to_string(),
+                rx_bytes_per_sec: 100.0,
+                tx_bytes_per_sec: 200.0,
+            },
+            NetworkInfo {
+                nic: "legacy".to_string(),
+                state: "up".to_string(),
+                rx_bytes_per_sec: 10.0,
+                tx_bytes_per_sec: 20.0,
+            },
+        ];
+        let mut counters = BTreeMap::new();
+        counters.insert(
+            "legacy".to_string(),
+            NetworkCounters { rx_bytes: 0, tx_bytes: 0, top: false },
+        );
+
+        update_network_summary(&mut stats, &counters);
+
+        assert_eq!(stats.network_summary.rx_bytes_per_sec, 100.0);
+        assert_eq!(stats.network_summary.tx_bytes_per_sec, 200.0);
     }
 
     #[test]
