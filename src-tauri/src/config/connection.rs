@@ -661,6 +661,8 @@ pub enum ConnectionType {
         clipboard: RdpClipboardSettings,
         #[serde(default)]
         reconnect: RdpReconnectSettings,
+        #[serde(default, skip_serializing_if = "is_false")]
+        admin: bool,
     },
     Vnc {
         host: String,

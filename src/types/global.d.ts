@@ -566,6 +566,8 @@ export interface SavedConnection {
   encoding?: string;
   /** RDP-only: optional Windows/domain part for authentication. */
   domain?: string;
+  /** RDP-only: connect using the administrative (console) session. */
+  admin?: boolean;
   /** RDP/VNC security options. */
   security?: Partial<RdpSecuritySettings & VncSecuritySettings>;
   /** RDP/VNC display options. */
