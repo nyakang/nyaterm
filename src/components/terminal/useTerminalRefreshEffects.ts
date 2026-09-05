@@ -202,7 +202,7 @@ export function useTerminalRefreshEffects({
       .catch(() => {});
     appWindow
       .onFocusChanged(({ payload }) => {
-        if (!disposed && payload) scheduleWindowFit("window-focus");
+        if (!disposed && payload) scheduleWindowFit("window-focus", true);
       })
       .then((unlisten) => {
         unlistenFocused = unlisten;

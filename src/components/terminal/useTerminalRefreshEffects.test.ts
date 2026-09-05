@@ -5,6 +5,7 @@ import type { TerminalFitScheduler } from "./terminalFitScheduler";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 
 const windowMocks = vi.hoisted(() => ({
+  focusChanged: undefined as ((event: { payload: boolean }) => void) | undefined,
   scaleChanged: undefined as
     | ((event: { payload: { scaleFactor: number } }) => void)
     | undefined,
@@ -14,7 +15,10 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     onResized: async () => vi.fn(),
     onMoved: async () => vi.fn(),
-    onFocusChanged: async () => vi.fn(),
+    onFocusChanged: async (callback: (event: { payload: boolean }) => void) => {
+      windowMocks.focusChanged = callback;
+      return vi.fn();
+    },
     onScaleChanged: async (
       callback: (event: { payload: { scaleFactor: number } }) => void,
     ) => {
@@ -26,6 +30,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 describe("useTerminalRefreshEffects", () => {
   beforeEach(() => {
+    windowMocks.focusChanged = undefined;
     windowMocks.scaleChanged = undefined;
   });
 
@@ -54,6 +59,42 @@ describe("useTerminalRefreshEffects", () => {
       expect.objectContaining({ force: true, refresh: true, focus: true }),
     );
     expect(activeRefresh).not.toHaveProperty("clearTextureAtlas");
+  });
+
+  it("forces fit and repaint when the native window regains focus", async () => {
+    const schedule = vi.fn();
+    renderHook(() =>
+      useTerminalRefreshEffects({
+        terminalRef: { current: {} as Terminal },
+        fitSchedulerRef: {
+          current: { schedule } as unknown as TerminalFitScheduler,
+        },
+        active: true,
+        visible: true,
+        terminalReady: true,
+        performanceMode: "normal",
+        sessionId: "session-1",
+        showGutter: false,
+        showContentPadding: false,
+      }),
+    );
+    await waitFor(() => expect(windowMocks.focusChanged).toBeTypeOf("function"));
+    schedule.mockClear();
+
+    windowMocks.focusChanged?.({ payload: false });
+    expect(schedule).not.toHaveBeenCalled();
+
+    windowMocks.focusChanged?.({ payload: true });
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "window-focus",
+        force: true,
+        refresh: true,
+        clearTextureAtlas: false,
+        focus: true,
+      }),
+    );
   });
 
   it("still invalidates textures after a DPI scale change", async () => {
