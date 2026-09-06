@@ -20,6 +20,7 @@
     "dev": "vite",
     "build": "pnpm build:mcp-sidecar && tsc && vite build",
     "build:mcp-sidecar": "node scripts/build-mcp-sidecar.mjs",
+    "build:web": "node scripts/build-web.mjs",
     "release": "node scripts/sync-version.mjs --commit && tauri build",
     "build:unlock-rescue": "powershell -ExecutionPolicy Bypass -File scripts/build-unlock-rescue.ps1",
     "preview": "vite preview",

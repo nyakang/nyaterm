@@ -70,6 +70,12 @@ struct_excessive_bools = "allow"
 too_many_lines = "allow"
 unnecessary_wraps = "allow"
 
+[features]
+# Headless web-server mode (`NYATERM_WEB_SERVER=1` / `nyaterm --server`).
+# Adds an axum HTTP/WebSocket layer on top of the existing Tauri runtime;
+# desktop builds are unaffected unless the feature is enabled.
+server = ["dep:axum", "dep:tower-http", "dep:tower"]
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -153,6 +159,10 @@ reqwest_012_native_tls = { package = "reqwest", version = "0.12.28", default-fea
 ] }
 genai = { version = "0.6.5", default-features = false, features = ["native-tls"] }
 futures-util = "0.3"
+# Optional: headless web-server mode (see [features] server)
+axum = { version = "0.8", optional = true, features = ["ws", "json"] }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", optional = true, features = ["cors", "fs"] }
 regex = "1"
 md-5 = "0.10"
 hmac = "0.12"

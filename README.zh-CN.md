@@ -246,6 +246,13 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 ---
 
+<a name="web-deployment"></a>
+# Web 部署
+
+在服务器上以无头方式运行同一个 NyaTerm（`nyaterm --server`），通过浏览器即可使用：后端把既有的命令/事件面以 HTTP + WebSocket 暴露，前端以静态 Web 构建交付。单用户令牌认证，提供 Docker 镜像。快速开始与配置详见 [Web 部署文档](https://nyaterm.app/docs/zh/development/web)。
+
+---
+
 <a name="支持平台"></a>
 # 支持平台
 

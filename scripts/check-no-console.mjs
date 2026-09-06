@@ -4,6 +4,9 @@ import path from "node:path";
 const ROOT = process.cwd();
 const SRC_DIR = path.join(ROOT, "src");
 const ALLOWED_FILE = path.normalize(path.join(SRC_DIR, "lib", "logger.ts"));
+// The web shims must not import the app logger (it would re-enter the Tauri
+// module graph), so they are allowed to use console directly.
+const ALLOWED_DIR = path.normalize(path.join(SRC_DIR, "lib", "web"));
 const FILE_EXTENSIONS = new Set([".ts", ".tsx"]);
 const CONSOLE_PATTERN = /\bconsole\.(debug|info|warn|error|log)\s*\(/g;
 
@@ -24,6 +27,10 @@ async function walk(directory) {
     }
 
     if (path.normalize(resolved) === ALLOWED_FILE) {
+      continue;
+    }
+
+    if (path.normalize(resolved).startsWith(`${ALLOWED_DIR}${path.sep}`)) {
       continue;
     }
 

@@ -88,6 +88,12 @@ function normalizeError(error: unknown): unknown {
       name: error.name,
       message_hash: hashString(error.message),
       stack_hash: error.stack ? hashString(error.stack) : undefined,
+      // Local debugging aid: opt in via localStorage to see raw details in
+      // logs (never set in normal use — logs may be exported/shared).
+      ...(typeof window !== "undefined" &&
+      window.localStorage.getItem("nyaterm_debug_raw_errors") === "1"
+        ? { message: error.message, stack: error.stack?.split("\n").slice(0, 10).join("\n") }
+        : {}),
     };
   }
   return error;

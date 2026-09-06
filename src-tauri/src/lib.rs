@@ -12,6 +12,7 @@ mod observability;
 mod platform;
 mod portable_updater;
 mod runtime;
+mod server;
 mod storage;
 mod tray;
 mod utils;
@@ -68,21 +69,29 @@ pub fn run() {
     );
 
     let builder = tauri::Builder::default();
+    // In web-server mode a second instance is a legitimate separate server
+    // process (e.g. two data directories), so single-instance forwarding
+    // must not swallow it.
+    let server_mode = server::is_server_mode();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        if external_open::handle_external_open_args(
-            app,
-            args,
-            external_open::ExternalOpenSource::SecondInstance,
-        ) {
-            return;
-        }
+    let builder = if !server_mode {
+        builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if external_open::handle_external_open_args(
+                app,
+                args,
+                external_open::ExternalOpenSource::SecondInstance,
+            ) {
+                return;
+            }
 
-        if let Err(error) = app::create_additional_main_window(app) {
-            tracing::warn!("Failed to create additional main window: {}", error);
-            app::show_main_window(app);
-        }
-    }));
+            if let Err(error) = app::create_additional_main_window(app) {
+                tracing::warn!("Failed to create additional main window: {}", error);
+                app::show_main_window(app);
+            }
+        }))
+    } else {
+        builder
+    };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
     #[cfg(not(any(target_os = "android", target_os = "ios", target_vendor = "win7")))]

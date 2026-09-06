@@ -239,6 +239,13 @@ Sync encrypted portable configuration snapshots and restore backups through WebD
 
 ---
 
+<a name="web-deployment"></a>
+# Web Deployment
+
+Run the same NyaTerm headless on a server (`nyaterm --server`) and use it from a browser: the backend exposes the existing command/event surface over HTTP + WebSocket, and the same frontend ships as a static web build. Single-user token auth, Docker image available. See the [Web Deployment docs](https://nyaterm.app/docs/development/web) for quick start and configuration.
+
+---
+
 <a name="supported-platforms"></a>
 # Supported Platforms
 

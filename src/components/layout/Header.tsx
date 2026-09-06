@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isWebMode } from "@/lib/web/isWebMode";
 import { useTranslation } from "react-i18next";
 import { BiExport, BiImport } from "react-icons/bi";
 import { GrUpgrade } from "react-icons/gr";
@@ -1967,7 +1968,7 @@ export default function Header({
           </Button>
         )}
 
-        {!isMacOS && (
+        {!isMacOS && !isWebMode && (
           <div className="flex items-center h-full -mr-2 ml-1">
             <Button
               type="button"

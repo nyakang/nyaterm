@@ -332,6 +332,26 @@ pub fn setup(
         }
     });
 
+    // Headless web-server mode: everything above (storage, managers, cloud
+    // sync, history) is shared with the desktop; below this line only the
+    // desktop UI (main window, tray, deep links) is set up.
+    if crate::server::is_server_mode() {
+        #[cfg(feature = "server")]
+        {
+            crate::server::start(app)?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            return Err(
+                "Web server mode requested (NYATERM_WEB_SERVER=1 / --server) but this build \
+                 was compiled without the `server` feature. Rebuild with: \
+                 cargo build --features server"
+                    .into(),
+            );
+        }
+    }
+
     let main_window = create_main_window_with_label(app, crate::window_state::MAIN_WINDOW_LABEL)?;
     if app
         .get_webview_window(crate::window_state::MAIN_WINDOW_LABEL)
