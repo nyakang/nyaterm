@@ -1,6 +1,7 @@
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Select as SelectPrimitive } from "radix-ui";
 import type * as React from "react";
+import { getPopoverBoundary } from "@/lib/popoverBoundary";
 
 import { cn } from "@/lib/utils";
 
@@ -49,6 +50,13 @@ function SelectContent({
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  // Web modal host sets a collision boundary so dropdowns stay contained in
+  // the dialog; desktop leaves it unset (default viewport collisions).
+  const collisionBoundary = props.collisionBoundary ?? getPopoverBoundary() ?? undefined;
+  if (collisionBoundary) {
+    const r = collisionBoundary.getBoundingClientRect();
+    console.log("[TEMP-DEBUG] select collisionBoundary rect:", Math.round(r.top), Math.round(r.bottom));
+  }
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -62,6 +70,7 @@ function SelectContent({
         position={position}
         align={align}
         {...props}
+        collisionBoundary={collisionBoundary}
       >
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport

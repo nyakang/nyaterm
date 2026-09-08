@@ -24,6 +24,7 @@ import { ChildAppProvider } from "@/context/ChildAppProvider";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { Toaster } from "@/components/ui/sonner";
+import { setPopoverBoundary } from "@/lib/popoverBoundary";
 import { emit } from "./shims/event";
 import { WebviewWindow } from "./shims/webviewWindow";
 import {
@@ -179,11 +180,27 @@ function ModalHostApp() {
       handle?.fireDestroyed();
       fakeWindows.delete(label);
       unregisterModal(label);
+      if (fakeWindows.size === 0) setPopoverBoundary(null);
     };
 
     // Register the opener callback before draining the queue so early
     // open requests (dispatched before React committed this effect) apply.
     applyOpenModal = (detail: OpenModalDetail) => {
+      // Anchor popover collision detection to the modal box so dropdowns
+      // flip/shrink to stay inside the dialog (desktop-window behavior).
+      // React commits the modal asynchronously, so retry until it exists.
+      let boundaryTries = 0;
+      const anchorBoundary = () => {
+        const box = document.querySelector(
+          "[data-nyaterm-web-modal-host] .fixed.inset-0 > div",
+        );
+        if (box instanceof HTMLElement) {
+          setPopoverBoundary(box);
+        } else if (++boundaryTries < 60) {
+          requestAnimationFrame(anchorBoundary);
+        }
+      };
+      requestAnimationFrame(anchorBoundary);
       const windowType = windowTypeFromUrl(detail.url);
       const token = readyTokenFromUrl(detail.url);
       const fakeWindow = new WebviewWindow(detail.label);
