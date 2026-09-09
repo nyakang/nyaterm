@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 
 use russh_sftp::client::SftpSession;
 
+use crate::sftp_transfer_types::SftpDuplicateCacheKey;
+
 use super::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
-    SftpPathCodec, SftpTransferDirection,
+    SftpPathCodec, SftpPathTransferOptions, SftpTransferDirection,
 };
 
 pub(super) fn resolve_remote_upload_target(
@@ -27,61 +29,113 @@ fn local_file_name(path: &Path) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("local path has no file name: {}", path.display()))
 }
 
+/// 本地下载目标解析所需的显示路径、真实身份和任务选项。
+pub(super) struct SftpLocalDownloadTargetContext<'a> {
+    pub(super) remote_path: &'a str,
+    pub(super) remote_path_raw: &'a [u8],
+    pub(super) local_path: &'a Path,
+    pub(super) is_directory: bool,
+    pub(super) path_options: &'a SftpPathTransferOptions,
+}
+
 pub(super) fn resolve_local_download_target(
-    remote_path: &str,
-    local_path: &Path,
-    is_directory: bool,
-    duplicate_policy: SftpDuplicatePolicy,
-    duplicate_resolver: Option<&dyn SftpDuplicateResolver>,
+    context: SftpLocalDownloadTargetContext<'_>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if !local_path.exists() {
-        return Ok(Some(local_path.to_path_buf()));
+    if !context.local_path.exists() {
+        return Ok(Some(context.local_path.to_path_buf()));
     }
 
-    match resolve_duplicate_decision(
+    let decision = resolve_duplicate_decision_for_path(
+        context.path_options,
+        SftpDuplicateCacheKey::Download {
+            remote_path: context.remote_path_raw.to_vec(),
+            local_path: context.local_path.to_path_buf(),
+            is_directory: context.is_directory,
+        },
         SftpTransferDirection::Download,
-        remote_path,
-        &local_path.display().to_string(),
-        is_directory,
-        duplicate_policy,
-        duplicate_resolver,
-    )? {
-        SftpDuplicateDecision::Overwrite => Ok(Some(local_path.to_path_buf())),
+        context.remote_path,
+        &context.local_path.display().to_string(),
+        context.is_directory,
+    )?;
+    match decision {
+        SftpDuplicateDecision::Overwrite => Ok(Some(context.local_path.to_path_buf())),
         SftpDuplicateDecision::Skip => Ok(None),
-        SftpDuplicateDecision::Rename => resolve_renamed_local_target(local_path).map(Some),
+        SftpDuplicateDecision::Rename => resolve_renamed_local_target(context.local_path).map(Some),
     }
 }
 
+/// 远端写入目标解析所需的会话、路径和任务选项。
+pub(super) struct SftpRemoteWriteTargetContext<'a> {
+    pub(super) sftp: &'a SftpSession,
+    pub(super) codec: &'a SftpPathCodec,
+    pub(super) local_path: &'a Path,
+    pub(super) remote_path: &'a str,
+    pub(super) is_directory: bool,
+    pub(super) path_options: &'a SftpPathTransferOptions,
+}
+
 pub(super) async fn resolve_remote_write_target(
-    sftp: &SftpSession,
-    codec: &SftpPathCodec,
-    local_path: &str,
-    remote_path: &str,
-    is_directory: bool,
-    duplicate_policy: SftpDuplicatePolicy,
-    duplicate_resolver: Option<&dyn SftpDuplicateResolver>,
+    context: SftpRemoteWriteTargetContext<'_>,
 ) -> anyhow::Result<Option<String>> {
-    if !sftp
-        .try_exists_bytes(codec.encode_path(remote_path)?)
+    if !context
+        .sftp
+        .try_exists_bytes(context.codec.encode_path(context.remote_path)?)
         .await?
     {
-        return Ok(Some(remote_path.to_string()));
+        return Ok(Some(context.remote_path.to_string()));
     }
 
-    match resolve_duplicate_decision(
+    let local_path = context.local_path.display().to_string();
+    let decision = resolve_duplicate_decision_for_path(
+        context.path_options,
+        SftpDuplicateCacheKey::Upload {
+            local_path: context.local_path.to_path_buf(),
+            remote_path: context.remote_path.to_string(),
+            is_directory: context.is_directory,
+        },
         SftpTransferDirection::Upload,
-        local_path,
-        remote_path,
-        is_directory,
-        duplicate_policy,
-        duplicate_resolver,
-    )? {
-        SftpDuplicateDecision::Overwrite => Ok(Some(remote_path.to_string())),
+        &local_path,
+        context.remote_path,
+        context.is_directory,
+    )?;
+    match decision {
+        SftpDuplicateDecision::Overwrite => Ok(Some(context.remote_path.to_string())),
         SftpDuplicateDecision::Skip => Ok(None),
-        SftpDuplicateDecision::Rename => resolve_renamed_remote_target(sftp, codec, remote_path)
-            .await
-            .map(Some),
+        SftpDuplicateDecision::Rename => Ok(Some(
+            resolve_renamed_remote_target(context.sftp, context.codec, context.remote_path).await?,
+        )),
     }
+}
+
+fn resolve_duplicate_decision_for_path(
+    path_options: &SftpPathTransferOptions,
+    cache_key: SftpDuplicateCacheKey,
+    direction: SftpTransferDirection,
+    source_path: &str,
+    target_path: &str,
+    is_directory: bool,
+) -> anyhow::Result<SftpDuplicateDecision> {
+    if path_options.duplicate_policy() == SftpDuplicatePolicy::Ask
+        && let Some(decision) = path_options
+            .cached_duplicate_decision(&cache_key)
+            .map_err(anyhow::Error::msg)?
+    {
+        return Ok(decision);
+    }
+    let decision = resolve_duplicate_decision(
+        direction,
+        source_path,
+        target_path,
+        is_directory,
+        path_options.duplicate_policy(),
+        path_options.duplicate_resolver(),
+    )?;
+    if path_options.duplicate_policy() == SftpDuplicatePolicy::Ask {
+        path_options
+            .remember_duplicate_decision(cache_key, decision)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(decision)
 }
 
 pub(super) fn resolve_duplicate_decision(
