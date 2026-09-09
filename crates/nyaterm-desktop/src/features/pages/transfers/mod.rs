@@ -1,7 +1,6 @@
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use self::browser::transfer_browser_view;
-use self::duplicate_banner::duplicate_prompt_banner;
 use self::panel::TransferPanel;
 use self::queue::transfer_queue_view;
 use self::resize::transfer_height_resize_handle;
@@ -106,7 +105,6 @@ pub(in crate::features::pages::transfers) fn transfer_panel(
     };
     let chrome = snapshot.chrome;
     let transfer_height = snapshot.panel_height;
-    let duplicate_prompt = snapshot.duplicate_prompt.clone();
 
     // Tauri AppPanelContent: FileExplorer (flex-1) + vertical resize + FileTransfer fixed height.
     div()
@@ -135,14 +133,6 @@ pub(in crate::features::pages::transfers) fn transfer_panel(
                 .overflow_hidden()
                 .child(transfer_queue_view(panel, cx)),
         )
-        .when_some(duplicate_prompt, |this, prompt| {
-            this.child(duplicate_prompt_banner(
-                chrome,
-                prompt,
-                &snapshot.panel_focus,
-                cx,
-            ))
-        })
         .into_any_element()
 }
 

@@ -302,6 +302,7 @@ impl NyaTermApp {
         };
         self.shell
             .set_status(format!("transfer queue: {:.0}px", height.round()));
+        self.defer_transfer_panel_snapshot_flush(cx);
         cx.notify();
     }
 
@@ -312,6 +313,7 @@ impl NyaTermApp {
                 "transfer queue {:.0}px",
                 self.transfer.panel_height().round()
             ));
+            self.defer_transfer_panel_snapshot_flush(cx);
             cx.notify();
         }
     }

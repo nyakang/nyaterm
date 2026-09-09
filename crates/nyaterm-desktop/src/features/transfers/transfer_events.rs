@@ -272,8 +272,9 @@ impl NyaTermApp {
         let mut remote_path_to_set = None;
         let mut sync_properties_inputs = false;
         let mut forget_properties_inputs = false;
-        let event_finished = matches!(&event.event, TransferJobEvent::Finished(_));
         let event_failed = matches!(&event.event, TransferJobEvent::Finished(Err(_)));
+        let event_succeeded = matches!(&event.event, TransferJobEvent::Finished(Ok(_)));
+        let event_finished = event_failed || event_succeeded;
         let cleanup_internal_job = event_finished
             && !job.is_user_transfer()
             && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. }) || event_failed);
@@ -1173,6 +1174,9 @@ impl NyaTermApp {
         if event_finished {
             self.transfer.browser.pending_navigations.remove(&event_id);
         }
+        if event_succeeded {
+            self.transfer.release_transfer_job_path_options(&event_id);
+        }
         if let Some(prompt_id) = external_sync_prompt_to_open {
             self.open_transfer_external_sync_window(prompt_id, cx);
         }
@@ -1243,7 +1247,7 @@ mod tests {
         TestAppContext, VisualTestContext, div,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
-    use nyaterm_transport::SftpTransferProgress;
+    use nyaterm_transport::{SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary};
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
@@ -1613,6 +1617,52 @@ mod tests {
                 Some(TransferJobStatus::Failed),
                 "the failure must have landed, not still be queued"
             );
+        });
+    }
+
+    #[test]
+    fn successful_transfer_releases_retry_state_while_failure_keeps_it() {
+        let test_dir = TestConfigDir::new("nyaterm-transfer-retry-state");
+        let mut cx = TestAppContext::single();
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        let sender = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                for id in ["completed", "failed"] {
+                    app.transfer.enqueue_transfer_job(running_job(id));
+                    app.transfer
+                        .bind_transfer_job_path_options(id, SftpPathTransferOptions::default());
+                }
+                app.start_transfer_event_drain(cx);
+                app.transfer.transfer_event_sender()
+            })
+        });
+        vcx.run_until_parked();
+
+        sender
+            .unbounded_send(TransferJobResult {
+                id: "completed".to_string(),
+                event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
+                    SftpTransferSummary {
+                        remote_path: "/remote/completed".to_string(),
+                        local_path: PathBuf::from("/local/completed"),
+                        bytes: 1,
+                        skipped: false,
+                    },
+                ))),
+            })
+            .expect("send completed event");
+        sender
+            .unbounded_send(TransferJobResult {
+                id: "failed".to_string(),
+                event: TransferJobEvent::Finished(Err("connection reset".to_string())),
+            })
+            .expect("send failed event");
+        vcx.run_until_parked();
+
+        vcx.update(|_, cx| {
+            let transfer = &app.read(cx).transfer;
+            assert!(!transfer.has_transfer_job_path_options("completed"));
+            assert!(transfer.has_transfer_job_path_options("failed"));
         });
     }
 

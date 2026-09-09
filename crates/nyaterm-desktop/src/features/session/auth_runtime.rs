@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -344,6 +344,8 @@ pub(in crate::features) struct SftpDuplicatePromptState {
 #[derive(Debug, Default)]
 pub(in crate::features) struct SftpDuplicatePromptBroker {
     pending: Mutex<VecDeque<SftpDuplicatePromptRequest>>,
+    /// 同一文件可能在连续上传中重复出现；序号让每个对话框都有独立生命周期。
+    next_id: AtomicU64,
     /// Signalled after a transport thread enqueues, so activation does not
     /// have to be polled. `Option` because the brokers are `Default`-built,
     /// including in tests that drive them without a wake at all.
@@ -370,8 +372,13 @@ impl SftpDuplicatePromptBroker {
         request: SftpDuplicateRequest,
     ) -> Result<SftpDuplicateDecision, String> {
         let (response_tx, response_rx) = mpsc::channel();
+        let prompt_id = format!(
+            "{}-{}",
+            sftp_duplicate_prompt_id(&request),
+            self.next_id.fetch_add(1, Ordering::Relaxed)
+        );
         let request = SftpDuplicatePromptRequest {
-            id: sftp_duplicate_prompt_id(&request),
+            id: prompt_id,
             request,
             response_tx,
         };
@@ -933,12 +940,13 @@ fn agent_prompt_id() -> String {
 mod prompt_state_debug_tests {
     use super::{
         AgentPromptBroker, AgentPromptState, CredentialPromptState, KeyboardInteractivePromptState,
-        NativeOtpProvider, TotpUseRecord, TransportSshAgentPromptRequest,
+        NativeOtpProvider, SftpDuplicatePromptBroker, TotpUseRecord,
+        TransportSshAgentPromptRequest,
     };
     use nyaterm_transport::{
-        SshAgentPrompt, SshAgentPromptAction, SshAgentPromptPhase, SshCredentialPrompt,
-        SshCredentialPromptKind, SshCredentialPromptReason, SshKeyboardInteractivePrompt,
-        SshKeyboardInteractiveRequest,
+        SftpDuplicateDecision, SftpDuplicateRequest, SftpTransferDirection, SshAgentPrompt,
+        SshAgentPromptAction, SshAgentPromptPhase, SshCredentialPrompt, SshCredentialPromptKind,
+        SshCredentialPromptReason, SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest,
     };
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -1050,6 +1058,50 @@ mod prompt_state_debug_tests {
         first_session.finish();
         second_session.finish();
         assert!(!broker.has_pending());
+    }
+
+    #[test]
+    fn identical_sftp_duplicate_prompts_receive_unique_ids() {
+        let broker = Arc::new(SftpDuplicatePromptBroker::default());
+        let request = SftpDuplicateRequest {
+            direction: SftpTransferDirection::Upload,
+            source_path: "/local/file.txt".to_string(),
+            target_path: "/remote/file.txt".to_string(),
+            is_directory: false,
+        };
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let broker = Arc::clone(&broker);
+            let request = request.clone();
+            workers.push(std::thread::spawn(move || broker.request_decision(request)));
+        }
+        let first = loop {
+            if let Some(request) = broker.pop_pending() {
+                break request;
+            }
+            std::thread::yield_now();
+        };
+        let second = loop {
+            if let Some(request) = broker.pop_pending() {
+                break request;
+            }
+            std::thread::yield_now();
+        };
+        assert_ne!(first.id, second.id);
+        first
+            .response_tx
+            .send(SftpDuplicateDecision::Skip)
+            .expect("send first duplicate decision");
+        second
+            .response_tx
+            .send(SftpDuplicateDecision::Overwrite)
+            .expect("send second duplicate decision");
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("join duplicate prompt"))
+            .collect::<Vec<_>>();
+        assert!(results.contains(&Ok(SftpDuplicateDecision::Skip)));
+        assert!(results.contains(&Ok(SftpDuplicateDecision::Overwrite)));
     }
 
     #[test]

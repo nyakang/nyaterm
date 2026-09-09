@@ -99,6 +99,7 @@ impl NyaTermApp {
                                 cx.listener(move |this, _, _, cx| {
                                     this.transfer.close_transfer_job_menu();
                                     this.pause_transfer_job(&pause_id, cx);
+                                    this.defer_transfer_panel_snapshot_flush(cx);
                                 }),
                             ))
                             .child(transfer_job_menu_button(
@@ -109,6 +110,7 @@ impl NyaTermApp {
                                 cx.listener(move |this, _, _, cx| {
                                     this.transfer.close_transfer_job_menu();
                                     this.resume_transfer_job(&resume_id, cx);
+                                    this.defer_transfer_panel_snapshot_flush(cx);
                                 }),
                             ))
                             .child(transfer_job_menu_button(
@@ -119,6 +121,7 @@ impl NyaTermApp {
                                 cx.listener(move |this, _, window, cx| {
                                     this.transfer.close_transfer_job_menu();
                                     this.retry_transfer_job(retry_id.clone(), window, cx);
+                                    this.defer_transfer_panel_snapshot_flush(cx);
                                 }),
                             ))
                             .child(transfer_job_menu_button(
@@ -129,6 +132,7 @@ impl NyaTermApp {
                                 cx.listener(move |this, _, _, cx| {
                                     this.transfer.close_transfer_job_menu();
                                     this.cancel_transfer_job(&cancel_id, cx);
+                                    this.defer_transfer_panel_snapshot_flush(cx);
                                 }),
                             ))
                             .child(div().h(px(1.)).mx_1().my_1().bg(rgb(palette.border)))

@@ -379,6 +379,8 @@ impl NyaTermApp {
         {
             return;
         }
+        // 回调直接更新 App；延迟发布能覆盖成功、取消、失败及下面所有提前返回。
+        self.defer_transfer_panel_snapshot_flush(cx);
         match result {
             TransferPathPromptResult::Selected(paths) => {
                 let Some(directory) = paths.into_iter().next() else {
@@ -454,6 +456,8 @@ impl NyaTermApp {
         if !self.transfer.finish_path_prompt(kind) {
             return;
         }
+        // 同一次延迟发布读取回调结束后的最终状态，也覆盖空选择的提前返回。
+        self.defer_transfer_panel_snapshot_flush(cx);
         match result {
             TransferPathPromptResult::Selected(paths) => {
                 if paths.is_empty() {

@@ -9,7 +9,6 @@ use nyaterm_transport::SftpFileEntry;
 use nyaterm_ui::NyaInputState;
 
 use crate::features::NyaTermApp;
-use crate::features::session::SftpDuplicatePromptState;
 use crate::features::transfers::TRANSFER_CWD_SYNC_POLL_INTERVAL;
 use crate::models::{
     TransferBrowserColumnResizeState, TransferBrowserColumnWidths, TransferBrowserSortColumn,
@@ -29,8 +28,6 @@ pub(in crate::features) struct TransferChrome {
     pub transparent_surface: Rgba,
     pub transparent_section_header: Rgba,
     pub surface: Rgba,
-    /// For `bounded_dialog_width`, which the duplicate prompt sizes against.
-    pub viewport_width: f32,
 }
 
 /// The browser's render state, owned.
@@ -100,8 +97,6 @@ pub(in crate::features) struct TransferSnapshot {
     pub height_is_resizing: bool,
     pub resize_handle_highlighted: bool,
     pub has_session: bool,
-    pub panel_focus: gpui::FocusHandle,
-    pub duplicate_prompt: Option<SftpDuplicatePromptState>,
     pub browser: TransferBrowserPresentation,
     pub queue: TransferQueuePresentation,
     /// Whether the browser wants its remote cwd polled.
@@ -352,6 +347,170 @@ mod tests {
 
     fn paints(app: &Entity<NyaTermApp>, cx: &mut gpui::App) -> usize {
         app.read(cx).transfer_panel.read(cx).paint_count()
+    }
+
+    /// 后台冲突必须自行打开窗口级对话框；激活任务在首次绘制前启动，整个过程
+    /// 不发送鼠标事件，也不刷新侧栏快照，覆盖启动竞态和原先的悬浮依赖。
+    #[test]
+    fn duplicate_prompts_open_globally_without_panel_interaction_and_drain_in_order() {
+        use std::time::Instant;
+
+        use nyaterm_transport::{
+            SftpDuplicateDecision, SftpDuplicateRequest, SftpDuplicateResolver as _,
+            SftpTransferDirection,
+        };
+        use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+        let test_dir = TestConfigDir::new("nyaterm-transfer-duplicate");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.flush_transfer_panel_snapshot(cx);
+        });
+        let host_app = app.clone();
+        let (_, vcx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| AppHost { app: host_app });
+            nya_root(host, window, cx)
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| app.start_prompt_activation_drain(window, cx));
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let broker = vcx.update(|_, cx| app.read(cx).session.prompt_duplicate_broker());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                // 保留旧快照作为哨兵，验证打开对话框没有借助快照刷新。
+                app.transfer.set_browser_search("unflushed".to_string());
+            });
+        });
+        let mut workers = Vec::new();
+        for name in ["first.txt", "second.txt"] {
+            let worker_broker = broker.clone();
+            let (result_tx, result_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = worker_broker.resolve_duplicate(&SftpDuplicateRequest {
+                    direction: SftpTransferDirection::Upload,
+                    source_path: format!("/local/{name}"),
+                    target_path: format!("/remote/{name}"),
+                    is_directory: false,
+                });
+                let _ = result_tx.send(result);
+            });
+            workers.push((worker, result_rx));
+            // 第一条先激活，第二条留在队列里；真实阻塞式 resolver 负责入队和唤醒。
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !broker.has_pending() {
+                assert!(Instant::now() < deadline, "后台冲突请求未入队");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            vcx.run_until_parked();
+        }
+
+        vcx.update(|window, cx| {
+            assert!(
+                window.has_active_nya_dialog(cx),
+                "冲突必须主动打开全局对话框"
+            );
+            assert!(
+                app.read(cx)
+                    .transfer_panel
+                    .read(cx)
+                    .snapshot()
+                    .unwrap()
+                    .browser
+                    .search
+                    .is_empty(),
+                "激活不能依赖侧栏快照刷新"
+            );
+            assert_eq!(
+                app.read(cx)
+                    .session
+                    .prompt_active_duplicate()
+                    .unwrap()
+                    .request
+                    .target_path,
+                "/remote/first.txt"
+            );
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        let bounds = vcx
+            .debug_bounds("duplicate-prompt-dialog")
+            .expect("冲突内容应显示");
+        let viewport = vcx.update(|window, _| window.viewport_size());
+        assert!(bounds.size.width > px(320.), "弹框不应受侧栏宽度限制");
+        assert!((bounds.center().x - viewport.width / 2.).abs() < px(1.));
+
+        // 对话框没有默认确认项，Enter 只能保持等待，不能隐式选择 Skip。
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            assert!(window.has_active_nya_dialog(cx));
+            assert_eq!(
+                app.read(cx)
+                    .session
+                    .prompt_active_duplicate()
+                    .unwrap()
+                    .request
+                    .target_path,
+                "/remote/first.txt"
+            );
+        });
+
+        let overwrite = vcx
+            .debug_bounds("duplicate-overwrite-action")
+            .expect("覆盖按钮应显示");
+        vcx.simulate_click(overwrite.center(), Modifiers::default());
+        vcx.run_until_parked();
+        let (worker, result_rx) = workers.remove(0);
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            SftpDuplicateDecision::Overwrite
+        );
+        worker.join().unwrap();
+        vcx.update(|window, cx| {
+            assert!(window.has_active_nya_dialog(cx), "第二个冲突应自动接续");
+            assert_eq!(
+                app.read(cx)
+                    .session
+                    .prompt_active_duplicate()
+                    .unwrap()
+                    .request
+                    .target_path,
+                "/remote/second.txt"
+            );
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        // 其它后台流程可能直接关闭窗口级对话框，gpui-component 此时不会调用
+        // `on_close`；生命周期兜底仍需释放第二个阻塞中的 resolver。
+        vcx.update(|window, cx| window.close_nya_dialog(cx));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        let (worker, result_rx) = workers.remove(0);
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            SftpDuplicateDecision::Skip
+        );
+        worker.join().unwrap();
+        vcx.update(|window, cx| {
+            assert!(!window.has_active_nya_dialog(cx));
+            assert!(app.read(cx).session.prompt_active_duplicate().is_none());
+        });
     }
 
     /// The point of the batch: the panel no longer rides the app's redraws.

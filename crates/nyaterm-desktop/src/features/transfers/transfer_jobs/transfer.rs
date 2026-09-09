@@ -86,6 +86,9 @@ impl NyaTermApp {
             progress: None,
             control: Some(control.clone()),
         });
+        let path_options = self
+            .transfer
+            .bind_transfer_job_path_options(&id, path_options);
         self.shell
             .set_status(format!("remote download started for {display_path}"));
         let progress_tx = self.transfer.transfer_event_sender();
@@ -145,6 +148,9 @@ impl NyaTermApp {
             progress: None,
             control: Some(control.clone()),
         });
+        let path_options = self
+            .transfer
+            .bind_transfer_job_path_options(&id, path_options);
         self.shell.set_status(format!(
             "remote upload started for {}",
             local_path.display()
@@ -354,11 +360,19 @@ impl NyaTermApp {
                     raw_path_token,
                 };
                 let duplicate_policy = self.transfer.duplicate_policy();
+                let transfer_options = self.sftp_transfer_options();
                 let duplicate_resolver =
                     (duplicate_policy == SftpDuplicatePolicy::Ask).then(|| {
                         self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>
                     });
-                let transfer_options = self.sftp_transfer_options();
+                let path_options = self.transfer.transfer_job_retry_path_options(
+                    &job_id,
+                    SftpPathTransferOptions::new(
+                        duplicate_policy,
+                        duplicate_resolver,
+                        transfer_options,
+                    ),
+                );
                 let control = SftpTransferControl::new();
                 let job = self
                     .transfer
@@ -387,11 +401,7 @@ impl NyaTermApp {
                                 &remote_file_path,
                                 local_path,
                                 control,
-                                SftpPathTransferOptions::new(
-                                    duplicate_policy,
-                                    duplicate_resolver,
-                                    transfer_options,
-                                ),
+                                path_options,
                                 move |progress| {
                                     progress_sender.send(progress);
                                 },
@@ -410,11 +420,19 @@ impl NyaTermApp {
                 remote_path,
             } => {
                 let duplicate_policy = self.transfer.duplicate_policy();
+                let transfer_options = self.sftp_transfer_options();
                 let duplicate_resolver =
                     (duplicate_policy == SftpDuplicatePolicy::Ask).then(|| {
                         self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>
                     });
-                let transfer_options = self.sftp_transfer_options();
+                let path_options = self.transfer.transfer_job_retry_path_options(
+                    &job_id,
+                    SftpPathTransferOptions::new(
+                        duplicate_policy,
+                        duplicate_resolver,
+                        transfer_options,
+                    ),
+                );
                 let control = SftpTransferControl::new();
                 let job = self
                     .transfer
@@ -445,11 +463,7 @@ impl NyaTermApp {
                                 local_path,
                                 &remote_path,
                                 control,
-                                SftpPathTransferOptions::new(
-                                    duplicate_policy,
-                                    duplicate_resolver,
-                                    transfer_options,
-                                ),
+                                path_options,
                                 move |progress| {
                                     progress_sender.send(progress);
                                 },

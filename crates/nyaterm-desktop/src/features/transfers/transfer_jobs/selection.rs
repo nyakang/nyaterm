@@ -64,6 +64,7 @@ impl NyaTermApp {
         let title = transfer_job_title(&job.kind);
         let description = t!("fileTransfer.deleteConfirmDesc", name = title).to_string();
         self.transfer.select_transfer_job_id(&job_id);
+        self.defer_transfer_panel_snapshot_flush(cx);
         self.open_confirm_dialog(
             (
                 t!("fileTransfer.deleteConfirmTitle").to_string(),
@@ -77,6 +78,7 @@ impl NyaTermApp {
                     } else {
                         "transfer job not found".to_string()
                     });
+                    app.defer_transfer_panel_snapshot_flush(cx);
                     cx.notify();
                     true
                 },

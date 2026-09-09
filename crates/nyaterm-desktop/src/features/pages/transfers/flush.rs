@@ -31,7 +31,6 @@ impl NyaTermApp {
             transparent_surface: self.shell_transparent_color(palette.surface),
             transparent_section_header: self.shell_transparent_color(palette.section_header),
             surface: self.shell_surface_color(palette.surface),
-            viewport_width: self.shell.viewport_size().0,
             palette,
         }
     }
@@ -74,7 +73,6 @@ impl NyaTermApp {
         let resize_handle_highlighted = self
             .shell
             .resize_handle_is_highlighted(&gpui::SharedString::from("transfer-height-resize"));
-        let duplicate_prompt = self.session.prompt_active_duplicate().cloned();
         let auto_sync_cwd_enabled = self.transfer_browser_auto_sync_cwd_enabled();
         let cwd_sync_demand = self.transfer_cwd_sync_needs_polling();
         let connection_id = self.active_transfer_browser_connection_id();
@@ -132,8 +130,6 @@ impl NyaTermApp {
             height_is_resizing,
             resize_handle_highlighted,
             has_session: active_session_id.is_some(),
-            panel_focus: self.transfer.panel_focus().clone(),
-            duplicate_prompt,
             browser,
             cwd_sync_demand,
             queue: TransferQueuePresentation {

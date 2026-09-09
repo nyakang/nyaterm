@@ -213,6 +213,9 @@ impl NyaTermApp {
         if !target_is_rdp && live_snapshot_missing {
             self.request_terminal_live_snapshot(session_id);
         }
+        // Transfer browser state is rendered by a separate entity, so an App notify
+        // alone cannot publish session-switch changes to its snapshot.
+        self.defer_transfer_panel_snapshot_flush(cx);
         previous_session_id
     }
 

@@ -172,6 +172,8 @@ impl NyaTermApp {
             Ok(path) => path,
             Err(status) => {
                 self.transfer.set_browser_status(status);
+                // 浏览器历史由根层的鼠标导航触发时，没有经过 TransferPanel::with_app。
+                self.defer_transfer_panel_snapshot_flush(cx);
                 cx.notify();
                 return;
             }
@@ -182,6 +184,8 @@ impl NyaTermApp {
             rollback,
             cx,
         );
+        // 根层后退/前进没有面板实体的回调兜底，先发布 loading/path 快照。
+        self.defer_transfer_panel_snapshot_flush(cx);
     }
 
     pub(in crate::features::pages::transfers) fn record_transfer_browser_history(

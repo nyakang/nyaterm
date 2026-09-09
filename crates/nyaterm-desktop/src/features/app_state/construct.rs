@@ -291,7 +291,6 @@ impl NyaTermApp {
                 transfer_duplicate_policy,
                 transfer_panel_height,
                 TransferFeatureFocus {
-                    panel: cx.focus_handle(),
                     queue: cx.focus_handle(),
                     browser: cx.focus_handle(),
                     editor: cx.focus_handle(),

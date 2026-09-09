@@ -114,7 +114,7 @@ impl NyaTermApp {
         self.start_session_start_event_drain(cx);
         self.start_credential_autofill_match_drain(cx);
         self.start_remote_desktop_event_drain(cx);
-        self.start_prompt_activation_drain(cx);
+        self.start_prompt_activation_drain(window, cx);
         self.start_shell_persistence_debounce(cx);
         // The restored panel width decides which process-table sort columns exist, and
         // nothing has resized yet, so this is where the initial value goes in.
@@ -167,11 +167,15 @@ impl NyaTermApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.dismiss_transfer_rename_if_open(cx);
+                    let transfer_rename_dismissed = this.dismiss_transfer_rename_if_open(cx);
                     let remote_menus_open = this.remote_ops.docker_menus_open();
                     let ai_menus_open = this.ai.transient_menus_are_open();
                     let changed =
                         this.shell.close_root_menus() || remote_menus_open || ai_menus_open;
+                    if transfer_rename_dismissed {
+                        // 传输面板独立维护快照；根层点击关闭行内重命名后也要同步它。
+                        this.defer_transfer_panel_snapshot_flush(cx);
+                    }
                     if changed {
                         this.remote_ops.close_docker_menus();
                         if remote_menus_open {
@@ -188,7 +192,10 @@ impl NyaTermApp {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, _, _, cx| {
-                    this.dismiss_transfer_rename_if_open(cx);
+                    if this.dismiss_transfer_rename_if_open(cx) {
+                        // 右键点击同样可能只关闭行内重命名，不能依赖后续菜单刷新。
+                        this.defer_transfer_panel_snapshot_flush(cx);
+                    }
                 }),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
