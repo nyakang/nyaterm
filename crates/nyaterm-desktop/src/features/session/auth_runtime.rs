@@ -371,6 +371,16 @@ impl SftpDuplicatePromptBroker {
         &self,
         request: SftpDuplicateRequest,
     ) -> Result<SftpDuplicateDecision, String> {
+        self.enqueue_decision_request(request)?
+            .recv_timeout(Duration::from_secs(300))
+            .map_err(|_| "remote transfer duplicate prompt timed out".to_string())
+    }
+
+    /// 完成入队和唤醒后才返回 receiver，调用方不会观察到只入队、尚未唤醒的中间态。
+    fn enqueue_decision_request(
+        &self,
+        request: SftpDuplicateRequest,
+    ) -> Result<mpsc::Receiver<SftpDuplicateDecision>, String> {
         let (response_tx, response_rx) = mpsc::channel();
         let prompt_id = format!(
             "{}-{}",
@@ -387,10 +397,15 @@ impl SftpDuplicatePromptBroker {
             .map_err(|_| "remote transfer duplicate prompt queue is poisoned".to_string())?
             .push_back(request);
         self.signal_wake();
+        Ok(response_rx)
+    }
 
-        response_rx
-            .recv_timeout(Duration::from_secs(300))
-            .map_err(|_| "remote transfer duplicate prompt timed out".to_string())
+    #[cfg(test)]
+    pub(in crate::features) fn enqueue_decision_request_for_test(
+        &self,
+        request: SftpDuplicateRequest,
+    ) -> Result<mpsc::Receiver<SftpDuplicateDecision>, String> {
+        self.enqueue_decision_request(request)
     }
 
     pub(in crate::features) fn pop_pending(&self) -> Option<SftpDuplicatePromptRequest> {
@@ -1062,31 +1077,21 @@ mod prompt_state_debug_tests {
 
     #[test]
     fn identical_sftp_duplicate_prompts_receive_unique_ids() {
-        let broker = Arc::new(SftpDuplicatePromptBroker::default());
+        let broker = SftpDuplicatePromptBroker::default();
         let request = SftpDuplicateRequest {
             direction: SftpTransferDirection::Upload,
             source_path: "/local/file.txt".to_string(),
             target_path: "/remote/file.txt".to_string(),
             is_directory: false,
         };
-        let mut workers = Vec::new();
-        for _ in 0..2 {
-            let broker = Arc::clone(&broker);
-            let request = request.clone();
-            workers.push(std::thread::spawn(move || broker.request_decision(request)));
-        }
-        let first = loop {
-            if let Some(request) = broker.pop_pending() {
-                break request;
-            }
-            std::thread::yield_now();
-        };
-        let second = loop {
-            if let Some(request) = broker.pop_pending() {
-                break request;
-            }
-            std::thread::yield_now();
-        };
+        let first_rx = broker
+            .enqueue_decision_request(request.clone())
+            .expect("enqueue first duplicate prompt");
+        let second_rx = broker
+            .enqueue_decision_request(request)
+            .expect("enqueue second duplicate prompt");
+        let first = broker.pop_pending().expect("first pending prompt");
+        let second = broker.pop_pending().expect("second pending prompt");
         assert_ne!(first.id, second.id);
         first
             .response_tx
@@ -1096,12 +1101,14 @@ mod prompt_state_debug_tests {
             .response_tx
             .send(SftpDuplicateDecision::Overwrite)
             .expect("send second duplicate decision");
-        let results = workers
-            .into_iter()
-            .map(|worker| worker.join().expect("join duplicate prompt"))
-            .collect::<Vec<_>>();
-        assert!(results.contains(&Ok(SftpDuplicateDecision::Skip)));
-        assert!(results.contains(&Ok(SftpDuplicateDecision::Overwrite)));
+        assert_eq!(
+            first_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(SftpDuplicateDecision::Skip)
+        );
+        assert_eq!(
+            second_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(SftpDuplicateDecision::Overwrite)
+        );
     }
 
     #[test]

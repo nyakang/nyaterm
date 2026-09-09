@@ -353,11 +353,8 @@ mod tests {
     /// 不发送鼠标事件，也不刷新侧栏快照，覆盖启动竞态和原先的悬浮依赖。
     #[test]
     fn duplicate_prompts_open_globally_without_panel_interaction_and_drain_in_order() {
-        use std::time::Instant;
-
         use nyaterm_transport::{
-            SftpDuplicateDecision, SftpDuplicateRequest, SftpDuplicateResolver as _,
-            SftpTransferDirection,
+            SftpDuplicateDecision, SftpDuplicateRequest, SftpTransferDirection,
         };
         use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
 
@@ -388,26 +385,18 @@ mod tests {
                 app.transfer.set_browser_search("unflushed".to_string());
             });
         });
-        let mut workers = Vec::new();
+        let mut response_receivers = Vec::new();
         for name in ["first.txt", "second.txt"] {
-            let worker_broker = broker.clone();
-            let (result_tx, result_rx) = std::sync::mpsc::channel();
-            let worker = std::thread::spawn(move || {
-                let result = worker_broker.resolve_duplicate(&SftpDuplicateRequest {
-                    direction: SftpTransferDirection::Upload,
-                    source_path: format!("/local/{name}"),
-                    target_path: format!("/remote/{name}"),
-                    is_directory: false,
-                });
-                let _ = result_tx.send(result);
-            });
-            workers.push((worker, result_rx));
-            // 第一条先激活，第二条留在队列里；真实阻塞式 resolver 负责入队和唤醒。
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !broker.has_pending() {
-                assert!(Instant::now() < deadline, "后台冲突请求未入队");
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            response_receivers.push(
+                broker
+                    .enqueue_decision_request_for_test(SftpDuplicateRequest {
+                        direction: SftpTransferDirection::Upload,
+                        source_path: format!("/local/{name}"),
+                        target_path: format!("/remote/{name}"),
+                        is_directory: false,
+                    })
+                    .expect("冲突请求应完成入队和唤醒"),
+            );
             vcx.run_until_parked();
         }
 
@@ -467,15 +456,13 @@ mod tests {
             .expect("覆盖按钮应显示");
         vcx.simulate_click(overwrite.center(), Modifiers::default());
         vcx.run_until_parked();
-        let (worker, result_rx) = workers.remove(0);
         assert_eq!(
-            result_rx
+            response_receivers
+                .remove(0)
                 .recv_timeout(Duration::from_secs(5))
-                .unwrap()
                 .unwrap(),
             SftpDuplicateDecision::Overwrite
         );
-        worker.join().unwrap();
         vcx.update(|window, cx| {
             assert!(window.has_active_nya_dialog(cx), "第二个冲突应自动接续");
             assert_eq!(
@@ -498,15 +485,13 @@ mod tests {
             _ = window.draw(cx);
         });
         vcx.run_until_parked();
-        let (worker, result_rx) = workers.remove(0);
         assert_eq!(
-            result_rx
+            response_receivers
+                .remove(0)
                 .recv_timeout(Duration::from_secs(5))
-                .unwrap()
                 .unwrap(),
             SftpDuplicateDecision::Skip
         );
-        worker.join().unwrap();
         vcx.update(|window, cx| {
             assert!(!window.has_active_nya_dialog(cx));
             assert!(app.read(cx).session.prompt_active_duplicate().is_none());
