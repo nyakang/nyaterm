@@ -122,6 +122,7 @@ mod tests {
 
     fn connection(id: &str, group_id: Option<&str>, sort_order: i32) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: id.to_string(),
             config: ConnectionType::LocalTerminal {

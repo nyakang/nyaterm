@@ -266,6 +266,10 @@ impl NyaTermApp {
             }
         };
         let reason = match prompt.prompt.reason {
+            SshCredentialPromptReason::KeyRejectedPasswordFallback => {
+                t!("sshAuth.keyRejectedPasswordFallback")
+            }
+            SshCredentialPromptReason::DockerElevation => t!("sshAuth.dockerElevation"),
             SshCredentialPromptReason::MissingPassword => t!("sshAuth.missingPassword"),
             SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
             SshCredentialPromptReason::KeyPassphraseRequired => {

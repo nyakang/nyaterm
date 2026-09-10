@@ -166,7 +166,7 @@ impl NyaTermApp {
                         this.connection_state.expand_list_group(parent_id);
                     }
                     this.connection_state.expand_list_group(group.id.clone());
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.connection_state.close_group_editor();
                     this.connection_state.clear_group_editor_field();
                     this.shell

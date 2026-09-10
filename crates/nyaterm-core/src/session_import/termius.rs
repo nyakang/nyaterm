@@ -774,6 +774,7 @@ fn prepare_termius_import(store: TermiusRawStore) -> AppResult<PreparedJsonImpor
     )?;
 
     Ok(PreparedJsonImport {
+        custom_icons: Vec::new(),
         groups: group_paths.values().cloned().collect(),
         passwords: prepared_passwords.passwords,
         ssh_keys: prepared_keys.keys,
@@ -1043,6 +1044,7 @@ fn prepare_termius_connections(
             .and_then(|group_id| group_paths.get(group_id).cloned());
 
         connections.push(PreparedJsonConnection {
+            saved: None,
             name: normalize_optional_string(host.label.clone()).unwrap_or_else(|| address.clone()),
             config: ConnectionType::Ssh {
                 host: address,

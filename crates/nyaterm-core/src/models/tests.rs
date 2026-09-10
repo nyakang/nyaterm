@@ -326,6 +326,8 @@ fn tauri_ssh_algorithm_sftp_and_encoding_fields_round_trip() {
     assert_eq!(
         connection.sftp,
         SftpSettings {
+            pipeline_depth: None,
+            extra: Default::default(),
             enabled: false,
             cwd_follow_mode: SftpCwdFollowMode::RcFile,
             shell_detection_timeout_ms: 5000,
@@ -417,6 +419,7 @@ fn validates_sftp_shell_detection_timeout_range() {
 #[test]
 fn local_terminal_endpoint_uses_shell_and_working_dir() {
     let connection = SavedConnection {
+        extensions: Default::default(),
         id: "local-1".to_string(),
         name: "Local".to_string(),
         config: ConnectionType::LocalTerminal {
@@ -1207,4 +1210,27 @@ fn asset_survives_full_sessions_config_roundtrip() {
         reloaded.connections[0].asset.as_ref().unwrap().cpu_cores,
         Some(8)
     );
+}
+
+#[test]
+fn sftp_pipeline_depth_preserves_legacy_range_and_unknown_settings() {
+    for (input, expected) in [
+        ("null", None),
+        ("0", Some(4)),
+        ("-10", Some(4)),
+        ("999", Some(64)),
+        ("32", Some(32)),
+        ("\"fast\"", None),
+    ] {
+        let settings: SftpSettings = serde_json::from_str(&format!(
+            r#"{{"pipeline_depth":{input},"future_option":{{"enabled":true}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(settings.pipeline_depth, expected);
+        let output = serde_json::to_value(&settings).unwrap();
+        assert_eq!(output["future_option"]["enabled"], true);
+        if expected.is_none() {
+            assert!(output.get("pipeline_depth").is_none());
+        }
+    }
 }

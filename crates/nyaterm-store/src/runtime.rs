@@ -652,6 +652,7 @@ fn aggregate_barrier_failures(
 pub struct BootstrapSnapshot {
     pub database_path: PathBuf,
     pub connections: Vec<SavedConnection>,
+    pub custom_icons: Vec<nyaterm_core::models::sessions::ConnectionCustomIcon>,
     pub connection_groups: Vec<Group>,
     pub ssh_keys: Vec<SshKey>,
     pub otp_entries: Vec<OtpEntry>,
@@ -722,6 +723,7 @@ impl StoreRequest for LoadBootstrap {
         Ok(BootstrapSnapshot {
             database_path: store.db_path().to_path_buf(),
             connections: sessions.connections,
+            custom_icons: sessions.custom_icons,
             connection_groups: sessions.groups,
             ssh_keys: store.list_ssh_keys()?,
             otp_entries: store.list_otp_entries()?,

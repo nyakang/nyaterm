@@ -356,6 +356,9 @@ fn file_properties_from_path(path: &Path) -> anyhow::Result<SftpFileProperties> 
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| path_to_string(path));
     Ok(SftpFileProperties {
+        symlink_target: fs::read_link(path)
+            .ok()
+            .map(|target| path_to_string(&target)),
         name,
         path: path_to_string(path),
         file_type: file_type_from_metadata(&metadata, &symlink_metadata),

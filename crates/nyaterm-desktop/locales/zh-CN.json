@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "显示 NyaTerm",
+    "newConnection": "新建连接",
+    "push": "推送云同步",
+    "pull": "拉取云同步",
+    "minimizeToTray": "最小化到托盘",
+    "lock": "锁屏",
+    "update": "检查更新",
+    "quit": "退出",
+    "unavailable": "当前桌面会话不支持隐藏到托盘，窗口已正常最小化。"
+},
+  "documentEditor": {
+    "fold": "折叠光标处代码",
+    "unfoldAll": "全部展开",
+    "find": "查找",
+    "replace": "替换",
+    "replaceAll": "全部替换",
+    "previous": "上一个",
+    "next": "下一个",
+    "caseSensitive": "区分大小写",
+    "wholeWord": "全词匹配",
+    "regex": "正则表达式",
+    "invalidRegex": "正则表达式无效"
+},
   "about": {
+    "copySupportInfo": "复制支持信息",
+    "supportInfoCopied": "已复制支持信息",
     "close": "关闭",
     "description": "用于 SSH、串口和本地命令行工作的桌面终端客户端。",
     "issues": "问题反馈",
@@ -364,6 +390,14 @@
     "usernameRegexPlaceholder": "匹配用户名提示的正则表达式"
   },
   "dialog": {
+    "importCustomIcon": "导入图标",
+    "deleteCustomIcon": "删除自定义图标",
+    "customIconFailed": "无法加载或保存图标，请使用不超过 2 MiB 的有效位图。",
+    "postLoginExternalTitle": "执行已保存的登录命令？",
+    "postLoginExternalMessage": "通过外部链接打开 %{name} 将执行它已保存的登录命令。",
+    "shellArgsUnclosedQuote": "Shell 参数中的引号未闭合",
+    "sftpPipelineDepth": "SFTP 流水线深度",
+    "sftpPipelineAutomatic": "自动",
     "advancedConfig": "高级配置",
     "algorithmCiphers": "加密算法",
     "algorithmCiphersTab": "加密",
@@ -840,6 +874,7 @@
     "zoomOut": "缩小"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "请输入软链接目标。",
     "addCurrentDirToFavorites": "收藏当前目录",
     "addToFavorites": "添加到收藏夹",
     "alwaysUpload": "总是上传",
@@ -1790,6 +1825,9 @@
     "unread": "未读"
   },
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "关键词会跨自动折行连续匹配，但不会跨真实换行匹配。",
+    "shortcutConflictMessage": "快捷键与 %{shortcut} 冲突",
+    "nativeGpuRenderer": "原生 GPU 渲染",
     "actionLinks": "快捷动作",
     "actionLinksDesc": "识别终端输出中的 IP、压缩包、host:port 和路径，并提供快捷操作。Ctrl/Cmd + 单击执行默认动作，Alt + 单击查看所有动作。",
     "actionLinksMatcherArchive": "压缩文件",
@@ -2433,6 +2471,8 @@
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
   },
   "sshAuth": {
+    "dockerElevation": "Docker 需要 sudo 授权，请输入 sudo 密码。",
+    "keyRejectedPasswordFallback": "服务器拒绝了密钥，请输入密码继续连接。",
     "agentWaitingTitle": "等待 SSH Agent 授权",
     "agentFailedTitle": "SSH Agent 认证失败",
     "agentApprovalWaiting": "请确认硬件密钥、PIN 或 SSH Agent 授权请求。",
@@ -2682,6 +2722,11 @@
     "unsupportedOption": "临时链接仅支持直连。"
   },
   "terminal": {
+    "uploadingClipboardImage": "正在上传剪贴板图片",
+    "clipboardImageFailed": "无法将剪贴板图片粘贴到此会话。",
+    "disconnectedStatus": "会话已断开",
+    "reconnectHint": "回车重连 · Ctrl+D 关闭",
+    "saveSelectionAsQuickCommand": "保存为快捷命令",
     "actionLinkAltClickHint": "Alt+单击：更多动作",
     "actionLinkDefaultBadge": "默认",
     "actionLinkKind_archive": "压缩文件",
@@ -2834,6 +2879,12 @@
     "waitingFrame": "正在等待首个桌面画面…"
   },
   "updater": {
+    "saveEditorsFirst": "安装更新前请保存或关闭已修改的文件。",
+    "installFailed": "无法启动更新安装程序。",
+    "installAndRestart": "安装并重启",
+    "downloadFailed": "下载失败，请重试更新。",
+    "downloadUpdate": "下载更新",
+
     "checking": "正在检查更新...",
     "currentVersion": "当前版本",
     "downloading": "正在下载更新...",

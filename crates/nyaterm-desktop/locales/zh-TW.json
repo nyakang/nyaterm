@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "顯示 NyaTerm",
+    "newConnection": "新增連線",
+    "push": "推送雲端同步",
+    "pull": "拉取雲端同步",
+    "minimizeToTray": "最小化至系統匣",
+    "lock": "鎖定",
+    "update": "檢查更新",
+    "quit": "結束",
+    "unavailable": "目前桌面工作階段不支援隱藏至系統匣，視窗已正常最小化。"
+},
+  "documentEditor": {
+    "fold": "摺疊游標處程式碼",
+    "unfoldAll": "全部展開",
+    "find": "尋找",
+    "replace": "取代",
+    "replaceAll": "全部取代",
+    "previous": "上一個",
+    "next": "下一個",
+    "caseSensitive": "區分大小寫",
+    "wholeWord": "全字比對",
+    "regex": "正規表示式",
+    "invalidRegex": "正規表示式無效"
+},
   "about": {
+    "copySupportInfo": "複製支援資訊",
+    "supportInfoCopied": "已複製支援資訊",
     "close": "關閉",
     "description": "用於 SSH、序列埠和本機命令列工作的桌面終端客戶端。",
     "issues": "問題回報",
@@ -317,6 +343,14 @@
     "usernameRegexPlaceholder": "符合使用者名稱提示的正規表示式"
   },
   "dialog": {
+    "importCustomIcon": "匯入圖示",
+    "deleteCustomIcon": "刪除自訂圖示",
+    "customIconFailed": "無法載入或儲存圖示，請使用不超過 2 MiB 的有效點陣圖。",
+    "postLoginExternalTitle": "執行已儲存的登入命令？",
+    "postLoginExternalMessage": "透過外部連結開啟 %{name} 將執行其已儲存的登入命令。",
+    "shellArgsUnclosedQuote": "Shell 參數中的引號未閉合",
+    "sftpPipelineDepth": "SFTP 管線深度",
+    "sftpPipelineAutomatic": "自動",
     "advancedConfig": "高階設定",
     "algorithmCiphers": "加密演算法",
     "algorithmCiphersTab": "加密",
@@ -793,6 +827,7 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "請輸入符號連結目標。",
     "addCurrentDirToFavorites": "收藏目前目錄",
     "addToFavorites": "新增到收藏夾",
     "alwaysUpload": "總是上傳",
@@ -1743,6 +1778,9 @@
     "unread": "未讀"
   },
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "關鍵字會跨自動折行連續比對，但不會跨實際換行比對。",
+    "shortcutConflictMessage": "快捷鍵與 %{shortcut} 衝突",
+    "nativeGpuRenderer": "原生 GPU 算繪",
     "actionLinks": "快捷動作",
     "actionLinksDesc": "識別終端輸出中的 IP、壓縮包、host:port 和路徑，並提供快捷操作。Ctrl/Cmd + 單擊填入預設命令，Alt + 單擊檢視所有動作。",
     "actionLinksMatcherArchive": "壓縮檔案",
@@ -2386,6 +2424,8 @@
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
   },
   "sshAuth": {
+    "dockerElevation": "Docker 需要 sudo 授權，請輸入 sudo 密碼。",
+    "keyRejectedPasswordFallback": "伺服器拒絕了金鑰，請輸入密碼繼續連線。",
     "agentWaitingTitle": "等待 SSH Agent 授權",
     "agentFailedTitle": "SSH Agent 認證失敗",
     "agentApprovalWaiting": "請確認硬體金鑰、PIN 或 SSH Agent 授權請求。",
@@ -2635,6 +2675,11 @@
     "unsupportedOption": "該 SSH 輸入使用了臨時連結暫不支援的選項。"
   },
   "terminal": {
+    "uploadingClipboardImage": "正在上傳剪貼簿圖片",
+    "clipboardImageFailed": "無法將剪貼簿圖片貼到此工作階段。",
+    "disconnectedStatus": "工作階段已中斷",
+    "reconnectHint": "Enter 重新連線 · Ctrl+D 關閉",
+    "saveSelectionAsQuickCommand": "儲存為快捷命令",
     "actionLinkAltClickHint": "Alt+單擊：更多動作",
     "actionLinkDefaultBadge": "預設",
     "actionLinkKind_archive": "壓縮檔案",
@@ -2787,6 +2832,12 @@
     "waitingFrame": "正在等待首個桌面畫面…"
   },
   "updater": {
+    "saveEditorsFirst": "安裝更新前請儲存或關閉已修改的檔案。",
+    "installFailed": "無法啟動更新安裝程式。",
+    "installAndRestart": "安裝並重新啟動",
+    "downloadFailed": "下載失敗，請重試更新。",
+    "downloadUpdate": "下載更新",
+
     "checking": "正在檢查更新...",
     "currentVersion": "目前版本",
     "downloading": "正在下載更新...",

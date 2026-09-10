@@ -21,6 +21,7 @@ fn group(id: &str, name: &str, parent: Option<&str>, sort_order: i32) -> Group {
 
 fn connection(id: &str, name: &str, host: &str, group_id: Option<&str>) -> SavedConnection {
     SavedConnection {
+        extensions: Default::default(),
         id: id.to_string(),
         name: name.to_string(),
         config: ConnectionType::Ssh {

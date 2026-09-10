@@ -22,6 +22,8 @@ fn required_env(name: &str) -> String {
 
 fn test_config() -> SshSessionConfig {
     SshSessionConfig {
+        attempt: Default::default(),
+        post_login: None,
         name: "SFTP E2E".to_string(),
         host: required_env("NYATERM_TEST_SFTP_HOST"),
         port: required_env("NYATERM_TEST_SFTP_PORT")
@@ -51,6 +53,7 @@ fn test_config() -> SshSessionConfig {
         deferred_pty: true,
         terminal_shell_integration: true,
         keep_alive_interval_secs: 0,
+        keep_alive_mode: Default::default(),
         cols: 80,
         rows: 24,
         pixel_width: 0,

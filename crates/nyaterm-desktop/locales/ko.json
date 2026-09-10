@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "NyaTerm 표시",
+    "newConnection": "새 연결",
+    "push": "클라우드에 보내기",
+    "pull": "클라우드에서 가져오기",
+    "minimizeToTray": "트레이로 최소화",
+    "lock": "잠금",
+    "update": "업데이트 확인",
+    "quit": "종료",
+    "unavailable": "현재 데스크톱은 트레이 숨기기를 지원하지 않아 일반 최소화를 수행했습니다."
+},
+  "documentEditor": {
+    "fold": "커서 위치 접기",
+    "unfoldAll": "모두 펼치기",
+    "find": "찾기",
+    "replace": "바꾸기",
+    "replaceAll": "모두 바꾸기",
+    "previous": "이전",
+    "next": "다음",
+    "caseSensitive": "대소문자 구분",
+    "wholeWord": "단어 단위",
+    "regex": "정규식",
+    "invalidRegex": "잘못된 정규식"
+},
   "about": {
+    "copySupportInfo": "지원 정보 복사",
+    "supportInfoCopied": "지원 정보를 복사했습니다",
     "close": "닫기",
     "description": "SSH 중심 작업과 다양한 터미널 워크플로를 위한 데스크톱 클라이언트입니다.",
     "issues": "이슈",
@@ -317,6 +343,14 @@
     "usernameRegexPlaceholder": "사용자 이름 프롬프트용 정규식"
   },
   "dialog": {
+    "importCustomIcon": "아이콘 가져오기",
+    "deleteCustomIcon": "사용자 아이콘 삭제",
+    "customIconFailed": "아이콘을 불러오거나 저장할 수 없습니다. 2 MiB 이하의 유효한 이미지를 사용하세요.",
+    "postLoginExternalTitle": "저장된 로그인 명령을 실행할까요?",
+    "postLoginExternalMessage": "외부 링크로 %{name}을 열면 저장된 로그인 명령이 실행됩니다.",
+    "shellArgsUnclosedQuote": "셸 인수의 따옴표가 닫히지 않았습니다",
+    "sftpPipelineDepth": "SFTP 파이프라인 깊이",
+    "sftpPipelineAutomatic": "자동",
     "advancedConfig": "고급",
     "algorithmCiphers": "암호(Cipher)",
     "algorithmCiphersTab": "암호",
@@ -793,6 +827,7 @@
     "zoomOut": "축소"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "심볼릭 링크 대상을 입력하세요.",
     "addCurrentDirToFavorites": "현재 폴더 추가",
     "addToFavorites": "즐겨찾기에 추가",
     "alwaysUpload": "항상 업로드",
@@ -1743,6 +1778,9 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "키워드는 자동 줄 바꿈에 걸쳐 일치하지만 명시적인 개행은 넘지 않습니다.",
+    "shortcutConflictMessage": "단축키가 %{shortcut}와 충돌합니다",
+    "nativeGpuRenderer": "네이티브 GPU 렌더러",
     "actionLinks": "액션 링크",
     "actionLinksDesc": "터미널 출력에서 패턴(IP, 압축 파일, 호스트:포트, 경로)을 인식합니다. Ctrl/Cmd+클릭으로 기본 명령을 삽입하고, Alt+클릭으로 모든 작업을 표시합니다.",
     "actionLinksMatcherArchive": "압축 파일",
@@ -2386,6 +2424,8 @@
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
   },
   "sshAuth": {
+    "dockerElevation": "Docker에 sudo 인증이 필요합니다. sudo 비밀번호를 입력하세요.",
+    "keyRejectedPasswordFallback": "서버가 키를 거부했습니다. 계속하려면 비밀번호를 입력하세요.",
     "agentWaitingTitle": "SSH Agent 승인 대기 중",
     "agentFailedTitle": "SSH Agent 인증 실패",
     "agentApprovalWaiting": "하드웨어 키, PIN 또는 SSH Agent 요청을 승인하세요.",
@@ -2635,6 +2675,11 @@
     "unsupportedOption": "이 SSH 입력에는 임시 링크에서 지원하지 않는 옵션이 있습니다."
   },
   "terminal": {
+    "uploadingClipboardImage": "클립보드 이미지 업로드 중",
+    "clipboardImageFailed": "이 세션에 클립보드 이미지를 붙여 넣을 수 없습니다.",
+    "disconnectedStatus": "세션 연결이 끊어졌습니다",
+    "reconnectHint": "Enter 재연결 · Ctrl+D 닫기",
+    "saveSelectionAsQuickCommand": "빠른 명령으로 저장",
     "actionLinkAltClickHint": "Alt+클릭: 더 많은 작업",
     "actionLinkDefaultBadge": "기본값",
     "actionLinkKind_archive": "압축 파일",
@@ -2787,6 +2832,12 @@
     "waitingFrame": "첫 데스크톱 프레임을 기다리는 중..."
   },
   "updater": {
+    "saveEditorsFirst": "업데이트 설치 전에 수정한 파일을 저장하거나 닫으세요.",
+    "installFailed": "업데이트 설치 프로그램을 시작할 수 없습니다.",
+    "installAndRestart": "설치 후 재시작",
+    "downloadFailed": "다운로드에 실패했습니다. 다시 시도하세요.",
+    "downloadUpdate": "업데이트 다운로드",
+
     "checking": "업데이트 확인 중...",
     "currentVersion": "현재",
     "downloading": "업데이트 다운로드 중...",

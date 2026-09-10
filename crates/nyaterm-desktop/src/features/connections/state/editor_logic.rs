@@ -151,6 +151,11 @@ pub(super) fn set_connection_editor_select_value(
         ConnectionEditorSelect::SftpCwdFollowMode => {
             editor.sftp_cwd_follow_mode = value.unwrap_or_else(|| "shell_integration".to_string());
         }
+        ConnectionEditorSelect::SftpPipelineDepth => {
+            editor.sftp_pipeline_depth = value
+                .and_then(|value| value.parse::<u32>().ok())
+                .map(|value| value.clamp(4, 64));
+        }
         ConnectionEditorSelect::SftpFilenameEncoding => {
             editor.sftp_filename_encoding = value.unwrap_or_else(|| "terminal".to_string());
         }

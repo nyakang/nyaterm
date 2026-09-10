@@ -141,6 +141,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let Some(field) = (match field_id {
+            "symlink-target" => Some(TransferPropertiesField::SymlinkTarget),
             "mode" => Some(TransferPropertiesField::Mode),
             "owner" => Some(TransferPropertiesField::Owner),
             "group" => Some(TransferPropertiesField::Group),
@@ -165,6 +166,10 @@ impl NyaTermApp {
         self.reset_text_input("transfer.properties.mode", &mode, cx);
         self.reset_text_input("transfer.properties.owner", &owner, cx);
         self.reset_text_input("transfer.properties.group", &group, cx);
+        if let Some(state) = self.transfer.properties_dialog() {
+            let value = state.symlink_target_value.clone();
+            self.reset_text_input("transfer.properties.symlink-target", &value, cx);
+        }
     }
 
     pub(super) fn start_sftp_properties_load_job(
@@ -251,6 +256,33 @@ impl NyaTermApp {
             cx.notify();
             return false;
         };
+        if properties.file_type == nyaterm_transport::SftpFileType::Symlink {
+            if state.symlink_target_value.is_empty() || state.symlink_target_value.contains('\0') {
+                self.transfer
+                    .set_properties_error(t!("fileExplorer.symlinkTargetRequired").to_string());
+                cx.notify();
+                return false;
+            }
+            if properties.symlink_target.as_deref() == Some(state.symlink_target_value.as_str()) {
+                self.close_transfer_properties(cx);
+                return true;
+            }
+            self.transfer.begin_properties_save();
+            self.start_sftp_properties_update_job(
+                RemoteFilePath {
+                    display_path: properties.path,
+                    raw_path_token: state.entry.raw_path_token,
+                },
+                remote_parent_path(&state.entry.path),
+                SftpAttributeUpdate {
+                    symlink_target: Some(state.symlink_target_value),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            return false;
+        }
         let mode = match parse_transfer_mode(&state.mode_value) {
             Some(mode) => mode,
             None => {
@@ -277,6 +309,7 @@ impl NyaTermApp {
         let group_changed =
             group != properties.group && properties.gid.is_none_or(|gid| group != gid.to_string());
         let update = SftpAttributeUpdate {
+            symlink_target: None,
             mode: (state.mode_value != initial_mode).then_some(mode),
             owner: owner_changed.then_some(owner),
             group: group_changed.then_some(group),

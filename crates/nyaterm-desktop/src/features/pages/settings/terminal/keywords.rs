@@ -57,22 +57,8 @@ impl SettingsPanel {
                             .flex()
                             .flex_col()
                             .gap_4()
-                            .child(settings_form_row(
-                                palette,
-                                t!("settings.keywordHighlightWrappedLines"),
-                                Some(SharedString::from(
-                                    t!("settings.keywordHighlightWrappedLinesDesc"),
-                                )),
-                                settings_switch_with_enabled(
-                                    palette,
-                                    "settings-keyword-highlights-wrap",
-                                    self.settings.keyword_config().across_wrapped_lines,
-                                    keyword_highlighting_enabled,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.toggle_keyword_highlights_wrapped(cx);
-                                    }),
-                                ),
-                            ))
+                            .child(div().text_xs().text_color(rgb(palette.text_muted))
+                                .child(t!("settings.keywordHighlightLogicalLinesDesc")))
                             .child(
                                 div()
                                     .flex()

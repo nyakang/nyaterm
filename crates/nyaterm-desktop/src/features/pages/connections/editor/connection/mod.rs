@@ -549,6 +549,19 @@ impl NyaTermApp {
             )
         })
         .collect::<Vec<_>>();
+        let sftp_pipeline_options = std::iter::once(ConnectionEditorChoice::new(
+            None,
+            t!("dialog.sftpPipelineAutomatic"),
+            editor.sftp_pipeline_depth.is_none(),
+        ))
+        .chain((4..=64).map(|depth| {
+            ConnectionEditorChoice::new(
+                Some(depth.to_string()),
+                depth.to_string(),
+                editor.sftp_pipeline_depth == Some(depth),
+            )
+        }))
+        .collect::<Vec<_>>();
         let encoding_options = ["global", "UTF-8", "GBK", "GB2312", "GB18030"]
             .into_iter()
             .map(|value| {
@@ -886,6 +899,11 @@ impl NyaTermApp {
                 String::new(),
             ),
             (
+                ConnectionEditorSelect::SftpPipelineDepth,
+                sftp_pipeline_options.as_slice(),
+                t!("dialog.sftpPipelineAutomatic").to_string(),
+            ),
+            (
                 ConnectionEditorSelect::SftpFilenameEncoding,
                 sftp_filename_encoding_options.as_slice(),
                 t!("dialog.sftpFilenameEncodingFollowTerminal").to_string(),
@@ -1067,6 +1085,42 @@ impl NyaTermApp {
                     })),
             );
         }
+        for record in self.connection_state.custom_icons.records.clone() {
+            let Some(image) = self
+                .connection_state
+                .custom_icons
+                .images
+                .get(&record.id)
+                .cloned()
+            else {
+                continue;
+            };
+            let id = record.id.clone();
+            icon_grid = icon_grid.child(
+                nyaterm_ui::NyaButton::new(format!("custom-icon-{}", record.id), "")
+                    .tooltip(record.name)
+                    .content(gpui::img(image).size(px(20.)))
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.set_connection_editor_icon(Some(&id), cx)
+                    })),
+            );
+        }
+        let custom_selected = editor
+            .icon
+            .as_ref()
+            .filter(|id| {
+                self.connection_state
+                    .custom_icons
+                    .records
+                    .iter()
+                    .any(|record| &record.id == *id)
+            })
+            .cloned();
+        let selected_image = editor
+            .icon
+            .as_ref()
+            .and_then(|id| self.connection_state.custom_icons.images.get(id))
+            .cloned();
         let icon_picker_trigger = div()
             .id("connection-editor-icon-trigger")
             .size(px(32.))
@@ -1083,7 +1137,11 @@ impl NyaTermApp {
             .bg(rgb(palette.input))
             .cursor_pointer()
             .hover(|this| this.bg(rgb(palette.hover)))
-            .child(themed_icon(palette, icon_def, false, 17.));
+            .child(if let Some(image) = selected_image {
+                gpui::img(image).size(px(17.)).into_any_element()
+            } else {
+                themed_icon(palette, icon_def, false, 17.).into_any_element()
+            });
         let icon_picker_content = div()
             .occlude()
             .w(px(232.))
@@ -1093,7 +1151,26 @@ impl NyaTermApp {
             .border_color(rgb(palette.border))
             .bg(icon_picker_bg)
             .shadow_lg()
-            .child(icon_grid)
+            .child(
+                div()
+                    .max_h(px(280.))
+                    .overflow_y_scrollbar()
+                    .child(icon_grid),
+            )
+            .child(
+                nyaterm_ui::NyaButton::new("import-custom-icon", t!("dialog.importCustomIcon"))
+                    .on_click(cx.listener(|app, _, window, cx| {
+                        app.import_connection_custom_icon(window, cx)
+                    })),
+            )
+            .when_some(custom_selected, |this, id| {
+                this.child(
+                    nyaterm_ui::NyaButton::new("delete-custom-icon", t!("dialog.deleteCustomIcon"))
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.delete_connection_custom_icon(id.clone(), cx)
+                        })),
+                )
+            })
             // Only SSH reports a remote system, so the toggle would be
             // inert on the other kinds.
             .when(
@@ -1314,6 +1391,33 @@ impl NyaTermApp {
                     .when(editor.kind == ConnectionKindTab::Serial, |this| {
                         this.child(connection_editor_serial_section(section_context, cx))
                     })
+                    .when(
+                        matches!(editor.kind, ConnectionKindTab::Rdp | ConnectionKindTab::Vnc),
+                        |this| {
+                            this.child(crate::features::pages::connections::list::connection_editor_select(
+                                crate::features::pages::connections::list::ConnectionEditorRenderContext {
+                                    palette,
+                                    fields: &fields,
+                                    cx,
+                                },
+                                "remote-desktop-proxy",
+                                t!("dialog.proxySelect"),
+                                ConnectionEditorSelect::Proxy,
+                            ))
+                            .child(
+                                crate::features::pages::connections::list::connection_editor_select(
+                                    crate::features::pages::connections::list::ConnectionEditorRenderContext {
+                                        palette,
+                                        fields: &fields,
+                                        cx,
+                                    },
+                                    "remote-desktop-jump",
+                                    t!("dialog.proxyJump"),
+                                    ConnectionEditorSelect::ProxyJump,
+                                ),
+                            )
+                        },
+                    )
                     .when(editor.kind == ConnectionKindTab::Rdp, |this| {
                         this.child(connection_editor_rdp_section(section_context, cx))
                     })
@@ -1714,7 +1818,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 28] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 29] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -1725,6 +1829,7 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 28] {
         ConnectionEditorSelect::Backspace,
         ConnectionEditorSelect::Encoding,
         ConnectionEditorSelect::SftpCwdFollowMode,
+        ConnectionEditorSelect::SftpPipelineDepth,
         ConnectionEditorSelect::SftpFilenameEncoding,
         ConnectionEditorSelect::SshAlgorithmMode,
         ConnectionEditorSelect::SshAgentEndpoint,
@@ -1763,6 +1868,7 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::Backspace => "connection-editor-backspace",
         ConnectionEditorSelect::Encoding => "connection-editor-encoding",
         ConnectionEditorSelect::SftpCwdFollowMode => "connection-editor-sftp-cwd-follow",
+        ConnectionEditorSelect::SftpPipelineDepth => "connection-editor-sftp-pipeline-depth",
         ConnectionEditorSelect::SftpFilenameEncoding => "connection-editor-sftp-filename-encoding",
         ConnectionEditorSelect::SshAlgorithmMode => "connection-editor-ssh-algorithm-mode",
         ConnectionEditorSelect::SshProfile => "connection-editor-ssh-profile",
@@ -2465,6 +2571,8 @@ mod tests {
             sftp_enabled: true,
             sftp_cwd_follow_mode: "shell_integration".to_string(),
             sftp_shell_detection_timeout_ms: "3000".to_string(),
+            sftp_pipeline_depth: None,
+            sftp_extra: Default::default(),
             sftp_filename_encoding: "terminal".to_string(),
             ssh_algorithm_mode: "compatible".to_string(),
             ssh_algorithm_kex: Vec::new(),

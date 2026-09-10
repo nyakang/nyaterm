@@ -476,10 +476,6 @@ impl SettingsFeatureState {
         self.summary.x11_display = text;
     }
 
-    pub(in crate::features) fn toggle_terminal_hardware_acceleration(&mut self) {
-        self.summary.terminal_hardware_acceleration = !self.summary.terminal_hardware_acceleration;
-    }
-
     pub(in crate::features) fn toggle_terminal_low_latency_mode(&mut self) -> bool {
         self.summary.terminal_low_latency_mode = !self.summary.terminal_low_latency_mode;
         self.summary.terminal_low_latency_mode
@@ -724,11 +720,6 @@ impl SettingsFeatureState {
     pub(in crate::features) fn toggle_keyword_highlights(&mut self) -> bool {
         self.keyword_config.enabled = !self.keyword_config.enabled;
         self.keyword_config.enabled
-    }
-
-    pub(in crate::features) fn toggle_keyword_highlights_wrapped(&mut self) -> bool {
-        self.keyword_config.across_wrapped_lines = !self.keyword_config.across_wrapped_lines;
-        self.keyword_config.across_wrapped_lines
     }
 
     pub(in crate::features) fn toggle_keyword_highlight_builtin(&mut self, rule_id: String) {
@@ -1973,7 +1964,6 @@ mod tests {
         });
 
         assert!(state.toggle_keyword_highlights());
-        assert!(state.toggle_keyword_highlights_wrapped());
         state.toggle_keyword_highlight_builtin("builtin-error".to_string());
         assert!(state.toggle_keyword_highlight_rule("warning"));
         assert!(state.set_keyword_highlight_rule_color("warning", true, "#123456".to_string()));
@@ -1985,7 +1975,7 @@ mod tests {
 
         let config = state.keyword_config();
         assert!(config.enabled);
-        assert!(config.across_wrapped_lines);
+        assert!(!config.across_wrapped_lines); // Preserve the legacy value while editing rules.
         assert!(!config.builtin_rules["builtin-error"]);
         assert!(!config.rules[0].enabled);
         assert_eq!(config.rules[0].color_dark, "#123456");

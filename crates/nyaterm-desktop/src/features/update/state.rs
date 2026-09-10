@@ -15,6 +15,12 @@ impl UpdateJobResult {
 }
 
 pub(in crate::features) struct UpdateFeatureState {
+    pub(in crate::features) download: super::download::DownloadState,
+    pub(in crate::features) download_generation: u64,
+    pub(in crate::features) download_cancel:
+        nyaterm_transport::connection_attempt::ConnectionAttempt,
+    pub(in crate::features) install_requested: bool,
+    pub(in crate::features) install_launch_pending: bool,
     tx: UnboundedSender<UpdateJobResult>,
     /// Taken once by `NyaTermApp::start_update_event_drain`, which owns delivery
     /// from then on. `None` afterwards, so a second start is a no-op.
@@ -28,6 +34,11 @@ impl UpdateFeatureState {
     pub(in crate::features) fn new() -> Self {
         let (tx, rx) = unbounded();
         Self {
+            download: super::download::DownloadState::Idle,
+            download_generation: 0,
+            download_cancel: Default::default(),
+            install_requested: false,
+            install_launch_pending: false,
             tx,
             rx: Some(rx),
             status: format!("Current version {}", env!("CARGO_PKG_VERSION")),

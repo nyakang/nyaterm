@@ -8,7 +8,7 @@ pub(in crate::features) use labels::{
     format_history_timestamp_ms, format_last_used_ms, format_permissions_octal, format_rate,
     format_uptime, non_empty_string, none_if_blank, normalize_startup_command,
     parse_telnet_enter_mode, recent_terminal_output, recording_file_path, risk_label,
-    session_kind_label, short_id, split_shell_args, status_label, terminal_gutter_labels,
+    session_kind_label, short_id, status_label, terminal_gutter_labels,
     terminal_timestamp_format_width_chars, trim_terminal_output_to, tunnel_endpoint, tunnel_mode,
     tunnel_name,
 };

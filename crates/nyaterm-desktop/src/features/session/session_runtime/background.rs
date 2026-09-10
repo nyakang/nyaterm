@@ -141,6 +141,7 @@ impl NyaTermApp {
         let reconnecting = self.session.start.register_pending(
             request_id.clone(),
             PendingSessionStart {
+                attempt: Default::default(),
                 connection_name: connection_name.clone(),
                 launch_config,
                 requested_at,
@@ -178,7 +179,7 @@ impl NyaTermApp {
     pub(in crate::features) fn begin_background_session_start(
         &mut self,
         connection_name: String,
-        launch_config: SessionLaunchConfig,
+        mut launch_config: SessionLaunchConfig,
         source_connection_id: Option<String>,
         ai_execution_profile: AiExecutionProfile,
         options: SavedConnectionStartOptions,
@@ -224,6 +225,10 @@ impl NyaTermApp {
             cx,
         );
 
+        let attempt = self.session.start.attempt(&request_id);
+        if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
+            config.bind_attempt(attempt.clone());
+        }
         let session_manager = self.session.manager_handle();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
@@ -235,7 +240,20 @@ impl NyaTermApp {
             kind,
             session_start_tx,
             move || {
-                create_session_from_launch_config(&session_manager, launch_config.clone())
+                attempt.check()?;
+                let result = if let SessionLaunchConfig::Telnet(config) = &launch_config {
+                    session_manager
+                        .create_telnet_session_with_attempt(config.clone(), attempt.clone())
+                        .map(|session_info| SessionStartSuccess {
+                            session_info,
+                            multiplex_handle: None,
+                            launch_config: None,
+                        })
+                        .map_err(|error| error.to_string())
+                } else {
+                    create_session_from_launch_config(&session_manager, launch_config.clone())
+                };
+                result
                     .map(|success| SessionStartSuccess {
                         launch_config: Some(launch_config),
                         ..success
@@ -304,6 +322,7 @@ impl NyaTermApp {
             cx,
         );
 
+        config.bind_attempt(self.session.start.attempt(&request_id));
         let session_manager = self.session.manager_handle();
         let session_start_tx = self.session.start.sender();
         let request_id_for_worker = request_id.clone();
@@ -629,6 +648,9 @@ impl NyaTermApp {
                 );
                 if let Some(connection_id) = source_connection_id.as_deref() {
                     self.complete_mcp_session_open_success(connection_id, session_id.clone());
+                    if kind == nyaterm_transport::SessionKind::Ssh {
+                        self.start_auto_tunnels_for_connection(connection_id, cx);
+                    }
                 }
                 if let Some(custom_name) = pending
                     .as_ref()

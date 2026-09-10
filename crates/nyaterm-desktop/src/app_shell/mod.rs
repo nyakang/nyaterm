@@ -390,6 +390,7 @@ impl AppShell {
         app.update(cx, |app, cx| {
             app.set_title_menu_bar(title_menu_bar);
             app.start_shell_environment_preload(cx);
+            app.start_system_tray(cx);
         });
         let shutdown_subscription =
             cx.subscribe(&app, |this, _, event: &AppLifecycleEvent, cx| match event {

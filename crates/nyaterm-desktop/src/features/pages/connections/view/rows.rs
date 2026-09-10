@@ -504,6 +504,11 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
     let menu_id = connection.id.clone();
     let kind = connection.kind_label();
     let icon_def = resolve_connection_icon(connection.icon.as_deref(), kind);
+    let custom_icon = connection
+        .icon
+        .as_ref()
+        .and_then(|id| snapshot.custom_icons.get(id))
+        .cloned();
     let details_rows: Arc<[ConnectionDetailRow]> =
         connection_detail_rows(&connection, &snapshot.connections_by_id).into();
     let drop_position = snapshot
@@ -675,7 +680,11 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                     // Match Tauri's `pr-14`: at maximum horizontal scroll the
                     // final glyph can move clear of the viewport-fixed actions.
                     .pr(px(CONNECTION_ACTION_CLEARANCE_PX))
-                    .child(connection_type_icon(palette, icon_def, selected, 16.))
+                    .child(if let Some(image) = custom_icon {
+                        gpui::img(image).size(px(16.)).into_any_element()
+                    } else {
+                        connection_type_icon(palette, icon_def, selected, 16.).into_any_element()
+                    })
                     .child(
                         div()
                             .text_size(px(12.))

@@ -10,7 +10,28 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let clipboard = cx.read_from_clipboard();
+        if let Some(clipboard) = clipboard.as_ref() {
+            if let Some(paths) = clipboard.entries().iter().find_map(|entry| match entry {
+                gpui::ClipboardEntry::ExternalPaths(paths) => Some(paths),
+                _ => None,
+            }) {
+                if let Some(id) = self.session.active_id_owned() {
+                    self.handle_terminal_external_file_drop(id, paths.paths().to_vec(), cx);
+                }
+                return;
+            }
+            if self.settings.summary().terminal_paste_image_as_path
+                && let Some(image) = clipboard.entries().iter().find_map(|entry| match entry {
+                    gpui::ClipboardEntry::Image(image) => Some(image.clone()),
+                    _ => None,
+                })
+            {
+                self.paste_clipboard_image(image, cx);
+                return;
+            }
+        }
+        let Some(text) = clipboard.and_then(|item| item.text()) else {
             self.shell
                 .set_status("clipboard does not contain text".to_string());
             cx.notify();

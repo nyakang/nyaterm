@@ -58,6 +58,7 @@ impl SftpFileEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpFileProperties {
+    pub symlink_target: Option<String>,
     pub name: String,
     pub path: String,
     pub file_type: SftpFileType,
@@ -144,6 +145,7 @@ impl From<&str> for RemoteFilePath {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SftpAttributeUpdate {
+    pub symlink_target: Option<String>,
     pub mode: Option<u32>,
     pub owner: Option<String>,
     pub group: Option<String>,
@@ -225,6 +227,19 @@ impl SftpTransferControl {
         Ok(())
     }
 
+    pub(crate) async fn until_cancelled<T>(
+        &self,
+        operation: impl std::future::Future<Output = T>,
+    ) -> anyhow::Result<T> {
+        self.check_cancelled()?;
+        tokio::select! {
+            result = operation => Ok(result),
+            _ = async {
+                while !self.is_cancelled() { tokio::time::sleep(Duration::from_millis(25)).await; }
+            } => Err(anyhow::anyhow!(SFTP_TRANSFER_CANCELLED)),
+        }
+    }
+
     pub(crate) async fn wait_if_paused(&self) -> anyhow::Result<()> {
         self.check_cancelled()?;
         while self.is_paused() {
@@ -232,5 +247,30 @@ impl SftpTransferControl {
             self.check_cancelled()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::SftpTransferControl;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn cancelling_wakes_an_inflight_request_without_waiting_for_network_timeout() {
+        let control = SftpTransferControl::new();
+        let cancel = control.clone();
+        let task =
+            tokio::spawn(
+                async move { control.until_cancelled(std::future::pending::<()>()).await },
+            );
+        tokio::task::yield_now().await;
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
     }
 }

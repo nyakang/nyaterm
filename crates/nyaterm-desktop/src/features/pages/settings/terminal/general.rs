@@ -95,14 +95,7 @@ impl SettingsPanel {
                         palette,
                         t!("settings.hardwareAcceleration"),
                         Some(SharedString::from(t!("settings.hardwareAccelerationDesc"))),
-                        settings_switch(
-                            palette,
-                            "terminal-hardware-acceleration",
-                            self.settings.summary().terminal_hardware_acceleration,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_terminal_hardware_acceleration(cx);
-                            }),
-                        ),
+                        div().text_xs().child(t!("settings.nativeGpuRenderer")),
                     ))
                     .child(settings_form_row(
                         palette,

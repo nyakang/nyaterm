@@ -383,7 +383,8 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let pending_session_start = self.session.start_has_pending();
+        let pending_session_start =
+            self.session.start_has_pending() || self.remote_desktop.restore_pending.is_some();
         let should_pump = !self.session.restore_is_complete()
             && self
                 .stores
@@ -404,7 +405,7 @@ impl NyaTermApp {
         if self.session.restore_is_complete() {
             return;
         }
-        if self.session.start_has_pending() {
+        if self.session.start_has_pending() || self.remote_desktop.restore_pending.is_some() {
             return;
         }
         let Some(tab) = self
@@ -522,6 +523,7 @@ impl NyaTermApp {
             {
                 let session_id = nyaterm_core::uuid();
                 let config = RdpSessionConfig {
+                    relay: None,
                     name: connection.name.clone(),
                     host: host.clone(),
                     port: *port,
@@ -568,7 +570,10 @@ impl NyaTermApp {
                 if self.session.active_id().is_none() {
                     self.activate_session_id(&session_id, cx);
                 }
-                return false;
+                self.remote_desktop.restore_pending = Some(session_id.clone());
+                self.retry_rdp_runtime(&session_id, cx);
+                self.settle_remote_desktop_restore(cx);
+                return true;
             }
             if let nyaterm_core::ConnectionType::Vnc {
                 host,
@@ -583,6 +588,7 @@ impl NyaTermApp {
             {
                 let session_id = nyaterm_core::uuid();
                 let config = VncSessionConfig {
+                    relay: None,
                     name: connection.name.clone(),
                     host: host.clone(),
                     port: *port,
@@ -627,7 +633,10 @@ impl NyaTermApp {
                 if self.session.active_id().is_none() {
                     self.activate_session_id(&session_id, cx);
                 }
-                return false;
+                self.remote_desktop.restore_pending = Some(session_id.clone());
+                self.retry_rdp_runtime(&session_id, cx);
+                self.settle_remote_desktop_restore(cx);
+                return true;
             }
             self.start_saved_connection_with_options(
                 connection,

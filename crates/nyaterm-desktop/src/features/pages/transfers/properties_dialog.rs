@@ -58,6 +58,17 @@ impl NyaTermApp {
                 cx,
             )
             .into_any_element();
+        let symlink = properties
+            .as_ref()
+            .is_some_and(|properties| properties.file_type == SftpFileType::Symlink);
+        let link_input = self
+            .text_input_box(
+                "transfer.properties.symlink-target",
+                &state.symlink_target_value,
+                TextInputSetup::placeholder(t!("fileExplorer.symlinkTarget")),
+                cx,
+            )
+            .into_any_element();
         let app = cx.weak_entity();
 
         div()
@@ -66,6 +77,13 @@ impl NyaTermApp {
             .overflow_y_scrollbar()
             .when_some(properties, |this, properties| {
                 this.child(properties_summary(palette, &state, &properties))
+                    .when(symlink, |this| {
+                        this.child(property_input(
+                            palette,
+                            t!("fileExplorer.symlinkTarget"),
+                            link_input,
+                        ))
+                    })
                     .when(editable, |this| {
                         this.child(
                             div()
@@ -82,6 +100,7 @@ impl NyaTermApp {
                     .child(
                         div()
                             .flex()
+                            .when(symlink, |this| this.hidden())
                             .flex_col()
                             .gap_3()
                             .child(property_input(

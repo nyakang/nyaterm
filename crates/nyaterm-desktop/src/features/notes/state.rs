@@ -348,6 +348,10 @@ impl NotesFeatureState {
         true
     }
 
+    pub(in crate::features) fn has_open_editor_windows(&self) -> bool {
+        !self.editor_windows.is_empty() || !self.pending_editor_windows.is_empty()
+    }
+
     pub fn editor_window(&self, note_id: &str) -> Option<NyaWindowHandle> {
         self.editor_windows.get(note_id).copied()
     }

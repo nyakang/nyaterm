@@ -57,7 +57,7 @@ impl NyaTermApp {
             |this, event, cx| match event.outcome {
                 Ok(sessions) => {
                     this.connection_state.clear_list_runtime_state();
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.shell
                         .set_status(t!("savedConnections.clearAllSuccess").to_string());
                     this.settings
@@ -154,7 +154,7 @@ impl NyaTermApp {
                 Ok(sessions) => {
                     this.connection_state
                         .remove_list_connection_references(&connection_id);
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.shell.set_status(format!("deleted connection {label}"));
                     cx.notify();
                 }
@@ -241,7 +241,7 @@ impl NyaTermApp {
                 Ok(sessions) => {
                     this.connection_state
                         .remove_list_group_references(&group_id);
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.shell
                         .set_status(format!("deleted connection group {label}"));
                     cx.notify();
@@ -447,7 +447,7 @@ impl NyaTermApp {
                         this.connection_state
                             .remove_list_connection_references(&connection.id);
                     }
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.shell
                         .set_status(format!("deleted {} connection(s)", selected.len()));
                     cx.notify();
@@ -481,6 +481,7 @@ mod tests {
 
     fn saved_connection(id: &str) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: id.to_string(),
             config: ConnectionType::LocalTerminal {

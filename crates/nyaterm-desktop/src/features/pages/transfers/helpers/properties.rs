@@ -91,6 +91,7 @@ pub(in crate::features::pages::transfers) fn transfer_properties_state_from_entr
         .map(format_permissions_octal)
         .unwrap_or_else(|| "0644".to_string());
     TransferPropertiesState {
+        symlink_target_value: String::new(),
         session_id,
         owner_value: String::new(),
         group_value: String::new(),

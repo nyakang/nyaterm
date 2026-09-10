@@ -1,6 +1,6 @@
 use gpui::{
-    App, ClickEvent, IntoElement, Pixels, RenderOnce, SharedString, Window,
-    prelude::FluentBuilder as _,
+    AnyElement, App, ClickEvent, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
+    Window, prelude::FluentBuilder as _,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Disableable, Icon, Selectable, Sizable};
@@ -19,6 +19,7 @@ pub enum NyaButtonVariant {
 pub struct NyaButton {
     id: SharedString,
     label: SharedString,
+    content: Option<AnyElement>,
     variant: NyaButtonVariant,
     small: bool,
     compact: bool,
@@ -34,6 +35,7 @@ impl NyaButton {
         Self {
             id: id.into(),
             label: label.into(),
+            content: None,
             variant: NyaButtonVariant::Secondary,
             small: false,
             compact: false,
@@ -43,6 +45,11 @@ impl NyaButton {
             tooltip: None,
             on_click: None,
         }
+    }
+
+    pub fn content(mut self, content: impl IntoElement) -> Self {
+        self.content = Some(content.into_any_element());
+        self
     }
 
     pub fn variant(mut self, variant: NyaButtonVariant) -> Self {
@@ -92,6 +99,9 @@ impl NyaButton {
 impl RenderOnce for NyaButton {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let mut button = Button::new(self.id).label(self.label).loading(self.loading);
+        if let Some(content) = self.content {
+            button = button.child(content);
+        }
         if self.small {
             button = button.small();
         }

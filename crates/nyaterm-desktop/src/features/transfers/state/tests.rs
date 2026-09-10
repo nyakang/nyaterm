@@ -301,6 +301,7 @@ fn browser_navigation_clears_the_rename_click_candidate() {
 
 fn file_properties(path: &str) -> SftpFileProperties {
     SftpFileProperties {
+        symlink_target: None,
         name: path.rsplit('/').next().unwrap_or(path).to_string(),
         path: path.to_string(),
         file_type: SftpFileType::File,
@@ -1136,6 +1137,7 @@ fn transfer_properties_ignore_stale_results_and_close_for_the_owner_session() {
     let cx = TestAppContext::single();
     let mut transfer = transfer_state(&cx);
     transfer.open_properties_dialog(TransferPropertiesState {
+        symlink_target_value: String::new(),
         session_id: Some("session-a".to_string()),
         entry: file_entry("/srv/file.txt"),
         properties: None,
@@ -1201,6 +1203,7 @@ fn transfer_properties_ignore_stale_results_and_close_for_the_owner_session() {
     assert!(transfer.properties_dialog().is_none());
 
     transfer.open_properties_dialog(TransferPropertiesState {
+        symlink_target_value: String::new(),
         session_id: Some("session-a".to_string()),
         entry: file_entry("/srv/file.txt"),
         properties: Some(file_properties("/srv/file.txt")),

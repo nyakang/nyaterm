@@ -38,6 +38,7 @@ fn closed_port() -> u16 {
 
 fn config(port: u16) -> VncSessionConfig {
     VncSessionConfig {
+        relay: None,
         name: "manager".to_string(),
         host: "127.0.0.1".to_string(),
         port,

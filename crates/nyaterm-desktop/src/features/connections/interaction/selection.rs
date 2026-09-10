@@ -74,7 +74,7 @@ impl NyaTermApp {
             }),
             move |this, event, cx| match event.outcome {
                 Ok(sessions) => {
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     this.connection_state.clear_list_selection();
                     this.shell
                         .set_status(format!("copied {count} saved connection(s)"));

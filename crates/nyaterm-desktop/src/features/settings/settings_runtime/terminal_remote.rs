@@ -15,14 +15,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn toggle_terminal_hardware_acceleration(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings.toggle_terminal_hardware_acceleration();
-        self.save_terminal_settings(cx);
-    }
-
     pub(in crate::features) fn toggle_terminal_low_latency_mode(&mut self, cx: &mut Context<Self>) {
         let low_latency_mode = self.settings.toggle_terminal_low_latency_mode();
         self.terminal.invalidate_command_suggestion_search();

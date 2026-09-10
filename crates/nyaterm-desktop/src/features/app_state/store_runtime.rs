@@ -27,6 +27,10 @@ struct ShutdownSessionSnapshot {
 
 impl NyaTermApp {
     pub(crate) fn shutdown_blocking_jobs(&mut self) {
+        self.update.download_cancel.cancel();
+        self.remote_desktop.routes.clear();
+        self.remote_desktop.prepared_routes.clear();
+        self.shell.system_tray = None;
         self.shutdown_remote_desktop_workers();
         self.session.shutdown_workers();
         self.terminal.shutdown_workers();

@@ -24,7 +24,7 @@ use nyaterm_transport::{
 
 use super::super::NativeHostKeyVerifier;
 use super::PendingSessionStartRegistration;
-use crate::features::formatting::{non_empty_string, parse_telnet_enter_mode, split_shell_args};
+use crate::features::formatting::{non_empty_string, parse_telnet_enter_mode};
 use crate::features::{
     NyaTermApp, runtime_jobs::SessionStartSuccess, runtime_jobs::submit_session_start_job,
     session::AgentPromptBroker, session::CredentialPromptBroker, session::HostKeyPromptBroker,
@@ -34,16 +34,28 @@ use crate::models::SessionLaunchConfig;
 
 #[derive(Clone)]
 pub(in crate::features) struct SshSessionConfigBuildContext {
+    pub attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     pub(in crate::features) store: StoreBlockingClient,
     pub(in crate::features) host_key_policy: String,
     pub(in crate::features) x11_display: String,
     pub(in crate::features) default_encoding: String,
     pub(in crate::features) keep_alive_interval_secs: u32,
+    pub(in crate::features) keep_alive_mode:
+        nyaterm_core::terminal::connection_input::KeepaliveMode,
     pub(in crate::features) terminal_shell_integration: bool,
     pub(in crate::features) host_key_prompts: Arc<HostKeyPromptBroker>,
     pub(in crate::features) credential_prompts: Arc<CredentialPromptBroker>,
     pub(in crate::features) agent_prompts: Arc<AgentPromptBroker>,
     pub(in crate::features) otp_provider: Arc<NativeOtpProvider>,
+}
+
+impl SshSessionConfigBuildContext {
+    pub(in crate::features) fn build_config(
+        &self,
+        connection: &SavedConnection,
+    ) -> Result<SshSessionConfig, String> {
+        build_ssh_session_config_with_context(connection, &mut Vec::new(), self)
+    }
 }
 
 /// Loads stored SSH keys only when the transport broker needs identities.
@@ -254,6 +266,48 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            connection.config,
+            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. }
+        ) && connection
+            .network
+            .as_ref()
+            .is_some_and(|network| network.proxy_id.is_some() || network.proxy_jump_id.is_some())
+            && !self
+                .remote_desktop
+                .prepared_routes
+                .contains_key(&connection.id)
+        {
+            let pending_connection = connection.clone();
+            self.prepare_remote_route(
+                connection.clone(),
+                move |app, result, cx| match result {
+                    Ok(route) => {
+                        app.remote_desktop
+                            .prepared_routes
+                            .insert(pending_connection.id.clone(), route);
+                        app.start_saved_connection_ready(
+                            pending_connection.clone(),
+                            options.clone(),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        app.session
+                            .start_release_saved_connection(&pending_connection.id);
+                        app.shell.set_status(error.clone());
+                        app.notify_operation(
+                            "remote-route",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            error,
+                            cx,
+                        );
+                    }
+                },
+                cx,
+            );
+            return;
+        }
         let connection_id = connection.id.clone();
         let workspace_split = options.workspace_split.clone();
         let tab_placement = options.tab_placement;
@@ -267,11 +321,28 @@ impl NyaTermApp {
                 encoding,
                 ..
             } => {
+                let shell_args =
+                    match nyaterm_core::terminal::connection_input::parse_shell_args(&shell_args) {
+                        Ok(args) => args,
+                        Err(_) => {
+                            let message =
+                                rust_i18n::t!("dialog.shellArgsUnclosedQuote").to_string();
+                            self.shell.set_status(message.clone());
+                            self.notify_operation(
+                                "shell-arguments",
+                                nyaterm_ui::notification::NyaNotificationKind::Error,
+                                message,
+                                cx,
+                            );
+                            cx.notify();
+                            return;
+                        }
+                    };
                 let encoding = resolve_effective_connection_encoding(&encoding, self);
                 let mut config = LocalSessionConfig {
                     name: connection.name.clone(),
                     shell_path: non_empty_string(shell_path),
-                    shell_args: split_shell_args(&shell_args),
+                    shell_args,
                     working_dir: working_dir
                         .filter(|value| !value.trim().is_empty())
                         .map(Into::into),
@@ -390,6 +461,11 @@ impl NyaTermApp {
                 reconnect,
             } => {
                 let config = RdpSessionConfig {
+                    relay: self
+                        .remote_desktop
+                        .prepared_routes
+                        .get(&connection.id)
+                        .map(|route| route.endpoint.clone()),
                     name: connection.name.clone(),
                     host,
                     port,
@@ -414,6 +490,11 @@ impl NyaTermApp {
                 };
                 match self.create_rdp_runtime(config.clone()) {
                     Ok(session_id) => {
+                        if let Some(route) =
+                            self.remote_desktop.prepared_routes.remove(&connection.id)
+                        {
+                            self.remote_desktop.routes.insert(session_id.clone(), route);
+                        }
                         let source_connection_id = Some(connection.id.clone());
                         self.register_session_for_start(
                             &session_id,
@@ -499,6 +580,11 @@ impl NyaTermApp {
                 view_only,
             } => {
                 let config = VncSessionConfig {
+                    relay: self
+                        .remote_desktop
+                        .prepared_routes
+                        .get(&connection.id)
+                        .map(|route| route.endpoint.clone()),
                     name: connection.name.clone(),
                     host,
                     port,
@@ -521,6 +607,11 @@ impl NyaTermApp {
                 };
                 match self.create_vnc_runtime(config.clone()) {
                     Ok(session_id) => {
+                        if let Some(route) =
+                            self.remote_desktop.prepared_routes.remove(&connection.id)
+                        {
+                            self.remote_desktop.routes.insert(session_id.clone(), route);
+                        }
                         self.register_session_for_start(
                             &session_id,
                             crate::models::SessionRuntimeMetadata {
@@ -595,7 +686,54 @@ impl NyaTermApp {
                 cx.notify();
             }
         }
+        self.remote_desktop.prepared_routes.remove(&connection_id);
         self.session.start_release_saved_connection(&connection_id);
+    }
+
+    pub(in crate::features) fn prepare_remote_route(
+        &mut self,
+        connection: SavedConnection,
+        callback: impl Fn(
+            &mut Self,
+            Result<Arc<nyaterm_transport::network_route::NetworkRoute>, String>,
+            &mut Context<Self>,
+        ) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let context = self.ssh_session_config_build_context();
+        let task = self
+            .blocking_jobs
+            .submit_task("remote-desktop-route", move |_| {
+                let (host, port) = match &connection.config {
+                    ConnectionType::Rdp { host, port, .. }
+                    | ConnectionType::Vnc { host, port, .. } => (host.clone(), *port),
+                    _ => return Err("connection is not a remote desktop".into()),
+                };
+                let jump =
+                    load_proxy_jump_config_with_context(&context, &connection, &mut Vec::new())?
+                        .map(|jump| *jump);
+                let proxy = if jump.is_none() {
+                    load_proxy_config_with_context(&context, &connection)?
+                } else {
+                    None
+                };
+                nyaterm_transport::network_route::NetworkRoute::start(
+                    nyaterm_transport::network_route::NetworkRouteConfig {
+                        host,
+                        port,
+                        jump,
+                        proxy,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            });
+        cx.spawn(async move |this, cx| {
+            let result = crate::features::runtime_jobs::await_blocking_job(task)
+                .await
+                .and_then(|result| result);
+            let _ = this.update(cx, |app, cx| callback(app, result, cx));
+        })
+        .detach();
     }
 
     pub(in crate::features) fn begin_background_saved_ssh_start(
@@ -624,7 +762,7 @@ impl NyaTermApp {
             .or(reconnect_session_id.as_deref());
         let desired_geometry =
             self.desired_terminal_resize_geometry_for_session_hint(geometry_session_hint);
-        let build_context = self.ssh_session_config_build_context();
+        let mut build_context = self.ssh_session_config_build_context();
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
@@ -652,6 +790,17 @@ impl NyaTermApp {
 
         let session_manager = self.session.manager_handle();
         let session_start_tx = self.session.start.sender();
+        build_context.attempt = self.session.start.attempt(&request_id);
+        build_context.host_key_prompts = Arc::new(
+            build_context
+                .host_key_prompts
+                .for_attempt(build_context.attempt.clone()),
+        );
+        build_context.credential_prompts = Arc::new(
+            build_context
+                .credential_prompts
+                .for_attempt(build_context.attempt.clone()),
+        );
         let request_id_for_worker = request_id.clone();
         submit_session_start_job(
             &self.blocking_jobs,
@@ -708,11 +857,15 @@ impl NyaTermApp {
                 self.settings.summary().terminal_keep_alive_interval
             };
         SshSessionConfigBuildContext {
+            attempt: Default::default(),
             store: self.store_blocking_client(),
             host_key_policy: self.settings.summary().host_key_policy.clone(),
             x11_display: self.settings.summary().x11_display.clone(),
             default_encoding: self.settings.summary().interaction_default_encoding.clone(),
             keep_alive_interval_secs,
+            keep_alive_mode: nyaterm_core::terminal::connection_input::KeepaliveMode::parse(
+                &self.settings.summary().terminal_keep_alive_mode,
+            ),
             terminal_shell_integration: self.settings.summary().terminal_zebra_stripes_enabled,
             host_key_prompts: self.session.prompts.host_key_broker(),
             credential_prompts: self.session.prompts.credential_broker(),
@@ -751,18 +904,6 @@ impl NyaTermApp {
             },
             cx,
         );
-    }
-
-    pub(in crate::features) fn build_ssh_session_config(
-        &self,
-        connection: &SavedConnection,
-        visited_proxy_jumps: &mut Vec<String>,
-    ) -> Result<SshSessionConfig, String> {
-        build_ssh_session_config_with_context(
-            connection,
-            visited_proxy_jumps,
-            &self.ssh_session_config_build_context(),
-        )
     }
 
     pub(in crate::features) fn refresh_connection_editor_agent_preview(
@@ -854,6 +995,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
     };
 
     Ok(SshSessionConfig {
+        attempt: context.attempt.clone(),
         name: connection.name.clone(),
         host,
         port,
@@ -903,6 +1045,8 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
         terminal_shell_integration: context.terminal_shell_integration,
         deferred_pty: true,
         keep_alive_interval_secs: context.keep_alive_interval_secs,
+        keep_alive_mode: context.keep_alive_mode,
+        post_login: connection.post_login.clone(),
         cols: 80,
         rows: 24,
         pixel_width: 0,
@@ -1071,6 +1215,7 @@ fn map_ssh_algorithm_preferences(
 
 fn map_sftp_settings(settings: &SftpSettings) -> nyaterm_transport::SftpSettings {
     nyaterm_transport::SftpSettings {
+        pipeline_depth: settings.pipeline_depth,
         enabled: settings.enabled,
         cwd_follow_mode: match settings.cwd_follow_mode {
             SftpCwdFollowMode::Off => nyaterm_transport::SftpCwdFollowMode::Off,
@@ -1231,12 +1376,14 @@ mod tests {
     fn test_ssh_build_context(root: &Path) -> SshSessionConfigBuildContext {
         let store = blocking_test_store(root);
         SshSessionConfigBuildContext {
+            attempt: Default::default(),
             store: store.clone(),
             host_key_policy: "accept".to_string(),
             x11_display: String::new(),
             default_encoding: "UTF-8".to_string(),
             terminal_shell_integration: true,
             keep_alive_interval_secs: 30,
+            keep_alive_mode: Default::default(),
             host_key_prompts: Arc::new(HostKeyPromptBroker::default()),
             credential_prompts: Arc::new(CredentialPromptBroker::default()),
             agent_prompts: Arc::new(AgentPromptBroker::default()),
@@ -1337,6 +1484,7 @@ mod tests {
         let mut context = test_ssh_build_context(dir.path());
         context.keep_alive_interval_secs = 45;
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "conn-1".to_string(),
             name: "SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -1386,6 +1534,7 @@ mod tests {
         let mut context = test_ssh_build_context(dir.path());
         context.default_encoding = "GB18030".to_string();
         let mut connection = SavedConnection {
+            extensions: Default::default(),
             id: "conn-1".to_string(),
             name: "SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -1418,6 +1567,8 @@ mod tests {
             ssh_profile: SshProfile::NetworkDevice,
             terminal_type: None,
             sftp: SftpSettings {
+                pipeline_depth: None,
+                extra: Default::default(),
                 enabled: true,
                 cwd_follow_mode: SftpCwdFollowMode::RcFile,
                 shell_detection_timeout_ms: 5000,

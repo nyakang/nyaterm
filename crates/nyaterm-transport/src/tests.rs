@@ -2121,3 +2121,36 @@ fn global_close_releases_full_producer_and_blocking_consumer() {
     });
     assert!(consumer_queue.drain(1).events.is_empty());
 }
+
+#[test]
+fn ssh_keepalive_policy_reaches_the_client_configuration() {
+    use nyaterm_core::terminal::connection_input::KeepaliveMode;
+    for (mode, expected) in [
+        (KeepaliveMode::Strict, russh::client::KeepaliveMode::Strict),
+        (
+            KeepaliveMode::Compatible,
+            russh::client::KeepaliveMode::Compatible,
+        ),
+    ] {
+        let config = SshSessionConfig {
+            keep_alive_mode: mode,
+            keep_alive_interval_secs: 12,
+            ..Default::default()
+        };
+        let client = ssh_client_config(&config).unwrap();
+        assert_eq!(client.keepalive_mode, expected);
+        assert_eq!(
+            client.keepalive_interval,
+            Some(std::time::Duration::from_secs(12))
+        );
+    }
+    let disabled = SshSessionConfig {
+        keep_alive_mode: KeepaliveMode::Disabled,
+        keep_alive_interval_secs: 12,
+        ..Default::default()
+    };
+    assert_eq!(
+        ssh_client_config(&disabled).unwrap().keepalive_interval,
+        None
+    );
+}

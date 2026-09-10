@@ -1656,6 +1656,7 @@ fn saved_connection(
     sort_order: i32,
 ) -> SavedConnection {
     SavedConnection {
+        extensions: Default::default(),
         id: id.to_string(),
         name: name.to_string(),
         config: ConnectionType::LocalTerminal {
@@ -1749,6 +1750,8 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         sftp_enabled: true,
         sftp_cwd_follow_mode: "shell_integration".to_string(),
         sftp_shell_detection_timeout_ms: "3000".to_string(),
+        sftp_pipeline_depth: None,
+        sftp_extra: Default::default(),
         sftp_filename_encoding: "terminal".to_string(),
         ssh_algorithm_mode: "compatible".to_string(),
         ssh_algorithm_kex: Vec::new(),

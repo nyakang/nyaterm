@@ -19,14 +19,6 @@ impl NyaTermApp {
         self.save_keyword_highlights(cx);
     }
 
-    pub(in crate::features) fn toggle_keyword_highlights_wrapped(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings.toggle_keyword_highlights_wrapped();
-        self.save_keyword_highlights(cx);
-    }
-
     fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
         self.invalidate_paint_theme_caches();
         if self.defer_settings_persistence(cx) {

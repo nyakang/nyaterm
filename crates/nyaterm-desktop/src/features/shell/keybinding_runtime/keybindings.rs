@@ -63,8 +63,15 @@ impl NyaTermApp {
         if let Some(conflict) = self.keybinding_conflict_label(&keys, shortcut_id.as_str()) {
             self.settings.begin_keybinding_recording(shortcut_id);
             self.settings.set_pending_keybinding(Some(binding));
-            self.shell
-                .set_status(format!("shortcut conflicts with {conflict}"));
+            let message =
+                rust_i18n::t!("settings.shortcutConflictMessage", shortcut = conflict).to_string();
+            self.shell.set_status(message.clone());
+            self.notify_operation(
+                "shortcut-conflict",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                message,
+                cx,
+            );
             cx.notify();
             return;
         }

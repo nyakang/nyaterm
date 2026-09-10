@@ -84,7 +84,11 @@ impl NyaTermApp {
         );
 
         let panel = self.connection_panel.clone();
-        if panel.read(cx).snapshot_key() == Some(&key) {
+        if panel.read(cx).snapshot_key() == Some(&key)
+            && panel
+                .read(cx)
+                .icon_images_are_current(&self.connection_state.custom_icons.images)
+        {
             return;
         }
 
@@ -111,6 +115,7 @@ impl NyaTermApp {
             && self.connection_state.active_group_editor_draft().is_none();
 
         ConnectionListSnapshot {
+            custom_icons: self.connection_state.custom_icons.images.clone(),
             chrome: key.chrome(),
             rows: model.rows,
             widest_row: model.widest_row,

@@ -698,18 +698,34 @@ async fn run_generation(
     mailbox: Arc<WorkerMailbox>,
     close_requested: &AtomicBool,
 ) -> Result<(), VncError> {
-    let stream = timeout(
-        CONNECT_TIMEOUT,
-        TcpStream::connect((config.host.as_str(), config.port)),
-    )
-    .await
-    .map_err(|_| VncError::new(VncErrorKind::Transport, "VNC connection timed out"))?
-    .map_err(|error| {
-        VncError::new(
-            VncErrorKind::Transport,
-            format!("Unable to connect to the VNC server: {error}"),
-        )
-    })?;
+    if let Some(relay) = &config.relay {
+        relay
+            .validate()
+            .map_err(|error| VncError::new(VncErrorKind::Transport, error))?;
+    }
+    let connect = async {
+        if let Some(relay) = &config.relay {
+            TcpStream::connect(relay.address).await
+        } else {
+            TcpStream::connect((config.host.as_str(), config.port)).await
+        }
+    };
+    let mut stream = timeout(CONNECT_TIMEOUT, connect)
+        .await
+        .map_err(|_| VncError::new(VncErrorKind::Transport, "VNC connection timed out"))?
+        .map_err(|error| {
+            VncError::new(
+                VncErrorKind::Transport,
+                format!("Unable to connect to the VNC server: {error}"),
+            )
+        })?;
+    if let Some(relay) = &config.relay {
+        use tokio::io::AsyncWriteExt as _;
+        stream
+            .write_all(relay.token.expose_secret().as_bytes())
+            .await
+            .map_err(|error| VncError::new(VncErrorKind::Transport, error.to_string()))?;
+    }
     output.state(VncSessionState::Authenticating, None)?;
     let auth_password = Zeroizing::new(
         config

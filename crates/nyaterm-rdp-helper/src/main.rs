@@ -588,6 +588,13 @@ fn build_config(
     if clipboard_enabled {
         builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
     }
+    if let Some(relay) = &config.relay {
+        relay.validate().map_err(anyhow::Error::msg)?;
+        builder = builder.with_direct_tcp_proxy(
+            relay.address,
+            relay.token.expose_secret().as_bytes().to_vec(),
+        );
+    }
     let config = builder.build()?;
     Ok((config, clipboard))
 }

@@ -98,6 +98,7 @@ fn prepare_electerm_import(file: ElectermBookmarksFile) -> AppResult<PreparedJso
     }
 
     Ok(PreparedJsonImport {
+        custom_icons: Vec::new(),
         groups,
         passwords: Vec::new(),
         ssh_keys: Vec::new(),
@@ -169,6 +170,7 @@ fn prepare_electerm_bookmark(
     };
 
     Ok(Some(PreparedJsonConnection {
+        saved: None,
         name,
         config: ConnectionType::Ssh {
             host: host.to_string(),

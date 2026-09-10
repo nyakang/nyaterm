@@ -163,6 +163,7 @@ pub(crate) struct TransferNewSymlinkState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransferPropertiesField {
+    SymlinkTarget,
     Mode,
     Owner,
     Group,
@@ -170,6 +171,7 @@ pub(crate) enum TransferPropertiesField {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TransferPropertiesState {
+    pub(crate) symlink_target_value: String,
     pub(crate) session_id: Option<String>,
     pub(crate) entry: SftpFileEntry,
     pub(crate) properties: Option<SftpFileProperties>,

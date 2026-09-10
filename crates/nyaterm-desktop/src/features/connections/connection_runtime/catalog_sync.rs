@@ -13,7 +13,12 @@ impl NyaTermApp {
     /// It is not where the panel snapshot is rebuilt. That happens once per store
     /// reply in `submit_store_request`, after the whole handler body has run, so a
     /// handler that mutates *after* the swap still flushes fresh state.
-    pub(in crate::features) fn apply_loaded_sessions(&mut self, sessions: SessionsConfig) {
+    pub(in crate::features) fn apply_loaded_sessions(
+        &mut self,
+        sessions: SessionsConfig,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_custom_icons(sessions.custom_icons, cx);
         self.connection_state
             .replace_loaded(sessions.connections, sessions.groups);
     }

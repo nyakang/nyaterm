@@ -13,10 +13,16 @@ use nyaterm_remote_desktop::{
 };
 
 pub(in crate::features) struct RemoteDesktopFeatureState {
+    pub(in crate::features) routes:
+        HashMap<String, Arc<nyaterm_transport::network_route::NetworkRoute>>,
+    pub(in crate::features) prepared_routes:
+        HashMap<String, Arc<nyaterm_transport::network_route::NetworkRoute>>,
     pub(super) manager: Arc<RdpSessionManager>,
     pub(super) vnc_manager: Arc<VncSessionManager>,
     pub(super) sessions: HashMap<String, RemoteDesktopSessionState>,
     pub(super) focus: FocusHandle,
+    pub(in crate::features) restore_pending: Option<String>,
+    pub(super) inputs: HashMap<String, gpui::Entity<super::input::RemoteDesktopInput>>,
     pub(super) last_clipboard_poll: Option<Instant>,
     pub(super) metrics_enabled: bool,
     pub(super) metrics_last_report: Instant,
@@ -125,10 +131,14 @@ impl RemoteDesktopFeatureState {
             vnc_wake.signal(ANY_INTEREST);
         }));
         Self {
+            routes: HashMap::new(),
+            prepared_routes: HashMap::new(),
             manager,
             vnc_manager,
             sessions: HashMap::new(),
             focus,
+            restore_pending: None,
+            inputs: HashMap::new(),
             last_clipboard_poll: None,
             metrics_enabled: std::env::var("NYATERM_RDP_METRICS").as_deref() == Ok("1"),
             metrics_last_report: Instant::now(),
@@ -218,6 +228,8 @@ impl RemoteDesktopFeatureState {
     }
 
     pub(in crate::features) fn remove_session(&mut self, session_id: &str) {
+        self.inputs.remove(session_id);
+        self.routes.remove(session_id);
         if let Some(mut session) = self.sessions.remove(session_id) {
             if let Some(texture) = session.texture.take() {
                 self.pending_texture_removals.push(texture);

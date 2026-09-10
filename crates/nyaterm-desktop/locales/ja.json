@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "NyaTerm を表示",
+    "newConnection": "新しい接続",
+    "push": "クラウドへ送信",
+    "pull": "クラウドから取得",
+    "minimizeToTray": "トレイへ最小化",
+    "lock": "ロック",
+    "update": "更新を確認",
+    "quit": "終了",
+    "unavailable": "このデスクトップではトレイに非表示にできません。通常の最小化を行いました。"
+},
+  "documentEditor": {
+    "fold": "カーソル位置を折りたたむ",
+    "unfoldAll": "すべて展開",
+    "find": "検索",
+    "replace": "置換",
+    "replaceAll": "すべて置換",
+    "previous": "前へ",
+    "next": "次へ",
+    "caseSensitive": "大文字と小文字を区別",
+    "wholeWord": "単語単位",
+    "regex": "正規表現",
+    "invalidRegex": "無効な正規表現"
+},
   "about": {
+    "copySupportInfo": "サポート情報をコピー",
+    "supportInfoCopied": "サポート情報をコピーしました",
     "close": "閉じる",
     "description": "SSH 中心の操作とターミナルワークフローを統合したデスクトップクライアント。",
     "issues": "問題を報告",
@@ -318,6 +344,14 @@
   },
 
   "dialog": {
+    "importCustomIcon": "アイコンをインポート",
+    "deleteCustomIcon": "カスタムアイコンを削除",
+    "customIconFailed": "アイコンを読み込みまたは保存できません。2 MiB 以下の有効な画像を使用してください。",
+    "postLoginExternalTitle": "保存されたログインコマンドを実行しますか？",
+    "postLoginExternalMessage": "外部リンクから %{name} を開くと、保存されたログインコマンドが実行されます。",
+    "shellArgsUnclosedQuote": "シェル引数の引用符が閉じていません",
+    "sftpPipelineDepth": "SFTP パイプライン深度",
+    "sftpPipelineAutomatic": "自動",
     "advancedConfig": "詳細設定",
     "algorithmCiphers": "暗号方式",
     "algorithmCiphersTab": "暗号方式",
@@ -796,6 +830,7 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "シンボリックリンクの参照先を入力してください。",
     "addCurrentDirToFavorites": "現在のフォルダーを追加",
     "addToFavorites": "お気に入りに追加",
     "alwaysUpload": "常にアップロード",
@@ -1749,6 +1784,9 @@
   },
 
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "キーワードは自動折り返しをまたいで一致しますが、明示的な改行はまたぎません。",
+    "shortcutConflictMessage": "ショートカットが %{shortcut} と競合しています",
+    "nativeGpuRenderer": "ネイティブ GPU レンダラー",
     "actionLinks": "アクションリンク",
     "actionLinksDesc": "ターミナル出力内のパターン（IP、アーカイブ、host:port、パス）を認識します。Ctrl/Cmd+クリックで既定のコマンドを実行し、Alt+クリックですべてのアクションを表示します。",
     "actionLinksMatcherArchive": "アーカイブファイル",
@@ -2394,6 +2432,8 @@
   },
 
   "sshAuth": {
+    "dockerElevation": "Docker には sudo 認証が必要です。sudo パスワードを入力してください。",
+    "keyRejectedPasswordFallback": "サーバーが鍵を拒否しました。続行するにはパスワードを入力してください。",
     "agentWaitingTitle": "SSH エージェントの承認を待機中",
     "agentFailedTitle": "SSH エージェント認証に失敗しました",
     "agentApprovalWaiting": "ハードウェアキー・PIN・SSH エージェントの要求を承認してください。",
@@ -2644,6 +2684,11 @@
     "unsupportedOption": "一時リンクは直接接続のみサポートします。"
   },
   "terminal": {
+    "uploadingClipboardImage": "クリップボード画像をアップロード中",
+    "clipboardImageFailed": "このセッションにクリップボード画像を貼り付けできません。",
+    "disconnectedStatus": "セッションが切断されました",
+    "reconnectHint": "Enter で再接続 · Ctrl+D で閉じる",
+    "saveSelectionAsQuickCommand": "クイックコマンドとして保存",
     "actionLinkAltClickHint": "Alt+クリック: その他のアクション",
     "actionLinkDefaultBadge": "既定",
     "actionLinkKind_archive": "アーカイブ",
@@ -2796,6 +2841,12 @@
     "waitingFrame": "最初のデスクトップフレームを待機中..."
   },
   "updater": {
+    "saveEditorsFirst": "更新をインストールする前に編集したファイルを保存または閉じてください。",
+    "installFailed": "更新インストーラーを起動できませんでした。",
+    "installAndRestart": "インストールして再起動",
+    "downloadFailed": "ダウンロードに失敗しました。再試行してください。",
+    "downloadUpdate": "更新をダウンロード",
+
     "checking": "更新を確認中...",
     "currentVersion": "現在",
     "downloading": "更新をダウンロード中...",

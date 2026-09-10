@@ -385,6 +385,63 @@ pub(crate) fn run_ssh_command(
     run_ssh_exec_operation(exec_ssh_command(config, command, timeout))
 }
 
+/// Execute a command with a separate stdin payload; secrets never enter argv.
+pub(crate) fn run_ssh_command_with_input(
+    config: SshSessionConfig,
+    multiplex: Option<SshMultiplexHandle>,
+    command: String,
+    input: Option<nyaterm_core::SecretString>,
+    timeout: Duration,
+) -> anyhow::Result<RemoteCommandOutput> {
+    let runtime_owner = multiplex.clone();
+    let operation = async move {
+        config
+            .attempt
+            .until_cancelled(tokio::time::timeout(timeout, async {
+                let (channel, owned) = if let Some(multiplex) = multiplex.as_ref() {
+                    let handle = multiplex.exec_target_handle().await;
+                    let handle = handle.lock().await;
+                    (
+                        open_exec_channel_on_handle(&handle, command.into_bytes()).await?,
+                        None,
+                    )
+                } else {
+                    let (handle, jumps) = open_authenticated_ssh_handle(&config).await?;
+                    let channel =
+                        open_exec_channel_on_handle(&handle, command.into_bytes()).await?;
+                    (channel, Some((handle, jumps)))
+                };
+                if let Some(secret) = input {
+                    let bytes = zeroize::Zeroizing::new(
+                        format!("{}\n", secret.expose_secret()).into_bytes(),
+                    );
+                    channel.data(&bytes[..]).await?;
+                }
+                channel.eof().await?;
+                let output = collect_exec_channel(channel).await;
+                if let Some((handle, jumps)) = owned {
+                    let _ = handle
+                        .disconnect(Disconnect::ByApplication, "command completed", "en")
+                        .await;
+                    for jump in jumps {
+                        let _ = jump
+                            .disconnect(Disconnect::ByApplication, "command completed", "en")
+                            .await;
+                    }
+                }
+                output
+            }))
+            .await
+            .map_err(anyhow::Error::msg)?
+            .map_err(|_| anyhow::anyhow!("remote command timed out"))?
+    };
+    if let Some(multiplex) = runtime_owner.as_ref() {
+        multiplex.block_on(operation)
+    } else {
+        run_ssh_exec_operation(operation)
+    }
+}
+
 pub(crate) async fn exec_ssh_command_with_multiplex(
     multiplex: SshMultiplexHandle,
     command: Vec<u8>,

@@ -232,6 +232,8 @@ impl NyaTermApp {
                 self.settings.summary().terminal_keep_alive_interval
             };
         SshSessionConfig {
+            attempt: Default::default(),
+            post_login: None,
             name: parsed.name,
             host: parsed.host,
             port: parsed.port,
@@ -259,6 +261,9 @@ impl NyaTermApp {
             terminal_shell_integration: self.settings.summary().terminal_zebra_stripes_enabled,
             deferred_pty: true,
             keep_alive_interval_secs,
+            keep_alive_mode: nyaterm_core::terminal::connection_input::KeepaliveMode::parse(
+                &self.settings.summary().terminal_keep_alive_mode,
+            ),
             cols: 80,
             rows: 24,
             pixel_width: 0,

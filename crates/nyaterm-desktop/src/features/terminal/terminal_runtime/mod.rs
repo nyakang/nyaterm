@@ -2,6 +2,7 @@ pub(in crate::features) const TERMINAL_INPUT_LATENCY_WINDOW: std::time::Duration
     std::time::Duration::from_millis(80);
 
 mod buffer;
+mod clipboard_files;
 mod paste;
 mod scroll;
 pub(in crate::features) use scroll::{

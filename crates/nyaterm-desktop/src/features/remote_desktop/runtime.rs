@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 use gpui::{
-    Bounds, ClipboardItem, Context, DevicePixels, Modifiers, Point, Size, Window, point, size,
+    AppContext as _, Bounds, ClipboardItem, Context, DevicePixels, IntoElement as _, Modifiers,
+    Point, Size, Window, point, size,
 };
 use nyaterm_remote_desktop::{
     CertificateDecision, CertificateMatchState, CertificatePromptReason, ClipboardOrigin,
@@ -49,6 +50,134 @@ fn remote_desktop_periodic_delay(pointer_flush_pending: bool) -> Duration {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn settle_remote_desktop_restore(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.remote_desktop.restore_pending.clone() else {
+            return;
+        };
+        if self
+            .remote_desktop
+            .sessions
+            .get(&id)
+            .is_some_and(|session| {
+                matches!(
+                    session.state,
+                    RemoteDesktopViewState::Connecting | RemoteDesktopViewState::Reconnecting
+                )
+            })
+        {
+            return;
+        }
+        self.remote_desktop.restore_pending = None;
+        let Some(window) = self.shell.main_window() else {
+            return;
+        };
+        let app = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.pump_startup_restore_queue_if_ready(window, cx);
+                });
+            });
+        });
+    }
+
+    fn prompt_remote_desktop_password(
+        &mut self,
+        session_id: &str,
+        reset_attempts: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+            session.state = RemoteDesktopViewState::Connecting;
+        }
+        let Some(window) = self.shell.main_window() else {
+            return;
+        };
+        let app = cx.weak_entity();
+        let session_id = session_id.to_string();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    use gpui::{ParentElement as _, Styled as _};
+                    use nyaterm_ui::{NyaDialogWindowExt as _, NyaInput, NyaInputState};
+                    if window.has_active_nya_dialog(cx) {
+                        if let Some(session) = app.remote_desktop.sessions.get_mut(&session_id) {
+                            session.state = RemoteDesktopViewState::Disconnected;
+                        }
+                        app.settle_remote_desktop_restore(cx);
+                        return;
+                    }
+                    let input = cx.new(|cx| NyaInputState::new(cx, "").masked(true));
+                    let render_input = input.clone();
+                    let cancel_input = input.clone();
+                    let cancel_id = session_id.clone();
+                    let focus = input.read(cx).focus_handle();
+                    app.open_form_dialog(
+                        (
+                            rust_i18n::t!("sshAuth.missingPassword").to_string(),
+                            400.,
+                            rust_i18n::t!("common.confirm").to_string(),
+                            move |_, _, _| {
+                                gpui::div()
+                                    .w_full()
+                                    .h(gpui::px(36.))
+                                    .child(NyaInput::new(&render_input))
+                                    .into_any_element()
+                            },
+                            move |app, _, cx| {
+                                let password = input.read(cx).value(cx);
+                                if password.is_empty() {
+                                    return false;
+                                }
+                                input.update(cx, |input, cx| input.clear(cx));
+                                if let Some(metadata) = app.session.metadata_mut(&session_id) {
+                                    match &mut metadata.launch_config {
+                                        crate::models::SessionLaunchConfig::Rdp(config) => {
+                                            config.password = Some(password.into())
+                                        }
+                                        crate::models::SessionLaunchConfig::Vnc(config) => {
+                                            config.password = Some(password.into())
+                                        }
+                                        _ => return true,
+                                    }
+                                } else {
+                                    return true;
+                                }
+                                app.retry_rdp_runtime(&session_id, cx);
+                                app.settle_remote_desktop_restore(cx);
+                                let _ = reset_attempts;
+                                true
+                            },
+                            move |app, cx| {
+                                cancel_input.update(cx, |input, cx| input.clear(cx));
+                                if let Some(session) =
+                                    app.remote_desktop.sessions.get_mut(&cancel_id)
+                                {
+                                    session.state = RemoteDesktopViewState::Disconnected;
+                                }
+                                app.settle_remote_desktop_restore(cx);
+                                cx.notify();
+                            },
+                        ),
+                        window,
+                        cx,
+                    );
+                    window.focus(&focus, cx);
+                });
+            });
+        });
+    }
+
+    pub(in crate::features) fn clear_remote_composition(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = self.remote_desktop.inputs.get(session_id) {
+            input.update(cx, |input, cx| input.clear(cx));
+        }
+    }
+
     pub(in crate::features) fn ensure_rdp_focus_reporting(
         &mut self,
         window: &mut Window,
@@ -120,6 +249,74 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        let route_missing = !self.remote_desktop.routes.contains_key(session_id);
+        if route_missing {
+            let connection = self
+                .session
+                .metadata(session_id)
+                .and_then(|metadata| metadata.source_connection_id.as_ref())
+                .and_then(|id| {
+                    self.connection_state
+                        .connections()
+                        .iter()
+                        .find(|connection| &connection.id == id)
+                })
+                .cloned()
+                .filter(|connection| {
+                    connection.network.as_ref().is_some_and(|network| {
+                        network.proxy_id.is_some() || network.proxy_jump_id.is_some()
+                    })
+                });
+            if let Some(connection) = connection {
+                if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+                    session.state = RemoteDesktopViewState::Connecting;
+                }
+                let session_id = session_id.to_string();
+                self.prepare_remote_route(
+                    connection,
+                    move |app, result, cx| {
+                        if !app.session.has_session(&session_id) {
+                            app.settle_remote_desktop_restore(cx);
+                            return;
+                        }
+                        match result {
+                            Ok(route) => {
+                                if let Some(metadata) = app.session.metadata_mut(&session_id) {
+                                    match &mut metadata.launch_config {
+                                        crate::models::SessionLaunchConfig::Rdp(config) => {
+                                            config.relay = Some(route.endpoint.clone())
+                                        }
+                                        crate::models::SessionLaunchConfig::Vnc(config) => {
+                                            config.relay = Some(route.endpoint.clone())
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                app.remote_desktop.routes.insert(session_id.clone(), route);
+                                app.retry_rdp_runtime(&session_id, cx);
+                            }
+                            Err(error) => {
+                                if let Some(session) =
+                                    app.remote_desktop.sessions.get_mut(&session_id)
+                                {
+                                    session.state = RemoteDesktopViewState::Failed;
+                                }
+                                app.notify_background_operation(
+                                    "remote-route",
+                                    nyaterm_ui::notification::NyaNotificationKind::Error,
+                                    error,
+                                    cx,
+                                );
+                            }
+                        }
+                        app.settle_remote_desktop_restore(cx);
+                        cx.notify();
+                    },
+                    cx,
+                );
+                return;
+            }
+        }
         if self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -167,6 +364,10 @@ impl NyaTermApp {
                 return;
             }
         }
+        if config.password.is_none() {
+            self.prompt_remote_desktop_password(session_id, reset_attempts, cx);
+            return;
+        }
         let reconnect_attempts = if reset_attempts {
             0
         } else {
@@ -180,7 +381,13 @@ impl NyaTermApp {
             .sessions
             .get(session_id)
             .is_some_and(|session| session.dynamic_resize_disabled);
+        let route = self.remote_desktop.routes.remove(session_id);
         let _ = self.close_rdp_runtime(session_id);
+        if let Some(route) = route {
+            self.remote_desktop
+                .routes
+                .insert(session_id.to_string(), route);
+        }
         match self
             .remote_desktop
             .manager
@@ -243,6 +450,12 @@ impl NyaTermApp {
                 return;
             }
         }
+        if config.password.is_none()
+            && config.security.mode != nyaterm_remote_desktop::VncSecurityMode::None
+        {
+            self.prompt_remote_desktop_password(session_id, reset_attempts, cx);
+            return;
+        }
         let reconnect_attempts = if reset_attempts {
             0
         } else {
@@ -251,7 +464,13 @@ impl NyaTermApp {
                 .get(session_id)
                 .map_or(0, |session| session.reconnect_attempts)
         };
+        let route = self.remote_desktop.routes.remove(session_id);
         let _ = self.close_vnc_runtime(session_id);
+        if let Some(route) = route {
+            self.remote_desktop
+                .routes
+                .insert(session_id.to_string(), route);
+        }
         match self
             .remote_desktop
             .vnc_manager
@@ -286,6 +505,9 @@ impl NyaTermApp {
         vnc: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session) = self.remote_desktop.sessions.get_mut(&session_id) {
+            session.state = RemoteDesktopViewState::Connecting;
+        }
         let response_session_id = session_id.clone();
         self.submit_store_request(
             0,
@@ -302,14 +524,18 @@ impl NyaTermApp {
                         this.shell.set_status(format!(
                             "remote desktop reconnect could not load saved password: {error}"
                         ));
+                        if let Some(session) =
+                            this.remote_desktop.sessions.get_mut(&response_session_id)
+                        {
+                            session.state = RemoteDesktopViewState::Failed;
+                        }
+                        this.settle_remote_desktop_restore(cx);
                         cx.notify();
                         return;
                     }
                 };
                 let Some(password) = password else {
-                    this.shell.set_status(
-                        "remote desktop reconnect saved password is missing or locked".to_string(),
-                    );
+                    this.prompt_remote_desktop_password(&response_session_id, reset_attempts, cx);
                     cx.notify();
                     return;
                 };
@@ -508,7 +734,21 @@ impl NyaTermApp {
             }
             self.apply_remote_cursor_batch(&session_id, vnc_drain.cursors, window);
             self.apply_rdp_frame_batch(&session_id, vnc_drain.frames, window);
+            if self
+                .remote_desktop
+                .sessions
+                .get(&session_id)
+                .is_some_and(|session| {
+                    matches!(
+                        session.state,
+                        RemoteDesktopViewState::Failed | RemoteDesktopViewState::Disconnected
+                    )
+                })
+            {
+                self.remote_desktop.routes.remove(&session_id);
+            }
         }
+        self.settle_remote_desktop_restore(cx);
         dirty
     }
 
@@ -598,6 +838,11 @@ impl NyaTermApp {
                         .server_capabilities(session_id),
                 );
                 let state = RemoteDesktopViewState::from(&state);
+                if remote_state_clears_input(&state)
+                    && let Some(input) = self.remote_desktop.inputs.get(session_id)
+                {
+                    input.update(cx, |input, cx| input.clear(cx));
+                }
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     if remote_state_clears_input(&state) {
                         session.keys = Default::default();
@@ -1288,6 +1533,11 @@ impl NyaTermApp {
                     .then(|| self.remote_desktop.manager.server_capabilities(session_id))
                     .flatten();
                 let view_state = rdp_view_state(&state);
+                if remote_state_clears_input(&view_state)
+                    && let Some(input) = self.remote_desktop.inputs.get(session_id)
+                {
+                    input.update(cx, |input, cx| input.clear(cx));
+                }
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     if remote_state_clears_input(&view_state) {
                         session.keys = Default::default();

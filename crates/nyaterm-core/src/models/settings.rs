@@ -366,6 +366,8 @@ impl Default for KeywordHighlightRule {
 pub struct KeywordHighlightConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Legacy Tauri setting retained for round trips. Native highlighting always
+    /// matches soft-wrapped logical lines and stops at actual line breaks.
     #[serde(default)]
     pub across_wrapped_lines: bool,
     /// Per built-in rule enable map (Tauri `keyword_highlight_builtin_rules`).

@@ -544,6 +544,11 @@ impl NyaTermApp {
         let connection = record.connection.clone();
         let asset = connection.asset.as_ref();
         let icon_def = resolve_connection_icon(connection.icon.as_deref(), connection.kind_label());
+        let custom_icon = connection
+            .icon
+            .as_ref()
+            .and_then(|id| self.connection_state.custom_icons.images.get(id))
+            .cloned();
         let values = [
             format_asset_address(&connection, labels),
             format_last_used_ms(connection.last_used_at_ms),
@@ -575,7 +580,11 @@ impl NyaTermApp {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(connection_type_icon(palette, icon_def, false, 18.))
+                    .child(if let Some(image) = custom_icon {
+                        gpui::img(image).size(px(18.)).into_any_element()
+                    } else {
+                        connection_type_icon(palette, icon_def, false, 18.).into_any_element()
+                    })
                     .child(
                         div()
                             .min_w_0()
@@ -771,6 +780,11 @@ impl NyaTermApp {
         let connection = record.connection.clone();
         let asset = connection.asset.as_ref();
         let icon_def = resolve_connection_icon(connection.icon.as_deref(), connection.kind_label());
+        let custom_icon = connection
+            .icon
+            .as_ref()
+            .and_then(|id| self.connection_state.custom_icons.images.get(id))
+            .cloned();
         div()
             .w_full()
             .min_w_0()
@@ -799,7 +813,12 @@ impl NyaTermApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(connection_type_icon(palette, icon_def, false, 18.)),
+                                .child(if let Some(image) = custom_icon {
+                                    gpui::img(image).size(px(18.)).into_any_element()
+                                } else {
+                                    connection_type_icon(palette, icon_def, false, 18.)
+                                        .into_any_element()
+                                }),
                         )
                         .child(
                             div()

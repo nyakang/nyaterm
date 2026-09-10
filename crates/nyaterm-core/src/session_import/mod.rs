@@ -49,6 +49,7 @@ struct ImportedSession {
 }
 
 pub struct PreparedSessionConnection {
+    pub saved: Option<crate::models::sessions::SavedConnection>,
     pub name: String,
     pub config: ConnectionType,
     pub group_path: Option<Vec<String>>,
@@ -59,6 +60,7 @@ pub struct PreparedSessionConnection {
 }
 
 pub struct PreparedSessionImport {
+    pub custom_icons: Vec<crate::models::sessions::ConnectionCustomIcon>,
     pub groups: Vec<Vec<String>>,
     pub passwords: Vec<SavedPassword>,
     pub ssh_keys: Vec<SshKey>,
@@ -180,6 +182,7 @@ fn prepare_legacy_sessions(imported: Vec<ImportedSession>) -> PreparedSessionImp
     let connections = imported
         .into_iter()
         .map(|session| PreparedSessionConnection {
+            saved: None,
             name: session.name,
             config: ConnectionType::Ssh {
                 host: session.host,
@@ -211,6 +214,7 @@ fn prepare_legacy_sessions(imported: Vec<ImportedSession>) -> PreparedSessionImp
         .collect();
 
     PreparedSessionImport {
+        custom_icons: Vec::new(),
         groups: Vec::new(),
         passwords: Vec::new(),
         ssh_keys: Vec::new(),

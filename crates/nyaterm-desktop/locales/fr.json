@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "Afficher NyaTerm",
+    "newConnection": "Nouvelle connexion",
+    "push": "Envoyer vers le cloud",
+    "pull": "Récupérer du cloud",
+    "minimizeToTray": "Réduire dans la zone de notification",
+    "lock": "Verrouiller",
+    "update": "Rechercher des mises à jour",
+    "quit": "Quitter",
+    "unavailable": "Le masquage dans la zone de notification est indisponible. La fenêtre a été réduite normalement."
+},
+  "documentEditor": {
+    "fold": "Replier au curseur",
+    "unfoldAll": "Tout déplier",
+    "find": "Rechercher",
+    "replace": "Remplacer",
+    "replaceAll": "Tout remplacer",
+    "previous": "Précédent",
+    "next": "Suivant",
+    "caseSensitive": "Respecter la casse",
+    "wholeWord": "Mot entier",
+    "regex": "Expression régulière",
+    "invalidRegex": "Expression régulière invalide"
+},
   "about": {
+    "copySupportInfo": "Copier les informations de support",
+    "supportInfoCopied": "Informations de support copiées",
     "close": "Fermer",
     "description": "Un client de bureau pour les opérations centrées sur SSH et les flux de travail de terminal mixtes.",
     "issues": "Problèmes",
@@ -317,6 +343,14 @@
     "usernameRegexPlaceholder": "Expression régulière pour les invites de nom d'utilisateur"
   },
   "dialog": {
+    "importCustomIcon": "Importer une icône",
+    "deleteCustomIcon": "Supprimer l’icône personnalisée",
+    "customIconFailed": "Impossible de charger ou enregistrer l’icône. Utilisez une image valide de 2 Mio maximum.",
+    "postLoginExternalTitle": "Exécuter la commande de connexion enregistrée ?",
+    "postLoginExternalMessage": "Ouvrir %{name} depuis un lien externe exécutera sa commande de connexion enregistrée.",
+    "shellArgsUnclosedQuote": "Guillemet non fermé dans les arguments du shell",
+    "sftpPipelineDepth": "Profondeur du pipeline SFTP",
+    "sftpPipelineAutomatic": "Automatique",
     "advancedConfig": "Avancé",
     "algorithmCiphers": "Chiffrements",
     "algorithmCiphersTab": "Chiffrements",
@@ -793,6 +827,7 @@
     "zoomOut": "Zoom arrière"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "La cible du lien symbolique est requise.",
     "addCurrentDirToFavorites": "Ajouter le dossier actuel",
     "addToFavorites": "Ajouter aux favoris",
     "alwaysUpload": "Toujours téléverser",
@@ -1743,6 +1778,9 @@
     "unread": "Non lu"
   },
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "Les mots-clés sont reconnus à travers les retours visuels automatiques, mais pas à travers les sauts de ligne explicites.",
+    "shortcutConflictMessage": "Le raccourci entre en conflit avec %{shortcut}",
+    "nativeGpuRenderer": "Rendu GPU natif",
     "actionLinks": "Liens d'action",
     "actionLinksDesc": "Reconnaître des motifs (IP, archive, hôte:port, chemin) dans la sortie du terminal. Ctrl/Cmd+clic pour exécuter la commande par défaut. Alt+clic pour afficher toutes les actions.",
     "actionLinksMatcherArchive": "Fichier d'archive",
@@ -2386,6 +2424,8 @@
     "x11DisplayPlaceholder": "Windows : localhost:0 / Linux/macOS : :0"
   },
   "sshAuth": {
+    "dockerElevation": "Docker nécessite une autorisation sudo. Saisissez votre mot de passe sudo.",
+    "keyRejectedPasswordFallback": "Le serveur a refusé la clé. Saisissez un mot de passe pour continuer.",
     "agentWaitingTitle": "En attente de l'autorisation de l'agent SSH",
     "agentFailedTitle": "Échec de l'authentification de l'agent SSH",
     "agentApprovalWaiting": "Approuvez la clé matérielle, le code PIN ou la demande de l'agent SSH.",
@@ -2635,6 +2675,11 @@
     "unsupportedOption": "Les liens temporaires ne prennent en charge que les connexions directes."
   },
   "terminal": {
+    "uploadingClipboardImage": "Envoi de l’image du presse-papiers",
+    "clipboardImageFailed": "Impossible de coller l’image du presse-papiers dans cette session.",
+    "disconnectedStatus": "Session déconnectée",
+    "reconnectHint": "Entrée : reconnecter · Ctrl+D : fermer",
+    "saveSelectionAsQuickCommand": "Enregistrer comme commande rapide",
     "actionLinkAltClickHint": "Alt+clic : plus d'actions",
     "actionLinkDefaultBadge": "par défaut",
     "actionLinkKind_archive": "Archive",
@@ -2787,6 +2832,12 @@
     "waitingFrame": "En attente de la première trame du bureau…"
   },
   "updater": {
+    "saveEditorsFirst": "Enregistrez ou fermez les fichiers modifiés avant la mise à jour.",
+    "installFailed": "Impossible de démarrer le programme de mise à jour.",
+    "installAndRestart": "Installer et redémarrer",
+    "downloadFailed": "Échec du téléchargement. Réessayez.",
+    "downloadUpdate": "Télécharger la mise à jour",
+
     "checking": "Recherche de mises à jour…",
     "currentVersion": "Actuelle",
     "downloading": "Téléchargement de la mise à jour…",

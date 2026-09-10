@@ -1,3 +1,4 @@
+mod input;
 mod keyboard_capture;
 mod runtime;
 mod state;

@@ -33,6 +33,7 @@ pub(in crate::features) enum NewSessionMenuAnchor {
 }
 
 pub(in crate::features) struct ShellFeatureState {
+    pub(in crate::features) system_tray: Option<super::tray::SystemTray>,
     /// Application-wide transient status shown by shell chrome and terminal overlays.
     status: String,
     /// GPUI event-pump, repaint, and shell-persistence scheduling bookkeeping.
@@ -196,6 +197,7 @@ impl ShellFeatureState {
     pub(in crate::features) fn new(init: ShellFeatureInit) -> Self {
         Self {
             status: init.status,
+            system_tray: None,
             runtime: ShellRuntimeState::default(),
             bottom_panel: ShellBottomPanelState {
                 mode: init.bottom_panel_mode,

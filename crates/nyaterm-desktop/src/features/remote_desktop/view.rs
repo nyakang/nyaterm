@@ -166,6 +166,23 @@ impl NyaTermApp {
         let cursor_texture = session.cursor_texture;
         let app = cx.entity();
         let surface_focus = self.remote_desktop.focus().clone();
+        let input = self
+            .remote_desktop
+            .inputs
+            .entry(session_id.clone())
+            .or_insert_with(|| {
+                cx.new(|_| {
+                    super::input::RemoteDesktopInput::new(
+                        app.downgrade(),
+                        session_id.clone(),
+                        surface_focus.clone(),
+                    )
+                })
+            })
+            .clone();
+        let input_down = input.clone();
+        let input_up = input.clone();
+
         let hide_native_cursor = remote_cursor_hides_native(cursor_visible, cursor_shape.as_ref());
         let remote_cursor_texture_visible = cursor_visible
             && cursor_texture.is_some()
@@ -247,6 +264,10 @@ impl NyaTermApp {
             })
             .track_focus(&focus)
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if input_down.update(cx, |input, _| input.consumes_key(event)) {
+                    return;
+                }
+
                 if this.send_rdp_key_down(
                     &key_down_id,
                     &event.keystroke.key,
@@ -271,6 +292,10 @@ impl NyaTermApp {
                 }),
             )
             .on_key_up(cx.listener(move |this, event: &KeyUpEvent, _, cx| {
+                if input_up.update(cx, |input, _| input.consumes_key_up(&event.keystroke.key)) {
+                    return;
+                }
+
                 if this.send_rdp_key_up(&key_up_id, &event.keystroke.key) {
                     cx.stop_propagation();
                     this.mark_user_activity();
@@ -489,6 +514,7 @@ impl NyaTermApp {
                 }),
             )
             .child(canvas)
+            .child(input)
             .into_any_element()
     }
 

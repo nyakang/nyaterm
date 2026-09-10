@@ -1,3 +1,5 @@
+pub mod connection_attempt;
+pub mod network_route;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
@@ -219,6 +221,7 @@ type ForwardedTcpIpRegistry = Arc<tokio::sync::Mutex<ForwardedTcpIpDispatch>>;
 type X11Registry = Arc<tokio::sync::Mutex<Option<X11Registration>>>;
 
 struct SshMultiplexInner {
+    docker_elevation: Arc<Mutex<Option<docker::DockerElevation>>>,
     runtime: Arc<tokio::runtime::Runtime>,
     target: SharedSshHandle,
     jumps: Vec<SharedSshHandle>,
@@ -512,6 +515,7 @@ pub fn open_ssh_multiplex_handle(config: SshSessionConfig) -> anyhow::Result<Ssh
     };
     Ok(SshMultiplexHandle {
         inner: Arc::new(SshMultiplexInner {
+            docker_elevation: Default::default(),
             runtime,
             target: Arc::new(tokio::sync::Mutex::new(target)),
             jumps: jumps
@@ -692,6 +696,8 @@ enum SshCommand {
 }
 
 struct OpenSshShellSession {
+    attempt: connection_attempt::ConnectionAttempt,
+    post_login: Option<nyaterm_core::models::sessions::ConnectionPostLogin>,
     handle: Option<client::Handle<SshClientHandler>>,
     channel: russh::Channel<client::Msg>,
     jump_handles: Vec<client::Handle<SshClientHandler>>,
@@ -841,9 +847,31 @@ impl SessionManager {
         &self,
         config: TelnetSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
+        self.create_telnet_session_with_attempt(config, Default::default())
+    }
+
+    pub fn create_telnet_session_with_attempt(
+        &self,
+        config: TelnetSessionConfig,
+        attempt: connection_attempt::ConnectionAttempt,
+    ) -> Result<SessionInfo, SessionError> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let addr = format!("{}:{}", config.host, config.port);
-        let stream = TcpStream::connect(&addr).map_err(|source| SessionError::ConnectTcp {
+        let connect = || -> Result<TcpStream, std::io::Error> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let stream = runtime
+                .block_on(attempt.until_cancelled(tokio::net::TcpStream::connect((
+                    config.host.as_str(),
+                    config.port,
+                ))))
+                .map_err(std::io::Error::other)??;
+            let stream = stream.into_std()?;
+            stream.set_nonblocking(false)?;
+            Ok(stream)
+        };
+        let stream = connect().map_err(|source| SessionError::ConnectTcp {
             addr: addr.clone(),
             source,
         })?;
@@ -909,7 +937,10 @@ impl SessionManager {
             info: info.clone(),
             writer,
             reader_stream: stream,
-            backspace_as_bs: config.backspace_mode == "ctrl_h",
+            backspace_as_bs: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                &config.backspace_mode,
+            )
+                == nyaterm_core::terminal::connection_input::BackspaceMode::Backspace,
             local_line_buffer: Vec::new(),
             auto_login,
             event_queue: self.event_queue.clone(),
@@ -1006,7 +1037,10 @@ impl SessionManager {
         let session = SshChannelTransport {
             info: info.clone(),
             command_tx,
-            backspace_as_bs: config.backspace_mode == "ctrl_h",
+            backspace_as_bs: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                &config.backspace_mode,
+            )
+                == nyaterm_core::terminal::connection_input::BackspaceMode::Backspace,
             worker_thread: Some(worker_thread),
         };
 
@@ -1054,7 +1088,10 @@ impl SessionManager {
         let session = SerialTransport {
             info: info.clone(),
             writer,
-            backspace_as_bs: config.backspace_mode == "ctrl_h",
+            backspace_as_bs: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                &config.backspace_mode,
+            )
+                == nyaterm_core::terminal::connection_input::BackspaceMode::Backspace,
             stop_reader,
             reader_thread: Some(reader_thread),
         };
@@ -1894,6 +1931,8 @@ async fn run_open_ssh_shell_session(
     mut pending_writes: VecDeque<Vec<u8>>,
 ) {
     let OpenSshShellSession {
+        attempt,
+        mut post_login,
         handle,
         mut channel,
         jump_handles,
@@ -1940,8 +1979,32 @@ async fn run_open_ssh_shell_session(
     let inject_timeout = tokio::time::sleep(ssh_shell_integration::SSH_INTEGRATION_TIMEOUT);
     tokio::pin!(inject_timeout);
 
+    post_login = post_login.filter(|command| command.enabled && !command.command.trim().is_empty());
+    let post_login_timer = tokio::time::sleep(Duration::ZERO);
+    tokio::pin!(post_login_timer);
+    let mut post_login_armed = false;
+
     loop {
+        if !post_login_armed
+            && shell_integration.is_normal()
+            && let Some(command) = post_login.as_ref()
+        {
+            post_login_timer.as_mut().reset(
+                tokio::time::Instant::now() + Duration::from_millis(command.delay_ms.min(60_000)),
+            );
+            post_login_armed = true;
+        }
         tokio::select! {
+            _ = async { while !attempt.is_cancelled() { tokio::time::sleep(Duration::from_millis(25)).await; } } => break,
+            _ = &mut post_login_timer, if post_login_armed && post_login.is_some() => {
+                if let Some(command) = post_login.take() {
+                    let mut text = command.command.replace("\r\n", "\r").replace('\n', "\r");
+                    if !text.ends_with('\r') { text.push('\r'); }
+                    if let Err(error) = channel.data_bytes(text.into_bytes()).await {
+                        send_session_error(&event_queue, &session_id, error);
+                    }
+                }
+            }
             _ = &mut initial_inject_delay, if shell_integration.should_inject_on_initial_delay() => {
                 shell_integration.inject(&mut channel).await;
                 inject_timeout
@@ -2321,6 +2384,8 @@ async fn open_ssh_shell_from_pending(
         SshShellHandle::Multiplexed(_) => None,
     };
     Ok(OpenSshShellSession {
+        attempt: config.attempt.clone(),
+        post_login: config.post_login.clone(),
         handle,
         channel,
         jump_handles,
@@ -2395,7 +2460,10 @@ impl SshPtyDimensions {
 }
 
 fn ssh_client_config(config: &SshSessionConfig) -> anyhow::Result<Arc<russh::client::Config>> {
-    let keepalive_interval = if config.keep_alive_interval_secs == 0 {
+    let keepalive_interval = if config.keep_alive_interval_secs == 0
+        || config.keep_alive_mode
+            == nyaterm_core::terminal::connection_input::KeepaliveMode::Disabled
+    {
         None
     } else {
         Some(Duration::from_secs(u64::from(
@@ -2407,6 +2475,12 @@ fn ssh_client_config(config: &SshSessionConfig) -> anyhow::Result<Arc<russh::cli
         inactivity_timeout: None,
         keepalive_interval,
         keepalive_max: 3,
+        keepalive_mode: match config.keep_alive_mode {
+            nyaterm_core::terminal::connection_input::KeepaliveMode::Strict => {
+                russh::client::KeepaliveMode::Strict
+            }
+            _ => russh::client::KeepaliveMode::Compatible,
+        },
         preferred,
         ..Default::default()
     }))
@@ -2473,29 +2547,37 @@ fn open_authenticated_ssh_handle_with_sender_registry(
     shell_environment: Arc<ShellEnvironmentCache>,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<SshHandleChain>> + Send + '_>> {
     Box::pin(async move {
-        const MAX_AGENT_ATTEMPTS: u32 = 3;
-        let mut agent_attempt = 1;
-        loop {
-            match open_authenticated_ssh_handle_once(
-                config,
-                forwarded_tcpip.clone(),
-                x11.clone(),
-                Arc::clone(&shell_environment),
-                agent_attempt,
-            )
+        config
+            .attempt
+            .until_cancelled(async {
+                const MAX_AGENT_ATTEMPTS: u32 = 3;
+                let mut agent_attempt = 1;
+                loop {
+                    match open_authenticated_ssh_handle_once(
+                        config,
+                        forwarded_tcpip.clone(),
+                        x11.clone(),
+                        Arc::clone(&shell_environment),
+                        agent_attempt,
+                    )
+                    .await
+                    {
+                        Err(error)
+                            if is_agent_retry(&error) && agent_attempt < MAX_AGENT_ATTEMPTS =>
+                        {
+                            agent_attempt += 1;
+                        }
+                        Err(error) if is_agent_retry(&error) => {
+                            return Err(anyhow::anyhow!(
+                                "SSH Agent authentication failed after {agent_attempt} attempts"
+                            ));
+                        }
+                        result => return result,
+                    }
+                }
+            })
             .await
-            {
-                Err(error) if is_agent_retry(&error) && agent_attempt < MAX_AGENT_ATTEMPTS => {
-                    agent_attempt += 1;
-                }
-                Err(error) if is_agent_retry(&error) => {
-                    return Err(anyhow::anyhow!(
-                        "SSH Agent authentication failed after {agent_attempt} attempts"
-                    ));
-                }
-                result => return result,
-            }
-        }
+            .map_err(anyhow::Error::msg)?
     })
 }
 

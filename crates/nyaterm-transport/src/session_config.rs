@@ -240,6 +240,7 @@ pub enum SshSessionProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpSettings {
+    pub pipeline_depth: Option<u32>,
     pub enabled: bool,
     pub cwd_follow_mode: SftpCwdFollowMode,
     pub shell_detection_timeout_ms: u64,
@@ -249,6 +250,7 @@ pub struct SftpSettings {
 impl Default for SftpSettings {
     fn default() -> Self {
         Self {
+            pipeline_depth: None,
             enabled: true,
             cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
             shell_detection_timeout_ms: 3000,
@@ -259,6 +261,7 @@ impl Default for SftpSettings {
 
 #[derive(Clone)]
 pub struct SshSessionConfig {
+    pub attempt: crate::connection_attempt::ConnectionAttempt,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -289,8 +292,10 @@ pub struct SshSessionConfig {
     /// Install shell semantic markers for terminal row highlighting.
     pub terminal_shell_integration: bool,
     pub deferred_pty: bool,
+    pub post_login: Option<nyaterm_core::models::sessions::ConnectionPostLogin>,
     /// Seconds between SSH keepalive packets. Zero disables keepalive.
     pub keep_alive_interval_secs: u32,
+    pub keep_alive_mode: nyaterm_core::terminal::connection_input::KeepaliveMode,
     pub cols: u16,
     pub rows: u16,
     /// Total terminal pixel width (cols * cell_width). Zero means unknown.
@@ -305,6 +310,27 @@ pub struct SshSessionConfig {
 }
 
 impl SshSessionConfig {
+    pub fn bind_attempt(&mut self, attempt: crate::connection_attempt::ConnectionAttempt) {
+        self.attempt = attempt.clone();
+        if let Some(provider) = self
+            .credential_provider
+            .as_ref()
+            .and_then(|provider| provider.for_attempt(attempt.clone()))
+        {
+            self.credential_provider = Some(provider);
+        }
+        if let Some(verifier) = self
+            .host_key_verifier
+            .as_ref()
+            .and_then(|verifier| verifier.for_attempt(attempt.clone()))
+        {
+            self.host_key_verifier = Some(verifier);
+        }
+        if let Some(jump) = self.proxy_jump.as_mut() {
+            jump.bind_attempt(attempt);
+        }
+    }
+
     pub fn is_network_device(&self) -> bool {
         self.profile == SshSessionProfile::NetworkDevice
     }
@@ -455,6 +481,13 @@ pub enum SshHostKeyDecision {
 }
 
 pub trait SshHostKeyVerifier: Send + Sync {
+    fn for_attempt(
+        &self,
+        _attempt: crate::connection_attempt::ConnectionAttempt,
+    ) -> Option<Arc<dyn SshHostKeyVerifier>> {
+        None
+    }
+
     fn verify(&self, host_key: &SshHostKey) -> Result<SshHostKeyDecision, String>;
 }
 
@@ -469,6 +502,8 @@ pub enum SshCredentialPromptKind {
 pub enum SshCredentialPromptReason {
     MissingPassword,
     PasswordRejected,
+    KeyRejectedPasswordFallback,
+    DockerElevation,
     KeyPassphraseRequired,
     KeyboardInteractive,
 }
@@ -506,6 +541,13 @@ pub struct SshKeyboardInteractiveRequest {
 }
 
 pub trait SshCredentialProvider: Send + Sync {
+    fn for_attempt(
+        &self,
+        _attempt: crate::connection_attempt::ConnectionAttempt,
+    ) -> Option<Arc<dyn SshCredentialProvider>> {
+        None
+    }
+
     fn request_secret(&self, prompt: &SshCredentialPrompt) -> Result<Option<String>, String>;
 
     fn request_keyboard_interactive(
@@ -613,6 +655,7 @@ impl Default for SerialSessionConfig {
 impl Default for SshSessionConfig {
     fn default() -> Self {
         Self {
+            attempt: Default::default(),
             name: "SSH".to_string(),
             host: String::new(),
             port: 22,
@@ -637,8 +680,10 @@ impl Default for SshSessionConfig {
             ssh_algorithms: None,
             sftp: SftpSettings::default(),
             terminal_shell_integration: true,
+            post_login: None,
             deferred_pty: false,
             keep_alive_interval_secs: 30,
+            keep_alive_mode: Default::default(),
             cols: 80,
             rows: 24,
             pixel_width: 0,

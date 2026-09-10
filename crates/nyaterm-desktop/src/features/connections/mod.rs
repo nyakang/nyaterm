@@ -1,6 +1,7 @@
 mod catalog;
 mod connection_import_runtime;
 mod connection_runtime;
+mod custom_icons;
 mod interaction;
 mod state;
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use nyaterm_core::SecretString;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Maximum UTF-8 payload accepted for a single committed-text event.
 ///
@@ -58,6 +58,8 @@ pub struct VncServerCapabilities {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RdpSessionConfig {
+    #[serde(default)]
+    pub relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -427,6 +429,8 @@ pub const MAX_VNC_FRAMEBUFFER_HEIGHT: u32 = 4320;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VncSessionConfig {
+    #[serde(default)]
+    pub relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
     pub name: String,
     pub host: String,
     pub port: u16,

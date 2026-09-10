@@ -28,6 +28,17 @@ pub(in crate::features) struct NativeHostKeyVerifier {
 }
 
 impl SshHostKeyVerifier for NativeHostKeyVerifier {
+    fn for_attempt(
+        &self,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    ) -> Option<Arc<dyn SshHostKeyVerifier>> {
+        Some(Arc::new(Self {
+            store: self.store.clone(),
+            policy: self.policy.clone(),
+            prompt_broker: Arc::new(self.prompt_broker.for_attempt(attempt)),
+        }))
+    }
+
     fn verify(&self, host_key: &SshHostKey) -> Result<SshHostKeyDecision, String> {
         let line = format!(
             "{} {} {}",
@@ -454,14 +465,47 @@ pub(in crate::features) struct HostKeyPromptRequest {
 
 #[derive(Debug, Default)]
 pub(in crate::features) struct HostKeyPromptBroker {
-    pending: Mutex<VecDeque<HostKeyPromptRequest>>,
+    pending: Arc<Mutex<VecDeque<HostKeyPromptRequest>>>,
+    cancelled: Arc<Mutex<Vec<String>>>,
+    attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     /// Signalled after a transport thread enqueues, so activation does not
     /// have to be polled. `Option` because the brokers are `Default`-built,
     /// including in tests that drive them without a wake at all.
-    wake: Mutex<Option<EventWake>>,
+    wake: Arc<Mutex<Option<EventWake>>>,
 }
 
 impl HostKeyPromptBroker {
+    pub(in crate::features) fn for_attempt(
+        &self,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    ) -> Self {
+        Self {
+            pending: self.pending.clone(),
+            cancelled: self.cancelled.clone(),
+            wake: self.wake.clone(),
+            attempt,
+        }
+    }
+    pub(in crate::features) fn take_cancelled(&self) -> Vec<String> {
+        self.cancelled
+            .lock()
+            .map(|mut ids| std::mem::take(&mut *ids))
+            .unwrap_or_default()
+    }
+    fn receive<T>(&self, id: String, receiver: &mpsc::Receiver<T>) -> Result<T, String> {
+        let result = self.attempt.receive(receiver, Duration::from_secs(300));
+        if result.is_err() {
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.retain(|request| request.id != id);
+            }
+            if let Ok(mut cancelled) = self.cancelled.lock() {
+                cancelled.push(id);
+            }
+            self.signal_wake();
+        }
+        result
+    }
+
     pub(in crate::features) fn set_wake(&self, wake: EventWake) {
         if let Ok(mut slot) = self.wake.lock() {
             *slot = Some(wake);
@@ -481,9 +525,15 @@ impl HostKeyPromptBroker {
         host_key: SshHostKey,
         issue: HostKeyPromptIssue,
     ) -> Result<HostKeyPromptChoice, String> {
+        self.attempt.check()?;
+        let id = format!(
+            "{}-{}",
+            uuid_like_prompt_id(&host_key),
+            nyaterm_core::uuid()
+        );
         let (response_tx, response_rx) = mpsc::channel();
         let request = HostKeyPromptRequest {
-            id: uuid_like_prompt_id(&host_key),
+            id: id.clone(),
             host_key,
             issue,
             response_tx,
@@ -494,9 +544,7 @@ impl HostKeyPromptBroker {
             .push_back(request);
         self.signal_wake();
 
-        response_rx
-            .recv_timeout(Duration::from_secs(300))
-            .map_err(|_| "SSH host-key prompt timed out".to_string())
+        self.receive(id, &response_rx)
     }
 
     pub(in crate::features) fn pop_pending(&self) -> Option<HostKeyPromptRequest> {
@@ -526,6 +574,14 @@ pub(in crate::features) enum CredentialPromptRequest {
         request: SshKeyboardInteractiveRequest,
         response_tx: mpsc::Sender<Option<Vec<String>>>,
     },
+}
+
+impl CredentialPromptRequest {
+    fn id(&self) -> &str {
+        match self {
+            Self::Secret { id, .. } | Self::KeyboardInteractive { id, .. } => id,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -579,14 +635,47 @@ impl std::fmt::Debug for KeyboardInteractivePromptState {
 
 #[derive(Debug, Default)]
 pub(in crate::features) struct CredentialPromptBroker {
-    pending: Mutex<VecDeque<CredentialPromptRequest>>,
+    pending: Arc<Mutex<VecDeque<CredentialPromptRequest>>>,
+    cancelled: Arc<Mutex<Vec<String>>>,
+    attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     /// Signalled after a transport thread enqueues, so activation does not
     /// have to be polled. `Option` because the brokers are `Default`-built,
     /// including in tests that drive them without a wake at all.
-    wake: Mutex<Option<EventWake>>,
+    wake: Arc<Mutex<Option<EventWake>>>,
 }
 
 impl CredentialPromptBroker {
+    pub(in crate::features) fn for_attempt(
+        &self,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    ) -> Self {
+        Self {
+            pending: self.pending.clone(),
+            cancelled: self.cancelled.clone(),
+            wake: self.wake.clone(),
+            attempt,
+        }
+    }
+    pub(in crate::features) fn take_cancelled(&self) -> Vec<String> {
+        self.cancelled
+            .lock()
+            .map(|mut ids| std::mem::take(&mut *ids))
+            .unwrap_or_default()
+    }
+    fn receive<T>(&self, id: String, receiver: &mpsc::Receiver<T>) -> Result<T, String> {
+        let result = self.attempt.receive(receiver, Duration::from_secs(300));
+        if result.is_err() {
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.retain(|request| request.id() != id);
+            }
+            if let Ok(mut cancelled) = self.cancelled.lock() {
+                cancelled.push(id);
+            }
+            self.signal_wake();
+        }
+        result
+    }
+
     pub(in crate::features) fn set_wake(&self, wake: EventWake) {
         if let Ok(mut slot) = self.wake.lock() {
             *slot = Some(wake);
@@ -602,9 +691,11 @@ impl CredentialPromptBroker {
     }
 
     fn request_secret(&self, prompt: SshCredentialPrompt) -> Result<Option<String>, String> {
+        self.attempt.check()?;
+        let id = format!("{}-{}", credential_prompt_id(&prompt), nyaterm_core::uuid());
         let (response_tx, response_rx) = mpsc::channel();
         let request = CredentialPromptRequest::Secret {
-            id: credential_prompt_id(&prompt),
+            id: id.clone(),
             prompt,
             response_tx,
         };
@@ -614,18 +705,22 @@ impl CredentialPromptBroker {
             .push_back(request);
         self.signal_wake();
 
-        response_rx
-            .recv_timeout(Duration::from_secs(300))
-            .map_err(|_| "SSH credential prompt timed out".to_string())
+        self.receive(id, &response_rx)
     }
 
     fn request_keyboard_interactive(
         &self,
         request: SshKeyboardInteractiveRequest,
     ) -> Result<Option<Vec<String>>, String> {
+        self.attempt.check()?;
+        let id = format!(
+            "{}-{}",
+            keyboard_interactive_prompt_id(&request),
+            nyaterm_core::uuid()
+        );
         let (response_tx, response_rx) = mpsc::channel();
         let queued = CredentialPromptRequest::KeyboardInteractive {
-            id: keyboard_interactive_prompt_id(&request),
+            id: id.clone(),
             request,
             response_tx,
         };
@@ -635,9 +730,7 @@ impl CredentialPromptBroker {
             .push_back(queued);
         self.signal_wake();
 
-        response_rx
-            .recv_timeout(Duration::from_secs(300))
-            .map_err(|_| "SSH keyboard-interactive prompt timed out".to_string())
+        self.receive(id, &response_rx)
     }
 
     pub(in crate::features) fn pop_pending(&self) -> Option<CredentialPromptRequest> {
@@ -656,6 +749,13 @@ impl CredentialPromptBroker {
 }
 
 impl SshCredentialProvider for CredentialPromptBroker {
+    fn for_attempt(
+        &self,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    ) -> Option<Arc<dyn SshCredentialProvider>> {
+        Some(Arc::new(CredentialPromptBroker::for_attempt(self, attempt)))
+    }
+
     fn request_secret(&self, prompt: &SshCredentialPrompt) -> Result<Option<String>, String> {
         CredentialPromptBroker::request_secret(self, prompt.clone())
     }
@@ -1192,5 +1292,49 @@ mod prompt_state_debug_tests {
         assert!(debug.contains("used_code_count: 1"));
         assert!(!debug.contains("123456"));
         assert!(!debug.contains("otp-1"));
+    }
+}
+
+#[cfg(test)]
+mod attempt_cancellation_tests {
+    use super::CredentialPromptBroker;
+    use nyaterm_transport::connection_attempt::ConnectionAttempt;
+    use nyaterm_transport::{
+        SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason,
+    };
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancelling_one_attempt_removes_only_its_prompt_and_wakes_the_waiter() {
+        let broker = Arc::new(CredentialPromptBroker::default());
+        let attempt = ConnectionAttempt::default();
+        let scoped = broker.for_attempt(attempt.clone());
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = crate::thread_owner::spawn_joinable("prompt-cancel-test", move || {
+            let result = scoped.request_secret(SshCredentialPrompt {
+                host: "example.com".into(),
+                port: 22,
+                username: "test".into(),
+                connection_name: "fixture".into(),
+                kind: SshCredentialPromptKind::Password,
+                reason: SshCredentialPromptReason::MissingPassword,
+                attempt: 1,
+                prompt_text: None,
+                echo: false,
+            });
+            let _ = result_tx.send(result);
+        })
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !broker.has_pending() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(broker.has_pending());
+        attempt.cancel();
+        worker.join().unwrap();
+        assert!(result_rx.recv().unwrap().is_err());
+        assert!(!broker.has_pending());
+        assert_eq!(broker.take_cancelled().len(), 1);
     }
 }

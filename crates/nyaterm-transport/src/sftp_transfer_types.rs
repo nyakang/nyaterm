@@ -36,6 +36,7 @@ pub struct SftpTransferOptions {
     pub default_file_mode: Option<u32>,
     pub resume_broken_transfer: bool,
     pub directory_upload_threads: usize,
+    pub download_threads: usize,
 }
 
 impl Default for SftpTransferOptions {
@@ -47,11 +48,21 @@ impl Default for SftpTransferOptions {
             default_file_mode: None,
             resume_broken_transfer: false,
             directory_upload_threads: SFTP_TRANSFER_DEFAULT_DIRECTORY_UPLOAD_THREADS,
+            download_threads: 3,
         }
     }
 }
 
 impl SftpTransferOptions {
+    pub fn with_download_threads(mut self, threads: usize) -> Self {
+        self.download_threads = threads.clamp(1, 10);
+        self
+    }
+
+    pub fn download_threads(&self) -> usize {
+        self.download_threads.clamp(1, 10)
+    }
+
     pub fn with_buffer_size_bytes(mut self, buffer_size: usize) -> Self {
         self.buffer_size =
             buffer_size.clamp(SFTP_TRANSFER_MIN_BUFFER_SIZE, SFTP_TRANSFER_MAX_BUFFER_SIZE);

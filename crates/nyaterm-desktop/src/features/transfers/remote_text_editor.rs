@@ -1,3 +1,5 @@
+mod folding;
+mod search;
 use nyaterm_ui::NyaScrollable;
 use std::ops::Range;
 
@@ -13,23 +15,24 @@ use gpui::{
 use crate::features::{NyaTermApp, shell::gpui_code_font_family};
 use crate::models::{TransferEditorField, TransferEditorState};
 
-const UNDO_LIMIT: usize = 64;
-
-#[derive(Clone)]
-struct EditSnapshot {
-    content: String,
-    anchor: usize,
-    head: usize,
-}
+use nyaterm_core::document_edit::{
+    DocumentSnapshot as EditSnapshot, SearchOptions, TextDocument, rectangle_selections,
+};
+use nyaterm_ui::NyaInputState;
 
 pub(in crate::features) struct RemoteTextEditor {
     app: Entity<NyaTermApp>,
     tab_id: String,
     focus_handle: FocusHandle,
-    content: String,
-    anchor: usize,
-    head: usize,
+    document: TextDocument,
+    projection: nyaterm_core::document_edit::FoldProjection,
+    folds: Vec<Range<usize>>,
+    fold_candidates: Vec<Range<usize>>,
+    fold_generation: u64,
+    fold_task: Option<gpui::Task<()>>,
+    fold_language: String,
     marked_range: Option<Range<usize>>,
+    multi_composition: Option<EditSnapshot>,
     last_layout: Option<TextLayout>,
     selecting: bool,
     read_only: bool,
@@ -37,8 +40,13 @@ pub(in crate::features) struct RemoteTextEditor {
     scroll_cursor_pending: bool,
     search_query: String,
     active_match: usize,
-    undo_stack: Vec<EditSnapshot>,
-    redo_stack: Vec<EditSnapshot>,
+    search_options: SearchOptions,
+    search_input: Entity<NyaInputState>,
+    replace_input: Entity<NyaInputState>,
+    search_subscriptions: Vec<gpui::Subscription>,
+    search_open: bool,
+    search_error: Option<String>,
+    rectangle_anchor: Option<usize>,
 }
 
 impl RemoteTextEditor {
@@ -48,14 +56,20 @@ impl RemoteTextEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let cursor = tab.content.len();
-        Self {
+        let (search_input, replace_input, search_subscriptions) = Self::search_inputs(cx);
+        let mut editor = Self {
             app,
             tab_id: tab.id.clone(),
             focus_handle: cx.focus_handle(),
-            content: tab.content.clone(),
-            anchor: cursor,
-            head: cursor,
+            document: TextDocument::new(tab.content.clone(), cursor),
+            projection: Default::default(),
+            folds: Vec::new(),
+            fold_candidates: Vec::new(),
+            fold_generation: 0,
+            fold_task: None,
+            fold_language: Self::fold_language_for_path(&tab.remote_path),
             marked_range: None,
+            multi_composition: None,
             last_layout: None,
             selecting: false,
             read_only: tab.loading || tab.saving,
@@ -63,9 +77,16 @@ impl RemoteTextEditor {
             scroll_cursor_pending: true,
             search_query: tab.search_query.clone(),
             active_match: tab.active_match,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        }
+            search_options: SearchOptions::default(),
+            search_input,
+            replace_input,
+            search_subscriptions,
+            search_open: false,
+            search_error: None,
+            rectangle_anchor: None,
+        };
+        editor.schedule_fold_parse(cx);
+        editor
     }
 
     /// Construct a read-only surface for previewing `content`.
@@ -80,14 +101,20 @@ impl RemoteTextEditor {
         content: String,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (search_input, replace_input, search_subscriptions) = Self::search_inputs(cx);
         Self {
             app,
             tab_id: id,
             focus_handle: cx.focus_handle(),
-            content,
-            anchor: 0,
-            head: 0,
+            document: TextDocument::new(content, 0),
+            projection: Default::default(),
+            folds: Vec::new(),
+            fold_candidates: Vec::new(),
+            fold_generation: 0,
+            fold_task: None,
+            fold_language: "plain".into(),
             marked_range: None,
+            multi_composition: None,
             last_layout: None,
             selecting: false,
             read_only: true,
@@ -95,8 +122,13 @@ impl RemoteTextEditor {
             scroll_cursor_pending: false,
             search_query: String::new(),
             active_match: 0,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            search_options: SearchOptions::default(),
+            search_input,
+            replace_input,
+            search_subscriptions,
+            search_open: false,
+            search_error: None,
+            rectangle_anchor: None,
         }
     }
 
@@ -108,18 +140,19 @@ impl RemoteTextEditor {
         content: &str,
         cx: &mut Context<Self>,
     ) {
-        let changed = self.tab_id != id || self.content != content;
+        let changed = self.tab_id != id || self.document.content != content;
         if !changed {
             return;
         }
         self.tab_id = id.to_string();
-        self.content = content.to_string();
-        self.anchor = 0;
-        self.head = 0;
+        self.document.content = content.to_string();
+        self.document.anchor = 0;
+        self.document.head = 0;
         self.marked_range = None;
         self.last_layout = None;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.document.additional_selections.clear();
+        self.document.undo_stack.clear();
+        self.document.redo_stack.clear();
         cx.notify();
     }
 
@@ -129,15 +162,19 @@ impl RemoteTextEditor {
         cx: &mut Context<Self>,
     ) {
         let mut changed = false;
-        if self.content != tab.content {
-            self.content = tab.content.clone();
-            let cursor = nearest_char_boundary(&self.content, self.head.min(self.content.len()));
-            self.anchor = cursor;
-            self.head = cursor;
+        if self.document.content != tab.content {
+            self.document.content = tab.content.clone();
+            let cursor = nearest_char_boundary(
+                &self.document.content,
+                self.document.head.min(self.document.content.len()),
+            );
+            self.document.anchor = cursor;
+            self.document.head = cursor;
             self.marked_range = None;
             self.last_layout = None;
-            self.undo_stack.clear();
-            self.redo_stack.clear();
+            self.document.additional_selections.clear();
+            self.document.undo_stack.clear();
+            self.document.redo_stack.clear();
             self.scroll_cursor_pending = true;
             changed = true;
         }
@@ -146,33 +183,22 @@ impl RemoteTextEditor {
             self.read_only = read_only;
             changed = true;
         }
-        if self.search_query != tab.search_query || self.active_match != tab.active_match {
-            self.search_query = tab.search_query.clone();
-            self.active_match = tab.active_match;
-            if self.search_query.is_empty() {
-                self.anchor = self.head;
-            } else if let Some((start, matched)) = self
-                .content
-                .match_indices(&self.search_query)
-                .nth(self.active_match)
-            {
-                self.anchor = start;
-                self.head = start + matched.len();
-                self.scroll_cursor_pending = true;
-            }
+        if tab.focused_field == TransferEditorField::Search && !self.search_open {
+            self.search_open = true;
             changed = true;
         }
         if changed {
+            self.schedule_fold_parse(cx);
             cx.notify();
         }
     }
 
     pub(in crate::features) fn cursor_position(&self) -> (usize, usize) {
-        let cursor = self.head.min(self.content.len());
-        let before = &self.content[..cursor];
+        let cursor = self.document.head.min(self.document.content.len());
+        let before = &self.document.content[..cursor];
         let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
         let line_start = before.rfind('\n').map(|index| index + 1).unwrap_or(0);
-        let column = self.content[line_start..cursor].chars().count() + 1;
+        let column = self.document.content[line_start..cursor].chars().count() + 1;
         (line, column)
     }
 
@@ -181,33 +207,25 @@ impl RemoteTextEditor {
     }
 
     fn selected_range(&self) -> Range<usize> {
-        self.anchor.min(self.head)..self.anchor.max(self.head)
+        self.document.anchor.min(self.document.head)..self.document.anchor.max(self.document.head)
     }
 
     fn selection_reversed(&self) -> bool {
-        self.head < self.anchor
+        self.document.head < self.document.anchor
     }
 
     fn snapshot(&self) -> EditSnapshot {
-        EditSnapshot {
-            content: self.content.clone(),
-            anchor: self.anchor,
-            head: self.head,
-        }
+        self.document.snapshot()
     }
-
     fn push_undo(&mut self) {
-        self.undo_stack.push(self.snapshot());
-        if self.undo_stack.len() > UNDO_LIMIT {
-            self.undo_stack.remove(0);
-        }
-        self.redo_stack.clear();
+        self.document.checkpoint();
     }
 
     fn restore_snapshot(&mut self, snapshot: EditSnapshot, cx: &mut Context<Self>) {
-        self.content = snapshot.content;
-        self.anchor = snapshot.anchor.min(self.content.len());
-        self.head = snapshot.head.min(self.content.len());
+        self.document.content = snapshot.content;
+        self.document.anchor = snapshot.anchor.min(self.document.content.len());
+        self.document.head = snapshot.head.min(self.document.content.len());
+        self.document.additional_selections = snapshot.additional_selections;
         self.marked_range = None;
         self.last_layout = None;
         self.scroll_cursor_pending = true;
@@ -219,10 +237,10 @@ impl RemoteTextEditor {
         if self.read_only {
             return;
         }
-        let Some(snapshot) = self.undo_stack.pop() else {
+        let Some(snapshot) = self.document.undo_stack.pop() else {
             return;
         };
-        self.redo_stack.push(self.snapshot());
+        self.document.redo_stack.push(self.snapshot());
         self.restore_snapshot(snapshot, cx);
     }
 
@@ -230,26 +248,26 @@ impl RemoteTextEditor {
         if self.read_only {
             return;
         }
-        let Some(snapshot) = self.redo_stack.pop() else {
+        let Some(snapshot) = self.document.redo_stack.pop() else {
             return;
         };
-        self.undo_stack.push(self.snapshot());
+        self.document.undo_stack.push(self.snapshot());
         self.restore_snapshot(snapshot, cx);
     }
 
     fn insert_newline(&mut self, cx: &mut Context<Self>) {
         let range = self.selected_range();
         let start = range.start;
-        let current_line_start = line_start(&self.content, start);
-        let indentation = self.content[current_line_start..start]
+        let current_line_start = line_start(&self.document.content, start);
+        let indentation = self.document.content[current_line_start..start]
             .chars()
             .take_while(|ch| matches!(ch, ' ' | '\t'))
             .collect::<String>();
-        let previous = self.content[..start]
+        let previous = self.document.content[..start]
             .chars()
             .rev()
             .find(|ch| !ch.is_whitespace());
-        let next = self.content[range.end..]
+        let next = self.document.content[range.end..]
             .chars()
             .find(|ch| !ch.is_whitespace());
         let closes_block = matches!(
@@ -263,8 +281,8 @@ impl RemoteTextEditor {
         };
         self.replace_byte_range(range, &insertion, true, cx);
         if closes_block {
-            self.anchor = start + 1 + indentation.len() + 4;
-            self.head = self.anchor;
+            self.document.anchor = start + 1 + indentation.len() + 4;
+            self.document.head = self.document.anchor;
             self.scroll_cursor_pending = true;
             cx.notify();
         }
@@ -276,16 +294,16 @@ impl RemoteTextEditor {
             self.replace_byte_range(selection, "    ", true, cx);
             return;
         }
-        let start = line_start(&self.content, selection.start);
+        let start = line_start(&self.document.content, selection.start);
         let selection_end = if selection.end > selection.start
-            && selection.end == line_start(&self.content, selection.end)
+            && selection.end == line_start(&self.document.content, selection.end)
         {
-            previous_char_boundary(&self.content, selection.end)
+            previous_char_boundary(&self.document.content, selection.end)
         } else {
             selection.end
         };
-        let end = line_end(&self.content, selection_end);
-        let source = &self.content[start..end];
+        let end = line_end(&self.document.content, selection_end);
+        let source = &self.document.content[start..end];
         let mut replacement = String::with_capacity(source.len() + 16);
         let mut changed = 0usize;
         for (index, line) in source.split('\n').enumerate() {
@@ -310,15 +328,17 @@ impl RemoteTextEditor {
             return;
         }
         self.replace_byte_range(start..end, &replacement, true, cx);
-        self.anchor = start;
-        self.head = start + replacement.len();
+        self.document.anchor = start;
+        self.document.head = start + replacement.len();
         self.scroll_cursor_pending = true;
         cx.notify();
     }
 
-    fn sync_content_to_app(&self, cx: &mut Context<Self>) {
+    fn sync_content_to_app(&mut self, cx: &mut Context<Self>) {
+        self.folds.clear();
+        self.schedule_fold_parse(cx);
         let tab_id = self.tab_id.clone();
-        let content = self.content.clone();
+        let content = self.document.content.clone();
         self.app.update(cx, move |app, cx| {
             app.transfer.sync_editor_content(&tab_id, content);
             app.mark_user_activity();
@@ -343,16 +363,31 @@ impl RemoteTextEditor {
         if self.read_only {
             return;
         }
-        let start = nearest_char_boundary(&self.content, range.start.min(self.content.len()));
-        let end =
-            nearest_char_boundary(&self.content, range.end.min(self.content.len())).max(start);
+        if record_undo
+            && !self.document.additional_selections.is_empty()
+            && range == self.selected_range()
+        {
+            if self.document.replace_selections(new_text).is_ok() {
+                self.did_edit(cx);
+            }
+            return;
+        }
+        let start = nearest_char_boundary(
+            &self.document.content,
+            range.start.min(self.document.content.len()),
+        );
+        let end = nearest_char_boundary(
+            &self.document.content,
+            range.end.min(self.document.content.len()),
+        )
+        .max(start);
         if record_undo {
             self.push_undo();
         }
-        self.content.replace_range(start..end, new_text);
+        self.document.content.replace_range(start..end, new_text);
         let cursor = start + new_text.len();
-        self.anchor = cursor;
-        self.head = cursor;
+        self.document.anchor = cursor;
+        self.document.head = cursor;
         self.marked_range = None;
         self.last_layout = None;
         self.scroll_cursor_pending = true;
@@ -361,12 +396,17 @@ impl RemoteTextEditor {
     }
 
     fn move_cursor(&mut self, offset: usize, extend: bool, cx: &mut Context<Self>) {
-        let offset = nearest_char_boundary(&self.content, offset.min(self.content.len()));
+        self.document.additional_selections.clear();
+        self.folds.retain(|range| !range.contains(&offset));
+        let offset = nearest_char_boundary(
+            &self.document.content,
+            offset.min(self.document.content.len()),
+        );
         if extend {
-            self.head = offset;
+            self.document.head = offset;
         } else {
-            self.anchor = offset;
-            self.head = offset;
+            self.document.anchor = offset;
+            self.document.head = offset;
         }
         self.marked_range = None;
         self.scroll_cursor_pending = true;
@@ -375,71 +415,72 @@ impl RemoteTextEditor {
     }
 
     fn move_left(&mut self, extend: bool, by_word: bool, cx: &mut Context<Self>) {
-        if !extend && self.anchor != self.head {
+        if !extend && self.document.anchor != self.document.head {
             self.move_cursor(self.selected_range().start, false, cx);
             return;
         }
         let target = if by_word {
-            previous_word_boundary(&self.content, self.head)
+            previous_word_boundary(&self.document.content, self.document.head)
         } else {
-            previous_char_boundary(&self.content, self.head)
+            previous_char_boundary(&self.document.content, self.document.head)
         };
         self.move_cursor(target, extend, cx);
     }
 
     fn move_right(&mut self, extend: bool, by_word: bool, cx: &mut Context<Self>) {
-        if !extend && self.anchor != self.head {
+        if !extend && self.document.anchor != self.document.head {
             self.move_cursor(self.selected_range().end, false, cx);
             return;
         }
         let target = if by_word {
-            next_word_boundary(&self.content, self.head)
+            next_word_boundary(&self.document.content, self.document.head)
         } else {
-            next_char_boundary(&self.content, self.head)
+            next_char_boundary(&self.document.content, self.document.head)
         };
         self.move_cursor(target, extend, cx);
     }
 
     fn move_vertical(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
-        let cursor = self.head.min(self.content.len());
-        let current_start = line_start(&self.content, cursor);
-        let column = self.content[current_start..cursor].chars().count();
+        let cursor = self.document.head.min(self.document.content.len());
+        let current_start = line_start(&self.document.content, cursor);
+        let column = self.document.content[current_start..cursor].chars().count();
         let target_start = if delta < 0 {
             if current_start == 0 {
                 0
             } else {
-                line_start(&self.content, current_start - 1)
+                line_start(&self.document.content, current_start - 1)
             }
         } else {
-            let current_end = line_end(&self.content, cursor);
-            if current_end >= self.content.len() {
+            let current_end = line_end(&self.document.content, cursor);
+            if current_end >= self.document.content.len() {
                 current_start
             } else {
                 current_end + 1
             }
         };
-        let target_end = line_end(&self.content, target_start);
-        let target = byte_offset_for_char_column(&self.content, target_start, target_end, column);
+        let target_end = line_end(&self.document.content, target_start);
+        let target =
+            byte_offset_for_char_column(&self.document.content, target_start, target_end, column);
         self.move_cursor(target, extend, cx);
     }
 
     fn select_word_at(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let (start, end) = word_bounds(&self.content, offset);
-        self.anchor = start;
-        self.head = end;
+        let (start, end) = word_bounds(&self.document.content, offset);
+        self.document.anchor = start;
+        self.document.head = end;
         self.scroll_cursor_pending = true;
         self.notify_cursor_changed(cx);
         cx.notify();
     }
 
     fn select_line_at(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let start = line_start(&self.content, offset);
-        let mut end = line_end(&self.content, offset);
-        if end < self.content.len() {
+        let start = line_start(&self.document.content, offset);
+        let mut end = line_end(&self.document.content, offset);
+        if end < self.document.content.len() {
             end += 1;
         }
-        self.anchor = start;
-        self.head = end;
+        self.document.anchor = start;
+        self.document.head = end;
         self.scroll_cursor_pending = true;
         self.notify_cursor_changed(cx);
         cx.notify();
@@ -447,13 +488,13 @@ impl RemoteTextEditor {
 
     fn index_for_point(&self, position: Point<Pixels>) -> usize {
         let Some(layout) = self.last_layout.as_ref() else {
-            return self.content.len();
+            return self.document.content.len();
         };
         let index = layout
             .index_for_position(position)
             .unwrap_or_else(|index| index)
-            .min(self.content.len());
-        nearest_char_boundary(&self.content, index)
+            .min(self.document.content.len());
+        nearest_char_boundary(&self.document.content, self.projection.source_offset(index))
     }
 
     fn on_mouse_down(
@@ -471,6 +512,14 @@ impl RemoteTextEditor {
             cx.notify();
         });
         let index = self.index_for_point(event.position);
+        if event.modifiers.alt && !event.modifiers.shift {
+            self.document.additional_selections.push(index..index);
+            cx.notify();
+            return;
+        }
+        self.document.additional_selections.clear();
+        self.rectangle_anchor = (event.modifiers.alt && event.modifiers.shift).then_some(index);
+
         if event.click_count >= 3 {
             self.select_line_at(index, cx);
             self.selecting = false;
@@ -479,10 +528,10 @@ impl RemoteTextEditor {
             self.selecting = false;
         } else {
             if event.modifiers.shift {
-                self.head = index;
+                self.document.head = index;
             } else {
-                self.anchor = index;
-                self.head = index;
+                self.document.anchor = index;
+                self.document.head = index;
             }
             self.selecting = true;
             self.scroll_cursor_pending = true;
@@ -501,7 +550,17 @@ impl RemoteTextEditor {
             self.selecting = false;
             return;
         }
-        self.head = self.index_for_point(event.position);
+        self.document.head = self.index_for_point(event.position);
+        if let Some(anchor) = self.rectangle_anchor {
+            let mut ranges =
+                rectangle_selections(&self.document.content, anchor, self.document.head);
+            if let Some(primary) = ranges.pop() {
+                self.document.anchor = primary.start;
+                self.document.head = primary.end;
+            }
+            self.document.additional_selections = ranges;
+        }
+
         self.scroll_cursor_pending = true;
         self.notify_cursor_changed(cx);
         cx.notify();
@@ -509,6 +568,7 @@ impl RemoteTextEditor {
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.selecting = false;
+        self.rectangle_anchor = None;
         cx.stop_propagation();
     }
 
@@ -517,12 +577,57 @@ impl RemoteTextEditor {
         let modifiers = event.keystroke.modifiers;
         let primary = modifiers.platform || modifiers.control;
         let extend = modifiers.shift;
+        if !self.read_only
+            && !self.document.additional_selections.is_empty()
+            && matches!(key, "backspace" | "delete")
+        {
+            let edits = self
+                .document
+                .selections()
+                .into_iter()
+                .map(|range| {
+                    if range.is_empty() {
+                        if key == "backspace" {
+                            previous_char_boundary(&self.document.content, range.start)..range.end
+                        } else {
+                            range.start..next_char_boundary(&self.document.content, range.end)
+                        }
+                    } else {
+                        range
+                    }
+                })
+                .collect();
+            let ranges =
+                nyaterm_core::document_edit::normalize_selections(&self.document.content, edits);
+            let edits = ranges
+                .into_iter()
+                .map(|range| nyaterm_core::document_edit::TextEdit {
+                    range,
+                    text: String::new(),
+                })
+                .collect();
+            if self.document.apply(edits).is_ok() {
+                self.did_edit(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
 
+        if primary && modifiers.shift && matches!(key, "[" | "]") {
+            if key == "[" {
+                self.fold_at_cursor(cx);
+            } else {
+                self.folds.clear();
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if primary && !modifiers.alt {
             let handled = match key {
                 "a" => {
-                    self.anchor = 0;
-                    self.head = self.content.len();
+                    self.document.anchor = 0;
+                    self.document.head = self.document.content.len();
                     self.scroll_cursor_pending = true;
                     self.notify_cursor_changed(cx);
                     cx.notify();
@@ -558,14 +663,14 @@ impl RemoteTextEditor {
                     });
                     true
                 }
-                "f" => {
-                    self.app.update(cx, |app, cx| {
-                        if let Some(tab) = app.transfer.active_editor_tab_mut() {
-                            tab.focused_field = TransferEditorField::Search;
-                        }
-                        window.focus(app.transfer.editor_focus(), cx);
-                        cx.notify();
-                    });
+                "f" | "h" => {
+                    self.search_open = true;
+                    window.focus(&self.search_input.read(cx).focus_handle(), cx);
+                    cx.notify();
+                    true
+                }
+                "d" => {
+                    self.select_next_occurrence(cx);
                     true
                 }
                 "left" => {
@@ -602,17 +707,26 @@ impl RemoteTextEditor {
                 true
             }
             "home" => {
-                self.move_cursor(line_start(&self.content, self.head), extend, cx);
+                self.move_cursor(
+                    line_start(&self.document.content, self.document.head),
+                    extend,
+                    cx,
+                );
                 true
             }
             "end" => {
-                self.move_cursor(line_end(&self.content, self.head), extend, cx);
+                self.move_cursor(
+                    line_end(&self.document.content, self.document.head),
+                    extend,
+                    cx,
+                );
                 true
             }
             "backspace" if !self.read_only => {
                 let range = self.selected_range();
                 let range = if range.is_empty() {
-                    previous_char_boundary(&self.content, self.head)..self.head
+                    previous_char_boundary(&self.document.content, self.document.head)
+                        ..self.document.head
                 } else {
                     range
                 };
@@ -624,7 +738,8 @@ impl RemoteTextEditor {
             "delete" if !self.read_only => {
                 let range = self.selected_range();
                 let range = if range.is_empty() {
-                    self.head..next_char_boundary(&self.content, self.head)
+                    self.document.head
+                        ..next_char_boundary(&self.document.content, self.document.head)
                 } else {
                     range
                 };
@@ -649,21 +764,37 @@ impl RemoteTextEditor {
     }
 
     fn copy_selection(&self, cx: &mut Context<Self>) {
-        let range = self.selected_range();
-        if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.content[range].to_string()));
+        let text = self
+            .document
+            .selections()
+            .into_iter()
+            .filter(|range| !range.is_empty())
+            .map(|range| &self.document.content[range])
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
     fn cut_selection(&mut self, cx: &mut Context<Self>) {
-        let range = self.selected_range();
-        if range.is_empty() {
+        if self.read_only {
             return;
         }
-        cx.write_to_clipboard(ClipboardItem::new_string(
-            self.content[range.clone()].to_string(),
-        ));
-        self.replace_byte_range(range, "", true, cx);
+        self.copy_selection(cx);
+        let edits = self
+            .document
+            .selections()
+            .into_iter()
+            .filter(|range| !range.is_empty())
+            .map(|range| nyaterm_core::document_edit::TextEdit {
+                range,
+                text: String::new(),
+            })
+            .collect();
+        if self.document.apply(edits).is_ok() {
+            self.did_edit(cx);
+        }
     }
 
     fn paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -681,7 +812,10 @@ impl RemoteTextEditor {
         let Some(layout) = self.last_layout.as_ref() else {
             return;
         };
-        let Some(cursor) = layout.position_for_index(self.head.min(self.content.len())) else {
+        let Some(cursor) = layout.position_for_index(
+            self.projection
+                .display_offset(self.document.head.min(self.document.content.len())),
+        ) else {
             return;
         };
         let viewport = self.scroll.bounds();
@@ -716,7 +850,7 @@ impl EntityInputHandler for RemoteTextEditor {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        Some(self.document.content[range].to_string())
     }
 
     fn selected_text_range(
@@ -741,7 +875,15 @@ impl EntityInputHandler for RemoteTextEditor {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multi_composition.is_some() {
+            let text = self
+                .marked_range
+                .clone()
+                .map(|range| self.document.content[range].to_string())
+                .unwrap_or_default();
+            self.replace_text_in_range(None, &text, window, cx);
+        }
         self.marked_range = None;
     }
 
@@ -755,24 +897,43 @@ impl EntityInputHandler for RemoteTextEditor {
         if self.read_only {
             return;
         }
+        if let Some(snapshot) = self.multi_composition.take() {
+            self.document.content = snapshot.content;
+            self.document.anchor = snapshot.anchor;
+            self.document.head = snapshot.head;
+            self.document.additional_selections = snapshot.additional_selections;
+            self.marked_range = None;
+            if self.document.replace_selections(new_text).is_ok() {
+                self.did_edit(cx);
+            }
+            return;
+        }
+        if !self.read_only && !self.document.additional_selections.is_empty() {
+            if self.document.replace_selections(new_text).is_ok() {
+                self.did_edit(cx);
+            }
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range());
         if self.marked_range.is_none() && range.is_empty() {
-            if is_close_bracket(new_text) && self.content[range.start..].starts_with(new_text) {
+            if is_close_bracket(new_text)
+                && self.document.content[range.start..].starts_with(new_text)
+            {
                 self.move_cursor(range.start + new_text.len(), false, cx);
                 return;
             }
-            if should_auto_close(&self.content, range.start, new_text)
+            if should_auto_close(&self.document.content, range.start, new_text)
                 && let Some(close) = matching_close_bracket(new_text)
             {
                 let start = range.start;
                 let pair = format!("{new_text}{close}");
                 self.replace_byte_range(range, &pair, true, cx);
-                self.anchor = start + new_text.len();
-                self.head = self.anchor;
+                self.document.anchor = start + new_text.len();
+                self.document.head = self.document.anchor;
                 self.scroll_cursor_pending = true;
                 cx.notify();
                 return;
@@ -793,6 +954,40 @@ impl EntityInputHandler for RemoteTextEditor {
         if self.read_only {
             return;
         }
+        if !self.document.additional_selections.is_empty() || self.multi_composition.is_some() {
+            if self.multi_composition.is_none() {
+                self.multi_composition = Some(self.document.snapshot());
+            }
+            let snapshot = self
+                .multi_composition
+                .as_ref()
+                .expect("composition snapshot")
+                .clone();
+            self.document.content = snapshot.content;
+            self.document.anchor = snapshot.anchor;
+            self.document.head = snapshot.head;
+            self.document.additional_selections = snapshot.additional_selections;
+            if new_text.is_empty() {
+                self.multi_composition = None;
+                self.marked_range = None;
+                cx.notify();
+                return;
+            }
+            let range = self.selected_range();
+            let start = range.start;
+            self.document.content.replace_range(range, new_text);
+            self.document.additional_selections.clear();
+            self.document.anchor = start + new_text.len();
+            self.document.head = self.document.anchor;
+            self.marked_range = Some(start..self.document.head);
+            if let Some(selected) = new_selected_range_utf16 {
+                self.document.anchor = start + utf16_to_utf8(new_text, selected.start);
+                self.document.head = start + utf16_to_utf8(new_text, selected.end);
+            }
+            self.last_layout = None;
+            cx.notify();
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
@@ -809,8 +1004,8 @@ impl EntityInputHandler for RemoteTextEditor {
         if let Some(selected) = new_selected_range_utf16 {
             let relative_start = utf16_to_utf8(new_text, selected.start);
             let relative_end = utf16_to_utf8(new_text, selected.end);
-            self.anchor = start + relative_start;
-            self.head = start + relative_end;
+            self.document.anchor = start + relative_start;
+            self.document.head = start + relative_end;
         }
         cx.notify();
     }
@@ -824,7 +1019,7 @@ impl EntityInputHandler for RemoteTextEditor {
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
-        let position = layout.position_for_index(range.end)?;
+        let position = layout.position_for_index(self.projection.display_offset(range.end))?;
         Some(Bounds::new(position, size(px(2.), layout.line_height())))
     }
 
@@ -840,11 +1035,14 @@ impl EntityInputHandler for RemoteTextEditor {
 
 impl RemoteTextEditor {
     fn offset_from_utf16(&self, offset: usize) -> usize {
-        utf16_to_utf8(&self.content, offset)
+        utf16_to_utf8(&self.document.content, offset)
     }
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
-        self.content[..nearest_char_boundary(&self.content, offset.min(self.content.len()))]
+        self.document.content[..nearest_char_boundary(
+            &self.document.content,
+            offset.min(self.document.content.len()),
+        )]
             .encode_utf16()
             .count()
     }
@@ -876,21 +1074,23 @@ impl Render for RemoteTextEditor {
             )
         });
         let selection = self.selected_range();
-        let display_text = if self.content.is_empty() {
+        self.projection = nyaterm_core::document_edit::FoldProjection::new(
+            &self.document.content,
+            self.folds.clone(),
+        );
+        let display_text = if self.projection.text.is_empty() {
             SharedString::from(" ")
         } else {
-            SharedString::from(self.content.clone())
+            SharedString::from(self.projection.text.clone())
         };
         let mut highlights = Vec::new();
-        if !self.search_query.is_empty() {
-            for (index, (start, matched)) in
-                self.content.match_indices(&self.search_query).enumerate()
-            {
-                if index == self.active_match {
-                    continue;
-                }
+        if let Ok(matches) = self
+            .search_options
+            .matches(&self.document.content, &self.search_query)
+        {
+            for range in matches {
                 highlights.push((
-                    start..start + matched.len(),
+                    range,
                     HighlightStyle {
                         background_color: Some(rgba((palette.warning << 8) | 0x38).into()),
                         ..Default::default()
@@ -898,7 +1098,20 @@ impl Render for RemoteTextEditor {
                 ));
             }
         }
-        if let Some((left, right)) = matching_bracket_ranges(&self.content, self.head) {
+        for range in &self.document.additional_selections {
+            if !range.is_empty() {
+                highlights.push((
+                    range.clone(),
+                    HighlightStyle {
+                        background_color: Some(rgba((palette.primary << 8) | 0x55).into()),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        if let Some((left, right)) =
+            matching_bracket_ranges(&self.document.content, self.document.head)
+        {
             for range in [left, right] {
                 highlights.push((
                     range,
@@ -935,6 +1148,11 @@ impl Render for RemoteTextEditor {
                 },
             ));
         }
+        let highlights = highlights.into_iter().filter_map(|(range, style)| {
+            let range = self.projection.display_offset(range.start)
+                ..self.projection.display_offset(range.end);
+            (!range.is_empty()).then_some((range, style))
+        });
         let text = StyledText::new(display_text).with_highlights(highlights);
 
         let editor_surface = div()
@@ -1004,11 +1222,44 @@ impl Render for RemoteTextEditor {
 
         // The editing surface is itself the scroller, so the bar has to hang off a
         // non-scrolling parent or it would scroll away with the text.
+        let fold_bar = div()
+            .flex_none()
+            .flex()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .child(
+                nyaterm_ui::NyaButton::new("editor-fold", rust_i18n::t!("documentEditor.fold"))
+                    .small()
+                    .on_click(cx.listener(|this, _, _, cx| this.fold_at_cursor(cx))),
+            )
+            .child(
+                nyaterm_ui::NyaButton::new(
+                    "editor-unfold",
+                    rust_i18n::t!("documentEditor.unfoldAll"),
+                )
+                .small()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.folds.clear();
+                    cx.notify();
+                })),
+            );
+        let search_bar = self.search_bar(cx);
         div()
             .size_full()
-            .relative()
-            .child(editor_surface)
-            .vertical_scrollbar(&self.scroll)
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(fold_bar)
+            .when(self.search_open, |this| this.child(search_bar))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(editor_surface)
+                    .vertical_scrollbar(&self.scroll),
+            )
     }
 }
 
@@ -1018,6 +1269,7 @@ struct RemoteTextElement {
 }
 
 struct RemoteTextPrepaint {
+    secondary_cursors: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
     active_line: Option<PaintQuad>,
     line_numbers: Vec<(ShapedLine, Point<Pixels>)>,
@@ -1068,7 +1320,11 @@ impl Element for RemoteTextElement {
         let layout = self.text.layout();
         let palette = editor.app.read(cx).theme_palette();
         let line_height = layout.line_height();
-        let cursor_position = layout.position_for_index(editor.head.min(editor.content.len()));
+        let cursor_position = layout.position_for_index(
+            editor
+                .projection
+                .display_offset(editor.document.head.min(editor.document.content.len())),
+        );
         let cursor = if !editor.selected_range().is_empty() {
             None
         } else {
@@ -1079,15 +1335,23 @@ impl Element for RemoteTextElement {
                 )
             })
         };
-        let active_start = line_start(&editor.content, editor.head.min(editor.content.len()));
-        let active_number = editor.content[..active_start]
+        let active_start = line_start(
+            &editor.document.content,
+            editor.document.head.min(editor.document.content.len()),
+        );
+        let active_number = editor.document.content[..active_start]
             .bytes()
             .filter(|byte| *byte == b'\n')
             .count()
             + 1;
-        let visual_rows = line_number_visual_rows(&editor.content, &layout.wrapped_text());
+        let visual_rows = line_number_visual_rows(&editor.projection.text, &layout.wrapped_text());
+        let visible_active_number = editor.projection.text
+            [..editor.projection.display_offset(active_start)]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
         let active_y = visual_rows
-            .get(active_number.saturating_sub(1))
+            .get(visible_active_number)
             .map(|row| bounds.top() + line_height * *row as f32);
         let active_line = active_y.map(|y| {
             fill(
@@ -1099,13 +1363,34 @@ impl Element for RemoteTextElement {
             )
         });
         let mut line_numbers = Vec::new();
+        let mut source_starts = vec![0];
+        source_starts.extend(
+            editor
+                .document
+                .content
+                .match_indices('\n')
+                .map(|(offset, _)| offset + 1),
+        );
+        let mut display_starts = vec![0];
+        display_starts.extend(
+            editor
+                .projection
+                .text
+                .match_indices('\n')
+                .map(|(offset, _)| offset + 1),
+        );
         let viewport = editor.scroll.bounds();
         for (index, visual_row) in visual_rows.into_iter().enumerate() {
             let y = bounds.top() + line_height * visual_row as f32;
             if y + line_height < viewport.top() || y > viewport.bottom() {
                 continue;
             }
-            let number = index + 1;
+            let display_offset = display_starts
+                .get(index)
+                .copied()
+                .unwrap_or(editor.projection.text.len());
+            let source_offset = editor.projection.source_offset(display_offset);
+            let number = source_starts.partition_point(|offset| *offset <= source_offset);
             let label = SharedString::from(number.to_string());
             let color = if number == active_number {
                 rgb(palette.text)
@@ -1126,7 +1411,23 @@ impl Element for RemoteTextElement {
             let origin = point(bounds.left() - px(10.) - shaped.width, y);
             line_numbers.push((shaped, origin));
         }
+        let secondary_cursors = editor
+            .document
+            .additional_selections
+            .iter()
+            .filter_map(|range| {
+                layout
+                    .position_for_index(editor.projection.display_offset(range.end))
+                    .map(|position| {
+                        fill(
+                            Bounds::new(position, size(px(2.), line_height)),
+                            rgb(palette.text),
+                        )
+                    })
+            })
+            .collect();
         RemoteTextPrepaint {
+            secondary_cursors,
             cursor,
             active_line,
             line_numbers,
@@ -1149,6 +1450,9 @@ impl Element for RemoteTextElement {
             ElementInputHandler::new(bounds, self.editor.clone()),
             cx,
         );
+        for cursor in prepaint.secondary_cursors.drain(..) {
+            window.paint_quad(cursor);
+        }
         if let Some(active_line) = prepaint.active_line.take() {
             window.paint_quad(active_line);
         }

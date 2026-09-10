@@ -270,11 +270,6 @@ impl NyaTermApp {
         let save_all_label = t!("fileEditor.saveAll");
         let save_close_label = t!("fileEditor.saveAndClose");
         let discard_label = t!("fileEditor.discard");
-        let search_placeholder = t!("fileEditor.searchPlaceholder");
-        let previous_match_label = t!("fileEditor.previousMatch");
-        let next_match_label = t!("fileEditor.nextMatch");
-        let clear_search_label = t!("fileEditor.clearSearch");
-        let no_match_label = t!("fileEditor.noMatch");
         let bytes_label = t!("fileEditor.bytes");
         let encoding_label = t!("fileEditor.encodingUtf8");
         let line_ending_label = t!("fileEditor.lineEndingLf");
@@ -353,11 +348,6 @@ impl NyaTermApp {
             .min(search_matches.len().saturating_sub(1));
         let content_preview =
             editor_content_preview(&state.content, &state.search_query, active_match);
-        let search_label = if state.search_query.is_empty() {
-            search_placeholder.to_string()
-        } else {
-            state.search_query.clone()
-        };
         let active_tab_id = state.id.clone();
         let has_native_editor = native_editor.is_some();
         let tabs_menu_open = self.transfer.editor_tabs_menu_is_open() && tabs.len() > 1;
@@ -759,106 +749,6 @@ impl NyaTermApp {
                                 .child(error),
                         )
                     })
-                    .when(
-                        state.focused_field == TransferEditorField::Search
-                            || !state.search_query.is_empty(),
-                        |this| {
-                            let search_bar = div()
-                                .flex_none()
-                                .px_3()
-                                .py_2()
-                                .border_b_1()
-                                .border_color(rgb(palette.border))
-                                .bg(rgb(palette.surface))
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .id(SharedString::from("transfer-editor-search-input"))
-                                        .h(px(32.))
-                                        .flex_1()
-                                        .min_w(px(180.))
-                                        .rounded_sm()
-                                        .border_1()
-                                        .border_color(if state.focused_field
-                                            == TransferEditorField::Search
-                                        {
-                                            rgb(0x256d3f)
-                                        } else {
-                                            rgb(palette.border)
-                                        })
-                                        .bg(rgb(palette.input))
-                                        .px_3()
-                                        .flex()
-                                        .items_center()
-                                        .font_family(crate::features::shell::gpui_code_font_family())
-                                        .text_xs()
-                                        .text_color(if state.search_query.is_empty() {
-                                            rgb(palette.text_muted)
-                                        } else {
-                                            rgb(palette.text)
-                                        })
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            if let Some(state) =
-                                                this.transfer.active_editor_tab_mut()
-                                            {
-                                                state.focused_field = TransferEditorField::Search;
-                                            }
-                                            window.focus(this.transfer.editor_focus(), cx);
-                                            cx.notify();
-                                        }))
-                                        .child(truncate_preview(&search_label, 96)),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(palette.text_muted))
-                                        .child(if state.search_query.is_empty() {
-                                            "0 / 0".to_string()
-                                        } else if search_matches.is_empty() {
-                                            no_match_label.to_string()
-                                        } else {
-                                            format!(
-                                                "{} / {}",
-                                                active_match + 1,
-                                                search_matches.len()
-                                            )
-                                        }),
-                                )
-                                .child(small_button(
-                                    palette,
-                                    "transfer-editor-prev-match",
-                                    previous_match_label,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.advance_transfer_editor_search(-1, cx);
-                                    }),
-                                ))
-                                .child(small_button(
-                                    palette,
-                                    "transfer-editor-next-match",
-                                    next_match_label,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.advance_transfer_editor_search(1, cx);
-                                    }),
-                                ))
-                                .child(small_button(
-                                    palette,
-                                    "transfer-editor-clear-search",
-                                    clear_search_label,
-                                    cx.listener(|this, _, _, cx| {
-                                        if let Some(state) = this.transfer.active_editor_tab_mut() {
-                                            state.search_query.clear();
-                                            state.active_match = 0;
-                                        }
-                                        cx.notify();
-                                    }),
-                                ));
-                            this.child(search_bar)
-                        },
-                    )
                     .child(
                         div()
                             .id(SharedString::from("transfer-editor-content"))

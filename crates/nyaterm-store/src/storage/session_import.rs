@@ -40,7 +40,19 @@ impl ConnectionStore {
             let group_id = connection.group_path.as_ref().and_then(|segments| {
                 ensure_group_path(&mut groups, &mut path_map, &mut next_sort, segments)
             });
+            if let Some(mut saved) = connection.saved {
+                saved.id = uuid::Uuid::new_v4().to_string();
+                saved.name = connection.name;
+                saved.group_id = group_id;
+                saved.description = connection.description;
+                saved.sort_order = connection.sort_order;
+                saved.icon = connection.icon;
+                saved.auth = connection.auth;
+                connections.push(saved);
+                continue;
+            }
             connections.push(SavedConnection {
+                extensions: Default::default(),
                 id: uuid::Uuid::new_v4().to_string(),
                 name: connection.name,
                 config: connection.config,
@@ -116,6 +128,14 @@ impl ConnectionStore {
         }
         for group in &groups[existing_group_count..] {
             save_group_in_txn(&txn, group)?;
+        }
+        for icon in &prepared.custom_icons {
+            write_json_in_txn(
+                &txn,
+                super::CONNECTIONS_TABLE,
+                &entity_key("connection_custom_icons/", &icon.id),
+                icon,
+            )?;
         }
         for connection in &connections {
             save_connection_in_txn(&txn, connection)?;
@@ -300,6 +320,7 @@ mod tests {
 
     fn prepared_import() -> PreparedSessionImport {
         PreparedSessionImport {
+            custom_icons: Vec::new(),
             groups: vec![vec!["Imported".to_string()]],
             passwords: vec![SavedPassword {
                 id: "password-1".to_string(),
@@ -309,6 +330,7 @@ mod tests {
             }],
             ssh_keys: Vec::new(),
             connections: vec![PreparedSessionConnection {
+                saved: None,
                 name: "Imported shell".to_string(),
                 config: ConnectionType::LocalTerminal {
                     shell_path: "/bin/sh".to_string(),

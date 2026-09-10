@@ -74,6 +74,7 @@ use self::network_logic::{
 };
 
 pub(in crate::features) struct ConnectionFeatureState {
+    pub(in crate::features) custom_icons: super::custom_icons::CustomIconState,
     catalog: ConnectionCatalogState,
     list: ConnectionListState,
     list_model: ConnectionListModelCache,
@@ -247,6 +248,7 @@ impl ConnectionFeatureState {
             },
         );
         Self {
+            custom_icons: Default::default(),
             catalog: ConnectionCatalogState::new(connections, groups),
             list: ConnectionListState {
                 search_field,
@@ -700,7 +702,10 @@ impl ConnectionFeatureState {
                 let input = NyaInputState::new(cx, value)
                     .masked(masked)
                     .placeholder(placeholder);
-                if field == ConnectionEditorField::Description {
+                if matches!(
+                    field,
+                    ConnectionEditorField::Description | ConnectionEditorField::PostLoginCommand
+                ) {
                     input.multi_line(Some(4))
                 } else {
                     input

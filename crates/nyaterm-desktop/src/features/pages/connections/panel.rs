@@ -101,6 +101,8 @@ impl PartialEq for ConnectionListKey {
 /// *from*. Prebuilding rows here would materialise the whole catalog in order to
 /// draw the twenty rows actually on screen.
 pub(in crate::features) struct ConnectionListSnapshot {
+    pub(in crate::features::pages::connections) custom_icons:
+        Arc<HashMap<String, Arc<gpui::RenderImage>>>,
     pub(in crate::features::pages::connections) key: ConnectionListKey,
     pub(in crate::features::pages::connections) chrome: ConnectionChrome,
     pub(in crate::features::pages::connections) rows: Arc<[ConnectionListRow]>,
@@ -228,6 +230,15 @@ impl ConnectionPanel {
 
     pub(in crate::features) fn snapshot_key(&self) -> Option<&ConnectionListKey> {
         self.snapshot.as_ref().map(|snapshot| &snapshot.key)
+    }
+
+    pub(in crate::features) fn icon_images_are_current(
+        &self,
+        images: &Arc<HashMap<String, Arc<gpui::RenderImage>>>,
+    ) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(|snapshot| Arc::ptr_eq(&snapshot.custom_icons, images))
     }
 
     pub(in crate::features) fn set_snapshot(
@@ -358,6 +369,7 @@ mod tests {
 
     fn connection(id: &str, name: &str, group_id: Option<&str>) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: name.to_string(),
             config: nyaterm_core::ConnectionType::LocalTerminal {

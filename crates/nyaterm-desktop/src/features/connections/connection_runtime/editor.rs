@@ -194,6 +194,8 @@ impl NyaTermApp {
                 sftp_enabled: true,
                 sftp_cwd_follow_mode: "shell_integration".to_string(),
                 sftp_shell_detection_timeout_ms: "3000".to_string(),
+                sftp_pipeline_depth: None,
+                sftp_extra: Default::default(),
                 sftp_filename_encoding: "terminal".to_string(),
                 ssh_algorithm_mode: "compatible".to_string(),
                 ssh_algorithm_kex: Vec::new(),
@@ -770,6 +772,10 @@ impl NyaTermApp {
         self.submit_store_request(
             0,
             store_request(StoreDomain::Connections, move |store| {
+                let mut persisted = persisted;
+                if let Some(previous) = store.get_connection(&persisted.id)? {
+                    persisted.extensions = previous.extensions;
+                }
                 if let Some(group) = &pending_group {
                     store.save_group_and_connection(group, &persisted)?;
                 } else {
@@ -784,7 +790,7 @@ impl NyaTermApp {
                         .iter()
                         .find(|connection| connection.id == saved_id)
                         .cloned();
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     let Some(saved) = saved else {
                         this.set_connection_editor_error(
                             "saved connection was not returned by storage".to_string(),

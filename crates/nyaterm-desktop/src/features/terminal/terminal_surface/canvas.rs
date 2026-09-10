@@ -807,13 +807,13 @@ impl NyaTermApp {
                                         .text_xs()
                                         .font_weight(FontWeight(700.))
                                         .text_color(rgb(palette.danger))
-                                        .child("Session disconnected"),
+                                        .child(rust_i18n::t!("terminal.disconnectedStatus")),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(11.))
                                         .text_color(rgb(palette.warning))
-                                        .child("Enter reconnect · Ctrl+D close"),
+                                        .child(rust_i18n::t!("terminal.reconnectHint")),
                                 ),
                         )
                     })

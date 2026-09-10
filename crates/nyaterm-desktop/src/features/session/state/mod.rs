@@ -177,6 +177,9 @@ impl SessionFeatureState {
     }
 
     pub(in crate::features) fn shutdown_workers(&mut self) {
+        for pending in self.start.pending.values() {
+            pending.attempt.cancel();
+        }
         self.protocols.shutdown_workers();
         self.event_bridge.shutdown();
     }
@@ -1982,6 +1985,39 @@ impl SessionPromptState {
         })
     }
 
+    pub(in crate::features) fn clear_cancelled_attempt_prompts(&mut self) -> bool {
+        let mut changed = false;
+        for id in self.host_key_prompts.take_cancelled() {
+            if self
+                .active_host_key_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.id == id)
+            {
+                self.active_host_key_prompt = None;
+                changed = true;
+            }
+        }
+        for id in self.credential_prompts.take_cancelled() {
+            if self
+                .active_credential_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.id == id)
+            {
+                self.active_credential_prompt = None;
+                changed = true;
+            }
+            if self
+                .active_keyboard_interactive_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.id == id)
+            {
+                self.active_keyboard_interactive_prompt = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(in crate::features) fn activate_next_host_key(&mut self) -> Option<String> {
         if self.active_host_key_prompt.is_some() || !self.host_key_prompts.has_pending() {
             return None;
@@ -2322,6 +2358,7 @@ impl SessionDialogState {
 }
 
 pub(in crate::features) struct PendingSessionStart {
+    pub attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     pub connection_name: String,
     pub launch_config: Option<SessionLaunchConfig>,
     pub requested_at: Instant,
@@ -2519,6 +2556,16 @@ impl SessionStartFeatureState {
         self.preparing_saved_connections.contains_key(connection_id)
     }
 
+    pub(in crate::features) fn attempt(
+        &self,
+        request_id: &str,
+    ) -> nyaterm_transport::connection_attempt::ConnectionAttempt {
+        self.pending
+            .get(request_id)
+            .map(|pending| pending.attempt.clone())
+            .unwrap_or_default()
+    }
+
     pub(in crate::features) fn register_pending(
         &mut self,
         request_id: String,
@@ -2689,6 +2736,7 @@ impl SessionStartFeatureState {
         request_id: &str,
     ) -> Option<PendingSessionStart> {
         let pending = self.pending.remove(request_id)?;
+        pending.attempt.cancel();
         self.cancelled.insert(request_id.to_string());
         if self.active_pending.as_deref() == Some(request_id) {
             self.active_pending = self.latest_pending_request_id();

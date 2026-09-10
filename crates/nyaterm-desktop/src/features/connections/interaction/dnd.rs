@@ -360,7 +360,7 @@ impl NyaTermApp {
             }),
             move |this, event, cx| match event.outcome {
                 Ok(sessions) => {
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     on_success(this, cx);
                     cx.notify();
                 }
@@ -394,7 +394,7 @@ impl NyaTermApp {
             }),
             move |this, event, cx| match event.outcome {
                 Ok(sessions) => {
-                    this.apply_loaded_sessions(sessions);
+                    this.apply_loaded_sessions(sessions, cx);
                     on_success(this, cx);
                     cx.notify();
                 }
@@ -418,6 +418,7 @@ mod tests {
 
     fn connection(id: &str, group_id: Option<&str>, sort_order: i32) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: id.to_string(),
             config: ConnectionType::LocalTerminal {

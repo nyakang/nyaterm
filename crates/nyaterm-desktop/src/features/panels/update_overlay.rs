@@ -24,6 +24,16 @@ impl NyaTermApp {
         let available =
             !checking && !failed && update_info.as_ref().is_some_and(|info| info.available);
         let portable = self.runtime.mode() == RuntimeMode::Portable;
+        let download_state = self.update.download.clone();
+        let download_error = if let crate::features::update::download::DownloadState::Failed(
+            error,
+        ) = &download_state
+        {
+            Some(error.clone())
+        } else {
+            None
+        };
+        let can_install = crate::features::update::download::supports_native_install(portable);
         let (_, viewport_h) = self.shell.viewport_size();
         let release_url = update_info
             .as_ref()
@@ -150,6 +160,59 @@ impl NyaTermApp {
                     )
                 },
             )
+            .when_some(download_error, |this, error| {
+                this.child(div().text_xs().text_color(rgb(palette.danger)).child(error))
+            })
+            .when(can_install && available, |this| {
+                use crate::features::update::download::DownloadState;
+                this.child(match download_state {
+                    DownloadState::Downloading { received, total } => div()
+                        .flex()
+                        .gap_2()
+                        .child(format!(
+                            "{} / {} MiB",
+                            received / 1048576,
+                            total
+                                .map(|value| (value / 1048576).to_string())
+                                .unwrap_or_else(|| "?".into())
+                        ))
+                        .child(
+                            nyaterm_ui::NyaButton::new(
+                                "update-cancel-download",
+                                t!("common.cancel"),
+                            )
+                            .on_click(
+                                cx.listener(|app, _, _, cx| app.cancel_native_update_download(cx)),
+                            ),
+                        )
+                        .into_any_element(),
+                    DownloadState::Ready { .. } => nyaterm_ui::NyaButton::new(
+                        "update-install",
+                        t!("updater.installAndRestart"),
+                    )
+                    .on_click(cx.listener(|app, _, window, cx| {
+                        app.request_native_update_install(window, cx)
+                    }))
+                    .into_any_element(),
+                    DownloadState::Idle | DownloadState::Failed(_) => div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(matches!(download_state, DownloadState::Failed(_)), |this| {
+                            this.child(t!("updater.downloadFailed"))
+                        })
+                        .child(
+                            nyaterm_ui::NyaButton::new(
+                                "update-download",
+                                t!("updater.downloadUpdate"),
+                            )
+                            .on_click(
+                                cx.listener(|app, _, _, cx| app.start_native_update_download(cx)),
+                            ),
+                        )
+                        .into_any_element(),
+                })
+            })
             .when(!checking, |this| {
                 this.child(
                     div()

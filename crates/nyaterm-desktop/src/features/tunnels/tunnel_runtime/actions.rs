@@ -272,6 +272,32 @@ impl NyaTermApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_tunnel_without_window(tunnel, cx);
+    }
+
+    pub(in crate::features) fn start_auto_tunnels_for_connection(
+        &mut self,
+        connection_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let tunnels = self
+            .tunnel_state
+            .tunnels()
+            .iter()
+            .filter(|tunnel| {
+                tunnel.auto_open && tunnel.connection_id.as_deref() == Some(connection_id)
+            })
+            .filter(|tunnel| {
+                !self.tunnel_state.is_open(&tunnel.id) && !self.tunnel_state.is_pending(&tunnel.id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for tunnel in tunnels {
+            self.start_tunnel_without_window(tunnel, cx);
+        }
+    }
+
+    fn start_tunnel_without_window(&mut self, tunnel: TunnelConfig, cx: &mut Context<Self>) {
         if self.tunnel_state.is_pending(&tunnel.id) {
             self.shell.set_status(format!(
                 "tunnel {} is already pending",
@@ -322,33 +348,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let ssh_config = match self.build_ssh_session_config(&connection, &mut Vec::new()) {
-            Ok(config) => config,
-            Err(error) => {
-                self.shell.set_status(format!(
-                    "failed to prepare tunnel {}: {error}",
-                    tunnel_name(&tunnel)
-                ));
-                cx.notify();
-                return;
-            }
-        };
-        let config = SshTunnelConfig {
-            id: tunnel.id.clone(),
-            ssh_config,
-            mode,
-            bind_host: if tunnel.bind_localhost {
-                "127.0.0.1".to_string()
-            } else {
-                "0.0.0.0".to_string()
-            },
-            listen_port: tunnel.listen_port,
-            target_host: matches!(mode, SshTunnelMode::Local | SshTunnelMode::Remote)
-                .then_some(tunnel.target_host.clone()),
-            target_port: matches!(mode, SshTunnelMode::Local | SshTunnelMode::Remote)
-                .then_some(tunnel.target_port),
-        };
-
+        let build_context = self.ssh_session_config_build_context();
         if !self.tunnel_state.begin_job(tunnel.id.clone()) {
             self.shell.set_status(format!(
                 "tunnel {} is already pending",
@@ -364,10 +364,30 @@ impl NyaTermApp {
         let rejected_tx = tunnel_tx.clone();
         let rejected_tunnel_id = tunnel.id.clone();
         if let Err(error) = self.blocking_jobs.submit_detached("tunnel-open", move |_| {
-            let result = tunnel_manager
-                .open(config)
-                .map(TunnelJobOutput::Opened)
-                .map_err(|error| error.to_string());
+            let result = build_context
+                .build_config(&connection)
+                .and_then(|ssh_config| {
+                    let config = SshTunnelConfig {
+                        id: tunnel.id.clone(),
+                        ssh_config,
+                        mode,
+                        bind_host: if tunnel.bind_localhost {
+                            "127.0.0.1".to_string()
+                        } else {
+                            "0.0.0.0".to_string()
+                        },
+                        listen_port: tunnel.listen_port,
+                        target_host: matches!(mode, SshTunnelMode::Local | SshTunnelMode::Remote)
+                            .then_some(tunnel.target_host.clone()),
+                        target_port: matches!(mode, SshTunnelMode::Local | SshTunnelMode::Remote)
+                            .then_some(tunnel.target_port),
+                    };
+
+                    tunnel_manager
+                        .open(config)
+                        .map(TunnelJobOutput::Opened)
+                        .map_err(|error| error.to_string())
+                });
             let _ = tunnel_tx.unbounded_send(TunnelJobResult {
                 tunnel_id: tunnel.id,
                 result,
@@ -442,7 +462,7 @@ impl NyaTermApp {
             while let Some(event) = rx.next().await {
                 if this
                     .update(cx, |this, cx| {
-                        this.apply_tunnel_event(event);
+                        this.apply_tunnel_event(event, cx);
                         cx.notify();
                     })
                     .is_err()
@@ -454,7 +474,7 @@ impl NyaTermApp {
         .detach();
     }
 
-    fn apply_tunnel_event(&mut self, event: TunnelJobResult) {
+    fn apply_tunnel_event(&mut self, event: TunnelJobResult, cx: &mut Context<Self>) {
         self.tunnel_state.finish_job(&event.tunnel_id);
         match event.result {
             Ok(TunnelJobOutput::Opened(info)) => {
@@ -468,6 +488,12 @@ impl NyaTermApp {
                     .set_status(format!("tunnel {} closed", event.tunnel_id));
             }
             Err(error) => {
+                self.notify_background_operation(
+                    "tunnel-failed",
+                    nyaterm_ui::notification::NyaNotificationKind::Error,
+                    format!("{}: {error}", event.tunnel_id),
+                    cx,
+                );
                 self.shell
                     .set_status(format!("tunnel {} failed: {error}", event.tunnel_id));
             }

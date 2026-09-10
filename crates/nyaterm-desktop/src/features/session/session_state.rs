@@ -152,6 +152,7 @@ impl NyaTermApp {
         let target_is_rdp = self.remote_desktop.is_session(session_id);
         if switching_sessions && let Some(previous_session_id) = previous_session_id.as_deref() {
             self.release_remote_keys(previous_session_id);
+            self.clear_remote_composition(previous_session_id, cx);
         }
         if switching_sessions
             && let Some(previous_session_id) = previous_session_id.as_deref()

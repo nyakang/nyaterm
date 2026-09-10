@@ -13,6 +13,7 @@ fn a_missing_helper_binary_names_the_command_to_build_it() {
         .create_session_with_id(
             "absent".to_string(),
             VncSessionConfig {
+                relay: None,
                 name: "absent".to_string(),
                 host: "127.0.0.1".to_string(),
                 port: 5900,

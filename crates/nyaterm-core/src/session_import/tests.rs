@@ -450,3 +450,15 @@ fn temp_import_dir(label: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).expect("create import directory");
     dir
 }
+
+#[test]
+fn nyaterm_json_retains_pipeline_shared_icons_and_future_connection_fields() {
+    let prepared = parse_nyaterm_json_content(r#"{"version":1,"custom_icons":[{"id":"custom-icon-test","name":"test","data_url":"data:image/png;base64,AA==","created_at_ms":1,"updated_at_ms":1}],"sessions":[{"name":"test","type":"ssh","host":"example.com","sftp":{"pipeline_depth":16},"icon":"custom-icon-test","future":{"enabled":true}}]}"#).unwrap();
+    assert_eq!(prepared.custom_icons.len(), 1);
+    let saved = prepared.connections[0].saved.as_ref().unwrap();
+    assert_eq!(saved.sftp.pipeline_depth, Some(16));
+    assert_eq!(
+        serde_json::to_value(saved).unwrap()["future"]["enabled"],
+        true
+    );
+}

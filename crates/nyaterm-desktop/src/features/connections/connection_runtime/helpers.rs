@@ -117,6 +117,8 @@ pub(super) fn connection_editor_from_saved(
         sftp_enabled: sftp.enabled,
         sftp_cwd_follow_mode: sftp_cwd_follow_mode_value(sftp.cwd_follow_mode),
         sftp_shell_detection_timeout_ms: sftp.shell_detection_timeout_ms.to_string(),
+        sftp_pipeline_depth: sftp.pipeline_depth,
+        sftp_extra: sftp.extra.clone(),
         sftp_filename_encoding: if sftp.filename_encoding.is_empty() {
             "terminal".to_string()
         } else {
@@ -370,7 +372,11 @@ pub(super) fn build_saved_connection_from_editor(
                 host,
                 port,
                 username,
-                backspace_mode: non_empty_or(editor.backspace_mode.clone(), "del"),
+                backspace_mode: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                    &editor.backspace_mode,
+                )
+                .persistence_id()
+                .to_string(),
                 ai_execution_profile: AiExecutionProfile::Auto,
                 x11_forwarding: editor.x11_forwarding,
                 auth_agent_endpoint: (editor.auth_mode == "agent")
@@ -408,7 +414,11 @@ pub(super) fn build_saved_connection_from_editor(
                 port,
                 username: editor.username.trim().to_string(),
                 ai_execution_profile: AiExecutionProfile::Auto,
-                backspace_mode: non_empty_or(editor.backspace_mode.clone(), "del"),
+                backspace_mode: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                    &editor.backspace_mode,
+                )
+                .persistence_id()
+                .to_string(),
                 raw_tcp_cli: editor.raw_tcp_cli,
                 enter_mode: non_empty_or(editor.telnet_enter_mode.clone(), "cr"),
                 local_echo: editor.local_echo,
@@ -472,7 +482,11 @@ pub(super) fn build_saved_connection_from_editor(
                 parity: non_empty_or(editor.parity.clone(), "none"),
                 stop_bits: non_empty_or(editor.stop_bits.clone(), "1"),
                 ai_execution_profile: AiExecutionProfile::Auto,
-                backspace_mode: non_empty_or(editor.backspace_mode.clone(), "del"),
+                backspace_mode: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
+                    &editor.backspace_mode,
+                )
+                .persistence_id()
+                .to_string(),
                 encoding: editor_encoding_to_saved(&editor.encoding),
             }
         }
@@ -634,7 +648,7 @@ pub(super) fn build_saved_connection_from_editor(
     };
 
     let network = match editor.kind {
-        ConnectionKindTab::Ssh => {
+        ConnectionKindTab::Ssh | ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => {
             let proxy_id = editor
                 .proxy_id
                 .clone()
@@ -706,6 +720,8 @@ pub(super) fn build_saved_connection_from_editor(
     };
     let sftp = if editor.kind == ConnectionKindTab::Ssh {
         SftpSettings {
+            pipeline_depth: editor.sftp_pipeline_depth,
+            extra: editor.sftp_extra.clone(),
             enabled: editor.sftp_enabled,
             cwd_follow_mode: parse_sftp_cwd_follow_mode(&editor.sftp_cwd_follow_mode),
             shell_detection_timeout_ms: editor
@@ -724,6 +740,7 @@ pub(super) fn build_saved_connection_from_editor(
     };
 
     Ok(SavedConnection {
+        extensions: Default::default(),
         id: editor.id.clone().unwrap_or_else(uuid),
         name,
         config,
@@ -805,6 +822,7 @@ mod tests {
     #[test]
     fn connection_editor_round_trip_preserves_icon() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-1".to_string(),
             name: "Local".to_string(),
             config: ConnectionType::LocalTerminal {
@@ -843,6 +861,7 @@ mod tests {
     #[test]
     fn connection_editor_round_trip_preserves_saved_password_reference() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-ssh".to_string(),
             name: "SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -903,6 +922,7 @@ mod tests {
             SshAgentEndpoint::Auto
         };
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-agent".to_string(),
             name: "Agent SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -966,6 +986,7 @@ mod tests {
     #[test]
     fn connection_editor_rejects_invalid_ssh_agent_endpoint_before_save() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-agent-invalid".to_string(),
             name: "Agent SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -1019,6 +1040,7 @@ mod tests {
     #[test]
     fn connection_editor_round_trip_preserves_ssh_encoding_sftp_and_algorithms() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-ssh".to_string(),
             name: "SSH".to_string(),
             config: ConnectionType::Ssh {
@@ -1051,6 +1073,8 @@ mod tests {
             ssh_profile: SshProfile::NetworkDevice,
             terminal_type: Some(SshTerminalType::Vt220),
             sftp: SftpSettings {
+                pipeline_depth: None,
+                extra: Default::default(),
                 enabled: false,
                 cwd_follow_mode: SftpCwdFollowMode::RcFile,
                 shell_detection_timeout_ms: 5000,
@@ -1104,6 +1128,7 @@ mod tests {
     #[test]
     fn connection_editor_round_trip_preserves_telnet_behavior() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-telnet".to_string(),
             name: "Telnet".to_string(),
             config: ConnectionType::Telnet {
@@ -1188,6 +1213,7 @@ mod tests {
             rotation: Some(RecordingRotationPolicy::Size { max_bytes: 4096 }),
         };
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-rdp".to_string(),
             name: "RDP".to_string(),
             config: ConnectionType::Rdp {
@@ -1293,6 +1319,7 @@ mod tests {
             max_attempts: 12,
         };
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-vnc".to_string(),
             name: "VNC".to_string(),
             config: ConnectionType::Vnc {
@@ -1375,6 +1402,7 @@ mod tests {
     #[test]
     fn connection_editor_saves_telnet_username_password_and_encoding() {
         let connection = SavedConnection {
+            extensions: Default::default(),
             id: "connection-telnet".to_string(),
             name: "Telnet".to_string(),
             config: ConnectionType::Telnet {

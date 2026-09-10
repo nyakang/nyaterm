@@ -1031,6 +1031,7 @@ mod tests {
         sort_order: i32,
     ) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: name.to_string(),
             config: nyaterm_core::ConnectionType::LocalTerminal {
@@ -1291,7 +1292,16 @@ pub(super) fn editor_field_box(
     let handle = entity.map(|field| field.read(cx).focus_handle());
     let focused = entity.is_some_and(|field| field.read(cx).has_focus());
     div()
-        .h(px(EDITOR_CONTROL_HEIGHT_PX))
+        .h(px(
+            if matches!(
+                field,
+                ConnectionEditorField::Description | ConnectionEditorField::PostLoginCommand
+            ) {
+                112.
+            } else {
+                EDITOR_CONTROL_HEIGHT_PX
+            },
+        ))
         .id("connection-list-search-input-shell")
         .min_w_0()
         .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))

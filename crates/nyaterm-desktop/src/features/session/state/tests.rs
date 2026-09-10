@@ -29,6 +29,7 @@ use super::{
 
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
+        attempt: Default::default(),
         connection_name: name.to_string(),
         launch_config: None,
         requested_at: Instant::now(),

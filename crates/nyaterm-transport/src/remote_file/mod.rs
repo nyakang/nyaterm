@@ -313,7 +313,20 @@ impl RemoteFileService {
     ) -> anyhow::Result<SftpFileProperties> {
         match self.backend()? {
             RemoteFileBackendKind::Sftp => self.sftp()?.remote_file_properties(path),
-            kind => shell_properties(&self.shell(kind), path),
+            kind => {
+                let shell = self.shell(kind);
+                let mut properties = shell_properties(&shell, path)?;
+                if properties.file_type == SftpFileType::Symlink {
+                    let output = shell.exec_ok(
+                        format!("readlink -- {}", shell_quote(&path.display_path)),
+                        None,
+                    )?;
+                    let text = String::from_utf8(output)?;
+                    properties.symlink_target =
+                        Some(text.strip_suffix('\n').unwrap_or(&text).to_string());
+                }
+                Ok(properties)
+            }
         }
     }
 
@@ -433,7 +446,31 @@ impl RemoteFileService {
     ) -> anyhow::Result<()> {
         match self.backend()? {
             RemoteFileBackendKind::Sftp => self.sftp()?.update_remote_path_attributes(path, update),
-            kind => update_shell_attributes(&self.shell(kind), &path.display_path, &update),
+            kind => {
+                let shell = self.shell(kind);
+                if let Some(target) = update.symlink_target.as_deref() {
+                    if target.is_empty() || target.contains('\0') {
+                        anyhow::bail!("invalid symbolic link target");
+                    }
+                    if update.mode.is_some()
+                        || update.owner.is_some()
+                        || update.group.is_some()
+                        || update.recursive
+                    {
+                        anyhow::bail!("save the link target separately from target attributes");
+                    }
+                    let original = shell_quote(&path.display_path);
+                    let temporary = shell_quote(&format!(
+                        "{}.nyaterm-{}",
+                        path.display_path,
+                        uuid::Uuid::new_v4()
+                    ));
+                    shell.exec_ok(format!("test -L {original} && ln -s -- {} {temporary} && {{ test -L {original} && mv -Tf -- {temporary} {original}; }}; code=$?; rm -f -- {temporary}; exit $code", shell_quote(target)), None)?;
+                    Ok(())
+                } else {
+                    update_shell_attributes(&shell, &path.display_path, &update)
+                }
+            }
         }
     }
 
@@ -1616,6 +1653,7 @@ fn shell_properties(
             .exit_status
             == Some(0);
     Ok(SftpFileProperties {
+        symlink_target: None,
         name: path
             .display_path
             .rsplit('/')
@@ -1670,6 +1708,7 @@ fn normal_shell_properties(
             .exit_status
             == Some(0);
     Ok(SftpFileProperties {
+        symlink_target: None,
         name: path
             .display_path
             .trim_end_matches('/')

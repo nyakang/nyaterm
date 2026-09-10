@@ -1,5 +1,31 @@
 {
+  "tray": {
+    "show": "Show NyaTerm",
+    "newConnection": "New connection",
+    "push": "Push cloud sync",
+    "pull": "Pull cloud sync",
+    "minimizeToTray": "Minimize to tray",
+    "lock": "Lock",
+    "update": "Check for updates",
+    "quit": "Quit",
+    "unavailable": "Tray hiding is unavailable in this desktop session. The window was minimized normally."
+},
+  "documentEditor": {
+    "fold": "Fold at cursor",
+    "unfoldAll": "Unfold all",
+    "find": "Find",
+    "replace": "Replace",
+    "replaceAll": "Replace all",
+    "previous": "Previous",
+    "next": "Next",
+    "caseSensitive": "Match case",
+    "wholeWord": "Whole word",
+    "regex": "Regular expression",
+    "invalidRegex": "Invalid regular expression"
+},
   "about": {
+    "copySupportInfo": "Copy support information",
+    "supportInfoCopied": "Support information copied",
     "close": "Close",
     "description": "A desktop client for SSH-centric operations and mixed terminal workflows.",
     "issues": "Issues",
@@ -364,6 +390,14 @@
     "usernameRegexPlaceholder": "Regular expression for username prompts"
   },
   "dialog": {
+    "importCustomIcon": "Import icon",
+    "deleteCustomIcon": "Delete custom icon",
+    "customIconFailed": "Could not load or save the icon. Use a valid raster image up to 2 MiB.",
+    "postLoginExternalTitle": "Run saved login command?",
+    "postLoginExternalMessage": "Opening %{name} from an external link will execute its saved login command.",
+    "shellArgsUnclosedQuote": "Unclosed quote in shell arguments",
+    "sftpPipelineDepth": "SFTP pipeline depth",
+    "sftpPipelineAutomatic": "Automatic",
     "advancedConfig": "Advanced",
     "algorithmCiphers": "Ciphers",
     "algorithmCiphersTab": "Ciphers",
@@ -840,6 +874,7 @@
     "zoomOut": "Zoom Out"
   },
   "fileExplorer": {
+    "symlinkTargetRequired": "A symbolic link target is required.",
     "addCurrentDirToFavorites": "Add Current Folder",
     "addToFavorites": "Add to Favorites",
     "alwaysUpload": "Always upload",
@@ -1790,6 +1825,9 @@
     "unread": "Unread"
   },
   "settings": {
+    "keywordHighlightLogicalLinesDesc": "Keywords match continuously across automatic line wraps, but never across explicit line breaks.",
+    "shortcutConflictMessage": "Shortcut conflicts with %{shortcut}",
+    "nativeGpuRenderer": "Native GPU renderer",
     "actionLinks": "Action Links",
     "actionLinksDesc": "Recognize patterns (IP, archive, host:port, path) in terminal output. Ctrl/Cmd+Click to run the default command. Alt+Click to show all actions.",
     "actionLinksMatcherArchive": "Archive File",
@@ -2433,6 +2471,8 @@
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
   },
   "sshAuth": {
+    "dockerElevation": "Docker requires sudo authorization. Enter your sudo password.",
+    "keyRejectedPasswordFallback": "The server rejected the key. Enter a password to continue.",
     "agentWaitingTitle": "Waiting for SSH Agent approval",
     "agentFailedTitle": "SSH Agent authentication failed",
     "agentApprovalWaiting": "Approve the hardware key, PIN, or SSH Agent request.",
@@ -2682,6 +2722,11 @@
     "unsupportedOption": "Temporary links only support direct connections."
   },
   "terminal": {
+    "uploadingClipboardImage": "Uploading clipboard image",
+    "clipboardImageFailed": "Could not paste the clipboard image into this session.",
+    "disconnectedStatus": "Session disconnected",
+    "reconnectHint": "Enter reconnect · Ctrl+D close",
+    "saveSelectionAsQuickCommand": "Save as Quick Command",
     "actionLinkAltClickHint": "Alt+Click: more actions",
     "actionLinkDefaultBadge": "default",
     "actionLinkKind_archive": "Archive",
@@ -2834,6 +2879,12 @@
     "waitingFrame": "Waiting for the first desktop frame..."
   },
   "updater": {
+    "saveEditorsFirst": "Save or close edited files before installing the update.",
+    "installFailed": "Could not start the update installer.",
+    "installAndRestart": "Install and restart",
+    "downloadFailed": "Download failed. Retry the update.",
+    "downloadUpdate": "Download update",
+
     "checking": "Checking for updates...",
     "currentVersion": "Current",
     "downloading": "Downloading update...",

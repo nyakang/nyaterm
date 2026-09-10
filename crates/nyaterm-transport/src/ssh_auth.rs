@@ -338,6 +338,16 @@ async fn authenticate_ssh_key(
         .map_err(|_| anyhow::anyhow!("SSH public-key authentication timed out"))??
     };
 
+    if matches!(&auth_result, client::AuthResult::Failure { remaining_methods, .. }
+        if remaining_methods.contains(&MethodKind::Password))
+    {
+        return authenticate_password_with_prompt(
+            handle,
+            config,
+            SshCredentialPromptReason::KeyRejectedPasswordFallback,
+        )
+        .await;
+    }
     if auth_result.success()
         || try_keyboard_interactive_after_auth_result(handle, config, &auth_result).await?
     {

@@ -515,6 +515,19 @@ impl NyaTermApp {
             let tab_group_name = SharedString::from(format!("session-tab-group-{session_id}"));
             let tab_number = tab_index + transient_cursor + 1;
             let kind_icon = session_kind_icon_path(session.kind);
+            let custom_icon = self
+                .session
+                .metadata(&session.id)
+                .and_then(|metadata| metadata.source_connection_id.as_ref())
+                .and_then(|id| {
+                    self.connection_state
+                        .connections()
+                        .iter()
+                        .find(|connection| &connection.id == id)
+                })
+                .and_then(|connection| connection.icon.as_ref())
+                .and_then(|id| self.connection_state.custom_icons.images.get(id))
+                .cloned();
             let saved_icon = self
                 .session
                 .metadata(&session.id)
@@ -706,7 +719,9 @@ impl NyaTermApp {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(if let Some(icon) = saved_icon {
+                        .child(if let Some(image) = custom_icon {
+                            gpui::img(image).size(px(14.)).into_any_element()
+                        } else if let Some(icon) = saved_icon {
                             themed_icon(palette, icon, is_active, 14.)
                         } else {
                             svg()

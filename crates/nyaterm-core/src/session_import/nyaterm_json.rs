@@ -20,7 +20,9 @@ struct NyatermJsonImportFile {
     #[serde(default)]
     groups: Vec<NyatermJsonGroup>,
     #[serde(default)]
-    sessions: Vec<NyatermJsonSession>,
+    sessions: Vec<serde_json::Value>,
+    #[serde(default)]
+    custom_icons: Vec<crate::models::sessions::ConnectionCustomIcon>,
 }
 
 fn default_import_version() -> u32 {
@@ -257,15 +259,26 @@ fn prepare_nyaterm_json_import(file: NyatermJsonImportFile) -> AppResult<Prepare
     }
 
     let mut connections = Vec::new();
-    for session in file.sessions {
-        connections.push(prepare_nyaterm_json_session(
-            session,
-            &password_ref_map,
-            &key_ref_map,
-        )?);
+    for mut raw in file.sessions {
+        let session: NyatermJsonSession = serde_json::from_value(raw.clone())
+            .map_err(|error| AppError::Config(format!("Invalid session: {error}")))?;
+        let mut prepared = prepare_nyaterm_json_session(session, &password_ref_map, &key_ref_map)?;
+        if let Some(auth) = raw
+            .get_mut("auth")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            auth.remove("password_ref");
+            auth.remove("key_ref");
+        }
+        let mut saved: crate::SavedConnection = serde_json::from_value(raw)
+            .map_err(|error| AppError::Config(format!("Invalid saved connection: {error}")))?;
+        saved.auth = prepared.auth.clone();
+        prepared.saved = Some(saved);
+        connections.push(prepared);
     }
 
     Ok(PreparedSessionImport {
+        custom_icons: file.custom_icons,
         groups,
         passwords,
         ssh_keys,
@@ -293,6 +306,7 @@ fn prepare_nyaterm_json_session(
             validate_port(port, "ssh session")?;
             let context = format!("ssh session '{name}'");
             Ok(PreparedSessionConnection {
+                saved: None,
                 name: required_string(name, "name", "ssh session")?,
                 config: ConnectionType::Ssh {
                     host: required_string(host, "host", &context)?,
@@ -331,6 +345,7 @@ fn prepare_nyaterm_json_session(
         } => {
             let context = format!("local_terminal session '{name}'");
             Ok(PreparedSessionConnection {
+                saved: None,
                 name: required_string(name, "name", "local_terminal session")?,
                 config: ConnectionType::LocalTerminal {
                     shell_path: required_string(shell_path, "shell_path", &context)?,
@@ -361,6 +376,7 @@ fn prepare_nyaterm_json_session(
             validate_backspace_mode(&backspace_mode, "telnet session")?;
             let context = format!("telnet session '{name}'");
             Ok(PreparedSessionConnection {
+                saved: None,
                 name: required_string(name, "name", "telnet session")?,
                 config: ConnectionType::Telnet {
                     host: required_string(host, "host", &context)?,
@@ -401,6 +417,7 @@ fn prepare_nyaterm_json_session(
             validate_serial_config(baud_rate, data_bits, &parity, &stop_bits, &backspace_mode)?;
             let context = format!("serial session '{name}'");
             Ok(PreparedSessionConnection {
+                saved: None,
                 name: required_string(name, "name", "serial session")?,
                 config: ConnectionType::Serial {
                     port_name: required_string(port_name, "port_name", &context)?,

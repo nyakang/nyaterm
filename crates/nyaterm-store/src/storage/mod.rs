@@ -219,10 +219,92 @@ impl ConnectionStore {
         let groups = self.list_groups()?;
         let mut connections = self.list_connections()?;
         self.hydrate_connection_passwords(&mut connections)?;
+        let mut custom_icons = self.list_connection_custom_icons()?;
+        for connection in &mut connections {
+            let Some(value) = connection.icon.as_deref() else {
+                continue;
+            };
+            let Some(icon) =
+                nyaterm_core::models::sessions::ConnectionCustomIcon::from_legacy_data_url(
+                    value,
+                    connection.name.clone(),
+                    current_time_ms(),
+                )
+            else {
+                continue;
+            };
+            if !custom_icons.iter().any(|existing| existing.id == icon.id) {
+                self.save_connection_custom_icon(&icon)?;
+                custom_icons.push(icon.clone());
+            }
+            connection.icon = Some(icon.id);
+        }
         Ok(SessionsConfig {
+            custom_icons,
             groups,
             connections,
         })
+    }
+
+    pub fn list_connection_custom_icons(
+        &self,
+    ) -> Result<Vec<nyaterm_core::models::sessions::ConnectionCustomIcon>, StorageError> {
+        let mut icons: Vec<nyaterm_core::models::sessions::ConnectionCustomIcon> =
+            self.list_json_by_prefix(CONNECTIONS_TABLE, "connection_custom_icons/")?;
+        icons.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        Ok(icons)
+    }
+
+    pub fn save_connection_custom_icon(
+        &self,
+        icon: &nyaterm_core::models::sessions::ConnectionCustomIcon,
+    ) -> Result<(), StorageError> {
+        let txn = self.db.begin_write()?;
+        write_json_in_txn(
+            &txn,
+            CONNECTIONS_TABLE,
+            &entity_key("connection_custom_icons/", &icon.id),
+            icon,
+        )?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_connection_custom_icon(&self, id: &str) -> Result<(), StorageError> {
+        let txn = self.db.begin_write()?;
+        txn.open_table(CONNECTIONS_TABLE)?
+            .remove(entity_key("connection_custom_icons/", id).as_str())?;
+        let connections = {
+            let table = txn.open_table(CONNECTIONS_TABLE)?;
+            let mut values = Vec::new();
+            for row in table.iter()? {
+                let (key, bytes) = row?;
+                if key.value().starts_with(CONNECTION_PREFIX) {
+                    values.push((
+                        key.value().to_string(),
+                        deserialize_json::<SavedConnection>(bytes.value())?,
+                    ));
+                }
+            }
+            values
+        };
+        for (key, mut connection) in connections {
+            let matches = connection.icon.as_deref().is_some_and(|value| {
+                value == id
+                    || nyaterm_core::models::sessions::ConnectionCustomIcon::from_legacy_data_url(
+                        value,
+                        String::new(),
+                        0,
+                    )
+                    .is_some_and(|icon| icon.id == id)
+            });
+            if matches {
+                connection.icon = None;
+                write_json_in_txn(&txn, CONNECTIONS_TABLE, &key, &connection)?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
     }
 
     pub fn list_tunnels(&self) -> Result<Vec<TunnelConfig>, StorageError> {
@@ -1109,6 +1191,15 @@ fn replace_sessions_in_txn(
     clear_string_table(txn, IDX_CONNECTIONS_BY_GROUP_TABLE)?;
     clear_string_table(txn, IDX_CONNECTIONS_BY_LAST_USED_TABLE)?;
     clear_string_table(txn, IDX_CONNECTIONS_BY_PROTOCOL_TABLE)?;
+    clear_prefix_in_txn(txn, CONNECTIONS_TABLE, "connection_custom_icons/")?;
+    for icon in &config.custom_icons {
+        write_json_in_txn(
+            txn,
+            CONNECTIONS_TABLE,
+            &entity_key("connection_custom_icons/", &icon.id),
+            icon,
+        )?;
+    }
     for group in &config.groups {
         save_group_in_txn(txn, group)?;
     }

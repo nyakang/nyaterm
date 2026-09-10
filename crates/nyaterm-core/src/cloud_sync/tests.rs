@@ -827,6 +827,7 @@ fn local_cloud_sync_push_and_forced_pull_round_trip() {
     let source_store = ConnectionStore::open(&source_dir).expect("source store");
     source_store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Synced Shell", "bash")],
         })
@@ -887,6 +888,7 @@ fn cloud_sync_algorithm_uses_remote_backend_abstraction() {
     ConnectionStore::open(&source_dir)
         .expect("source store")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Remote Trait Shell", "bash")],
         })
@@ -954,6 +956,7 @@ fn pointer_commit_failure_keeps_previous_head_readable() {
     let store = ConnectionStore::open(&source_dir).expect("source store");
     store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("first", "First", "bash")],
         })
@@ -965,6 +968,7 @@ fn pointer_commit_failure_keeps_previous_head_readable() {
     ConnectionStore::open(&source_dir)
         .expect("source store reopen")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("second", "Second", "zsh")],
         })
@@ -1047,6 +1051,7 @@ fn concurrent_pointer_update_is_rejected_before_commit() {
     let store = ConnectionStore::open(&source_dir).expect("source store");
     store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("first", "First", "bash")],
         })
@@ -1058,6 +1063,7 @@ fn concurrent_pointer_update_is_rejected_before_commit() {
     ConnectionStore::open(&source_dir)
         .expect("source store reopen")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("second", "Second", "zsh")],
         })
@@ -1177,6 +1183,7 @@ fn missing_immutable_snapshot_is_migrated_from_matching_current() {
     ConnectionStore::open(&source_dir)
         .expect("source")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn", "Migrated", "bash")],
         })
@@ -1221,6 +1228,7 @@ fn inconsistent_remote_requires_explicit_current_recovery() {
     ConnectionStore::open(&first_dir)
         .expect("first")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("first", "Recover Me", "bash")],
         })
@@ -1240,6 +1248,7 @@ fn inconsistent_remote_requires_explicit_current_recovery() {
     ConnectionStore::open(&second_dir)
         .expect("second")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("second", "New Head", "zsh")],
         })
@@ -1319,6 +1328,7 @@ fn snippet_remote_codec_matches_legacy_blob_layout_and_syncs() {
     ConnectionStore::open(&source_dir)
         .expect("source store")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Snippet Shell", "bash")],
         })
@@ -1480,6 +1490,7 @@ fn local_cloud_sync_detects_push_conflict() {
     ConnectionStore::open(&source_dir)
         .expect("source")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Local A", "bash")],
         })
@@ -1491,6 +1502,7 @@ fn local_cloud_sync_detects_push_conflict() {
     ConnectionStore::open(&other_dir)
         .expect("other")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-2", "Remote B", "zsh")],
         })
@@ -1501,6 +1513,7 @@ fn local_cloud_sync_detects_push_conflict() {
     ConnectionStore::open(&source_dir)
         .expect("source reopen")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Local Changed", "fish")],
         })
@@ -1527,6 +1540,7 @@ fn local_cloud_sync_detects_pull_conflict_until_forced() {
     ConnectionStore::open(&source_dir)
         .expect("source")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Initial", "bash")],
         })
@@ -1539,6 +1553,7 @@ fn local_cloud_sync_detects_pull_conflict_until_forced() {
     ConnectionStore::open(&other_dir)
         .expect("other")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-2", "Remote Changed", "zsh")],
         })
@@ -1549,6 +1564,7 @@ fn local_cloud_sync_detects_pull_conflict_until_forced() {
     ConnectionStore::open(&target_dir)
         .expect("target reopen")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Local Changed", "fish")],
         })
@@ -1583,6 +1599,7 @@ fn local_cloud_sync_wrong_password_does_not_replace_target() {
     ConnectionStore::open(&source_dir)
         .expect("source")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("conn-1", "Remote State", "bash")],
         })
@@ -1592,6 +1609,7 @@ fn local_cloud_sync_wrong_password_does_not_replace_target() {
     ConnectionStore::open(&target_dir)
         .expect("target")
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![local_connection("keep", "Keep Local", "zsh")],
         })
@@ -1767,6 +1785,7 @@ fn options(config_dir: &Path, remote_dir: &Path, device_id: &str) -> LocalCloudS
 
 fn local_connection(id: &str, name: &str, shell: &str) -> SavedConnection {
     SavedConnection {
+        extensions: Default::default(),
         id: id.to_string(),
         name: name.to_string(),
         config: ConnectionType::LocalTerminal {

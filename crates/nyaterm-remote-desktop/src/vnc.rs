@@ -1060,6 +1060,7 @@ mod tests {
 
     fn config() -> VncSessionConfig {
         VncSessionConfig {
+            relay: None,
             name: "vnc".to_string(),
             host: "127.0.0.1".to_string(),
             port: 5900,

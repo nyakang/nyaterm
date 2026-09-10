@@ -266,6 +266,8 @@ pub fn precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel(
         if cancelled() {
             return None;
         }
+        // Soft-wrapped screen rows are one logical line; hard breaks must never
+        // join unrelated commands or log records. Only pathological lines degrade.
         let group = terminal_keyword_wrapped_group_bounds(snapshot, row);
         let group_range = group.start..group.end;
         let requested = group.start < requested_rows.end && group.end > requested_rows.start;
@@ -1914,6 +1916,79 @@ mod tests {
             .expect("second ranges");
 
         assert!(Arc::ptr_eq(&first_ranges, second_ranges));
+    }
+
+    #[test]
+    fn keyword_matching_follows_alacritty_soft_wraps_but_stops_at_hard_line_breaks() {
+        let rules = vec![ResolvedKeywordHighlightRule {
+            id: "error".into(),
+            name: "Error".into(),
+            patterns: vec!["ERROR".into()],
+            color: "#ff2244".into(),
+            enabled: true,
+        }];
+        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        for (input, expected_cells) in [("ERROR", 5), ("ERR\r\nOR", 0)] {
+            let mut screen = TerminalScreen::new(3, 4);
+            screen.advance(input.as_bytes());
+            let snapshot = screen.snapshot();
+            let highlights =
+                precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
+            let highlighted_cells: usize = highlights
+                .rows
+                .iter()
+                .flatten()
+                .flat_map(|ranges| ranges.iter())
+                .map(|range| range.end_col - range.start_col)
+                .sum();
+            assert_eq!(highlighted_cells, expected_cells, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn keyword_matching_survives_terminal_width_reflow() {
+        let rules = vec![ResolvedKeywordHighlightRule {
+            id: "error".into(),
+            name: "Error".into(),
+            patterns: vec!["ERROR".into()],
+            color: "#ff2244".into(),
+            enabled: true,
+        }];
+        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        let mut screen = TerminalScreen::new(12, 4);
+        screen.advance(b"ERROR");
+        let mut previous = None;
+        for columns in [12, 3, 8] {
+            screen.resize(columns, 4);
+            // Narrowing may move the start of the logical line into scrollback.
+            let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+            let highlights = precompute_terminal_keyword_highlights(
+                &snapshot,
+                &highlighter,
+                palette,
+                previous.as_ref(),
+            );
+            let highlighted_cells: usize = highlights
+                .rows
+                .iter()
+                .flatten()
+                .flat_map(|ranges| ranges.iter())
+                .map(|range| range.end_col - range.start_col)
+                .sum();
+            assert_eq!(
+                highlighted_cells,
+                5,
+                "columns={columns}, rows={:?}",
+                snapshot
+                    .rows()
+                    .iter()
+                    .map(|row| (&row.text, row.wrapped))
+                    .collect::<Vec<_>>()
+            );
+            previous = Some(highlights);
+        }
     }
 
     #[test]

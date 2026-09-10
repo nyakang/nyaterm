@@ -1480,6 +1480,7 @@ impl NyaTermApp {
                             .update_path_attributes(
                                 &args.path,
                                 nyaterm_transport::SftpAttributeUpdate {
+                                    symlink_target: None,
                                     mode: Some(
                                         parse_remote_mode(Some(&args.mode))?
                                             .ok_or_else(|| "mode is required".to_string())?,

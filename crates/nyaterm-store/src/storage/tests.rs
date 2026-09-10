@@ -79,6 +79,7 @@ fn round_trips_sessions_in_redb_compatible_tables() {
     let dir = unique_temp_dir("round-trip");
     let store = ConnectionStore::open(&dir).expect("store");
     let config = SessionsConfig {
+        custom_icons: Vec::new(),
         groups: vec![Group {
             id: "group-1".to_string(),
             name: "Servers".to_string(),
@@ -88,6 +89,7 @@ fn round_trips_sessions_in_redb_compatible_tables() {
             updated_at_ms: None,
         }],
         connections: vec![SavedConnection {
+            extensions: Default::default(),
             id: "conn-1".to_string(),
             name: "Production".to_string(),
             config: ConnectionType::Ssh {
@@ -157,6 +159,7 @@ fn exports_and_imports_native_redb_backup() {
     let backup_path = unique_temp_dir("backup-output").join("nyaterm.redb");
     let source_store = ConnectionStore::open(&source_dir).expect("source store");
     let config = SessionsConfig {
+        custom_icons: Vec::new(),
         groups: vec![Group {
             id: "ops".to_string(),
             name: "Ops".to_string(),
@@ -166,6 +169,7 @@ fn exports_and_imports_native_redb_backup() {
             updated_at_ms: None,
         }],
         connections: vec![SavedConnection {
+            extensions: Default::default(),
             id: "local-1".to_string(),
             name: "Shell".to_string(),
             config: ConnectionType::LocalTerminal {
@@ -206,6 +210,7 @@ fn exports_and_imports_native_redb_backup() {
     let target_store = ConnectionStore::open(&target_dir).expect("target store");
     target_store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: Vec::new(),
         })
@@ -239,6 +244,7 @@ fn exports_and_imports_portable_snapshot() {
     let source_store = ConnectionStore::open(&source_dir).expect("source store");
     source_store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: vec![Group {
                 id: "group-1".to_string(),
                 name: "Servers".to_string(),
@@ -248,6 +254,7 @@ fn exports_and_imports_portable_snapshot() {
                 updated_at_ms: None,
             }],
             connections: vec![SavedConnection {
+                extensions: Default::default(),
                 id: "conn-1".to_string(),
                 name: "Production".to_string(),
                 config: ConnectionType::Ssh {
@@ -462,8 +469,10 @@ fn encrypted_portable_snapshot_requires_master_password() {
     let source_store = ConnectionStore::open(&source_dir).expect("source store");
     source_store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![SavedConnection {
+                extensions: Default::default(),
                 id: "conn-1".to_string(),
                 name: "Encrypted Snapshot".to_string(),
                 config: ConnectionType::LocalTerminal {
@@ -527,8 +536,10 @@ fn encrypted_portable_snapshot_requires_master_password() {
     let wrong_target = ConnectionStore::open(&wrong_target_dir).expect("wrong target");
     wrong_target
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![SavedConnection {
+                extensions: Default::default(),
                 id: "keep".to_string(),
                 name: "Keep".to_string(),
                 config: ConnectionType::LocalTerminal {
@@ -606,8 +617,10 @@ fn rejects_invalid_backup_without_replacing_current_database() {
     let store = ConnectionStore::open(&target_dir).expect("target store");
     store
         .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
             groups: Vec::new(),
             connections: vec![SavedConnection {
+                extensions: Default::default(),
                 id: "keep".to_string(),
                 name: "Keep".to_string(),
                 config: ConnectionType::LocalTerminal {
@@ -684,6 +697,7 @@ fn save_and_delete_connection_updates_store() {
     let dir = unique_temp_dir("delete");
     let store = ConnectionStore::open(&dir).expect("store");
     let connection = SavedConnection {
+        extensions: Default::default(),
         id: "local-1".to_string(),
         name: "Local".to_string(),
         config: ConnectionType::LocalTerminal {
@@ -734,6 +748,7 @@ fn save_group_and_connection_persists_both_records() {
         updated_at_ms: None,
     };
     let connection = SavedConnection {
+        extensions: Default::default(),
         id: "local-grouped".to_string(),
         name: "Local".to_string(),
         config: ConnectionType::LocalTerminal {
@@ -810,6 +825,7 @@ fn deleting_group_removes_descendants_and_grouped_connections() {
     ] {
         store
             .save_connection(&SavedConnection {
+                extensions: Default::default(),
                 id: id.to_string(),
                 name: id.to_string(),
                 config: ConnectionType::LocalTerminal {
@@ -853,6 +869,7 @@ fn load_sessions_decrypts_legacy_connection_password_record() {
     let dir = unique_temp_dir("decrypt-password");
     let store = ConnectionStore::open(&dir).expect("store");
     let connection = SavedConnection {
+        extensions: Default::default(),
         id: "ssh-1".to_string(),
         name: "SSH".to_string(),
         config: ConnectionType::Ssh {
@@ -3347,8 +3364,10 @@ fn sync_snapshot_strips_device_local_ssh_agent_settings() {
     let dir = unique_temp_dir("sync-agent-settings");
     let store = ConnectionStore::open(&dir).expect("store");
     let mut sessions = SessionsConfig {
+        custom_icons: Vec::new(),
         groups: Vec::new(),
         connections: vec![SavedConnection {
+            extensions: Default::default(),
             id: "agent-sync".to_string(),
             name: "Agent Sync".to_string(),
             config: ConnectionType::Ssh {
@@ -3811,6 +3830,7 @@ fn dedicated_rdp_records_win_conflicts_and_do_not_break_ssh_replacement() {
 
 fn ssh_connection_for_asset(id: &str) -> SavedConnection {
     SavedConnection {
+        extensions: Default::default(),
         id: id.to_string(),
         name: "Asset Host".to_string(),
         config: ConnectionType::Ssh {
@@ -4102,6 +4122,7 @@ fn connection_asset_survives_redb_replace_sessions_roundtrip() {
         ..AssetMetadata::default()
     });
     let config = SessionsConfig {
+        custom_icons: Vec::new(),
         groups: Vec::new(),
         connections: vec![connection],
     };
@@ -4254,4 +4275,109 @@ fn portable_snapshot_excludes_and_preserves_device_local_main_window_state() {
     );
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(target_dir).ok();
+}
+
+#[test]
+fn shared_custom_icons_and_pipeline_survive_sessions_replacement() {
+    let dir = unique_temp_dir("custom-icons-pipeline");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let config: SessionsConfig = serde_json::from_value(serde_json::json!({
+        "groups": [],
+        "connections": [{"id":"compat", "name":"Compat", "type":"ssh", "host":"example.com",
+            "icon":"custom-icon-fixture", "future":{"opaque":true}, "auth":{"mode":"password","future_auth":7}, "sftp":{"pipeline_depth":32,"future_option":{"enabled":true}}}],
+        "custom_icons": [{"id":"custom-icon-fixture","name":"Fixture","data_url":"data:image/png;base64,AA==", "created_at_ms":1,"updated_at_ms":2}]
+    })).expect("legacy config");
+    store.replace_sessions(&config).expect("replace");
+    let mut loaded = store.load_sessions().expect("load");
+    assert_eq!(loaded.custom_icons, config.custom_icons);
+    loaded.connections[0].name = "Renamed".to_string();
+    store.save_connection(&loaded.connections[0]).expect("edit");
+    let loaded = store.load_sessions().expect("reload");
+    assert_eq!(loaded.connections[0].sftp.pipeline_depth, Some(32));
+    assert_eq!(
+        loaded.connections[0].sftp.extra["future_option"]["enabled"],
+        true
+    );
+    let bytes = serde_json::to_vec(&loaded).expect("export");
+    let exported: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(exported["connections"][0]["future"]["opaque"], true);
+    assert_eq!(exported["connections"][0]["auth"]["future_auth"], 7);
+    let restored: SessionsConfig = serde_json::from_slice(&bytes).expect("import");
+    store.replace_sessions(&restored).expect("restore");
+    assert_eq!(
+        store.load_sessions().expect("restored").custom_icons,
+        config.custom_icons
+    );
+    let mut snapshot = store
+        .build_raw_portable_snapshot(nyaterm_core::PortableSnapshotKind::Sync, "fixture", "2.0.0")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    store.apply_raw_portable_snapshot(&snapshot).unwrap();
+    let synced = serde_json::to_value(store.load_sessions().unwrap()).unwrap();
+    assert_eq!(synced["connections"][0]["future"]["opaque"], true);
+    assert_eq!(synced["custom_icons"][0]["id"], "custom-icon-fixture");
+    store
+        .delete_connection_custom_icon("custom-icon-fixture")
+        .expect("delete");
+    assert!(
+        store
+            .list_connection_custom_icons()
+            .expect("list")
+            .is_empty()
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn deleting_migrated_shared_icon_clears_legacy_references_without_recreating_it() {
+    let dir = unique_temp_dir("legacy-icon-delete");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"legacy-icon", "name":"Legacy", "type":"ssh", "host":"example.com",
+        "icon":"data:image/png;base64,AA==", "future":{"retained":true}
+    }))
+    .unwrap();
+    store.save_connection(&connection).unwrap();
+    let loaded = store.load_sessions().unwrap();
+    assert_eq!(loaded.custom_icons.len(), 1);
+    assert_eq!(
+        loaded.connections[0].icon.as_deref(),
+        Some(loaded.custom_icons[0].id.as_str())
+    );
+    store
+        .delete_connection_custom_icon(&loaded.custom_icons[0].id)
+        .unwrap();
+    let loaded = store.load_sessions().unwrap();
+    assert!(loaded.custom_icons.is_empty());
+    assert!(loaded.connections[0].icon.is_none());
+    assert_eq!(
+        serde_json::to_value(&loaded.connections[0]).unwrap()["future"]["retained"],
+        true
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn editing_keywords_preserves_both_values_of_the_retired_soft_wrap_setting() {
+    let dir = unique_temp_dir("keyword-wrap-compatibility");
+    let store = ConnectionStore::open(&dir).expect("store");
+    for legacy_value in [false, true] {
+        store.save_settings_value(&serde_json::json!({
+            "terminal": {"keyword_highlights_across_wrapped_lines": legacy_value, "future_keyword_option": "retain"}
+        })).expect("legacy settings");
+        let mut config = store.load_keyword_highlights().expect("load");
+        config.enabled = true;
+        let saved = store.save_keyword_highlights(&config).expect("save");
+        assert_eq!(saved.across_wrapped_lines, legacy_value);
+        let reloaded = store.load_settings_value().expect("reload");
+        assert_eq!(
+            reloaded["terminal"]["keyword_highlights_across_wrapped_lines"],
+            legacy_value
+        );
+        assert_eq!(reloaded["terminal"]["future_keyword_option"], "retain");
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).expect("cleanup");
 }

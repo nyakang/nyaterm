@@ -968,6 +968,7 @@ mod tests {
         sort_order: i32,
     ) -> SavedConnection {
         SavedConnection {
+            extensions: Default::default(),
             id: id.to_string(),
             name: name.to_string(),
             config: ConnectionType::LocalTerminal {

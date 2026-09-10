@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use crate::{
     RemoteCommandOutput, SshMultiplexHandle, SshSessionConfig, ensure_remote_command_success,
-    run_ssh_command,
 };
 
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(20);
@@ -122,6 +121,20 @@ pub struct RemoteDockerOverview {
 pub struct DockerService {
     config: SshSessionConfig,
     multiplex: Option<SshMultiplexHandle>,
+    elevation: std::sync::Arc<std::sync::Mutex<Option<DockerElevation>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum DockerElevation {
+    Plain,
+    Sudo,
+    Password(nyaterm_core::SecretString),
+}
+
+fn docker_environment(command: &str) -> String {
+    format!(
+        "export PATH=/usr/local/bin:/usr/bin:/bin:/var/packages/ContainerManager/target/usr/bin:/var/packages/Docker/target/usr/bin:$PATH; {command}"
+    )
 }
 
 pub const DOCKER_OVERVIEW_SCRIPT: &str = r#"sh -c '
@@ -171,6 +184,7 @@ impl DockerService {
         Self {
             config,
             multiplex: None,
+            elevation: Default::default(),
         }
     }
 
@@ -181,6 +195,7 @@ impl DockerService {
         multiplex.ensure_matches_config(&config)?;
         Ok(Self {
             config,
+            elevation: multiplex.inner.docker_elevation.clone(),
             multiplex: Some(multiplex),
         })
     }
@@ -360,13 +375,124 @@ impl DockerService {
         )
     }
 
-    fn exec(&self, command: &str, timeout: Duration) -> anyhow::Result<RemoteCommandOutput> {
-        run_ssh_command(
+    fn raw_exec(
+        &self,
+        command: String,
+        input: Option<nyaterm_core::SecretString>,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteCommandOutput> {
+        crate::remote_process::run_ssh_command_with_input(
             self.config.clone(),
             self.multiplex.clone(),
-            command.as_bytes().to_vec(),
+            command,
+            input,
             timeout,
         )
+    }
+
+    fn detect_elevation(&self) -> anyhow::Result<DockerElevation> {
+        let exists = self.raw_exec(
+            docker_environment("command -v docker"),
+            None,
+            DOCKER_TIMEOUT,
+        )?;
+        if exists.exit_status != Some(0) {
+            anyhow::bail!("Docker is not installed or its executable is unavailable");
+        }
+        let probe = self.raw_exec(docker_environment("docker info"), None, DOCKER_TIMEOUT)?;
+        if probe.exit_status == Some(0) {
+            return Ok(DockerElevation::Plain);
+        }
+        if !probe
+            .stderr
+            .to_ascii_lowercase()
+            .contains("permission denied")
+        {
+            anyhow::bail!("Docker daemon is unavailable");
+        }
+        let privileged = format!(
+            "sudo -n -- sh -c {}",
+            sh_quote(&docker_environment("docker info"))
+        );
+        if self.raw_exec(privileged, None, DOCKER_TIMEOUT)?.exit_status == Some(0) {
+            return Ok(DockerElevation::Sudo);
+        }
+        let probe = format!(
+            "sudo -S -p '' -- sh -c {}",
+            sh_quote(&docker_environment("docker info"))
+        );
+        if let Some(password) = self.config.password.clone()
+            && self
+                .raw_exec(probe.clone(), Some(password.clone()), DOCKER_TIMEOUT)?
+                .exit_status
+                == Some(0)
+        {
+            return Ok(DockerElevation::Password(password));
+        }
+        let provider = self
+            .config
+            .credential_provider
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Docker requires sudo authorization"))?;
+        self.config.attempt.check().map_err(anyhow::Error::msg)?;
+        let response = provider
+            .request_secret(&crate::SshCredentialPrompt {
+                host: self.config.host.clone(),
+                port: self.config.port,
+                username: self.config.username.clone(),
+                connection_name: self.config.name.clone(),
+                kind: crate::SshCredentialPromptKind::Password,
+                reason: crate::SshCredentialPromptReason::DockerElevation,
+                attempt: 1,
+                prompt_text: None,
+                echo: false,
+            })
+            .map_err(anyhow::Error::msg)?;
+        let password: nyaterm_core::SecretString = response
+            .ok_or_else(|| anyhow::anyhow!("Docker authorization cancelled"))?
+            .into();
+        if self
+            .raw_exec(probe, Some(password.clone()), DOCKER_TIMEOUT)?
+            .exit_status
+            != Some(0)
+        {
+            anyhow::bail!("Docker sudo authorization failed");
+        }
+        Ok(DockerElevation::Password(password))
+    }
+
+    fn exec(&self, command: &str, timeout: Duration) -> anyhow::Result<RemoteCommandOutput> {
+        let cached = self
+            .elevation
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Docker authorization state unavailable"))?
+            .clone();
+        let elevation = match cached {
+            Some(cached) => cached,
+            None => {
+                let detected = self.detect_elevation()?;
+                *self
+                    .elevation
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Docker authorization state unavailable"))? =
+                    Some(detected.clone());
+                detected
+            }
+        };
+        let command = docker_environment(command);
+        match elevation {
+            DockerElevation::Plain => self.raw_exec(command, None, timeout),
+            DockerElevation::Sudo => self.raw_exec(
+                format!("sudo -n -- sh -c {}", sh_quote(&command)),
+                None,
+                timeout,
+            ),
+            DockerElevation::Password(password) => self.raw_exec(
+                format!("sudo -S -p '' -- sh -c {}", sh_quote(&command)),
+                Some(password),
+                timeout,
+            ),
+        }
     }
 
     fn exec_success(

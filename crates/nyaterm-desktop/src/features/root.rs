@@ -42,6 +42,54 @@ struct OverlayFlags {
 }
 
 impl NyaTermApp {
+    /// Capture the initiating window before deferring across entity leases.
+    pub(in crate::features) fn notify_operation(
+        &self,
+        key: &'static str,
+        kind: nyaterm_ui::notification::NyaNotificationKind,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        let target = cx
+            .active_window()
+            .or_else(|| self.shell.main_window().map(Into::into));
+        self.notify_operation_at(target, key, kind, message, cx);
+    }
+
+    pub(in crate::features) fn notify_background_operation(
+        &self,
+        key: &'static str,
+        kind: nyaterm_ui::notification::NyaNotificationKind,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.notify_operation_at(
+            self.shell.main_window().map(Into::into),
+            key,
+            kind,
+            message,
+            cx,
+        );
+    }
+
+    pub(in crate::features) fn notify_operation_at(
+        &self,
+        target: Option<gpui::AnyWindowHandle>,
+        key: &'static str,
+        kind: nyaterm_ui::notification::NyaNotificationKind,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(target) = target {
+            cx.defer(move |cx| {
+                let _ = target.update(cx, |_, window, cx| {
+                    use nyaterm_ui::notification::NyaNotificationWindowExt as _;
+                    window.notify_operation(key, kind, message, cx);
+                });
+            });
+        }
+    }
+
     /// Run an app update after the current GPUI entity leases are released.
     ///
     /// The weak handle lets the deferred work disappear normally during application

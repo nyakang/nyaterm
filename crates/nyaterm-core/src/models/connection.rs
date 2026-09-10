@@ -385,11 +385,21 @@ pub struct SftpSettings {
     pub shell_detection_timeout_ms: u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub filename_encoding: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_sftp_pipeline_depth",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pipeline_depth: Option<u32>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for SftpSettings {
     fn default() -> Self {
         Self {
+            pipeline_depth: None,
+            extra: Default::default(),
             enabled: true,
             cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
             shell_detection_timeout_ms: default_sftp_shell_detection_timeout_ms(),
@@ -894,4 +904,18 @@ fn merge_monitoring_accelerators(
     merged.retain(|accelerator| !patch_types.contains(&accelerator.r#type));
     merged.extend(patch);
     merged
+}
+
+/// Match the supported Tauri pipeline range while accepting legacy invalid values.
+fn deserialize_sftp_pipeline_depth<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        value
+            .as_i64()
+            .map(|number| number.clamp(4, 64) as u32)
+            .or_else(|| value.as_u64().map(|number| number.clamp(4, 64) as u32))
+    }))
 }

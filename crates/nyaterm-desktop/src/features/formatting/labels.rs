@@ -517,14 +517,6 @@ pub(in crate::features) fn non_empty_string(value: String) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-pub(in crate::features) fn split_shell_args(value: &str) -> Vec<String> {
-    value
-        .split_whitespace()
-        .filter(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 pub(in crate::features) fn parse_telnet_enter_mode(value: &str) -> TelnetEnterMode {
     match value {
         "crlf" => TelnetEnterMode::Crlf,

@@ -46,7 +46,55 @@ impl NyaTermApp {
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [connection] => {
-                self.continue_saved_connection_start(connection.clone(), Default::default(), cx);
+                if connection
+                    .post_login
+                    .as_ref()
+                    .is_some_and(|command| command.enabled && !command.command.trim().is_empty())
+                {
+                    let Some(window) = self.shell.main_window() else {
+                        return;
+                    };
+                    let connection = connection.clone();
+                    let app = cx.weak_entity();
+                    cx.defer(move |cx| {
+                        let _ = window.update(cx, |_, window, cx| {
+                            let _ = app.update(cx, |app, cx| {
+                                use nyaterm_ui::NyaDialogWindowExt as _;
+                                if window.has_active_nya_dialog(cx) {
+                                    return;
+                                }
+                                app.open_confirm_dialog(
+                                    (
+                                        rust_i18n::t!("dialog.postLoginExternalTitle").to_string(),
+                                        rust_i18n::t!(
+                                            "dialog.postLoginExternalMessage",
+                                            name = connection.name.clone()
+                                        )
+                                        .to_string(),
+                                        rust_i18n::t!("common.confirm").to_string(),
+                                        true,
+                                        move |app, _, cx| {
+                                            app.continue_saved_connection_start(
+                                                connection.clone(),
+                                                Default::default(),
+                                                cx,
+                                            );
+                                            true
+                                        },
+                                    ),
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                    });
+                } else {
+                    self.continue_saved_connection_start(
+                        connection.clone(),
+                        Default::default(),
+                        cx,
+                    );
+                }
             }
             [] => match request {
                 ExternalConnectionRequest::Ssh {
