@@ -153,6 +153,53 @@ export function installXTerminalKeyboardController({
       return false;
     }
 
+    // 终端操作快捷键必须先于选中文本时的 Shell 输入处理，否则 Ctrl 组合键
+    // 会被当作控制字符发送到终端，导致自定义终端操作失效。
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.copy", kb), e)) {
+      const sel = terminal.getSelection();
+      // Ctrl+C 没有选区时保留 Shell 的中断语义（例如终止 python main.py）。
+      if (
+        !sel &&
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.code === "KeyC"
+      ) {
+        return true;
+      }
+
+      e.preventDefault();
+      if (sel) writeClipboardText(sel).catch(() => {});
+      return false;
+    }
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.paste", kb), e)) {
+      e.preventDefault();
+      pasteClipboard().catch(() => {});
+      return false;
+    }
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.find", kb), e)) {
+      e.preventDefault();
+      doFindRef.current();
+      return false;
+    }
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.clear", kb), e)) {
+      e.preventDefault();
+      sendTerminalClearInput(terminal);
+      return false;
+    }
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)) {
+      e.preventDefault();
+      const sel = terminal.getSelection() || lastSelectionRef.current;
+      pasteText(sel);
+      return false;
+    }
+    if (matchesKeyEvent(resolveShortcutKeys("terminal.selectAll", kb), e)) {
+      e.preventDefault();
+      terminal.selectAll();
+      return false;
+    }
+
     if (
       e.key === "Tab" &&
       !e.ctrlKey &&
@@ -452,39 +499,6 @@ export function installXTerminalKeyboardController({
           return false;
         }
       }
-    }
-
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.copy", kb), e)) {
-      e.preventDefault();
-      const sel = terminal.getSelection();
-      if (sel) writeClipboardText(sel).catch(() => {});
-      return false;
-    }
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.paste", kb), e)) {
-      e.preventDefault();
-      pasteClipboard().catch(() => {});
-      return false;
-    }
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.find", kb), e)) {
-      e.preventDefault();
-      doFindRef.current();
-      return false;
-    }
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.clear", kb), e)) {
-      e.preventDefault();
-      sendTerminalClearInput(terminal);
-      return false;
-    }
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)) {
-      e.preventDefault();
-      const sel = terminal.getSelection() || lastSelectionRef.current;
-      pasteText(sel);
-      return false;
-    }
-    if (matchesKeyEvent(resolveShortcutKeys("terminal.selectAll", kb), e)) {
-      e.preventDefault();
-      terminal.selectAll();
-      return false;
     }
 
     const swallowIds = [
