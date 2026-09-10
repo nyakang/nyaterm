@@ -19,16 +19,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
-use crate::remote_file::{
-    RemoteTextDocument, RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult,
-    metadata_is_stable,
-};
-
 use super::{
     PROCESS_TIMEOUT, SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest,
     SftpDuplicateResolver, SftpPathTransferOptions, SftpTransferDirection, SftpTransferOptions,
     SftpTransferProgress, SftpTransferSummary, SshClientHandler, SshMultiplexHandle,
     SshProcessService, SshSessionConfig, open_authenticated_ssh_handle,
+};
+use crate::remote_file::{
+    RemoteTextDocument, RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult,
+    metadata_is_stable,
 };
 
 mod path_codec;
@@ -46,12 +45,12 @@ use remote_metadata::{
     resolve_remote_user_name, resolve_remote_user_value,
 };
 mod transfer_paths;
+use transfer_paths::{
+    SftpLocalDownloadTargetContext, SftpRemoteWriteTargetContext, remote_join,
+    resolve_local_download_target, resolve_remote_upload_target, resolve_remote_write_target,
+};
 #[cfg(test)]
 use transfer_paths::{remote_conflict_candidate, resolve_duplicate_decision};
-use transfer_paths::{
-    remote_join, resolve_local_download_target, resolve_remote_upload_target,
-    resolve_remote_write_target,
-};
 
 pub const SFTP_TRANSFER_CANCELLED: &str = "SFTP transfer cancelled";
 
@@ -1545,13 +1544,14 @@ impl SftpService {
                     let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
                     let metadata = sftp.metadata_bytes(raw_path.clone()).await?;
                     let is_directory = metadata.file_type() == russh_sftp::protocol::FileType::Dir;
-                    let Some(local_target) = resolve_local_download_target(
-                        &remote_path.display_path,
-                        &local_path,
-                        is_directory,
-                        path_options.duplicate_policy(),
-                        path_options.duplicate_resolver(),
-                    )?
+                    let Some(local_target) =
+                        resolve_local_download_target(SftpLocalDownloadTargetContext {
+                            remote_path: &remote_path.display_path,
+                            remote_path_raw: &raw_path,
+                            local_path: &local_path,
+                            is_directory,
+                            path_options: &path_options,
+                        })?
                     else {
                         close_sftp_session(session).await;
                         return Ok(SftpTransferSummary {
@@ -1874,16 +1874,16 @@ impl SftpService {
                     .await?;
                     let sftp = Arc::clone(&session.sftp);
                     control.wait_if_paused().await?;
-                    let Some(remote_target) = resolve_remote_write_target(
-                        &sftp,
-                        &codec,
-                        &local_path.display().to_string(),
-                        &remote_path,
-                        metadata.is_dir(),
-                        path_options.duplicate_policy(),
-                        path_options.duplicate_resolver(),
-                    )
-                    .await?
+                    let Some(remote_target) =
+                        resolve_remote_write_target(SftpRemoteWriteTargetContext {
+                            sftp: &sftp,
+                            codec: &codec,
+                            local_path: &local_path,
+                            remote_path: &remote_path,
+                            is_directory: metadata.is_dir(),
+                            path_options: &path_options,
+                        })
+                        .await?
                     else {
                         close_sftp_session(session).await;
                         return Ok(SftpTransferSummary {
@@ -2379,24 +2379,28 @@ where
             let local_child = local_dir.join(&name);
             match entry.file_type() {
                 russh_sftp::protocol::FileType::Dir => {
-                    if let Some(local_child) = resolve_local_download_target(
-                        &remote_child,
-                        &local_child,
-                        true,
-                        path_options.duplicate_policy(),
-                        path_options.duplicate_resolver(),
-                    )? {
+                    if let Some(local_child) =
+                        resolve_local_download_target(SftpLocalDownloadTargetContext {
+                            remote_path: &remote_child,
+                            remote_path_raw: &remote_child_raw,
+                            local_path: &local_child,
+                            is_directory: true,
+                            path_options,
+                        })?
+                    {
                         pending.push((remote_child_raw, remote_child, local_child));
                     }
                 }
                 russh_sftp::protocol::FileType::File | russh_sftp::protocol::FileType::Symlink => {
-                    if let Some(local_child) = resolve_local_download_target(
-                        &remote_child,
-                        &local_child,
-                        false,
-                        path_options.duplicate_policy(),
-                        path_options.duplicate_resolver(),
-                    )? {
+                    if let Some(local_child) =
+                        resolve_local_download_target(SftpLocalDownloadTargetContext {
+                            remote_path: &remote_child,
+                            remote_path_raw: &remote_child_raw,
+                            local_path: &local_child,
+                            is_directory: false,
+                            path_options,
+                        })?
+                    {
                         files.push((remote_child_raw, remote_child, local_child));
                     } else {
                         item_count_completed = item_count_completed.saturating_add(1);
@@ -2678,15 +2682,14 @@ async fn plan_local_directory_upload_entries(
             continue;
         };
         let remote_child = remote_join(parent_remote, &name);
-        let Some(remote_child) = resolve_remote_upload_write_target(
+        let Some(remote_child) = resolve_remote_upload_write_target(SftpRemoteWriteTargetContext {
             sftp,
             codec,
-            &directory.local_path.display().to_string(),
-            &remote_child,
-            true,
-            path_options.duplicate_policy(),
-            path_options.duplicate_resolver(),
-        )
+            local_path: &directory.local_path,
+            remote_path: &remote_child,
+            is_directory: true,
+            path_options,
+        })
         .await?
         else {
             continue;
@@ -2707,15 +2710,14 @@ async fn plan_local_directory_upload_entries(
             continue;
         };
         let remote_child = remote_join(parent_remote, &name);
-        let Some(remote_child) = resolve_remote_upload_write_target(
+        let Some(remote_child) = resolve_remote_upload_write_target(SftpRemoteWriteTargetContext {
             sftp,
             codec,
-            &file.local_path.display().to_string(),
-            &remote_child,
-            false,
-            path_options.duplicate_policy(),
-            path_options.duplicate_resolver(),
-        )
+            local_path: &file.local_path,
+            remote_path: &remote_child,
+            is_directory: false,
+            path_options,
+        })
         .await?
         else {
             continue;
@@ -3003,28 +3005,14 @@ fn directory_upload_stalled(
         && idle_for >= SFTP_DIRECTORY_STALL_TIMEOUT
 }
 
+// 目录规划在默认覆盖策略下无需额外探测，其他策略复用统一的目标解析上下文。
 async fn resolve_remote_upload_write_target(
-    sftp: &SftpSession,
-    codec: &SftpPathCodec,
-    local_path: &str,
-    remote_path: &str,
-    is_directory: bool,
-    duplicate_policy: SftpDuplicatePolicy,
-    duplicate_resolver: Option<&dyn SftpDuplicateResolver>,
+    context: SftpRemoteWriteTargetContext<'_>,
 ) -> anyhow::Result<Option<String>> {
-    if !remote_upload_write_target_requires_probe(duplicate_policy) {
-        return Ok(Some(remote_path.to_string()));
+    if !remote_upload_write_target_requires_probe(context.path_options.duplicate_policy()) {
+        return Ok(Some(context.remote_path.to_string()));
     }
-    resolve_remote_write_target(
-        sftp,
-        codec,
-        local_path,
-        remote_path,
-        is_directory,
-        duplicate_policy,
-        duplicate_resolver,
-    )
-    .await
+    resolve_remote_write_target(context).await
 }
 
 fn remote_upload_write_target_requires_probe(duplicate_policy: SftpDuplicatePolicy) -> bool {
@@ -3120,6 +3108,10 @@ async fn ensure_remote_dir(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::{Duration, UNIX_EPOCH};
 
     use crate::{SftpSettings, SshSessionConfig};
@@ -3127,10 +3119,11 @@ mod tests {
     use super::{
         DirectoryUploadProgressSnapshot, RemoteFilePath, SFTP_DIRECTORY_STALL_TIMEOUT,
         SFTP_SMALL_FILE_THRESHOLD, SFTP_TRANSFER_CANCELLED, SftpDirectoryConcurrency,
-        SftpDuplicatePolicy, SftpFileEntry, SftpFileType, SftpPathCodec, SftpTransferControl,
-        SftpTransferDirection, SftpTransferOptions, SftpTransferProgress,
-        collect_local_directory_upload_inventory, directory_transfer_progress,
-        directory_upload_aggregate_progress, directory_upload_stalled,
+        SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
+        SftpFileEntry, SftpFileType, SftpLocalDownloadTargetContext, SftpPathCodec,
+        SftpPathTransferOptions, SftpTransferControl, SftpTransferDirection, SftpTransferOptions,
+        SftpTransferProgress, collect_local_directory_upload_inventory,
+        directory_transfer_progress, directory_upload_aggregate_progress, directory_upload_stalled,
         directory_upload_worker_count, is_sftp_large_file, is_sftp_transfer_cancelled,
         remote_conflict_candidate, remote_join, remote_join_bytes,
         remote_upload_write_target_requires_probe, resolve_duplicate_decision,
@@ -3550,29 +3543,141 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let target = dir.join("archive.tar.gz");
         std::fs::write(&target, b"existing").expect("target");
+        let skip_options = SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Skip,
+            None,
+            SftpTransferOptions::default(),
+        );
 
         assert_eq!(
-            resolve_local_download_target(
-                "/remote/archive.tar.gz",
-                &target,
-                false,
-                SftpDuplicatePolicy::Skip,
-                None,
-            )
+            resolve_local_download_target(SftpLocalDownloadTargetContext {
+                remote_path: "/remote/archive.tar.gz",
+                remote_path_raw: b"/remote/archive.tar.gz",
+                local_path: &target,
+                is_directory: false,
+                path_options: &skip_options,
+            })
             .expect("skip"),
             None
         );
-        assert_eq!(
-            resolve_local_download_target(
-                "/remote/archive.tar.gz",
-                &target,
-                false,
-                SftpDuplicatePolicy::Rename,
-                None,
-            )
-            .expect("rename"),
-            Some(dir.join("archive.tar(1).gz"))
+        let rename_options = SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Rename,
+            None,
+            SftpTransferOptions::default(),
         );
+        let renamed = resolve_local_download_target(SftpLocalDownloadTargetContext {
+            remote_path: "/remote/archive.tar.gz",
+            remote_path_raw: b"/remote/archive.tar.gz",
+            local_path: &target,
+            is_directory: false,
+            path_options: &rename_options,
+        })
+        .expect("rename")
+        .expect("renamed target");
+        std::fs::write(&renamed, b"partial transfer").expect("partial renamed target");
+        let retried = resolve_local_download_target(SftpLocalDownloadTargetContext {
+            remote_path: "/remote/archive.tar.gz",
+            remote_path_raw: b"/remote/archive.tar.gz",
+            local_path: &target,
+            is_directory: false,
+            path_options: &rename_options,
+        })
+        .expect("retry rename")
+        .expect("retry target");
+        assert_ne!(retried, renamed, "重试不能覆盖已经占用的 Rename 目标");
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn local_download_target_rechecks_a_new_conflict_after_an_implicit_target() {
+        let dir = std::env::temp_dir().join(format!("nyaterm-sftp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("archive.txt");
+        let options = SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Skip,
+            None,
+            SftpTransferOptions::default(),
+        );
+
+        assert_eq!(
+            resolve_local_download_target(SftpLocalDownloadTargetContext {
+                remote_path: "/remote/archive.txt",
+                remote_path_raw: b"/remote/archive.txt",
+                local_path: &target,
+                is_directory: false,
+                path_options: &options,
+            })
+            .expect("implicit target"),
+            Some(target.clone())
+        );
+        std::fs::write(&target, b"created after the first probe").expect("new target");
+
+        assert_eq!(
+            resolve_local_download_target(SftpLocalDownloadTargetContext {
+                remote_path: "/remote/archive.txt",
+                remote_path_raw: b"/remote/archive.txt",
+                local_path: &target,
+                is_directory: false,
+                path_options: &options,
+            })
+            .expect("rechecked conflict"),
+            None
+        );
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_decisions_distinguish_lossy_remote_names_and_reuse_the_same_raw_path() {
+        struct CountingResolver(Arc<AtomicUsize>);
+
+        impl SftpDuplicateResolver for CountingResolver {
+            fn resolve_duplicate(
+                &self,
+                _request: &SftpDuplicateRequest,
+            ) -> Result<SftpDuplicateDecision, String> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(SftpDuplicateDecision::Overwrite)
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("nyaterm-sftp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("archive.txt");
+        std::fs::write(&target, b"existing").expect("target");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let options = SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Ask,
+            Some(Arc::new(CountingResolver(Arc::clone(&calls)))),
+            SftpTransferOptions::default(),
+        );
+
+        for raw_path in [
+            b"/remote/\xff.txt".as_slice(),
+            b"/remote/\xfe.txt".as_slice(),
+        ] {
+            resolve_local_download_target(SftpLocalDownloadTargetContext {
+                remote_path: "/remote/�.txt",
+                remote_path_raw: raw_path,
+                local_path: &target,
+                is_directory: false,
+                path_options: &options,
+            })
+            .expect("resolve lossy remote path")
+            .expect("overwrite target");
+        }
+        let retry_options = options.with_transfer_options(SftpTransferOptions::default());
+        resolve_local_download_target(SftpLocalDownloadTargetContext {
+            remote_path: "/remote/�.txt",
+            remote_path_raw: b"/remote/\xff.txt",
+            local_path: &target,
+            is_directory: false,
+            path_options: &retry_options,
+        })
+        .expect("resolve retry path")
+        .expect("reuse overwrite decision");
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
 
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }

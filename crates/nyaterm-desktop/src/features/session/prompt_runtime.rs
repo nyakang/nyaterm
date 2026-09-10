@@ -348,34 +348,52 @@ impl NyaTermApp {
     /// prompt: that frees the slot the next one needs, and nothing is enqueued at
     /// that moment, so every `SessionPromptState::take_*` signals as it clears the
     /// slot. Without that the second prompt of a pair would never appear.
-    pub(in crate::features) fn start_prompt_activation_drain(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn start_prompt_activation_drain(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(mut wake_rx) = self.session.prompts.take_wake_receiver() else {
             return;
         };
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             loop {
                 // Arm before checking, so a prompt enqueued in between still
                 // signals rather than waiting for the next one.
-                let activated = this.update(cx, |this, cx| {
-                    this.session.prompts.arm_wake();
-                    let dirty = this.session.prompts.clear_cancelled_attempt_prompts()
-                        | this.drain_host_key_prompts()
-                        | this.drain_agent_prompts()
-                        | this.drain_credential_prompts()
-                        | this.drain_duplicate_prompts();
-                    if dirty {
-                        cx.notify();
-                    }
-                    // A keyboard-interactive TOTP prompt can only reach the screen
-                    // through an activation, so this is where its clock starts.
-                    this.ensure_keyboard_interactive_totp_clock(cx);
-                    dirty
+                let Some(app) = this.upgrade() else {
+                    break;
+                };
+                let updated = cx.update(|window, cx| {
+                    app.update(cx, |this, cx| {
+                        this.session.prompts.arm_wake();
+                        let dirty = this.session.prompts.clear_cancelled_attempt_prompts()
+                            | this.drain_host_key_prompts()
+                            | this.drain_agent_prompts()
+                            | this.drain_credential_prompts();
+                        let duplicate_activated = this.drain_duplicate_prompts();
+                        if duplicate_activated
+                            && let Some(prompt) = this.session.prompt_active_duplicate().cloned()
+                        {
+                            // 冲突会阻塞传输线程，必须在收到唤醒时直接打开全局对话框。
+                            // 窗口任务从创建时就持有 Window 上下文，不依赖首次绘制后
+                            // 才建立的 Entity-to-Window 映射。
+                            this.open_duplicate_prompt_dialog(prompt, window, cx);
+                        }
+                        let dirty = dirty | duplicate_activated;
+                        if dirty {
+                            cx.notify();
+                        }
+                        // A keyboard-interactive TOTP prompt can only reach the screen
+                        // through an activation, so this is where its clock starts.
+                        this.ensure_keyboard_interactive_totp_clock(cx);
+                        dirty
+                    });
                 });
                 // No `continue` on success: only one prompt occupies the slot at
                 // a time, so a queue with several waiting needs another pass once
                 // this one resolves -- and that pass is driven by the `take_*`
                 // signal, not by looping here.
-                if activated.is_err() {
+                if updated.is_err() {
                     break;
                 }
                 if wake_rx.next().await.is_none() {

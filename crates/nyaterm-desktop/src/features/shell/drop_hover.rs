@@ -67,9 +67,13 @@ impl NyaTermApp {
             return running;
         }
         let mut dirty = self.terminal.clear_terminal_file_drop_hover();
-        dirty |= self.transfer.set_browser_external_drop_hover(false);
+        let transfer_dirty = self.transfer.set_browser_external_drop_hover(false);
+        dirty |= transfer_dirty;
         dirty |= self.session.clear_tab_drag();
         if dirty {
+            if transfer_dirty {
+                self.defer_transfer_panel_snapshot_flush(cx);
+            }
             cx.notify();
         }
         let running = self.has_drop_hover();

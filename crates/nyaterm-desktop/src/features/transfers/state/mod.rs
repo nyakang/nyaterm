@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
-use nyaterm_transport::{SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties};
+use nyaterm_transport::{
+    SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpPathTransferOptions,
+};
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
 use crate::models::{
@@ -56,6 +58,8 @@ pub(in crate::features) struct TransferFeatureState {
     preview: TransferPreviewFeatureState,
     external_sync: TransferExternalSyncState,
     panel: TransferPanelState,
+    /// 失败和取消的 SFTP 任务保留原策略及 Ask 决定，供手动重试复用。
+    path_options_by_job: HashMap<String, SftpPathTransferOptions>,
     /// How many times the event drain has entered GPUI.
     ///
     /// The coalescing test needs the batch count, not the event count: the point
@@ -70,7 +74,6 @@ pub(in crate::features) struct TransferFeatureState {
 
 /// Focus handles the transfer feature needs at construction time.
 pub(in crate::features) struct TransferFeatureFocus {
-    pub panel: FocusHandle,
     pub queue: FocusHandle,
     pub browser: FocusHandle,
     pub editor: FocusHandle,
@@ -262,9 +265,8 @@ struct ExternalEditorWatcherEntry {
     _watcher: ExternalEditorWatcher,
 }
 
-/// Panel chrome: focus routing and height.
+/// 传输面板的高度及拖动状态；全局冲突对话框的焦点由 NyaDialog 管理。
 struct TransferPanelState {
-    focus: FocusHandle,
     height: f32,
     height_resize: Option<TransferHeightResizeState>,
 }
@@ -331,15 +333,11 @@ impl TransferFeatureState {
             preview: TransferPreviewFeatureState::new(focus.preview),
             external_sync: TransferExternalSyncState::new(focus.external_sync),
             panel: TransferPanelState {
-                focus: focus.panel,
                 height: panel_height,
                 height_resize: None,
             },
+            path_options_by_job: HashMap::new(),
         }
-    }
-
-    pub(in crate::features) fn panel_focus(&self) -> &FocusHandle {
-        &self.panel.focus
     }
 
     pub(in crate::features) fn queue_focus(&self) -> &FocusHandle {
@@ -371,6 +369,41 @@ impl TransferFeatureState {
     pub(in crate::features) fn enqueue_transfer_job(&mut self, mut job: TransferJobState) {
         job.ensure_presentation_fields();
         self.queue.enqueue(job);
+    }
+
+    /// 保存任务自己的路径选项；普通 Clone 已为每个新任务创建独立运行态。
+    pub(in crate::features) fn bind_transfer_job_path_options(
+        &mut self,
+        job_id: &str,
+        path_options: SftpPathTransferOptions,
+    ) -> SftpPathTransferOptions {
+        let retry_options =
+            path_options.with_transfer_options(path_options.transfer_options().clone());
+        self.path_options_by_job
+            .insert(job_id.to_string(), retry_options);
+        path_options
+    }
+
+    /// 已有任务沿用原策略和 Ask 决定，只接受当前的执行参数；旧任务才使用回退值。
+    pub(in crate::features) fn transfer_job_retry_path_options(
+        &mut self,
+        job_id: &str,
+        fallback: SftpPathTransferOptions,
+    ) -> SftpPathTransferOptions {
+        if let Some(path_options) = self.path_options_by_job.get(job_id) {
+            return path_options.with_transfer_options(fallback.transfer_options().clone());
+        }
+        self.bind_transfer_job_path_options(job_id, fallback)
+    }
+
+    /// 成功任务不能再次重试，立即释放可能很大的目录冲突决定表。
+    pub(in crate::features) fn release_transfer_job_path_options(&mut self, job_id: &str) {
+        self.path_options_by_job.remove(job_id);
+    }
+
+    #[cfg(test)]
+    pub(in crate::features) fn has_transfer_job_path_options(&self, job_id: &str) -> bool {
+        self.path_options_by_job.contains_key(job_id)
     }
 
     #[cfg(test)]
@@ -433,7 +466,11 @@ impl TransferFeatureState {
     }
 
     pub(in crate::features) fn delete_transfer_job(&mut self, job_id: &str) -> bool {
-        self.queue.remove_job(job_id)
+        let removed = self.queue.remove_job(job_id);
+        if removed {
+            self.path_options_by_job.remove(job_id);
+        }
+        removed
     }
 
     pub(in crate::features) fn transfer_job_menu(&self) -> Option<&TransferJobMenuState> {
@@ -490,14 +527,23 @@ impl TransferFeatureState {
         &mut self,
         session_id: Option<&str>,
     ) -> usize {
-        self.queue.clear_completed_jobs(session_id)
+        let removed = self.queue.clear_completed_jobs(session_id);
+        self.prune_transfer_job_path_options();
+        removed
     }
 
     pub(in crate::features) fn clear_stopped_transfer_jobs_for_session(
         &mut self,
         session_id: Option<&str>,
     ) -> usize {
-        self.queue.clear_stopped_jobs(session_id)
+        let removed = self.queue.clear_stopped_jobs(session_id);
+        self.prune_transfer_job_path_options();
+        removed
+    }
+
+    fn prune_transfer_job_path_options(&mut self) {
+        self.path_options_by_job
+            .retain(|job_id, _| self.queue.jobs().iter().any(|job| job.id == *job_id));
     }
 
     pub(in crate::features) fn rename_dialog(&self) -> Option<&TransferRenameState> {

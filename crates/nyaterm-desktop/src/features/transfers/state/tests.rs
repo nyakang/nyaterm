@@ -7,7 +7,7 @@ use gpui::{ScrollHandle, ScrollStrategy, TestAppContext, UniformListScrollHandle
 use nyaterm_transport::{
     RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
     RemoteTextWriteResult, SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpFileType,
-    SftpTransferControl, SftpWriteTextResult,
+    SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions, SftpWriteTextResult,
 };
 
 use crate::models::{
@@ -26,7 +26,6 @@ use super::{
 
 fn transfer_focus(cx: &TestAppContext) -> TransferFeatureFocus {
     cx.update(|cx| TransferFeatureFocus {
-        panel: cx.focus_handle(),
         queue: cx.focus_handle(),
         browser: cx.focus_handle(),
         editor: cx.focus_handle(),
@@ -766,10 +765,39 @@ fn transfer_paths_own_endpoints_policy_and_prompt_admission() {
 }
 
 #[test]
-fn transfer_panel_owns_focus_height_and_resize_lifecycle() {
+fn transfer_job_retry_keeps_the_original_policy_and_releases_it_after_success() {
     let cx = TestAppContext::single();
+    let mut transfer = transfer_state(&cx);
+    let initial = transfer.bind_transfer_job_path_options(
+        "sftp-upload-1",
+        SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Ask,
+            None,
+            SftpTransferOptions::default(),
+        ),
+    );
+    assert_eq!(initial.duplicate_policy(), SftpDuplicatePolicy::Ask);
+    assert!(transfer.has_transfer_job_path_options("sftp-upload-1"));
+
+    // 全局策略已改为 Skip，已有任务仍沿用它启动时的 Ask 策略。
+    let retry = transfer.transfer_job_retry_path_options(
+        "sftp-upload-1",
+        SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Skip,
+            None,
+            SftpTransferOptions::default().with_max_retries(3),
+        ),
+    );
+    assert_eq!(retry.duplicate_policy(), SftpDuplicatePolicy::Ask);
+    assert_eq!(retry.transfer_options().max_retries(), 3);
+
+    transfer.release_transfer_job_path_options("sftp-upload-1");
+    assert!(!transfer.has_transfer_job_path_options("sftp-upload-1"));
+}
+
+#[test]
+fn transfer_panel_owns_height_and_resize_lifecycle() {
     let mut panel = TransferPanelState {
-        focus: cx.update(|cx| cx.focus_handle()),
         height: 120.,
         height_resize: None,
     };

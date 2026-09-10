@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpTransferSummary {
@@ -155,6 +156,55 @@ pub struct SftpDuplicateRequest {
     pub is_directory: bool,
 }
 
+/// 重名决定的真实路径身份。
+///
+/// 下载使用远端原始字节，上传保留本地 `PathBuf`，避免有损显示名让两个不同文件
+/// 共用一次用户选择。这里只记录 Ask 的决定；具体 Rename 目标每次重新检查，防止
+/// 重试期间被外部文件占用后退化为覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum SftpDuplicateCacheKey {
+    Download {
+        remote_path: Vec<u8>,
+        local_path: PathBuf,
+        is_directory: bool,
+    },
+    Upload {
+        local_path: PathBuf,
+        remote_path: String,
+        is_directory: bool,
+    },
+}
+
+/// 一次路径传输在自动重试和手动重试之间共享的 Ask 决定。
+#[derive(Debug, Default)]
+struct SftpDuplicateDecisionCache {
+    decisions: Mutex<HashMap<SftpDuplicateCacheKey, SftpDuplicateDecision>>,
+}
+
+impl SftpDuplicateDecisionCache {
+    fn decision(
+        &self,
+        key: &SftpDuplicateCacheKey,
+    ) -> Result<Option<SftpDuplicateDecision>, String> {
+        self.decisions
+            .lock()
+            .map_err(|_| "SFTP duplicate decision cache is poisoned".to_string())
+            .map(|cache| cache.get(key).copied())
+    }
+
+    fn remember(
+        &self,
+        key: SftpDuplicateCacheKey,
+        decision: SftpDuplicateDecision,
+    ) -> Result<(), String> {
+        self.decisions
+            .lock()
+            .map_err(|_| "SFTP duplicate decision cache is poisoned".to_string())?
+            .insert(key, decision);
+        Ok(())
+    }
+}
+
 pub trait SftpDuplicateResolver: Send + Sync {
     fn resolve_duplicate(
         &self,
@@ -162,11 +212,22 @@ pub trait SftpDuplicateResolver: Send + Sync {
     ) -> Result<SftpDuplicateDecision, String>;
 }
 
-#[derive(Clone)]
 pub struct SftpPathTransferOptions {
     duplicate_policy: SftpDuplicatePolicy,
     duplicate_resolver: Option<Arc<dyn SftpDuplicateResolver>>,
     transfer: SftpTransferOptions,
+    duplicate_decisions: Arc<SftpDuplicateDecisionCache>,
+}
+
+impl Clone for SftpPathTransferOptions {
+    fn clone(&self) -> Self {
+        // Clone 表示给另一个传输任务复制配置，任务运行态不能随普通配置复制泄漏。
+        Self::new(
+            self.duplicate_policy,
+            self.duplicate_resolver.clone(),
+            self.transfer.clone(),
+        )
+    }
 }
 
 impl Default for SftpPathTransferOptions {
@@ -175,6 +236,7 @@ impl Default for SftpPathTransferOptions {
             duplicate_policy: SftpDuplicatePolicy::Overwrite,
             duplicate_resolver: None,
             transfer: SftpTransferOptions::default(),
+            duplicate_decisions: Arc::new(SftpDuplicateDecisionCache::default()),
         }
     }
 }
@@ -189,6 +251,7 @@ impl SftpPathTransferOptions {
             duplicate_policy,
             duplicate_resolver,
             transfer,
+            duplicate_decisions: Arc::new(SftpDuplicateDecisionCache::default()),
         }
     }
 
@@ -202,6 +265,31 @@ impl SftpPathTransferOptions {
 
     pub fn transfer_options(&self) -> &SftpTransferOptions {
         &self.transfer
+    }
+
+    /// 使用新的执行参数，同时保留同一任务已经回答过的重名决定。
+    pub fn with_transfer_options(&self, transfer: SftpTransferOptions) -> Self {
+        Self {
+            duplicate_policy: self.duplicate_policy,
+            duplicate_resolver: self.duplicate_resolver.clone(),
+            transfer,
+            duplicate_decisions: Arc::clone(&self.duplicate_decisions),
+        }
+    }
+
+    pub(crate) fn cached_duplicate_decision(
+        &self,
+        key: &SftpDuplicateCacheKey,
+    ) -> Result<Option<SftpDuplicateDecision>, String> {
+        self.duplicate_decisions.decision(key)
+    }
+
+    pub(crate) fn remember_duplicate_decision(
+        &self,
+        key: SftpDuplicateCacheKey,
+        decision: SftpDuplicateDecision,
+    ) -> Result<(), String> {
+        self.duplicate_decisions.remember(key, decision)
     }
 }
 
@@ -225,9 +313,9 @@ mod tests {
         SFTP_TRANSFER_DEFAULT_BUFFER_SIZE, SFTP_TRANSFER_DEFAULT_DIRECTORY_UPLOAD_THREADS,
         SFTP_TRANSFER_MAX_BUFFER_SIZE, SFTP_TRANSFER_MAX_DIRECTORY_UPLOAD_THREADS,
         SFTP_TRANSFER_MAX_RETRIES, SFTP_TRANSFER_MIN_BUFFER_SIZE,
-        SFTP_TRANSFER_MIN_DIRECTORY_UPLOAD_THREADS, SftpDuplicateDecision, SftpDuplicatePolicy,
-        SftpDuplicateRequest, SftpDuplicateResolver, SftpPathTransferOptions, SftpTransferOptions,
-        parse_sftp_file_mode,
+        SFTP_TRANSFER_MIN_DIRECTORY_UPLOAD_THREADS, SftpDuplicateCacheKey, SftpDuplicateDecision,
+        SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver, SftpPathTransferOptions,
+        SftpTransferOptions, parse_sftp_file_mode,
     };
 
     struct TestDuplicateResolver;
@@ -318,6 +406,33 @@ mod tests {
                 .directory_upload_threads(),
             5
         );
+    }
+
+    #[test]
+    fn retry_options_share_decisions_while_plain_clones_start_clean() {
+        let options = SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Ask,
+            None,
+            SftpTransferOptions::default(),
+        );
+        let key = SftpDuplicateCacheKey::Upload {
+            local_path: "/local/file.txt".into(),
+            remote_path: "/remote/file.txt".to_string(),
+            is_directory: false,
+        };
+        options
+            .remember_duplicate_decision(key.clone(), SftpDuplicateDecision::Rename)
+            .expect("remember decision");
+
+        let new_transfer = options.clone();
+        let retry_options =
+            options.with_transfer_options(SftpTransferOptions::default().with_max_retries(3));
+        assert_eq!(retry_options.transfer_options().max_retries(), 3);
+        assert_eq!(
+            retry_options.cached_duplicate_decision(&key),
+            Ok(Some(SftpDuplicateDecision::Rename))
+        );
+        assert_eq!(new_transfer.cached_duplicate_decision(&key), Ok(None));
     }
 
     #[test]

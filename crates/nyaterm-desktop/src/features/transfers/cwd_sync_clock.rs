@@ -67,6 +67,8 @@ impl NyaTermApp {
         }
         self.transfer.mark_browser_auto_sync_cwd(Instant::now());
         self.start_transfer_sync_cwd_job(cx);
+        // 定时任务从 App 更新浏览器状态，不会经过面板交互的 with_app。
+        self.defer_transfer_panel_snapshot_flush(cx);
         true
     }
 }

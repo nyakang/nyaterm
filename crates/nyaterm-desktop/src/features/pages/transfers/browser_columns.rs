@@ -21,6 +21,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.transfer.update_browser_column_resize(event.position.x) {
+            self.defer_transfer_panel_snapshot_flush(cx);
             cx.notify();
         }
     }
@@ -30,6 +31,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.transfer.finish_browser_column_resize() {
+            self.defer_transfer_panel_snapshot_flush(cx);
             cx.notify();
         }
     }

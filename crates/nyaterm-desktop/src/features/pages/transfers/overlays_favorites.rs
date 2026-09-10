@@ -99,6 +99,7 @@ impl NyaTermApp {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_transfer_browser_favorites_menu(cx);
                         this.open_transfer_browser_directory(open_path.clone(), window, cx);
+                        this.defer_transfer_panel_snapshot_flush(cx);
                     }))
                     .child(
                         div()
@@ -129,6 +130,7 @@ impl NyaTermApp {
                             .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                                 cx.stop_propagation();
                                 this.remove_transfer_browser_favorite_path(remove_path.clone(), cx);
+                                this.defer_transfer_panel_snapshot_flush(cx);
                             }))
                             .child(
                                 svg()

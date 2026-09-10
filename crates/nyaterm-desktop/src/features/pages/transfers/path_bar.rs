@@ -375,6 +375,7 @@ impl NyaTermApp {
                             .hover(|this| this.bg(rgb(palette.hover)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.retry_transfer_browser_children_menu(cx);
+                                this.defer_transfer_panel_snapshot_flush(cx);
                             }))
                             .child(t!("common.retry")),
                     )
@@ -739,6 +740,7 @@ fn transfer_browser_path_menu_entries(
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.close_transfer_browser_path_menu(cx);
                     this.open_transfer_browser_directory(open_path.clone(), window, cx);
+                    this.defer_transfer_panel_snapshot_flush(cx);
                 }))
                 .child(
                     div()
