@@ -367,7 +367,7 @@ impl NyaTermApp {
                     app.update(cx, |this, cx| {
                         this.session.prompts.arm_wake();
                         let dirty = this.session.prompts.clear_cancelled_attempt_prompts()
-                        | this.drain_host_key_prompts()
+                            | this.drain_host_key_prompts()
                             | this.drain_agent_prompts()
                             | this.drain_credential_prompts();
                         let duplicate_activated = this.drain_duplicate_prompts();
