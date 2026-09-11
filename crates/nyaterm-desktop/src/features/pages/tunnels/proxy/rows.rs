@@ -55,7 +55,7 @@ pub(in crate::features::pages::tunnels) fn proxy_network_row(
                         .text_size(px(14.))
                         .font_weight(FontWeight(600.))
                         .text_color(rgb(palette.text))
-                        .overflow_hidden()
+                        .truncate()
                         .child(truncate_preview(&proxy.name, 52)),
                 )
                 .child(
@@ -71,7 +71,7 @@ pub(in crate::features::pages::tunnels) fn proxy_network_row(
                         .font_family(crate::features::shell::gpui_code_font_family())
                         .text_size(px(11.))
                         .text_color(rgb(palette.text_dimmed))
-                        .overflow_hidden()
+                        .truncate()
                         .child(truncate_preview(&address, 92)),
                 ),
         )

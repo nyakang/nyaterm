@@ -99,7 +99,8 @@ impl NyaTermApp {
                     div()
                         .id("network-list-scroll")
                         .size_full()
-                        .overflow_scrollbar()
+                        // Expanded records must stay within the sidebar width.
+                        .overflow_y_scrollbar()
                         .p_3()
                         .flex()
                         .flex_col()
