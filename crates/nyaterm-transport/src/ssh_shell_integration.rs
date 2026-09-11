@@ -13,6 +13,8 @@ const LEGACY_COMMAND_MARKER_PREFIX: &str = "7777;DflyCommand:";
 const MAX_OSC_BUF: usize = 64 * 1024;
 const SUPPRESSED_OUTPUT_LIMIT: usize = 64 * 1024;
 pub(super) const SSH_INTEGRATION_TIMEOUT: Duration = Duration::from_secs(8);
+const SSH_INJECTION_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5);
+const SSH_INJECTION_CHANNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const SUPPRESSION_DIAGNOSTIC_INITIAL: Duration = Duration::from_secs(1);
 const SUPPRESSION_DIAGNOSTIC_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -130,19 +132,42 @@ impl SshShellIntegrationState {
         self.phase == SshShellIntegrationPhase::WaitInitial && self.pending_script.is_some()
     }
 
-    pub(super) async fn inject(&mut self, channel: &mut russh::Channel<client::Msg>) {
-        let Some(script) = self.pending_script.take() else {
+    pub(super) fn take_pending_script(&mut self) -> Option<Vec<u8>> {
+        self.pending_script.take()
+    }
+
+    pub(super) fn begin_suppression(&mut self) {
+        self.phase = SshShellIntegrationPhase::Suppressing;
+        self.suppress_started_at = Some(Instant::now());
+        self.suppressed_visible_bytes = 0;
+        self.suppressed_rx_bytes = 0;
+        self.suppressed_rx_chunks = 0;
+        self.last_diagnostic_at = None;
+    }
+
+    pub(super) async fn apply_upload_outcome(
+        &mut self,
+        outcome: ScriptUploadOutcome,
+        script: Vec<u8>,
+        channel: &mut russh::Channel<client::Msg>,
+    ) {
+        if !outcome.success {
+            let _ = channel.data_bytes(script).await;
+            self.begin_suppression();
             return;
-        };
-        if channel.data_bytes(script).await.is_ok() {
-            self.phase = SshShellIntegrationPhase::Suppressing;
-            self.suppress_started_at = Some(Instant::now());
-            self.suppressed_visible_bytes = 0;
-            self.suppressed_rx_bytes = 0;
-            self.suppressed_rx_chunks = 0;
-            self.last_diagnostic_at = None;
+        }
+
+        let source_cmd = format!(
+            ". '{path}'; rm -rf '{dir}'\n",
+            path = outcome.remote_path,
+            dir = outcome.remote_dir,
+        );
+        if channel.data_bytes(source_cmd.into_bytes()).await.is_ok() {
+            self.begin_suppression();
         } else {
-            self.force_normal();
+            self.phase = SshShellIntegrationPhase::Normal;
+            self.suppress_started_at = None;
+            self.suppressed_visible_bytes = 0;
         }
     }
 
@@ -229,6 +254,104 @@ impl SshShellIntegrationState {
                 }
             }
         }
+    }
+}
+
+pub(super) struct ScriptUploadOutcome {
+    remote_dir: String,
+    remote_path: String,
+    success: bool,
+}
+
+impl ScriptUploadOutcome {
+    pub(super) fn failed() -> Self {
+        Self {
+            remote_dir: String::new(),
+            remote_path: String::new(),
+            success: false,
+        }
+    }
+}
+
+pub(super) async fn upload_integration_script(
+    handle: std::sync::Arc<SshShellHandle>,
+    script: Vec<u8>,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+) -> ScriptUploadOutcome {
+    let remote_dir = format!("/tmp/.nyaterm_inj_{}", uuid::Uuid::new_v4().simple());
+    let remote_path = format!("{remote_dir}/script.sh");
+    let deadline = tokio::time::Instant::now() + SSH_INJECTION_UPLOAD_TIMEOUT;
+
+    let open_channel = async {
+        match handle.as_ref() {
+            SshShellHandle::Dedicated(h) => h.channel_open_session().await,
+            SshShellHandle::Multiplexed(h) => {
+                let h = h.lock().await;
+                h.channel_open_session().await
+            }
+        }
+    };
+
+    let mut exec_ch = match tokio::select! {
+        _ = &mut cancel => None,
+        result = tokio::time::timeout_at(deadline, open_channel) => {
+            result.ok().and_then(Result::ok)
+        }
+    } {
+        Some(channel) => channel,
+        None => return ScriptUploadOutcome::failed(),
+    };
+
+    // The UUID makes collisions impractical, while mkdir without -p is the
+    // exclusive creation step: an existing file, directory, or symlink makes
+    // the upload fail instead of being followed. The restrictive umask and
+    // 0700 directory keep the script private even before chmod runs.
+    let cmd = format!(
+        "umask 077; mkdir -m 700 '{dir}' || exit 1; \
+         trap 'rm -rf \"{dir}\"; exit 1' HUP INT TERM; \
+         cat > '{path}' && chmod 700 '{path}' || {{ rm -rf '{dir}'; exit 1; }}",
+        dir = remote_dir,
+        path = remote_path,
+    );
+
+    let upload = async {
+        exec_ch.exec(true, cmd.into_bytes()).await?;
+        exec_ch.data_bytes(script).await?;
+        exec_ch.eof().await?;
+
+        let mut exit_status = None;
+        while let Some(msg) = exec_ch.wait().await {
+            match msg {
+                ChannelMsg::ExitStatus {
+                    exit_status: status,
+                } => exit_status = Some(status),
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        Ok::<bool, anyhow::Error>(exit_status.unwrap_or(0) == 0)
+    };
+
+    let success = tokio::select! {
+        _ = &mut cancel => false,
+        result = tokio::time::timeout_at(deadline, upload) => {
+            match result {
+                Ok(Ok(success)) => success,
+                Ok(Err(_)) | Err(_) => false,
+            }
+        }
+    };
+
+    // Keep the channel owned by this task outside the timeout/cancellation
+    // future so both paths can explicitly close it. This is important for
+    // multiplexed connections, where dropping a plain russh::Channel does not
+    // close the remote channel or terminate a blocked `cat` process.
+    let _ = tokio::time::timeout(SSH_INJECTION_CHANNEL_CLOSE_TIMEOUT, exec_ch.close()).await;
+
+    ScriptUploadOutcome {
+        remote_dir,
+        remote_path,
+        success,
     }
 }
 
