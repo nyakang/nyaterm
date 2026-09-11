@@ -299,13 +299,13 @@ where
 {
     let label: SharedString = label.into();
     div()
-        .h(px(52.))
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_1()
         .child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(rgb(palette.text_muted))
                 .child(label),
         )

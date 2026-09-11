@@ -103,22 +103,29 @@ pub(in crate::features::pages::tunnels) fn tunnel_network_row(
                 .gap_0()
                 .child(
                     div()
+                        .min_w_0()
                         .flex()
                         .items_center()
                         .gap_2()
                         .child(
                             div()
                                 .min_w_0()
+                                .flex_1()
                                 .text_size(px(14.))
                                 .font_weight(FontWeight(600.))
                                 .text_color(rgb(palette.text))
-                                .overflow_hidden()
+                                .truncate()
                                 .child(truncate_preview(&tunnel_name(tunnel), 52)),
                         )
-                        .child(status_pill(status, status_color, status_bg))
+                        .child(div().flex_none().child(status_pill(
+                            status,
+                            status_color,
+                            status_bg,
+                        )))
                         .when(tunnel.auto_open, |this| {
                             this.child(
                                 div()
+                                    .flex_none()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette.success))
                                     .child("auto"),
@@ -130,7 +137,7 @@ pub(in crate::features::pages::tunnels) fn tunnel_network_row(
                         .mt(px(1.))
                         .text_size(px(12.))
                         .text_color(rgb(palette.text_muted))
-                        .overflow_hidden()
+                        .truncate()
                         .child(format!(
                             "{} · {}",
                             truncate_preview(&connection_label, 44),
@@ -143,12 +150,13 @@ pub(in crate::features::pages::tunnels) fn tunnel_network_row(
                         .font_family(crate::features::shell::gpui_code_font_family())
                         .text_size(px(11.))
                         .text_color(rgb(palette.text_dimmed))
-                        .overflow_hidden()
+                        .truncate()
                         .child(truncate_preview(&tunnel_endpoint(tunnel, &listen), 88)),
                 ),
         )
         .child(
             div()
+                .flex_none()
                 .flex()
                 .items_center()
                 .gap_1()
