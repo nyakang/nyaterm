@@ -176,11 +176,12 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn normalized_transfer_local_path(&self) -> PathBuf {
+    /// Builds a single-file download target from an explicit remote display path; the
+    /// selection identity key must not participate in naming.
+    pub(in crate::features) fn normalized_transfer_local_path(&self, remote_path: &str) -> PathBuf {
         let value = self.transfer.local_path().trim();
         if value.is_empty() {
-            let file_name =
-                download_file_name_from_remote_path(&self.transfer.normalized_remote_path());
+            let file_name = download_file_name_from_remote_path(remote_path);
             self.resolved_transfer_download_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(file_name)

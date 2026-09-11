@@ -15,7 +15,8 @@ use crate::models::{
 };
 
 use super::helpers::{
-    TransferProgressEventSender, submit_transfer_blocking_job, transfer_job_remote_parent_path,
+    TransferProgressEventSender, log_sftp_upload_job_failure, submit_transfer_blocking_job,
+    transfer_job_remote_parent_path,
 };
 
 impl NyaTermApp {
@@ -188,8 +189,11 @@ impl NyaTermApp {
                             },
                             Err(_) => TransferJobOutput::Summary(summary),
                         }
-                    })
-                    .map_err(|error| error.to_string());
+                    });
+                if let Err(error) = &result {
+                    log_sftp_upload_job_failure(&id, error);
+                }
+                let result = result.map_err(|error| error.to_string());
                 let _ = finished_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -482,8 +486,11 @@ impl NyaTermApp {
                                     },
                                     Err(_) => TransferJobOutput::Summary(summary),
                                 }
-                            })
-                            .map_err(|error| error.to_string());
+                            });
+                        if let Err(error) = &result {
+                            log_sftp_upload_job_failure(&job_id, error);
+                        }
+                        let result = result.map_err(|error| error.to_string());
                         let _ = finished_tx.unbounded_send(TransferJobResult {
                             id: job_id,
                             event: TransferJobEvent::Finished(result),
