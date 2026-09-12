@@ -84,7 +84,7 @@ impl HeaderStatusContent {
 }
 
 impl NyaTermApp {
-    fn handle_title_bar_mouse_down(
+    pub(in crate::features) fn handle_title_bar_mouse_down(
         &mut self,
         _event: &MouseDownEvent,
         _window: &mut Window,

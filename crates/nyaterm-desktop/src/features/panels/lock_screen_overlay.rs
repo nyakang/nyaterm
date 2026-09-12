@@ -1,8 +1,8 @@
 use rust_i18n::t;
 
 use gpui::{
-    Context, FontWeight, IntoElement, KeyDownEvent, SharedString, Window, WindowControlArea, div,
-    prelude::*, px, rgb, rgba, svg,
+    Context, FontWeight, IntoElement, KeyDownEvent, MouseButton, SharedString, Window,
+    WindowControlArea, div, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_ui::NyaInput;
 
@@ -72,7 +72,11 @@ impl NyaTermApp {
                             div()
                                 .h_full()
                                 .flex_1()
-                                .window_control_area(WindowControlArea::Drag),
+                                .window_control_area(WindowControlArea::Drag)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(Self::handle_title_bar_mouse_down),
+                                ),
                         )
                         .child(window_control_button(
                             palette,
