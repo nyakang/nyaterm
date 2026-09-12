@@ -433,6 +433,29 @@ impl SftpService {
         }
     }
 
+    /// Runs an upload and records its final result; ordinary failures are logged as errors,
+    /// while user cancellations are logged as warnings.
+    fn run_upload_operation<T, F>(
+        &self,
+        operation: &'static str,
+        attempts: u32,
+        operation_future: F,
+    ) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = anyhow::Result<T>> + Send + 'static,
+    {
+        let result = self.run_operation(operation_future);
+        if let Err(error) = &result {
+            if is_sftp_transfer_cancelled(error) {
+                tracing::warn!(operation, "SFTP upload cancelled");
+            } else {
+                log_sftp_upload_failure(operation, attempts, error);
+            }
+        }
+        result
+    }
+
     pub(crate) fn copy_remote_path_to(
         &self,
         source_path: &RemoteFilePath,
@@ -1663,7 +1686,8 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        self.run_operation(async move {
+        let attempts = options.max_retries().saturating_add(1);
+        self.run_upload_operation("upload_file", attempts, async move {
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
@@ -1720,7 +1744,8 @@ impl SftpService {
         let remote_path = remote_path.clone();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        self.run_operation(async move {
+        let attempts = options.max_retries().saturating_add(1);
+        self.run_upload_operation("upload_remote_file", attempts, async move {
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
                 control.check_cancelled()?;
@@ -1858,7 +1883,11 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        self.run_operation(async move {
+        let attempts = path_options
+            .transfer_options()
+            .max_retries()
+            .saturating_add(1);
+        self.run_upload_operation("upload_path", attempts, async move {
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let mut last_error = None;
@@ -2149,6 +2178,21 @@ fn remote_join_bytes(parent: &[u8], child: &[u8]) -> Vec<u8> {
 
 fn is_sftp_transfer_cancelled(error: &anyhow::Error) -> bool {
     error.to_string().contains(SFTP_TRANSFER_CANCELLED)
+}
+
+/// Records the full error chain before an upload leaves the transport layer so asynchronous
+/// callers do not see only the abbreviated `Display` text.
+///
+/// The log does not include local or remote paths or file contents; the desktop transfer ID
+/// supplies task-level context.
+fn log_sftp_upload_failure(operation: &'static str, attempts: u32, error: &anyhow::Error) {
+    tracing::error!(
+        operation,
+        attempts,
+        error = %error,
+        error_chain = %format!("{error:#}"),
+        "SFTP upload failed"
+    );
 }
 
 fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {

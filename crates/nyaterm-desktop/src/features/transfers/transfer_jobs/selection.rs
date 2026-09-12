@@ -3,7 +3,7 @@ use rust_i18n::t;
 use gpui::{Context, KeyDownEvent, MouseDownEvent, Window};
 
 use super::super::transfer_widgets::transfer_job_title;
-use super::helpers::{transfer_job_local_target_path, transfer_job_reveal_dir};
+use super::helpers::transfer_job_local_target_path;
 use crate::features::NyaTermApp;
 
 impl NyaTermApp {
@@ -116,19 +116,97 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
-        let Some(target_path) = transfer_job_local_target_path(job) else {
+        let Some(target_path) =
+            transfer_job_local_target_path(job).filter(|path| !path.as_os_str().is_empty())
+        else {
             self.shell
                 .set_status(format!("transfer {} has no local target", job.id));
             cx.notify();
             return;
         };
-        let target_dir = transfer_job_reveal_dir(target_path);
-        cx.reveal_path(&target_dir);
-        self.shell.set_status(format!(
-            "opened transfer directory {}",
-            target_dir.display()
-        ));
-        cx.notify();
+        // Keep filesystem checks and file-manager requests off the UI thread.
+        let request = cx.background_executor().spawn(async move {
+            let mut target_path = std::path::absolute(target_path)?;
+            // Follow directory symlinks, preserving the existing open-directory behavior.
+            let target_is_dir = match std::fs::metadata(&target_path) {
+                Ok(metadata) => metadata.is_dir(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    anyhow::ensure!(target_path.pop(), "transfer target has no parent directory");
+                    anyhow::ensure!(
+                        std::fs::metadata(&target_path)?.is_dir(),
+                        "transfer target directory is unavailable"
+                    );
+                    true
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            #[cfg(target_os = "macos")]
+            if target_is_dir {
+                // Explicitly use Finder: the default handler could execute an app bundle.
+                let status = std::process::Command::new("/usr/bin/open")
+                    .args(["-b", "com.apple.finder", "--"])
+                    .arg(&target_path)
+                    .output()?
+                    .status;
+                anyhow::ensure!(status.success(), "Finder request failed: {status}");
+                return Ok(None);
+            }
+
+            #[cfg(target_os = "linux")]
+            if !target_is_dir {
+                use gtk::gio;
+                use gtk::gio::prelude::FileExt;
+
+                // GPUI opens the file for the portal. Check access without opening a FIFO/device.
+                let info = gio::File::for_path(&target_path).query_info(
+                    "standard::type,access::can-read",
+                    gio::FileQueryInfoFlags::NONE,
+                    gio::Cancellable::NONE,
+                )?;
+                if info.file_type() != gio::FileType::Regular || !info.boolean("access::can-read") {
+                    anyhow::ensure!(target_path.pop(), "transfer target has no parent directory");
+                    anyhow::ensure!(
+                        std::fs::metadata(&target_path)?.is_dir(),
+                        "transfer target directory is unavailable"
+                    );
+                    return Ok(Some((target_path, true)));
+                }
+            }
+            Ok::<_, anyhow::Error>(Some((target_path, target_is_dir)))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = request.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(target) => {
+                        if let Some((target_path, target_is_dir)) = target {
+                            if target_is_dir {
+                                #[cfg(target_os = "linux")]
+                                {
+                                    use gtk::gio::prelude::FileExt;
+                                    // The URI API preserves GPUI's Wayland activation-token handling.
+                                    cx.open_url(
+                                        gtk::gio::File::for_path(&target_path).uri().as_str(),
+                                    );
+                                }
+                                #[cfg(not(target_os = "linux"))]
+                                cx.open_with_system(&target_path);
+                            } else {
+                                cx.reveal_path(&target_path);
+                            }
+                        }
+                        this.shell
+                            .set_status("requested transfer location in file manager".to_string());
+                    }
+                    Err(error) => this
+                        .shell
+                        .set_status(format!("cannot show transfer location: {error}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn handle_transfer_queue_key_down(

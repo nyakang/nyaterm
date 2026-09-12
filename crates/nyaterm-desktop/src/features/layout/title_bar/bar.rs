@@ -1,7 +1,8 @@
 use rust_i18n::t;
 
 use gpui::{
-    Context, IntoElement, MouseButton, Window, WindowControlArea, div, prelude::*, px, rgb, svg,
+    Context, IntoElement, MouseButton, MouseDownEvent, Window, WindowControlArea, div, prelude::*,
+    px, rgb, svg,
 };
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::NyaDropdownMenu;
@@ -83,6 +84,26 @@ impl HeaderStatusContent {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn handle_title_bar_mouse_down(
+        &mut self,
+        _event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mark_title_drag_activity();
+        #[cfg(target_os = "linux")]
+        {
+            // Linux 的拖动标记不会主动移动窗口；阻止嵌套拖动区重复处理同一次按下。
+            cx.stop_propagation();
+            if _event.click_count == 2 {
+                _window.zoom_window();
+            } else {
+                _window.start_window_move();
+            }
+        }
+        cx.notify();
+    }
+
     pub(in crate::features) fn title_bar(
         &mut self,
         window: &mut Window,
@@ -115,10 +136,7 @@ impl NyaTermApp {
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.mark_title_drag_activity();
-                            cx.notify();
-                        }),
+                        cx.listener(Self::handle_title_bar_mouse_down),
                     )
                     .when(!macos, |this| {
                         this.child(
@@ -154,6 +172,11 @@ impl NyaTermApp {
                                             this.text_color(rgb(palette.text))
                                         }),
                                 )
+                                .when(cfg!(target_os = "linux"), |this| {
+                                    this.on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.toggle_mobile_left_drawer(cx);
                                 })),
@@ -173,10 +196,7 @@ impl NyaTermApp {
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.mark_title_drag_activity();
-                            cx.notify();
-                        }),
+                        cx.listener(Self::handle_title_bar_mouse_down),
                     )
                     .when(header_status_visible, |this| {
                         this.child(self.header_status_control(header_status, cx))
@@ -223,10 +243,7 @@ impl NyaTermApp {
                             .window_control_area(WindowControlArea::Drag)
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.mark_title_drag_activity();
-                                    cx.notify();
-                                }),
+                                cx.listener(Self::handle_title_bar_mouse_down),
                             ),
                     )
                     .when(!macos, |this| {
@@ -311,10 +328,7 @@ impl NyaTermApp {
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.mark_title_drag_activity();
-                            cx.notify();
-                        }),
+                        cx.listener(Self::handle_title_bar_mouse_down),
                     )
                     .child(self.header_status_body(content, cx)),
             )

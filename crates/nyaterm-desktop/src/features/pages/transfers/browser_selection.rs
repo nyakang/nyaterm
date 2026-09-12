@@ -11,20 +11,24 @@ use crate::models::{TransferBrowserContextTarget, TransferBrowserDragSelectionSt
 
 use super::{TransferPathPart, remote_file_name, transfer_path_part_value};
 
+/// Converts a selection identity key to its display path so raw-path-token is not
+/// treated as a user-facing path.
+fn browser_display_path_for_identity(entries: &[SftpFileEntry], identity: &str) -> String {
+    entries
+        .iter()
+        .find(|entry| entry.matches_identity(identity))
+        .map(|entry| entry.path.clone())
+        .unwrap_or_else(|| identity.to_string())
+}
+
 impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn select_transfer_browser_entry(
         &mut self,
         identity: String,
         cx: &mut Context<Self>,
     ) {
-        let display_path = self
-            .transfer
-            .browser_view()
-            .entries
-            .iter()
-            .find(|entry| entry.matches_identity(&identity))
-            .map(|entry| entry.path.clone())
-            .unwrap_or_else(|| identity.clone());
+        let display_path =
+            browser_display_path_for_identity(self.transfer.browser_view().entries, &identity);
         self.transfer.select_browser_entry(identity);
         self.transfer.set_remote_path(display_path.clone());
         self.shell
@@ -207,7 +211,9 @@ impl NyaTermApp {
     ) {
         window.focus(self.transfer.browser_view().focus, cx);
         if let Some(selected_count) = self.transfer.activate_marked_browser_path(&path) {
-            self.transfer.set_remote_path(path);
+            let display_path =
+                browser_display_path_for_identity(self.transfer.browser_view().entries, &path);
+            self.transfer.set_remote_path(display_path);
             self.shell
                 .set_status(format!("{} remote item(s) marked", selected_count));
             cx.notify();
@@ -332,8 +338,10 @@ impl NyaTermApp {
         path: String,
         cx: &mut Context<Self>,
     ) {
+        let display_path =
+            browser_display_path_for_identity(self.transfer.browser_view().entries, &path);
         let selected_count = self.transfer.toggle_browser_path_mark(path.clone());
-        self.transfer.set_remote_path(path.clone());
+        self.transfer.set_remote_path(display_path);
         self.shell
             .set_status(format!("{} remote item(s) marked", selected_count));
         cx.notify();
@@ -485,7 +493,7 @@ impl NyaTermApp {
         }
         let total = entries.len();
         let base_local_path = if total == 1 {
-            self.normalized_transfer_local_path()
+            self.normalized_transfer_local_path(&entries[0].path)
         } else {
             self.resolved_transfer_download_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -501,5 +509,38 @@ impl NyaTermApp {
         self.shell
             .set_status(format!("{total} remote download job(s) started"));
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_transport::{RemoteFilePath, SftpFileEntry, SftpFileType};
+
+    use super::browser_display_path_for_identity;
+
+    #[test]
+    fn browser_display_path_for_identity_uses_display_path_for_raw_tokens() {
+        let entry = SftpFileEntry {
+            name: "client-rust.2026-09-11.log".to_string(),
+            path: "./rocontrol2/client-rust.2026-09-11.log".to_string(),
+            file_type: SftpFileType::File,
+            size: Some(1),
+            permissions: None,
+            owner: String::new(),
+            group: String::new(),
+            modified_at: None,
+            raw_path_token: RemoteFilePath::from_raw(
+                "./rocontrol2/client-rust.2026-09-11.log",
+                b"./rocontrol2/client-rust.2026-09-11.log",
+            )
+            .raw_path_token,
+            symlink_target_is_directory: false,
+        };
+        let identity = entry.identity_key();
+
+        assert_eq!(
+            browser_display_path_for_identity(std::slice::from_ref(&entry), &identity),
+            entry.path
+        );
     }
 }
