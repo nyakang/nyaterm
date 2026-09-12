@@ -617,6 +617,7 @@ mod tests {
                         stop_bits: "1".to_string(),
                         ai_execution_profile: config::AiExecutionProfile::Auto,
                         backspace_mode: "del".to_string(),
+                        modem_upload_protocol: config::SerialModemUploadProtocol::Zmodem,
                         encoding: String::new(),
                     },
                     group_id: None,

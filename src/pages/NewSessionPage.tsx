@@ -232,6 +232,9 @@ export default function NewSessionPage() {
   const [dataBits, setDataBits] = useState("8");
   const [parity, setParity] = useState("none");
   const [stopBits, setStopBits] = useState("1");
+  const [serialModemUploadProtocol, setSerialModemUploadProtocol] = useState<
+    "xmodem" | "ymodem" | "zmodem"
+  >("zmodem");
 
   // Local Terminal States
   const [shellPath, setShellPath] = useState("powershell.exe");
@@ -353,6 +356,7 @@ export default function NewSessionPage() {
           setParity(found.parity || "none");
           setStopBits(found.stop_bits || "1");
           setSerialBackspaceMode(found.backspace_mode || "ctrl_h");
+          setSerialModemUploadProtocol(found.modem_upload_protocol || "zmodem");
         } else if (found.type === "rdp") {
           setHost(found.host || "");
           setRdpPort(found.port || 3389);
@@ -454,6 +458,7 @@ export default function NewSessionPage() {
     setDataBits("8");
     setParity("none");
     setStopBits("1");
+    setSerialModemUploadProtocol("zmodem");
     setShellPath("powershell.exe");
     setShellArgs("");
     setWorkingDir("");
@@ -1047,6 +1052,7 @@ export default function NewSessionPage() {
               parity,
               stop_bits: stopBits,
               backspace_mode: serialBackspaceMode,
+              modem_upload_protocol: serialModemUploadProtocol,
             }
           : {}),
         ...(currentTab === "rdp"
@@ -1621,6 +1627,8 @@ export default function NewSessionPage() {
               setStopBits={setStopBits}
               backspaceMode={serialBackspaceMode}
               setBackspaceMode={setSerialBackspaceMode}
+              modemUploadProtocol={serialModemUploadProtocol}
+              setModemUploadProtocol={setSerialModemUploadProtocol}
               recordingUseGlobal={recordingUseGlobal}
               setRecordingUseGlobal={setRecordingUseGlobal}
               recordingAutoStart={recordingAutoStart}

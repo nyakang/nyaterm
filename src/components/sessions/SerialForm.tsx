@@ -48,6 +48,8 @@ interface SerialFormProps {
   setStopBits: (v: string) => void;
   backspaceMode: string;
   setBackspaceMode: (v: string) => void;
+  modemUploadProtocol: "xmodem" | "ymodem" | "zmodem";
+  setModemUploadProtocol: (v: "xmodem" | "ymodem" | "zmodem") => void;
   recordingUseGlobal: boolean;
   setRecordingUseGlobal: (v: boolean) => void;
   recordingAutoStart: boolean;
@@ -215,6 +217,8 @@ export function SerialForm({
   setStopBits,
   backspaceMode,
   setBackspaceMode,
+  modemUploadProtocol,
+  setModemUploadProtocol,
   recordingUseGlobal,
   setRecordingUseGlobal,
   recordingAutoStart,
@@ -386,6 +390,26 @@ export function SerialForm({
                         <SelectItem value="GBK">GBK</SelectItem>
                         <SelectItem value="GB2312">GB2312</SelectItem>
                         <SelectItem value="GB18030">GB18030</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.serialModemUploadProtocol", "Modem upload protocol")}
+                    </Label>
+                    <Select
+                      value={modemUploadProtocol}
+                      onValueChange={(value) =>
+                        setModemUploadProtocol(value as "xmodem" | "ymodem" | "zmodem")
+                      }
+                    >
+                      <SelectTrigger className="mt-1 h-8 w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="xmodem">XMODEM</SelectItem>
+                        <SelectItem value="ymodem">YMODEM</SelectItem>
+                        <SelectItem value="zmodem">ZMODEM</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

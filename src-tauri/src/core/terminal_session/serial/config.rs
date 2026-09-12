@@ -6,5 +6,6 @@ pub struct SerialConfig {
     pub stop_bits: String,
     pub name: String,
     pub backspace_mode: String,
+    pub modem_upload_protocol: crate::config::SerialModemUploadProtocol,
     pub encoding: String,
 }

@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedConnection } from "@/types/global";
 import NewSessionPage from "./NewSessionPage";
 
-const { closeMock, emitMock, invokeMock, rdpFormMock, translateMock } = vi.hoisted(() => ({
+const { closeMock, emitMock, invokeMock, rdpFormMock, serialFormMock, translateMock } = vi.hoisted(() => ({
   closeMock: vi.fn(),
   emitMock: vi.fn(),
   invokeMock: vi.fn(),
   rdpFormMock: vi.fn(),
+  serialFormMock: vi.fn(),
   translateMock: (key: string, fallback?: unknown) =>
     typeof fallback === "string" ? fallback : key,
 }));
@@ -34,7 +35,21 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 vi.mock("@/components/sessions/LocalTerminal", () => ({ LocalTerminal: () => null }));
-vi.mock("@/components/sessions/SerialForm", () => ({ SerialForm: () => null }));
+vi.mock("@/components/sessions/SerialForm", () => ({
+  SerialForm: (props: Record<string, unknown>) => {
+    serialFormMock(props);
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          (props.setModemUploadProtocol as ((value: "xmodem") => void) | undefined)?.("xmodem")
+        }
+      >
+        choose-xmodem
+      </button>
+    );
+  },
+}));
 vi.mock("@/components/sessions/SshForm", () => ({ SshForm: () => null }));
 vi.mock("@/components/sessions/TelnetForm", () => ({ TelnetForm: () => null }));
 vi.mock("@/components/sessions/VncForm", () => ({ VncForm: () => null }));
@@ -85,6 +100,19 @@ const rdpConnection: SavedConnection = {
   reconnect: { enabled: true, max_attempts: 5 },
 };
 
+const serialConnection: SavedConnection = {
+  id: "serial-1",
+  name: "Board",
+  type: "serial",
+  port_name: "COM3",
+  baud_rate: 115200,
+  data_bits: 8,
+  parity: "none",
+  stop_bits: "1",
+  backspace_mode: "ctrl_h",
+  modem_upload_protocol: "ymodem",
+};
+
 describe("NewSessionPage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", `/?edit=${rdpConnection.id}`);
@@ -101,7 +129,9 @@ describe("NewSessionPage", () => {
         case "get_connection_custom_icons":
           return Promise.resolve([]);
         case "get_saved_connections":
-          return Promise.resolve([rdpConnection, jumpHost]);
+          return Promise.resolve([rdpConnection, serialConnection, jumpHost]);
+        case "list_serial_ports":
+          return Promise.resolve(["COM3"]);
         case "save_connection":
           return Promise.resolve(rdpConnection.id);
         default:
@@ -109,6 +139,7 @@ describe("NewSessionPage", () => {
       }
     });
     rdpFormMock.mockReset();
+    serialFormMock.mockReset();
   });
 
   it("restores an RDP jump host and keeps it when saving without changes", async () => {
@@ -142,6 +173,38 @@ describe("NewSessionPage", () => {
               proxy_id: "proxy-1",
               proxy_jump_id: jumpHost.id,
             },
+          }),
+        }),
+      );
+    });
+  });
+
+  it("restores and saves the Serial modem upload protocol", async () => {
+    window.history.replaceState({}, "", `/?edit=${serialConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ modemUploadProtocol: "ymodem" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "choose-xmodem" }));
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ modemUploadProtocol: "xmodem" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "serial",
+            modem_upload_protocol: "xmodem",
           }),
         }),
       );

@@ -1464,6 +1464,11 @@ fn pty_session_thread(
                 *zm = None;
                 zmodem_input_blocked.store(false, Ordering::Release);
             }
+            SessionCommand::SerialModemUpload { result_tx, .. } => {
+                let _ = result_tx.send(Err(
+                    "Direct modem upload is only available for Serial sessions".to_string(),
+                ));
+            }
             SessionCommand::Close => {
                 break;
             }

@@ -1,4 +1,5 @@
 import type { AiCaptureEvent } from "@/types/global";
+import type { SerialModemEventPayload } from "./serialModemTerminalEvents";
 import type { ZmodemEventPayload } from "./zmodemTerminalEvents";
 
 export interface XTermInternalTrimSource {
@@ -38,6 +39,7 @@ export type PendingWakeEvent =
   | { type: "closed" }
   | { type: "focus" }
   | { type: "zmodem"; payload: ZmodemEventPayload }
+  | { type: "serialModem"; payload: SerialModemEventPayload }
   | { type: "ai"; payload: AiCaptureEvent };
 
 export type HibernationPhase =

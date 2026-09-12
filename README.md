@@ -125,7 +125,7 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 - AI shortcuts for explaining recent output, plus inline Agent command output with configurable `Terminal Output Lines`
 - Large-output protection, configurable scrollback, SSH keep-alive, and session recording
 - Online search and translation from selected terminal text
-- Zmodem file transfer support directly from the terminal, surfaced in the transfer queue
+- ZMODEM file transfer support directly from the terminal, plus Serial XMODEM/YMODEM/ZMODEM drag-and-drop uploads surfaced in the transfer queue
 - Confirmation dialog before closing all sessions
 - Customizable keyboard shortcuts for terminal and UI actions, including `Backspace Mode` selection for Telnet and Serial sessions
 
@@ -260,7 +260,7 @@ Download installers from [nyaterm.app](https://nyaterm.app) or the [Releases](ht
 | SSH | Linux / Unix remote servers | Supports SFTP, OTP, resource / GPU / process / Docker monitoring, proxy, jump host, tunnels, and per-connection algorithm preferences |
 | Local Terminal | Local shell workflows | Uses your local shell path and working directory |
 | Telnet | Legacy network devices or lab systems | Lightweight terminal session without SSH-only features, with `Backspace Mode` for `Ctrl+H (BS)` or `DEL (0x7F)` |
-| Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, and `Backspace Mode` |
+| Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, `Backspace Mode`, and XMODEM/YMODEM/ZMODEM drag-and-drop upload protocol |
 
 ---
 

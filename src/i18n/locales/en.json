@@ -648,6 +648,7 @@
     "selectShellFileTitle": "Select Shell File",
     "selectedItemMissing": "Item removed",
     "serial": "Serial",
+    "serialModemUploadProtocol": "Modem upload protocol",
     "serialPort": "Serial",
     "serialPortPlaceholder": "COM1 or /dev/ttyS0",
     "serialPortRequired": "Serial port required",
@@ -2770,8 +2771,10 @@
     "click": "Click",
     "connectionFailed": "Connection failed",
     "dropFoldersNotSupportedLocal": "Folders cannot be inserted as paths in a local terminal.",
+    "dropFoldersSerialModemOnly": "Serial modem upload only supports files, not folders.",
     "dropFoldersZmodemOnly": "Folders cannot be uploaded via ZMODEM. Use the file explorer for SFTP uploads.",
     "dropOverlayHintLocal": "File paths will be inserted into the command line",
+    "dropOverlayHintSerialModem": "Files only, uploaded with this Serial connection's configured modem protocol",
     "dropOverlayHintSsh": "Single files prefer ZMODEM; folders or failures use SFTP",
     "dropOverlayHintZmodem": "Files only, uploaded via ZMODEM",
     "dropOverlayTitleLocal": "Drop to insert file paths",
@@ -2803,6 +2806,8 @@
     "reconnecting": "Reconnecting...",
     "scrollTabsLeft": "Scroll tabs left",
     "scrollTabsRight": "Scroll tabs right",
+    "serialModemUploadFailed": "Serial modem upload failed.",
+    "serialModemWaiting": "Waiting…",
     "sessionDisconnected": "Disconnected",
     "shellSessions": "Shell Sessions",
     "showHiddenSessions": "Show Hidden Sessions",
@@ -2812,7 +2817,8 @@
     "tabDockSplitBottom": "Split Bottom",
     "tabDockSplitLeft": "Split Left",
     "tabDockSplitRight": "Split Right",
-    "tabDockSplitTop": "Split Top"
+    "tabDockSplitTop": "Split Top",
+    "xmodemSingleFileOnly": "XMODEM can upload exactly one file at a time."
   },
   "terminalCtx": {
     "clearAll": "Clear All",

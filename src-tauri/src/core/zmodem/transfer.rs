@@ -248,6 +248,10 @@ impl ZmodemTransfer {
         matches!(self.state, TransferState::Done)
     }
 
+    pub fn is_waiting_for_user(&self) -> bool {
+        matches!(self.state, TransferState::WaitingForUser { .. })
+    }
+
     /// Called when the user cancels the transfer from the frontend.
     pub fn cancel(&mut self) -> Vec<ZmodemAction> {
         self.state = TransferState::Done;
@@ -723,41 +727,51 @@ impl ZmodemTransfer {
     }
 
     fn start_next_send_file(&mut self) -> Vec<ZmodemAction> {
-        let TransferState::Sending {
-            sender,
-            files,
-            file_index,
-            current_file,
-            conflict_mode: _,
-            preserve_timestamps,
-            ..
-        } = &mut self.state
-        else {
-            return vec![];
-        };
+        let (actions, start_failed) = {
+            let TransferState::Sending {
+                sender,
+                files,
+                file_index,
+                current_file,
+                conflict_mode: _,
+                preserve_timestamps,
+                ..
+            } = &mut self.state
+            else {
+                return vec![];
+            };
 
-        if *file_index >= files.len() {
-            return vec![];
-        }
-
-        self.progress_throttle.reset();
-        let mut actions = Self::start_file_for_sender(
-            sender,
-            files,
-            *file_index,
-            current_file,
-            *preserve_timestamps,
-        );
-        if let Some(sf) = current_file {
-            if self.progress_throttle.should_emit(0, true) {
-                actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Progress {
-                    file_name: sf.name.clone(),
-                    bytes_transferred: 0,
-                    total_size: sf.size,
-                    local_path: None,
-                    direction: ZmodemDirection::Upload,
-                }));
+            if *file_index >= files.len() {
+                return vec![];
             }
+
+            self.progress_throttle.reset();
+            let mut actions = Self::start_file_for_sender(
+                sender,
+                files,
+                *file_index,
+                current_file,
+                *preserve_timestamps,
+            );
+            let start_failed = current_file.is_none()
+                && actions.iter().any(|action| {
+                    matches!(action, ZmodemAction::EmitEvent(ZmodemEvent::Failed { .. }))
+                });
+            if let Some(sf) = current_file {
+                if self.progress_throttle.should_emit(0, true) {
+                    actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Progress {
+                        file_name: sf.name.clone(),
+                        bytes_transferred: 0,
+                        total_size: sf.size,
+                        local_path: None,
+                        direction: ZmodemDirection::Upload,
+                    }));
+                }
+            }
+            (actions, start_failed)
+        };
+        if start_failed {
+            self.state = TransferState::Done;
         }
         actions
     }
@@ -897,4 +911,3 @@ fn looks_like_terminal_text(data: &[u8]) -> bool {
         )
     })
 }
-

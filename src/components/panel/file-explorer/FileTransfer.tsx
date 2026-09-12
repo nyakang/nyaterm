@@ -73,6 +73,10 @@ function getTransferDisplayRank(transfer: TransferItem): number {
   return 2;
 }
 
+function isBackendModemTransfer(transfer: TransferItem): boolean {
+  return transfer.source === "zmodem" || transfer.source === "serial_modem";
+}
+
 function HeaderActionButton({
   label,
   icon: Icon,
@@ -154,20 +158,28 @@ function TransferRow({
       : item.totalSize > 0
         ? Math.min(100, Math.round((item.bytesTransferred / item.totalSize) * 100))
         : 0;
-  const isZmodemTransfer = item.source === "zmodem";
-  const canPause = !isZmodemTransfer && item.status === "transferring";
-  const canPauseQueued = !isZmodemTransfer && item.status === "queued";
-  const canResume = !isZmodemTransfer && item.status === "paused";
-  const canRetry = !isZmodemTransfer && (item.status === "error" || item.status === "cancelled");
+  const isModemTransfer = isBackendModemTransfer(item);
+  const canPause = !isModemTransfer && item.status === "transferring";
+  const canPauseQueued = !isModemTransfer && item.status === "queued";
+  const canResume = !isModemTransfer && item.status === "paused";
+  const canRetry = !isModemTransfer && (item.status === "error" || item.status === "cancelled");
   const canCancel =
-    !isZmodemTransfer &&
+    !isModemTransfer &&
     (item.status === "queued" || item.status === "transferring" || item.status === "paused");
-  const canDelete = isZmodemTransfer
+  const canDelete = isModemTransfer
     ? item.status !== "transferring"
     : !canCancel || item.status === "queued" || item.queueState === "pending";
 
   let statusColor = "#facc15";
   let statusText = formatRate(item.speedBytesPerSec ?? 0);
+
+  if (
+    item.source === "serial_modem" &&
+    item.status === "transferring" &&
+    item.bytesTransferred === 0
+  ) {
+    statusText = t("terminal.serialModemWaiting");
+  }
 
   if (item.status === "queued") {
     statusColor = "#a1a1aa";
@@ -297,7 +309,7 @@ function TransferRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
-        {!isZmodemTransfer && (
+        {!isModemTransfer && (
           <>
             <ContextMenuItem
               onClick={() => onPause(item.id)}
@@ -404,7 +416,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   );
 
   const canDeleteTransfer = useCallback((transfer: TransferItem) => {
-    if (transfer.source === "zmodem") {
+    if (isBackendModemTransfer(transfer)) {
       return transfer.status !== "transferring";
     }
     const canCancel =
@@ -475,15 +487,15 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
 
   const hasRunning = visibleTransfers.some(
     (transfer) =>
-      transfer.source !== "zmodem" &&
+      !isBackendModemTransfer(transfer) &&
       (transfer.status === "transferring" || transfer.status === "queued"),
   );
   const hasPaused = visibleTransfers.some(
-    (transfer) => transfer.source !== "zmodem" && transfer.status === "paused",
+    (transfer) => !isBackendModemTransfer(transfer) && transfer.status === "paused",
   );
   const hasActive = visibleTransfers.some(
     (transfer) =>
-      transfer.source !== "zmodem" &&
+      !isBackendModemTransfer(transfer) &&
       (transfer.status === "queued" ||
         transfer.status === "transferring" ||
         transfer.status === "paused"),
@@ -501,7 +513,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       visibleTransfers
         .filter(
           (transfer) =>
-            transfer.source !== "zmodem" &&
+            !isBackendModemTransfer(transfer) &&
             (transfer.status === "transferring" || transfer.status === "queued"),
         )
         .map((transfer) => pauseTransfer(transfer.id)),
@@ -524,7 +536,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   const handleResumeAll = useCallback(() => {
     void Promise.all(
       visibleTransfers
-        .filter((transfer) => transfer.source !== "zmodem" && transfer.status === "paused")
+        .filter((transfer) => !isBackendModemTransfer(transfer) && transfer.status === "paused")
         .map((transfer) => resumeTransfer(transfer.id)),
     );
   }, [resumeTransfer, visibleTransfers]);
@@ -534,7 +546,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       visibleTransfers
         .filter(
           (transfer) =>
-            transfer.source !== "zmodem" &&
+            !isBackendModemTransfer(transfer) &&
             (transfer.status === "queued" ||
               transfer.status === "transferring" ||
               transfer.status === "paused"),

@@ -25,4 +25,5 @@ use tauri::{AppHandle, Emitter, Manager};
 include!("config.rs");
 include!("port.rs");
 include!("manager.rs");
+mod xymodem;
 include!("session.rs");

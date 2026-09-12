@@ -18,7 +18,7 @@ import { pruneRetainedTransfers as pruneTransferMap } from "@/lib/transferRetent
 
 export type TransferDirection = "upload" | "download" | "copy";
 export type TransferKind = "file" | "directory";
-export type TransferSource = "sftp" | "zmodem";
+export type TransferSource = "sftp" | "zmodem" | "serial_modem";
 export type TransferStatus =
   | "queued"
   | "transferring"
@@ -79,6 +79,7 @@ export interface ExternalTransferProgress {
   totalSize: number;
   localPath?: string;
   remotePath?: string;
+  source?: Exclude<TransferSource, "sftp">;
 }
 
 export interface TransferItem {
@@ -1021,7 +1022,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           timestamp: existing?.timestamp ?? now,
           queueState: undefined,
           error: undefined,
-          source: "zmodem",
+          source: progress.source ?? "zmodem",
         });
         return pruneRetainedTransfers(next, now);
       });
