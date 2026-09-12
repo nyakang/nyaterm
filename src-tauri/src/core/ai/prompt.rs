@@ -305,6 +305,9 @@ pub(super) fn build_agent_prompt(request: &AiChatRequest, settings: &AiSettings)
 要求：
 - 面向用户的说明、总结以及推理过程使用：{language}
 - 命令、路径、文件名、配置键名保持原样，不要翻译
+- 通过 execute_command 执行的命令必须是非交互式的，不能等待用户输入、确认或翻页
+- 对可能启动分页器的工具使用其非交互或禁用分页选项，例如 git --no-pager ...、journalctl --no-pager；不要依赖用户按键继续
+- 如果命令必须进入交互式 UI、确认提示或等待输入且没有非交互替代方案，不要自动执行；改用非交互替代方案，或调用 final_answer 向用户说明
 
 请开始执行任务。每轮调用且只调用一个工具。"#,
             user_input = user_input,
@@ -336,6 +339,9 @@ pub(super) fn build_agent_prompt(request: &AiChatRequest, settings: &AiSettings)
 要求：
 - 面向使用者的說明、摘要以及推理過程使用：{language}
 - 命令、路徑、檔名、設定鍵名保持原樣，不要翻譯
+- 透過 execute_command 執行的命令必須是非互動式的，不能等待使用者輸入、確認或翻頁
+- 對可能啟動分頁器的工具使用其非互動或停用分頁選項，例如 git --no-pager ...、journalctl --no-pager；不要依賴使用者按鍵繼續
+- 如果命令必須進入互動式 UI、確認提示或等待輸入且沒有非互動替代方案，不要自動執行；改用非互動替代方案，或呼叫 final_answer 向使用者說明
 
 請開始執行任務。每輪呼叫且只呼叫一個工具。"#,
             user_input = user_input,
@@ -367,6 +373,9 @@ pub(super) fn build_agent_prompt(request: &AiChatRequest, settings: &AiSettings)
 요구 사항:
 - 사용자에게 보이는 설명, 요약, 추론에는 {language}을(를) 사용하세요.
 - 명령, 경로, 파일 이름, 구성 키는 변경하지 말고 번역하지 마세요.
+- execute_command로 실행하는 명령은 비대화형이어야 하며 사용자 입력, 확인 또는 페이지 넘김을 기다리면 안 됩니다.
+- pager를 실행할 수 있는 도구는 git --no-pager ..., journalctl --no-pager 같은 도구별 비대화형 또는 pager 비활성화 옵션을 사용하고 사용자 키 입력에 의존하지 마세요.
+- 명령이 대화형 UI, 확인 프롬프트 또는 입력 대기를 반드시 필요로 하고 비대화형 대안이 없다면 자동 실행하지 말고, 비대화형 대안을 사용하거나 final_answer로 사용자에게 설명하세요.
 
 지금 작업을 시작하세요. 각 턴에서 정확히 하나의 도구만 호출하세요."#,
             user_input = user_input,
@@ -399,6 +408,9 @@ Requirements:
 - Use {language} for user-facing explanations and summaries.
 - Prefer {language} for reasoning when possible.
 - Keep commands, paths, file names, and configuration keys unchanged.
+- Commands sent through execute_command must be non-interactive and must not wait for user input, confirmation, or pager navigation.
+- For tools that may start a pager, use tool-specific non-interactive or no-pager options such as git --no-pager ... or journalctl --no-pager; never rely on user key presses to continue.
+- If a command requires an interactive UI, confirmation prompt, or input and has no non-interactive alternative, do not execute it automatically; choose a non-interactive alternative or call final_answer to explain it to the user.
 
 Start the task now. Call exactly one tool per turn."#,
             user_input = user_input,
@@ -880,6 +892,28 @@ mod tests {
         assert!(agent_prompt.contains("使用者任務："));
         assert!(agent_prompt.contains("最近終端輸出"));
         assert!(agent_prompt.contains("zh-TW"));
+    }
+
+    #[test]
+    fn agent_prompts_require_non_interactive_commands() {
+        let settings = AiSettings::default();
+        for (language, localized_rule) in [
+            ("zh-CN", "不能等待用户输入"),
+            ("zh-TW", "不能等待使用者輸入"),
+            ("en", "must be non-interactive"),
+            ("ko", "비대화형이어야"),
+        ] {
+            let request = test_request(language);
+            let prompt = build_agent_prompt(&request, &settings);
+
+            assert!(prompt.contains(localized_rule), "language={language}");
+            assert!(prompt.contains("git --no-pager"), "language={language}");
+            assert!(
+                prompt.contains("journalctl --no-pager"),
+                "language={language}"
+            );
+            assert!(prompt.contains("final_answer"), "language={language}");
+        }
     }
 
     #[test]

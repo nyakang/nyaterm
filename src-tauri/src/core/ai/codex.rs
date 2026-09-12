@@ -1706,6 +1706,8 @@ mod tests {
         let prompt = build_codex_agent_prompt(&request, &AiSettings::default());
 
         assert!(prompt.contains("nyaterm_terminal.execute_command"));
+        assert!(prompt.contains("must be non-interactive"));
+        assert!(prompt.contains("git --no-pager"));
         assert!(!prompt.contains("commandCards"));
         assert!(!prompt.contains("必须返回 JSON 对象"));
     }
