@@ -81,6 +81,8 @@ jobs:
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-linux-deps
+        with:
+          extra_packages: zsh fish
 
       # --no-fail-fast so one crate's failure stops masking every crate after it.
       - name: Test workspace

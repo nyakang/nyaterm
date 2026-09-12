@@ -1022,7 +1022,7 @@ fn run_bash_injection_history_probe(
     }
     commands.push_str(&script);
     commands.push_str(
-        "case $- in *h*) printf '__NYATERM_HISTORY_STATE__:enabled\\n' ;; *) printf '__NYATERM_HISTORY_STATE__:disabled\\n' ;; esac\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nHISTTIMEFORMAT= builtin history\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
+        "if [[ -o history ]]; then printf '__NYATERM_HISTORY_STATE__:enabled\\n'; else printf '__NYATERM_HISTORY_STATE__:disabled\\n'; fi\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nHISTTIMEFORMAT= builtin history\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
     );
     write_pty_paced(&mut writer, &commands);
 
@@ -1122,6 +1122,336 @@ fn bash_inline_shell_integration_preserves_disabled_history() {
             assert!(
                 !history.contains(leaked),
                 "injected Bash source leaked into disabled history for {mode:?}: {history:?}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum UploadedHistoryProbeState {
+    Default,
+    BashHistoryDisabled,
+    FishPrivate,
+}
+
+#[cfg(unix)]
+fn run_uploaded_shell_history_probe(
+    shell: super::ShellKind,
+    mode: super::ShellIntegrationMode,
+    initial_state: UploadedHistoryProbeState,
+) -> Option<(String, std::path::PathBuf)> {
+    let executable = match shell {
+        super::ShellKind::Bash => "bash",
+        super::ShellKind::Zsh => "zsh",
+        super::ShellKind::Fish => "fish",
+        super::ShellKind::PosixSh | super::ShellKind::Unknown => return None,
+    };
+    if !std::process::Command::new(executable)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return None;
+    }
+
+    let probe_id = uuid::Uuid::new_v4().simple().to_string();
+    let remote_dir = std::env::temp_dir().join(format!(".nyaterm_inj_{probe_id}"));
+    let remote_path = remote_dir.join("script.sh");
+    let state_dir = std::env::temp_dir().join(format!("nyaterm-history-probe-{probe_id}"));
+    std::fs::create_dir(&remote_dir).expect("create uploaded integration probe directory");
+    std::fs::create_dir(&state_dir).expect("create shell history probe state directory");
+
+    let ready = super::build_ssh_ready_marker("uploaded-history-probe");
+    let integration =
+        super::prepare_shell_integration(shell, &ready, mode).expect("prepared shell integration");
+    std::fs::write(&remote_path, integration.upload_payload())
+        .expect("write uploaded integration probe script");
+    let injected = String::from_utf8(integration.uploaded_script(
+        remote_path.to_str().expect("utf8 uploaded script path"),
+        remote_dir.to_str().expect("utf8 uploaded script directory"),
+    ))
+    .expect("utf8 uploaded integration command");
+
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open uploaded shell history probe pty");
+    let mut command = CommandBuilder::new(executable);
+    match shell {
+        super::ShellKind::Bash => {
+            command.args(["--noprofile", "--norc", "-i"]);
+            command.env("HISTFILE", "/dev/null");
+            command.env("PS1", "");
+            command.env_remove("PROMPT_COMMAND");
+            command.env_remove("HISTCONTROL");
+        }
+        super::ShellKind::Zsh => {
+            command.args(["-f", "-i"]);
+            command.env("HISTFILE", "/dev/null");
+            command.env("PROMPT", "");
+            command.env("RPROMPT", "");
+        }
+        super::ShellKind::Fish => {
+            if matches!(initial_state, UploadedHistoryProbeState::FishPrivate) {
+                command.args(["--private", "--interactive"]);
+            } else {
+                command.arg("--interactive");
+            }
+            command.env("fish_greeting", "");
+            command.env("fish_history", format!("nyaterm_probe_{probe_id}"));
+            command.env("XDG_DATA_HOME", state_dir.to_string_lossy().to_string());
+            command.env("XDG_CONFIG_HOME", state_dir.to_string_lossy().to_string());
+        }
+        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+    }
+    command.env("TERM", "xterm-256color");
+
+    let mut reader = pty
+        .master
+        .try_clone_reader()
+        .expect("clone uploaded shell history probe reader");
+    let mut writer = pty
+        .master
+        .take_writer()
+        .expect("take uploaded shell history probe writer");
+    let mut child = pty
+        .slave
+        .spawn_command(command)
+        .expect("spawn uploaded shell history probe");
+    drop(pty.slave);
+
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let reader_output = output.clone();
+    let reader_thread = std::thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("uploaded shell history probe output lock")
+                .extend_from_slice(&buffer[..read]);
+        }
+    });
+
+    let setup = match shell {
+        super::ShellKind::Fish => {
+            "stty -echo\nset -g fish_greeting\nfunction fish_prompt; end\nprintf '__NYATERM_PTY_READY__\\n'\n"
+        }
+        _ => "stty -echo\nprintf '__NYATERM_PTY_READY__\\n'\n",
+    };
+    writer
+        .write_all(setup.as_bytes())
+        .expect("initialize uploaded shell history probe");
+    writer
+        .flush()
+        .expect("flush uploaded shell history probe setup");
+
+    let setup_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let ready = output
+            .lock()
+            .expect("uploaded shell history probe output lock")
+            .windows(b"__NYATERM_PTY_READY__".len())
+            .any(|window| window == b"__NYATERM_PTY_READY__");
+        if ready {
+            break;
+        }
+        if Instant::now() >= setup_deadline {
+            let _ = child.kill();
+            panic!("timed out preparing interactive {executable}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut commands = match shell {
+        super::ShellKind::Bash => "history -c\nprintf '__NYATERM_USER_BEFORE__\\n'\n".to_string(),
+        super::ShellKind::Zsh => {
+            "HISTSIZE=0\nHISTSIZE=1000\nprint -r -- '__NYATERM_USER_BEFORE__'\n".to_string()
+        }
+        super::ShellKind::Fish => "printf '__NYATERM_USER_BEFORE__\\n'\n".to_string(),
+        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+    };
+    match initial_state {
+        UploadedHistoryProbeState::Default => {}
+        UploadedHistoryProbeState::BashHistoryDisabled => commands.push_str("set +o history\n"),
+        UploadedHistoryProbeState::FishPrivate => {}
+    }
+    commands.push_str(&injected);
+    match shell {
+        super::ShellKind::Bash => commands.push_str(
+            "if [[ -o history ]]; then printf '__NYATERM_HISTORY_STATE__:enabled\\n'; else printf '__NYATERM_HISTORY_STATE__:disabled\\n'; fi\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nHISTTIMEFORMAT= builtin history\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
+        ),
+        super::ShellKind::Zsh => commands.push_str(
+            "fc -P 2>/dev/null\nprintf '__NYATERM_HISTORY_STACK__:%s\\n' $?\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nfc -l 1\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
+        ),
+        super::ShellKind::Fish => commands.push_str(
+            "if set -q fish_private_mode; printf '__NYATERM_PRIVATE_STATE__:enabled\\n'; else; printf '__NYATERM_PRIVATE_STATE__:disabled\\n'; end\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nhistory\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
+        ),
+        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+    }
+    write_pty_paced(&mut writer, &commands);
+
+    let child_deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll uploaded shell history probe") {
+            break status;
+        }
+        if Instant::now() >= child_deadline {
+            let _ = child.kill();
+            let captured = String::from_utf8_lossy(
+                &output
+                    .lock()
+                    .expect("uploaded shell history probe output lock"),
+            )
+            .into_owned();
+            panic!("interactive {executable} history probe timed out: {captured:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(
+        status.success(),
+        "uploaded {executable} history probe failed: {status:?}"
+    );
+    drop(writer);
+    drop(pty.master);
+    reader_thread
+        .join()
+        .expect("join uploaded shell history probe reader");
+    let captured =
+        String::from_utf8_lossy(&output.lock().expect("uploaded history probe output lock"))
+            .into_owned();
+    let _ = std::fs::remove_dir_all(&state_dir);
+    Some((captured, remote_dir))
+}
+
+#[cfg(unix)]
+fn uploaded_history_probe_section(output: &str) -> &str {
+    let start_marker = "__NYATERM_HISTORY_BEGIN__";
+    let end_marker = "__NYATERM_HISTORY_END__";
+    let start_line = format!("{start_marker}\r\n");
+    let start = output
+        .rfind(&start_line)
+        .map(|offset| offset + start_line.len())
+        .expect("history probe start marker line");
+    let end_line = format!("{end_marker}\r\n");
+    let end = output[start..]
+        .find(&end_line)
+        .map(|offset| start + offset)
+        .expect("history probe end marker line");
+    &output[start..end]
+}
+
+#[cfg(unix)]
+fn assert_uploaded_integration_is_private(
+    shell: super::ShellKind,
+    mode: super::ShellIntegrationMode,
+    initial_state: UploadedHistoryProbeState,
+) -> Option<String> {
+    let (output, remote_dir) = run_uploaded_shell_history_probe(shell, mode, initial_state)?;
+    let ready = super::build_ssh_ready_marker("uploaded-history-probe");
+    assert!(
+        output.contains(&ready),
+        "ready marker missing for {shell:?} {mode:?}: {output:?}"
+    );
+    assert!(
+        !remote_dir.exists(),
+        "uploaded integration directory was not removed for {shell:?} {mode:?}: {remote_dir:?}"
+    );
+    let history = uploaded_history_probe_section(&output);
+    assert!(
+        history.contains("__NYATERM_USER_BEFORE__"),
+        "pre-injection history was lost for {shell:?} {mode:?}: {history:?}"
+    );
+    for leaked in [
+        ".nyaterm_inj_",
+        "script.sh",
+        "NYATERM_INJ",
+        "__nyaterm_",
+        "__nya_bp_",
+        "NyaTermReady:",
+    ] {
+        assert!(
+            !history.contains(leaked),
+            "uploaded integration leaked {leaked:?} for {shell:?} {mode:?}: {history:?}"
+        );
+    }
+    Some(output)
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_uploaded_shell_integration_preserves_history_state_without_pollution() {
+    for mode in [
+        super::ShellIntegrationMode::Full,
+        super::ShellIntegrationMode::CwdOnly,
+    ] {
+        let enabled = assert_uploaded_integration_is_private(
+            super::ShellKind::Bash,
+            mode,
+            UploadedHistoryProbeState::Default,
+        );
+        if let Some(output) = enabled {
+            assert!(output.contains("__NYATERM_HISTORY_STATE__:enabled\r\n"));
+        } else {
+            return;
+        }
+        let disabled = assert_uploaded_integration_is_private(
+            super::ShellKind::Bash,
+            mode,
+            UploadedHistoryProbeState::BashHistoryDisabled,
+        )
+        .expect("Bash availability was already established");
+        assert!(disabled.contains("__NYATERM_HISTORY_STATE__:disabled\r\n"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn zsh_uploaded_shell_integration_restores_history_stack_without_pollution() {
+    for mode in [
+        super::ShellIntegrationMode::Full,
+        super::ShellIntegrationMode::CwdOnly,
+    ] {
+        let Some(output) = assert_uploaded_integration_is_private(
+            super::ShellKind::Zsh,
+            mode,
+            UploadedHistoryProbeState::Default,
+        ) else {
+            return;
+        };
+        assert!(
+            output.contains("__NYATERM_HISTORY_STACK__:1\r\n"),
+            "injection left an extra Zsh history stack for {mode:?}: {output:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fish_uploaded_shell_integration_preserves_private_mode_without_pollution() {
+    for mode in [
+        super::ShellIntegrationMode::Full,
+        super::ShellIntegrationMode::CwdOnly,
+    ] {
+        for (initial_state, expected) in [
+            (UploadedHistoryProbeState::Default, "disabled"),
+            (UploadedHistoryProbeState::FishPrivate, "enabled"),
+        ] {
+            let Some(output) =
+                assert_uploaded_integration_is_private(super::ShellKind::Fish, mode, initial_state)
+            else {
+                return;
+            };
+            assert!(
+                output.contains(&format!("__NYATERM_PRIVATE_STATE__:{expected}\r\n")),
+                "Fish private mode changed for {mode:?}: {output:?}"
             );
         }
     }

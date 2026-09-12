@@ -33,6 +33,57 @@ pub(super) enum ShellIntegrationMode {
     CwdOnly,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct PreparedSshShellIntegration {
+    shell: ShellKind,
+    mode: ShellIntegrationMode,
+    ready_marker: String,
+    payload: String,
+}
+
+impl PreparedSshShellIntegration {
+    fn new(
+        shell: ShellKind,
+        mode: ShellIntegrationMode,
+        ready_marker: &str,
+        payload: String,
+    ) -> Self {
+        Self {
+            shell,
+            mode,
+            ready_marker: ready_marker.to_string(),
+            payload,
+        }
+    }
+
+    pub(super) fn upload_payload(&self) -> Vec<u8> {
+        self.payload.as_bytes().to_vec()
+    }
+
+    pub(super) fn inline_script(&self) -> Vec<u8> {
+        wrap_shell_integration_payload(self.shell, self.mode, &self.ready_marker, &self.payload)
+            .expect("prepared shell integration uses a supported shell")
+            .into_bytes()
+    }
+
+    pub(super) fn uploaded_script(&self, remote_path: &str, remote_dir: &str) -> Vec<u8> {
+        let remote_path = sh_single_quote(remote_path);
+        let remote_dir = sh_single_quote(remote_dir);
+        let source = match self.shell {
+            ShellKind::Bash | ShellKind::Zsh => {
+                format!(". {remote_path}; rm -rf {remote_dir}")
+            }
+            ShellKind::Fish => format!("source {remote_path}; rm -rf {remote_dir}"),
+            ShellKind::PosixSh | ShellKind::Unknown => {
+                unreachable!("prepared shell integration uses a supported shell")
+            }
+        };
+        wrap_shell_integration_payload(self.shell, self.mode, &self.ready_marker, &source)
+            .expect("prepared shell integration uses a supported shell")
+            .into_bytes()
+    }
+}
+
 impl ShellIntegrationMode {
     fn install_arg(self) -> &'static str {
         match self {
@@ -84,7 +135,7 @@ enum SshShellIntegrationPhase {
 
 pub(super) struct SshShellIntegrationState {
     phase: SshShellIntegrationPhase,
-    pending_script: Option<Vec<u8>>,
+    pending_integration: Option<PreparedSshShellIntegration>,
     stripper: OscStripper,
     suppress_started_at: Option<Instant>,
     suppressed_visible_bytes: usize,
@@ -95,18 +146,18 @@ pub(super) struct SshShellIntegrationState {
 
 impl SshShellIntegrationState {
     pub(super) fn new(
-        pending_script: Option<Vec<u8>>,
+        pending_integration: Option<PreparedSshShellIntegration>,
         ready_marker: String,
         legacy_ready_marker: Option<String>,
     ) -> Self {
-        let phase = if pending_script.is_some() {
+        let phase = if pending_integration.is_some() {
             SshShellIntegrationPhase::WaitInitial
         } else {
             SshShellIntegrationPhase::Normal
         };
         Self {
             phase,
-            pending_script,
+            pending_integration,
             stripper: OscStripper::new(&ready_marker, legacy_ready_marker.as_deref()),
             suppress_started_at: None,
             suppressed_visible_bytes: 0,
@@ -129,11 +180,11 @@ impl SshShellIntegrationState {
     }
 
     pub(super) fn should_inject_on_initial_delay(&self) -> bool {
-        self.phase == SshShellIntegrationPhase::WaitInitial && self.pending_script.is_some()
+        self.phase == SshShellIntegrationPhase::WaitInitial && self.pending_integration.is_some()
     }
 
-    pub(super) fn take_pending_script(&mut self) -> Option<Vec<u8>> {
-        self.pending_script.take()
+    pub(super) fn take_pending_integration(&mut self) -> Option<PreparedSshShellIntegration> {
+        self.pending_integration.take()
     }
 
     pub(super) fn begin_suppression(&mut self) {
@@ -148,21 +199,15 @@ impl SshShellIntegrationState {
     pub(super) async fn apply_upload_outcome(
         &mut self,
         outcome: ScriptUploadOutcome,
-        script: Vec<u8>,
+        integration: PreparedSshShellIntegration,
         channel: &mut russh::Channel<client::Msg>,
     ) {
-        if !outcome.success {
-            let _ = channel.data_bytes(script).await;
-            self.begin_suppression();
-            return;
-        }
-
-        let source_cmd = format!(
-            ". '{path}'; rm -rf '{dir}'\n",
-            path = outcome.remote_path,
-            dir = outcome.remote_dir,
-        );
-        if channel.data_bytes(source_cmd.into_bytes()).await.is_ok() {
+        let script = if outcome.success {
+            integration.uploaded_script(&outcome.remote_path, &outcome.remote_dir)
+        } else {
+            integration.inline_script()
+        };
+        if channel.data_bytes(script).await.is_ok() {
             self.begin_suppression();
         } else {
             self.phase = SshShellIntegrationPhase::Normal;
@@ -199,7 +244,7 @@ impl SshShellIntegrationState {
     fn force_normal(&mut self) {
         self.phase = SshShellIntegrationPhase::Normal;
         self.suppress_started_at = None;
-        self.pending_script = None;
+        self.pending_integration = None;
         self.suppressed_visible_bytes = 0;
         self.suppressed_rx_bytes = 0;
         self.suppressed_rx_chunks = 0;
@@ -389,7 +434,7 @@ pub(super) async fn build_ssh_shell_integration_script(
     terminal_shell_integration: bool,
     cwd_follow_mode: super::SftpCwdFollowMode,
     timeout_ms: u64,
-) -> Option<Vec<u8>> {
+) -> Option<PreparedSshShellIntegration> {
     let mode = if terminal_shell_integration {
         ShellIntegrationMode::Full
     } else {
@@ -397,18 +442,15 @@ pub(super) async fn build_ssh_shell_integration_script(
     };
     match cwd_follow_mode {
         super::SftpCwdFollowMode::Off => terminal_shell_integration
-            .then(|| ssh_shell_injection_script(shell, ready_marker, mode))
-            .flatten()
-            .map(String::into_bytes),
+            .then(|| prepare_shell_integration(shell, ready_marker, mode))
+            .flatten(),
         super::SftpCwdFollowMode::ShellIntegration => {
-            ssh_shell_injection_script(shell, ready_marker, mode).map(String::into_bytes)
+            prepare_shell_integration(shell, ready_marker, mode)
         }
         super::SftpCwdFollowMode::RcFile => {
             match install_remote_shell_integration(handle, shell, timeout_ms).await {
-                Ok(()) => activation_script(shell, ready_marker, mode).map(String::into_bytes),
-                Err(_error) => {
-                    ssh_shell_injection_script(shell, ready_marker, mode).map(String::into_bytes)
-                }
+                Ok(()) => prepare_activation(shell, ready_marker, mode),
+                Err(_error) => prepare_shell_integration(shell, ready_marker, mode),
             }
         }
     }
@@ -501,25 +543,57 @@ fn ready_printf(marker: &str) -> String {
         .replace('\'', "'\\''")
 }
 
+#[cfg(test)]
 pub(super) fn ssh_shell_injection_script(
     shell: ShellKind,
     ready_marker: &str,
     mode: ShellIntegrationMode,
 ) -> Option<String> {
-    let script = match mode {
+    prepare_shell_integration(shell, ready_marker, mode).map(|integration| {
+        String::from_utf8(integration.inline_script()).expect("shell script utf8")
+    })
+}
+
+pub(super) fn prepare_shell_integration(
+    shell: ShellKind,
+    ready_marker: &str,
+    mode: ShellIntegrationMode,
+) -> Option<PreparedSshShellIntegration> {
+    let payload = match mode {
         ShellIntegrationMode::Full => persistent_script(shell)?,
         ShellIntegrationMode::CwdOnly => cwd_only_script(shell)?,
     };
+    Some(PreparedSshShellIntegration::new(
+        shell,
+        mode,
+        ready_marker,
+        payload.to_string(),
+    ))
+}
+
+fn wrap_shell_integration_payload(
+    shell: ShellKind,
+    mode: ShellIntegrationMode,
+    ready_marker: &str,
+    payload: &str,
+) -> Option<String> {
     let ready = ready_printf(ready_marker);
     let install_arg = mode.install_arg();
+    let fish_payload;
+    let payload = if shell == ShellKind::Fish {
+        fish_payload = prefix_physical_lines(payload, ' ');
+        fish_payload.as_str()
+    } else {
+        payload
+    };
     // Bash records each top-level definition from a multiline PTY write separately. Keep the
     // guard start and finish on single physical lines so history is disabled between them.
     let prefix = match shell {
         ShellKind::Bash => {
-            " case $- in *h*) NYATERM_INJ_HISTORY_WAS_ENABLED=1; NYATERM_PRUNE_HISTORY=1 ;; *) unset NYATERM_INJ_HISTORY_WAS_ENABLED NYATERM_PRUNE_HISTORY ;; esac; NYATERM_LAST_HISTCMD=\"${HISTCMD-}\"; export NYATERM_INJ=1; set +o history\n"
+            " if [[ -o history ]]; then NYATERM_INJ_HISTORY_WAS_ENABLED=1; NYATERM_PRUNE_HISTORY=1; else unset NYATERM_INJ_HISTORY_WAS_ENABLED NYATERM_PRUNE_HISTORY; fi; NYATERM_LAST_HISTCMD=\"${HISTCMD-}\"; export NYATERM_INJ=1; set +o history\n"
         }
         ShellKind::Zsh => " fc -p /dev/null 2>/dev/null\n export NYATERM_INJ=1;\n",
-        ShellKind::Fish => " set fish_private_mode 1 2>/dev/null\n set -gx NYATERM_INJ 1\n",
+        ShellKind::Fish => " set -gx NYATERM_INJ 1\n",
         ShellKind::PosixSh | ShellKind::Unknown => return None,
     };
     let suffix = match shell {
@@ -529,38 +603,55 @@ pub(super) fn ssh_shell_injection_script(
             )
         }
         ShellKind::Zsh => format!(
-            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true; fc -P 2>/dev/null\nprintf '{ready}'\n"
+            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true; fc -P 2>/dev/null; printf '{ready}'\n"
         ),
         ShellKind::Fish => format!(
-            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null; or true\nset -e fish_private_mode 2>/dev/null\nprintf '{ready}'\n"
+            "\n __nyaterm_install_prompt {install_arg} 2>/dev/null; or true\n printf '{ready}'\n"
         ),
         ShellKind::PosixSh | ShellKind::Unknown => return None,
     };
-    Some(format!("{prefix}{script}{suffix}"))
+    Some(format!("{prefix}{payload}{suffix}"))
 }
 
+fn prefix_physical_lines(value: &str, prefix: char) -> String {
+    let mut prefixed = String::with_capacity(value.len() + value.lines().count());
+    for line in value.split_inclusive('\n') {
+        prefixed.push(prefix);
+        prefixed.push_str(line);
+    }
+    prefixed
+}
+
+#[cfg(test)]
 pub(super) fn activation_script(
     shell: ShellKind,
     ready_marker: &str,
     mode: ShellIntegrationMode,
 ) -> Option<String> {
-    let ready = ready_printf(ready_marker);
-    let install_arg = mode.install_arg();
-    match shell {
-        ShellKind::Bash => Some(format!(
-            " NYATERM_PRUNE_HISTORY=1; NYATERM_READY_PENDING=1; export NYATERM_INJ=1; export NYATERM_READY_MARKER=\"$(printf '{}')\"; [ -r \"$HOME/.config/nyaterm/shell-integration.bash\" ] && . \"$HOME/.config/nyaterm/shell-integration.bash\"; __nyaterm_install_prompt {install_arg} 2>/dev/null; if [ -n \"${{NYATERM_READY_PENDING:-}}\" ]; then unset NYATERM_READY_PENDING; printf '%s' \"${{NYATERM_READY_MARKER-}}\"; fi\n",
-            ready
-        )),
-        ShellKind::Zsh => Some(format!(
-            " fc -p /dev/null 2>/dev/null\n NYATERM_READY_PENDING=1; export NYATERM_INJ=1; export NYATERM_READY_MARKER=\"$(printf '{}')\"; [ -r \"$HOME/.config/nyaterm/shell-integration.zsh\" ] && . \"$HOME/.config/nyaterm/shell-integration.zsh\"; __nyaterm_install_prompt {install_arg} 2>/dev/null; fc -P 2>/dev/null\n if [ -n \"${{NYATERM_READY_PENDING:-}}\" ]; then unset NYATERM_READY_PENDING; printf '%s' \"${{NYATERM_READY_MARKER-}}\"; fi\n",
-            ready
-        )),
-        ShellKind::Fish => Some(format!(
-            " set fish_private_mode 1 2>/dev/null\n set -g NYATERM_READY_PENDING 1; set -gx NYATERM_INJ 1; set -gx NYATERM_READY_MARKER (printf '{}'); if test -r \"$HOME/.config/nyaterm/shell-integration.fish\"; source \"$HOME/.config/nyaterm/shell-integration.fish\"; end; __nyaterm_install_prompt {install_arg} 2>/dev/null; set -e fish_private_mode 2>/dev/null\n if set -q NYATERM_READY_PENDING; set -e NYATERM_READY_PENDING; printf '%s' \"$NYATERM_READY_MARKER\"; end\n",
-            ready
-        )),
-        ShellKind::PosixSh | ShellKind::Unknown => None,
-    }
+    prepare_activation(shell, ready_marker, mode).map(|integration| {
+        String::from_utf8(integration.inline_script()).expect("shell script utf8")
+    })
+}
+
+fn prepare_activation(
+    shell: ShellKind,
+    ready_marker: &str,
+    mode: ShellIntegrationMode,
+) -> Option<PreparedSshShellIntegration> {
+    let script_path = persistent_script_path(shell)?;
+    let payload = match shell {
+        ShellKind::Bash | ShellKind::Zsh => {
+            format!("[ -r \"{script_path}\" ] && . \"{script_path}\"")
+        }
+        ShellKind::Fish => format!("if test -r \"{script_path}\"\n source \"{script_path}\"\nend"),
+        ShellKind::PosixSh | ShellKind::Unknown => return None,
+    };
+    Some(PreparedSshShellIntegration::new(
+        shell,
+        mode,
+        ready_marker,
+        payload,
+    ))
 }
 
 pub(super) fn persistent_script(shell: ShellKind) -> Option<&'static str> {
@@ -1425,15 +1516,21 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     use super::{
-        SSH_INTEGRATION_TIMEOUT, SshShellIntegrationPhase, SshShellIntegrationState,
-        build_legacy_ssh_ready_marker, build_ssh_ready_marker,
+        PreparedSshShellIntegration, SSH_INTEGRATION_TIMEOUT, ShellIntegrationMode, ShellKind,
+        SshShellIntegrationPhase, SshShellIntegrationState, build_legacy_ssh_ready_marker,
+        build_ssh_ready_marker,
     };
 
     fn shell_integration_state(session_id: &str) -> SshShellIntegrationState {
         let ready_marker = build_ssh_ready_marker(session_id);
         let legacy_ready_marker = build_legacy_ssh_ready_marker(&ready_marker);
         SshShellIntegrationState::new(
-            Some(b"inject-script\n".to_vec()),
+            Some(PreparedSshShellIntegration::new(
+                ShellKind::Bash,
+                ShellIntegrationMode::Full,
+                &ready_marker,
+                "inject-script\n".to_string(),
+            )),
             ready_marker,
             legacy_ready_marker,
         )
@@ -1441,8 +1538,81 @@ mod tests {
 
     fn mark_injection_sent(state: &mut SshShellIntegrationState) {
         state.phase = SshShellIntegrationPhase::Suppressing;
-        state.pending_script = None;
+        state.pending_integration = None;
         state.suppress_started_at = Some(Instant::now());
+    }
+
+    #[test]
+    fn uploaded_scripts_source_payload_inside_shell_history_guards() {
+        let ready_marker = build_ssh_ready_marker("history-guard");
+        for shell in [ShellKind::Bash, ShellKind::Zsh, ShellKind::Fish] {
+            let integration =
+                super::prepare_shell_integration(shell, &ready_marker, ShellIntegrationMode::Full)
+                    .expect("prepared shell integration");
+            let uploaded = String::from_utf8(
+                integration
+                    .uploaded_script("/tmp/.nyaterm_inj_test/script.sh", "/tmp/.nyaterm_inj_test"),
+            )
+            .expect("utf8 uploaded script");
+
+            assert!(uploaded.contains(".nyaterm_inj_test/script.sh"));
+            assert!(uploaded.contains("rm -rf '/tmp/.nyaterm_inj_test'"));
+            assert!(uploaded.contains("NyaTermReady:history-guard"));
+            match shell {
+                ShellKind::Bash => {
+                    assert!(uploaded.starts_with(" if [[ -o history ]]"));
+                    assert!(uploaded.contains("set +o history\n. '/tmp/.nyaterm_inj_test"));
+                    assert!(uploaded.contains("set -o history; __nyaterm_prune_history"));
+                }
+                ShellKind::Zsh => {
+                    assert!(uploaded.starts_with(" fc -p /dev/null"));
+                    assert!(uploaded.contains("fc -P 2>/dev/null"));
+                }
+                ShellKind::Fish => {
+                    assert!(uploaded.starts_with(" set -gx NYATERM_INJ 1"));
+                    assert!(uploaded.contains(" source '/tmp/.nyaterm_inj_test/script.sh'"));
+                    assert!(!uploaded.contains("fish_private_mode"));
+                    assert!(uploaded.lines().all(|line| line.starts_with(' ')));
+                }
+                ShellKind::PosixSh | ShellKind::Unknown => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn upload_payload_excludes_interactive_history_wrappers() {
+        let ready_marker = build_ssh_ready_marker("payload-only");
+        let integration = super::prepare_shell_integration(
+            ShellKind::Bash,
+            &ready_marker,
+            ShellIntegrationMode::Full,
+        )
+        .expect("prepared shell integration");
+        let payload = String::from_utf8(integration.upload_payload()).expect("utf8 payload");
+
+        assert!(payload.contains("__nyaterm_install_prompt"));
+        assert!(!payload.contains("set +o history"));
+        assert!(!payload.contains("NyaTermReady:payload-only"));
+    }
+
+    #[test]
+    fn rc_activation_scripts_use_shell_history_guards() {
+        let ready_marker = build_ssh_ready_marker("rc-history-guard");
+        for shell in [ShellKind::Bash, ShellKind::Zsh, ShellKind::Fish] {
+            let activation =
+                super::prepare_activation(shell, &ready_marker, ShellIntegrationMode::CwdOnly)
+                    .expect("prepared RC activation");
+            let script = String::from_utf8(activation.inline_script()).expect("utf8 activation");
+
+            assert!(script.contains("__nyaterm_install_prompt cwd"));
+            assert!(script.contains("NyaTermReady:rc-history-guard"));
+            match shell {
+                ShellKind::Bash => assert!(script.contains("if [[ -o history ]]")),
+                ShellKind::Zsh => assert!(script.starts_with(" fc -p /dev/null")),
+                ShellKind::Fish => assert!(script.starts_with(" set -gx NYATERM_INJ 1")),
+                ShellKind::PosixSh | ShellKind::Unknown => unreachable!(),
+            }
+        }
     }
 
     #[test]
