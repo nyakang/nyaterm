@@ -100,12 +100,3 @@ pub(super) fn transfer_job_local_target_path(job: &TransferJobState) -> Option<P
             _ => None,
         })
 }
-
-pub(super) fn transfer_job_reveal_dir(path: PathBuf) -> PathBuf {
-    if path.is_dir() {
-        return path;
-    }
-    path.parent()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| path.clone())
-}
