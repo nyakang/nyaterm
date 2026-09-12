@@ -1,3 +1,22 @@
+fn teardown_serial_io(
+    reader_running: Arc<std::sync::atomic::AtomicBool>,
+    output_pause: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    reader_thread: std::thread::JoinHandle<()>,
+    port_writer: Arc<Mutex<Box<dyn SerialPort>>>,
+) {
+    reader_running.store(false, std::sync::atomic::Ordering::Relaxed);
+    {
+        let (lock, cvar) = &*output_pause;
+        if let Ok(mut paused) = lock.lock() {
+            *paused = false;
+            cvar.notify_all();
+        }
+    }
+
+    let _ = reader_thread.join();
+    drop(port_writer);
+}
+
 fn serial_session_thread(
     app: AppHandle,
     session_id: String,
@@ -45,7 +64,7 @@ fn serial_session_thread(
     let reader_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let reader_flag = reader_running.clone();
 
-    std::thread::spawn(move || {
+    let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let mut zmodem_detector = ZmodemDetector::new();
         let mut output_decoder = TerminalOutputDecoder::new(&encoding_reader);
@@ -184,7 +203,6 @@ fn serial_session_thread(
                 }
             }
         }
-        output_reader.close();
         let _ = reader_shutdown_tx.send(SessionCommand::Close);
     });
 
@@ -319,14 +337,7 @@ fn serial_session_thread(
         }
     }
 
-    reader_running.store(false, std::sync::atomic::Ordering::Relaxed);
-    {
-        let (lock, cvar) = &*output_pause;
-        if let Ok(mut paused) = lock.lock() {
-            *paused = false;
-            cvar.notify_all();
-        }
-    }
+    teardown_serial_io(reader_running, output_pause, reader_thread, port_writer);
     output.close();
 
     if let Some(ref recorder) = recording_mgr {
@@ -337,4 +348,114 @@ fn serial_session_thread(
         manager.remove_session(&session_id).await;
     });
     let _ = app.emit(&closed_event, ());
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+    use std::fs::File;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    fn open_pseudo_terminal() -> (File, String) {
+        // SAFETY: posix_openpt returns a new owned file descriptor on success.
+        let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+        assert!(
+            master_fd >= 0,
+            "failed to open pseudo-terminal master: {}",
+            std::io::Error::last_os_error()
+        );
+
+        // SAFETY: master_fd was just returned by posix_openpt and ownership is transferred to File.
+        let master = unsafe { File::from_raw_fd(master_fd) };
+        // SAFETY: master is a valid pseudo-terminal master descriptor.
+        assert_eq!(
+            unsafe { libc::grantpt(master.as_raw_fd()) },
+            0,
+            "failed to grant pseudo-terminal slave: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: master is a valid pseudo-terminal master descriptor.
+        assert_eq!(
+            unsafe { libc::unlockpt(master.as_raw_fd()) },
+            0,
+            "failed to unlock pseudo-terminal slave: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut slave_name = [0 as libc::c_char; 128];
+        // SAFETY: slave_name is a writable buffer and master is a valid pseudo-terminal master.
+        let rc = unsafe {
+            libc::ptsname_r(
+                master.as_raw_fd(),
+                slave_name.as_mut_ptr(),
+                slave_name.len(),
+            )
+        };
+        assert_eq!(
+            rc,
+            0,
+            "failed to resolve pseudo-terminal slave: {}",
+            std::io::Error::from_raw_os_error(rc)
+        );
+        // SAFETY: ptsname_r wrote a NUL-terminated path into slave_name on success.
+        let slave_path = unsafe { CStr::from_ptr(slave_name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+
+        (master, slave_path)
+    }
+
+    #[test]
+    fn serial_teardown_releases_port_before_closed_event() {
+        let (_master, slave_path) = open_pseudo_terminal();
+        let port = serialport::new(&slave_path, 115_200)
+            .timeout(Duration::from_millis(10))
+            .open()
+            .expect("failed to open pseudo-terminal slave as serial port");
+        let reader_port = port
+            .try_clone()
+            .expect("failed to clone pseudo-terminal serial port");
+        let port_writer = Arc::new(Mutex::new(port));
+        let port_writer_reader = port_writer.clone();
+
+        assert!(
+            serialport::new(&slave_path, 115_200)
+                .timeout(Duration::from_millis(10))
+                .open()
+                .is_err(),
+            "serial port should remain exclusive while session handles are alive"
+        );
+
+        let reader_running = Arc::new(AtomicBool::new(true));
+        let reader_flag = reader_running.clone();
+        let output_pause = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let output_pause_reader = output_pause.clone();
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let reader_thread = std::thread::spawn(move || {
+            let _reader_port = reader_port;
+            let (lock, cvar) = &*output_pause_reader;
+            let mut paused = lock.lock().unwrap();
+            waiting_tx.send(()).unwrap();
+            while *paused && reader_flag.load(Ordering::Relaxed) {
+                paused = cvar.wait(paused).unwrap();
+            }
+            drop(paused);
+            drop(port_writer_reader);
+        });
+
+        waiting_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reader thread did not enter paused state");
+
+        teardown_serial_io(reader_running, output_pause, reader_thread, port_writer);
+
+        let reopened = serialport::new(&slave_path, 115_200)
+            .timeout(Duration::from_millis(10))
+            .open()
+            .expect("serial port should reopen after teardown releases all handles");
+        drop(reopened);
+    }
 }
