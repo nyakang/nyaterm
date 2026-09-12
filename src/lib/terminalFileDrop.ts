@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import type { ResolvedLocalDropPathEntry } from "@/components/panel/file-explorer/model";
+import { invoke } from "@/lib/invoke";
 import { sendSessionInput } from "@/lib/sessionInput";
 import {
   isZmodemUploadErrorHandled,
@@ -33,10 +34,14 @@ export function getTerminalDropOverlayCopy(
       };
     case "SSH":
     case "Telnet":
-    case "Serial":
       return {
         title: t("terminal.dropOverlayTitleUpload"),
         hint: t("terminal.dropOverlayHintZmodem"),
+      };
+    case "Serial":
+      return {
+        title: t("terminal.dropOverlayTitleUpload"),
+        hint: t("terminal.dropOverlayHintSerialModem"),
       };
   }
 }
@@ -68,7 +73,31 @@ export async function handleTerminalFileDrop(params: {
     return;
   }
 
-  // SSH / Telnet / Serial: ZMODEM only, no folder support.
+  if (sessionType === "Serial") {
+    if (hasDirectories) {
+      toast.error(t("terminal.dropFoldersSerialModemOnly"));
+      return;
+    }
+    if (fileEntries.length === 0) {
+      return;
+    }
+
+    await invoke("serial_modem_upload", {
+      sessionId,
+      filePaths: fileEntries.map((entry) => entry.path),
+    }).catch((error) => {
+      const message = String(error);
+      toast.error(
+        message.includes("XMODEM supports exactly one file")
+          ? t("terminal.xmodemSingleFileOnly")
+          : t("terminal.serialModemUploadFailed"),
+      );
+      throw error;
+    });
+    return;
+  }
+
+  // SSH / Telnet: ZMODEM only, no folder support.
   if (hasDirectories) {
     toast.error(t("terminal.dropFoldersZmodemOnly"));
     return;

@@ -555,6 +555,11 @@ async fn telnet_session_task(
                         }
                         *zm = None;
                     }
+                    Some(SessionCommand::SerialModemUpload { result_tx, .. }) => {
+                        let _ = result_tx.send(Err(
+                            "Direct modem upload is only available for Serial sessions".to_string(),
+                        ));
+                    }
                     Some(SessionCommand::Close) | None => {
                         break;
                     }

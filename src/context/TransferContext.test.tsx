@@ -1,6 +1,6 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TransferProvider } from "./TransferContext";
+import { TransferProvider, useTransfer } from "./TransferContext";
 
 interface TransferEventPayload {
   id: string;
@@ -88,6 +88,13 @@ const baseEvent: TransferEventPayload = {
   total_size: 10,
 };
 
+let transferContext: ReturnType<typeof useTransfer> | null = null;
+
+function TransferProbe() {
+  transferContext = useTransfer();
+  return null;
+}
+
 async function emitTransferEvent(payload: TransferEventPayload) {
   await waitFor(() => expect(mocks.listener).toBeDefined());
   act(() => {
@@ -99,9 +106,10 @@ describe("TransferProvider transfer completion toasts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listener = undefined;
+    transferContext = null;
     render(
       <TransferProvider>
-        <div />
+        <TransferProbe />
       </TransferProvider>,
     );
   });
@@ -154,5 +162,33 @@ describe("TransferProvider transfer completion toasts", () => {
     );
     expect(mocks.toastWarning).not.toHaveBeenCalled();
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Serial modem source for backend-driven progress", async () => {
+    await waitFor(() => expect(transferContext).not.toBeNull());
+
+    act(() => {
+      transferContext?.upsertExternalTransferProgress({
+        id: "serial-modem-1",
+        sessionId: "serial-1",
+        fileName: "firmware.bin",
+        direction: "upload",
+        bytesTransferred: 128,
+        totalSize: 1024,
+        source: "serial_modem",
+      });
+    });
+
+    await waitFor(() => {
+      expect(transferContext?.transfers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "serial-modem-1",
+            source: "serial_modem",
+            sessionId: "serial-1",
+          }),
+        ]),
+      );
+    });
   });
 });

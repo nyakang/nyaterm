@@ -277,6 +277,13 @@ pub enum SessionCommand {
     },
     /// ZMODEM: user cancelled the ZMODEM transfer.
     ZmodemCancel,
+    /// Serial: start the saved connection's direct modem upload protocol.
+    SerialModemUpload {
+        files: Vec<std::path::PathBuf>,
+        conflict_mode: ZmodemUploadConflictMode,
+        preserve_timestamps: bool,
+        result_tx: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -849,6 +856,22 @@ impl SessionManager {
         session_id: &str,
     ) -> Option<ZmodemPreparedUpload> {
         self.pending_zmodem_uploads.lock().await.remove(session_id)
+    }
+
+    /// Stores a direct Serial ZMODEM upload until the remote receiver sends ZRINIT.
+    pub async fn prepare_zmodem_upload(
+        &self,
+        session_id: &str,
+        upload: ZmodemPreparedUpload,
+    ) -> AppResult<()> {
+        let mut pending = self.pending_zmodem_uploads.lock().await;
+        if pending.contains_key(session_id) {
+            return Err(AppError::Config(
+                "A ZMODEM upload is already waiting for the receiver".to_string(),
+            ));
+        }
+        pending.insert(session_id.to_string(), upload);
+        Ok(())
     }
 
     /// Clears prepared ZMODEM upload paths without starting a transfer.

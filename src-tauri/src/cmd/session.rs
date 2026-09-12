@@ -414,6 +414,7 @@ pub async fn create_serial_session(
                 parity,
                 stop_bits,
                 backspace_mode,
+                modem_upload_protocol,
                 ..
             } => core::SerialConfig {
                 port_name,
@@ -423,6 +424,7 @@ pub async fn create_serial_session(
                 stop_bits,
                 name: conn.name,
                 backspace_mode,
+                modem_upload_protocol,
                 encoding,
             },
             _ => {
@@ -444,6 +446,7 @@ pub async fn create_serial_session(
             stop_bits: stop_bits.unwrap_or_else(|| "1".to_string()),
             name: name.unwrap_or_else(|| "Serial".to_string()),
             backspace_mode: "ctrl_h".to_string(),
+            modem_upload_protocol: config::SerialModemUploadProtocol::Zmodem,
             encoding,
         }
     };
@@ -1016,6 +1019,67 @@ pub async fn zmodem_cancel(
     state
         .send_command(&session_id, SessionCommand::ZmodemCancel)
         .await
+}
+
+#[tauri::command]
+pub async fn serial_modem_upload(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    file_paths: Vec<String>,
+) -> AppResult<()> {
+    let info = state.session_info(&session_id).await?;
+    if info.session_type != core::SessionType::Serial {
+        return Err(AppError::Config(
+            "Direct modem upload is only available for Serial sessions".to_string(),
+        ));
+    }
+    if file_paths.is_empty() {
+        return Err(AppError::Config(
+            "No files selected for modem upload".to_string(),
+        ));
+    }
+    let files = file_paths
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    for path in &files {
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            AppError::Config(format!(
+                "Failed to inspect modem upload path '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(AppError::Config(format!(
+                "Modem upload only supports files: {}",
+                path.display()
+            )));
+        }
+    }
+
+    let transfer_settings = config::load_app_settings(&app)
+        .map(|settings| settings.transfer)
+        .unwrap_or_default();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    state
+        .send_command(
+            &session_id,
+            SessionCommand::SerialModemUpload {
+                files,
+                conflict_mode: ZmodemUploadConflictMode::from_wire(Some(
+                    &transfer_settings.duplicate_strategy,
+                )),
+                preserve_timestamps: transfer_settings.preserve_timestamps,
+                result_tx,
+            },
+        )
+        .await?;
+
+    result_rx
+        .await
+        .map_err(|_| AppError::Channel("Serial modem upload result was dropped".to_string()))?
+        .map_err(AppError::Config)
 }
 
 #[tauri::command]

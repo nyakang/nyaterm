@@ -647,6 +647,7 @@
     "selectShellFileTitle": "选择终端文件",
     "selectedItemMissing": "选择项已删除",
     "serial": "串口",
+    "serialModemUploadProtocol": "Modem 上传协议",
     "serialPort": "串口名",
     "serialPortPlaceholder": "例如 COM1 或 /dev/ttyS0",
     "serialPortRequired": "串口名不能为空",
@@ -2766,8 +2767,10 @@
     "click": "单击",
     "connectionFailed": "连接失败",
     "dropFoldersNotSupportedLocal": "本地终端不支持拖入文件夹，请只拖入文件。",
+    "dropFoldersSerialModemOnly": "串口 Modem 上传仅支持文件，不支持文件夹。",
     "dropFoldersZmodemOnly": "文件夹无法通过 ZMODEM 上传，请使用文件浏览器进行 SFTP 上传。",
     "dropOverlayHintLocal": "文件路径将插入到命令行",
+    "dropOverlayHintSerialModem": "仅支持文件，将使用此串口连接配置的 Modem 协议上传",
     "dropOverlayHintSsh": "单文件优先 ZMODEM，文件夹或失败时使用 SFTP",
     "dropOverlayHintZmodem": "仅支持文件，将以 ZMODEM 方式上传",
     "dropOverlayTitleLocal": "拖动以插入文件路径",
@@ -2799,6 +2802,8 @@
     "reconnecting": "正在重新连接...",
     "scrollTabsLeft": "向左滚动标签",
     "scrollTabsRight": "向右滚动标签",
+    "serialModemUploadFailed": "串口 Modem 上传失败。",
+    "serialModemWaiting": "等待…",
     "sessionDisconnected": "会话已断开",
     "shellSessions": "Shell会话",
     "showHiddenSessions": "显示被隐藏的会话",
@@ -2808,7 +2813,8 @@
     "tabDockSplitBottom": "向下拆分",
     "tabDockSplitLeft": "向左拆分",
     "tabDockSplitRight": "向右拆分",
-    "tabDockSplitTop": "向上拆分"
+    "tabDockSplitTop": "向上拆分",
+    "xmodemSingleFileOnly": "XMODEM 每次只能上传一个文件。"
   },
   "terminalCtx": {
     "clearAll": "全部清除",

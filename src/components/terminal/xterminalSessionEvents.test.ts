@@ -56,6 +56,7 @@ function params(overrides: Record<string, unknown> = {}) {
     updateOutputDrainMode: vi.fn(),
     logHibernation: vi.fn(),
     zmodemHandler: { handle: vi.fn() },
+    serialModemHandler: { handle: vi.fn() },
     replayPendingWakeEvents: vi.fn(),
     settleOutputAfterAttach: vi.fn().mockResolvedValue(true),
     flushPendingDynamicTitle: vi.fn(),

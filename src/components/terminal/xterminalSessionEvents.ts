@@ -10,6 +10,7 @@ import { invoke } from "@/lib/invoke";
 import { createTerminalInputState } from "@/lib/terminalInputTracker";
 import type { AiCaptureEvent } from "@/types/global";
 import type { Dec2026FrameGate } from "./dec2026FrameGate";
+import type { SerialModemEventPayload } from "./serialModemTerminalEvents";
 import { hasErrorKeyword } from "./terminalInputSelection";
 import type {
   HibernationLogEvent,
@@ -25,6 +26,10 @@ interface MutableRef<T> {
 
 interface ZmodemHandler {
   handle: (payload: ZmodemEventPayload) => void;
+}
+
+interface SerialModemHandler {
+  handle: (payload: SerialModemEventPayload) => void;
 }
 
 export async function replaySnapshotBeforeAttach(options: {
@@ -84,6 +89,7 @@ interface CreateXTerminalSessionEventsParams {
     error?: unknown,
   ) => void;
   zmodemHandler: ZmodemHandler;
+  serialModemHandler: SerialModemHandler;
   replayPendingWakeEvents: () => void;
   settleOutputAfterAttach: () => Promise<boolean>;
   flushPendingDynamicTitle: () => void;
@@ -122,6 +128,7 @@ export function createXTerminalSessionEvents({
   updateOutputDrainMode,
   logHibernation,
   zmodemHandler,
+  serialModemHandler,
   replayPendingWakeEvents,
   settleOutputAfterAttach,
   flushPendingDynamicTitle,
@@ -299,6 +306,21 @@ export function createXTerminalSessionEvents({
       },
     );
     if (!addUnlistener(nextZmodemUnlisten)) return;
+
+    const nextSerialModemUnlisten = await listen<SerialModemEventPayload>(
+      `serial-modem-event-${sessionId}`,
+      (event) => {
+        if (!isTerminalAlive()) return;
+        requestWake("serial_modem");
+        if (event.payload.type === "progress") {
+          zmodemActiveRef.current = true;
+        } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+          zmodemActiveRef.current = false;
+        }
+        serialModemHandler.handle(event.payload);
+      },
+    );
+    if (!addUnlistener(nextSerialModemUnlisten)) return;
 
     let backendAttached = false;
     try {

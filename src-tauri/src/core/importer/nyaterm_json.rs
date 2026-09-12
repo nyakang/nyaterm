@@ -232,6 +232,7 @@ fn prepare_nyaterm_json_session(
                     stop_bits,
                     ai_execution_profile: AiExecutionProfile::Auto,
                     backspace_mode,
+                    modem_upload_protocol: crate::config::SerialModemUploadProtocol::Zmodem,
                     encoding: String::new(),
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,

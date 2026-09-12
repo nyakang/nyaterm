@@ -542,6 +542,7 @@ export interface SavedConnection {
   data_bits?: number;
   parity?: string;
   stop_bits?: string;
+  modem_upload_protocol?: "xmodem" | "ymodem" | "zmodem";
   /** Backspace key mode for SSH/Telnet/Serial connections ("ctrl_h" or "del"). */
   backspace_mode?: string;
   /** Telnet-only: bypass Telnet option negotiation for embedded/raw TCP CLIs. */

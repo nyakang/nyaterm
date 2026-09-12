@@ -553,6 +553,19 @@ fn is_standard_ssh_profile(value: &SshProfile) -> bool {
     *value == SshProfile::Standard
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SerialModemUploadProtocol {
+    Xmodem,
+    Ymodem,
+    #[default]
+    Zmodem,
+}
+
+fn is_default_serial_modem_upload_protocol(value: &SerialModemUploadProtocol) -> bool {
+    *value == SerialModemUploadProtocol::Zmodem
+}
+
 /// Type-specific configuration for each connection kind.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -646,6 +659,11 @@ pub enum ConnectionType {
         ai_execution_profile: AiExecutionProfile,
         #[serde(default = "default_backspace_mode_serial")]
         backspace_mode: String,
+        #[serde(
+            default,
+            skip_serializing_if = "is_default_serial_modem_upload_protocol"
+        )]
+        modem_upload_protocol: SerialModemUploadProtocol,
         #[serde(default)]
         encoding: String,
     },
@@ -1419,12 +1437,49 @@ mod tests {
         MAX_SFTP_PIPELINE_DEPTH, MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN,
         MAX_SSH_AGENT_FORWARDING_ENDPOINTS, MAX_SSH_AGENT_FORWARDING_IDENTITIES,
         MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN, MIN_SFTP_PIPELINE_DEPTH, SavedConnection,
-        SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
-        SshAgentForwardingPolicy, SshAgentForwardingSources, SshAlgorithmMode, SshProfile,
-        SshTerminalType, effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
-        migrate_legacy_ssh_agent_settings, resolve_ssh_terminal_type, validate_ssh_agent_endpoint,
-        validate_ssh_agent_settings,
+        SerialModemUploadProtocol, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
+        SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAgentForwardingSources,
+        SshAlgorithmMode, SshProfile, SshTerminalType, effective_cwd_follow_mode,
+        effective_cwd_follow_mode_for_profile, migrate_legacy_ssh_agent_settings,
+        resolve_ssh_terminal_type, validate_ssh_agent_endpoint, validate_ssh_agent_settings,
     };
+
+    #[test]
+    fn serial_modem_protocol_defaults_to_zmodem_for_legacy_connections() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "serial-1",
+            "name": "Serial",
+            "type": "serial",
+            "port_name": "COM3"
+        }))
+        .expect("serial connection");
+
+        let ConnectionType::Serial {
+            modem_upload_protocol,
+            ..
+        } = &connection.config
+        else {
+            panic!("expected serial connection");
+        };
+        assert_eq!(*modem_upload_protocol, SerialModemUploadProtocol::Zmodem);
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert!(encoded.get("modem_upload_protocol").is_none());
+    }
+
+    #[test]
+    fn serial_modem_protocol_round_trips_non_default_values() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "serial-1",
+            "name": "Serial",
+            "type": "serial",
+            "port_name": "COM3",
+            "modem_upload_protocol": "ymodem"
+        }))
+        .expect("serial connection");
+
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert_eq!(encoded["modem_upload_protocol"], "ymodem");
+    }
 
     #[test]
     fn saved_connection_defaults_missing_post_login_to_none() {

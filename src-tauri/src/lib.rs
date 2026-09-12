@@ -268,6 +268,7 @@ pub fn run() {
             cmd::session::zmodem_accept_download,
             cmd::session::zmodem_accept_upload,
             cmd::session::zmodem_cancel,
+            cmd::session::serial_modem_upload,
             cmd::sftp::get_home_dir,
             cmd::sftp::list_remote_dir,
             cmd::sftp::list_remote_child_directories,

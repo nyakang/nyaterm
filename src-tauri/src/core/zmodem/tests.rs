@@ -3,9 +3,9 @@ mod tests {
     use super::{
         ProgressThrottle, ZMODEM_FINISH_DRAIN_IDLE, ZMODEM_PROGRESS_BYTES,
         ZMODEM_PROGRESS_INTERVAL, ZmodemAction, ZmodemDetectResult, ZmodemDetector,
-        ZmodemDirection, ZmodemDownloadOoDrain, ZmodemEvent, ZmodemTransfer,
-        ZmodemUploadConflictMode, ZmodemUploadDrain, cancel_sequence, zmodem_mtime_from_metadata,
-        zmodem_mtime_from_system_time,
+        ZmodemDirection, ZmodemDownloadOoDrain, ZmodemEvent, ZmodemPreparedUpload, ZmodemTransfer,
+        ZmodemUploadConflictMode, ZmodemUploadDrain, cancel_sequence, start_zmodem_transfer,
+        zmodem_mtime_from_metadata, zmodem_mtime_from_system_time,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -188,6 +188,29 @@ mod tests {
             failed_reason(&actions)
                 .expect("failed event")
                 .contains("destination may be unwritable")
+        );
+
+        cleanup_temp_files(&[path]);
+    }
+
+    #[test]
+    fn prepared_upload_starts_without_waiting_for_user() {
+        let path = temp_upload_file("prepared-direct-upload");
+        let (transfer, actions) = start_zmodem_transfer(
+            ZmodemDirection::Upload,
+            &write_zrinit(),
+            Some(ZmodemPreparedUpload {
+                files: vec![path.clone()],
+                conflict_mode: ZmodemUploadConflictMode::Overwrite,
+                preserve_timestamps: false,
+            }),
+        );
+
+        assert!(!transfer.is_waiting_for_user());
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, ZmodemAction::SendToRemote(data) if !data.is_empty()))
         );
 
         cleanup_temp_files(&[path]);

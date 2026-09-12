@@ -647,6 +647,7 @@
     "selectShellFileTitle": "셸 파일 선택",
     "selectedItemMissing": "항목이 제거되었습니다",
     "serial": "시리얼",
+    "serialModemUploadProtocol": "Modem 업로드 프로토콜",
     "serialPort": "시리얼",
     "serialPortPlaceholder": "COM1 또는 /dev/ttyS0",
     "serialPortRequired": "시리얼 포트가 필요합니다",
@@ -2758,8 +2759,10 @@
     "click": "클릭",
     "connectionFailed": "연결 실패",
     "dropFoldersNotSupportedLocal": "로컬 터미널에서는 폴더를 경로로 삽입할 수 없습니다.",
+    "dropFoldersSerialModemOnly": "시리얼 Modem 업로드는 파일만 지원하며 폴더는 지원하지 않습니다.",
     "dropFoldersZmodemOnly": "ZMODEM으로는 폴더를 업로드할 수 없습니다. SFTP 업로드는 파일 탐색기를 사용하세요.",
     "dropOverlayHintLocal": "파일 경로가 명령줄에 삽입됩니다",
+    "dropOverlayHintSerialModem": "파일만 지원되며 이 시리얼 연결에 설정된 Modem 프로토콜로 업로드됩니다",
     "dropOverlayHintSsh": "단일 파일은 ZMODEM을 우선 사용하며, 폴더나 실패 시 SFTP를 사용합니다",
     "dropOverlayHintZmodem": "파일만 지원되며 ZMODEM으로 업로드됩니다",
     "dropOverlayTitleLocal": "놓으면 파일 경로 삽입",
@@ -2791,6 +2794,8 @@
     "reconnecting": "다시 연결 중...",
     "scrollTabsLeft": "탭을 왼쪽으로 스크롤",
     "scrollTabsRight": "탭을 오른쪽으로 스크롤",
+    "serialModemUploadFailed": "시리얼 Modem 업로드에 실패했습니다.",
+    "serialModemWaiting": "대기 중…",
     "sessionDisconnected": "연결이 끊어짐",
     "shellSessions": "셸 세션",
     "showHiddenSessions": "숨겨진 세션 표시",
@@ -2800,7 +2805,8 @@
     "tabDockSplitBottom": "아래로 분할",
     "tabDockSplitLeft": "왼쪽으로 분할",
     "tabDockSplitRight": "오른쪽으로 분할",
-    "tabDockSplitTop": "위로 분할"
+    "tabDockSplitTop": "위로 분할",
+    "xmodemSingleFileOnly": "XMODEM은 한 번에 정확히 하나의 파일만 업로드할 수 있습니다."
   },
   "terminalCtx": {
     "clearAll": "모두 지우기",
