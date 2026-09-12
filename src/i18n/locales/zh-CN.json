@@ -619,6 +619,8 @@
     "rdpSecurity": "安全",
     "rdpUseNla": "网络级身份验证",
     "rdpUseNlaDesc": "远程主机支持时使用 NLA/CredSSP。",
+    "rdpAdmin": "管理会话",
+    "rdpAdminDesc": "连接到控制台（管理员）会话。当前 RDP 引擎尚未实际生效。",
     "rdpWidth": "宽度",
     "recordingAutoStart": "自动开始日志",
     "recordingAutoStartDesc": "打开此连接时自动创建日志文件。",

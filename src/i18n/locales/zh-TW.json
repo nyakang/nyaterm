@@ -619,6 +619,8 @@
     "rdpSecurity": "安全",
     "rdpUseNla": "網路層級驗證",
     "rdpUseNlaDesc": "遠端主機支援時使用 NLA/CredSSP。",
+    "rdpAdmin": "管理階層工作階段",
+    "rdpAdminDesc": "連線到主控台（管理員）工作階段。目前的 RDP 引擎尚未實際生效。",
     "rdpWidth": "寬度",
     "recordingAutoStart": "自動開始日誌",
     "recordingAutoStartDesc": "開啟此連線時自動建立日誌檔案。",

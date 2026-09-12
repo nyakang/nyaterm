@@ -188,6 +188,7 @@ export default function NewSessionPage() {
   const [rdpClipboardMode, setRdpClipboardMode] = useState<RdpClipboardMode>("text-only");
   const [rdpReconnectEnabled, setRdpReconnectEnabled] = useState(true);
   const [rdpReconnectMaxAttempts, setRdpReconnectMaxAttempts] = useState(5);
+  const [rdpAdmin, setRdpAdmin] = useState(false);
   const [vncScaleMode, setVncScaleMode] = useState<VncScaleMode>("fit");
   const [vncSecurityMode, setVncSecurityMode] = useState<VncSecurityMode>("auto");
   const [vncShared, setVncShared] = useState(true);
@@ -372,6 +373,7 @@ export default function NewSessionPage() {
           setRdpClipboardMode(found.clipboard?.mode ?? "text-only");
           setRdpReconnectEnabled(found.reconnect?.enabled ?? true);
           setRdpReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
+          setRdpAdmin(found.admin ?? false);
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
@@ -476,6 +478,7 @@ export default function NewSessionPage() {
     setRdpClipboardMode("text-only");
     setRdpReconnectEnabled(true);
     setRdpReconnectMaxAttempts(5);
+    setRdpAdmin(false);
     setVncScaleMode("fit");
     setVncSecurityMode("auto");
     setVncShared(true);
@@ -1074,6 +1077,7 @@ export default function NewSessionPage() {
                 enabled: rdpReconnectEnabled,
                 max_attempts: rdpReconnectMaxAttempts,
               },
+              admin: rdpAdmin,
             }
           : {}),
         ...(currentTab === "vnc"
@@ -1664,6 +1668,8 @@ export default function NewSessionPage() {
               setReconnectEnabled={setRdpReconnectEnabled}
               reconnectMaxAttempts={rdpReconnectMaxAttempts}
               setReconnectMaxAttempts={setRdpReconnectMaxAttempts}
+              admin={rdpAdmin}
+              setAdmin={setRdpAdmin}
               proxyId={proxyId}
               setProxyId={setProxyId}
               proxies={proxies}

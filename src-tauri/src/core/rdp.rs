@@ -195,6 +195,7 @@ pub struct RdpConnectConfig {
     pub reconnect_enabled: bool,
     pub reconnect_max_attempts: u32,
     pub color_depth: u8,
+    pub admin: bool,
     pub network: Option<ConnectionNetwork>,
 }
 
@@ -609,6 +610,7 @@ pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<
         security,
         clipboard,
         reconnect,
+        admin,
         ..
     } = conn.config
     else {
@@ -635,6 +637,7 @@ pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<
         reconnect_enabled: reconnect.enabled,
         reconnect_max_attempts: reconnect.max_attempts,
         color_depth: display.color_depth,
+        admin,
         network,
     })
 }
@@ -937,6 +940,14 @@ async fn build_ironrdp_config(
         "RDP TLS backend: {}",
         rdp_tls_backend_label()
     );
+
+    if config.admin {
+        tracing::warn!(
+            session_id = %config.session_id,
+            "RDP admin (console) session requested, but the pinned IronRDP version does not \
+             support sending the administrative session flag; this option is currently ignored"
+        );
+    }
 
     let certificate_verifier = Arc::new(NyaTermRdpCertificateVerifier {
         app: app.clone(),
@@ -2030,6 +2041,7 @@ mod tests {
             reconnect_enabled: true,
             reconnect_max_attempts: 3,
             color_depth: 32,
+            admin: false,
             network: None,
         }
     }
