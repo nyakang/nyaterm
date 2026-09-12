@@ -62,6 +62,8 @@ fn main() -> anyhow::Result<()> {
                         .then(|| point(px(9.), px(11.))),
                     ..Default::default()
                 }),
+                #[cfg(target_os = "linux")]
+                window_decorations: Some(gpui::WindowDecorations::Client),
                 window_bounds: Some(placement.window_bounds),
                 display_id: placement.display_id,
                 ..Default::default()
