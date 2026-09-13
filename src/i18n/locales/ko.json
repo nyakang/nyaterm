@@ -1380,6 +1380,8 @@
     "emptyDescription": "노트나 폴더를 만들어 기록을 시작하세요",
     "emptyTitle": "아직 노트가 없습니다",
     "expandAll": "모두 펼치기",
+    "export": "노트 내보내기…",
+    "exportSuccess": "노트 {{count}}개를 내보냈습니다",
     "externalUpdate": "외부 콘텐츠가 업데이트됨",
     "moveTo": "이동",
     "newFolder": "새 폴더",

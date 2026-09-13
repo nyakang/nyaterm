@@ -1380,6 +1380,8 @@
     "emptyDescription": "建立一則筆記或資料夾開始記錄",
     "emptyTitle": "還沒有筆記",
     "expandAll": "全部展開",
+    "export": "匯出筆記…",
+    "exportSuccess": "已匯出 {{count}} 篇筆記",
     "externalUpdate": "外部內容已更新",
     "moveTo": "移動到",
     "newFolder": "新建資料夾",

@@ -1380,6 +1380,8 @@
     "emptyDescription": "创建一个笔记或文件夹开始记录",
     "emptyTitle": "还没有笔记",
     "expandAll": "全部展开",
+    "export": "导出笔记…",
+    "exportSuccess": "已导出 {{count}} 篇笔记",
     "externalUpdate": "外部内容已更新",
     "moveTo": "移动到",
     "newFolder": "新建文件夹",
