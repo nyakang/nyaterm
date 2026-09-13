@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   type DragEvent,
   type KeyboardEvent,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdCreateNewFolder, MdDescription } from "react-icons/md";
+import { toast } from "sonner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,8 +22,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { useNotesTree } from "@/hooks/useNotesTree";
+import { getErrorMessage } from "@/lib/errors";
+import { invoke } from "@/lib/invoke";
+import { logger } from "@/lib/logger";
 import { openNoteEditor } from "@/lib/windowManager";
-import type { NoteTreeNode } from "@/types/notes";
+import type { NoteExportResult, NoteTreeNode } from "@/types/notes";
 import NotesPanelHeader from "./NotesPanelHeader";
 import NoteTree from "./NoteTree";
 import {
@@ -100,6 +105,24 @@ export default function NotesPanel() {
     expandAll: t("notes.expandAll"),
     collapseAll: t("notes.collapseAll"),
     more: t("common.more"),
+    export: t("notes.export"),
+  };
+
+  const exportNotes = async () => {
+    try {
+      const destination = await open({ directory: true, multiple: false });
+      if (!destination) return;
+      const result = await invoke<NoteExportResult>("export_notes", { destination });
+      toast.success(t("notes.exportSuccess", { count: result.noteCount }));
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+      logger.error({
+        domain: "ui.error",
+        event: "notes.export_failed",
+        message: "Failed to export notes",
+        error: err,
+      });
+    }
   };
 
   const creationParentId = () => {
@@ -238,6 +261,7 @@ export default function NotesPanel() {
         onExpandAll={() => setExpandedFolderIds(new Set(folders.map((folder) => folder.id)))}
         onCollapseAll={() => setExpandedFolderIds(new Set())}
         onRefresh={() => void refresh()}
+        onExport={() => void exportNotes()}
         labels={labels}
       />
       <div className="min-h-0 flex-1" role="tree" tabIndex={0} onKeyDown={handleKeyDown}>

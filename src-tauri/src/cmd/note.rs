@@ -4,6 +4,17 @@ use crate::config::{
 use crate::error::{AppError, AppResult};
 use tauri::Emitter;
 
+#[tauri::command]
+pub async fn export_notes(
+    destination: String,
+) -> AppResult<crate::core::note_export::NoteExportResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::note_export::export_notes(std::path::Path::new(&destination))
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Notes export task failed: {error}")))?
+}
+
 fn schedule_cloud_sync_notify(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         crate::core::cloud_sync::notify_config_changed(&app).await;

@@ -14,6 +14,7 @@ pub(crate) mod input;
 pub mod mcp;
 pub mod monitoring;
 pub mod network;
+pub mod note_export;
 mod output;
 pub mod portable_snapshot;
 mod quick_commands;

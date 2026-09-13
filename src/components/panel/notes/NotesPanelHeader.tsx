@@ -19,6 +19,7 @@ interface NotesPanelHeaderProps {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onRefresh: () => void;
+  onExport: () => void;
   labels: {
     search: string;
     newNote: string;
@@ -27,6 +28,7 @@ interface NotesPanelHeaderProps {
     collapseAll: string;
     refresh: string;
     more: string;
+    export: string;
   };
 }
 
@@ -67,6 +69,7 @@ export default function NotesPanelHeader({
   onExpandAll,
   onCollapseAll,
   onRefresh,
+  onExport,
   labels,
 }: NotesPanelHeaderProps) {
   return (
@@ -120,6 +123,7 @@ export default function NotesPanelHeader({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-36 text-xs">
+            <DropdownMenuItem onClick={onExport}>{labels.export}</DropdownMenuItem>
             <DropdownMenuItem onClick={onExpandAll}>{labels.expandAll}</DropdownMenuItem>
             <DropdownMenuItem onClick={onCollapseAll}>{labels.collapseAll}</DropdownMenuItem>
             <DropdownMenuItem onClick={onRefresh}>

@@ -188,6 +188,7 @@ pub fn run() {
             cmd::log::append_frontend_logs,
             cmd::log::export_diagnostics,
             cmd::note::list_note_tree,
+            cmd::note::export_notes,
             cmd::note::get_note,
             cmd::note::create_note_folder,
             cmd::note::create_note,
