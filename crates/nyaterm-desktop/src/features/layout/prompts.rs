@@ -334,8 +334,8 @@ impl NyaTermApp {
             .flex_col()
             .gap_4()
             .on_click(|_, _, cx| cx.stop_propagation())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if this.handle_credential_key_down(event, cx) {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.handle_credential_key_down(event, window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -350,8 +350,8 @@ impl NyaTermApp {
                         palette,
                         format!("credential-cancel-{}", prompt.id),
                         t!("common.cancel"),
-                        cx.listener(|this, _, _, cx| {
-                            this.cancel_credential_prompt(cx);
+                        cx.listener(|this, _, window, cx| {
+                            this.cancel_credential_prompt(window, cx);
                         }),
                     ))
                     .child(dialog_action_button(
@@ -359,8 +359,8 @@ impl NyaTermApp {
                         format!("credential-submit-{}", prompt.id),
                         t!("sshAuth.submit"),
                         false,
-                        cx.listener(|this, _, _, cx| {
-                            this.submit_credential_prompt(cx);
+                        cx.listener(|this, _, window, cx| {
+                            this.submit_credential_prompt(window, cx);
                         }),
                     )),
             )
@@ -619,8 +619,8 @@ impl NyaTermApp {
                         palette,
                         format!("keyboard-interactive-cancel-{}", prompt.id),
                         t!("otp.cancel"),
-                        cx.listener(|this, _, _, cx| {
-                            this.cancel_keyboard_interactive_prompt(cx);
+                        cx.listener(|this, _, window, cx| {
+                            this.cancel_keyboard_interactive_prompt(window, cx);
                         }),
                     ))
                     .child(dialog_action_button(
@@ -628,8 +628,8 @@ impl NyaTermApp {
                         format!("keyboard-interactive-submit-{}", prompt.id),
                         t!("otp.submit"),
                         false,
-                        cx.listener(|this, _, _, cx| {
-                            this.submit_keyboard_interactive_prompt(cx);
+                        cx.listener(|this, _, window, cx| {
+                            this.submit_keyboard_interactive_prompt(window, cx);
                         }),
                     )),
             )

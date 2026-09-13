@@ -115,7 +115,11 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn submit_credential_prompt(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn submit_credential_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.session.prompts.take_credential() else {
             return;
         };
@@ -124,10 +128,15 @@ impl NyaTermApp {
         self.forget_text_inputs("ssh.credential.");
         self.shell
             .set_status(format!("submitted SSH credential for {host}"));
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 
-    pub(in crate::features) fn cancel_credential_prompt(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn cancel_credential_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.session.prompts.take_credential() else {
             return;
         };
@@ -136,11 +145,13 @@ impl NyaTermApp {
         self.forget_text_inputs("ssh.credential.");
         self.shell
             .set_status(format!("cancelled SSH credential prompt for {host}"));
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 
     pub(in crate::features) fn submit_keyboard_interactive_prompt(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.session.prompts.take_keyboard_interactive() else {
@@ -151,11 +162,13 @@ impl NyaTermApp {
         self.forget_text_inputs("ssh.keyboard-interactive.");
         self.shell
             .set_status(format!("submitted SSH verification for {target}"));
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 
     pub(in crate::features) fn cancel_keyboard_interactive_prompt(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.session.prompts.take_keyboard_interactive() else {
@@ -166,6 +179,7 @@ impl NyaTermApp {
         self.forget_text_inputs("ssh.keyboard-interactive.");
         self.shell
             .set_status(format!("cancelled SSH verification for {target}"));
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 
@@ -224,6 +238,7 @@ impl NyaTermApp {
     pub(in crate::features) fn handle_credential_key_down(
         &mut self,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         self.mark_user_activity();
@@ -237,10 +252,10 @@ impl NyaTermApp {
 
         match keystroke.key.as_str() {
             "enter" => {
-                self.submit_credential_prompt(cx);
+                self.submit_credential_prompt(window, cx);
             }
             "escape" => {
-                self.cancel_credential_prompt(cx);
+                self.cancel_credential_prompt(window, cx);
             }
             _ => return false,
         }
@@ -263,8 +278,8 @@ impl NyaTermApp {
         }
 
         match keystroke.key.as_str() {
-            "enter" => self.submit_keyboard_interactive_prompt(cx),
-            "escape" => self.cancel_keyboard_interactive_prompt(cx),
+            "enter" => self.submit_keyboard_interactive_prompt(window, cx),
+            "escape" => self.cancel_keyboard_interactive_prompt(window, cx),
             "tab" => {
                 let Some(target) = self
                     .session

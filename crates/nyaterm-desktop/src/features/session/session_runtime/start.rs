@@ -32,6 +32,24 @@ use crate::features::{
 };
 use crate::models::SessionLaunchConfig;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionStartFocusTarget {
+    Terminal,
+    RemoteDesktop,
+}
+
+fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarget {
+    match config {
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {
+            SessionStartFocusTarget::RemoteDesktop
+        }
+        ConnectionType::Ssh { .. }
+        | ConnectionType::LocalTerminal { .. }
+        | ConnectionType::Telnet { .. }
+        | ConnectionType::Serial { .. } => SessionStartFocusTarget::Terminal,
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::features) struct SshSessionConfigBuildContext {
     pub attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
@@ -114,7 +132,7 @@ impl SshAgentStoredKeyProvider for StoreSshAgentKeyProvider {
 impl NyaTermApp {
     pub(in crate::features) fn start_local_session(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut config = LocalSessionConfig::default();
@@ -128,6 +146,7 @@ impl NyaTermApp {
             SavedConnectionStartOptions::default(),
             cx,
         );
+        self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
     }
 
     pub(in crate::features) fn start_saved_connection(
@@ -148,10 +167,32 @@ impl NyaTermApp {
         &mut self,
         connection: SavedConnection,
         options: SavedConnectionStartOptions,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let focus_target = session_start_focus_target(&connection.config);
         self.continue_saved_connection_start(connection, options, cx);
+        self.focus_user_started_session_surface(focus_target, window, cx);
+    }
+
+    fn focus_user_started_session_surface(
+        &self,
+        target: SessionStartFocusTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let focus = match target {
+            SessionStartFocusTarget::Terminal => self.terminal.input_focus().clone(),
+            SessionStartFocusTarget::RemoteDesktop => self.remote_desktop.focus().clone(),
+        };
+        window.focus(&focus, cx);
+
+        // Menu dismissal can restore its previous focus after the click handler.
+        // Re-apply this user-requested handoff at the end of the same event cycle.
+        let window = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| window.focus(&focus, cx));
+        });
     }
 
     pub(in crate::features) fn continue_saved_connection_start(
@@ -1351,23 +1392,48 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use gpui::{
+        AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, div,
+    };
     use nyaterm_core::{
-        AiExecutionProfile, ConnectionAuth, ConnectionType, SavedConnection, SftpCwdFollowMode,
-        SftpSettings, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile, SshTerminalType,
+        AiExecutionProfile, AppRuntime, ConnectionAuth, ConnectionType, RuntimeMode,
+        SavedConnection, SftpCwdFollowMode, SftpSettings, SshAlgorithmMode,
+        SshAlgorithmPreferences, SshProfile, SshTerminalType,
     };
     use nyaterm_store::StoreDomain;
     use nyaterm_transport::SshSessionProfile;
 
     use super::{
-        SshSessionConfigBuildContext, build_ssh_session_config_with_context,
-        inline_connection_password, load_ssh_connection_password_with_context,
+        SessionStartFocusTarget, SshSessionConfigBuildContext,
+        build_ssh_session_config_with_context, inline_connection_password,
+        load_ssh_connection_password_with_context, session_start_focus_target,
         stored_connection_password_id,
     };
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::{
-        session::AgentPromptBroker, session::CredentialPromptBroker, session::HostKeyPromptBroker,
-        session::NativeOtpProvider,
+        NyaTermApp, session::AgentPromptBroker, session::CredentialPromptBroker,
+        session::HostKeyPromptBroker, session::NativeOtpProvider,
     };
     use crate::test_support::{TestConfigDir, blocking_test_store};
+
+    struct FocusHost {
+        app: Entity<NyaTermApp>,
+    }
+
+    impl Render for FocusHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let app = self.app.read(cx);
+            div()
+                .size_full()
+                .child(div().track_focus(app.terminal.input_focus()))
+                .child(div().track_focus(app.remote_desktop.focus()))
+        }
+    }
 
     fn unique_temp_dir(name: &str) -> TestConfigDir {
         TestConfigDir::new(&format!("nyaterm-desktop-{name}"))
@@ -1389,6 +1455,79 @@ mod tests {
             agent_prompts: Arc::new(AgentPromptBroker::default()),
             otp_provider: Arc::new(NativeOtpProvider::new(store)),
         }
+    }
+
+    #[test]
+    fn session_start_focus_target_matches_protocol_surface() {
+        let config = |json| serde_json::from_value::<ConnectionType>(json).unwrap();
+
+        for terminal in [
+            config(serde_json::json!({"type": "ssh", "host": "host"})),
+            config(serde_json::json!({"type": "local_terminal"})),
+            config(serde_json::json!({"type": "telnet", "host": "host"})),
+            config(serde_json::json!({"type": "serial", "port_name": "COM1"})),
+        ] {
+            assert_eq!(
+                session_start_focus_target(&terminal),
+                SessionStartFocusTarget::Terminal
+            );
+        }
+        for remote in [
+            config(serde_json::json!({"type": "rdp", "host": "host"})),
+            config(serde_json::json!({"type": "vnc", "host": "host"})),
+        ] {
+            assert_eq!(
+                session_start_focus_target(&remote),
+                SessionStartFocusTarget::RemoteDesktop
+            );
+        }
+    }
+
+    #[test]
+    fn user_started_session_focus_handoff_targets_the_requested_surface() {
+        let dir = unique_temp_dir("session-start-focus");
+        let mut cx = TestAppContext::single();
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            dir.path().to_path_buf(),
+            dir.path().join("config"),
+            dir.path().join("logs"),
+            dir.path().join("cache"),
+            None,
+        );
+        let stores = UiStoreHandles {
+            startup_restore: cx.new(|_| StartupRestoreStore::default()),
+            overlays: cx.new(|_| OverlayStore::default()),
+        };
+        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| FocusHost { app: host_app });
+
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            app.update(cx, |app, cx| {
+                app.focus_user_started_session_surface(
+                    SessionStartFocusTarget::Terminal,
+                    window,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(app.read(cx).terminal.input_focus().is_focused(window));
+            app.update(cx, |app, cx| {
+                app.focus_user_started_session_surface(
+                    SessionStartFocusTarget::RemoteDesktop,
+                    window,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(app.read(cx).remote_desktop.focus().is_focused(window));
+        });
     }
 
     #[test]
