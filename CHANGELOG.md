@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.10] - 2026-09-13
+
+### Added
+
+- **notes:** Add note export to a local folder, including UI integration, tests, and localized copy.
+- **terminal:** Add an optional foreground-intense color for bold default text so themes can highlight bold output independently.
+- **ai:** Show Codex foreground command execution and output in the terminal using the configured terminal presentation limit.
+- **terminal-search:** Add configurable wrap-around navigation when moving between search matches.
+- **file-explorer:** Show file and directory details on hover.
+- **sftp:** Add an explicit SFTP-only SSH runtime and support file-browser sessions for servers that do not provide an interactive shell.
+
+### Changed
+
+- **rdp:** Remove the hover operation bar and improve transparent-window behavior on macOS.
+
+### Fixed
+
+- **linux:** Prefer native Wayland for AppImage webviews to improve input-method compatibility.
+- **terminal:** Fix Linux IME stale composition cleanup, duplicate Backspace handling, and macOS modifier-first IME input loss.
+- **terminal:** Preserve text selection and copy behavior when terminal mouse tracking is enabled, keep custom-copy Ctrl+C interrupt behavior, and prevent right-click paste from leaking terminal mouse input.
+- **terminal:** Fix wide-character drag-selection boundaries.
+- **terminal:** Restore input focus after terminal rebuilds without stealing focus from inactive panes, preserve foreground focus, and keep the viewport at the bottom after switching terminals.
+- **ssh:** Import `IdentityFile` keys from SSH config more safely while preserving authentication semantics.
+- **ssh:** Fix recursive zsh shell-integration hooks and preserve percent-escaped working directories across reconnects.
+- **sftp:** Retry transient directory-list failures, distinguish recoverable directory-upload errors from fatal failures, preserve partial-upload results, and keep permit waits outside setup timeouts.
+- **cloud-sync:** Create nested WebDAV sync directories level by level.
+- **ai:** Fix Codex CLI launcher resolution on Windows and prevent active or reconnected AI streams from being incorrectly rebound or reported as occupied.
+- **docker:** Allow restarting containers to be stopped instead of leaving them stuck in an unactionable state.
+- **window:** Avoid the Linux X11 modal topmost pulse that could crash affected desktop environments.
+- **updater:** Target the correct Linux DEB artifact in update manifests.
+- **assets:** Combine asset filters by dimension so multiple selections within one dimension are aggregated while different dimensions still intersect.
+- **ui:** Avoid duplicate native password reveal buttons on Windows.
+- **settings:** Apply theme-designer changes immediately and preserve settings drag interactions while restoring terminal focus correctly.
+
+### Performance
+
+- **terminal:** Bound logical-line scans used by keyword highlighting and line-boundary detection to avoid excessive work on very long output.
+
 ## [1.2.9] - 2026-09-07
 
 ### Added

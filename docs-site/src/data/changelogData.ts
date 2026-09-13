@@ -10,6 +10,53 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: '[1.2.10] - 2026-09-13',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**notes:** Add note export to a local folder, including UI integration, tests, and localized copy.',
+          '**terminal:** Add an optional foreground-intense color for bold default text so themes can highlight bold output independently.',
+          '**ai:** Show Codex foreground command execution and output in the terminal using the configured terminal presentation limit.',
+          '**terminal-search:** Add configurable wrap-around navigation when moving between search matches.',
+          '**file-explorer:** Show file and directory details on hover.',
+          '**sftp:** Add an explicit SFTP-only SSH runtime and support file-browser sessions for servers that do not provide an interactive shell.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: ['**rdp:** Remove the hover operation bar and improve transparent-window behavior on macOS.'],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**linux:** Prefer native Wayland for AppImage webviews to improve input-method compatibility.',
+          '**terminal:** Fix Linux IME stale composition cleanup, duplicate Backspace handling, and macOS modifier-first IME input loss.',
+          '**terminal:** Preserve text selection and copy behavior when terminal mouse tracking is enabled, keep custom-copy Ctrl+C interrupt behavior, and prevent right-click paste from leaking terminal mouse input.',
+          '**terminal:** Fix wide-character drag-selection boundaries.',
+          '**terminal:** Restore input focus after terminal rebuilds without stealing focus from inactive panes, preserve foreground focus, and keep the viewport at the bottom after switching terminals.',
+          '**ssh:** Import `IdentityFile` keys from SSH config more safely while preserving authentication semantics.',
+          '**ssh:** Fix recursive zsh shell-integration hooks and preserve percent-escaped working directories across reconnects.',
+          '**sftp:** Retry transient directory-list failures, distinguish recoverable directory-upload errors from fatal failures, preserve partial-upload results, and keep permit waits outside setup timeouts.',
+          '**cloud-sync:** Create nested WebDAV sync directories level by level.',
+          '**ai:** Fix Codex CLI launcher resolution on Windows and prevent active or reconnected AI streams from being incorrectly rebound or reported as occupied.',
+          '**docker:** Allow restarting containers to be stopped instead of leaving them stuck in an unactionable state.',
+          '**window:** Avoid the Linux X11 modal topmost pulse that could crash affected desktop environments.',
+          '**updater:** Target the correct Linux DEB artifact in update manifests.',
+          '**assets:** Combine asset filters by dimension so multiple selections within one dimension are aggregated while different dimensions still intersect.',
+          '**ui:** Avoid duplicate native password reveal buttons on Windows.',
+          '**settings:** Apply theme-designer changes immediately and preserve settings drag interactions while restoring terminal focus correctly.',
+        ],
+      },
+      {
+        title: 'Performance',
+        items: [
+          '**terminal:** Bound logical-line scans used by keyword highlighting and line-boundary detection to avoid excessive work on very long output.',
+        ],
+      },
+    ],
+  },
+  {
     version: '[1.2.9] - 2026-09-07',
     sections: [
       {
@@ -2118,6 +2165,51 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: '[1.2.10] - 2026-09-13',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**notes:** 新增笔记导出到本地文件夹功能，并补充 UI 集成、测试和多语言文案。',
+          '**terminal:** 新增可选的粗体默认前景色高亮，主题可通过独立 foreground-intense 颜色区分粗体输出。',
+          '**ai:** Codex 前台执行命令时在终端中展示命令与输出，并遵循已配置的终端展示行数限制。',
+          '**terminal-search:** 新增搜索结果导航“循环查找”开关。',
+          '**file-explorer:** 文件和目录支持鼠标悬停查看详细信息。',
+          '**sftp:** 新增显式 SFTP-only SSH 运行模式，并支持没有交互式 Shell 的服务器直接进入文件浏览会话。',
+        ],
+      },
+      {
+        title: '变更',
+        items: ['**rdp:** 移除悬浮操作栏，并改进 macOS 下透明窗口的显示行为。'],
+      },
+      {
+        title: '修复',
+        items: [
+          '**linux:** AppImage WebView 优先使用原生 Wayland，以改善输入法兼容性。',
+          '**terminal:** 修复 Linux IME 残留组合文本清理、Backspace 重复删除，以及 macOS 下修饰键后首次输入丢失的问题。',
+          '**terminal:** 在终端开启鼠标追踪时保留文本选择和复制能力，保持自定义复制快捷键下 Ctrl+C 中断语义，并避免右键粘贴泄漏为终端鼠标输入。',
+          '**terminal:** 修复宽字符拖选时的选区边界。',
+          '**terminal:** 修复终端重建后的输入焦点恢复，避免抢占非活动 Pane 焦点，并保持前台焦点和切换终端后的底部视口。',
+          '**ssh:** 更安全地从 SSH config 导入 `IdentityFile` 密钥，并保持原有认证语义。',
+          '**ssh:** 修复 zsh Shell 集成递归 Hook，并在重连时正确保留包含百分号转义的工作目录。',
+          '**sftp:** 重试目录列表的临时失败，区分目录上传中的可恢复与致命错误，保留部分上传结果，并将 permit 等待从初始化超时中排除。',
+          '**cloud-sync:** WebDAV 同步目录改为按层级逐级创建。',
+          '**ai:** 修复 Windows 下 Codex CLI 启动器解析，并避免活动或重连后的 AI 流被错误重新绑定或误判为占用。',
+          '**docker:** 允许停止处于“重启中”的容器，避免容器进入无法操作的卡住状态。',
+          '**window:** 避免 Linux X11 模态窗口的置顶脉冲导致部分桌面环境崩溃。',
+          '**updater:** 修复更新清单中 Linux DEB 安装包目标选择错误。',
+          '**assets:** 资产筛选改为同一维度内合并、多维度间取交集，修复组合筛选结果异常。',
+          '**ui:** 避免 Windows 下密码输入框重复显示系统原生明文查看按钮。',
+          '**settings:** 主题设计器修改即时生效，并在保留设置项拖拽交互的同时正确恢复终端焦点。',
+        ],
+      },
+      {
+        title: '性能',
+        items: ['**terminal:** 限制关键词高亮和逻辑行边界检测的扫描范围，避免超长输出造成过量计算。'],
+      },
+    ],
+  },
   {
     version: '[1.2.9] - 2026-09-07',
     sections: [
