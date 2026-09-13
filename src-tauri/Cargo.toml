@@ -1,6 +1,6 @@
 [package]
 name = "nyaterm"
-version = "1.2.9"
+version = "1.2.10"
 description = "A modern remote terminal workspace built with Tauri, React, and Rust."
 authors = ["Kang"]
 edition = "2024"

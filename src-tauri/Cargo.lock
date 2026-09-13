@@ -4866,7 +4866,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm"
-version = "1.2.9"
+version = "1.2.10"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
