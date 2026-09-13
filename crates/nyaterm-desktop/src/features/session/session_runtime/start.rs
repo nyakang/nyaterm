@@ -1393,8 +1393,8 @@ mod tests {
     use std::sync::Arc;
 
     use gpui::{
-        AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, div,
+        AppContext as _, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+        Styled as _, TestAppContext, div,
     };
     use nyaterm_core::{
         AiExecutionProfile, AppRuntime, ConnectionAuth, ConnectionType, RuntimeMode,
@@ -1511,6 +1511,8 @@ mod tests {
                     window,
                     cx,
                 );
+                // Model a menu restoring its old focus after its action returns.
+                window.focus(app.remote_desktop.focus(), cx);
             });
         });
         cx.run_until_parked();
@@ -1527,6 +1529,12 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert!(app.read(cx).remote_desktop.focus().is_focused(window));
+            let focus = app.read(cx).terminal.input_focus().clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(app.read(cx).terminal.input_focus().is_focused(window));
         });
     }
 
