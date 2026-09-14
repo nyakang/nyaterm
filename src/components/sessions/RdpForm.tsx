@@ -57,6 +57,8 @@ interface RdpFormProps {
   setReconnectEnabled: (value: boolean) => void;
   reconnectMaxAttempts: number;
   setReconnectMaxAttempts: (value: number) => void;
+  admin: boolean;
+  setAdmin: (value: boolean) => void;
   proxyId: string;
   setProxyId: (value: string) => void;
   proxies: ProxyConfig[];
@@ -105,6 +107,8 @@ export function RdpForm({
   setReconnectEnabled,
   reconnectMaxAttempts,
   setReconnectMaxAttempts,
+  admin,
+  setAdmin,
   proxyId,
   setProxyId,
   proxies,
@@ -374,6 +378,17 @@ export function RdpForm({
                         </p>
                       </div>
                       <Switch checked={useNla} onCheckedChange={setUseNla} />
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-background/70 px-3 py-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="text-xs font-medium">{t("dialog.rdpAdmin")}</div>
+                        <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                          {t("dialog.rdpAdminDesc")}
+                        </p>
+                      </div>
+                      <Switch checked={admin} onCheckedChange={setAdmin} />
                     </div>
                   </div>
                   <div>
