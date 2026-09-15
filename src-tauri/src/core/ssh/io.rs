@@ -151,7 +151,7 @@ async fn detect_shell_type<H: client::Handler>(
     }
 }
 
-async fn exec_remote_command<H: client::Handler>(
+pub(super) async fn exec_remote_command<H: client::Handler>(
     handle: &mut client::Handle<H>,
     command: &str,
     timeout_ms: u64,
@@ -193,12 +193,15 @@ async fn exec_remote_command<H: client::Handler>(
         .map_err(|_| AppError::Channel("Remote command timed out".to_string()))?
 }
 
-fn sh_single_quote(value: &str) -> String {
+pub(super) fn sh_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn remote_install_command(shell: ShellKind) -> Option<String> {
-    let script = osc::persistent_script(shell)?;
+pub(super) fn remote_install_command(shell: ShellKind) -> Option<String> {
+    // Windows 工作树中的 Bash 脚本可能是 CRLF，远端 Unix Shell 无法直接解析。
+    let script = osc::persistent_script(shell)?
+        .replace("\r\n", "\n")
+        .replace('\r', "");
     let block = osc::rc_managed_block(shell)?;
     let script_path = osc::persistent_script_path(shell)?;
     let rc_path = osc::rc_file_path(shell)?;
@@ -1907,7 +1910,7 @@ mod tests {
     };
     use crate::config::{AiExecutionProfile, SftpCwdFollowMode, SshProfile};
     use crate::core::InputOrigin;
-    use crate::core::ssh::osc::{OscResult, OscStripper, build_ready_marker};
+    use crate::core::ssh::osc::{OscResult, OscStripper, ShellKind, build_ready_marker};
     use crate::core::{
         DynamicTitleCapabilities, SessionCommand, SessionHandle, SessionInfo, SessionManager,
         SessionType, session_command_channel,
@@ -3085,6 +3088,13 @@ mod tests {
         assert_eq!(phase, IoPhase::Normal);
         assert!(post_login_deadline.is_some());
         post_login_deadline.as_mut().unwrap().as_mut().await;
+    }
+
+    #[test]
+    fn remote_install_command_normalizes_unix_script_line_endings() {
+        let command = super::remote_install_command(ShellKind::Bash)
+            .expect("Bash persistent integration command");
+        assert!(!command.contains('\r'));
     }
 
     #[tokio::test]

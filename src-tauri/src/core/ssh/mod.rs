@@ -7,6 +7,7 @@ mod agent;
 mod agent_broker;
 mod auth;
 mod client;
+mod cwd_tracking;
 mod io;
 pub(crate) mod osc;
 mod session;
@@ -24,6 +25,7 @@ pub(crate) use client::{
     RemoteForwardOpen, SshAuth, SshConfig, SshConnectionHandles, SshHandle, SshRawHandle,
     SshStartupCommand, open_proxy_command_stream, validate_ssh_algorithm_preferences,
 };
+pub(crate) use cwd_tracking::prepare_terminal_cwd_tracking_for_user_switch;
 pub use session::{create_multiplexed_ssh_session, create_ssh_session};
 pub(crate) use session::{create_ssh_handle_for_tunnel, open_ssh_direct_tcpip_stream};
 pub(crate) use tunnel::{TunnelManager, TunnelRuntimeState};

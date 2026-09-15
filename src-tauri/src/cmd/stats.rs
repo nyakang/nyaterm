@@ -91,3 +91,32 @@ pub async fn try_get_terminal_cwd(
 
     Ok(cwd_arc.lock().await.operational_path.clone())
 }
+
+/// 在 su/sudo su 写入终端前，静默准备目标用户的目录跟随配置。
+#[tauri::command]
+pub async fn prepare_terminal_cwd_tracking(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    command: String,
+) -> AppResult<bool> {
+    let session = state.session_info(&session_id).await?;
+    let Some(connection_id) = session.connection_id else {
+        return Ok(false);
+    };
+    let settings = crate::config::load_app_settings(&app)?;
+    if !settings
+        .ui
+        .file_explorer_auto_sync_cwd_connection_ids
+        .contains(&connection_id)
+    {
+        return Ok(false);
+    }
+
+    crate::core::ssh::prepare_terminal_cwd_tracking_for_user_switch(
+        state.inner().clone(),
+        &session_id,
+        &command,
+    )
+    .await
+}

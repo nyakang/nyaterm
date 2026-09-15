@@ -5,7 +5,11 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("./invoke", () => ({ invoke: mocks.invoke }));
 
-import { sendSessionInput, sendSessionInputWithSync } from "./sessionInput";
+import {
+  isTerminalUserSwitchCommand,
+  sendSessionInput,
+  sendSessionInputWithSync,
+} from "./sessionInput";
 
 describe("sendSessionInputWithSync command confirmation", () => {
   beforeEach(() => {
@@ -97,6 +101,39 @@ describe("sendSessionInputWithSync command confirmation", () => {
     expect(mocks.invoke).not.toHaveBeenCalledWith(
       "register_command_confirmation_candidate",
       expect.anything(),
+    );
+  });
+
+  it("recognizes commands that can create a user-switched shell", () => {
+    expect(isTerminalUserSwitchCommand("su - root")).toBe(true);
+    expect(isTerminalUserSwitchCommand("sudo su -")).toBe(true);
+    expect(isTerminalUserSwitchCommand("sudo -u root su -")).toBe(true);
+    expect(isTerminalUserSwitchCommand("sudo -i")).toBe(true);
+    expect(isTerminalUserSwitchCommand("sudo ls -la")).toBe(false);
+    expect(isTerminalUserSwitchCommand("echo su - root")).toBe(false);
+  });
+
+  it("prepares a user-switched shell before terminal input is written", async () => {
+    await sendSessionInput("primary", "sudo su -\r", {
+      registerSubmission: "sudo su -",
+      origin: "keyboard",
+    });
+
+    const prepareIndex = mocks.invoke.mock.calls.findIndex(
+      ([command]) => command === "prepare_terminal_cwd_tracking",
+    );
+    const registrationIndex = mocks.invoke.mock.calls.findIndex(
+      ([command]) => command === "register_command_submission",
+    );
+    const writeIndex = mocks.invoke.mock.calls.findIndex(
+      ([command]) => command === "write_to_session",
+    );
+    expect(prepareIndex).toBeGreaterThanOrEqual(0);
+    expect(registrationIndex).toBeGreaterThan(prepareIndex);
+    expect(writeIndex).toBeGreaterThan(registrationIndex);
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "prepare_terminal_cwd_tracking",
+      { sessionId: "primary", command: "sudo su -" },
     );
   });
 });

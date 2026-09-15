@@ -54,6 +54,41 @@ export function buildTerminalCommandInput(command: string, execute: boolean = tr
   return execute ? `${input}\r` : input;
 }
 
+/** 判断命令是否可能启动一个新的登录用户 Shell。 */
+export function isTerminalUserSwitchCommand(command: string): boolean {
+  const tokens = command.trim().split(/\s+/u).filter(Boolean);
+  if (tokens.length === 0) return false;
+
+  let index = 0;
+  while (index < tokens.length && tokens[index] === "env") index += 1;
+  while (
+    index < tokens.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[index] ?? "")
+  ) {
+    index += 1;
+  }
+
+  const executable = tokens[index];
+  if (executable === "su") return true;
+  if (executable === "doas") return tokens[index + 1] === "su";
+  if (executable !== "sudo") return false;
+
+  for (index += 1; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token === "su") return true;
+    if (token === "-i" || token === "--login" || /^-[^\s]*i/u.test(token)) {
+      return true;
+    }
+    if (token === "-u" || token === "--user") {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+    return false;
+  }
+  return false;
+}
+
 export function emitSessionInputPreview(sessionId: string, preview: SessionInputPreview): void {
   if (typeof window === "undefined") {
     return;
@@ -160,6 +195,14 @@ export async function sendSessionInput(
   }
 
   if (options.registerSubmission) {
+    if (isTerminalUserSwitchCommand(options.registerSubmission)) {
+      await invoke("prepare_terminal_cwd_tracking", {
+        sessionId,
+        command: options.registerSubmission,
+      }).catch(() => {
+        // 预检失败不应阻止原始命令继续发送。
+      });
+    }
     registerSessionCommandSubmission(sessionId, options.registerSubmission);
     await invoke("register_command_submission", {
       sessionId,

@@ -58,6 +58,33 @@ __nyaterm_prompt(){
   return "$status"
 }
 
+# 为通过 rc 文件加载的子 Shell 提供不依赖会话令牌的 CWD 事件。
+__nyaterm_cwd_prompt(){
+  local status=$?
+  local cwd="${PWD//%/%25}"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$cwd"
+  return "$status"
+}
+
+__nyaterm_install_cwd_prompt(){
+  local decl f
+  decl="$(declare -p PROMPT_COMMAND 2>/dev/null || true)"
+  [[ ! "$decl" =~ ^declare\ -[^[:space:]]*r ]] || return 1
+  if [[ "$decl" =~ ^declare\ -[^[:space:]]*a[^[:space:]]*\ PROMPT_COMMAND= ]]; then
+    for f in "${PROMPT_COMMAND[@]}"; do
+      case "$f" in
+        __nyaterm_prompt|__nyaterm_cwd_prompt) return 0 ;;
+      esac
+    done
+    PROMPT_COMMAND+=(__nyaterm_cwd_prompt) || return 1
+  else
+    case "${PROMPT_COMMAND-}" in
+      *__nyaterm_prompt*|*__nyaterm_cwd_prompt*) return 0 ;;
+      *) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }__nyaterm_cwd_prompt" || return 1 ;;
+    esac
+  fi
+}
+
 __nyaterm_array_prompt_supported(){
   [ "${BASH_VERSINFO[0]:-0}" -gt 5 ] || {
     [ "${BASH_VERSINFO[0]:-0}" -eq 5 ] && [ "${BASH_VERSINFO[1]:-0}" -ge 1 ]
@@ -227,7 +254,7 @@ __nyaterm_repair_prompt_container(){
   if [[ "$decl" =~ ^declare\ -[^[:space:]]*a[^[:space:]]*\ PROMPT_COMMAND= ]] && __nyaterm_array_prompt_supported; then
     local -a retained=()
     for f in "${PROMPT_COMMAND[@]}"; do
-      case "$f" in __nyaterm_prompt|__nyaterm_repair_prompt) ;; *) retained+=("$f");; esac
+      case "$f" in __nyaterm_prompt|__nyaterm_cwd_prompt|__nyaterm_repair_prompt) ;; *) retained+=("$f");; esac
     done
     PROMPT_COMMAND=(__nyaterm_prompt "${retained[@]}" __nyaterm_repair_prompt) || return 1
   else
@@ -261,6 +288,10 @@ __nyaterm_install_prompt(){
   if [ -z "$owner_decl" ]; then
     __nyaterm_prompt_state_writable || return 1
     current="${PROMPT_COMMAND-}"
+    case "$current" in
+      __nyaterm_cwd_prompt) current="" ;;
+      *"; __nyaterm_cwd_prompt") current="${current%; __nyaterm_cwd_prompt}" ;;
+    esac
     if __nyaterm_prompt_command_is_managed; then
       current="${__nyaterm_exported_prompt_fallback-}"
       [ -n "$current" ] || return 1

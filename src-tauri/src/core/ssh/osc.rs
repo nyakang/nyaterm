@@ -248,11 +248,11 @@ pub fn rc_managed_block(shell: ShellKind) -> Option<String> {
     let source_path = persistent_script_path(shell)?;
     let body = match shell {
         ShellKind::Bash | ShellKind::Zsh => format!(
-            "if [ -r \"{}\" ]; then\n  . \"{}\"\nfi",
+            "if [ -r \"{}\" ]; then\n  . \"{}\"\n  __nyaterm_install_cwd_prompt 2>/dev/null || true\nfi",
             source_path, source_path
         ),
         ShellKind::Fish => format!(
-            "if test -r \"{}\"\n  source \"{}\"\nend",
+            "if test -r \"{}\"\n  source \"{}\"\n  __nyaterm_install_cwd_prompt 2>/dev/null; or true\nend",
             source_path, source_path
         ),
         ShellKind::PosixSh | ShellKind::Unknown => return None,
@@ -311,6 +311,21 @@ const ZSH_PERSISTENT_SCRIPT: &str = concat!(
     "  printf '\\033]7;file://%s%s\\007' \"$(__nyaterm_host)\" \"$cwd\"\n",
     "  return \"$saved_status\"\n",
     "}\n",
+    "__nyaterm_cwd_prompt(){\n",
+    "  builtin typeset saved_status=$?\n",
+    "  builtin typeset cwd=\"${PWD//\\%/%25}\"\n",
+    "  printf '\\033]7;file://%s%s\\007' \"$(__nyaterm_host)\" \"$cwd\"\n",
+    "  return \"$saved_status\"\n",
+    "}\n",
+    "__nyaterm_install_cwd_prompt(){\n",
+    "  [[ ${parameters[precmd_functions]-} == *readonly* ]] && return 1\n",
+    "  builtin typeset -ga precmd_functions || return 1\n",
+    "  builtin typeset f\n",
+    "  for f in \"${precmd_functions[@]}\"; do\n",
+    "    case \"$f\" in (__nyaterm_emit|__nyaterm_cwd_prompt) return 0;; esac\n",
+    "  done\n",
+    "  precmd_functions+=(__nyaterm_cwd_prompt) || return 1\n",
+    "}\n",
     "__nyaterm_preexec(){\n",
     "  builtin typeset saved_status=$?\n",
     "  if [ -n \"$1\" ] && command -v base64 >/dev/null 2>&1; then\n",
@@ -326,7 +341,7 @@ const ZSH_PERSISTENT_SCRIPT: &str = concat!(
     "  builtin typeset -a retained || return 1\n",
     "  builtin typeset f || return 1\n",
     "  retained=()\n",
-    "  for f in \"${precmd_functions[@]}\"; do case \"$f\" in (__nyaterm_emit|__nyaterm_repair_prompt) ;; (*) retained+=(\"$f\");; esac; done\n",
+    "  for f in \"${precmd_functions[@]}\"; do case \"$f\" in (__nyaterm_emit|__nyaterm_cwd_prompt|__nyaterm_repair_prompt) ;; (*) retained+=(\"$f\");; esac; done\n",
     "  precmd_functions=(\"${retained[@]}\" __nyaterm_emit) || return 1\n",
     "  retained=()\n",
     "  for f in \"${preexec_functions[@]}\"; do [ \"$f\" = __nyaterm_preexec ] || retained+=(\"$f\"); done\n",
@@ -346,6 +361,19 @@ const FISH_PERSISTENT_SCRIPT: &str = concat!(
     "  printf '\\033]7;file://%s%s\\007' (hostname) $cwd\n",
     "  return $saved_status\n",
     "end\n",
+    "function __nyaterm_cwd_prompt\n",
+    "  set -l saved_status $status\n",
+    "  set -l cwd (string replace -a '%' '%25' -- $PWD)\n",
+    "  printf '\\033]7;file://%s%s\\007' (hostname) $cwd\n",
+    "  return $saved_status\n",
+    "end\n",
+    "function __nyaterm_install_cwd_prompt\n",
+    "  functions -e __nyaterm_cwd_prompt_event 2>/dev/null\n",
+    "  function __nyaterm_cwd_prompt_event --on-event fish_prompt\n",
+    "    __nyaterm_cwd_prompt\n",
+    "  end\n",
+    "  functions -q __nyaterm_cwd_prompt_event\n",
+    "end\n",
     "function __nyaterm_preexec\n",
     "  set -l saved_status $status\n",
     "  if test -n \"$argv[1]\"; and command -sq base64\n",
@@ -357,6 +385,7 @@ const FISH_PERSISTENT_SCRIPT: &str = concat!(
     "  return $saved_status\n",
     "end\n",
     "function __nyaterm_install_prompt\n",
+    "  functions -e __nyaterm_cwd_prompt_event 2>/dev/null\n",
     "  functions -e __nyaterm_emit_event 2>/dev/null\n",
     "  functions -e __nyaterm_preexec_event 2>/dev/null\n",
     "  function __nyaterm_emit_event --on-event fish_prompt\n",
@@ -1006,6 +1035,7 @@ mod tests {
         let added = replace_managed_block("alias ll='ls -la'\n", &block);
 
         assert!(added.contains("alias ll='ls -la'"));
+        assert!(block.contains("__nyaterm_install_cwd_prompt"));
         assert_eq!(added.matches(MANAGED_BLOCK_START).count(), 1);
         assert_eq!(added.matches(MANAGED_BLOCK_END).count(), 1);
 
@@ -1018,13 +1048,17 @@ mod tests {
     }
 
     #[test]
-    fn fish_persistent_script_requires_explicit_activation() {
+    fn fish_persistent_script_keeps_full_activation_explicit() {
         let script = persistent_script(ShellKind::Fish).expect("fish persistent script");
+        let cwd_install_pos = script
+            .find("function __nyaterm_install_cwd_prompt")
+            .expect("cwd install function");
         let install_pos = script
             .find("function __nyaterm_install_prompt")
             .expect("install function");
 
-        assert!(!script[..install_pos].contains("--on-event"));
+        assert!(cwd_install_pos < install_pos);
+        assert!(script[cwd_install_pos..install_pos].contains("--on-event fish_prompt"));
         assert!(script[install_pos..].contains("--on-event fish_prompt"));
         assert!(script[install_pos..].contains("--on-event fish_preexec"));
     }
