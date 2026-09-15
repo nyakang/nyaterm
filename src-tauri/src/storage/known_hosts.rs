@@ -1,14 +1,27 @@
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use hmac::Mac;
 use redb::ReadableTable;
+use serde::Serialize;
+use ssh_key::{HashAlg, PublicKey};
 
 use super::KnownHostCheck;
 use super::Storage;
 use super::history::history_id;
 use super::tables::*;
 use super::util::*;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnownHostEntry {
+    pub id: String,
+    pub marker: Option<String>,
+    pub host_identifier: String,
+    pub host_patterns: Vec<String>,
+    pub key_type: String,
+    pub fingerprint: Option<String>,
+}
 
 impl Storage {
     pub fn check_known_host(
@@ -60,6 +73,40 @@ impl Storage {
         txn.commit().map_err(storage_error)?;
         Ok(())
     }
+    pub fn list_known_hosts(&self) -> AppResult<Vec<KnownHostEntry>> {
+        let mut records: Vec<(String, Vec<u8>)> =
+            self.list_raw_by_prefix(KNOWN_HOSTS_TABLE, KNOWN_HOST_PREFIX)?;
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut entries = Vec::new();
+        for (id, value) in records {
+            if id.starts_with(KNOWN_HOST_RAW_PREFIX) {
+                continue;
+            }
+            let record: KnownHostRecord = deserialize_json(&value)?;
+            entries.push(KnownHostEntry {
+                id,
+                marker: record.marker.clone(),
+                host_identifier: record.host_identifier.clone(),
+                host_patterns: record.host_patterns.clone(),
+                key_type: record.key_type.clone(),
+                fingerprint: known_host_fingerprint(&record),
+            });
+        }
+        Ok(entries)
+    }
+    pub fn delete_known_host(&self, id: &str) -> AppResult<()> {
+        if !id.starts_with(KNOWN_HOST_PREFIX) || id.starts_with(KNOWN_HOST_RAW_PREFIX) {
+            return Err(AppError::Storage("Invalid SSH known host id".to_string()));
+        }
+        self.remove_key(KNOWN_HOSTS_TABLE, id)
+    }
+    pub fn clear_known_hosts(&self) -> AppResult<()> {
+        let txn = self.db.begin_write().map_err(storage_error)?;
+        clear_prefix_in_txn(&txn, KNOWN_HOSTS_TABLE, KNOWN_HOST_PREFIX)?;
+        txn.commit().map_err(storage_error)?;
+        Ok(())
+    }
     pub(super) fn render_known_hosts_text(&self) -> AppResult<String> {
         let mut records: Vec<(String, Vec<u8>)> =
             self.list_raw_by_prefix(KNOWN_HOSTS_TABLE, KNOWN_HOST_PREFIX)?;
@@ -84,6 +131,12 @@ impl Storage {
             Ok(format!("{}\n", lines.join("\n")))
         }
     }
+}
+
+fn known_host_fingerprint(record: &KnownHostRecord) -> Option<String> {
+    let key =
+        PublicKey::from_openssh(&format!("{} {}", record.key_type, record.key_base64)).ok()?;
+    Some(key.fingerprint(HashAlg::Sha256).to_string())
 }
 
 pub(super) fn replace_known_hosts_text_in_txn(

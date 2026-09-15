@@ -3,15 +3,21 @@ import { useTranslation } from "react-i18next";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { CredentialManagementTab } from "@/components/panel/security-auth/CredentialManagementTab";
 import { KeyManagementTab } from "@/components/panel/security-auth/KeyManagementTab";
+import { KnownHostsManagementTab } from "@/components/panel/security-auth/KnownHostsManagementTab";
 import { OtpManagementTab } from "@/components/panel/security-auth/OtpManagementTab";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useApp } from "@/context/AppContext";
 
-type SecurityAuthTab = "keys" | "passwords" | "credentials" | "otp";
+type SecurityAuthTab = "keys" | "passwords" | "credentials" | "otp" | "known-hosts";
 
 function resolveSecurityAuthTab(value: string | undefined): SecurityAuthTab {
-  return value === "passwords" || value === "credentials" || value === "otp" ? value : "keys";
+  return value === "passwords" ||
+    value === "credentials" ||
+    value === "otp" ||
+    value === "known-hosts"
+    ? value
+    : "keys";
 }
 
 interface SecurityAuthPanelProps {
@@ -26,6 +32,7 @@ export default function SecurityAuthPanel({ activeSessionId = null }: SecurityAu
   const [passwordCount, setPasswordCount] = useState(0);
   const [credentialCount, setCredentialCount] = useState(0);
   const [otpCount, setOtpCount] = useState(0);
+  const [knownHostCount, setKnownHostCount] = useState(0);
   const [secretsUnlocked, setSecretsUnlocked] = useState(false);
 
   const displayCount =
@@ -35,7 +42,9 @@ export default function SecurityAuthPanel({ activeSessionId = null }: SecurityAu
         ? passwordCount
         : activeTab === "credentials"
           ? credentialCount
-          : otpCount;
+          : activeTab === "otp"
+            ? otpCount
+            : knownHostCount;
 
   const handleTabChange = (value: string) => {
     updateUi({ security_auth_panel_active_tab: resolveSecurityAuthTab(value) });
@@ -61,7 +70,7 @@ export default function SecurityAuthPanel({ activeSessionId = null }: SecurityAu
           className="min-h-0 w-full flex-1 gap-0"
         >
           <div className="px-3 pt-3">
-            <TabsList className="grid h-8 w-full grid-cols-4">
+            <TabsList className="grid h-8 w-full grid-cols-5">
               <TabsTrigger value="keys" className="min-w-0 px-1 text-xs">
                 <span className="truncate">{t("securityAuth.keys")}</span>
               </TabsTrigger>
@@ -73,6 +82,9 @@ export default function SecurityAuthPanel({ activeSessionId = null }: SecurityAu
               </TabsTrigger>
               <TabsTrigger value="credentials" className="min-w-0 px-1 text-xs">
                 <span className="truncate">{t("securityAuth.credentials")}</span>
+              </TabsTrigger>
+              <TabsTrigger value="known-hosts" className="min-w-0 px-1 text-xs">
+                <span className="truncate">{t("securityAuth.knownHosts")}</span>
               </TabsTrigger>
             </TabsList>
           </div>
@@ -103,6 +115,9 @@ export default function SecurityAuthPanel({ activeSessionId = null }: SecurityAu
           </TabsContent>
           <TabsContent value="otp" className="mt-3 flex min-h-0 flex-1 overflow-hidden">
             <OtpManagementTab activeSessionId={activeSessionId} onCountChange={setOtpCount} />
+          </TabsContent>
+          <TabsContent value="known-hosts" className="mt-3 flex min-h-0 flex-1 overflow-hidden">
+            <KnownHostsManagementTab onCountChange={setKnownHostCount} />
           </TabsContent>
         </Tabs>
       </div>

@@ -1224,6 +1224,23 @@
     "uptimeHours": "{{count}}小时",
     "uptimeMinutes": "{{count}}分钟"
   },
+  "knownHosts": {
+    "clearAll": "全部清空",
+    "clearConfirm": "这将删除所有已保存的 SSH 主机密钥，包括导入的原始 known_hosts 行。当前已连接的会话不会断开。",
+    "clearFailed": "清空主机指纹失败：{{error}}",
+    "clearTitle": "清空所有 SSH 主机指纹？",
+    "deleteConfirm": "删除 {{host}} 的已保存主机密钥？下次连接时将重新按 SSH 主机密钥策略处理。",
+    "deleteEntry": "删除主机指纹",
+    "deleteFailed": "删除主机指纹失败：{{error}}",
+    "deleteTitle": "删除 SSH 主机指纹？",
+    "fingerprint": "指纹",
+    "fingerprintUnavailable": "不可用",
+    "host": "主机",
+    "keyType": "密钥类型",
+    "loadFailed": "加载主机指纹失败：{{error}}",
+    "noEntries": "暂无已保存的 SSH 主机指纹",
+    "title": "SSH 主机指纹"
+  },
   "lockScreen": {
     "message": "应用程序已锁定",
     "passwordPlaceholder": "请输入解锁密码",
@@ -1784,6 +1801,7 @@
   "securityAuth": {
     "credentials": "凭据",
     "keys": "密钥",
+    "knownHosts": "主机指纹",
     "otp": "双因素",
     "passwords": "账户",
     "title": "安全认证"

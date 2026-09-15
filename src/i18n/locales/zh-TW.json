@@ -1224,6 +1224,23 @@
     "uptimeHours": "{{count}}小時",
     "uptimeMinutes": "{{count}}分鐘"
   },
+  "knownHosts": {
+    "clearAll": "全部清除",
+    "clearConfirm": "這將刪除所有已儲存的 SSH 主機金鑰，包括匯入的原始 known_hosts 行。目前已連線的工作階段不會中斷。",
+    "clearFailed": "清除主機指紋失敗：{{error}}",
+    "clearTitle": "清除所有 SSH 主機指紋？",
+    "deleteConfirm": "刪除 {{host}} 的已儲存主機金鑰？下次連線時將重新依 SSH 主機金鑰策略處理。",
+    "deleteEntry": "刪除主機指紋",
+    "deleteFailed": "刪除主機指紋失敗：{{error}}",
+    "deleteTitle": "刪除 SSH 主機指紋？",
+    "fingerprint": "指紋",
+    "fingerprintUnavailable": "無法取得",
+    "host": "主機",
+    "keyType": "金鑰類型",
+    "loadFailed": "載入主機指紋失敗：{{error}}",
+    "noEntries": "暫無已儲存的 SSH 主機指紋",
+    "title": "SSH 主機指紋"
+  },
   "lockScreen": {
     "message": "應用程式已鎖定",
     "passwordPlaceholder": "請輸入解鎖密碼",
@@ -1781,6 +1798,7 @@
   "securityAuth": {
     "credentials": "認證資訊",
     "keys": "金鑰",
+    "knownHosts": "主機指紋",
     "otp": "雙因素",
     "passwords": "帳戶",
     "title": "安全性"

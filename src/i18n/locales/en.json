@@ -1225,6 +1225,23 @@
     "uptimeHours": "{{count}}h",
     "uptimeMinutes": "{{count}}m"
   },
+  "knownHosts": {
+    "clearAll": "Clear all",
+    "clearConfirm": "This removes all saved SSH host keys, including imported raw known_hosts lines. This does not disconnect active sessions.",
+    "clearFailed": "Failed to clear known hosts: {{error}}",
+    "clearTitle": "Clear all SSH known hosts?",
+    "deleteConfirm": "Remove the saved host key for {{host}}? It will be handled by your SSH host-key policy the next time you connect.",
+    "deleteEntry": "Delete known host",
+    "deleteFailed": "Failed to delete known host: {{error}}",
+    "deleteTitle": "Delete SSH known host?",
+    "fingerprint": "Fingerprint",
+    "fingerprintUnavailable": "Unavailable",
+    "host": "Host",
+    "keyType": "Key type",
+    "loadFailed": "Failed to load known hosts: {{error}}",
+    "noEntries": "No saved SSH known hosts",
+    "title": "SSH Known Hosts"
+  },
   "lockScreen": {
     "message": "The application is locked",
     "passwordPlaceholder": "Unlock password",
@@ -1786,6 +1803,7 @@
   "securityAuth": {
     "credentials": "Credentials",
     "keys": "Keys",
+    "knownHosts": "Known Hosts",
     "otp": "OTP",
     "passwords": "Accounts",
     "title": "Security"

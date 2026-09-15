@@ -336,6 +336,16 @@ export interface SshKey {
   passphrase?: string;
 }
 
+/** Stored SSH host key metadata exposed by the known-hosts management UI. */
+export interface KnownHostEntry {
+  id: string;
+  marker?: string | null;
+  hostIdentifier: string;
+  hostPatterns: string[];
+  keyType: string;
+  fingerprint?: string | null;
+}
+
 /** Managed account entry stored in local app storage. */
 export interface SavedAccount {
   id: string;
@@ -834,7 +844,7 @@ export interface UiConfig {
   /** Relative height weight per panel id for stacked multi-open panels. */
   panel_stack_sizes: Record<string, number>;
   network_panel_active_tab?: "tunnel" | "proxy";
-  security_auth_panel_active_tab?: "keys" | "passwords" | "otp" | "credentials";
+  security_auth_panel_active_tab?: "keys" | "passwords" | "otp" | "credentials" | "known-hosts";
   show_quick_cmd_bar: boolean;
   show_serial_send_panel: boolean;
   serial_send_height: number;

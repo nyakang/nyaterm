@@ -1773,6 +1773,21 @@ pub fn delete_ssh_key(app: tauri::AppHandle, id: String) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn get_known_hosts() -> AppResult<Vec<crate::storage::KnownHostEntry>> {
+    crate::storage::list_known_hosts()
+}
+
+#[tauri::command]
+pub fn delete_known_host(id: String) -> AppResult<()> {
+    crate::storage::delete_known_host(&id)
+}
+
+#[tauri::command]
+pub fn clear_known_hosts() -> AppResult<()> {
+    crate::storage::clear_known_hosts()
+}
+
+#[tauri::command]
 pub fn get_groups(app: tauri::AppHandle) -> AppResult<Vec<Group>> {
     let cfg = config::load_config(&app)?;
     Ok(cfg.groups)

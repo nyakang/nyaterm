@@ -1224,6 +1224,23 @@
     "uptimeHours": "{{count}}시간",
     "uptimeMinutes": "{{count}}분"
   },
+  "knownHosts": {
+    "clearAll": "모두 지우기",
+    "clearConfirm": "저장된 모든 SSH 호스트 키와 가져온 원본 known_hosts 줄을 삭제합니다. 현재 연결된 세션은 끊지 않습니다.",
+    "clearFailed": "호스트 지문을 모두 지우지 못했습니다: {{error}}",
+    "clearTitle": "SSH 호스트 지문을 모두 지울까요?",
+    "deleteConfirm": "{{host}}의 저장된 호스트 키를 삭제할까요? 다음 연결부터 SSH 호스트 키 정책에 따라 다시 처리됩니다.",
+    "deleteEntry": "호스트 지문 삭제",
+    "deleteFailed": "호스트 지문을 삭제하지 못했습니다: {{error}}",
+    "deleteTitle": "SSH 호스트 지문을 삭제할까요?",
+    "fingerprint": "지문",
+    "fingerprintUnavailable": "사용할 수 없음",
+    "host": "호스트",
+    "keyType": "키 유형",
+    "loadFailed": "호스트 지문을 불러오지 못했습니다: {{error}}",
+    "noEntries": "저장된 SSH 호스트 지문이 없습니다",
+    "title": "SSH 호스트 지문"
+  },
   "lockScreen": {
     "message": "애플리케이션이 잠겼습니다",
     "passwordPlaceholder": "잠금 해제 비밀번호",
@@ -1784,6 +1801,7 @@
   "securityAuth": {
     "credentials": "자격 증명",
     "keys": "키",
+    "knownHosts": "호스트 지문",
     "otp": "OTP",
     "passwords": "계정",
     "title": "보안"

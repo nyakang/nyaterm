@@ -366,3 +366,107 @@ fn known_hosts_repository_preserves_structured_marker_hashed_and_raw_lines() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn known_hosts_management_lists_fingerprints_and_deletes_exact_record() {
+    const ED25519_KEY: &str =
+        "AAAAC3NzaC1lZDI1NTE5AAAAILM+rvN+ot98qgEN796jTiQfZfG1KaT0PtFDJ/XFSqti";
+    let (dir, storage) = test_storage("known-hosts-management");
+    let marker_line = format!(
+        "@cert-authority first.example.com,second.example.com ssh-ed25519 {ED25519_KEY} ca"
+    );
+    let content = format!(
+        "# preserved comment\nexample.com ssh-ed25519 {ED25519_KEY} primary\nexample.com ssh-rsa BBBB alternate\n{marker_line}\n|1|nNMSH1CuL4w6FneDFn3ONf5paeg=|q8MlMsHsBk6GOpNwYqhnCeXKlRk= ssh-rsa BBBB hashed\nbroken.example ssh-ed25519 not-base64\n"
+    );
+    storage
+        .replace_known_hosts_export(&content)
+        .expect("save known hosts");
+
+    let entries = storage.list_known_hosts().expect("list known hosts");
+    assert_eq!(entries.len(), 5);
+    let primary = entries
+        .iter()
+        .find(|entry| entry.host_identifier == "example.com" && entry.key_type == "ssh-ed25519")
+        .expect("primary host");
+    assert_eq!(
+        primary.fingerprint.as_deref(),
+        Some("SHA256:UCUiLr7Pjs9wFFJMDByLgc3NrtdU344OgUM45wZPcIQ")
+    );
+    let marker = entries
+        .iter()
+        .find(|entry| entry.marker.as_deref() == Some("@cert-authority"))
+        .expect("marker entry");
+    assert_eq!(
+        marker.host_patterns,
+        ["first.example.com", "second.example.com"]
+    );
+    assert!(
+        entries
+            .iter()
+            .find(|entry| entry.host_identifier == "broken.example")
+            .expect("broken legacy entry")
+            .fingerprint
+            .is_none()
+    );
+
+    storage
+        .delete_known_host(&primary.id)
+        .expect("delete exact known host");
+    let remaining = storage.list_known_hosts().expect("list remaining");
+    assert_eq!(remaining.len(), 4);
+    assert!(
+        remaining
+            .iter()
+            .any(|entry| { entry.host_identifier == "example.com" && entry.key_type == "ssh-rsa" })
+    );
+
+    let rendered = storage
+        .render_known_hosts_export()
+        .expect("render remaining known hosts");
+    assert!(rendered.contains("# preserved comment"));
+    assert!(rendered.contains(&marker_line));
+    assert!(rendered.contains(
+        "|1|nNMSH1CuL4w6FneDFn3ONf5paeg=|q8MlMsHsBk6GOpNwYqhnCeXKlRk= ssh-rsa BBBB hashed"
+    ));
+    assert!(rendered.contains("example.com ssh-rsa BBBB alternate"));
+    assert!(!rendered.contains(&format!("example.com ssh-ed25519 {ED25519_KEY} primary")));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn known_hosts_management_clear_removes_ssh_records_without_touching_rdp() {
+    let (dir, storage) = test_storage("known-hosts-clear");
+    storage
+        .replace_known_hosts_export("# comment\nexample.com ssh-rsa BBBB\n")
+        .expect("save ssh known hosts");
+    storage
+        .upsert_rdp_known_host(
+            "rdp.example.com",
+            3389,
+            "AA:BB:CC",
+            RdpCertificateMetadata::default(),
+        )
+        .expect("save rdp known host");
+
+    storage.clear_known_hosts().expect("clear ssh known hosts");
+
+    assert!(
+        storage
+            .list_known_hosts()
+            .expect("list ssh known hosts")
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .render_known_hosts_export()
+            .expect("render ssh known hosts"),
+        ""
+    );
+    assert_eq!(
+        storage
+            .check_rdp_known_host("rdp.example.com", 3389, "AA:BB:CC")
+            .expect("check rdp known host"),
+        KnownHostCheck::Match
+    );
+    let _ = fs::remove_dir_all(dir);
+}
