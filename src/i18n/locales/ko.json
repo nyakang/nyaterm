@@ -1933,6 +1933,8 @@
     "copyGithubGistUserCode": "장치 코드 복사",
     "copyOnSelect": "선택 시 복사",
     "copyOnSelectDesc": "선택한 터미널 텍스트를 클립보드에 복사합니다.",
+    "copyPublicKey": "공개 키 복사",
+    "copyPublicKeySuccess": "공개 키를 복사했습니다.",
     "credentialStorage": "자격 증명",
     "currentOperation": "작업",
     "currentRemoteSnapshot": "현재 원격 스냅샷",

@@ -324,6 +324,7 @@ pub fn run() {
             cmd::connection::get_ssh_keys,
             cmd::connection::get_ssh_key_passphrase,
             cmd::connection::get_ssh_key_private_key,
+            cmd::connection::get_ssh_key_public_key,
             cmd::connection::save_ssh_key,
             cmd::connection::delete_ssh_key,
             cmd::connection::get_groups,

@@ -1935,6 +1935,8 @@
     "copyGithubGistUserCode": "Copy device code",
     "copyOnSelect": "Copy on Select",
     "copyOnSelectDesc": "Copy selected terminal text to clipboard.",
+    "copyPublicKey": "Copy public key",
+    "copyPublicKeySuccess": "Public key copied",
     "credentialStorage": "Credentials",
     "currentOperation": "Operation",
     "currentRemoteSnapshot": "Current Remote Snapshot",

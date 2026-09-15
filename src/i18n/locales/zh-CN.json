@@ -1933,6 +1933,8 @@
     "copyGithubGistUserCode": "复制机器码",
     "copyOnSelect": "选中即复制",
     "copyOnSelectDesc": "在终端中选中文本时自动将其复制到剪贴板。",
+    "copyPublicKey": "复制公钥",
+    "copyPublicKeySuccess": "公钥已复制",
     "credentialStorage": "凭据存储",
     "currentOperation": "当前操作",
     "currentRemoteSnapshot": "当前云端快照",

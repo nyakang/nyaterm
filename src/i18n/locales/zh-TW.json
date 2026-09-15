@@ -1928,6 +1928,8 @@
     "copyGithubGistUserCode": "複製機器碼",
     "copyOnSelect": "選取即複製",
     "copyOnSelectDesc": "在終端中選取文字時自動將其複製到剪貼簿。",
+    "copyPublicKey": "複製公鑰",
+    "copyPublicKeySuccess": "公鑰已複製",
     "credentialStorage": "認證資訊儲存",
     "currentOperation": "目前操作",
     "currentRemoteSnapshot": "目前雲端快照",

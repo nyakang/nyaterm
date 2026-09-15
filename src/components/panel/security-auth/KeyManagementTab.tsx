@@ -1,5 +1,5 @@
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { KeyRound } from "lucide-react";
+import { Copy, KeyRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdDelete, MdEdit } from "react-icons/md";
@@ -13,6 +13,7 @@ import { PrivateKeyViewDialog } from "@/components/dialog/security-auth/PrivateK
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { writeClipboardText } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import type { SshKey } from "@/types/global";
@@ -63,6 +64,7 @@ export function KeyManagementTab({
   const [privateKeyValue, setPrivateKeyValue] = useState("");
   const [privateKeyLoading, setPrivateKeyLoading] = useState(false);
   const [privateKeyError, setPrivateKeyError] = useState(false);
+  const [publicKeyLoadingId, setPublicKeyLoadingId] = useState<string | null>(null);
   const [unlockRequestNonce, setUnlockRequestNonce] = useState(0);
   const editRequestRef = useRef(0);
   const pendingUnlockedActionRef = useRef<(() => void | Promise<void>) | null>(null);
@@ -259,6 +261,22 @@ export function KeyManagementTab({
     }
   }, []);
 
+  const handleCopyPublicKey = useCallback(
+    async (key: SshKey) => {
+      setPublicKeyLoadingId(key.id);
+      try {
+        const value = await invoke<string>("get_ssh_key_public_key", { id: key.id });
+        await writeClipboardText(value);
+        toast.success(t("settings.copyPublicKeySuccess"));
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      } finally {
+        setPublicKeyLoadingId((current) => (current === key.id ? null : current));
+      }
+    },
+    [t],
+  );
+
   const handlePickFile = async () => {
     const selected = await openFileDialog({
       multiple: false,
@@ -365,6 +383,24 @@ export function KeyManagementTab({
               >
                 <span className="min-w-24 flex-1 truncate text-xs leading-8">{key.name}</span>
                 <div className="security-auth-row-actions flex shrink-0 items-center">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => {
+                            void handleCopyPublicKey(key);
+                          }}
+                          disabled={editingId !== null || publicKeyLoadingId === key.id}
+                          aria-label={t("settings.copyPublicKey")}
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{t("settings.copyPublicKey")}</TooltipContent>
+                  </Tooltip>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span className="inline-flex">
