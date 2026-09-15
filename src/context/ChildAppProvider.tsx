@@ -93,6 +93,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     scrollback_lines: 10000,
     keep_alive_mode: "compatible",
     keep_alive_interval: 60,
+    ssh_auto_reconnect: false,
+    ssh_auto_reconnect_interval: 5,
     font_size_delta: 0,
     x11_display: "",
     hardware_acceleration: false,

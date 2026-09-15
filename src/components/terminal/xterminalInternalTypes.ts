@@ -34,9 +34,14 @@ export interface TerminalOutputPayload {
   droppedBytes?: number;
 }
 
+export interface SessionClosedEventPayload {
+  reason?: string;
+  auto_reconnect_eligible?: boolean;
+}
+
 export type PendingWakeEvent =
   | { type: "error"; message: string }
-  | { type: "closed" }
+  | { type: "closed"; payload?: SessionClosedEventPayload }
   | { type: "focus" }
   | { type: "zmodem"; payload: ZmodemEventPayload }
   | { type: "serialModem"; payload: SerialModemEventPayload }

@@ -1365,6 +1365,8 @@ export interface TerminalSettings {
   scrollback_lines: number;
   keep_alive_mode: SshKeepAliveMode;
   keep_alive_interval: number;
+  ssh_auto_reconnect: boolean;
+  ssh_auto_reconnect_interval: number;
   font_size_delta: number;
   x11_display?: string;
   hardware_acceleration: boolean;

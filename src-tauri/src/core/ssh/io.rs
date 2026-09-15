@@ -19,6 +19,7 @@ use crate::core::{
 };
 use crate::error::{AppError, AppResult};
 use russh::{ChannelMsg, client};
+use serde::Serialize;
 use std::{pin::Pin, sync::Arc, time::Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{Duration, Sleep, timeout};
@@ -28,6 +29,23 @@ const INITIAL_INJECT_DELAY_MS: u64 = 500;
 const SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES: usize = 64 * 1024;
 const SUPPRESSION_DIAGNOSTIC_INITIAL_MS: u64 = 1_000;
 const SUPPRESSION_DIAGNOSTIC_INTERVAL_MS: u64 = 2_000;
+
+#[derive(Clone, Debug, Serialize)]
+struct SshSessionClosedPayload<'a> {
+    reason: &'a str,
+    auto_reconnect_eligible: bool,
+}
+
+fn is_ssh_auto_reconnect_eligible(close_reason: &str) -> bool {
+    matches!(
+        close_reason,
+        "remote-channel-eof"
+            | "remote-channel-close"
+            | "channel-stream-ended"
+            | "remote-transport-disconnect"
+            | "remote-transport-ended"
+    )
+}
 
 #[derive(Debug)]
 enum ShellDetectionResult {
@@ -1720,7 +1738,13 @@ pub(super) async fn ssh_io_loop(
         remote_exit_signal = remote_exit_signal.as_deref(),
         "SSH session closed"
     );
-    let _ = app.emit(&closed_event, ());
+    let _ = app.emit(
+        &closed_event,
+        SshSessionClosedPayload {
+            reason: close_reason,
+            auto_reconnect_eligible: is_ssh_auto_reconnect_eligible(close_reason),
+        },
+    );
 }
 
 async fn run_sftp_only_session_commands(
@@ -1809,7 +1833,13 @@ pub(super) async fn sftp_only_ssh_lifecycle_loop(
         "SFTP-only SSH session closed"
     );
     let closed_event = format!("session-closed-{session_id}");
-    let _ = app.emit(&closed_event, ());
+    let _ = app.emit(
+        &closed_event,
+        SshSessionClosedPayload {
+            reason: close_reason,
+            auto_reconnect_eligible: is_ssh_auto_reconnect_eligible(close_reason),
+        },
+    );
 }
 
 async fn handle_zmodem_actions(
@@ -1902,8 +1932,8 @@ mod tests {
         append_suppressed_visible_and_take_passthrough, build_post_login_command_input,
         build_startup_command_input, cancel_pending_injection_for_input, discard_suppressed_output,
         fallback_shell_integration_timeout, handle_injection_result, handle_injection_timeout,
-        injection_has_timed_out_at, on_initial_injection_sent, open_shell_channel,
-        run_sftp_only_session_commands, should_send_initial_injection,
+        injection_has_timed_out_at, is_ssh_auto_reconnect_eligible, on_initial_injection_sent,
+        open_shell_channel, run_sftp_only_session_commands, should_send_initial_injection,
     };
     use crate::config::{AiExecutionProfile, SftpCwdFollowMode, SshProfile};
     use crate::core::InputOrigin;
@@ -2464,6 +2494,23 @@ mod tests {
 
         assert_eq!(close_reason, "remote-transport-disconnect");
         assert!(manager.list_sessions().await.is_empty());
+    }
+
+    #[test]
+    fn ssh_auto_reconnect_eligibility_only_accepts_remote_close_reasons() {
+        for reason in [
+            "remote-channel-eof",
+            "remote-channel-close",
+            "channel-stream-ended",
+            "remote-transport-disconnect",
+            "remote-transport-ended",
+        ] {
+            assert!(is_ssh_auto_reconnect_eligible(reason), "{reason}");
+        }
+
+        for reason in ["local-close-request", "session-command-channel-closed"] {
+            assert!(!is_ssh_auto_reconnect_eligible(reason), "{reason}");
+        }
     }
 
     #[test]
