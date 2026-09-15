@@ -225,6 +225,34 @@ describe("xterminalSessionEvents setup lifecycle", () => {
     expect(getDynamicTitle("ssh-1")).toBe("Production · After wake");
     wakeEvents.dispose();
   });
+
+  it("passes SSH close eligibility into the disconnected state", async () => {
+    const listeners = new Map<string, (event: { payload?: unknown }) => void>();
+    mocks.listen.mockImplementation(
+      async (eventName: string, listener: (event: { payload?: unknown }) => void) => {
+        listeners.set(eventName, listener);
+        return vi.fn();
+      },
+    );
+    const options = params();
+    const events = createXTerminalSessionEvents(options as never);
+    await events.setup();
+
+    listeners.get("session-closed-ssh-1")?.({
+      payload: {
+        reason: "remote-transport-disconnect",
+        auto_reconnect_eligible: true,
+      },
+    });
+
+    expect(options.enterDisconnectedState).toHaveBeenCalledWith({
+      title: "terminal.sessionDisconnected",
+      titleColor: "31",
+      showReconnectPrompt: true,
+      autoReconnectEligible: true,
+    });
+    events.dispose();
+  });
 });
 
 function createDeferred() {

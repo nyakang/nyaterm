@@ -15,6 +15,7 @@ import { hasErrorKeyword } from "./terminalInputSelection";
 import type {
   HibernationLogEvent,
   HibernationPhase,
+  SessionClosedEventPayload,
   SessionCommandAcceptedEvent,
   TerminalOutputPayload,
 } from "./xterminalInternalTypes";
@@ -68,6 +69,7 @@ interface CreateXTerminalSessionEventsParams {
     message?: string;
     titleColor: "31" | "36";
     showReconnectPrompt: boolean;
+    autoReconnectEligible?: boolean;
   }) => void;
   enterDisconnectedStateIfAttachSessionMissing: (error: unknown) => boolean;
   noteSkippedOutput: (count: number) => void;
@@ -236,15 +238,16 @@ export function createXTerminalSessionEvents({
     );
     if (!addUnlistener(nextErrorUnlisten)) return;
 
-    const nextClosedUnlisten = await listen<void>(
+    const nextClosedUnlisten = await listen<SessionClosedEventPayload>(
       `session-closed-${sessionId}`,
-      () => {
+      (event) => {
         if (!isTerminalAlive()) return;
         requestWake("session_closed");
         enterDisconnectedState({
           title: tRef.current("terminal.sessionDisconnected"),
           titleColor: "31",
           showReconnectPrompt: true,
+          autoReconnectEligible: event.payload?.auto_reconnect_eligible === true,
         });
       },
     );

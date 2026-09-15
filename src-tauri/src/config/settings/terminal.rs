@@ -60,6 +60,10 @@ pub struct TerminalSettings {
     pub keep_alive_mode: String,
     #[serde(default = "default_keep_alive")]
     pub keep_alive_interval: u32,
+    #[serde(default = "default_false")]
+    pub ssh_auto_reconnect: bool,
+    #[serde(default = "default_ssh_auto_reconnect_interval")]
+    pub ssh_auto_reconnect_interval: u32,
     #[serde(default)]
     pub font_size_delta: f64,
     #[serde(default)]
@@ -99,6 +103,9 @@ fn default_scrollback() -> u32 {
 }
 fn default_keep_alive() -> u32 {
     60
+}
+fn default_ssh_auto_reconnect_interval() -> u32 {
+    5
 }
 fn default_keep_alive_mode() -> String {
     "compatible".to_string()
@@ -143,6 +150,8 @@ impl Default for TerminalSettings {
             scrollback_lines: default_scrollback(),
             keep_alive_mode: default_keep_alive_mode(),
             keep_alive_interval: default_keep_alive(),
+            ssh_auto_reconnect: false,
+            ssh_auto_reconnect_interval: default_ssh_auto_reconnect_interval(),
             font_size_delta: 0.0,
             x11_display: String::new(),
             hardware_acceleration: false,
@@ -189,6 +198,20 @@ mod tests {
 
         assert!(!settings.reconnect_restore_cwd);
         assert!(!TerminalSettings::default().reconnect_restore_cwd);
+    }
+
+    #[test]
+    fn missing_ssh_auto_reconnect_settings_use_safe_defaults() {
+        let settings: TerminalSettings = serde_json::from_value(serde_json::json!({
+            "scrollback_lines": 5000,
+            "keep_alive_interval": 60
+        }))
+        .expect("legacy terminal settings deserialize");
+
+        assert!(!settings.ssh_auto_reconnect);
+        assert_eq!(settings.ssh_auto_reconnect_interval, 5);
+        assert!(!TerminalSettings::default().ssh_auto_reconnect);
+        assert_eq!(TerminalSettings::default().ssh_auto_reconnect_interval, 5);
     }
 
     #[test]

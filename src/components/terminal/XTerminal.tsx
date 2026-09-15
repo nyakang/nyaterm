@@ -113,6 +113,7 @@ import {
   decodeOsc52ClipboardText,
   quotePosixPath,
 } from "./xterminalClipboard";
+import { createXTerminalAutoReconnectController } from "./xterminalAutoReconnectController";
 import { createXTerminalHibernationController } from "./xterminalHibernationController";
 import { createXTerminalImeTracker } from "./xterminalIme";
 import { installXTerminalKeyboardController } from "./xterminalKeyboardController";
@@ -124,6 +125,7 @@ import type {
   HibernationLogEvent,
   HibernationPhase,
   PendingWakeEvent,
+  SessionClosedEventPayload,
   XTermInternalTrimSource,
 } from "./xterminalInternalTypes";
 import {
@@ -259,6 +261,9 @@ export default function XTerminal({
   const disconnectedNoticeShownRef = useRef(false);
   const disconnectedCloseRequestedRef = useRef(false);
   const reconnectingRef = useRef(false);
+  const autoReconnectControllerRef = useRef<ReturnType<
+    typeof createXTerminalAutoReconnectController
+  > | null>(null);
   // Set when a terminal renderer is torn down while it owned keyboard focus
   // (e.g. a reconnect swaps the session id) so the rebuilt terminal can take
   // the focus back once it is ready. See issue #603.
@@ -487,8 +492,8 @@ export default function XTerminal({
         }),
       );
       unlistenBag.add(
-        listen<void>(`session-closed-${sessionId}`, () => {
-          wake({ type: "closed" });
+        listen<SessionClosedEventPayload>(`session-closed-${sessionId}`, (event) => {
+          wake({ type: "closed", payload: event.payload });
         }),
       );
       unlistenBag.add(
@@ -584,6 +589,12 @@ export default function XTerminal({
   useEffect(() => {
     terminalAppSettingsRef.current = terminalAppSettings;
   }, [terminalAppSettings]);
+
+  useEffect(() => {
+    if (!(terminalSettings.ssh_auto_reconnect ?? false)) {
+      autoReconnectControllerRef.current?.cancel();
+    }
+  }, [terminalSettings.ssh_auto_reconnect]);
 
   useEffect(() => {
     tRef.current = t;
@@ -1875,6 +1886,53 @@ export default function XTerminal({
       void writeTerminalTextAfterOutputQueue(data);
     };
 
+    const attemptReconnectDisconnectedSession = async (): Promise<boolean> => {
+      if (!isTerminalAlive() || !canReconnectDisconnectedSession()) return false;
+
+      try {
+        await writeTerminalTextAfterOutputQueue(
+          `\r\n\x1b[36m[${tRef.current("terminal.reconnecting")}]\x1b[0m\r\n`,
+        );
+        const newSessionId = await createReconnectedSession();
+        const reconnectSnapshot = captureReconnectSnapshot();
+        preservedReconnectContentRef.current = reconnectSnapshot;
+        snapshotRestoreController.begin(reconnectSnapshot);
+        const oldSessionId = sessionIdRef.current;
+        carryOverSessionCwd(oldSessionId, newSessionId);
+        disconnectedRef.current = false;
+        disconnectedNoticeShownRef.current = false;
+        disconnectedCloseRequestedRef.current = false;
+        window.dispatchEvent(
+          new CustomEvent("nyaterm:session-reconnected", {
+            detail: { oldSessionId, newSessionId },
+          }),
+        );
+        onReconnectedRef.current?.(oldSessionId, newSessionId);
+        return true;
+      } catch (err) {
+        if (!isTerminalAlive()) return false;
+        await writeTerminalTextAfterOutputQueue(
+          `\r\n\x1b[31m[${tRef.current("terminal.reconnectFailed")}: ${err}]\x1b[0m\r\n`,
+        );
+        await writeTerminalTextAfterOutputQueue(
+          `\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`,
+        );
+        return false;
+      }
+    };
+
+    const autoReconnectController = createXTerminalAutoReconnectController({
+      reconnectingRef,
+      attemptReconnect: attemptReconnectDisconnectedSession,
+      getRetryDelayMs: () => {
+        const configuredSeconds =
+          terminalAppSettingsRef.current.terminal.ssh_auto_reconnect_interval ?? 5;
+        const seconds = Number.isFinite(configuredSeconds) ? configuredSeconds : 5;
+        return Math.min(600, Math.max(1, seconds)) * 1_000;
+      },
+    });
+    autoReconnectControllerRef.current = autoReconnectController;
+
     const resetDisconnectedInputState = () => {
       inputStateRef.current = createTerminalInputState();
       clearCredentialPromptInputMode();
@@ -1887,16 +1945,29 @@ export default function XTerminal({
       message,
       titleColor,
       showReconnectPrompt,
+      autoReconnectEligible = false,
     }: {
       title: string;
       message?: string;
       titleColor: "31" | "36";
       showReconnectPrompt: boolean;
+      autoReconnectEligible?: boolean;
     }) => {
       disconnectedRef.current = true;
       resetDisconnectedInputState();
 
-      if (disconnectedNoticeShownRef.current) return;
+      const shouldAutoReconnect = () =>
+        autoReconnectEligible &&
+        sessionTypeRef.current === "SSH" &&
+        (terminalAppSettingsRef.current.terminal.ssh_auto_reconnect ?? false) &&
+        canReconnectDisconnectedSession();
+
+      if (disconnectedNoticeShownRef.current) {
+        if (shouldAutoReconnect()) {
+          void autoReconnectController.startAutoReconnect();
+        }
+        return;
+      }
       disconnectedNoticeShownRef.current = true;
       window.dispatchEvent(
         new CustomEvent("nyaterm:session-disconnected", {
@@ -1920,6 +1991,9 @@ export default function XTerminal({
           await writeTerminalTextAfterOutputQueue(
             `\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`,
           );
+        }
+        if (shouldAutoReconnect() && isTerminalAlive()) {
+          void autoReconnectController.startAutoReconnect();
         }
       })();
     };
@@ -1982,6 +2056,8 @@ export default function XTerminal({
               title: tRef.current("terminal.sessionDisconnected"),
               titleColor: "31",
               showReconnectPrompt: true,
+              autoReconnectEligible:
+                event.payload?.auto_reconnect_eligible === true,
             });
             break;
           case "focus":
@@ -2148,43 +2224,8 @@ export default function XTerminal({
       }
 
       if (disconnectedRef.current) {
-        if (
-          data === "\r" &&
-          canReconnectDisconnectedSession() &&
-          !reconnectingRef.current
-        ) {
-          reconnectingRef.current = true;
-          void (async () => {
-            try {
-              await writeTerminalTextAfterOutputQueue(
-                `\r\n\x1b[36m[${tRef.current("terminal.reconnecting")}]\x1b[0m\r\n`,
-              );
-              const newSessionId = await createReconnectedSession();
-              const reconnectSnapshot = captureReconnectSnapshot();
-              preservedReconnectContentRef.current = reconnectSnapshot;
-              snapshotRestoreController.begin(reconnectSnapshot);
-              const oldSessionId = sessionIdRef.current;
-              carryOverSessionCwd(oldSessionId, newSessionId);
-              disconnectedRef.current = false;
-              disconnectedNoticeShownRef.current = false;
-              disconnectedCloseRequestedRef.current = false;
-              reconnectingRef.current = false;
-              window.dispatchEvent(
-                new CustomEvent("nyaterm:session-reconnected", {
-                  detail: { oldSessionId, newSessionId },
-                }),
-              );
-              onReconnectedRef.current?.(oldSessionId, newSessionId);
-            } catch (err) {
-              reconnectingRef.current = false;
-              await writeTerminalTextAfterOutputQueue(
-                `\r\n\x1b[31m[${tRef.current("terminal.reconnectFailed")}: ${err}]\x1b[0m\r\n`,
-              );
-              await writeTerminalTextAfterOutputQueue(
-                `\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`,
-              );
-            }
-          })();
+        if (data === "\r" && canReconnectDisconnectedSession()) {
+          void autoReconnectController.attemptNow();
         }
         if (
           data === "\x04" &&
@@ -2498,6 +2539,10 @@ export default function XTerminal({
         fitSchedulerRef.current = null;
       }
       sessionEvents.dispose();
+      autoReconnectController.cancel();
+      if (autoReconnectControllerRef.current === autoReconnectController) {
+        autoReconnectControllerRef.current = null;
+      }
       zmodemHandler.dispose();
       serialModemHandler.dispose();
       frameGate.dispose({ ackRemaining: true, reason: "terminal_cleanup" });

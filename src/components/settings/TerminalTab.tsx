@@ -241,6 +241,39 @@ export function TerminalTab() {
         />
 
         <SettingRow
+          label={t("settings.sshAutoReconnect")}
+          desc={t("settings.sshAutoReconnectDesc")}
+        >
+          <SettingSwitch
+            checked={appSettings.terminal.ssh_auto_reconnect ?? false}
+            onChange={(v) =>
+              updateAppSettings({
+                terminal: { ...appSettings.terminal, ssh_auto_reconnect: v },
+              })
+            }
+          />
+        </SettingRow>
+
+        <SettingNumberInput
+          label={t("settings.sshAutoReconnectInterval")}
+          desc={t("settings.sshAutoReconnectIntervalDesc")}
+          min={1}
+          max={600}
+          step={1}
+          value={appSettings.terminal.ssh_auto_reconnect_interval ?? 5}
+          disabled={!(appSettings.terminal.ssh_auto_reconnect ?? false)}
+          controlClassName="max-w-sm"
+          onChange={(v) =>
+            updateAppSettings({
+              terminal: {
+                ...appSettings.terminal,
+                ssh_auto_reconnect_interval: Math.min(600, Math.max(1, v || 1)),
+              },
+            })
+          }
+        />
+
+        <SettingRow
           label={t("settings.reconnectRestoreCwd")}
           desc={t("settings.reconnectRestoreCwdDesc")}
         >
