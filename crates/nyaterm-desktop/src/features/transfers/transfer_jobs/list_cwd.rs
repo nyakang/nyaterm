@@ -232,10 +232,24 @@ impl NyaTermApp {
             progress: None,
             control: None,
         });
-        self.transfer.browser.status = "Resolving remote cwd...".to_string();
-        self.transfer.browser.loading = true;
+        // A CWD poll also refreshes the listing, but it must not make an unchanged
+        // directory look as though it is navigating again. In shell-integration
+        // mode we already know the target, so retain a successfully loaded current
+        // listing -- including an empty directory -- while the background check runs.
+        let should_show_loading = shell_cwd.as_deref().is_none_or(|cwd| {
+            transfer_cwd_sync_should_show_loading(
+                &self.transfer.browser.path,
+                self.transfer.browser.loading,
+                self.transfer.browser.error.as_deref(),
+                cwd,
+            )
+        });
+        if should_show_loading {
+            self.transfer.browser.status = "Resolving remote cwd...".to_string();
+            self.transfer.browser.loading = true;
+            self.shell.set_status("remote cwd sync started".to_string());
+        }
         self.transfer.browser.error = None;
-        self.shell.set_status("remote cwd sync started".to_string());
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {
@@ -301,7 +315,9 @@ impl NyaTermApp {
                 });
             },
         );
-        cx.notify();
+        if should_show_loading {
+            cx.notify();
+        }
     }
 
     pub(in crate::features) fn transfer_sync_cwd_job_running(&self) -> bool {
@@ -410,7 +426,18 @@ impl NyaTermApp {
             progress: None,
             control: None,
         });
-        self.transfer.browser.loading = true;
+        // Local sessions always expose their CWD. Keep a successfully loaded current
+        // directory visible while its periodic listing check is in flight, including
+        // a legitimately empty directory.
+        let should_show_loading = transfer_cwd_sync_should_show_loading(
+            &self.transfer.browser.path,
+            self.transfer.browser.loading,
+            self.transfer.browser.error.as_deref(),
+            &cwd,
+        );
+        if should_show_loading {
+            self.transfer.browser.loading = true;
+        }
         self.transfer.browser.error = None;
         let transfer_tx = self.transfer.transfer_event_sender();
         submit_transfer_blocking_job(
@@ -432,6 +459,51 @@ impl NyaTermApp {
                 });
             },
         );
-        cx.notify();
+        if should_show_loading {
+            cx.notify();
+        }
+    }
+}
+
+fn transfer_cwd_sync_should_show_loading(
+    current_path: &str,
+    loading: bool,
+    error: Option<&str>,
+    target_cwd: &str,
+) -> bool {
+    current_path != target_cwd || loading || error.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transfer_cwd_sync_should_show_loading;
+
+    #[test]
+    fn cwd_poll_keeps_a_loaded_empty_directory_quiet() {
+        assert!(!transfer_cwd_sync_should_show_loading(
+            "/remote/empty",
+            false,
+            None,
+            "/remote/empty"
+        ));
+    }
+
+    #[test]
+    fn cwd_poll_surfaces_navigation_loading_and_retry_states() {
+        assert!(transfer_cwd_sync_should_show_loading(
+            "/remote/one",
+            false,
+            None,
+            "/remote/two"
+        ));
+        assert!(transfer_cwd_sync_should_show_loading(
+            "/remote", true, None, "/remote"
+        ));
+        assert!(transfer_cwd_sync_should_show_loading(
+            "/remote",
+            false,
+            Some("previous list failed"),
+            "/remote"
+        ));
     }
 }
