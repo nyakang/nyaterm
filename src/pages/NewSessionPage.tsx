@@ -14,6 +14,7 @@ import {
 } from "@/components/icons";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
+import { ConnectionTagsField } from "@/components/sessions/ConnectionTagsField";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import { RdpForm } from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
@@ -144,6 +145,20 @@ function normalizeSshAgentForwardingConfig(
   return { ...DEFAULT_SSH_AGENT_FORWARDING_CONFIG };
 }
 
+function normalizeConnectionTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of tags) {
+    const tag = value.trim();
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    normalized.push(tag);
+  }
+
+  return normalized;
+}
+
 const isValidPostLoginDelay = (value: number) =>
   Number.isInteger(value) && value >= MIN_POST_LOGIN_DELAY_MS && value <= MAX_POST_LOGIN_DELAY_MS;
 
@@ -170,6 +185,7 @@ export default function NewSessionPage() {
   const [groupId, setGroupId] = useState(initialGroupId);
   const [newGroupNamePending, setNewGroupNamePending] = useState("");
   const [description, setDescription] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [host, setHost] = useState("");
   const [sshPort, setSshPort] = useState(22);
   const [telnetPort, setTelnetPort] = useState(23);
@@ -305,6 +321,7 @@ export default function NewSessionPage() {
         setName(found.name);
         setGroupId(found.group_id || "");
         setDescription(found.description || "");
+        setTags(found.tags ?? []);
         setIconKey(found.icon || "");
         setIconAutoDetect(found.icon_auto_detect ?? !found.icon);
 
@@ -448,6 +465,7 @@ export default function NewSessionPage() {
     setGroupId("");
     setNewGroupNamePending("");
     setDescription("");
+    setTags([]);
     setHost("");
     setSshPort(22);
     setTelnetPort(23);
@@ -621,6 +639,11 @@ export default function NewSessionPage() {
 
   const savedConnectionsById = useMemo(
     () => new Map(savedConnections.map((connection) => [connection.id, connection])),
+    [savedConnections],
+  );
+
+  const existingTagSuggestions = useMemo(
+    () => normalizeConnectionTags(savedConnections.flatMap((connection) => connection.tags ?? [])),
     [savedConnections],
   );
 
@@ -887,6 +910,7 @@ export default function NewSessionPage() {
     try {
       const normalizedName = name.trim();
       const normalizedDescription = description.trim();
+      const normalizedTags = normalizeConnectionTags(tags);
       const normalizedHost = host.trim();
       const normalizedUsername = username.trim();
       const normalizedSerialPortName = serialPortName.trim();
@@ -1052,6 +1076,7 @@ export default function NewSessionPage() {
         type: typeTag as SavedConnection["type"],
         group_id: finalGroupId || undefined,
         description: normalizedDescription || undefined,
+        tags: normalizedTags.length > 0 ? normalizedTags : undefined,
         sort_order: sortOrder,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
@@ -1803,6 +1828,12 @@ export default function NewSessionPage() {
           </TabsContent>
 
           <div className="mt-5 space-y-3">
+            <ConnectionTagsField
+              value={tags}
+              suggestions={existingTagSuggestions}
+              onChange={setTags}
+            />
+
             {/* Description */}
             <div>
               <Label className="text-xs font-medium text-foreground/80">

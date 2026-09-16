@@ -616,6 +616,7 @@ fn entry_to_saved_connection(
         },
         group_id: None,
         description: Some(description),
+        tags: Vec::new(),
         sort_order: 0,
         icon: None,
         icon_auto_detect: None,

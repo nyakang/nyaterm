@@ -150,25 +150,6 @@ export function formatAssetSystem(
   return result || labels.notApplicable;
 }
 
-export function isLinuxAsset(asset: AssetMetadata | null | undefined): boolean {
-  const os = text(asset?.os_name).toLowerCase();
-  return /\b(linux|ubuntu|debian|centos|rocky|almalinux|fedora|arch|alpine|openeuler|openEuler)\b/i.test(
-    os,
-  );
-}
-
-export function isWindowsAsset(asset: AssetMetadata | null | undefined): boolean {
-  return text(asset?.os_name).toLowerCase().includes("windows");
-}
-
-export function hasGpu(asset: AssetMetadata | null | undefined): boolean {
-  return asset?.accelerators?.some((accelerator) => accelerator.type === "gpu") ?? false;
-}
-
-export function hasNpu(asset: AssetMetadata | null | undefined): boolean {
-  return asset?.accelerators?.some((accelerator) => accelerator.type === "npu") ?? false;
-}
-
 export function buildAssetSearchText(connection: SavedConnection, groupPath: string): string {
   const asset = connection.asset;
   const accelerators = asset?.accelerators ?? [];
@@ -183,7 +164,7 @@ export function buildAssetSearchText(connection: SavedConnection, groupPath: str
     asset?.os_version,
     asset?.architecture,
     asset?.cpu_model,
-    asset?.tags?.join(" "),
+    connection.tags?.join(" "),
     asset?.notes,
     groupPath,
     ...accelerators.flatMap((item) => [item.vendor, item.model, item.type]),

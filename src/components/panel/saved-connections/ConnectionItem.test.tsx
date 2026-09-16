@@ -4,26 +4,13 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedConnection } from "@/types/global";
 import ConnectionItem from "./ConnectionItem";
-import {
-  SavedConnectionsContext,
-  type SavedConnectionsContextValue,
-} from "./context";
+import { SavedConnectionsContext, type SavedConnectionsContextValue } from "./context";
 
 vi.mock("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
-  ContextMenuTrigger: ({ children }: { children: ReactNode }) => (
-    <>{children}</>
-  ),
-  ContextMenuContent: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
-  ContextMenuItem: ({
-    children,
-    onClick,
-  }: {
-    children: ReactNode;
-    onClick?: () => void;
-  }) => (
+  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ContextMenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>
       {children}
     </button>
@@ -34,9 +21,7 @@ vi.mock("@/components/ui/context-menu", () => ({
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
+  TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock("./MoveToGroupMenu", () => ({ MoveToGroupContextMenu: () => null }));
@@ -48,20 +33,21 @@ const connection: SavedConnection = {
   host: "prod.example.com",
   port: 22,
   username: "root",
+  tags: ["production", "gpu", "database", "critical"],
 };
 
 const handleConnectOnlyMock = vi.fn();
 const onEditConnectionMock = vi.fn();
 
-function createContextValue(): SavedConnectionsContextValue {
+function createContextValue(conn = connection): SavedConnectionsContextValue {
   return {
     isDragEnabled: false,
     isPointerDragEnabled: false,
     dragTarget: null,
     expandedGroups: new Set(),
-    selectedConnectionIds: new Set([connection.id]),
+    selectedConnectionIds: new Set([conn.id]),
     keyboardActiveConnectionId: null,
-    savedConnections: [connection],
+    savedConnections: [conn],
     savedGroups: [],
     toggleGroup: vi.fn(),
     handleConnect: vi.fn(),
@@ -97,18 +83,16 @@ function createContextValue(): SavedConnectionsContextValue {
   };
 }
 
-function renderConnectionItem() {
+function renderConnectionItem(conn = connection) {
   return render(
-    <SavedConnectionsContext.Provider value={createContextValue()}>
-      <ConnectionItem conn={connection} indented={false} />
+    <SavedConnectionsContext.Provider value={createContextValue(conn)}>
+      <ConnectionItem conn={conn} indented={false} />
     </SavedConnectionsContext.Provider>,
   );
 }
 
 function getConnectionTrigger(container: HTMLElement) {
-  const trigger = container.querySelector<HTMLElement>(
-    `[data-saved-drop-id="${connection.id}"]`,
-  );
+  const trigger = container.querySelector<HTMLElement>(`[data-saved-drop-id="${connection.id}"]`);
   if (!trigger) throw new Error("Connection trigger not found");
   return trigger;
 }
@@ -172,5 +156,24 @@ describe("ConnectionItem", () => {
     expect(onEditConnectionMock).toHaveBeenCalledTimes(1);
     expect(onEditConnectionMock).toHaveBeenCalledWith(connection);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("shows two compact tags, an overflow count, and all tags in details", () => {
+    const { container } = renderConnectionItem();
+
+    expect(container.querySelector('[data-connection-tag="production"]')).not.toBeNull();
+    expect(container.querySelector('[data-connection-tag="gpu"]')).not.toBeNull();
+    expect(container.querySelector('[data-connection-tag="database"]')).toBeNull();
+    expect(container.querySelector("[data-connection-tag-overflow]")?.textContent).toBe("+2");
+    expect(screen.queryByText("savedConnections.tags")).not.toBeNull();
+    expect(screen.queryByText("production · gpu · database · critical")).not.toBeNull();
+  });
+
+  it("renders normally without tags", () => {
+    const withoutTags = { ...connection, id: "ssh-2", tags: undefined };
+    const { container } = renderConnectionItem(withoutTags);
+
+    expect(container.querySelector("[data-connection-tag]")).toBeNull();
+    expect(container.querySelector("[data-connection-tag-overflow]")).toBeNull();
   });
 });

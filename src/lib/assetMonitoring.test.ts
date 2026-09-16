@@ -132,13 +132,11 @@ describe("asset monitoring cache", () => {
         { type: "gpu", vendor: "NVIDIA", model: "A100", count: 1 },
         { type: "npu", vendor: "Huawei", model: "Ascend 910B", count: 1 },
       ],
-      tags: ["keep"],
       notes: "keep notes",
     };
 
     const next = mergeMonitoringAssetPatch(current, {
       accelerators: [{ type: "gpu", vendor: "NVIDIA", model: "H100", count: 4 }],
-      tags: ["ignored"],
       notes: "ignored",
     });
 
@@ -146,7 +144,6 @@ describe("asset monitoring cache", () => {
       { type: "npu", vendor: "Huawei", model: "Ascend 910B", count: 1 },
       { type: "gpu", vendor: "NVIDIA", model: "H100", count: 4 },
     ]);
-    expect(next.tags).toEqual(["keep"]);
     expect(next.notes).toBe("keep notes");
   });
 

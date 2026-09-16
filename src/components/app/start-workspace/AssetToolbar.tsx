@@ -1,29 +1,29 @@
 import type { TFunction } from "i18next";
 import { Grid2X2, List, Search, X } from "lucide-react";
-import type { AssetFilterKey, AssetViewMode } from "./types";
+import type { AssetViewMode } from "./types";
 
 interface AssetToolbarProps {
   t: TFunction;
   totalCount: number;
   search: string;
   onSearchChange: (value: string) => void;
-  filters: Set<AssetFilterKey>;
-  onToggleFilter: (filter: AssetFilterKey) => void;
-  onClearFilters: () => void;
+  availableTags: string[];
+  selectedTags: Set<string>;
+  onToggleTag: (tag: string) => void;
+  onClearTags: () => void;
   viewMode: AssetViewMode;
   onViewModeChange: (mode: AssetViewMode) => void;
 }
-
-const FILTERS: AssetFilterKey[] = ["linux", "windows", "gpu", "npu"];
 
 export default function AssetToolbar({
   t,
   totalCount,
   search,
   onSearchChange,
-  filters,
-  onToggleFilter,
-  onClearFilters,
+  availableTags,
+  selectedTags,
+  onToggleTag,
+  onClearTags,
   viewMode,
   onViewModeChange,
 }: AssetToolbarProps) {
@@ -62,23 +62,32 @@ export default function AssetToolbar({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-1.5">
-          <FilterButton active={filters.size === 0} onClick={onClearFilters}>
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <FilterButton active={selectedTags.size === 0} onClick={onClearTags}>
             {t("assets.all")}
           </FilterButton>
-          {FILTERS.map((filter) => (
-            <FilterButton
-              key={filter}
-              active={filters.has(filter)}
-              onClick={() => onToggleFilter(filter)}
+          {availableTags.length > 0 ? (
+            <div
+              data-asset-tag-filters
+              className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
             >
-              {t(`assets.${filter}`)}
-            </FilterButton>
-          ))}
+              <div className="flex w-max items-center gap-1.5 pr-1">
+                {availableTags.map((tag) => (
+                  <FilterButton
+                    key={tag}
+                    active={selectedTags.has(tag)}
+                    onClick={() => onToggleTag(tag)}
+                  >
+                    {tag}
+                  </FilterButton>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <IconToggleButton
             label={t("assets.list")}
             active={viewMode === "list"}
@@ -113,7 +122,7 @@ function FilterButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className="h-7 rounded-md border px-2.5 text-xs transition-colors"
+      className="h-7 shrink-0 whitespace-nowrap rounded-md border px-2.5 text-xs transition-colors"
       style={{
         borderColor: active ? "var(--df-primary)" : "var(--df-border)",
         color: active ? "var(--df-primary)" : "var(--df-text-muted)",

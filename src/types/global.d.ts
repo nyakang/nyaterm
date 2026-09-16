@@ -440,7 +440,6 @@ export interface AssetMetadata {
   memory_bytes?: number;
   accelerators?: AssetAccelerator[];
   disks?: AssetDisk[];
-  tags?: string[];
   notes?: string;
   updated_at?: string;
 }
@@ -517,6 +516,7 @@ export interface SavedConnection {
   type: ConnectionTypeTag;
   group_id?: string;
   description?: string;
+  tags?: string[];
   sort_order?: number;
   icon?: string;
   icon_auto_detect?: boolean;

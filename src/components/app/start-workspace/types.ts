@@ -2,7 +2,6 @@ import type { Group, SavedConnection } from "@/types/global";
 
 export type StartWorkspaceMode = "workbench" | "assets";
 export type AssetViewMode = "list" | "cards";
-export type AssetFilterKey = "linux" | "windows" | "gpu" | "npu";
 export type AssetSortKey =
   | "name"
   | "address"

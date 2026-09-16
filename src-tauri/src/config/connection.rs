@@ -367,6 +367,38 @@ pub fn migrate_legacy_ssh_agent_settings(connection: &mut SavedConnection) -> bo
     changed
 }
 
+pub fn normalize_connection_tags(tags: &mut Vec<String>) -> bool {
+    let original = tags.clone();
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::with_capacity(tags.len());
+
+    for tag in tags.drain(..) {
+        let tag = tag.trim();
+        if tag.is_empty() || !seen.insert(tag.to_string()) {
+            continue;
+        }
+        normalized.push(tag.to_string());
+    }
+
+    let changed = normalized != original;
+    *tags = normalized;
+    changed
+}
+
+pub fn migrate_legacy_asset_tags(connection: &mut SavedConnection) -> bool {
+    let legacy_tags = connection
+        .asset
+        .as_mut()
+        .and_then(|asset| asset.legacy_tags.take());
+    let migrated = legacy_tags.is_some();
+
+    if let Some(legacy_tags) = legacy_tags {
+        connection.tags.extend(legacy_tags);
+    }
+
+    normalize_connection_tags(&mut connection.tags) || migrated
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SftpCwdFollowMode {
@@ -1135,8 +1167,8 @@ pub struct AssetMetadata {
     pub accelerators: Option<Vec<AssetAccelerator>>,
     #[serde(default)]
     pub disks: Option<Vec<AssetDisk>>,
-    #[serde(default)]
-    pub tags: Option<Vec<String>>,
+    #[serde(default, rename = "tags", skip_serializing)]
+    pub legacy_tags: Option<Vec<String>>,
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default)]
@@ -1159,6 +1191,8 @@ pub struct SavedConnection {
     pub group_id: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub sort_order: i32,
     #[serde(default)]
@@ -1292,6 +1326,7 @@ pub fn load_sessions(app: &AppHandle) -> AppResult<SessionsConfig> {
     let mut migrated = false;
     for connection in &mut config.connections {
         migrated |= migrate_legacy_ssh_agent_settings(connection);
+        migrated |= migrate_legacy_asset_tags(connection);
     }
     if migrated {
         save_sessions(app, &config)?;
@@ -1304,6 +1339,7 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
     let _ = app;
     let mut sanitized = config.clone();
     for conn in &mut sanitized.connections {
+        migrate_legacy_asset_tags(conn);
         match &mut conn.config {
             ConnectionType::LocalTerminal {
                 ai_execution_profile,
@@ -1422,7 +1458,9 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
 pub fn load_connection_by_id(app: &AppHandle, id: &str) -> AppResult<SavedConnection> {
     let mut conn = storage::get_connection(id)?
         .ok_or_else(|| AppError::SessionNotFound(format!("Connection '{}' not found", id)))?;
-    if migrate_legacy_ssh_agent_settings(&mut conn) {
+    let mut migrated = migrate_legacy_ssh_agent_settings(&mut conn);
+    migrated |= migrate_legacy_asset_tags(&mut conn);
+    if migrated {
         let mut config = storage::load_sessions()?;
         if let Some(stored) = config.connections.iter_mut().find(|stored| stored.id == id) {
             *stored = conn.clone();
@@ -1448,8 +1486,9 @@ mod tests {
         SerialModemUploadProtocol, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
         SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAgentForwardingSources,
         SshAlgorithmMode, SshProfile, SshTerminalType, effective_cwd_follow_mode,
-        effective_cwd_follow_mode_for_profile, migrate_legacy_ssh_agent_settings,
-        resolve_ssh_terminal_type, validate_ssh_agent_endpoint, validate_ssh_agent_settings,
+        effective_cwd_follow_mode_for_profile, migrate_legacy_asset_tags,
+        migrate_legacy_ssh_agent_settings, normalize_connection_tags, resolve_ssh_terminal_type,
+        validate_ssh_agent_endpoint, validate_ssh_agent_settings,
     };
 
     #[test]
@@ -2167,6 +2206,101 @@ mod tests {
         .expect("connection");
 
         assert!(connection.asset.is_none());
+        assert!(connection.tags.is_empty());
+    }
+
+    #[test]
+    fn saved_connection_tags_roundtrip_and_empty_tags_are_omitted() {
+        let tagged: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-tagged",
+            "name": "Tagged",
+            "type": "ssh",
+            "host": "example.com",
+            "tags": ["production", "gpu"]
+        }))
+        .expect("tagged connection");
+        let tagged_json = serde_json::to_value(tagged).expect("serialize tagged connection");
+        assert_eq!(
+            tagged_json["tags"],
+            serde_json::json!(["production", "gpu"])
+        );
+
+        let empty: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-empty",
+            "name": "Empty",
+            "type": "ssh",
+            "host": "example.com",
+            "tags": []
+        }))
+        .expect("empty connection");
+        let empty_json = serde_json::to_value(empty).expect("serialize empty connection");
+        assert!(empty_json.get("tags").is_none());
+    }
+
+    #[test]
+    fn normalizes_connection_tags_without_changing_case() {
+        let mut tags = vec![
+            " production ".to_string(),
+            String::new(),
+            "production".to_string(),
+            "Production".to_string(),
+            "gpu".to_string(),
+        ];
+
+        assert!(normalize_connection_tags(&mut tags));
+        assert_eq!(tags, vec!["production", "Production", "gpu"]);
+        assert!(!normalize_connection_tags(&mut tags));
+    }
+
+    #[test]
+    fn migrates_legacy_asset_tags_into_connection_tags() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-legacy-tags",
+            "name": "Legacy Tags",
+            "type": "ssh",
+            "host": "example.com",
+            "tags": [" production ", "Production"],
+            "asset": {
+                "hostname": "node-01",
+                "tags": ["production", " gpu ", "", "gpu"]
+            }
+        }))
+        .expect("legacy tagged connection");
+
+        assert!(migrate_legacy_asset_tags(&mut connection));
+        assert_eq!(connection.tags, vec!["production", "Production", "gpu"]);
+        assert!(!migrate_legacy_asset_tags(&mut connection));
+
+        let encoded = serde_json::to_value(connection).expect("serialize migrated connection");
+        assert_eq!(
+            encoded["tags"],
+            serde_json::json!(["production", "Production", "gpu"])
+        );
+        assert!(encoded["asset"].get("tags").is_none());
+        assert_eq!(encoded["asset"]["hostname"], "node-01");
+    }
+
+    #[test]
+    fn legacy_asset_tag_migration_handles_empty_and_missing_assets() {
+        let mut empty_legacy: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-empty-legacy",
+            "name": "Empty Legacy",
+            "type": "local_terminal",
+            "shell_path": "powershell.exe",
+            "asset": { "tags": [] }
+        }))
+        .expect("empty legacy tags");
+        assert!(migrate_legacy_asset_tags(&mut empty_legacy));
+        assert!(empty_legacy.tags.is_empty());
+
+        let mut no_asset: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-no-asset",
+            "name": "No Asset",
+            "type": "local_terminal",
+            "shell_path": "powershell.exe"
+        }))
+        .expect("connection without asset");
+        assert!(!migrate_legacy_asset_tags(&mut no_asset));
     }
 
     #[test]
@@ -2208,7 +2342,6 @@ mod tests {
                         "purpose": "data"
                     }
                 ],
-                "tags": ["training", "production"],
                 "notes": "Static asset metadata",
                 "updated_at": "2026-08-03T12:00:00.000Z"
             }

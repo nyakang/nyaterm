@@ -83,6 +83,7 @@ fn decode_v2_snapshot(
         known_hosts: text_docs.get("known_hosts").cloned().unwrap_or_default(),
         notes: config::NotesSnapshot::default(),
     };
+    normalize_portable_session_tags(&mut snapshot.sessions);
     snapshot.payload_hash = calculate_payload_hash(&snapshot)?;
     log_snapshot_hash_normalized(&snapshot, &source_payload_hash);
     Ok(DecodedPortableSnapshot {

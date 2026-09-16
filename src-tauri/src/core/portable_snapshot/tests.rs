@@ -590,6 +590,7 @@ mod tests {
                     },
                     group_id: None,
                     description: None,
+                    tags: Vec::new(),
                     sort_order: 0,
                     icon: None,
                     icon_auto_detect: None,
@@ -622,6 +623,7 @@ mod tests {
                     },
                     group_id: None,
                     description: None,
+                    tags: Vec::new(),
                     sort_order: 1,
                     icon: None,
                     icon_auto_detect: None,
@@ -663,6 +665,7 @@ mod tests {
                 },
                 group_id: None,
                 description: None,
+                tags: vec!["training".to_string(), "production".to_string()],
                 sort_order: 0,
                 icon: None,
                 icon_auto_detect: None,
@@ -694,7 +697,7 @@ mod tests {
                         memory_bytes: Some(85_899_345_920),
                     }]),
                     disks: Some(Vec::new()),
-                    tags: Some(vec!["training".to_string(), "production".to_string()]),
+                    legacy_tags: None,
                     notes: Some("Static asset metadata".to_string()),
                     updated_at: Some("2026-08-03T12:00:00.000Z".to_string()),
                 }),
@@ -715,6 +718,10 @@ mod tests {
             }
         ));
         let asset = sessions.connections[0].asset.as_ref().expect("asset");
+        assert_eq!(
+            sessions.connections[0].tags,
+            vec!["training".to_string(), "production".to_string()]
+        );
         assert_eq!(asset.device_type, Some(config::AssetDeviceType::Physical));
         assert_eq!(asset.hostname.as_deref(), Some("gpu-node-01"));
         assert_eq!(asset.cpu_threads, Some(384));
@@ -994,6 +1001,51 @@ mod tests {
         let decoded = super::decode_portable_snapshot(&encoded).expect("decode snapshot");
 
         assert_asset_metadata_preserved(&decoded.sessions);
+    }
+
+    #[test]
+    fn portable_snapshot_migrates_legacy_asset_tags_after_source_hash_validation() {
+        let mut snapshot = sample_snapshot();
+        snapshot.snapshot_kind = PortableSnapshotKind::Backup;
+        snapshot.sessions = sample_sessions_with_asset_metadata();
+        snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("current snapshot hash");
+
+        let mut entities = snapshot_entities(&snapshot);
+        let mut legacy_sessions =
+            serde_json::to_value(&snapshot.sessions).expect("sessions json");
+        let connection = legacy_sessions["connections"][0]
+            .as_object_mut()
+            .expect("connection object");
+        let tags = connection.remove("tags").expect("connection tags");
+        connection
+            .get_mut("asset")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("asset object")
+            .insert("tags".to_string(), tags);
+        entities.insert(
+            "sessions".to_string(),
+            serde_json::to_string(&legacy_sessions).expect("legacy sessions raw"),
+        );
+
+        let source_hash = calculate_v3_raw_payload_hash(&entities).expect("legacy source hash");
+        assert_ne!(source_hash, snapshot.payload_hash);
+        let encoded =
+            encode_v3_raw_snapshot_redb_for_test(&snapshot, &entities, source_hash.clone());
+
+        let decoded = super::decode_portable_snapshot_with_source_hash(&encoded)
+            .expect("decode legacy asset tags");
+
+        assert_eq!(decoded.source_payload_hash, source_hash);
+        assert_eq!(decoded.snapshot.payload_hash, snapshot.payload_hash);
+        assert_eq!(
+            decoded.snapshot.sessions.connections[0].tags,
+            vec!["training".to_string(), "production".to_string()]
+        );
+        let normalized_sessions =
+            serde_json::to_value(&decoded.snapshot.sessions).expect("normalized sessions");
+        assert!(normalized_sessions["connections"][0]["asset"]
+            .get("tags")
+            .is_none());
     }
 
     #[test]

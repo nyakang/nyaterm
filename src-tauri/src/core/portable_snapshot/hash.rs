@@ -71,6 +71,7 @@ fn decode_v3_snapshot(
         known_hosts: read_entity_or_default(entities, "known_hosts")?,
         notes: read_entity_or_default(entities, "notes")?,
     };
+    normalize_portable_session_tags(&mut snapshot.sessions);
     snapshot.payload_hash = calculate_payload_hash(&snapshot)?;
     log_snapshot_hash_normalized(&snapshot, &source_payload_hash);
     Ok(DecodedPortableSnapshot {

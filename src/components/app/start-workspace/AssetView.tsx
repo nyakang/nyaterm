@@ -17,14 +17,9 @@ import {
   formatAssetAddress,
   getAssetConnectionTimeMs,
   getDiskTotalBytes,
-  hasGpu,
-  hasNpu,
-  isLinuxAsset,
-  isWindowsAsset,
   naturalCompare,
 } from "./assetFormatters";
 import type {
-  AssetFilterKey,
   AssetGroupOption,
   AssetRecord,
   AssetSortKey,
@@ -48,7 +43,7 @@ export default function AssetView({
   const { appSettings, savedConnections, savedGroups, refreshConnections, updateUi } = useApp();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [filters, setFilters] = useState<Set<AssetFilterKey>>(new Set());
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<AssetViewMode>("list");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const sortState = useMemo(
@@ -94,6 +89,17 @@ export default function AssetView({
     });
   }, [groupSortById, savedConnections, savedGroups, t]);
 
+  const availableTags = useMemo(() => collectConnectionTags(savedConnections), [savedConnections]);
+
+  useEffect(() => {
+    const available = new Set(availableTags);
+    setSelectedTags((current) => {
+      const next = new Set([...current].filter((tag) => available.has(tag)));
+      if (next.size === current.size) return current;
+      return next;
+    });
+  }, [availableTags]);
+
   const groupConnections = useMemo(
     () => getConnectionsForAssetGroup(savedConnections, savedGroups, selectedGroupId),
     [savedConnections, savedGroups, selectedGroupId],
@@ -108,9 +114,9 @@ export default function AssetView({
     return allRecords.filter((record) => {
       if (selectedGroupId && !groupConnectionIds.has(record.connection.id)) return false;
       if (keyword && !record.searchText.includes(keyword)) return false;
-      return matchesFilters(record.connection, filters);
+      return matchesSelectedTags(record.connection, selectedTags);
     });
-  }, [allRecords, deferredSearch, filters, groupConnectionIds, selectedGroupId]);
+  }, [allRecords, deferredSearch, groupConnectionIds, selectedGroupId, selectedTags]);
 
   const sortedRecords = useMemo(
     () => sortAssetRecords(filteredRecords, sortState, labels),
@@ -125,11 +131,11 @@ export default function AssetView({
     [transparentBackground],
   );
 
-  const toggleFilter = useCallback((filter: AssetFilterKey) => {
-    setFilters((current) => {
+  const toggleTag = useCallback((tag: string) => {
+    setSelectedTags((current) => {
       const next = new Set(current);
-      if (next.has(filter)) next.delete(filter);
-      else next.add(filter);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
       return next;
     });
   }, []);
@@ -142,22 +148,25 @@ export default function AssetView({
     setSelectedGroupId(groupId);
   }, []);
 
-  const handleClearFilters = useCallback(() => {
-    setFilters(new Set());
+  const handleClearTags = useCallback(() => {
+    setSelectedTags(new Set());
   }, []);
 
-  const handleSortChange = useCallback((key: AssetSortKey) => {
-    updateUi((prev) => {
-      const current = normalizeAssetSortState(prev.asset_sort_key, prev.asset_sort_direction);
-      if (!current || current.key !== key) {
-        return { asset_sort_key: key, asset_sort_direction: "asc" };
-      }
-      return {
-        asset_sort_key: key,
-        asset_sort_direction: current.direction === "asc" ? "desc" : "asc",
-      };
-    });
-  }, [updateUi]);
+  const handleSortChange = useCallback(
+    (key: AssetSortKey) => {
+      updateUi((prev) => {
+        const current = normalizeAssetSortState(prev.asset_sort_key, prev.asset_sort_direction);
+        if (!current || current.key !== key) {
+          return { asset_sort_key: key, asset_sort_direction: "asc" };
+        }
+        return {
+          asset_sort_key: key,
+          asset_sort_direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      });
+    },
+    [updateUi],
+  );
 
   return (
     <div
@@ -170,9 +179,10 @@ export default function AssetView({
         totalCount={savedConnections.length}
         search={search}
         onSearchChange={handleSearchChange}
-        filters={filters}
-        onToggleFilter={toggleFilter}
-        onClearFilters={handleClearFilters}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={handleClearTags}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
       />
@@ -217,30 +227,22 @@ export default function AssetView({
   );
 }
 
-function matchesFilters(connection: SavedConnection, filters: Set<AssetFilterKey>): boolean {
-  if (filters.size === 0) return true;
-  const asset = connection.asset;
-
-  const hasOsFilter = filters.has("linux") || filters.has("windows");
-  if (
-    hasOsFilter &&
-    !(
-      (filters.has("linux") && isLinuxAsset(asset)) ||
-      (filters.has("windows") && isWindowsAsset(asset))
-    )
-  ) {
-    return false;
+function collectConnectionTags(connections: SavedConnection[]): string[] {
+  const tags = new Set<string>();
+  for (const connection of connections) {
+    for (const value of connection.tags ?? []) {
+      const tag = value.trim();
+      if (tag) tags.add(tag);
+    }
   }
+  return [...tags].sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true, sensitivity: "variant" }),
+  );
+}
 
-  const hasAcceleratorFilter = filters.has("gpu") || filters.has("npu");
-  if (
-    hasAcceleratorFilter &&
-    !((filters.has("gpu") && hasGpu(asset)) || (filters.has("npu") && hasNpu(asset)))
-  ) {
-    return false;
-  }
-
-  return true;
+function matchesSelectedTags(connection: SavedConnection, selectedTags: Set<string>): boolean {
+  if (selectedTags.size === 0) return true;
+  return connection.tags?.some((value) => selectedTags.has(value.trim())) ?? false;
 }
 
 function sortAssetRecords(

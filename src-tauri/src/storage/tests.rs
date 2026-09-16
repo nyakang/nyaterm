@@ -48,6 +48,7 @@ fn sample_connection(id: &str, group_id: Option<&str>, sort_order: i32) -> Saved
         },
         group_id: group_id.map(str::to_string),
         description: None,
+        tags: Vec::new(),
         sort_order,
         icon: None,
         icon_auto_detect: None,

@@ -7,20 +7,9 @@ import {
   formatBytes,
   formatDiskSummary,
   getDiskTotalBytes,
-  hasGpu,
-  hasNpu,
-  isLinuxAsset,
-  isWindowsAsset,
 } from "./assetFormatters";
 
 describe("assetFormatters", () => {
-  it("detects Linux, Windows, GPU and NPU assets", () => {
-    expect(isLinuxAsset({ os_name: "Ubuntu Linux" })).toBe(true);
-    expect(isWindowsAsset({ os_name: "Windows Server 2022" })).toBe(true);
-    expect(hasGpu({ accelerators: [{ type: "gpu", model: "RTX 4090" }] })).toBe(true);
-    expect(hasNpu({ accelerators: [{ type: "npu", model: "Ascend 910B" }] })).toBe(true);
-  });
-
   it("formats bytes and keeps undefined distinct from confirmed empty arrays", () => {
     expect(formatBytes(16 * 1024 ** 3)).toBe("16 GB");
     expect(formatBytes(undefined)).toBe("-");
@@ -50,14 +39,16 @@ describe("assetFormatters", () => {
 
   it("builds searchable text from CPU, accelerators, tags and group path", () => {
     const searchText = buildAssetSearchText(
-      connection({
-        cpu_model: "EPYC 9654",
-        accelerators: [
-          { type: "gpu", vendor: "NVIDIA", model: "H100" },
-          { type: "npu", vendor: "Huawei", model: "Ascend 910B" },
-        ],
+      {
+        ...connection({
+          cpu_model: "EPYC 9654",
+          accelerators: [
+            { type: "gpu", vendor: "NVIDIA", model: "H100" },
+            { type: "npu", vendor: "Huawei", model: "Ascend 910B" },
+          ],
+        }),
         tags: ["Inference", "Production"],
-      }),
+      },
       "Assets / Lab",
     );
 
@@ -70,7 +61,6 @@ describe("assetFormatters", () => {
 
   it("handles connections without asset metadata", () => {
     expect(buildAssetSearchText(connection(undefined), "Assets")).toContain("gpu-node");
-    expect(hasGpu(undefined)).toBe(false);
   });
 });
 

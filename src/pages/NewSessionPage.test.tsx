@@ -190,6 +190,7 @@ const rdpConnection: SavedConnection = {
   host: "rdp.example.com",
   port: 3389,
   username: "Administrator",
+  tags: ["production"],
   auth: { mode: "password" },
   network: {
     proxy_id: "proxy-1",
@@ -295,6 +296,26 @@ describe("NewSessionPage", () => {
               proxy_jump_id: jumpHost.id,
             },
           }),
+        }),
+      );
+    });
+  });
+
+  it("loads, edits, and saves connection tags", async () => {
+    render(<NewSessionPage />);
+
+    expect(await screen.findByText("production")).not.toBeNull();
+    const tagInput = screen.getByRole("combobox", { name: "dialog.tagsPlaceholder" });
+    fireEvent.change(tagInput, { target: { value: " gpu " } });
+    fireEvent.keyDown(tagInput, { key: "Enter" });
+    fireEvent.click(screen.getAllByRole("button", { name: "dialog.removeTag" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({ tags: ["gpu"] }),
         }),
       );
     });

@@ -35,6 +35,15 @@ fn agent_endpoint_supported_on_platform(
     }
 }
 
+fn normalize_portable_session_tags(sessions: &mut config::SessionsConfig) -> bool {
+    sessions
+        .connections
+        .iter_mut()
+        .fold(false, |changed, connection| {
+            config::migrate_legacy_asset_tags(connection) || changed
+        })
+}
+
 /// Removes device-specific Agent endpoints that cannot work on the restore target.
 pub(crate) fn normalize_backup_sessions_for_platform(
     sessions: &mut config::SessionsConfig,
@@ -42,6 +51,7 @@ pub(crate) fn normalize_backup_sessions_for_platform(
 ) -> crate::error::AppResult<bool> {
     let mut changed = false;
     for connection in &mut sessions.connections {
+        changed |= config::migrate_legacy_asset_tags(connection);
         #[allow(deprecated)]
         {
             changed |= config::migrate_legacy_ssh_agent_settings(connection);

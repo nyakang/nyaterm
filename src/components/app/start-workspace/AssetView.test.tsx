@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { TFunction } from "i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -105,44 +105,117 @@ describe("start workspace asset view", () => {
     expect(screen.getAllByText("-").length).toBeGreaterThan(0);
   });
 
-  it("filters by search text and combined filters", async () => {
+  it("shows only normalized user tags in stable order", () => {
+    renderAssetView();
+
+    const tagFilters = document.querySelector("[data-asset-tag-filters]");
+    const tagLabels = Array.from(tagFilters?.querySelectorAll("button") ?? []).map(
+      (button) => button.textContent,
+    );
+
+    expect(tagLabels).toEqual(["edge", "office", "production", "Production", "training"]);
+    expect(screen.queryByRole("button", { name: "Linux" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Windows" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "GPU" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "NPU" })).toBeNull();
+    expect(tagFilters?.className).toContain("overflow-x-auto");
+    expect(screen.getByRole("button", { name: "List" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cards" })).not.toBeNull();
+  });
+
+  it("filters by exact user tags with OR semantics", async () => {
+    const user = userEvent.setup();
+    appState.savedConnections = appState.savedConnections.map((connection) =>
+      connection.id === "conn-win" ? { ...connection, tags: undefined } : connection,
+    );
+    renderAssetView();
+
+    await user.click(screen.getByRole("button", { name: "Production" }));
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    expect(screen.queryByText("Windows VM")).toBeNull();
+    expect(screen.queryByText("Ascend Edge")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "production" }));
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    expect(screen.queryByText("Windows VM")).toBeNull();
+    expect(screen.getByText("Ascend Edge")).not.toBeNull();
+  });
+
+  it("combines tag filters with search and group selection", async () => {
     const user = userEvent.setup();
     renderAssetView();
 
-    await user.type(screen.getByPlaceholderText("Search assets"), "ascend");
-    expect(screen.getByText("Ascend Edge")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Production" }));
+    await user.type(screen.getByPlaceholderText("Search assets"), "windows");
     expect(screen.queryByText("GPU Lab")).toBeNull();
+    expect(screen.getByText("Windows VM")).not.toBeNull();
 
     await user.clear(screen.getByPlaceholderText("Search assets"));
-    await user.click(screen.getByRole("button", { name: "Linux" }));
-    await user.click(screen.getByRole("button", { name: "GPU" }));
-
+    await user.click(screen.getByLabelText("Pick group"));
+    const aiLabOptions = screen.getAllByText("Assets / Region / AI Lab");
+    await user.click(aiLabOptions[aiLabOptions.length - 1]);
     expect(screen.getByText("GPU Lab")).not.toBeNull();
     expect(screen.queryByText("Windows VM")).toBeNull();
     expect(screen.queryByText("Ascend Edge")).toBeNull();
   });
 
-  it("combines filters with OR within a dimension and AND across dimensions", async () => {
+  it("clears tag filters with All", async () => {
     const user = userEvent.setup();
     renderAssetView();
 
-    await user.click(screen.getByRole("button", { name: "Linux" }));
-    await user.click(screen.getByRole("button", { name: "Windows" }));
-
+    await user.click(screen.getByRole("button", { name: "edge" }));
+    expect(screen.queryByText("GPU Lab")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("GPU Lab")).not.toBeNull();
     expect(screen.getByText("Windows VM")).not.toBeNull();
     expect(screen.getByText("Ascend Edge")).not.toBeNull();
+  });
 
-    await user.click(screen.getByRole("button", { name: "GPU" }));
+  it("removes selected tags that disappear after connections refresh", async () => {
+    const user = userEvent.setup();
+    const view = renderAssetView();
 
+    await user.click(screen.getByRole("button", { name: "edge" }));
+    appState.savedConnections = appState.savedConnections.map((connection) =>
+      connection.id === "conn-npu" ? { ...connection, tags: undefined } : connection,
+    );
+    rerenderAssetView(view);
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "edge" })).toBeNull());
     expect(screen.getByText("GPU Lab")).not.toBeNull();
-    expect(screen.queryByText("Windows VM")).toBeNull();
-    expect(screen.queryByText("Ascend Edge")).toBeNull();
+    expect(screen.getByText("Windows VM")).not.toBeNull();
+    expect(screen.getByText("Ascend Edge")).not.toBeNull();
+  });
 
-    await user.click(screen.getByRole("button", { name: "NPU" }));
+  it("shows only All when no connections have user tags", () => {
+    appState.savedConnections = appState.savedConnections.map((connection) => ({
+      ...connection,
+      tags: undefined,
+    }));
+    renderAssetView();
 
+    expect(document.querySelector("[data-asset-tag-filters]")).toBeNull();
+    expect(screen.getByRole("button", { name: "All" })).not.toBeNull();
+  });
+
+  it("keeps OS and accelerator properties searchable without built-in tags", async () => {
+    const user = userEvent.setup();
+    renderAssetView();
+    const search = screen.getByPlaceholderText("Search assets");
+
+    await user.type(search, "linux");
     expect(screen.getByText("GPU Lab")).not.toBeNull();
-    expect(screen.queryByText("Windows VM")).toBeNull();
+    await user.clear(search);
+
+    await user.type(search, "windows");
+    expect(screen.getByText("Windows VM")).not.toBeNull();
+    await user.clear(search);
+
+    await user.type(search, "gpu");
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    await user.clear(search);
+
+    await user.type(search, "npu");
     expect(screen.getByText("Ascend Edge")).not.toBeNull();
   });
 
@@ -398,13 +471,11 @@ const translations: Record<string, string> = {
   "assets.deviceType": "Device Type",
   "assets.disk": "Disk",
   "assets.embedded": "Embedded",
-  "assets.gpu": "GPU",
   "assets.group": "Group",
   "assets.groupPickerPlaceholder": "Pick group",
   "assets.hostname": "Hostname",
   "assets.items": "{{count}} items",
   "assets.kernel": "Kernel",
-  "assets.linux": "Linux",
   "assets.list": "List",
   "assets.localMachine": "Local Machine",
   "assets.memory": "Memory",
@@ -417,7 +488,6 @@ const translations: Record<string, string> = {
   "assets.none": "None",
   "assets.notApplicable": "-",
   "assets.notes": "Notes",
-  "assets.npu": "NPU",
   "assets.osVersion": "OS Version",
   "assets.other": "Other",
   "assets.previousPage": "Previous Page",
@@ -433,7 +503,6 @@ const translations: Record<string, string> = {
   "assets.updatedNewest": "Updated Newest",
   "assets.updatedOldest": "Updated Oldest",
   "assets.updatedOn": "Updated {{date}}",
-  "assets.windows": "Windows",
   "assets.workbench": "Workbench",
   "savedConnections.connect": "Connect",
   "savedConnections.edit": "Edit",
@@ -463,6 +532,7 @@ function sampleConnections(): SavedConnection[] {
       port: 22,
       username: "root",
       group_id: "ai",
+      tags: [" training ", "Production", "", "training"],
       sort_order: 0,
       last_used_at_ms: GPU_CONNECTION_TIME_MS,
       asset: {
@@ -472,7 +542,6 @@ function sampleConnections(): SavedConnection[] {
         memory_bytes: 64 * 1024 ** 3,
         accelerators: [{ type: "gpu", vendor: "NVIDIA", model: "H100" }],
         disks: [{ capacity_bytes: 2 * 1024 ** 4, count: 1 }],
-        tags: ["training"],
       },
     },
     {
@@ -482,6 +551,7 @@ function sampleConnections(): SavedConnection[] {
       host: "10.0.0.10",
       port: 22,
       username: "admin",
+      tags: ["office", "Production"],
       sort_order: 1,
       last_used_at_ms: WINDOWS_CONNECTION_TIME_MS,
       asset: {
@@ -496,6 +566,7 @@ function sampleConnections(): SavedConnection[] {
       host: "edge-01",
       port: 22,
       username: "root",
+      tags: ["edge", "production"],
       sort_order: 2,
       asset: {
         device_type: "physical",
