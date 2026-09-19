@@ -3,6 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 import { isTerminalTransparencyEnabled } from "@/lib/backgroundImage";
 import { resolveTerminalFontSize } from "@/lib/terminalFontSize";
+import { composeTerminalFontFamily } from "@/lib/terminalSymbolFont";
 import type { TerminalColors } from "@/lib/themes";
 import { installImeCompatibilityPatch } from "@/lib/xtermImeCompatibility";
 import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
@@ -252,7 +253,7 @@ export function useTerminalSettings(
   useEffect(() => {
     if (terminalRef.current) {
       const options = terminalRef.current.options;
-      options.fontFamily = appearance.font_family;
+      options.fontFamily = composeTerminalFontFamily(appearance.font_family);
       options.fontSize = resolveTerminalFontSize(
         appearance.font_size,
         terminalSettings.font_size_delta,

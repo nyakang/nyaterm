@@ -32,6 +32,7 @@ export type TerminalFitReason =
   | "window-focus"
   | "scale-factor"
   | "visible"
+  | "braille-font"
   | "oscillation-settle";
 
 export interface TerminalFitResult {
