@@ -56,10 +56,10 @@ sudo xattr -cr /Applications/NyaTerm.app
 
 ```bash
 # 直接运行
-nix run github:nyakang/nyaterm
+nix run github:nyakang/nyaterm/migration/gpui
 
 # 安装到用户环境 profile
-nix profile install github:nyakang/nyaterm
+nix profile install github:nyakang/nyaterm/migration/gpui
 ```
 
 若从本地仓库源码构建：

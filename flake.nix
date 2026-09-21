@@ -10,7 +10,6 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -38,9 +37,30 @@
       devShells = forAllSystems (system:
         let
           pkgs = pkgsFor system;
+          nyaterm = self.packages.${system}.default;
         in
         {
-          default = import ./shell.nix { inherit pkgs; };
+          default = pkgs.mkShell (
+            {
+              inputsFrom = [ nyaterm ];
+              nativeBuildInputs = with pkgs; [
+                cargo
+                rustc
+                rustfmt
+                clippy
+              ];
+              RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+            }
+            // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
+                nyaterm.buildInputs
+                ++ [
+                  pkgs.vulkan-loader
+                  pkgs.libGL
+                ]
+              );
+            }
+          );
         }
       );
     };

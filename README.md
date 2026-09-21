@@ -330,10 +330,10 @@ AUR package: [`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 You can run NyaTerm directly using Nix Flakes:
 
 ```bash
-nix run github:nyakang/nyaterm
+nix run github:nyakang/nyaterm/migration/gpui
 ```
 
-Or build the package locally:
+Or build the package from source:
 
 ```bash
 nix build
@@ -342,16 +342,16 @@ nix build
 Install into the user environment profile:
 
 ```bash
-nix profile install github:nyakang/nyaterm
+nix profile install github:nyakang/nyaterm/migration/gpui
 ```
 
 Spawn a development shell with all native dependencies, graphics libraries, and Rust toolchain:
 
 ```bash
 nix develop
-# or with traditional nix-shell:
-nix-shell
 ```
+
+> Note: Specify the `migration/gpui` branch when referencing the repository remotely while development continues on this branch. Once merged into the default branch, `github:nyakang/nyaterm` can be used directly.
 
 
 ## Prerequisites for Development

@@ -1,0 +1,51 @@
+name: Nix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, migration/gpui]
+  pull_request:
+    branches: [main, migration/gpui]
+
+# No paths filter, for the same reason as rust.yml: a filtered-out workflow never
+# reports its gate, which blocks any pull request that requires it.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Flake check & dependency vendor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Check Flake syntax and evaluation
+        run: nix flake check --no-build
+
+      - name: Verify Cargo lock and outputHashes
+        run: nix build .#nyaterm.cargoDeps --no-link
+
+  gate:
+    name: Nix gate
+    runs-on: ubuntu-24.04
+    needs: [check]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Check dependency results
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

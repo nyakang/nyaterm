@@ -337,10 +337,10 @@ AUR 软件包：[`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 你可以通过 Nix Flakes 直接运行 NyaTerm：
 
 ```bash
-nix run github:nyakang/nyaterm
+nix run github:nyakang/nyaterm/migration/gpui
 ```
 
-或在本地构建打包：
+或从源码本地构建：
 
 ```bash
 nix build
@@ -349,16 +349,16 @@ nix build
 将其安装至当前用户 profile：
 
 ```bash
-nix profile install github:nyakang/nyaterm
+nix profile install github:nyakang/nyaterm/migration/gpui
 ```
 
 进入包含全部原生依赖、图形库及 Rust 工具链的开发 Shell 环境：
 
 ```bash
 nix develop
-# 或使用传统的 nix-shell：
-nix-shell
 ```
+
+> 注意：在当前功能分支开发期间，远程引用请明确指定 `migration/gpui` 分支；合并入默认分支后即可直接使用 `github:nyakang/nyaterm`。
 
 
 ## 开发环境要求

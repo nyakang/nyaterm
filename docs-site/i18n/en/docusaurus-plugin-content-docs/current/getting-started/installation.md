@@ -56,10 +56,10 @@ You can run or install NyaTerm using Nix Flakes:
 
 ```bash
 # Run directly
-nix run github:nyakang/nyaterm
+nix run github:nyakang/nyaterm/migration/gpui
 
 # Install into user profile
-nix profile install github:nyakang/nyaterm
+nix profile install github:nyakang/nyaterm/migration/gpui
 ```
 
 Or build from the local repository:
