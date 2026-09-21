@@ -75,7 +75,7 @@ pub(crate) struct DockerConfirmState {
     pub(crate) action: DockerConfirmAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DockerTab {
     Containers,
     Images,

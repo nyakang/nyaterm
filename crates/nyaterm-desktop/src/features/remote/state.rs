@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedReceiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nyaterm_transport::{
     CpuUsageSource, DockerComposeProject, DockerComposeService, DockerContainer,
@@ -25,8 +25,9 @@ use crate::features::remote::list_window::{
     PROCESS_VIEWPORT_ROWS, max_list_offset,
 };
 use crate::features::{
-    runtime_jobs::DockerJobResult, runtime_jobs::GpuJobResult, runtime_jobs::NpuJobResult,
-    runtime_jobs::ProcessJobOutput, runtime_jobs::ProcessJobResult, runtime_jobs::StatsJobResult,
+    runtime_jobs::DockerJobResult, runtime_jobs::DockerResource, runtime_jobs::GpuJobResult,
+    runtime_jobs::NpuJobResult, runtime_jobs::ProcessJobOutput, runtime_jobs::ProcessJobResult,
+    runtime_jobs::StatsJobResult,
 };
 use crate::models::{DockerTab, RemoteProcessSortDirection, RemoteProcessSortKey};
 
@@ -64,6 +65,8 @@ pub(in crate::features) struct RemoteOpsFeatureFocus {}
 struct DockerPaneState {
     job: RemoteJobState<DockerJobResult>,
     pub overview: Option<Arc<RemoteDockerOverview>>,
+    loaded_resources: HashSet<DockerTab>,
+    resource_attempts: HashMap<DockerTab, Instant>,
     /// Bumped by every mutation that changes what `docker_presentation` returns.
     revision: u64,
     data_generation: u64,
@@ -226,6 +229,7 @@ struct AcceleratorDerivedCache<Process> {
 #[derive(Clone)]
 pub(in crate::features) struct DockerPresentationState {
     pub overview: Option<Arc<RemoteDockerOverview>>,
+    pub loaded_resources: HashSet<DockerTab>,
     pub status: String,
     pub details: Option<DockerContainerDetails>,
     pub details_container_id: Option<String>,
@@ -294,6 +298,8 @@ impl RemoteOpsFeatureState {
             docker: DockerPaneState {
                 job: RemoteJobState::new(),
                 overview: None,
+                loaded_resources: HashSet::new(),
+                resource_attempts: HashMap::new(),
                 revision: 0,
                 data_generation: 0,
                 derived: None,
@@ -374,6 +380,7 @@ impl RemoteOpsFeatureState {
     pub(in crate::features) fn docker_presentation(&self) -> DockerPresentationState {
         DockerPresentationState {
             overview: self.docker.overview.clone(),
+            loaded_resources: self.docker.loaded_resources.clone(),
             status: self.docker.status.clone(),
             details: self.docker.details.clone(),
             details_container_id: self.docker.details_container_id.clone(),
@@ -398,6 +405,10 @@ impl RemoteOpsFeatureState {
     /// The tab actually shown, which falls back from Compose when unsupported.
     pub(in crate::features) fn docker_effective_tab(&self) -> DockerTab {
         self.docker.effective_tab()
+    }
+
+    pub(in crate::features) fn docker_resource_load_due(&self, interval: u32) -> bool {
+        self.docker.resource_load_due(interval)
     }
 
     pub(in crate::features) fn process_presentation(&self) -> ProcessPresentationState {
@@ -797,6 +808,10 @@ impl RemoteOpsFeatureState {
         self.docker.mark_refresh_started();
     }
 
+    pub(in crate::features) fn mark_docker_resource_started(&mut self, tab: DockerTab) {
+        self.docker.resource_attempts.insert(tab, Instant::now());
+    }
+
     pub(in crate::features) fn take_docker_event_receiver(
         &mut self,
     ) -> Option<UnboundedReceiver<DockerJobResult>> {
@@ -831,6 +846,24 @@ impl RemoteOpsFeatureState {
 
     pub(in crate::features) fn apply_docker_overview(&mut self, overview: RemoteDockerOverview) {
         self.docker.apply_overview(overview);
+    }
+
+    pub(in crate::features) fn apply_docker_summary(&mut self, mut overview: RemoteDockerOverview) {
+        if overview.available
+            && let Some(previous) = self.docker.overview.as_deref()
+        {
+            overview.images = previous.images.clone();
+            overview.volumes = previous.volumes.clone();
+            overview.networks = previous.networks.clone();
+            if overview.compose_available {
+                overview.compose_projects = previous.compose_projects.clone();
+            }
+        }
+        self.apply_docker_overview(overview);
+    }
+
+    pub(in crate::features) fn apply_docker_resource(&mut self, resource: DockerResource) {
+        self.docker.apply_resource(resource);
     }
 
     pub(in crate::features) fn apply_docker_details(
@@ -1191,6 +1224,20 @@ impl RemoteOpsFeatureState {
 }
 
 impl DockerPaneState {
+    fn resource_load_due(&self, interval: u32) -> bool {
+        let tab = self.effective_tab();
+        tab != DockerTab::Containers
+            && self
+                .overview
+                .as_ref()
+                .is_some_and(|overview| overview.available)
+            && !self.loaded_resources.contains(&tab)
+            && self
+                .resource_attempts
+                .get(&tab)
+                .is_none_or(|attempt| attempt.elapsed() >= Duration::from_secs(u64::from(interval)))
+    }
+
     pub(in crate::features) fn is_pending(&self) -> bool {
         self.job.is_pending()
     }
@@ -1272,6 +1319,13 @@ impl DockerPaneState {
     }
 
     pub(in crate::features) fn apply_overview(&mut self, overview: RemoteDockerOverview) {
+        if !overview.available {
+            self.loaded_resources.clear();
+            self.resource_attempts.clear();
+        } else if !overview.compose_available {
+            self.loaded_resources.remove(&DockerTab::Compose);
+            self.resource_attempts.remove(&DockerTab::Compose);
+        }
         if let Some(details_id) = self.details_container_id.as_deref()
             && !overview
                 .containers
@@ -1282,26 +1336,62 @@ impl DockerPaneState {
             self.details_container_id = None;
             self.details_last_refresh_at = None;
         }
-        let active_compose_keys = overview
-            .compose_projects
-            .iter()
-            .map(|project| {
-                docker_compose_project_key(&project.name, Some(project.config_files.as_str()))
-            })
-            .collect::<HashSet<_>>();
-        Arc::make_mut(&mut self.compose_expanded).retain(|key| active_compose_keys.contains(key));
-        Arc::make_mut(&mut self.compose_services)
-            .retain(|key, _| active_compose_keys.contains(key));
-        Arc::make_mut(&mut self.compose_service_errors)
-            .retain(|key, _| active_compose_keys.contains(key));
+        self.retain_compose_projects(&overview.compose_projects);
         self.overview = Some(Arc::new(overview));
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.reconcile();
     }
 
+    fn apply_resource(&mut self, resource: DockerResource) {
+        if self.overview.is_none() {
+            return;
+        }
+        let tab = match resource {
+            DockerResource::Images(images) => {
+                Arc::make_mut(self.overview.as_mut().expect("Docker overview exists")).images =
+                    images;
+                DockerTab::Images
+            }
+            DockerResource::Volumes(volumes) => {
+                Arc::make_mut(self.overview.as_mut().expect("Docker overview exists")).volumes =
+                    volumes;
+                DockerTab::Volumes
+            }
+            DockerResource::Networks(networks) => {
+                Arc::make_mut(self.overview.as_mut().expect("Docker overview exists")).networks =
+                    networks;
+                DockerTab::Networks
+            }
+            DockerResource::Compose(projects) => {
+                self.retain_compose_projects(&projects);
+                Arc::make_mut(self.overview.as_mut().expect("Docker overview exists"))
+                    .compose_projects = projects;
+                DockerTab::Compose
+            }
+        };
+        self.loaded_resources.insert(tab);
+        self.data_generation = self.data_generation.wrapping_add(1);
+        self.derived = None;
+        self.reconcile();
+    }
+
+    fn retain_compose_projects(&mut self, projects: &[DockerComposeProject]) {
+        let active_keys = projects
+            .iter()
+            .map(|project| {
+                docker_compose_project_key(&project.name, Some(project.config_files.as_str()))
+            })
+            .collect::<HashSet<_>>();
+        Arc::make_mut(&mut self.compose_expanded).retain(|key| active_keys.contains(key));
+        Arc::make_mut(&mut self.compose_services).retain(|key, _| active_keys.contains(key));
+        Arc::make_mut(&mut self.compose_service_errors).retain(|key, _| active_keys.contains(key));
+    }
+
     fn clear_overview(&mut self) {
         self.overview = None;
+        self.loaded_resources.clear();
+        self.resource_attempts.clear();
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.reconcile();
@@ -2280,7 +2370,9 @@ mod tests {
         RemoteOpsFeatureFocus, RemoteOpsFeatureState, StatsApplyOutcome,
     };
     use crate::features::remote::job_state::RemoteJobState;
-    use crate::features::runtime_jobs::{ProcessJobOutput, ProcessJobResult, StatsJobResult};
+    use crate::features::runtime_jobs::{
+        DockerResource, ProcessJobOutput, ProcessJobResult, StatsJobResult,
+    };
     use crate::models::{DockerTab, RemoteProcessSortKey};
 
     fn process(pid: u32) -> RemoteProcess {
@@ -2527,6 +2619,87 @@ mod tests {
         let cleared = derived_containers(state.derived_docker_items());
         assert!(!Arc::ptr_eq(&refreshed, &cleared));
         assert!(cleared.is_empty());
+    }
+
+    #[test]
+    fn docker_summary_preserves_loaded_resources_and_empty_lists_are_loaded() {
+        let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
+        state.apply_docker_summary(RemoteDockerOverview {
+            available: true,
+            containers: vec![docker_container("one", "first")],
+            ..Default::default()
+        });
+        state.set_docker_tab(DockerTab::Images);
+        assert!(state.docker_resource_load_due(10));
+        state.mark_docker_resource_started(DockerTab::Images);
+        assert!(!state.docker_resource_load_due(10));
+
+        state.apply_docker_resource(DockerResource::Images(Vec::new()));
+        assert!(!state.docker_resource_load_due(10));
+        assert!(
+            state
+                .docker_presentation()
+                .loaded_resources
+                .contains(&DockerTab::Images)
+        );
+        state.apply_docker_resource(DockerResource::Images(vec![docker_image("img", "repo")]));
+        state.apply_docker_summary(RemoteDockerOverview {
+            available: true,
+            containers: vec![docker_container("two", "second")],
+            ..Default::default()
+        });
+        let overview = state
+            .docker_presentation()
+            .overview
+            .expect("Docker overview");
+        assert_eq!(overview.containers[0].id, "two");
+        assert_eq!(overview.images[0].id, "img");
+
+        state.set_docker_tab(DockerTab::Volumes);
+        assert!(state.docker_resource_load_due(10));
+        state.reset_for_session_switch();
+        assert!(state.docker_presentation().loaded_resources.is_empty());
+        state.apply_docker_summary(RemoteDockerOverview {
+            available: true,
+            ..Default::default()
+        });
+        assert!(state.docker_resource_load_due(10));
+        assert!(
+            state
+                .docker_presentation()
+                .overview
+                .expect("new host")
+                .images
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn docker_summary_disables_compose_without_dropping_other_resource_caches() {
+        let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
+        state.apply_docker_summary(RemoteDockerOverview {
+            available: true,
+            compose_available: true,
+            ..Default::default()
+        });
+        state.apply_docker_resource(DockerResource::Compose(vec![
+            nyaterm_transport::DockerComposeProject {
+                name: "project".to_string(),
+                status: "running".to_string(),
+                config_files: "/compose.yml".to_string(),
+            },
+        ]));
+        state.apply_docker_resource(DockerResource::Images(vec![docker_image("img", "repo")]));
+        state.apply_docker_summary(RemoteDockerOverview {
+            available: true,
+            compose_available: false,
+            ..Default::default()
+        });
+        let presentation = state.docker_presentation();
+        let overview = presentation.overview.expect("Docker overview");
+        assert!(overview.compose_projects.is_empty());
+        assert!(!presentation.loaded_resources.contains(&DockerTab::Compose));
+        assert_eq!(overview.images[0].id, "img");
     }
 
     #[test]

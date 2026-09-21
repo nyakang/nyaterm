@@ -31,9 +31,29 @@ pub(in crate::features) fn max_list_offset(total: usize, viewport_rows: usize) -
     total.saturating_sub(viewport_rows.min(total))
 }
 
+/// The rows rendered by a wheel-driven list that owns its offset as state.
+///
+/// These lists do not move a native scroll container. Changing `offset` replaces the
+/// rendered rows, so the window must begin at the offset itself. Leading spacer rows
+/// would be visible content and create an increasingly large blank area while scrolling.
+/// Overscan is therefore added only after the visible viewport.
+pub(in crate::features) fn state_scrolled_list_range(
+    total: usize,
+    offset: usize,
+    viewport_rows: usize,
+    overscan_rows: usize,
+) -> std::ops::Range<usize> {
+    let start = offset.min(max_list_offset(total, viewport_rows));
+    let end = start
+        .saturating_add(viewport_rows)
+        .saturating_add(overscan_rows)
+        .min(total);
+    start..end
+}
+
 #[cfg(test)]
 mod tests {
-    use super::max_list_offset;
+    use super::{max_list_offset, state_scrolled_list_range};
 
     #[test]
     fn a_list_shorter_than_the_viewport_pins_to_the_top() {
@@ -46,5 +66,16 @@ mod tests {
     fn a_longer_list_can_scroll_by_the_overflow() {
         assert_eq!(max_list_offset(17, 16), 1);
         assert_eq!(max_list_offset(100, 16), 84);
+    }
+
+    #[test]
+    fn a_state_scrolled_window_starts_at_the_requested_offset() {
+        assert_eq!(state_scrolled_list_range(100, 20, 16, 6), 20..42);
+    }
+
+    #[test]
+    fn a_state_scrolled_window_clamps_and_keeps_the_last_viewport_full() {
+        assert_eq!(state_scrolled_list_range(100, usize::MAX, 16, 6), 84..100);
+        assert_eq!(state_scrolled_list_range(5, 3, 16, 6), 0..5);
     }
 }

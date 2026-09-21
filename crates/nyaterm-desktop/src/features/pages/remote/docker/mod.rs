@@ -207,5 +207,7 @@ mod resources;
 
 pub(super) use compose::{DockerComposePanelState, docker_compose_panel};
 pub(super) use containers::{DockerContainersPanelState, docker_containers_panel};
-pub(super) use controls::{DockerTabBarLabels, docker_overview_strip, docker_tab_bar};
+pub(super) use controls::{
+    DockerTabBarLabels, DockerTabBarState, docker_overview_strip, docker_tab_bar,
+};
 pub(super) use resources::{docker_images_panel, docker_networks_panel, docker_volumes_panel};

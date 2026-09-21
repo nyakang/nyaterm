@@ -100,7 +100,7 @@ impl NyaTermApp {
         false
     }
 
-    /// The Docker overview, or an open container's details on the off beats.
+    /// The overview and visible resource, or an open container's details on the off beats.
     pub(in crate::features) fn refresh_docker_if_due(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.settings.summary().ui_show_docker_manager || self.remote_ops.docker_is_pending() {
             return false;
@@ -108,6 +108,10 @@ impl NyaTermApp {
         let interval = self.settings.summary().ui_docker_manager_interval.max(3);
         if remote_refresh_due(self.remote_ops.docker_last_refresh_at(), interval) {
             self.refresh_docker(cx);
+            return true;
+        }
+        if self.remote_ops.docker_resource_load_due(interval) {
+            self.refresh_docker_resource(cx);
             return true;
         }
         if let Some((container_id, last_refresh_at)) = self.remote_ops.docker_details_refresh()

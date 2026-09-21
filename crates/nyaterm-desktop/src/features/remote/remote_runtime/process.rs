@@ -12,6 +12,7 @@ use crate::models::{DockerTab, RemoteProcessSortKey};
 impl NyaTermApp {
     pub(in crate::features) fn set_docker_tab(&mut self, tab: DockerTab, cx: &mut Context<Self>) {
         self.remote_ops.set_docker_tab(tab);
+        self.load_docker_resource_if_needed(cx);
         cx.notify();
     }
 

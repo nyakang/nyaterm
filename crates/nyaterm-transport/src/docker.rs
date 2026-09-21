@@ -251,14 +251,7 @@ impl DockerService {
 
     pub fn overview(&self) -> anyhow::Result<RemoteDockerOverview> {
         let output = self.exec(DOCKER_OVERVIEW_SCRIPT, DOCKER_TIMEOUT)?;
-        let mut overview = parse_docker_overview_output(&output.stdout);
-        if overview.available {
-            overview.images = self.images().unwrap_or_default();
-            overview.volumes = self.volumes().unwrap_or_default();
-            overview.networks = self.networks().unwrap_or_default();
-            overview.compose_projects = self.compose_projects().unwrap_or_default();
-        }
-        Ok(overview)
+        Ok(parse_docker_overview_output(&output.stdout))
     }
 
     pub fn images(&self) -> anyhow::Result<Vec<DockerImage>> {
@@ -1127,6 +1120,20 @@ mod tests {
             build_compose_base_command("my project", Some("/a.yml,/b.yml")),
             "compose -f '/a.yml' -f '/b.yml' -p 'my project'"
         );
+    }
+
+    #[test]
+    fn overview_script_only_lists_containers() {
+        assert!(DOCKER_OVERVIEW_SCRIPT.contains("docker ps -a"));
+        for resource_command in [
+            "docker images",
+            "docker volume ls",
+            "docker network ls",
+            "docker compose ls",
+            "docker-compose ls",
+        ] {
+            assert!(!DOCKER_OVERVIEW_SCRIPT.contains(resource_command));
+        }
     }
 
     #[test]

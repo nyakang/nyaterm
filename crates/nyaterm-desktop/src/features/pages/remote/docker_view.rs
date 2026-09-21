@@ -13,8 +13,9 @@ use crate::widgets::empty_panel_with_icon;
 
 use super::docker::{
     DockerComposePanelState, DockerContainersPanelState, DockerRenderContext, DockerTabBarLabels,
-    docker_compose_panel, docker_containers_panel, docker_images_panel, docker_labels,
-    docker_networks_panel, docker_overview_strip, docker_tab_bar, docker_volumes_panel,
+    DockerTabBarState, docker_compose_panel, docker_containers_panel, docker_images_panel,
+    docker_labels, docker_networks_panel, docker_overview_strip, docker_tab_bar,
+    docker_volumes_panel,
 };
 
 /// The Docker panel, rendered from a snapshot.
@@ -142,6 +143,22 @@ pub(in crate::features::pages::remote) fn docker_panel(
         )
         .into_any_element(),
     };
+    let docker_content =
+        if active_tab != DockerTab::Containers && !docker.loaded_resources.contains(&active_tab) {
+            let message = if docker.status.contains("failed") {
+                format!(
+                    "{}\n{}",
+                    labels.error,
+                    truncate_preview(&docker.status, 240)
+                )
+                .into()
+            } else {
+                labels.loading.clone()
+            };
+            empty_panel_with_icon(message, palette, "icons/docker.svg").into_any_element()
+        } else {
+            docker_content
+        };
 
     // Tauri DockerManager shell: header actions + dense search + tabs + flex list body.
     // Shared PanelHeader already shows title/meta; avoid page-like section headers.
@@ -158,6 +175,7 @@ pub(in crate::features::pages::remote) fn docker_panel(
             this.child(docker_overview_strip(
                 palette,
                 &overview,
+                docker.loaded_resources.contains(&DockerTab::Images),
                 [
                     t!("dockerManager.running").to_string(),
                     t!("dockerManager.stopped").to_string(),
@@ -175,8 +193,11 @@ pub(in crate::features::pages::remote) fn docker_panel(
         )
         .child(docker_tab_bar(
             render_context,
-            active_tab,
-            &overview,
+            DockerTabBarState {
+                active_tab,
+                overview: &overview,
+                loaded_resources: &docker.loaded_resources,
+            },
             DockerTabBarLabels {
                 tabs: [
                     t!("dockerManager.containers").to_string(),

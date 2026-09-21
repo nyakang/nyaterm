@@ -6,7 +6,7 @@ use nyaterm_core::truncate_preview;
 use nyaterm_transport::DockerContainer;
 
 use super::super::panels::RemoteMonitorPanel;
-use crate::features::remote::DOCKER_VIEWPORT_ROWS;
+use crate::features::remote::{DOCKER_VIEWPORT_ROWS, state_scrolled_list_range};
 use crate::features::{
     formatting::compact_id, formatting::docker_state_color, formatting::docker_state_rank,
     shell::gpui_code_font_family,
@@ -96,27 +96,16 @@ pub(in crate::features::pages::remote) fn docker_containers_panel(
             .then(left.name.cmp(&right.name))
     });
 
-    // Tauri-like virtual list: fixed row slot, overscan window, spacer padding + wheel.
+    // Wheel-driven row window. The offset replaces the rendered slice; this container
+    // does not have a native scroll position that could consume spacer padding.
     const DOCKER_ROW_PX: f32 = 66.;
     const DOCKER_OVERSCAN: usize = 6;
     let total = containers.len();
-    let window_capacity = DOCKER_VIEWPORT_ROWS + DOCKER_OVERSCAN * 2;
-    let max_offset = total.saturating_sub(DOCKER_VIEWPORT_ROWS.min(total));
-    let scroll_row = list_offset.min(max_offset);
-    let window_start = scroll_row.saturating_sub(DOCKER_OVERSCAN);
-    let window_end = (window_start + window_capacity).min(total);
-    let visible = containers
-        .get(window_start..window_end)
-        .unwrap_or(&[])
-        .to_vec();
-    let pad_top = (window_start as f32) * DOCKER_ROW_PX;
-    let pad_bottom = ((total.saturating_sub(window_end)) as f32) * DOCKER_ROW_PX;
+    let visible_range =
+        state_scrolled_list_range(total, list_offset, DOCKER_VIEWPORT_ROWS, DOCKER_OVERSCAN);
 
     let mut rows = div().flex().flex_col().gap(px(6.));
-    if pad_top > 0. {
-        rows = rows.child(div().h(px(pad_top)).w_full().flex_none());
-    }
-    for container in visible {
+    for container in containers.get(visible_range).unwrap_or(&[]).iter().cloned() {
         let menu_open = open_menu_id == Some(container.id.as_str());
         rows = rows.child(docker_container_row(
             context.clone(),
@@ -124,9 +113,6 @@ pub(in crate::features::pages::remote) fn docker_containers_panel(
             menu_open,
             cx,
         ));
-    }
-    if pad_bottom > 0. {
-        rows = rows.child(div().h(px(pad_bottom)).w_full().flex_none());
     }
     div()
         .id(SharedString::from("docker-containers-scroll"))

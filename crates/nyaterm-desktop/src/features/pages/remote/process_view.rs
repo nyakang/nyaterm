@@ -8,7 +8,7 @@ use gpui::{
 };
 use nyaterm_transport::{PROCESS_LIST_UNSUPPORTED_ERROR, RemoteProcess};
 
-use crate::features::remote::PROCESS_VIEWPORT_ROWS;
+use crate::features::remote::{PROCESS_VIEWPORT_ROWS, state_scrolled_list_range};
 use std::sync::Arc;
 
 use super::panels::{PanelChrome, RemoteMonitorPanel};
@@ -21,8 +21,8 @@ use nyaterm_ui::{NyaInputState, NyaNumberInputState, NyaSearchInput};
 
 use super::process::{
     ProcessDetailLabels, ProcessDisplayMode, ProcessTableLabels, ProcessTableRowActions,
-    ProcessTableRowPresentation, process_details, process_details_height_px, process_display_mode,
-    process_row_height_px, process_sort_button, process_table_row,
+    ProcessTableRowPresentation, process_details, process_display_mode, process_row_height_px,
+    process_sort_button, process_table_row,
 };
 
 /// The Processes panel, rendered from a snapshot.
@@ -103,37 +103,18 @@ pub(in crate::features::pages::remote) fn processes_panel(
     // both when the data, the query, the sort or the panel width changes. This pass
     // only reads them.
 
-    // Tauri-like virtual list: base row + expanded details height, spacer padding.
+    // Wheel-driven row window. The scroll offset is authoritative state rather than a
+    // native scroll position, so the first rendered row must be the offset row itself.
     let process_row_px = process_row_height_px(mode);
-    let process_details_px = process_details_height_px(mode);
     const PROCESS_OVERSCAN: usize = 8;
-    let selected_pid = process_state.selected_pid;
-    let row_height = |process: &RemoteProcess| -> f32 {
-        if selected_pid == Some(process.pid) {
-            process_row_px + process_details_px
-        } else {
-            process_row_px
-        }
-    };
     let total_filtered = filtered_processes.len();
-    let window_capacity = PROCESS_VIEWPORT_ROWS + PROCESS_OVERSCAN * 2;
-    let scroll_row = process_state.list_offset;
-    let window_start = scroll_row.saturating_sub(PROCESS_OVERSCAN);
-    let window_end = (window_start + window_capacity).min(total_filtered);
-    let visible_processes = filtered_processes
-        .get(window_start..window_end)
-        .unwrap_or(&[])
-        .to_vec();
-    let pad_top = filtered_processes
-        .iter()
-        .take(window_start)
-        .map(row_height)
-        .sum::<f32>();
-    let pad_bottom = filtered_processes
-        .iter()
-        .skip(window_end)
-        .map(row_height)
-        .sum::<f32>();
+    let visible_range = state_scrolled_list_range(
+        total_filtered,
+        process_state.list_offset,
+        PROCESS_VIEWPORT_ROWS,
+        PROCESS_OVERSCAN,
+    );
+    let visible_processes = filtered_processes.get(visible_range).unwrap_or(&[]);
 
     let selected_process = process_state
         .selected_pid
@@ -167,10 +148,7 @@ pub(in crate::features::pages::remote) fn processes_panel(
             "icons/processes.svg",
         ));
     } else {
-        if pad_top > 0. {
-            rows = rows.child(div().h(px(pad_top)).w_full().flex_none());
-        }
-        for process in visible_processes.iter() {
+        for process in visible_processes {
             let pid = process.pid;
             let selected = process_state.selected_pid == Some(pid);
             rows = rows.child(
@@ -281,9 +259,6 @@ pub(in crate::features::pages::remote) fn processes_panel(
                         .unwrap_or_else(|| div().into_any_element()),
                 ),
             );
-        }
-        if pad_bottom > 0. {
-            rows = rows.child(div().h(px(pad_bottom)).w_full().flex_none());
         }
     }
 

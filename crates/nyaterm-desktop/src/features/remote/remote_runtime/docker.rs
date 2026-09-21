@@ -7,8 +7,8 @@ use nyaterm_transport::DockerService;
 use crate::blocking_jobs::BlockingJobScheduler;
 use crate::features::NyaTermApp;
 use crate::features::formatting::{compact_id, docker_compose_project_key};
-use crate::features::runtime_jobs::{DockerJobOutput, DockerJobResult};
-use crate::models::{DockerConfirmAction, DockerConfirmState, NavItem};
+use crate::features::runtime_jobs::{DockerJobOutput, DockerJobResult, DockerResource};
+use crate::models::{DockerConfirmAction, DockerConfirmState, DockerTab, NavItem};
 
 use super::helpers::{
     ActiveSshRuntimeContext, DOCKER_SHELL_SELECTOR, docker_compose_terminal_base,
@@ -59,6 +59,19 @@ fn docker_error_kind(error: &str) -> &'static str {
     }
 }
 
+fn fetch_docker_resource(
+    service: &DockerService,
+    tab: DockerTab,
+) -> Option<anyhow::Result<DockerResource>> {
+    match tab {
+        DockerTab::Containers => None,
+        DockerTab::Images => Some(service.images().map(DockerResource::Images)),
+        DockerTab::Volumes => Some(service.volumes().map(DockerResource::Volumes)),
+        DockerTab::Networks => Some(service.networks().map(DockerResource::Networks)),
+        DockerTab::Compose => Some(service.compose_projects().map(DockerResource::Compose)),
+    }
+}
+
 impl NyaTermApp {
     fn active_docker_runtime_context(
         &mut self,
@@ -91,8 +104,12 @@ impl NyaTermApp {
             return;
         }
 
+        let tab = self.remote_ops.docker_effective_tab();
         let ticket = self.remote_ops.begin_docker_job(job_session_id.clone());
         self.remote_ops.mark_docker_refresh_started();
+        if tab != DockerTab::Containers {
+            self.remote_ops.mark_docker_resource_started(tab);
+        }
         self.remote_ops.set_docker_status("loading Docker overview");
         submit_docker_job(
             &self.blocking_jobs,
@@ -101,9 +118,58 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    DockerService::with_multiplex(config, multiplex)?
-                        .overview()
-                        .map(DockerJobOutput::Overview)
+                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let overview = service.overview()?;
+                    let resource = overview
+                        .available
+                        .then(|| fetch_docker_resource(&service, tab))
+                        .flatten()
+                        .map(|result| result.map_err(|error| error.to_string()));
+                    Ok(DockerJobOutput::Overview { overview, resource })
+                })()
+                .map_err(|error: anyhow::Error| error.to_string())
+            },
+        );
+        cx.notify();
+    }
+
+    pub(in crate::features) fn load_docker_resource_if_needed(&mut self, cx: &mut Context<Self>) {
+        let interval = self.settings.summary().ui_docker_manager_interval.max(3);
+        if !self.remote_ops.docker_is_pending()
+            && self.remote_ops.docker_resource_load_due(interval)
+        {
+            self.refresh_docker_resource(cx);
+        }
+    }
+
+    pub(in crate::features) fn refresh_docker_resource(&mut self, cx: &mut Context<Self>) {
+        let tab = self.remote_ops.docker_effective_tab();
+        if tab == DockerTab::Containers || !self.remote_ops.docker_can_prune() {
+            return;
+        }
+        let Some(context) = self.active_docker_runtime_context("reading Docker resources", cx)
+        else {
+            return;
+        };
+        let job_session_id = context.session_id;
+        if self.remote_ops.docker_is_pending_for(&job_session_id) {
+            return;
+        }
+        let ticket = self.remote_ops.begin_docker_job(job_session_id.clone());
+        self.remote_ops.mark_docker_resource_started(tab);
+        self.remote_ops
+            .set_docker_status(format!("loading Docker {}", tab.label()));
+        submit_docker_job(
+            &self.blocking_jobs,
+            "docker-resource",
+            ticket,
+            job_session_id,
+            move || {
+                (|| {
+                    let service = DockerService::with_multiplex(context.config, context.multiplex)?;
+                    fetch_docker_resource(&service, tab)
+                        .expect("resource tab has a Docker command")
+                        .map(DockerJobOutput::Resource)
                 })()
                 .map_err(|error: anyhow::Error| error.to_string())
             },
@@ -603,7 +669,22 @@ impl NyaTermApp {
             while let Some(event) = rx.next().await {
                 if this
                     .update(cx, |this, cx| {
+                        let active_session =
+                            this.session.active_id() == Some(event.session_id.as_str());
+                        let refresh_resource = matches!(
+                            &event.result,
+                            Ok(DockerJobOutput::RefreshedAfterAction { .. }
+                                | DockerJobOutput::ComposeServiceAction { .. }
+                                | DockerJobOutput::ComposeProjectAction { .. })
+                        );
                         if this.apply_docker_event(event) {
+                            if active_session {
+                                if refresh_resource {
+                                    this.refresh_docker_resource(cx);
+                                } else {
+                                    this.load_docker_resource_if_needed(cx);
+                                }
+                            }
                             cx.notify();
                         }
                         // Flush boundary: a reply changed the pane, so its panel
@@ -635,13 +716,27 @@ impl NyaTermApp {
         }
         let was_overview_refresh = self.remote_ops.docker_status() == "loading Docker overview";
         match event.result {
-            Ok(DockerJobOutput::Overview(overview)) => {
+            Ok(DockerJobOutput::Overview { overview, resource }) => {
                 self.remote_ops.reset_docker_refresh_failures();
                 self.remote_ops
                     .set_docker_status(docker_overview_status(&overview));
+                self.remote_ops.apply_docker_summary(overview);
+                if let Some(resource) = resource {
+                    match resource {
+                        Ok(resource) => self.remote_ops.apply_docker_resource(resource),
+                        Err(error) => self
+                            .remote_ops
+                            .set_docker_status(format!("Docker resource refresh failed: {error}")),
+                    }
+                }
                 self.shell
                     .set_status(self.remote_ops.docker_status().to_string());
-                self.remote_ops.apply_docker_overview(overview);
+            }
+            Ok(DockerJobOutput::Resource(resource)) => {
+                self.remote_ops.apply_docker_resource(resource);
+                self.remote_ops.set_docker_status("Docker resources loaded");
+                self.shell
+                    .set_status(self.remote_ops.docker_status().to_string());
             }
             Ok(DockerJobOutput::Details {
                 container_id,
@@ -677,7 +772,7 @@ impl NyaTermApp {
                     .set_docker_status(format!("compose {action} {service_name}"));
                 self.shell
                     .set_status(self.remote_ops.docker_status().to_string());
-                self.remote_ops.apply_docker_overview(overview);
+                self.remote_ops.apply_docker_summary(overview);
                 self.remote_ops.set_compose_services(key, services);
             }
             Ok(DockerJobOutput::ComposeProjectAction {
@@ -692,7 +787,7 @@ impl NyaTermApp {
                     .set_docker_status(format!("compose {action} {project_name}"));
                 self.shell
                     .set_status(self.remote_ops.docker_status().to_string());
-                self.remote_ops.apply_docker_overview(overview);
+                self.remote_ops.apply_docker_summary(overview);
                 if let Some(services) = services {
                     self.remote_ops.set_compose_services(key.clone(), services);
                 } else if let Some(error) = service_error {
@@ -702,7 +797,7 @@ impl NyaTermApp {
             }
             Ok(DockerJobOutput::RefreshedAfterAction { label, overview }) => {
                 let container_count = overview.containers.len();
-                self.remote_ops.apply_docker_overview(overview);
+                self.remote_ops.apply_docker_summary(overview);
                 self.remote_ops.set_docker_status(format!(
                     "{label} completed · {container_count} container(s)"
                 ));

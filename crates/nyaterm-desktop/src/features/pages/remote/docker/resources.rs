@@ -7,7 +7,7 @@ use nyaterm_transport::{DockerImage, DockerNetwork, DockerVolume};
 use nyaterm_ui::NyaScrollable;
 
 use super::super::panels::RemoteMonitorPanel;
-use crate::features::remote::DOCKER_RESOURCE_VIEWPORT_ROWS;
+use crate::features::remote::{DOCKER_RESOURCE_VIEWPORT_ROWS, state_scrolled_list_range};
 use crate::features::{formatting::compact_id, shell::gpui_code_font_family};
 use crate::models::{DockerConfirmAction, DockerConfirmState};
 use crate::theme::ThemePalette;
@@ -30,18 +30,10 @@ pub(in crate::features::pages::remote) fn docker_images_panel(
     }
 
     let total = images.len();
-    let (window_start, window_end, pad_top, pad_bottom, scroll_offset) =
-        docker_resource_window(total, list_offset);
+    let visible_range = docker_resource_window(total, list_offset);
+    let window_start = visible_range.start;
     let mut rows = div().flex().flex_col().gap(px(6.));
-    if pad_top > 0. {
-        rows = rows.child(div().h(px(pad_top)).w_full().flex_none());
-    }
-    for (visible_index, image) in images
-        .get(window_start..window_end)
-        .unwrap_or(&[])
-        .iter()
-        .enumerate()
-    {
+    for (visible_index, image) in images.get(visible_range).unwrap_or(&[]).iter().enumerate() {
         let row_index = window_start + visible_index;
         let image_id = image.id.clone();
         let label = docker_image_label(image);
@@ -82,10 +74,7 @@ pub(in crate::features::pages::remote) fn docker_images_panel(
             )),
         );
     }
-    if pad_bottom > 0. {
-        rows = rows.child(div().h(px(pad_bottom)).w_full().flex_none());
-    }
-    docker_resource_panel(palette, "Images", total, rows, scroll_offset, cx)
+    docker_resource_panel(palette, "Images", total, rows, cx)
 }
 
 pub(in crate::features::pages::remote) fn docker_volumes_panel(
@@ -100,13 +89,9 @@ pub(in crate::features::pages::remote) fn docker_volumes_panel(
     }
 
     let total = volumes.len();
-    let (window_start, window_end, pad_top, pad_bottom, scroll_offset) =
-        docker_resource_window(total, list_offset);
+    let visible_range = docker_resource_window(total, list_offset);
     let mut rows = div().flex().flex_col().gap(px(6.));
-    if pad_top > 0. {
-        rows = rows.child(div().h(px(pad_top)).w_full().flex_none());
-    }
-    for volume in volumes.get(window_start..window_end).unwrap_or(&[]) {
+    for volume in volumes.get(visible_range).unwrap_or(&[]) {
         let volume_name = volume.name.clone();
         let row_labels = labels.clone();
         rows = rows.child(
@@ -140,10 +125,7 @@ pub(in crate::features::pages::remote) fn docker_volumes_panel(
             )),
         );
     }
-    if pad_bottom > 0. {
-        rows = rows.child(div().h(px(pad_bottom)).w_full().flex_none());
-    }
-    docker_resource_panel(palette, "Volumes", total, rows, scroll_offset, cx)
+    docker_resource_panel(palette, "Volumes", total, rows, cx)
 }
 
 pub(in crate::features::pages::remote) fn docker_networks_panel(
@@ -158,13 +140,9 @@ pub(in crate::features::pages::remote) fn docker_networks_panel(
     }
 
     let total = networks.len();
-    let (window_start, window_end, pad_top, pad_bottom, scroll_offset) =
-        docker_resource_window(total, list_offset);
+    let visible_range = docker_resource_window(total, list_offset);
     let mut rows = div().flex().flex_col().gap(px(6.));
-    if pad_top > 0. {
-        rows = rows.child(div().h(px(pad_top)).w_full().flex_none());
-    }
-    for network in networks.get(window_start..window_end).unwrap_or(&[]) {
+    for network in networks.get(visible_range).unwrap_or(&[]) {
         let network_id = network.id.clone();
         let name = network.name.clone();
         let row_labels = labels.clone();
@@ -203,21 +181,16 @@ pub(in crate::features::pages::remote) fn docker_networks_panel(
             )),
         );
     }
-    if pad_bottom > 0. {
-        rows = rows.child(div().h(px(pad_bottom)).w_full().flex_none());
-    }
-    docker_resource_panel(palette, "Networks", total, rows, scroll_offset, cx)
+    docker_resource_panel(palette, "Networks", total, rows, cx)
 }
 
-fn docker_resource_window(total: usize, list_offset: usize) -> (usize, usize, f32, f32, usize) {
-    let window_capacity = DOCKER_RESOURCE_VIEWPORT_ROWS + DOCKER_RESOURCE_OVERSCAN * 2;
-    let max_offset = total.saturating_sub(DOCKER_RESOURCE_VIEWPORT_ROWS.min(total));
-    let scroll_row = list_offset.min(max_offset);
-    let window_start = scroll_row.saturating_sub(DOCKER_RESOURCE_OVERSCAN);
-    let window_end = (window_start + window_capacity).min(total);
-    let pad_top = (window_start as f32) * DOCKER_RESOURCE_ROW_PX;
-    let pad_bottom = ((total.saturating_sub(window_end)) as f32) * DOCKER_RESOURCE_ROW_PX;
-    (window_start, window_end, pad_top, pad_bottom, scroll_row)
+fn docker_resource_window(total: usize, list_offset: usize) -> std::ops::Range<usize> {
+    state_scrolled_list_range(
+        total,
+        list_offset,
+        DOCKER_RESOURCE_VIEWPORT_ROWS,
+        DOCKER_RESOURCE_OVERSCAN,
+    )
 }
 
 fn docker_resource_empty(
@@ -243,7 +216,6 @@ pub(in crate::features::pages::remote) fn docker_resource_panel(
     title: &'static str,
     count: usize,
     rows: impl IntoElement,
-    _scroll_offset: usize,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
     // Tauri resource tabs: full-height virtual list + wheel offset.
