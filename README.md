@@ -325,6 +325,34 @@ AUR package: [`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 
 > `nyaterm-bin` is a community-maintained binary AUR package. If the AUR package has not yet caught up with the latest release, download the official package from [Releases](https://github.com/nyakang/nyaterm/releases).
 
+### Nix / NixOS
+
+You can run NyaTerm directly using Nix Flakes:
+
+```bash
+nix run github:nyakang/nyaterm
+```
+
+Or build the package locally:
+
+```bash
+nix build
+```
+
+Install into the user environment profile:
+
+```bash
+nix profile install github:nyakang/nyaterm
+```
+
+Spawn a development shell with all native dependencies, graphics libraries, and Rust toolchain:
+
+```bash
+nix develop
+# or with traditional nix-shell:
+nix-shell
+```
+
 
 ## Prerequisites for Development
 
@@ -356,6 +384,8 @@ cargo run -p nyaterm-app --bin nyaterm
 │   ├── nyaterm-vnc-helper/      # Isolated VNC protocol helper process
 │   └── nyaterm-otp/             # OTP compatibility implementation
 ├── docs-site/                   # Docusaurus documentation site
+├── nix/                         # Declarative Nix package definition
+├── flake.nix                    # Nix Flake entrypoint
 ├── Cargo.toml                   # Rust workspace definition
 └── Cargo.lock
 ```

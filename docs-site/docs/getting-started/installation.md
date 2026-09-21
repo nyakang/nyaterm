@@ -50,6 +50,24 @@ NyaTerm 目前还没有使用 Apple Developer 证书签名。安装后如果 mac
 sudo xattr -cr /Applications/NyaTerm.app
 ```
 
+### Nix / NixOS
+
+你可以使用 Nix Flakes 直接运行或安装 NyaTerm：
+
+```bash
+# 直接运行
+nix run github:nyakang/nyaterm
+
+# 安装到用户环境 profile
+nix profile install github:nyakang/nyaterm
+```
+
+若从本地仓库源码构建：
+
+```bash
+nix build
+```
+
 ### 从源码构建
 
 从源码构建见 [开发环境搭建](../development/setup)。

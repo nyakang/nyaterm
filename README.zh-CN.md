@@ -332,6 +332,34 @@ AUR 软件包：[`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 
 > `nyaterm-bin` 为社区维护的 AUR 二进制包。如果 AUR 版本暂未同步到最新发布版，可以从 [Releases](https://github.com/nyakang/nyaterm/releases) 下载官方安装包。
 
+### Nix / NixOS
+
+你可以通过 Nix Flakes 直接运行 NyaTerm：
+
+```bash
+nix run github:nyakang/nyaterm
+```
+
+或在本地构建打包：
+
+```bash
+nix build
+```
+
+将其安装至当前用户 profile：
+
+```bash
+nix profile install github:nyakang/nyaterm
+```
+
+进入包含全部原生依赖、图形库及 Rust 工具链的开发 Shell 环境：
+
+```bash
+nix develop
+# 或使用传统的 nix-shell：
+nix-shell
+```
+
 
 ## 开发环境要求
 
@@ -363,6 +391,8 @@ cargo run -p nyaterm-app --bin nyaterm
 │   ├── nyaterm-vnc-helper/      # 隔离的 VNC 协议 helper 进程
 │   └── nyaterm-otp/             # OTP 兼容实现
 ├── docs-site/                   # Docusaurus 文档站点
+├── nix/                         # 声明式 Nix 打包定义
+├── flake.nix                    # Nix Flake 入口
 ├── Cargo.toml                   # Rust workspace 定义
 └── Cargo.lock
 ```

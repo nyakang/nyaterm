@@ -63,6 +63,9 @@ must include explicit conversion logic and tests.
   they can be read locally. Nothing under `temp/` is compiled. **Editing
   anything there has no effect on the build and produces no error** — change
   the fork branch instead.
+* `nix/package.nix`, `flake.nix`, `default.nix`, `shell.nix`: declarative Nix
+  packaging, development shells, and Flake outputs. When adding or bumping Git
+  dependencies in `Cargo.lock`, keep `outputHashes` in `nix/package.nix` in step.
 
 ## Application Architecture
 
@@ -246,6 +249,13 @@ Before review, run the relevant broader checks:
 * `cargo test --workspace`
 * `cargo fmt --all -- --check`
 * `cargo clippy --workspace --all-targets`
+
+Nix builds and development environments:
+
+* `nix build` (builds `nyaterm`, helpers, desktop entry, and icons into `./result`)
+* `nix run` (executes the packaged application)
+* `nix develop` or `nix-shell` (interactive shell with toolchain and runtime libraries)
+* `nix flake check --no-build` (evaluates and checks flake outputs)
 
 Use `cargo fmt --all` only when intentionally applying formatting changes.
 
