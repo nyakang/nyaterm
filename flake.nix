@@ -19,20 +19,33 @@
       packages = forAllSystems (system:
         let
           pkgs = pkgsFor system;
+          pkg = pkgs.callPackage ./nix/package.nix { };
         in
         {
-          default = pkgs.callPackage ./nix/package.nix { };
-          nyaterm = self.packages.${system}.default;
+          default = pkg;
+          nyaterm = pkg;
         }
+        // (if pkg.pname != "nyaterm" then {
+          ${pkg.pname} = pkg;
+        } else { })
       );
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/nyaterm";
-          meta.description = "Launch NyaTerm";
-        };
-      });
+      apps = forAllSystems (system:
+        let
+          pkg = self.packages.${system}.default;
+        in
+        {
+          default = {
+            type = "app";
+            program = "${pkg}/bin/nyaterm";
+            meta.description = "Launch NyaTerm";
+          };
+          nyaterm = self.apps.${system}.default;
+        }
+        // (if pkg.pname != "nyaterm" then {
+          ${pkg.pname} = self.apps.${system}.default;
+        } else { })
+      );
 
       devShells = forAllSystems (system:
         let

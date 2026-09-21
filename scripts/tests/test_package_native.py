@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import plistlib
+import re
+import shutil
 import subprocess
 import struct
 import tarfile
@@ -131,6 +134,82 @@ class PackageNativeTests(unittest.TestCase):
                     app_root = payload / "usr" / "bin" if payload.name == "NyaTerm.AppDir" else payload / "opt" / identity.desktop_id
                     for name in ("nyaterm", *package_native.HELPER_BINS):
                         self.assertTrue((app_root / name).is_file())
+
+    def test_nix_package_uses_isolated_package_desktop_and_icons(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        package_nix_path = repo_root / "nix" / "package.nix"
+        self.assertTrue(package_nix_path.is_file())
+        package_nix = package_nix_path.read_text()
+
+        self.assertIn('isPrerelease = lib.hasInfix "-" version;', package_nix)
+        self.assertIn('displayName = "NyaTerm Preview";', package_nix)
+        self.assertIn('desktopId = "nyaterm-preview";', package_nix)
+        self.assertIn('displayName = "NyaTerm";', package_nix)
+        self.assertIn('desktopId = "nyaterm";', package_nix)
+        self.assertIn('pname = identity.desktopId;', package_nix)
+        self.assertIn('applications/${identity.desktopId}.desktop', package_nix)
+        self.assertIn('apps/${identity.desktopId}.png', package_nix)
+
+        match = re.search(r"<<EOF\n(\[Desktop Entry\].*?)\nEOF", package_nix, re.DOTALL)
+        self.assertIsNotNone(match, "desktop template not found in nix/package.nix")
+        desktop_template = match.group(1)
+
+        for version in ("2.0.0", "2.0.0-preview.1"):
+            with self.subTest(version=version):
+                identity = package_native.release_identity(version)
+                rendered = (
+                    desktop_template
+                    .replace("${identity.displayName}", identity.display_name)
+                    .replace("${identity.desktopId}", identity.desktop_id)
+                )
+                verify_native_package.verify_linux_desktop(
+                    rendered, "nyaterm", f"nix/package.nix ({version})", identity
+                )
+
+        if shutil.which("nix"):
+            res = subprocess.run(
+                [
+                    "nix", "eval", "--impure", "--json", "--expr",
+                    """
+                    let
+                      pkgs = (builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.x86_64-linux;
+                      evalPkg = v: pkgs.callPackage ./nix/package.nix { version = v; };
+                    in {
+                      stable = let p = evalPkg "2.0.0"; in { inherit (p) pname postInstall postFixup; inherit (p.identity) displayName desktopId; };
+                      preview = let p = evalPkg "2.0.0-preview.1"; in { inherit (p) pname postInstall postFixup; inherit (p.identity) displayName desktopId; };
+                    }
+                    """
+                ],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                for version, key in (("2.0.0", "stable"), ("2.0.0-preview.1", "preview")):
+                    with self.subTest(nix_eval=version):
+                        identity = package_native.release_identity(version)
+                        pkg_data = data[key]
+                        self.assertEqual(pkg_data["pname"], identity.desktop_id)
+                        self.assertEqual(pkg_data["desktopId"], identity.desktop_id)
+                        self.assertEqual(pkg_data["displayName"], identity.display_name)
+                        self.assertIn(
+                            f"applications/{identity.desktop_id}.desktop",
+                            pkg_data["postInstall"],
+                        )
+                        self.assertIn(
+                            f"apps/{identity.desktop_id}.png",
+                            pkg_data["postInstall"],
+                        )
+                        m = re.search(
+                            r"<<EOF\n(\[Desktop Entry\].*?)\nEOF",
+                            pkg_data["postInstall"],
+                            re.DOTALL,
+                        )
+                        self.assertIsNotNone(m)
+                        verify_native_package.verify_linux_desktop(
+                            m.group(1), "nyaterm", f"nix evaluated ({version})", identity
+                        )
 
     def test_release_tag_is_normalized(self) -> None:
         self.assertEqual(package_native.validate_version("v2.0.0"), "2.0.0")

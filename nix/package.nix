@@ -29,6 +29,7 @@
 , libxcb-wm
 , libxcb-util
 , apple-sdk_14 ? null
+, version ? (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version
 }:
 
 let
@@ -65,10 +66,19 @@ let
     openssl
     zstd
   ];
+
+  isPrerelease = lib.hasInfix "-" version;
+  identity = if isPrerelease then {
+    displayName = "NyaTerm Preview";
+    desktopId = "nyaterm-preview";
+  } else {
+    displayName = "NyaTerm";
+    desktopId = "nyaterm";
+  };
 in
 rustPlatform.buildRustPackage rec {
-  pname = "nyaterm";
-  version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version;
+  pname = identity.desktopId;
+  inherit version;
 
   src = lib.cleanSourceWith {
     src = lib.cleanSource ../.;
@@ -131,17 +141,17 @@ rustPlatform.buildRustPackage rec {
 
   postInstall = ''
     # Install desktop entry
-    install -Dm644 -T /dev/stdin $out/share/applications/nyaterm.desktop <<'EOF'
+    install -Dm644 -T /dev/stdin $out/share/applications/${identity.desktopId}.desktop <<EOF
 [Desktop Entry]
 Type=Application
-Name=NyaTerm
+Name=${identity.displayName}
 Comment=Native GPUI terminal workspace with SSH, SFTP, RDP and VNC
 Exec=nyaterm %U
-Icon=nyaterm
-StartupWMClass=nyaterm
+Icon=${identity.desktopId}
+StartupWMClass=${identity.desktopId}
 Terminal=false
 Categories=Development;TerminalEmulator;Network;
-MimeType=x-scheme-handler/nyaterm;
+MimeType=x-scheme-handler/${identity.desktopId};
 StartupNotify=true
 EOF
 
@@ -149,7 +159,7 @@ EOF
     for size in 32 64 128 256 512; do
       icon_file="crates/nyaterm-app/resources/icons/''${size}x''${size}.png"
       if [ -f "$icon_file" ]; then
-        install -Dm644 "$icon_file" "$out/share/icons/hicolor/''${size}x''${size}/apps/nyaterm.png"
+        install -Dm644 "$icon_file" "$out/share/icons/hicolor/''${size}x''${size}/apps/${identity.desktopId}.png"
       fi
     done
   '';
@@ -164,6 +174,14 @@ EOF
       --set NYATERM_MCP_HELPER "$out/bin/nyaterm-mcp"
     )
   '';
+
+  postFixup = lib.optionalString (identity.desktopId != "nyaterm") ''
+    ln -s nyaterm $out/bin/${identity.desktopId}
+  '';
+
+  passthru = {
+    inherit identity;
+  };
 
   meta = with lib; {
     description = "Native GPUI terminal workspace with SSH, SFTP, RDP and VNC";
