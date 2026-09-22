@@ -1,3 +1,5 @@
+use rust_i18n::t;
+
 use gpui::{Context, Window};
 
 use crate::features::NyaTermApp;
@@ -32,8 +34,9 @@ impl NyaTermApp {
             self.session.start_has_pending(),
         ) {
             self.shell
-                .set_status("close active session before pulling provider cloud sync".to_string());
-            self.cloud_sync.set_status(self.shell.status().to_string());
+                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+            self.cloud_sync
+                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
             cx.notify();
             return;
         }
@@ -74,15 +77,10 @@ impl NyaTermApp {
             self.session.active_id().is_some(),
             self.session.start_has_pending(),
         ) {
-            self.shell.set_status(
-                if provider_action {
-                    "close active session before force pulling provider cloud sync"
-                } else {
-                    "close active session before force pulling cloud sync"
-                }
-                .to_string(),
-            );
-            self.cloud_sync.set_status(self.shell.status().to_string());
+            self.shell
+                .set_status(t!("settings.syncCloseActiveSessionBeforeForcePull"));
+            self.cloud_sync
+                .set_status(t!("settings.syncCloseActiveSessionBeforeForcePull"));
             cx.notify();
             return;
         }
@@ -107,10 +105,10 @@ impl NyaTermApp {
             self.session.active_id().is_some(),
             self.session.start_has_pending(),
         ) {
-            self.shell.set_status(
-                "close active sessions before recovering cloud sync metadata".to_string(),
-            );
-            self.cloud_sync.set_status(self.shell.status().to_string());
+            self.shell
+                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
+            self.cloud_sync
+                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
             cx.notify();
             return;
         }

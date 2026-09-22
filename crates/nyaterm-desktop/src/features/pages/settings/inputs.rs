@@ -649,17 +649,22 @@ mod tests {
     use std::path::Path;
 
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
-        Window, div,
+        AppContext as _, Context, Entity, IntoElement, Render, Subscription, TestAppContext,
+        VisualTestContext, Window, div,
     };
-    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use nyaterm_core::{AppRuntime, CloudSyncState, RuntimeMode};
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
+    use crate::features::sync::CloudSyncLiveState;
     use crate::models::{AiActionEditorField, AiActionListKind, NavItem, SettingsTab};
     use crate::test_support::TestConfigDir;
 
     use super::ALL_SETTINGS_TABS;
+
+    struct EmitSink {
+        _subscription: Subscription,
+    }
 
     fn app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
         // A uuid rather than a clock reading: these tests run in parallel and
@@ -948,5 +953,389 @@ mod tests {
             &["settings.security.master-password"],
             &["settings.number.idle-lock-minutes"],
         );
+    }
+
+    /// The full keystroke path behind the WebDAV grey-apply report.
+    ///
+    /// A real keypress is forwarded as `NyaInputEvent::Changed` by the input
+    /// entity; the app's subscription routes it through `on_text_input_changed`
+    /// (the `cloud-sync.input.` prefix) into `apply_cloud_sync_input`. That path
+    /// must land in the draft and make the *flushed panel snapshot* -- which is
+    /// what the apply button reads -- dirty with no validation error, so the
+    /// button stops being grey. This drives the event through the transport
+    /// layer rather than calling `apply_cloud_sync_input` directly.
+    #[test]
+    fn webdav_keystroke_enables_the_flushed_panel_apply_button() {
+        use nyaterm_ui::NyaInputEvent;
+
+        let test_dir = TestConfigDir::new("nyaterm-settings-inputs");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+
+        // A master password must be persisted first, matching the reported state
+        // where the switch is on and the form is expected to be editable.
+        //
+        // Persist through the blocking store instead of `apply_settings_draft`:
+        // the store apply leaves a callback pending that, once delivered, runs
+        // `cloud_sync.replace_settings(saved)` and re-begins the draft, which
+        // would stomp the WebDAV keystroke below no matter when it lands.
+        let persisted = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store
+                        .save_master_password(Some("msk"))
+                        .expect("save master password");
+                    Ok(store
+                        .load_app_settings_summary()
+                        .expect("load stored settings"))
+                })
+                .expect("blocking settings store request")
+        });
+        assert!(
+            persisted.has_master_password,
+            "the password must reach disk"
+        );
+        cx.update_entity(&app, |app, _cx| {
+            app.settings.replace_summary(persisted.clone());
+            app.settings.rebase_master_password();
+            assert!(app.cloud_sync_form_enabled());
+        });
+
+        // Open the settings page (starts a fresh draft) and reveal the SyncBackup
+        // tab so its cloud-sync inputs are built and published in the snapshot.
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.ensure_settings_tab_inputs(SettingsTab::SyncBackup, cx);
+            app.shell.set_settings_active_tab(SettingsTab::SyncBackup);
+            app.flush_settings_panel_snapshots(cx);
+        });
+
+        let field = cx.update_entity(&app, |app, _| {
+            app.existing_text_input("cloud-sync.input.webdav-endpoint")
+                .expect("SyncBackup activation built the webdav endpoint input")
+                .clone()
+        });
+
+        // Emit exactly what a keystroke delivers: the input entity emits a change.
+        // The diagnostic probe mirrors how the app subscribes: a context-owned
+        // subscription on the input entity, kept alive for the whole test.
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let probe = fired.clone();
+        let _sink = cx.new(|cx| {
+            let _subscription = cx.subscribe(&field, move |_, _, _: &NyaInputEvent, _| {
+                probe.set(true);
+            });
+            EmitSink { _subscription }
+        });
+        cx.update_entity(&field, |_input, cx| {
+            cx.emit(NyaInputEvent::Changed("https://dav.example.com".into()));
+        });
+        cx.run_until_parked();
+        assert!(fired.get(), "the emit did not dispatch to any subscription");
+
+        cx.update_entity(&app, |app, _| {
+            assert_eq!(
+                app.cloud_sync.settings().webdav.endpoint,
+                "https://dav.example.com",
+                "the emit must reach apply_input through the subscription"
+            );
+            assert_eq!(
+                app.cloud_sync.status(),
+                "Cloud sync settings edited.",
+                "the event handler must set the edited status"
+            );
+            assert!(
+                app.settings_draft_dirty(),
+                "the keystroke must land in the draft through the event path"
+            );
+        });
+
+        // The app requests a panel refresh when the field edits land. It defers
+        // the flush, so the parked updates above must already have pushed the
+        // rebuilt snapshot into the panel the apply button renders from.
+        cx.update_entity(&app, |app, cx| {
+            let snapshot = app
+                .settings_panel
+                .read(cx)
+                .snapshot()
+                .expect("the panel has a snapshot");
+            assert!(
+                snapshot.draft_dirty,
+                "the flushed snapshot must report the webdav keystroke as dirty"
+            );
+            assert!(
+                snapshot.validation_error.is_none(),
+                "no reason to keep apply grey once a master password is stored"
+            );
+        });
+    }
+
+    /// The reported state: a master password is already stored, the switch reads
+    /// as on, and the "new master password" box is empty. Typing a replacement
+    /// must reach the draft and make the flushed panel snapshot dirty so Apply
+    /// stops being grey.
+    #[test]
+    fn master_password_keystroke_enables_the_flushed_panel_apply_button() {
+        use nyaterm_ui::NyaInputEvent;
+
+        let test_dir = TestConfigDir::new("nyaterm-settings-inputs");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+
+        let persisted = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store
+                        .save_master_password(Some("msk"))
+                        .expect("save master password");
+                    Ok(store
+                        .load_app_settings_summary()
+                        .expect("load stored settings"))
+                })
+                .expect("blocking settings store request")
+        });
+        assert!(persisted.has_master_password, "fixture: password on disk");
+        cx.update_entity(&app, |app, cx| {
+            app.settings.replace_summary(persisted);
+            app.settings.rebase_master_password();
+            assert!(
+                app.settings.master_password().enabled,
+                "fixture: the switch reads as on"
+            );
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.ensure_settings_tab_inputs(SettingsTab::Security, cx);
+            app.shell.set_settings_active_tab(SettingsTab::Security);
+            app.flush_settings_panel_snapshots(cx);
+        });
+
+        let field = cx.update_entity(&app, |app, _| {
+            app.existing_text_input("settings.security.master-password")
+                .expect("Security activation built the master-password input")
+                .clone()
+        });
+        cx.update_entity(&field, |_input, cx| {
+            cx.emit(NyaInputEvent::Changed("new secret".into()));
+        });
+        cx.run_until_parked();
+
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.settings.master_password().draft,
+                "new secret",
+                "the keystroke must reach the master-password draft"
+            );
+            assert!(app.settings_draft_dirty());
+            let snapshot = app
+                .settings_panel
+                .read(cx)
+                .snapshot()
+                .expect("the panel has a snapshot");
+            assert!(
+                snapshot.draft_dirty,
+                "the flushed snapshot must report the keystroke as dirty"
+            );
+            assert!(
+                snapshot.validation_error.is_none(),
+                "a stored master password must not block apply: {:?}",
+                snapshot.validation_error
+            );
+        });
+    }
+
+    /// A finished connection test must unstick the settings panel.
+    ///
+    /// `run_provider_cloud_sync_test` stops showing "testing..." only when the
+    /// background completion flush publishes the outcome into the panel
+    /// snapshot. The panel's `with_app` click wrapper refreshes unconditionally
+    /// on its own, so this drives the job directly: the completion handler
+    /// alone has to reflush the snapshot. The endpoint is a just-released
+    /// listener, so the webdav client is refused immediately and the job fails
+    /// fast instead of hanging on a real departure.
+    #[test]
+    fn finished_cloud_sync_connection_test_reflushes_the_panel_snapshot() {
+        let test_dir = TestConfigDir::new("nyaterm-settings-inputs");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe");
+        let endpoint = format!("http://{}", probe.local_addr().expect("probe address"));
+        drop(probe);
+
+        let persisted = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store
+                        .save_master_password(Some("msk"))
+                        .expect("save master password");
+                    Ok(store
+                        .load_app_settings_summary()
+                        .expect("load stored settings"))
+                })
+                .expect("blocking settings store request")
+        });
+        cx.update_entity(&app, |app, cx| {
+            app.settings.replace_summary(persisted);
+            app.settings.rebase_master_password();
+            let mut settings = app.cloud_sync.settings().clone();
+            settings.provider = "webdav".to_string();
+            settings.webdav.endpoint = endpoint;
+            settings.enabled = true;
+            app.cloud_sync
+                .replace_settings(settings, Default::default());
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.ensure_settings_tab_inputs(SettingsTab::SyncBackup, cx);
+            app.shell.set_settings_active_tab(SettingsTab::SyncBackup);
+            app.flush_settings_panel_snapshots(cx);
+        });
+
+        cx.update_entity(&app, |app, cx| app.run_provider_cloud_sync_test(cx));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let completed = cx.update_entity(&app, |app, _| !app.cloud_sync.job_running());
+            if completed {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cloud sync connection test never completed"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update_entity(&app, |app, cx| {
+            let status = app.cloud_sync.status().to_string();
+            assert!(
+                status.contains("Cloud test failed"),
+                "expected a refusal, got: {status}"
+            );
+            let presentation = &app
+                .settings_panel
+                .read(cx)
+                .snapshot()
+                .expect("the panel has a snapshot")
+                .cloud_sync;
+            assert_eq!(
+                presentation.status, status,
+                "the flushed panel must show the job outcome"
+            );
+            assert!(
+                !presentation.job_running,
+                "the panel must not stay stuck in a running state"
+            );
+            assert_eq!(presentation.live_state(), CloudSyncLiveState::Failed);
+        });
+    }
+
+    /// A successful manual connection test records the last-check time while the
+    /// last-sync time stays untouched: probing the endpoint is a check, not a
+    /// transfer.
+    #[test]
+    fn successful_cloud_sync_connection_test_records_check_time_only() {
+        let test_dir = TestConfigDir::new("nyaterm-settings-inputs");
+        let mut cx = TestAppContext::single();
+        let app = app(&mut cx, test_dir.path());
+
+        let (endpoint, server) = crate::test_support::spawn_webdav_healthy_server();
+        let preserved_state = CloudSyncState {
+            device_id: "new-device".to_string(),
+            last_synced_payload_hash: Some("new-hash".to_string()),
+            last_applied_remote_revision: Some("new-revision".to_string()),
+            last_checked_at_ms: Some(11),
+            last_synced_at_ms: Some(22),
+            last_validated_remote_revision: Some("validated-revision".to_string()),
+            last_full_validation_at_ms: Some(33),
+            last_gc_attempt_at_ms: Some(44),
+        };
+        let state_to_persist = preserved_state.clone();
+        cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_state(&state_to_persist)?;
+                    Ok(())
+                })
+                .expect("seed newer cloud sync state");
+        });
+
+        let persisted = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store
+                        .save_master_password(Some("msk"))
+                        .expect("save master password");
+                    Ok(store
+                        .load_app_settings_summary()
+                        .expect("load stored settings"))
+                })
+                .expect("blocking settings store request")
+        });
+        cx.update_entity(&app, |app, cx| {
+            app.settings.replace_summary(persisted);
+            app.settings.rebase_master_password();
+            let mut settings = app.cloud_sync.settings().clone();
+            settings.provider = "webdav".to_string();
+            settings.webdav.endpoint = endpoint;
+            settings.enabled = true;
+            app.cloud_sync
+                .replace_settings(settings, Default::default());
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.ensure_settings_tab_inputs(SettingsTab::SyncBackup, cx);
+            app.shell.set_settings_active_tab(SettingsTab::SyncBackup);
+            app.flush_settings_panel_snapshots(cx);
+            assert!(
+                app.cloud_sync.state().last_checked_at_ms.is_none(),
+                "no check is recorded before the test runs"
+            );
+        });
+
+        cx.update_entity(&app, |app, cx| app.run_provider_cloud_sync_test(cx));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let completed = cx.update_entity(&app, |app, _| !app.cloud_sync.job_running());
+            if completed {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cloud sync connection test never completed"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update_entity(&app, |app, _| {
+            let checked_state = app.cloud_sync.state();
+            let checked_at = checked_state
+                .last_checked_at_ms
+                .expect("a successful test records the check time");
+            assert_ne!(checked_at, preserved_state.last_checked_at_ms.unwrap());
+            let expected = CloudSyncState {
+                last_checked_at_ms: Some(checked_at),
+                ..preserved_state.clone()
+            };
+            assert_eq!(checked_state, &expected);
+            let persisted = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::CloudSync, |store| {
+                    store.load_cloud_sync_state()
+                })
+                .expect("load checked cloud sync state");
+            assert_eq!(persisted, expected);
+            assert!(
+                app.cloud_sync.status().contains("Cloud test passed"),
+                "expected a success, got: {}",
+                app.cloud_sync.status()
+            );
+            assert_eq!(app.cloud_sync.live_state(), CloudSyncLiveState::Success);
+        });
+        server.join().expect("mock WebDAV server finishes");
     }
 }

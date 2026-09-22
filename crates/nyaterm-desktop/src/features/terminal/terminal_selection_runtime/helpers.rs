@@ -88,15 +88,9 @@ impl EntityInputHandler for NyaTermApp {
         &mut self,
         range: Range<usize>,
         adjusted_range: &mut Option<Range<usize>>,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            let text = self.terminal.paste.text();
-            let byte_range = byte_range_from_utf16(text, &range);
-            *adjusted_range = Some(utf16_range_from_bytes(text, &byte_range));
-            return Some(text[byte_range].to_string());
-        }
         if self.terminal.input.ime_marked_text.is_empty() {
             return None;
         }
@@ -110,22 +104,9 @@ impl EntityInputHandler for NyaTermApp {
     fn selected_text_range(
         &mut self,
         _ignore_disabled_input: bool,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        if self.terminal.paste.focus.is_focused(window) {
-            let text = self.terminal.paste.text();
-            let range = self.terminal.paste.selected_byte_range();
-            let reversed = self
-                .terminal
-                .paste
-                .anchor
-                .is_some_and(|anchor| anchor > self.terminal.paste.cursor);
-            return Some(UTF16Selection {
-                range: utf16_range_from_bytes(text, &range),
-                reversed,
-            });
-        }
         // GPUI's IME contract needs a valid insertion range even when there is
         // no marked text. This is also what lets CJK candidate windows anchor to
         // the terminal cursor instead of treating the surface as non-editable.
@@ -134,48 +115,24 @@ impl EntityInputHandler for NyaTermApp {
 
     fn marked_text_range(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            return self
-                .terminal
-                .paste
-                .marked_range
-                .as_ref()
-                .map(|range| utf16_range_from_bytes(self.terminal.paste.text(), range));
-        }
         let len = self.terminal.input.ime_marked_text.encode_utf16().count();
         (len > 0).then_some(0..len)
     }
 
-    fn unmark_text(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            self.terminal.paste.marked_text.clear();
-            self.terminal.paste.marked_range = None;
-            return;
-        }
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.terminal.input.ime_marked_text.clear();
     }
 
     fn replace_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        _range: Option<Range<usize>>,
         text: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            let range = range
-                .as_ref()
-                .map(|range| byte_range_from_utf16(self.terminal.paste.text(), range))
-                .or_else(|| self.terminal.paste.marked_range.clone())
-                .unwrap_or_else(|| self.terminal.paste.selected_byte_range());
-            if self.terminal.paste.replace_range(range, text) {
-                cx.notify();
-            }
-            return;
-        }
         self.terminal.input.ime_marked_text.clear();
         if !text.is_empty() {
             if let Some(selected) = self.smart_cursor_selected_input_range()
@@ -196,34 +153,12 @@ impl EntityInputHandler for NyaTermApp {
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        _range: Option<Range<usize>>,
         new_text: &str,
-        new_selected_range: Option<Range<usize>>,
-        window: &mut Window,
+        _new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            let range = range
-                .as_ref()
-                .map(|range| byte_range_from_utf16(self.terminal.paste.text(), range))
-                .or_else(|| self.terminal.paste.marked_range.clone())
-                .unwrap_or_else(|| self.terminal.paste.selected_byte_range());
-            let start = range.start;
-            if !self.terminal.paste.replace_range(range, new_text) {
-                return;
-            }
-            self.terminal.paste.marked_text = new_text.to_string();
-            self.terminal.paste.marked_range =
-                (!new_text.is_empty()).then_some(start..start + new_text.len());
-            if let Some(selected) = new_selected_range {
-                let selected = byte_range_from_utf16(new_text, &selected);
-                self.terminal.paste.anchor =
-                    (selected.start != selected.end).then_some(start + selected.start);
-                self.terminal.paste.cursor = start + selected.end;
-            }
-            cx.notify();
-            return;
-        }
         self.terminal.input.ime_marked_text = new_text.to_string();
         cx.notify();
     }
@@ -232,12 +167,9 @@ impl EntityInputHandler for NyaTermApp {
         &mut self,
         _range_utf16: Range<usize>,
         element_bounds: Bounds<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            return Some(element_bounds);
-        }
         let (cell_w, cell_h) = self.terminal_cell_size();
         let insets = self.terminal_content_insets();
         let gutter = self.terminal_gutter_width_px();
@@ -273,15 +205,9 @@ impl EntityInputHandler for NyaTermApp {
     fn character_index_for_point(
         &mut self,
         _point: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.terminal.paste.draft.is_some() && self.terminal.paste.focus.is_focused(window) {
-            return Some(utf16_offset_for_byte(
-                self.terminal.paste.text(),
-                self.terminal.paste.cursor,
-            ));
-        }
         Some(0)
     }
 }
@@ -356,35 +282,6 @@ mod tests {
 
         assert_eq!(terminal_visible_surface_bounds(bounds, content_mask), None);
     }
-}
-
-fn byte_offset_from_utf16(text: &str, offset: usize) -> usize {
-    let mut utf16_offset = 0usize;
-    for (byte_offset, ch) in text.char_indices() {
-        if utf16_offset >= offset {
-            return byte_offset;
-        }
-        utf16_offset += ch.len_utf16();
-        if utf16_offset >= offset {
-            return byte_offset + ch.len_utf8();
-        }
-    }
-    text.len()
-}
-
-fn byte_range_from_utf16(text: &str, range: &Range<usize>) -> Range<usize> {
-    let start = byte_offset_from_utf16(text, range.start);
-    let end = byte_offset_from_utf16(text, range.end).max(start);
-    start..end
-}
-
-fn utf16_offset_for_byte(text: &str, offset: usize) -> usize {
-    let offset = offset.min(text.len());
-    text[..offset].encode_utf16().count()
-}
-
-fn utf16_range_from_bytes(text: &str, range: &Range<usize>) -> Range<usize> {
-    utf16_offset_for_byte(text, range.start)..utf16_offset_for_byte(text, range.end)
 }
 
 pub(super) fn open_external_url_for_action(url: &str) -> Result<(), String> {

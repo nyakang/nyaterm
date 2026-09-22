@@ -28,29 +28,23 @@ impl NyaTermApp {
         let provider_label = format_cloud_provider(&provider);
         let enabled = self.cloud_sync.settings().enabled;
         let status_message = self.cloud_sync.status().to_string();
-        let message = status_message.to_ascii_lowercase();
+        let last_history_status = self
+            .cloud_sync
+            .history()
+            .first()
+            .map(|entry| entry.status.as_str());
         let state = if !enabled {
             "disabled"
         } else if self.cloud_sync.conflict().is_some() {
             "conflict"
         } else if self.cloud_sync.job_running() {
             "running"
-        } else if message.contains("fail") || message.contains("error") {
-            "failed"
-        } else if [
-            "success",
-            "synced",
-            "uploaded",
-            "downloaded",
-            "up to date",
-            "recovered",
-        ]
-        .iter()
-        .any(|word| message.contains(word))
-        {
-            "success"
         } else {
-            "idle"
+            match last_history_status {
+                Some("failed") => "failed",
+                Some("success") => "success",
+                _ => "idle",
+            }
         };
         let state_label = match state {
             "disabled" => t!("settings.syncState.disabled"),

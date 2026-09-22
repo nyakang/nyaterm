@@ -10,8 +10,10 @@ use std::thread;
 use std::time::Duration;
 
 use ironrdp_client::config::{ClipboardType, ConfigBuilder, Destination};
+use ironrdp_client::output_channel::{OutputEventReceiver, output_channel};
 use ironrdp_client::rdp::{
-    AutoReconnectDecision, RdpClient, RdpInputEvent as IronInput, RdpInputSender, RdpOutputEvent,
+    AutoReconnectDecision, DesktopUpdate, RdpClient, RdpInputEvent as IronInput, RdpInputSender,
+    RdpOutputEvent,
 };
 use ironrdp_input::{
     Database as InputDatabase, MouseButton, MousePosition, Operation, Scancode, WheelRotations,
@@ -189,8 +191,8 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                     output_tx.clone(),
                     connection_gate.clone(),
                 )?;
-                let (rdp_output_tx, rdp_output_rx) = tokio_mpsc::channel(64);
-                let client = RdpClient::new(iron_config, rdp_output_tx);
+                let (rdp_output_tx, rdp_output_rx) = output_channel(64);
+                let client = RdpClient::new(iron_config, rdp_output_tx).with_desktop_updates();
                 let input_sender = client.input_sender();
                 bridge.set_input_sender(input_sender.clone());
                 iron_input = Some(input_sender.clone());
@@ -293,7 +295,7 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
             RdpControlMessage::RequestFullFrame { session_id } => {
                 validate_active_session_id(active_session_id.as_deref(), &session_id)?;
                 if let Some(sender) = iron_input.as_ref() {
-                    send_iron_input(sender, IronInput::RequestFullFrame)?;
+                    forward_full_frame_request(sender)?;
                 } else {
                     send_error(
                         &output_tx,
@@ -579,7 +581,6 @@ fn build_config(
         .with_tls(!use_credssp)
         .with_codecs(Vec::new())
         .with_pointer_software_rendering(false)
-        .with_dirty_region_updates(true)
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
         .with_certificate_validation_callback(verifier)
         // Keep IronRDP's native clipboard backend disabled on every platform. When text
@@ -599,15 +600,219 @@ fn build_config(
     Ok((config, clipboard))
 }
 
+struct DesktopPayload {
+    framebuffer_width: u32,
+    framebuffer_height: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PreparedDesktopUpdate {
+    reset: Option<(u64, u32, u32)>,
+    frame: RdpFrameEvent,
+}
+
+#[derive(Default)]
+struct DesktopOutputState {
+    epoch: u64,
+    extent: Option<(u32, u32)>,
+}
+
+impl DesktopOutputState {
+    fn prepare(&mut self, payload: DesktopPayload) -> Result<PreparedDesktopUpdate, &'static str> {
+        validate_framebuffer_dimensions(
+            payload.framebuffer_width,
+            payload.framebuffer_height,
+            RDP_FRAMEBUFFER_LIMITS,
+        )
+        .map_err(|_| "framebuffer dimensions are outside the supported range")?;
+        if payload.width == 0
+            || payload.height == 0
+            || payload
+                .x
+                .checked_add(payload.width)
+                .is_none_or(|right| right > payload.framebuffer_width)
+            || payload
+                .y
+                .checked_add(payload.height)
+                .is_none_or(|bottom| bottom > payload.framebuffer_height)
+        {
+            return Err("desktop update region is outside the framebuffer");
+        }
+        let stride = payload
+            .width
+            .checked_mul(4)
+            .ok_or("desktop update stride overflowed")?;
+        let expected_len = usize::try_from(stride)
+            .ok()
+            .and_then(|stride| {
+                usize::try_from(payload.height)
+                    .ok()
+                    .and_then(|height| stride.checked_mul(height))
+            })
+            .ok_or("desktop update payload length overflowed")?;
+        if payload.pixels.len() != expected_len {
+            return Err("desktop update pixel payload has an invalid length");
+        }
+
+        let extent = (payload.framebuffer_width, payload.framebuffer_height);
+        let reset = if self.extent == Some(extent) {
+            None
+        } else {
+            self.epoch = self.epoch.wrapping_add(1);
+            self.extent = Some(extent);
+            Some((self.epoch, extent.0, extent.1))
+        };
+        let full = payload.x == 0
+            && payload.y == 0
+            && payload.width == payload.framebuffer_width
+            && payload.height == payload.framebuffer_height;
+        Ok(PreparedDesktopUpdate {
+            reset,
+            frame: RdpFrameEvent::Bitmap {
+                epoch: self.epoch,
+                full,
+                x: payload.x,
+                y: payload.y,
+                width: payload.width,
+                height: payload.height,
+                stride,
+                format: PixelFormat::Bgra8,
+                pixels: payload.pixels,
+            },
+        })
+    }
+}
+
+fn desktop_update_payload(update: DesktopUpdate) -> Result<DesktopPayload, &'static str> {
+    let (buffer, framebuffer_width, framebuffer_height, region) = update.into_parts();
+    let width = region
+        .right
+        .checked_sub(region.left)
+        .and_then(|width| width.checked_add(1))
+        .ok_or("desktop update width overflowed")?;
+    let height = region
+        .bottom
+        .checked_sub(region.top)
+        .and_then(|height| height.checked_add(1))
+        .ok_or("desktop update height overflowed")?;
+    Ok(DesktopPayload {
+        framebuffer_width: u32::from(framebuffer_width.get()),
+        framebuffer_height: u32::from(framebuffer_height.get()),
+        x: u32::from(region.left),
+        y: u32::from(region.top),
+        width: u32::from(width),
+        height: u32::from(height),
+        pixels: rgb_u32_to_bgra(buffer),
+    })
+}
+
+fn full_image_payload(
+    buffer: Vec<u32>,
+    width: u16,
+    height: u16,
+) -> Result<DesktopPayload, &'static str> {
+    Ok(DesktopPayload {
+        framebuffer_width: u32::from(width),
+        framebuffer_height: u32::from(height),
+        x: 0,
+        y: 0,
+        width: u32::from(width),
+        height: u32::from(height),
+        pixels: rgb_u32_to_bgra(buffer),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "forwards one complete desktop state transition"
+)]
+fn forward_desktop_update(
+    session_id: &str,
+    output_tx: &mpsc::SyncSender<Outbound>,
+    input_tx: &RdpInputSender,
+    desktop: &mut DesktopOutputState,
+    connected: &mut bool,
+    cursor_shape: &CursorShape,
+    cursor_position: CursorPosition,
+    cursor_visible: bool,
+    payload: Result<DesktopPayload, &'static str>,
+) -> Result<(), ()> {
+    let prepared = payload.and_then(|payload| desktop.prepare(payload));
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(reason) => {
+            let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+                session_id: session_id.to_string(),
+                error: RdpError::new(RdpErrorKind::Protocol, reason),
+                fatal: true,
+            }));
+            input_tx.request_close();
+            return Err(());
+        }
+    };
+
+    if let Some((epoch, width, height)) = prepared.reset {
+        output_tx
+            .send(Outbound::Control(RdpControlMessage::DesktopReset {
+                session_id: session_id.to_string(),
+                epoch,
+                width,
+                height,
+            }))
+            .map_err(|_| ())?;
+        if !*connected {
+            *connected = true;
+            output_tx
+                .send(Outbound::Control(RdpControlMessage::State {
+                    session_id: session_id.to_string(),
+                    state: RdpSessionState::Connected,
+                    message: None,
+                }))
+                .map_err(|_| ())?;
+        }
+        send_cursor(
+            output_tx,
+            session_id,
+            &RemoteCursorEvent::Shape(cursor_shape.clone()),
+        )?;
+        send_cursor(
+            output_tx,
+            session_id,
+            &RemoteCursorEvent::Position(cursor_position),
+        )?;
+        send_cursor(
+            output_tx,
+            session_id,
+            &RemoteCursorEvent::Visibility(CursorVisibility {
+                visible: cursor_visible,
+            }),
+        )?;
+    }
+
+    encode_frame_packet_owned(session_id, prepared.frame)
+        .map(Outbound::Packet)
+        .and_then(|packet| {
+            output_tx
+                .send(packet)
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "RDP stdout writer stopped"))
+        })
+        .map_err(|_| ())
+}
+
 async fn forward_output(
     session_id: String,
-    mut receiver: tokio_mpsc::Receiver<RdpOutputEvent>,
+    mut receiver: OutputEventReceiver,
     output_tx: mpsc::SyncSender<Outbound>,
     input_tx: RdpInputSender,
     certificate_gate: Arc<CertificateGate>,
     connection_timeout: Duration,
 ) {
-    let mut epoch = 0u64;
+    let mut desktop = DesktopOutputState::default();
     let mut connected = false;
     let mut cursor_shape = CursorShape {
         shape_id: 0,
@@ -659,96 +864,34 @@ async fn forward_output(
             RdpOutputEvent::ConnectionFailure(_) | RdpOutputEvent::Terminated(_)
         );
         let result: Result<(), ()> = match event {
-            RdpOutputEvent::DesktopReset { width, height } => {
-                // Double-side validation: the application rejects an out-of-range
-                // reset in `Framebuffer::new`, but the helper is the authority for
-                // the bytes it puts on the wire, so it refuses here too rather than
-                // shipping a reset the consumer would only tear down.
-                if validate_framebuffer_dimensions(
-                    u32::from(width),
-                    u32::from(height),
-                    RDP_FRAMEBUFFER_LIMITS,
-                )
-                .is_err()
-                {
-                    let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
-                        session_id: session_id.clone(),
-                        error: RdpError::new(
-                            RdpErrorKind::Protocol,
-                            format!(
-                                "RDP desktop reset {width}x{height} is outside the supported range"
-                            ),
-                        ),
-                        fatal: true,
-                    }));
-                    input_tx.request_close();
-                    return;
-                }
-                epoch = epoch.wrapping_add(1);
-                let reset = output_tx.send(Outbound::Control(RdpControlMessage::DesktopReset {
-                    session_id: session_id.clone(),
-                    epoch,
-                    width: u32::from(width),
-                    height: u32::from(height),
-                }));
-                if !connected {
-                    connected = true;
-                    let _ = output_tx.send(Outbound::Control(RdpControlMessage::State {
-                        session_id: session_id.clone(),
-                        state: RdpSessionState::Connected,
-                        message: None,
-                    }));
-                }
-                reset.map_err(|_| ()).and_then(|()| {
-                    send_cursor(
-                        &output_tx,
-                        &session_id,
-                        &RemoteCursorEvent::Shape(cursor_shape.clone()),
-                    )?;
-                    send_cursor(
-                        &output_tx,
-                        &session_id,
-                        &RemoteCursorEvent::Position(cursor_position),
-                    )?;
-                    send_cursor(
-                        &output_tx,
-                        &session_id,
-                        &RemoteCursorEvent::Visibility(CursorVisibility {
-                            visible: cursor_visible,
-                        }),
-                    )
-                })
-            }
-            RdpOutputEvent::ImageRegion {
+            RdpOutputEvent::DesktopUpdate(update) => forward_desktop_update(
+                &session_id,
+                &output_tx,
+                &input_tx,
+                &mut desktop,
+                &mut connected,
+                &cursor_shape,
+                cursor_position,
+                cursor_visible,
+                desktop_update_payload(update),
+            ),
+            // Keep the complete-image path so a future IronRDP configuration regression does
+            // not silently discard every frame. The normal path uses `DesktopUpdate` above.
+            RdpOutputEvent::Image {
                 buffer,
-                x,
-                y,
                 width,
                 height,
-                stride,
-                full,
-            } => {
-                let pixels = rgba_to_bgra(buffer);
-                let frame = RdpFrameEvent::Bitmap {
-                    epoch,
-                    full,
-                    x: u32::from(x),
-                    y: u32::from(y),
-                    width: u32::from(width),
-                    height: u32::from(height),
-                    stride: u32::try_from(stride).unwrap_or(u32::MAX),
-                    format: PixelFormat::Bgra8,
-                    pixels,
-                };
-                encode_frame_packet_owned(&session_id, frame)
-                    .map(Outbound::Packet)
-                    .and_then(|packet| {
-                        output_tx.send(packet).map_err(|_| {
-                            io::Error::new(io::ErrorKind::BrokenPipe, "RDP stdout writer stopped")
-                        })
-                    })
-                    .map_err(|_| ())
-            }
+            } => forward_desktop_update(
+                &session_id,
+                &output_tx,
+                &input_tx,
+                &mut desktop,
+                &mut connected,
+                &cursor_shape,
+                cursor_position,
+                cursor_visible,
+                full_image_payload(buffer, width.get(), height.get()),
+            ),
             // The session could not resize in place and IronRDP is about to reconnect
             // with the new size. Report the capability so the UI stops offering dynamic
             // resize; the reconnect surfaces through the ordinary state events. The
@@ -882,7 +1025,7 @@ async fn forward_output(
             }
             // Everything else IronRDP reports is either informational or for a feature
             // NyaTerm does not drive: connection/logon milestones (the helper derives
-            // its own state from DesktopReset and Terminated), monitor layout, RAIL and
+            // its own state from desktop updates and Terminated), monitor layout, RAIL and
             // RemoteApp, and the server-side redraw requests, whose effect arrives as
             // ordinary region updates.
             _ => Ok(()),
@@ -909,6 +1052,10 @@ fn send_iron_input(sender: &RdpInputSender, event: IronInput) -> anyhow::Result<
             Err(anyhow::anyhow!("IronRDP input channel closed"))
         }
     }
+}
+
+fn forward_full_frame_request(sender: &RdpInputSender) -> anyhow::Result<bool> {
+    send_iron_input(sender, IronInput::RequestFullFrame)
 }
 
 /// Reliably queues control input without blocking the helper's async runtime thread.
@@ -1026,6 +1173,14 @@ fn rgba_to_bgra(mut pixels: Vec<u8>) -> Vec<u8> {
         pixel.swap(0, 2);
     }
     pixels
+}
+
+fn rgb_u32_to_bgra(pixels: Vec<u32>) -> Vec<u8> {
+    let mut bgra = Vec::with_capacity(pixels.len().saturating_mul(4));
+    for pixel in pixels {
+        bgra.extend_from_slice(&[pixel as u8, (pixel >> 8) as u8, (pixel >> 16) as u8, 0xff]);
+    }
+    bgra
 }
 
 fn convert_input(
@@ -1187,25 +1342,26 @@ fn report_ironrdp_panic(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
-    use ironrdp_client::rdp::{RdpInputEvent as IronInput, RdpInputSender, RdpOutputEvent};
+    use super::{
+        CertificateGate, DesktopOutputState, DesktopPayload, Outbound, classify_error,
+        convert_and_send_input, convert_input, desktop_update_payload, forward_full_frame_request,
+        forward_output, install_crypto_provider, output_channel, report_ironrdp_panic,
+        secure_attention_input, send_iron_input, send_reliable_iron_input,
+        validate_active_session_id, validate_input_events,
+    };
+    use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
+    use ironrdp_pdu::geometry::InclusiveRectangle;
     use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
     use ironrdp_pdu::input::mouse::PointerFlags;
     use ironrdp_pdu::input::mouse_x::PointerXFlags;
     use nyaterm_remote_desktop::{
         RdpControlMessage, RdpErrorKind, RdpInputEvent, RemotePoint, RemotePointerButton,
         RemotePointerEvent, RemoteWheelAxis,
-    };
-    use tokio::sync::mpsc as tokio_mpsc;
-
-    use super::{
-        CertificateGate, Outbound, classify_error, convert_and_send_input, convert_input,
-        forward_output, install_crypto_provider, report_ironrdp_panic, secure_attention_input,
-        send_iron_input, send_reliable_iron_input, validate_active_session_id,
-        validate_input_events,
     };
 
     #[test]
@@ -1255,7 +1411,7 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_security_negotiation_reports_a_fatal_timeout() {
-        let (rdp_output_tx, rdp_output_rx) = tokio_mpsc::channel::<RdpOutputEvent>(1);
+        let (rdp_output_tx, rdp_output_rx) = output_channel(1);
         let (input_tx, mut input_rx) = RdpInputSender::channel(1);
         let (output_tx, output_rx) = mpsc::sync_channel(1);
 
@@ -1304,6 +1460,174 @@ mod tests {
             "IronRDP runtime panicked: connector assertion failed"
         );
         assert!(fatal);
+    }
+
+    fn desktop_update(
+        framebuffer_width: u16,
+        framebuffer_height: u16,
+        region: InclusiveRectangle,
+        pixels: Vec<u32>,
+    ) -> DesktopUpdate {
+        DesktopUpdate::new(
+            pixels,
+            NonZeroU16::new(framebuffer_width).unwrap(),
+            NonZeroU16::new(framebuffer_height).unwrap(),
+            region,
+        )
+        .expect("valid desktop update")
+    }
+
+    #[test]
+    fn first_complete_desktop_update_resets_and_converts_rgb_to_bgra() {
+        let update = desktop_update(
+            2,
+            1,
+            InclusiveRectangle {
+                left: 0,
+                top: 0,
+                right: 1,
+                bottom: 0,
+            },
+            vec![0x0011_2233, 0x00aa_bbcc],
+        );
+        let mut state = DesktopOutputState::default();
+        let prepared = state
+            .prepare(desktop_update_payload(update).unwrap())
+            .unwrap();
+
+        assert_eq!(prepared.reset, Some((1, 2, 1)));
+        let nyaterm_remote_desktop::RdpFrameEvent::Bitmap {
+            epoch,
+            full,
+            x,
+            y,
+            width,
+            height,
+            stride,
+            pixels,
+            ..
+        } = prepared.frame
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (epoch, full, x, y, width, height, stride),
+            (1, true, 0, 0, 2, 1, 8)
+        );
+        assert_eq!(pixels, [0x33, 0x22, 0x11, 0xff, 0xcc, 0xbb, 0xaa, 0xff]);
+    }
+
+    #[test]
+    fn partial_desktop_update_keeps_epoch_and_inclusive_region_size() {
+        let mut state = DesktopOutputState::default();
+        state
+            .prepare(DesktopPayload {
+                framebuffer_width: 4,
+                framebuffer_height: 3,
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 3,
+                pixels: vec![0; 4 * 3 * 4],
+            })
+            .unwrap();
+        let update = desktop_update(
+            4,
+            3,
+            InclusiveRectangle {
+                left: 1,
+                top: 1,
+                right: 2,
+                bottom: 2,
+            },
+            vec![0x0001_0203; 4],
+        );
+        let prepared = state
+            .prepare(desktop_update_payload(update).unwrap())
+            .unwrap();
+
+        assert_eq!(prepared.reset, None);
+        let nyaterm_remote_desktop::RdpFrameEvent::Bitmap {
+            epoch,
+            full,
+            x,
+            y,
+            width,
+            height,
+            stride,
+            ..
+        } = prepared.frame
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (epoch, full, x, y, width, height, stride),
+            (1, false, 1, 1, 2, 2, 8)
+        );
+    }
+
+    #[test]
+    fn framebuffer_extent_change_advances_epoch() {
+        let mut state = DesktopOutputState::default();
+        let first = state
+            .prepare(DesktopPayload {
+                framebuffer_width: 1,
+                framebuffer_height: 1,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                pixels: vec![0; 4],
+            })
+            .unwrap();
+        let resized = state
+            .prepare(DesktopPayload {
+                framebuffer_width: 2,
+                framebuffer_height: 1,
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+                pixels: vec![0; 8],
+            })
+            .unwrap();
+
+        assert_eq!(first.reset, Some((1, 1, 1)));
+        assert_eq!(resized.reset, Some((2, 2, 1)));
+    }
+
+    #[test]
+    fn oversized_framebuffer_is_rejected_before_state_changes() {
+        let mut state = DesktopOutputState::default();
+        let error = state
+            .prepare(DesktopPayload {
+                framebuffer_width: 8193,
+                framebuffer_height: 1,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                pixels: vec![0; 4],
+            })
+            .expect_err("oversized desktop must be rejected");
+
+        assert_eq!(
+            error,
+            "framebuffer dimensions are outside the supported range"
+        );
+        assert_eq!(state.epoch, 0);
+        assert_eq!(state.extent, None);
+    }
+
+    #[test]
+    fn request_full_frame_is_forwarded_to_ironrdp() {
+        let (sender, mut receiver) = RdpInputSender::channel(1);
+
+        assert!(forward_full_frame_request(&sender).unwrap());
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(IronInput::RequestFullFrame)
+        ));
     }
 
     #[test]

@@ -8,12 +8,23 @@ use std::sync::{
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
+use rust_i18n::t;
+
 use nyaterm_core::{CloudSyncError, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState};
 
 use crate::models::{
     CloudSyncConflictState, CloudSyncInputField, CloudSyncSecretDraft, GithubGistAuthJobEvent,
     GithubGistAuthState,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::features) enum CloudSyncLiveState {
+    #[default]
+    Idle,
+    Running,
+    Success,
+    Failed,
+}
 
 pub(in crate::features) struct CloudSyncFeatureState {
     settings: CloudSyncSettings,
@@ -24,7 +35,7 @@ pub(in crate::features) struct CloudSyncFeatureState {
     secret_draft: CloudSyncSecretDraft,
     status: String,
     /// Prevent overlapping network jobs from applying cloud state out of order.
-    job_running: bool,
+    live_state: CloudSyncLiveState,
     focused_field: CloudSyncInputField,
     github: GithubGistAuthFeatureState,
 }
@@ -80,7 +91,7 @@ impl CloudSyncFeatureState {
             conflict: None,
             secret_draft: CloudSyncSecretDraft::default(),
             status: String::new(),
-            job_running: false,
+            live_state: CloudSyncLiveState::Idle,
             focused_field: CloudSyncInputField::RemoteRoot,
             github: GithubGistAuthFeatureState {
                 auth: GithubGistAuthState::default(),
@@ -99,7 +110,7 @@ impl CloudSyncFeatureState {
         }
         self.focused_field = field;
         *self.input_value_mut() = text;
-        self.status = "cloud sync settings edited".to_string();
+        self.status = t!("settings.syncSettingsEdited").to_string();
         true
     }
 
@@ -132,7 +143,11 @@ impl CloudSyncFeatureState {
     }
 
     pub(in crate::features) fn job_running(&self) -> bool {
-        self.job_running
+        self.live_state == CloudSyncLiveState::Running
+    }
+
+    pub(in crate::features) fn live_state(&self) -> CloudSyncLiveState {
+        self.live_state
     }
 
     pub(in crate::features) fn github_auth(&self) -> &GithubGistAuthState {
@@ -238,66 +253,64 @@ impl CloudSyncFeatureState {
 
     pub(in crate::features) fn select_provider(&mut self, provider: &str) {
         self.settings.provider = provider.to_string();
-        self.status = format!("provider set to {provider}; save to persist");
+        self.status = t!("settings.syncProviderSetTo", provider = provider).to_string();
     }
 
     pub(in crate::features) fn toggle_enabled(&mut self) {
         self.settings.enabled = !self.settings.enabled;
         self.status = if self.settings.enabled {
-            "cloud sync enabled; save to persist"
+            t!("settings.syncEnabledSaveToPersist").to_string()
         } else {
-            "cloud sync disabled; save to persist"
-        }
-        .to_string();
+            t!("settings.syncDisabledSaveToPersist").to_string()
+        };
     }
 
     pub(in crate::features) fn toggle_s3_virtual_host_style(&mut self) {
         self.settings.s3.virtual_host_style = !self.settings.s3.virtual_host_style;
         self.status = if self.settings.s3.virtual_host_style {
-            "S3 virtual-host style enabled; save to persist"
+            t!("settings.s3VirtualHostStyleEnabled").to_string()
         } else {
-            "S3 path-style URLs enabled; save to persist"
-        }
-        .to_string();
+            t!("settings.s3PathStyleUrlsEnabled").to_string()
+        };
     }
 
     pub(in crate::features) fn toggle_auto_check(&mut self) {
         self.settings.auto_check_on_startup = !self.settings.auto_check_on_startup;
-        self.status = "cloud sync auto-check setting edited".to_string();
+        self.status = t!("settings.syncAutoCheckEdited").to_string();
     }
 
     pub(in crate::features) fn toggle_auto_push(&mut self) {
         self.settings.auto_push_on_change = !self.settings.auto_push_on_change;
-        self.status = "cloud sync auto-push setting edited".to_string();
+        self.status = t!("settings.syncAutoPushEdited").to_string();
     }
 
     pub(in crate::features) fn toggle_auto_pull_remote_changes(&mut self) {
         self.settings.auto_pull_remote_changes = !self.settings.auto_pull_remote_changes;
-        self.status = "cloud sync auto-pull setting edited".to_string();
+        self.status = t!("settings.syncAutoPullEdited").to_string();
     }
 
     pub(in crate::features) fn set_debounce(&mut self, value: u64) {
         self.settings.sync_debounce_seconds = value.clamp(1, 3_600);
-        self.status = "cloud sync debounce setting edited".to_string();
+        self.status = t!("settings.syncDebounceEdited").to_string();
     }
 
     pub(super) fn begin_job(&mut self) -> bool {
-        if self.job_running {
+        if self.job_running() {
             return false;
         }
-        self.job_running = true;
+        self.live_state = CloudSyncLiveState::Running;
         true
     }
 
     pub(super) fn complete_job(&mut self, state: CloudSyncState, status: String) {
-        self.job_running = false;
+        self.live_state = CloudSyncLiveState::Success;
         self.conflict = None;
         self.state = state;
         self.status = status;
     }
 
-    pub(super) fn finish_job_with_status(&mut self, status: String) {
-        self.job_running = false;
+    pub(super) fn fail_job_with_status(&mut self, status: String) {
+        self.live_state = CloudSyncLiveState::Failed;
         self.status = status;
     }
 
@@ -308,7 +321,7 @@ impl CloudSyncFeatureState {
         provider: String,
         provider_action: bool,
     ) {
-        self.job_running = false;
+        self.live_state = CloudSyncLiveState::Failed;
         self.status = status;
         self.capture_conflict(error, provider, provider_action);
     }
@@ -645,7 +658,7 @@ mod tests {
         CloudSyncInputField, CloudSyncSecretDraft, GithubGistAuthEvent, GithubGistAuthJobEvent,
     };
 
-    use super::CloudSyncFeatureState;
+    use super::{CloudSyncFeatureState, CloudSyncLiveState};
 
     #[test]
     fn cloud_sync_state_owns_loaded_data_and_github_job_channel() {
@@ -678,6 +691,7 @@ mod tests {
             "the device-flow channel starts empty"
         );
         assert!(!cloud_sync.job_running());
+        assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Idle);
         assert!(cloud_sync.conflict().is_none());
 
         let mut settings = cloud_sync.settings().clone();
@@ -744,6 +758,7 @@ mod tests {
             true,
         );
         assert!(!cloud_sync.job_running());
+        assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Failed);
         assert_eq!(cloud_sync.status(), "push failed");
         assert_eq!(cloud_sync.conflict().unwrap().preview.provider, "webdav");
 
@@ -754,6 +769,7 @@ mod tests {
         };
         cloud_sync.complete_job(completed_state, "push complete".to_string());
         assert!(!cloud_sync.job_running());
+        assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Success);
         assert!(cloud_sync.conflict().is_none());
         assert_eq!(cloud_sync.state().device_id, "device-2");
         assert_eq!(cloud_sync.status(), "push complete");
@@ -793,11 +809,13 @@ mod tests {
         assert_eq!(conflict.preview, preview);
         assert!(conflict.provider_action);
         assert!(!cloud_sync.job_running());
+        assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Failed);
 
         assert!(cloud_sync.begin_job());
         cloud_sync.complete_job(CloudSyncState::default(), "recovered".to_string());
         assert!(cloud_sync.conflict().is_none());
         assert!(!cloud_sync.job_running());
+        assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Success);
         assert_eq!(cloud_sync.status(), "recovered");
     }
 

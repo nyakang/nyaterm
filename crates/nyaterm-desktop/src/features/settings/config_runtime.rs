@@ -54,7 +54,7 @@ impl NyaTermApp {
         }
         if self.session.active_id().is_some() || self.session.start_has_pending() {
             self.shell
-                .set_status("close active session before importing config".to_string());
+                .set_status(t!("settings.closeActiveSessionBeforeImport"));
             cx.notify();
             return;
         }
@@ -69,38 +69,35 @@ impl NyaTermApp {
     ) {
         self.clear_stale_local_snapshot_password_prompt(cx);
         if !self.settings.begin_snapshot_password_prompt(kind) {
-            self.shell
-                .set_status("backup or sync prompt is already open".to_string());
+            self.shell.set_status(t!("settings.backupOrSyncPromptOpen"));
             cx.notify();
             return;
         }
 
         self.forget_text_inputs("snapshot-password.");
         let field = self.text_input("snapshot-password.value", "", TextInputSetup::masked(), cx);
-        self.shell.set_status(
-            match kind {
-                SnapshotPasswordPromptKind::Export => "enter password for encrypted .nya export",
-                SnapshotPasswordPromptKind::Import => "enter password for encrypted .nya import",
-                SnapshotPasswordPromptKind::CloudForcePush
-                | SnapshotPasswordPromptKind::CloudForcePull
-                | SnapshotPasswordPromptKind::CloudProviderPush
-                | SnapshotPasswordPromptKind::CloudProviderPull
-                | SnapshotPasswordPromptKind::CloudProviderForcePush
-                | SnapshotPasswordPromptKind::CloudProviderForcePull
-                | SnapshotPasswordPromptKind::CloudRecoverCurrent
-                | SnapshotPasswordPromptKind::CloudProviderRecoverCurrent => {
-                    "enter password for encrypted cloud sync snapshot"
-                }
+        self.shell.set_status(match kind {
+            SnapshotPasswordPromptKind::Export => t!("settings.nyaExportPassword"),
+            SnapshotPasswordPromptKind::Import => t!("settings.nyaImportPassword"),
+            SnapshotPasswordPromptKind::CloudForcePush
+            | SnapshotPasswordPromptKind::CloudForcePull
+            | SnapshotPasswordPromptKind::CloudProviderPush
+            | SnapshotPasswordPromptKind::CloudProviderPull
+            | SnapshotPasswordPromptKind::CloudProviderForcePush
+            | SnapshotPasswordPromptKind::CloudProviderForcePull
+            | SnapshotPasswordPromptKind::CloudRecoverCurrent
+            | SnapshotPasswordPromptKind::CloudProviderRecoverCurrent => {
+                t!("settings.syncSnapshotPassword")
             }
-            .to_string(),
-        );
+        });
         self.settings
-            .set_store_message("awaiting .nya master password");
+            .set_store_message(t!("settings.nyaAwaitingMasterPassword"));
         if !matches!(
             kind,
             SnapshotPasswordPromptKind::Export | SnapshotPasswordPromptKind::Import
         ) {
-            self.cloud_sync.set_status("awaiting cloud sync password");
+            self.cloud_sync
+                .set_status(t!("settings.syncAwaitingPassword"));
         }
         let title = t!(snapshot_password_prompt_title_key(kind));
         self.open_form_dialog(
@@ -193,7 +190,7 @@ impl NyaTermApp {
             self.settings.restore_snapshot_password_prompt(state.kind);
             self.reset_text_input("snapshot-password.value", "", cx);
             self.shell
-                .set_status("master password is required for encrypted .nya".to_string());
+                .set_status(t!("settings.nyaMasterPasswordRequired"));
             cx.notify();
             return false;
         }
@@ -243,37 +240,28 @@ impl NyaTermApp {
             state.kind,
             SnapshotPasswordPromptKind::Export | SnapshotPasswordPromptKind::Import
         ) {
-            self.cloud_sync.set_status("cloud sync cancelled");
+            self.cloud_sync.set_status(t!("settings.syncCancelled"));
         }
         self.shell.set_status(match state.kind {
-            SnapshotPasswordPromptKind::Export => "encrypted .nya export cancelled".to_string(),
-            SnapshotPasswordPromptKind::Import => "encrypted .nya import cancelled".to_string(),
-            SnapshotPasswordPromptKind::CloudForcePush => {
-                "forced cloud sync push cancelled".to_string()
+            SnapshotPasswordPromptKind::Export => t!("settings.nyaExportCancelled"),
+            SnapshotPasswordPromptKind::Import => t!("settings.nyaImportCancelled"),
+            SnapshotPasswordPromptKind::CloudForcePush
+            | SnapshotPasswordPromptKind::CloudProviderPush
+            | SnapshotPasswordPromptKind::CloudProviderForcePush => {
+                t!("settings.syncPushCancelled")
             }
-            SnapshotPasswordPromptKind::CloudForcePull => {
-                "forced cloud sync pull cancelled".to_string()
+            SnapshotPasswordPromptKind::CloudForcePull
+            | SnapshotPasswordPromptKind::CloudProviderPull
+            | SnapshotPasswordPromptKind::CloudProviderForcePull => {
+                t!("settings.syncPullCancelled")
             }
-            SnapshotPasswordPromptKind::CloudProviderPush => {
-                "provider cloud sync push cancelled".to_string()
-            }
-            SnapshotPasswordPromptKind::CloudProviderPull => {
-                "provider cloud sync pull cancelled".to_string()
-            }
-            SnapshotPasswordPromptKind::CloudProviderForcePush => {
-                "forced provider cloud sync push cancelled".to_string()
-            }
-            SnapshotPasswordPromptKind::CloudProviderForcePull => {
-                "forced provider cloud sync pull cancelled".to_string()
-            }
-            SnapshotPasswordPromptKind::CloudRecoverCurrent => {
-                "cloud sync metadata recovery cancelled".to_string()
-            }
-            SnapshotPasswordPromptKind::CloudProviderRecoverCurrent => {
-                "provider cloud sync metadata recovery cancelled".to_string()
+            SnapshotPasswordPromptKind::CloudRecoverCurrent
+            | SnapshotPasswordPromptKind::CloudProviderRecoverCurrent => {
+                t!("settings.syncRecoveryCancelled")
             }
         });
-        self.settings.set_store_message("config picker cancelled");
+        self.settings
+            .set_store_message(t!("settings.configPathPickerClosed"));
         cx.notify();
     }
 
@@ -328,8 +316,7 @@ impl NyaTermApp {
             .settings
             .begin_config_path_prompt(ConfigPathPromptKind::EncryptedPortableExport)
         {
-            self.shell
-                .set_status("config path picker is already open".to_string());
+            self.shell.set_status(t!("settings.configPathPickerOpen"));
             cx.notify();
             return;
         }
@@ -338,16 +325,16 @@ impl NyaTermApp {
         let store = self.store_blocking_client();
         let scheduler = self.blocking_jobs.clone();
         self.shell
-            .set_status("selecting encrypted portable snapshot destination".to_string());
+            .set_status(t!("settings.nyaSelectingDestination"));
         self.settings
-            .set_store_message("selecting encrypted .nya export destination");
+            .set_store_message(t!("settings.nyaSelectingDestination"));
         self.request_settings_panel_refresh(cx);
         cx.spawn(async move |this, cx| {
             let result = match receiver.await {
                 Ok(Ok(Some(path))) => {
                     let _ = this.update(cx, |this, cx| {
                         this.settings
-                            .update_store_status("exporting encrypted .nya snapshot", false);
+                            .update_store_status(t!("settings.nyaExporting").to_string(), false);
                         this.request_settings_panel_refresh(cx);
                     });
                     tracing::info!(operation = "portable_snapshot_export", "started");
@@ -394,8 +381,7 @@ impl NyaTermApp {
             .settings
             .begin_config_path_prompt(ConfigPathPromptKind::EncryptedPortableImport)
         {
-            self.shell
-                .set_status("config path picker is already open".to_string());
+            self.shell.set_status(t!("settings.configPathPickerOpen"));
             cx.notify();
             return;
         }
@@ -408,18 +394,19 @@ impl NyaTermApp {
         let receiver = cx.prompt_for_paths(options);
         let store = self.store_blocking_client();
         let scheduler = self.blocking_jobs.clone();
-        self.shell
-            .set_status("selecting encrypted portable snapshot to import".to_string());
+        self.shell.set_status(t!("settings.nyaSelectingSnapshot"));
         self.settings
-            .set_store_message("selecting encrypted .nya snapshot");
+            .set_store_message(t!("settings.nyaSelectingSnapshot"));
         self.request_settings_panel_refresh(cx);
         cx.spawn(async move |this, cx| {
             let result = match receiver.await {
                 Ok(Ok(Some(paths))) => match paths.into_iter().next() {
                     Some(path) => {
                         let _ = this.update(cx, |this, cx| {
-                            this.settings
-                                .update_store_status("importing encrypted .nya snapshot", false);
+                            this.settings.update_store_status(
+                                t!("settings.nyaImporting").to_string(),
+                                false,
+                            );
                             this.request_settings_panel_refresh(cx);
                         });
                         tracing::info!(operation = "portable_snapshot_import", "started");
@@ -473,33 +460,16 @@ impl NyaTermApp {
                     bytes = info.bytes,
                     "completed"
                 );
-                let message = match kind {
-                    ConfigPathPromptKind::EncryptedPortableExport => {
-                        format!("exported {} byte encrypted .nya snapshot", info.bytes)
-                    }
-                    ConfigPathPromptKind::EncryptedPortableImport => {
-                        format!("exported {} byte encrypted .nya snapshot", info.bytes)
-                    }
-                };
+                let message = t!("settings.nyaExportedCount", count = info.bytes).to_string();
                 self.settings.replace_store_status(
                     info.database_path.display().to_string(),
                     message,
                     true,
                 );
-                self.shell.set_status(match kind {
-                    ConfigPathPromptKind::EncryptedPortableExport => {
-                        format!(
-                            "encrypted portable snapshot exported to {}",
-                            info.backup_path.display()
-                        )
-                    }
-                    ConfigPathPromptKind::EncryptedPortableImport => {
-                        format!(
-                            "encrypted portable snapshot exported to {}",
-                            info.backup_path.display()
-                        )
-                    }
-                });
+                self.shell.set_status(t!(
+                    "settings.nyaExportedTo",
+                    path = info.backup_path.display().to_string()
+                ));
             }
             ConfigPathPromptResult::Imported(info) => {
                 tracing::info!(
@@ -511,58 +481,48 @@ impl NyaTermApp {
                 let safety = info
                     .safety_backup_path
                     .as_ref()
-                    .map(|path| format!("; previous db saved to {}", path.display()))
+                    .map(|path| {
+                        format!(
+                            "; {}",
+                            t!(
+                                "settings.nyaPreviousDbSavedTo",
+                                path = path.display().to_string()
+                            )
+                        )
+                    })
                     .unwrap_or_default();
-                let message = match kind {
-                    ConfigPathPromptKind::EncryptedPortableImport => {
-                        format!(
-                            "imported {} byte encrypted .nya snapshot{safety}",
-                            info.bytes
-                        )
-                    }
-                    ConfigPathPromptKind::EncryptedPortableExport => {
-                        format!(
-                            "imported {} byte encrypted .nya snapshot{safety}",
-                            info.bytes
-                        )
-                    }
-                };
+                let message = format!(
+                    "{}{}",
+                    t!("settings.nyaImportedCount", count = info.bytes),
+                    safety
+                );
                 self.refresh_store_after_portable_import(message, cx);
-                self.shell.set_status(match kind {
-                    ConfigPathPromptKind::EncryptedPortableImport => {
-                        format!(
-                            "encrypted portable snapshot imported from {}",
-                            info.backup_path.display()
-                        )
-                    }
-                    ConfigPathPromptKind::EncryptedPortableExport => {
-                        format!(
-                            "encrypted portable snapshot imported from {}",
-                            info.backup_path.display()
-                        )
-                    }
-                });
+                self.shell.set_status(t!(
+                    "settings.nyaImportedFrom",
+                    path = info.backup_path.display().to_string()
+                ));
             }
             ConfigPathPromptResult::Cancelled => {
                 tracing::info!(operation = ?kind, "portable snapshot picker cancelled");
                 self.shell.set_status(match kind {
                     ConfigPathPromptKind::EncryptedPortableExport => {
-                        "encrypted portable snapshot export cancelled".to_string()
+                        t!("settings.nyaExportCancelled")
                     }
                     ConfigPathPromptKind::EncryptedPortableImport => {
-                        "encrypted portable snapshot import cancelled".to_string()
+                        t!("settings.nyaImportCancelled")
                     }
                 });
-                self.settings.set_store_message("config picker cancelled");
+                self.settings
+                    .set_store_message(t!("settings.configPathPickerClosed"));
             }
             ConfigPathPromptResult::Failed(error) => {
                 tracing::warn!(operation = ?kind, error = %error, "portable snapshot operation failed");
                 self.shell.set_status(match kind {
                     ConfigPathPromptKind::EncryptedPortableExport => {
-                        format!("encrypted portable snapshot export failed: {error}")
+                        format!("{}: {error}", t!("settings.nyaExportFailed"))
                     }
                     ConfigPathPromptKind::EncryptedPortableImport => {
-                        format!("encrypted portable snapshot import failed: {error}")
+                        format!("{}: {error}", t!("settings.nyaImportFailed"))
                     }
                 });
                 self.settings
@@ -570,9 +530,9 @@ impl NyaTermApp {
             }
             ConfigPathPromptResult::Closed => {
                 tracing::warn!(operation = ?kind, "portable snapshot picker closed");
-                self.shell
-                    .set_status("config path picker closed before returning".to_string());
-                self.settings.set_store_message("config picker closed");
+                self.shell.set_status(t!("settings.configPathPickerClosed"));
+                self.settings
+                    .set_store_message(t!("settings.configPathPickerClosed"));
             }
         }
         self.request_settings_panel_refresh(cx);
@@ -690,7 +650,7 @@ impl NyaTermApp {
             ));
         self.settings.replace_store_status(
             snapshot.database_path.display().to_string(),
-            "redb connection store online".to_string(),
+            t!("settings.redbStoreOnline").to_string(),
             true,
         );
         // Notes are not part of BootstrapSnapshot because their Markdown bodies

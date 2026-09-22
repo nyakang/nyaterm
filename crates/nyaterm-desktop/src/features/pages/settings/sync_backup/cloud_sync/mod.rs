@@ -7,6 +7,7 @@ use gpui::{
 use nyaterm_core::{CloudConflictKind, CloudSyncSettings};
 use nyaterm_ui::NyaSelectOption;
 
+use crate::features::sync::CloudSyncLiveState;
 use crate::features::{
     formatting::compact_id, formatting::configured_cloud_sync_provider,
     formatting::format_cloud_provider, formatting::format_history_timestamp_ms,
@@ -234,7 +235,11 @@ impl SettingsPanel {
         let sync_state_key = cloud_sync_state_i18n_key(
             self.cloud_sync.settings().enabled,
             cloud_conflict.is_some(),
-            self.cloud_sync.status(),
+            self.cloud_sync.live_state(),
+            self.cloud_sync
+                .history()
+                .first()
+                .map(|entry| entry.status.as_str()),
         );
         let sync_running = sync_state_key == "settings.syncState.running";
         let current_operation = if sync_running {
@@ -428,7 +433,7 @@ impl SettingsPanel {
                                 .py_2()
                                 .text_size(px(12.))
                                 .text_color(rgb(palette.text_muted))
-                                .child(local_backup_status),
+                                .child(local_backup_status.clone()),
                         )
                     }),
             ))
@@ -756,27 +761,28 @@ fn cloud_sync_provider_label(provider: &str) -> &'static str {
     }
 }
 
-fn cloud_sync_state_i18n_key(enabled: bool, has_conflict: bool, message: &str) -> &'static str {
+fn cloud_sync_state_i18n_key(
+    enabled: bool,
+    has_conflict: bool,
+    live_state: CloudSyncLiveState,
+    last_history_status: Option<&str>,
+) -> &'static str {
     if has_conflict {
         return "settings.syncState.conflict";
     }
     if !enabled {
         return "settings.syncState.disabled";
     }
-    let message = message.to_ascii_lowercase();
-    if message.contains("failed") || message.contains("error") {
-        "settings.syncState.failed"
-    } else if message.contains("testing")
-        || message.contains("pushing")
-        || message.contains("pulling")
-        || message.contains("started")
-        || message.contains("awaiting")
-    {
-        "settings.syncState.running"
-    } else if message.contains("success") || message.contains("up to date") {
-        "settings.syncState.success"
-    } else {
-        "settings.syncState.idle"
+    match live_state {
+        CloudSyncLiveState::Running => return "settings.syncState.running",
+        CloudSyncLiveState::Failed => return "settings.syncState.failed",
+        CloudSyncLiveState::Success => return "settings.syncState.success",
+        CloudSyncLiveState::Idle => {}
+    }
+    match last_history_status {
+        Some("failed") => "settings.syncState.failed",
+        Some("success") => "settings.syncState.success",
+        _ => "settings.syncState.idle",
     }
 }
 
@@ -929,4 +935,37 @@ fn cloud_sync_status_item(
                 .overflow_hidden()
                 .child(value),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CloudSyncLiveState, cloud_sync_state_i18n_key};
+
+    #[test]
+    fn cloud_sync_badge_prioritizes_availability_conflict_and_live_state() {
+        assert_eq!(
+            cloud_sync_state_i18n_key(false, false, CloudSyncLiveState::Idle, None),
+            "settings.syncState.disabled"
+        );
+        assert_eq!(
+            cloud_sync_state_i18n_key(true, true, CloudSyncLiveState::Failed, Some("success")),
+            "settings.syncState.conflict"
+        );
+        assert_eq!(
+            cloud_sync_state_i18n_key(true, false, CloudSyncLiveState::Running, None),
+            "settings.syncState.running"
+        );
+        assert_eq!(
+            cloud_sync_state_i18n_key(true, false, CloudSyncLiveState::Failed, Some("success"),),
+            "settings.syncState.failed"
+        );
+        assert_eq!(
+            cloud_sync_state_i18n_key(true, false, CloudSyncLiveState::Success, Some("failed"),),
+            "settings.syncState.success"
+        );
+        assert_eq!(
+            cloud_sync_state_i18n_key(true, false, CloudSyncLiveState::Idle, Some("success"),),
+            "settings.syncState.success"
+        );
+    }
 }

@@ -1,9 +1,9 @@
 //! A registry of real text inputs, keyed by an id the caller picks.
 //!
 //! Ordinary form, prompt and search inputs use [`NyaInputState`] entities
-//! backed by `gpui-kit`. Full editing surfaces such as the terminal,
-//! paste review and remote file editor keep their own input handlers because
-//! their selection and command semantics are different.
+//! backed by `gpui-kit`. The paste review uses the shared document-editor
+//! wrapper, while the terminal and remote file editor keep dedicated input
+//! handlers because their selection and command semantics are different.
 //!
 //! The connection editor owns dedicated [`NyaInputState`] entities for fields
 //! with custom focus choreography. For smaller panels, the fields live here

@@ -172,21 +172,6 @@ impl TerminalSearchMode {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct MultiLinePasteDraft {
-    pub(crate) text: String,
-}
-
-impl MultiLinePasteDraft {
-    pub(crate) fn new(text: String) -> Self {
-        Self { text }
-    }
-
-    pub(crate) fn normalized_text(&self) -> String {
-        normalize_paste_newlines(&self.text)
-    }
-}
-
 pub(crate) fn normalize_paste_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }

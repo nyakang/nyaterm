@@ -5,12 +5,12 @@
 //! protocol stay in `nyaterm-terminal` and `nyaterm-transport`.
 
 use std::collections::{HashMap, VecDeque};
-use std::ops::Range;
 use std::sync::Arc;
 
 use gpui::{Entity, FocusHandle, Subscription};
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
+use nyaterm_ui::NyaDocumentEditorState;
 
 use super::assist_state::TerminalAssistState;
 use super::terminal_surface::TerminalScrollbarDragState;
@@ -18,9 +18,9 @@ use super::terminal_surface_entity::TerminalSurface;
 use super::window_state::TerminalWindowState;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
 use crate::models::{
-    ActionLinkMenuState, ActionLinkTooltipState, MultiLinePasteDraft, RecordingHistorySearchEvent,
+    ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
     RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
-    TerminalSelection, TerminalViewState, normalize_paste_newlines,
+    TerminalSelection, TerminalViewState,
 };
 use crate::theme::ThemePalette;
 
@@ -41,7 +41,6 @@ pub(in crate::features) struct TerminalFeatureState {
 pub(in crate::features) struct TerminalFeatureFocus {
     pub actions: FocusHandle,
     pub terminal: FocusHandle,
-    pub paste: FocusHandle,
 }
 
 /// In-terminal find bar and recording history search.
@@ -84,17 +83,10 @@ pub(super) struct TerminalInputState {
     pub(super) ime_marked_text: String,
 }
 
-/// Dedicated multi-line paste editor state.
-///
-/// This remains separate from registry-backed single-line inputs because it
-/// owns a byte cursor, selection anchor and IME composition range.
+/// Dedicated multi-line paste editor state backed by gpui-kit's editor.
 pub(super) struct TerminalPasteReviewState {
-    pub(super) draft: Option<MultiLinePasteDraft>,
-    pub(super) marked_text: String,
-    pub(super) marked_range: Option<Range<usize>>,
-    pub(super) cursor: usize,
-    pub(super) anchor: Option<usize>,
-    pub(super) focus: FocusHandle,
+    pub(super) editor: Option<Entity<NyaDocumentEditorState>>,
+    _subscription: Option<Subscription>,
 }
 
 /// Text selection and mouse reporting.
@@ -173,14 +165,6 @@ pub(super) struct TerminalPaintCacheState {
     pub(super) cached_keyword_highlight_rules: Option<Arc<Vec<ResolvedKeywordHighlightRule>>>,
 }
 
-pub(in crate::features) struct TerminalPasteReviewView<'a> {
-    pub draft: Option<&'a MultiLinePasteDraft>,
-    pub selected_byte_range: Range<usize>,
-    pub cursor: usize,
-    pub marked_range: Option<Range<usize>>,
-    pub focus: &'a FocusHandle,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::features) struct TerminalOverlayVisibility {
     pub paste_review: bool,
@@ -237,7 +221,7 @@ impl TerminalFeatureState {
                 focus_subscriptions: Vec::new(),
                 ime_marked_text: String::new(),
             },
-            paste: TerminalPasteReviewState::new(focus.paste),
+            paste: TerminalPasteReviewState::new(),
             assist: TerminalAssistState::new(),
             selection: TerminalSelectionState {
                 selection: None,
@@ -346,19 +330,15 @@ impl TerminalFeatureState {
         self.input.focus_active
     }
 
-    pub(in crate::features) fn paste_review(&self) -> TerminalPasteReviewView<'_> {
-        TerminalPasteReviewView {
-            draft: self.paste.draft.as_ref(),
-            selected_byte_range: self.paste.selected_byte_range(),
-            cursor: self.paste.cursor,
-            marked_range: self.paste.marked_range.clone(),
-            focus: &self.paste.focus,
-        }
+    pub(in crate::features) fn paste_review_editor(
+        &self,
+    ) -> Option<Entity<NyaDocumentEditorState>> {
+        self.paste.editor.clone()
     }
 
     pub(in crate::features) fn overlay_visibility(&self) -> TerminalOverlayVisibility {
         TerminalOverlayVisibility {
-            paste_review: self.paste.draft.is_some(),
+            paste_review: self.paste.editor.is_some(),
             actions: self.menus.actions_open,
             action_link_menu: self.menus.action_link_menu.is_some(),
             action_link_tooltip: self.menus.action_link_tooltip.is_some(),
@@ -535,184 +515,26 @@ impl TerminalFeatureState {
 }
 
 impl TerminalPasteReviewState {
-    fn new(focus: FocusHandle) -> Self {
+    fn new() -> Self {
         Self {
-            draft: None,
-            marked_text: String::new(),
-            marked_range: None,
-            cursor: 0,
-            anchor: None,
-            focus,
+            editor: None,
+            _subscription: None,
         }
     }
 
-    pub(super) fn open(&mut self, text: String) {
-        let text = normalize_paste_newlines(&text);
-        self.cursor = text.len();
-        self.anchor = None;
-        self.marked_range = None;
-        self.draft = Some(MultiLinePasteDraft::new(text));
-        self.marked_text.clear();
+    pub(super) fn open(
+        &mut self,
+        editor: Entity<NyaDocumentEditorState>,
+        subscription: Subscription,
+    ) {
+        self.editor = Some(editor);
+        self._subscription = Some(subscription);
     }
 
     pub(super) fn clear(&mut self) {
-        self.draft = None;
-        self.reset_editing_state();
+        self.editor = None;
+        self._subscription = None;
     }
-
-    pub(super) fn take_normalized_text(&mut self) -> Option<String> {
-        let text = self.draft.take().map(|draft| draft.normalized_text());
-        self.reset_editing_state();
-        text
-    }
-
-    pub(super) fn text(&self) -> &str {
-        self.draft
-            .as_ref()
-            .map(|draft| draft.text.as_str())
-            .unwrap_or_default()
-    }
-
-    pub(super) fn selected_byte_range(&self) -> Range<usize> {
-        let cursor = floor_char_boundary(self.text(), self.cursor);
-        let anchor = floor_char_boundary(self.text(), self.anchor.unwrap_or(cursor));
-        if anchor <= cursor {
-            anchor..cursor
-        } else {
-            cursor..anchor
-        }
-    }
-
-    pub(super) fn select_all(&mut self) {
-        self.anchor = Some(0);
-        self.cursor = self.text().len();
-        self.clear_marked_text();
-    }
-
-    pub(super) fn previous_char_boundary(&self) -> usize {
-        previous_char_boundary(self.text(), self.cursor)
-    }
-
-    pub(super) fn next_char_boundary(&self) -> usize {
-        next_char_boundary(self.text(), self.cursor)
-    }
-
-    pub(super) fn current_line_start(&self) -> usize {
-        line_start(self.text(), self.cursor)
-    }
-
-    pub(super) fn current_line_end(&self) -> usize {
-        line_end(self.text(), self.cursor)
-    }
-
-    pub(super) fn move_cursor(&mut self, cursor: usize, extend: bool) {
-        let cursor = floor_char_boundary(self.text(), cursor);
-        if extend {
-            self.anchor.get_or_insert(self.cursor);
-        } else {
-            self.anchor = None;
-        }
-        self.cursor = cursor;
-        self.clear_marked_text();
-    }
-
-    pub(super) fn move_vertical(&mut self, delta: isize, extend: bool) {
-        let text = self.text();
-        let cursor = floor_char_boundary(text, self.cursor);
-        let current_start = line_start(text, cursor);
-        let column = text[current_start..cursor].chars().count();
-        let target_start = if delta < 0 {
-            if current_start == 0 {
-                0
-            } else {
-                line_start(text, current_start - 1)
-            }
-        } else {
-            let current_end = line_end(text, cursor);
-            if current_end >= text.len() {
-                current_start
-            } else {
-                current_end + 1
-            }
-        };
-        let target_end = line_end(text, target_start);
-        let target = text[target_start..target_end]
-            .char_indices()
-            .nth(column)
-            .map(|(offset, _)| target_start + offset)
-            .unwrap_or(target_end);
-        self.move_cursor(target, extend);
-    }
-
-    pub(super) fn replace_selection(&mut self, text: &str) -> bool {
-        self.replace_range(self.selected_byte_range(), text)
-    }
-
-    pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) -> bool {
-        let Some(draft) = self.draft.as_mut() else {
-            return false;
-        };
-        let start = floor_char_boundary(&draft.text, range.start);
-        let end = floor_char_boundary(&draft.text, range.end).max(start);
-        draft.text.replace_range(start..end, text);
-        self.cursor = start + text.len();
-        self.anchor = None;
-        self.clear_marked_text();
-        true
-    }
-
-    fn reset_editing_state(&mut self) {
-        self.marked_text.clear();
-        self.marked_range = None;
-        self.cursor = 0;
-        self.anchor = None;
-    }
-
-    fn clear_marked_text(&mut self) {
-        self.marked_text.clear();
-        self.marked_range = None;
-    }
-}
-
-fn floor_char_boundary(text: &str, offset: usize) -> usize {
-    let mut offset = offset.min(text.len());
-    while !text.is_char_boundary(offset) {
-        offset -= 1;
-    }
-    offset
-}
-
-fn previous_char_boundary(text: &str, offset: usize) -> usize {
-    let offset = floor_char_boundary(text, offset);
-    text[..offset]
-        .char_indices()
-        .next_back()
-        .map(|(index, _)| index)
-        .unwrap_or(0)
-}
-
-fn next_char_boundary(text: &str, offset: usize) -> usize {
-    let offset = floor_char_boundary(text, offset);
-    text[offset..]
-        .chars()
-        .next()
-        .map(|ch| offset + ch.len_utf8())
-        .unwrap_or(offset)
-}
-
-fn line_start(text: &str, offset: usize) -> usize {
-    text[..floor_char_boundary(text, offset)]
-        .rfind('\n')
-        .map(|index| index + 1)
-        .unwrap_or(0)
-}
-
-fn line_end(text: &str, offset: usize) -> usize {
-    let offset = floor_char_boundary(text, offset);
-    text[offset..]
-        .find('\n')
-        .map(|index| offset + index)
-        .unwrap_or(text.len())
 }
 
 #[cfg(test)]
@@ -722,19 +544,10 @@ mod tests {
     use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 
     use super::super::window_state::{TerminalWindowDockResult, TerminalWindowReconcileResult};
-    use super::{
-        LostTerminalSelectionRecovery, TerminalFeatureFocus, TerminalFeatureState,
-        TerminalPasteReviewState,
-    };
+    use super::{LostTerminalSelectionRecovery, TerminalFeatureFocus, TerminalFeatureState};
     use crate::models::{
         SmartSplitMode, TabDockEdge, TabDockZone, TerminalFramePipeline, TerminalSearchMode,
     };
-
-    fn paste_state() -> TerminalPasteReviewState {
-        let cx = TestAppContext::single();
-        let focus = cx.update(|cx| cx.focus_handle());
-        TerminalPasteReviewState::new(focus)
-    }
 
     fn terminal_state() -> TerminalFeatureState {
         let cx = TestAppContext::single();
@@ -748,7 +561,6 @@ mod tests {
                 TerminalFeatureFocus {
                     actions: cx.focus_handle(),
                     terminal: cx.focus_handle(),
-                    paste: cx.focus_handle(),
                 },
             )
         })
@@ -757,13 +569,12 @@ mod tests {
     #[test]
     fn terminal_owner_projects_overlay_visibility_and_search_mode() {
         let mut state = terminal_state();
-        state.paste.open("echo hello".to_string());
         state.menus.actions_open = true;
         state.search.open = true;
         state.set_search_mode(TerminalSearchMode::History);
 
         let overlays = state.overlay_visibility();
-        assert!(overlays.paste_review);
+        assert!(!overlays.paste_review);
         assert!(overlays.actions);
         assert!(!state.buffer_search_is_open());
 
@@ -1010,77 +821,5 @@ mod tests {
             state.assist.command_suggestion_search_gen,
             search_generation.saturating_add(1)
         );
-    }
-
-    #[test]
-    fn paste_cursor_operations_stay_on_utf8_boundaries() {
-        let mut state = paste_state();
-        state.open("a你🙂b".to_string());
-
-        state.move_cursor(2, false);
-        assert_eq!(state.cursor, 1);
-        assert_eq!(state.next_char_boundary(), 4);
-
-        state.move_cursor(4, false);
-        assert_eq!(state.previous_char_boundary(), 1);
-        assert_eq!(state.next_char_boundary(), 8);
-    }
-
-    #[test]
-    fn paste_selection_replacement_resets_selection_and_ime_state() {
-        let mut state = paste_state();
-        state.open("alpha\nβeta".to_string());
-        state.move_cursor(0, false);
-        state.move_cursor(5, true);
-        state.marked_text = "composition".to_string();
-        state.marked_range = Some(0..5);
-
-        assert_eq!(state.selected_byte_range(), 0..5);
-        assert!(state.replace_selection("替换"));
-
-        assert_eq!(state.text(), "替换\nβeta");
-        assert_eq!(state.cursor, "替换".len());
-        assert!(state.anchor.is_none());
-        assert!(state.marked_text.is_empty());
-        assert!(state.marked_range.is_none());
-    }
-
-    #[test]
-    fn paste_vertical_movement_preserves_character_column() {
-        let mut state = paste_state();
-        state.open("ab\n你cde\nz".to_string());
-
-        state.move_cursor(7, false);
-        state.move_vertical(-1, false);
-        assert_eq!(state.cursor, 2);
-
-        state.move_vertical(1, true);
-        assert_eq!(state.cursor, 7);
-        assert_eq!(state.anchor, Some(2));
-        assert_eq!(state.selected_byte_range(), 2..7);
-    }
-
-    #[test]
-    fn taking_or_clearing_paste_draft_resets_editor_transients() {
-        let mut state = paste_state();
-        state.open("first\r\nsecond\rthird".to_string());
-        state.marked_text = "ime".to_string();
-        state.marked_range = Some(0..3);
-        state.anchor = Some(1);
-
-        assert_eq!(
-            state.take_normalized_text().as_deref(),
-            Some("first\nsecond\nthird")
-        );
-        assert!(state.draft.is_none());
-        assert_eq!(state.cursor, 0);
-        assert!(state.anchor.is_none());
-        assert!(state.marked_text.is_empty());
-        assert!(state.marked_range.is_none());
-
-        state.open("another draft".to_string());
-        state.clear();
-        assert!(state.draft.is_none());
-        assert_eq!(state.cursor, 0);
     }
 }

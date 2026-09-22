@@ -1,5 +1,7 @@
-use gpui::{Context, KeyDownEvent, Window};
+use gpui::{AppContext as _, Context, KeyDownEvent, Keystroke, Window};
 use nyaterm_core::terminal_input_fanout_status;
+use nyaterm_ui::{NyaDocumentEditorEvent, NyaDocumentEditorState};
+use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::models::{is_multi_line_paste, normalize_paste_newlines};
@@ -73,10 +75,29 @@ impl NyaTermApp {
             .terminal_show_multi_line_paste_dialog
             && is_multi_line_paste(&text)
         {
-            self.terminal.paste.open(text);
+            let text = normalize_paste_newlines(&text);
+            let editor = cx.new(|cx| {
+                NyaDocumentEditorState::new_with_placeholder(
+                    window,
+                    cx,
+                    text,
+                    t!("terminal.multiLinePasteTextPlaceholder").to_string(),
+                )
+            });
+            let subscription =
+                cx.subscribe(&editor, |this, _, event: &NyaDocumentEditorEvent, cx| {
+                    if matches!(event, NyaDocumentEditorEvent::Changed(_)) {
+                        this.mark_user_activity();
+                        cx.notify();
+                    }
+                });
+            self.terminal.paste.open(editor.clone(), subscription);
             self.shell
                 .set_status("multi-line paste confirmation opened".to_string());
-            window.focus(&self.terminal.paste.focus, cx);
+            editor.update(cx, |editor, cx| {
+                editor.move_cursor_to_end(cx);
+                editor.focus(window, cx);
+            });
             cx.notify();
             return;
         }
@@ -202,162 +223,117 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn close_multi_line_paste(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn close_multi_line_paste(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.terminal.paste.clear();
         self.shell
             .set_status("multi-line paste cancelled".to_string());
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 
-    pub(in crate::features) fn direct_multi_line_paste(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.terminal.paste.take_normalized_text() else {
+    pub(in crate::features) fn direct_multi_line_paste(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.multi_line_paste_text(cx) else {
             self.shell
                 .set_status("no multi-line paste is active".to_string());
             cx.notify();
             return;
         };
+        let Some(text) = normalized_review_text(&text) else {
+            self.shell
+                .set_status("multi-line paste text is empty".to_string());
+            cx.notify();
+            return;
+        };
+        self.terminal.paste.clear();
         self.send_terminal_paste_input(&text, cx);
+        self.focus_active_workspace_surface(window, cx);
     }
 
-    pub(in crate::features) fn send_multi_line_paste_by_line(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.terminal.paste.take_normalized_text() else {
+    pub(in crate::features) fn send_multi_line_paste_by_line(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.multi_line_paste_text(cx) else {
             self.shell
                 .set_status("no multi-line paste is active".to_string());
             cx.notify();
             return;
         };
+        let Some(text) = normalized_review_text(&text) else {
+            self.shell
+                .set_status("multi-line paste text is empty".to_string());
+            cx.notify();
+            return;
+        };
+        self.terminal.paste.clear();
         // Line-by-line send intentionally skips bracketed paste framing.
         self.send_terminal_input(line_by_line_paste_bytes(&text), cx);
+        self.focus_active_workspace_surface(window, cx);
     }
 
     pub(in crate::features) fn handle_multi_line_paste_key_down(
         &mut self,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.mark_user_activity();
-        let keystroke = &event.keystroke;
-        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
-        if primary && !keystroke.modifiers.alt && !keystroke.modifiers.function {
-            match keystroke.key.as_str() {
-                "a" | "A" => {
-                    self.terminal.paste.select_all();
-                    cx.notify();
-                    return;
-                }
-                "enter" => {
-                    self.direct_multi_line_paste(cx);
-                    return;
-                }
-                "l" | "L" => {
-                    self.send_multi_line_paste_by_line(cx);
-                    return;
-                }
-                _ => {}
+        match multi_line_paste_shortcut(&event.keystroke) {
+            Some(MultiLinePasteShortcut::Cancel) => self.close_multi_line_paste(window, cx),
+            Some(MultiLinePasteShortcut::Direct) => self.direct_multi_line_paste(window, cx),
+            Some(MultiLinePasteShortcut::LineByLine) => {
+                self.send_multi_line_paste_by_line(window, cx)
             }
+            None => return false,
         }
-        if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
-            return;
-        }
-        match keystroke.key.as_str() {
-            "escape" => self.close_multi_line_paste(cx),
-            "backspace" => {
-                let range = self.terminal.paste.selected_byte_range();
-                let range = if range.is_empty() {
-                    let start = self.terminal.paste.previous_char_boundary();
-                    start..self.terminal.paste.cursor
-                } else {
-                    range
-                };
-                if self.terminal.paste.replace_range(range, "") {
-                    cx.notify();
-                }
-            }
-            "enter" => {
-                if self.terminal.paste.replace_selection("\n") {
-                    cx.notify();
-                }
-            }
-            "delete" => {
-                let range = self.terminal.paste.selected_byte_range();
-                let range = if range.is_empty() {
-                    let end = self.terminal.paste.next_char_boundary();
-                    self.terminal.paste.cursor..end
-                } else {
-                    range
-                };
-                if self.terminal.paste.replace_range(range, "") {
-                    cx.notify();
-                }
-            }
-            "left" => {
-                if !keystroke.modifiers.shift
-                    && let Some(anchor) = self.terminal.paste.anchor
-                {
-                    let target = anchor.min(self.terminal.paste.cursor);
-                    self.terminal.paste.move_cursor(target, false);
-                    cx.notify();
-                    return;
-                }
-                let target = self.terminal.paste.previous_char_boundary();
-                self.terminal
-                    .paste
-                    .move_cursor(target, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            "right" => {
-                if !keystroke.modifiers.shift
-                    && let Some(anchor) = self.terminal.paste.anchor
-                {
-                    let target = anchor.max(self.terminal.paste.cursor);
-                    self.terminal.paste.move_cursor(target, false);
-                    cx.notify();
-                    return;
-                }
-                let target = self.terminal.paste.next_char_boundary();
-                self.terminal
-                    .paste
-                    .move_cursor(target, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            "home" => {
-                let target = self.terminal.paste.current_line_start();
-                self.terminal
-                    .paste
-                    .move_cursor(target, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            "end" => {
-                let target = self.terminal.paste.current_line_end();
-                self.terminal
-                    .paste
-                    .move_cursor(target, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            "up" => {
-                self.terminal
-                    .paste
-                    .move_vertical(-1, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            "down" => {
-                self.terminal
-                    .paste
-                    .move_vertical(1, keystroke.modifiers.shift);
-                cx.notify();
-            }
-            _ => {
-                if let Some(input) = keystroke
-                    .key_char
-                    .as_deref()
-                    .filter(|input| !input.is_empty())
-                    && self.terminal.paste.replace_selection(input)
-                {
-                    cx.notify();
-                }
-            }
-        }
+        true
     }
+
+    fn multi_line_paste_text(&self, cx: &gpui::App) -> Option<String> {
+        self.terminal
+            .paste_review_editor()
+            .map(|editor| editor.read(cx).value(cx))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MultiLinePasteShortcut {
+    Cancel,
+    Direct,
+    LineByLine,
+}
+
+fn multi_line_paste_shortcut(keystroke: &Keystroke) -> Option<MultiLinePasteShortcut> {
+    let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+    if primary && !keystroke.modifiers.alt && !keystroke.modifiers.function {
+        return match keystroke.key.as_str() {
+            "enter" => Some(MultiLinePasteShortcut::Direct),
+            "l" | "L" => Some(MultiLinePasteShortcut::LineByLine),
+            _ => None,
+        };
+    }
+    if !primary
+        && !keystroke.modifiers.alt
+        && !keystroke.modifiers.function
+        && keystroke.key == "escape"
+    {
+        return Some(MultiLinePasteShortcut::Cancel);
+    }
+    None
+}
+
+fn normalized_review_text(text: &str) -> Option<String> {
+    let text = normalize_paste_newlines(text);
+    (!text.is_empty()).then_some(text)
 }
 
 fn line_by_line_paste_bytes(text: &str) -> Vec<u8> {
@@ -371,9 +347,35 @@ fn line_by_line_paste_bytes(text: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use crate::features::NyaTermApp;
+    use gpui::{
+        Entity, InteractiveElement as _, IntoElement, Keystroke, ParentElement as _, Render,
+        Styled as _, TestAppContext, div,
+    };
 
-    use super::line_by_line_paste_bytes;
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+
+    use super::{
+        MultiLinePasteShortcut, line_by_line_paste_bytes, multi_line_paste_shortcut,
+        normalized_review_text,
+    };
+
+    struct FocusHost {
+        app: Entity<NyaTermApp>,
+    }
+
+    impl Render for FocusHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(div().track_focus(self.app.read(cx).terminal.input_focus()))
+        }
+    }
 
     #[test]
     fn bracketed_paste_wraps_wire_bytes_without_reencoding_body() {
@@ -403,5 +405,70 @@ mod tests {
             line_by_line_paste_bytes("first\n第二\n"),
             "first\n第二\n\n".as_bytes()
         );
+    }
+
+    #[test]
+    fn paste_review_shortcuts_leave_editor_commands_to_the_editor() {
+        assert_eq!(
+            multi_line_paste_shortcut(&Keystroke::parse("ctrl-enter").unwrap()),
+            Some(MultiLinePasteShortcut::Direct)
+        );
+        assert_eq!(
+            multi_line_paste_shortcut(&Keystroke::parse("ctrl-l").unwrap()),
+            Some(MultiLinePasteShortcut::LineByLine)
+        );
+        assert_eq!(
+            multi_line_paste_shortcut(&Keystroke::parse("escape").unwrap()),
+            Some(MultiLinePasteShortcut::Cancel)
+        );
+        assert_eq!(
+            multi_line_paste_shortcut(&Keystroke::parse("ctrl-a").unwrap()),
+            None
+        );
+        assert_eq!(
+            multi_line_paste_shortcut(&Keystroke::parse("enter").unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn paste_review_normalizes_newlines_without_accepting_empty_text() {
+        assert_eq!(
+            normalized_review_text("first\r\nsecond\rthird").as_deref(),
+            Some("first\nsecond\nthird")
+        );
+        assert_eq!(normalized_review_text(""), None);
+    }
+
+    #[test]
+    fn every_paste_review_action_restores_terminal_focus() {
+        let dir = TestConfigDir::new("nyaterm-desktop-paste-review-focus");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "session-a");
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| FocusHost { app: host_app });
+
+        for action in ["cancel", "direct", "line-by-line"] {
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                app.update(cx, |app, cx| {
+                    app.paste_terminal_text("first\nsecond".to_string(), window, cx);
+                    assert!(app.terminal.overlay_visibility().paste_review);
+                    let editor = app.terminal.paste_review_editor().unwrap();
+                    assert_eq!(editor.read(cx).selected_range(cx), 12..12);
+                    match action {
+                        "cancel" => app.close_multi_line_paste(window, cx),
+                        "direct" => app.direct_multi_line_paste(window, cx),
+                        "line-by-line" => app.send_multi_line_paste_by_line(window, cx),
+                        _ => unreachable!(),
+                    }
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(app.read(cx).terminal.input_focus().is_focused(window));
+                assert!(!app.read(cx).terminal.overlay_visibility().paste_review);
+            });
+        }
     }
 }

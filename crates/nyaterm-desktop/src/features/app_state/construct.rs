@@ -139,7 +139,7 @@ impl NyaTermApp {
         }
         let store_status = (
             database_path.display().to_string(),
-            "redb connection store online".to_string(),
+            t!("settings.redbStoreOnline").to_string(),
             true,
         );
         let otp_provider = Arc::new(NativeOtpProvider::new(store_blocking.clone()));
@@ -296,7 +296,6 @@ impl NyaTermApp {
                 TerminalFeatureFocus {
                     actions: cx.focus_handle(),
                     terminal: cx.focus_handle(),
-                    paste: cx.focus_handle(),
                 },
             ),
             ai: AiFeatureState::new(

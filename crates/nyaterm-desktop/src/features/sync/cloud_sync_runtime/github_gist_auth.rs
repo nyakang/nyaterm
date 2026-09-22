@@ -81,6 +81,7 @@ impl NyaTermApp {
                     .update(cx, |this, cx| {
                         if let Some(event) = this.cloud_sync.accept_github_auth_event(job) {
                             this.apply_github_gist_auth_event(event, cx);
+                            this.request_settings_panel_refresh(cx);
                             cx.notify();
                         }
                     })

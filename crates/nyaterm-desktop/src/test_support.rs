@@ -86,6 +86,45 @@ pub(crate) fn spawn_webdav_service_unavailable_server() -> (String, JoinHandle<(
     (endpoint, server)
 }
 
+/// A one-shot WebDAV server that answers any request as "no such resource", so a
+/// provider connection test reading `sync/latest.redb` succeeds (`None` pointer).
+pub(crate) fn spawn_webdav_healthy_server() -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("mock WebDAV listener");
+    let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "WebDAV request was not sent");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("mock accept failed: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).expect("request headers");
+            assert!(count > 0, "incomplete request");
+            request.extend_from_slice(&buffer[..count]);
+            assert!(request.len() < 16 * 1024, "oversized mock request");
+        }
+        assert!(request.starts_with(b"GET /"));
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .expect("mock response");
+    });
+    (endpoint, server)
+}
+
 #[test]
 fn test_config_dir_removes_its_tree_on_drop() {
     let path = {

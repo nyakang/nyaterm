@@ -2,6 +2,8 @@
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
+use rust_i18n::t;
+
 use nyaterm_core::{TranslateResult, TranslationSettings};
 
 use crate::models::{TranslateInputField, TranslationDialogState, TranslationSecretDraft};
@@ -284,16 +286,16 @@ impl TranslationFeatureState {
             }
             _ => {}
         }
-        self.status = format!("{provider} translation secret cleared; save to persist");
+        self.status = t!("settings.translationSecretCleared", provider = provider).to_string();
     }
 
     pub(super) fn edit_input(&mut self, field: TranslateInputField, text: String) {
         self.focused_field = field;
         *self.input_value_mut() = text;
         self.status = if field.is_settings_field() {
-            "translation settings edited".to_string()
+            t!("settings.translationSettingsEdited").to_string()
         } else {
-            "translation input edited".to_string()
+            t!("settings.translationInputEdited").to_string()
         };
     }
 
@@ -426,7 +428,7 @@ mod tests {
         let mut state = TranslationFeatureState::new(TranslationSettings::default());
         state.edit_input(TranslateInputField::BaiduAppId, "app-id".to_string());
         assert_eq!(state.settings().baidu_app_id, "app-id");
-        assert_eq!(state.status(), "translation settings edited");
+        assert_eq!(state.status(), "Translation settings edited.");
 
         state.replace_settings(
             TranslationSettings {
@@ -443,7 +445,7 @@ mod tests {
         assert!(state.settings_draft_snapshot().1.baidu_app_key.is_empty());
         assert_eq!(
             state.status(),
-            "baidu translation secret cleared; save to persist"
+            "baidu translation secret cleared; save to persist."
         );
 
         state.select_target_language("ko");

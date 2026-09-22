@@ -401,12 +401,20 @@ pub(in crate::features) fn format_history_timestamp_ms(timestamp_ms: u64) -> Str
     if timestamp_ms == 0 {
         return "never".to_string();
     }
+    // Timestamps are UTC epoch milliseconds; render them as local wall-clock like the
+    // terminal gutter formatter, otherwise sync rows display UTC and shift by the
+    // machine's UTC offset.
     let secs = (timestamp_ms / 1000) as i64;
-    let hours = ((secs % 86_400) / 3_600).rem_euclid(24);
-    let minutes = ((secs % 3_600) / 60).rem_euclid(60);
-    let seconds = (secs % 60).rem_euclid(60);
-    // Compact wall-clock style without pulling chrono; good enough for panel density.
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
+    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    let datetime = time::OffsetDateTime::from_unix_timestamp(secs)
+        .map(|value| value.to_offset(offset))
+        .unwrap_or_else(|_| time::OffsetDateTime::UNIX_EPOCH.to_offset(offset));
+    format!(
+        "{:02}:{:02}:{:02}",
+        datetime.hour(),
+        datetime.minute(),
+        datetime.second()
+    )
 }
 
 pub(in crate::features) fn format_duration_ms(duration_ms: Option<u64>) -> Option<String> {
@@ -609,7 +617,8 @@ mod tests {
     use nyaterm_terminal::TerminalScreen;
 
     use super::{
-        TerminalTimestampFormatter, terminal_gutter_labels, terminal_timestamp_format_width_chars,
+        TerminalTimestampFormatter, format_history_timestamp_ms, terminal_gutter_labels,
+        terminal_timestamp_format_width_chars,
     };
 
     #[test]
@@ -636,6 +645,28 @@ mod tests {
 
         assert_eq!(labels.line_number, " 3");
         assert_eq!(labels.timestamp.len(), formatter.width_chars());
+    }
+
+    #[test]
+    fn history_timestamp_is_local_wall_clock_not_utc() {
+        assert_eq!(format_history_timestamp_ms(0), "never");
+
+        let timestamp_ms = 1_600_000_000_000;
+        let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+        let datetime = time::OffsetDateTime::from_unix_timestamp((timestamp_ms / 1000) as i64)
+            .expect("valid timestamp")
+            .to_offset(offset);
+        let expected = format!(
+            "{:02}:{:02}:{:02}",
+            datetime.hour(),
+            datetime.minute(),
+            datetime.second()
+        );
+        assert_eq!(
+            format_history_timestamp_ms(timestamp_ms),
+            expected,
+            "history timestamps must honor the local UTC offset"
+        );
     }
 
     #[test]
