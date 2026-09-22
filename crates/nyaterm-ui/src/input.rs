@@ -4,11 +4,11 @@ use gpui::{
     RenderOnce, SharedString, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
     px,
 };
-use gpui_component::input::SelectAll;
-use gpui_component::input::{
+use gpui_kit::component::input::SelectAll;
+use gpui_kit::component::input::{
     Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState,
 };
-use gpui_component::{Icon, IconName, Sizable, Size};
+use gpui_kit::component::{Icon, IconName, Sizable, Size};
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
 
@@ -632,6 +632,7 @@ impl RenderOnce for NyaInputShell {
                 // A script box needs more than the two-line note height a textarea
                 // gets; the gutter makes short boxes read as cramped.
                 .h(px(168.))
+                .text_size(px(14.))
                 .into_any_element(),
         };
 
@@ -710,7 +711,7 @@ mod tests {
         TestAppContext, div,
     };
 
-    use gpui_component::highlighter::LanguageRegistry;
+    use gpui_kit::component::highlighter::LanguageRegistry;
 
     use super::{NyaInputState, component_placeholder};
 
@@ -772,7 +773,7 @@ mod tests {
 
     #[gpui::test]
     fn ancestor_key_listener_does_not_block_plain_or_masked_ascii_input(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let handled = Rc::new(Cell::new(0));
         let (fixture, cx) = cx.add_window_view({
             let handled = Rc::clone(&handled);

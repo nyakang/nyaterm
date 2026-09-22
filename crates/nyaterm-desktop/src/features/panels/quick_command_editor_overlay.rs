@@ -6,7 +6,8 @@ use gpui::{
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
-    NyaPopover, NyaScrollArea, NyaScrollable, NyaSwitch, NyaTabItem, NyaTabs, NyaTabsVariant,
+    NyaButton, NyaButtonVariant, NyaPopover, NyaScrollArea, NyaScrollable, NyaSwitch, NyaTabItem,
+    NyaTabs, NyaTabsVariant,
 };
 
 use super::{
@@ -15,10 +16,9 @@ use super::{
 };
 use crate::features::{
     NyaTermApp, commands::QUICK_COMMAND_COLOR_OPTIONS, icons::QUICK_COMMAND_ICON_OPTIONS,
-    text_inputs::TextInputSetup, view_widgets::dialog_primary_button,
+    text_inputs::TextInputSetup,
 };
 use crate::models::{QuickCommandEditorField, QuickCommandEditorState};
-use crate::widgets::small_button;
 
 impl NyaTermApp {
     pub(in crate::features) fn quick_command_editor_overlay(
@@ -651,13 +651,13 @@ impl NyaTermApp {
                     )
                     .child(
                         div()
-                            .h(px(52.))
+                            .h(px(64.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_end()
-                            .gap_2()
-                            .px_5()
+                            .gap_3()
+                            .px_4()
                             .py_3()
                             .border_t_1()
                             .border_color(rgb(palette.border))
@@ -666,23 +666,34 @@ impl NyaTermApp {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
-                                    .child(small_button(
-                                        palette,
-                                        "quick-command-editor-cancel",
-                                        cancel_label,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.close_quick_command_editor(cx);
-                                        }),
-                                    ))
-                                    .child(dialog_primary_button(
-                                        "quick-command-editor-save",
-                                        save_label,
-                                        can_save,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.save_quick_command_editor(cx);
-                                        }),
-                                    )),
+                                    .gap_3()
+                                    .child(
+                                        div().w(px(70.)).child(
+                                            NyaButton::new(
+                                                "quick-command-editor-cancel",
+                                                cancel_label,
+                                            )
+                                            .variant(NyaButtonVariant::Secondary)
+                                            .full_width()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.close_quick_command_editor(cx);
+                                            })),
+                                        ),
+                                    )
+                                    .child(
+                                        div().w(px(70.)).child(
+                                            NyaButton::new(
+                                                "quick-command-editor-save",
+                                                save_label,
+                                            )
+                                            .variant(NyaButtonVariant::Primary)
+                                            .full_width()
+                                            .disabled(!can_save)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.save_quick_command_editor(cx);
+                                            })),
+                                        ),
+                                    ),
                             ),
                     ),
             )

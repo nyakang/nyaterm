@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     application.run(move |cx: &mut App| {
         let flavor = AppFlavor::current();
         cx.set_app_identity(flavor.application_identifier(), flavor.display_name());
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         cx.set_quit_mode(gpui::QuitMode::Explicit);
         nyaterm_desktop::init(cx);
         let startup = AppShellStartup::prepare(&runtime);

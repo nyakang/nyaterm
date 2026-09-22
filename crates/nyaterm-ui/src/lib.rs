@@ -31,13 +31,13 @@ pub use child_window::{ChildWindowSlot, activate_child_window};
 pub use command::{NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState};
 pub use dialog::{NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogWindowExt};
 pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
-pub use gpui_component::input::{
+pub use gpui_kit::component::input::{
     Copy as NyaCopy, Cut as NyaCut, Paste as NyaPaste, Redo as NyaRedo, SelectAll as NyaSelectAll,
     Undo as NyaUndo,
 };
-pub use gpui_component::kbd::Kbd as NyaKbd;
-pub use gpui_component::scroll::ScrollableElement as NyaScrollable;
-pub use gpui_component::scroll::ScrollbarAxis as NyaScrollbarAxis;
+pub use gpui_kit::component::kbd::Kbd as NyaKbd;
+pub use gpui_kit::component::scroll::ScrollableElement as NyaScrollable;
+pub use gpui_kit::component::scroll::ScrollbarAxis as NyaScrollbarAxis;
 pub use hover_card::NyaHoverCard;
 pub use input::{
     NyaInput, NyaInputEvent, NyaInputShell, NyaInputState, NyaSearchInput, NyaTextArea,
@@ -67,17 +67,18 @@ pub use widgets::{
 
 #[cfg(test)]
 mod tests {
-    /// NyaTerm localises `gpui-component`'s own widget strings by setting one
+    /// NyaTerm localises `gpui-kit`'s own widget strings by setting one
     /// process-wide locale, which only works because both crates read the same
-    /// `rust_i18n` global and `gpui-component` ships the locales NyaTerm offers.
+    /// `rust_i18n` global and `gpui-kit` ships the locales NyaTerm offers.
     /// This pins the whole chain without mutating the global, which parallel tests
     /// would race.
     #[test]
     fn gpui_component_shares_the_rust_i18n_locale_and_ships_simplified_chinese() {
-        assert_eq!(&*gpui_component::locale(), &*rust_i18n::locale());
+        assert_eq!(&*gpui_kit::component::locale(), &*rust_i18n::locale());
 
-        let english = gpui_component::_rust_i18n_try_translate("en", "Calendar.month.January");
-        let chinese = gpui_component::_rust_i18n_try_translate("zh-CN", "Calendar.month.January");
+        let english = gpui_kit::component::_rust_i18n_try_translate("en", "Calendar.month.January");
+        let chinese =
+            gpui_kit::component::_rust_i18n_try_translate("zh-CN", "Calendar.month.January");
         assert_eq!(english.as_deref(), Some("January"));
         assert_eq!(chinese.as_deref(), Some("一月"));
     }

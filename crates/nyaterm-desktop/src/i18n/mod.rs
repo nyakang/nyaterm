@@ -61,7 +61,7 @@ pub(crate) fn normalize_locale(language: &str) -> Cow<'static, str> {
 /// The persisted setting stays authoritative; this is a write-through projection of
 /// it, so it must be called from every writer of that setting. `rust_i18n`'s locale
 /// is a single global shared by every crate in the graph, which is what makes
-/// `gpui-component`'s own widget strings follow the same language.
+/// `gpui-kit`'s own widget strings follow the same language.
 pub(crate) fn apply_locale(language: &str) {
     rust_i18n::set_locale(&normalize_locale(language));
 }

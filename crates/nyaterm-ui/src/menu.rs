@@ -4,11 +4,11 @@ use gpui::{
     Anchor, App, ClickEvent, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
     SharedString, Styled, Window, div, prelude::FluentBuilder as _, px, rgb,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::menu::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{
     ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuAppearance, PopupMenuItem,
 };
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
 };
 
@@ -880,7 +880,7 @@ mod tests {
 
     #[gpui::test]
     fn dynamic_context_menu_uses_the_latest_uniform_list_target(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let target = Rc::new(Cell::new(0));
         let current_triggered = Rc::new(Cell::new(false));
         let parent_triggered = Rc::new(Cell::new(false));

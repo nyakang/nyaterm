@@ -4,7 +4,7 @@ use gpui::{
     AnyElement, App, ClickEvent, FontWeight, Hsla, IntoElement, Pixels, RenderOnce, ScrollHandle,
     SharedString, UniformListScrollHandle, Window, div, prelude::*, px, rgb,
 };
-use gpui_component::scroll::Scrollbar;
+use gpui_kit::component::scroll::Scrollbar;
 
 fn platform_code_font_family() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -408,7 +408,7 @@ mod tests {
 
     #[gpui::test]
     fn max_height_scroll_area_handles_wheel_events(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| MaxHeightScrollAreaFixture);
         let cx: &mut VisualTestContext = cx;
         draw(cx);
@@ -429,7 +429,7 @@ mod tests {
 
     #[gpui::test]
     fn horizontal_scrollbar_tracks_only_horizontal_wheel_input(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let scroll = ScrollHandle::new();
         let (_, cx) = cx.add_window_view({
             let scroll = scroll.clone();

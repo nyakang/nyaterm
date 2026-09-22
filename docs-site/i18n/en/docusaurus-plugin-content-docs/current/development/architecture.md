@@ -28,7 +28,7 @@ The main responsibilities are:
 |------|----------------|
 | `nyaterm-app` | Executable entry point, logging, embedded assets, and root-window creation |
 | `nyaterm-desktop` | GPUI composition, state, views, platform adapters, and background coordination |
-| `nyaterm-ui` | Shared controls, theme tokens, and the `gpui-component` integration boundary |
+| `nyaterm-ui` | Shared controls, theme tokens, and the `gpui-kit` integration boundary |
 | `nyaterm-terminal` | UI-independent terminal state, control sequences, encodings, and graphics protocols |
 | `nyaterm-terminal-gpui` | GPUI terminal input, layout, selection, highlighting, images, and painting |
 | `nyaterm-transport` | PTY, SSH, Telnet, Serial, SFTP, tunnels, remote operations, and transfer protocols |

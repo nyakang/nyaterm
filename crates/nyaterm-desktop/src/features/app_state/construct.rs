@@ -237,7 +237,7 @@ impl NyaTermApp {
         let ai_panel = cx.new(|_| AiPanel::new(app_entity.downgrade()));
         let start_workspace = StartWorkspaceFeatureState::new(&connection_groups, &settings, cx);
 
-        // Settings are loaded after gpui-component initialization, so this is the
+        // Settings are loaded after gpui-kit initialization, so this is the
         // first point at which the persisted shortcut map can replace the defaults.
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
 

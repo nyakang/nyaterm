@@ -1,4 +1,4 @@
-//! Window-root adapter for gpui-component.
+//! Window-root adapter for gpui-kit.
 
 use gpui::{
     AnyView, AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -23,7 +23,7 @@ const COMPONENT_OVERLAY_PRIORITY: usize = 1;
 /// third-party root type directly. Windows that render component-backed
 /// dialogs, popovers, menus, tooltips, or inputs should use this as their first
 /// view layer.
-pub type NyaRoot = gpui_component::Root;
+pub type NyaRoot = gpui_kit::component::Root;
 
 pub type NyaWindowHandle = WindowHandle<NyaRoot>;
 
@@ -54,15 +54,15 @@ impl Render for NyaRootContent {
             // being scattered across various popup types. The priority of internal popups
             // continues to take effect after the parent layer.
             .children(
-                gpui_component::Root::render_sheet_layer(window, cx)
+                gpui_kit::component::Root::render_sheet_layer(window, cx)
                     .map(|layer| deferred(layer).with_priority(COMPONENT_OVERLAY_PRIORITY)),
             )
             .children(
-                gpui_component::Root::render_dialog_layer(window, cx)
+                gpui_kit::component::Root::render_dialog_layer(window, cx)
                     .map(|layer| deferred(layer).with_priority(COMPONENT_OVERLAY_PRIORITY)),
             )
             .children(
-                gpui_component::Root::render_notification_layer(window, cx)
+                gpui_kit::component::Root::render_notification_layer(window, cx)
                     .map(|layer| deferred(layer).with_priority(COMPONENT_OVERLAY_PRIORITY)),
             )
     }
@@ -74,7 +74,7 @@ pub fn nya_root(
     cx: &mut Context<NyaRoot>,
 ) -> NyaRoot {
     let content = cx.new(|_| NyaRootContent::new(view));
-    gpui_component::Root::new(content, window, cx)
+    gpui_kit::component::Root::new(content, window, cx)
 }
 
 #[cfg(test)]
@@ -264,7 +264,7 @@ mod tests {
 
     #[gpui::test]
     fn nya_root_renders_component_dialog_layer(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|_| RootContentFixture);
@@ -330,7 +330,7 @@ mod tests {
     fn nya_dialog_blocks_lower_pointer_events_while_open_and_preserves_clicks(
         cx: &mut TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let lower_down = Arc::new(AtomicUsize::new(0));
         let lower_movement = Arc::new(AtomicUsize::new(0));
         let lower_up = Arc::new(AtomicUsize::new(0));
@@ -396,7 +396,7 @@ mod tests {
     fn ordinary_inputs_keep_focus_on_inside_click_and_blur_on_outside_click(
         cx: &mut TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let fixture_slot = Rc::new(RefCell::new(None));
         let fixture_slot_for_window = fixture_slot.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -509,7 +509,7 @@ mod tests {
 
     #[gpui::test]
     fn input_blur_event_is_forwarded_once(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let fixture_slot = Rc::new(RefCell::new(None));
         let fixture_slot_for_window = fixture_slot.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -532,7 +532,7 @@ mod tests {
                 .component_state()
                 .expect("first component should be initialized");
             component.update(cx, |_, cx| {
-                cx.emit(gpui_component::input::InputEvent::Blur);
+                cx.emit(gpui_kit::component::input::InputEvent::Blur);
             });
         });
         cx.run_until_parked();
@@ -545,7 +545,7 @@ mod tests {
 
     #[gpui::test]
     fn nya_confirm_dialog_renders_footer_actions(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|_| RootContentFixture);
@@ -574,7 +574,7 @@ mod tests {
 
     #[gpui::test]
     fn nya_danger_confirm_dialog_renders_footer_actions(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|_| RootContentFixture);
@@ -603,7 +603,7 @@ mod tests {
 
     #[gpui::test]
     fn nya_alert_dialog_renders_action_footer(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|_| RootContentFixture);
@@ -629,7 +629,7 @@ mod tests {
 
     /// Geometry of the dialog card's own close button.
     ///
-    /// `gpui-component` paints it as an absolutely positioned overlay inset from
+    /// `gpui-kit` paints it as an absolutely positioned overlay inset from
     /// the card's top-right corner, and gives it no debug selector, so derive it
     /// from the title and content it sits beside.
     fn dialog_close_button_center(
@@ -678,7 +678,7 @@ mod tests {
     /// element's dispatch path, so this only holds while the dialog owns focus.
     #[gpui::test]
     fn nya_dialog_close_button_dismisses_the_dialog(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|_| RootContentFixture);
@@ -797,7 +797,7 @@ mod tests {
     /// item click always dismisses the one that opened.
     #[gpui::test]
     fn dialog_from_a_list_context_menu_item_stays_dismissable(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
 
         let target = Rc::new(RefCell::new("none"));
         let fixture_target = target.clone();

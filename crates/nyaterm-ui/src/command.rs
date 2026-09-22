@@ -6,7 +6,7 @@ use gpui::{
     SharedString, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_base::actions::Cancel;
-use gpui_component::{
+use gpui_kit::component::{
     Disableable as _, IndexPath,
     command::{Command, CommandItem, CommandState},
 };
@@ -384,7 +384,7 @@ mod tests {
 
     #[gpui::test]
     fn command_state_exposes_query_and_selection_without_component_types(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (fixture, cx) = cx.add_window_view(|window, cx| CommandFixture {
             state: cx.new(|cx| NyaCommandState::new(window, cx)),
         });
@@ -419,7 +419,7 @@ mod tests {
 
     #[gpui::test]
     fn escape_clears_then_cancels_without_leaking_and_enter_confirms(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let cancel_count = Rc::new(Cell::new(0));
         let propagated_cancel_count = Rc::new(Cell::new(0));
         let raw_keydown_count = Rc::new(Cell::new(0));

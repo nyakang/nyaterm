@@ -2,8 +2,8 @@ use gpui::{
     AnyElement, App, ClickEvent, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
     Styled as _, Window, prelude::FluentBuilder as _,
 };
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Disableable, Icon, Selectable, Sizable};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Disableable, Icon, Selectable, Sizable};
 
 type NyaButtonClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 

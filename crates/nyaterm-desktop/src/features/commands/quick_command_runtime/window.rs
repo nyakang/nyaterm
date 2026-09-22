@@ -165,7 +165,7 @@ fn open_quick_command_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut App)
     }
 
     let title = app.read(cx).quick_command_editor_title().to_string();
-    let spec = ChildWindowSpec::modal_editor(title, 540., 688.).min_size(420., 560.);
+    let spec = ChildWindowSpec::modal_editor(title, 540., 720.).min_size(420., 560.);
     let chrome = spec.chrome();
     let parent = app.read(cx).shell.main_window();
     let options = child_window_options(&spec, parent, cx);

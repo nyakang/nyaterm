@@ -30,12 +30,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{Context, Entity, IntoElement, Render, Rgba, Task, WeakEntity, Window, div, prelude::*};
+use gpui::{
+    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba,
+    ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
+};
 use nyaterm_transport::{RemoteGpuProcess, RemoteNpuProcess, RemoteProcess};
 use nyaterm_ui::{NyaInputState, NyaNumberInputOptions, NyaNumberInputState};
 use rust_i18n::t;
 
 use super::docker_view::docker_panel;
+use super::process::{process_display_mode, process_row_height_px};
 use super::process_view::processes_panel;
 use super::stats_view::{gpu_panel, npu_panel, stats_panel};
 use crate::features::NyaTermApp;
@@ -192,6 +196,13 @@ pub(in crate::features) struct RemoteMonitorPanel {
     clock: Option<Task<()>>,
     /// The snapshot this panel renders from.
     snapshot: Option<RemoteMonitorSnapshot>,
+    /// Variable-height process rows live here because expanding a process changes only
+    /// that row's measured height. The panel entity is the authoritative UI owner.
+    process_list: ListState,
+    /// Docker keeps separate positions for containers and the resource tabs, matching
+    /// the two independent offsets the old wheel-only implementation exposed.
+    docker_container_scroll: UniformListScrollHandle,
+    docker_resource_scroll: UniformListScrollHandle,
     /// Paints of *this entity*, so a test can tell the entity route apart from the
     /// inline views it replaced. Both register the same search-input ids, so no
     /// externally visible side effect distinguishes them.
@@ -241,6 +252,7 @@ impl RemoteMonitorPanel {
     }
 
     fn set_snapshot(&mut self, snapshot: RemoteMonitorSnapshot, cx: &mut Context<Self>) {
+        self.reconcile_scroll_state(&snapshot);
         self.snapshot = Some(snapshot);
         // Notifies this panel only. The app is untouched, so nothing else repaints.
         cx.notify();
@@ -252,8 +264,85 @@ impl RemoteMonitorPanel {
             app,
             clock: None,
             snapshot: None,
+            process_list: ListState::new(0, ListAlignment::Top, px(256.)),
+            docker_container_scroll: UniformListScrollHandle::new(),
+            docker_resource_scroll: UniformListScrollHandle::new(),
             #[cfg(test)]
             paint_count: 0,
+        }
+    }
+
+    fn reconcile_scroll_state(&mut self, snapshot: &RemoteMonitorSnapshot) {
+        match &snapshot.data {
+            RemoteMonitorData::Processes {
+                state, processes, ..
+            } => {
+                let (reset_to_top, needs_reset) =
+                    self.snapshot.as_ref().map_or((true, true), |previous| {
+                        let RemoteMonitorData::Processes {
+                            state: previous_state,
+                            processes: previous_processes,
+                            ..
+                        } = &previous.data
+                        else {
+                            return (true, true);
+                        };
+                        let reset_to_top = previous.key.has_session != snapshot.key.has_session
+                            || previous_state.search_draft != state.search_draft
+                            || previous_state.sort_key != state.sort_key
+                            || previous_state.sort_direction != state.sort_direction;
+                        let previous_selected_index = previous_state.selected_pid.and_then(|pid| {
+                            previous_processes
+                                .iter()
+                                .position(|process| process.pid == pid)
+                        });
+                        let selected_index = state.selected_pid.and_then(|pid| {
+                            processes.iter().position(|process| process.pid == pid)
+                        });
+                        let previous_mode = process_display_mode(previous.key.panel_width);
+                        let mode = process_display_mode(snapshot.key.panel_width);
+                        (
+                            reset_to_top,
+                            reset_to_top
+                                || previous_processes.len() != processes.len()
+                                || previous_selected_index != selected_index
+                                || previous_mode != mode,
+                        )
+                    });
+                if needs_reset {
+                    let previous_top = self.process_list.logical_scroll_top();
+                    let row_height =
+                        process_row_height_px(process_display_mode(snapshot.key.panel_width));
+                    self.process_list
+                        .reset_with_uniform_height(processes.len(), px(row_height));
+                    let restored_top = if reset_to_top {
+                        ListOffset::default()
+                    } else {
+                        ListOffset {
+                            item_ix: previous_top.item_ix.min(processes.len().saturating_sub(1)),
+                            offset_in_item: px(0.),
+                        }
+                    };
+                    self.process_list.scroll_to(restored_top);
+                }
+            }
+            RemoteMonitorData::Docker(docker) => {
+                let reset_to_top = self.snapshot.as_ref().is_none_or(|previous| {
+                    let RemoteMonitorData::Docker(previous_docker) = &previous.data else {
+                        return true;
+                    };
+                    previous.key.has_session != snapshot.key.has_session
+                        || previous_docker.effective_tab != docker.effective_tab
+                        || previous_docker.state.search_draft != docker.state.search_draft
+                });
+                if reset_to_top {
+                    self.docker_container_scroll
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                    self.docker_resource_scroll
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -373,6 +462,7 @@ impl Render for RemoteMonitorPanel {
                         panel_width,
                         search,
                         nice,
+                        self.process_list.clone(),
                         cx,
                     )
                 }
@@ -391,6 +481,8 @@ impl Render for RemoteMonitorPanel {
                         effective_tab,
                         panel_width,
                         search,
+                        self.docker_container_scroll.clone(),
+                        self.docker_resource_scroll.clone(),
                         cx,
                     )
                 }
@@ -1116,6 +1208,7 @@ mod isolation_tests {
     use super::RemoteMonitorKind;
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
+    use crate::features::runtime_jobs::DockerResource;
     use crate::models::{DockerTab, NavItem, SessionLaunchConfig, SessionRuntimeMetadata};
     use crate::test_support::TestConfigDir;
 
@@ -1688,32 +1781,57 @@ mod isolation_tests {
         );
     }
 
-    /// A shorter list clamps the stored offset, so the next wheel event steps rather than
-    /// jumping. The clamp lives in `reconcile`, and this pins that the snapshot the panel
-    /// renders carries the clamped value.
+    /// The process panel owns a variable-height GPUI list and keeps its item count in
+    /// step with snapshots without routing scroll state through `RemoteOpsFeatureState`.
     #[test]
-    fn a_shorter_list_clamps_the_offset_in_the_snapshot() {
+    fn process_list_state_tracks_snapshots_and_clamps_a_shorter_list() {
         let test_dir = TestConfigDir::new("nyaterm-panel-isolation");
         let mut cx = TestAppContext::single();
         let (app, vcx) = hosted_processes(&mut cx, test_dir.path());
-        vcx.update(|_, cx| {
+        vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 app.remote_ops
                     .apply_processes((0..100).map(process).collect());
-                assert!(app.remote_ops.set_process_list_offset(60));
                 app.flush_remote_panel_snapshots(cx);
-                assert_eq!(app.remote_ops.process_presentation().list_offset, 60);
+            });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let panel = app
+                .read(cx)
+                .remote_panels
+                .entity(RemoteMonitorKind::Processes)
+                .read(cx);
+            assert_eq!(panel.process_list.item_count(), 100);
+            assert!(panel.process_list.max_offset_for_scrollbar().y > gpui::px(0.));
+            panel.process_list.scroll_to(gpui::ListOffset {
+                item_ix: 60,
+                offset_in_item: gpui::px(0.),
+            });
+        });
 
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
                 app.remote_ops
                     .apply_processes((0..3).map(process).collect());
                 app.flush_remote_panel_snapshots(cx);
-                assert_eq!(
-                    app.remote_ops.process_presentation().list_offset,
-                    0,
-                    "three rows cannot be scrolled, so the next wheel event steps from the \
-                     top instead of jumping back from 60"
-                );
             });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let panel = app
+                .read(cx)
+                .remote_panels
+                .entity(RemoteMonitorKind::Processes)
+                .read(cx);
+            assert_eq!(panel.process_list.item_count(), 3);
+            assert!(panel.process_list.logical_scroll_top().item_ix < 3);
+            assert_eq!(
+                panel.process_list.max_offset_for_scrollbar().y,
+                gpui::px(0.)
+            );
         });
     }
 
@@ -1975,34 +2093,104 @@ mod isolation_tests {
         });
     }
 
-    /// A shorter resource list clamps the stored offset, so the next wheel event steps.
+    /// Docker's fixed-height virtual lists expose real GPUI scroll handles, and the
+    /// handle becomes non-scrollable again when refreshed data fits the viewport.
     #[test]
-    fn a_shorter_docker_resource_list_clamps_the_offset() {
+    fn docker_resource_list_uses_a_native_scroll_handle() {
         let test_dir = TestConfigDir::new("nyaterm-panel-isolation");
         let mut cx = TestAppContext::single();
         let (app, vcx) = hosted_docker(&mut cx, test_dir.path());
 
-        vcx.update(|_, cx| {
+        vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
+                app.remote_ops.apply_docker_overview(docker_overview(2));
+                app.remote_ops.apply_docker_resource(DockerResource::Images(
+                    (0..100)
+                        .map(|index| nyaterm_transport::DockerImage {
+                            id: format!("image-{index}"),
+                            repository: format!("repo-{index}"),
+                            tag: "latest".to_string(),
+                            created_since: "now".to_string(),
+                            size: "1 MB".to_string(),
+                        })
+                        .collect(),
+                ));
                 app.remote_ops.set_docker_tab(DockerTab::Images);
-                assert!(app.remote_ops.set_docker_resource_offset(14));
                 app.flush_remote_panel_snapshots(cx);
-                assert_eq!(
-                    app.remote_ops.docker_presentation().resource_list_offset,
-                    14
-                );
-
-                let mut overview = docker_overview(2);
-                overview.images.truncate(1);
-                app.remote_ops.apply_docker_overview(overview);
-                app.flush_remote_panel_snapshots(cx);
-                assert_eq!(
-                    app.remote_ops.docker_presentation().resource_list_offset,
-                    0,
-                    "one image cannot be scrolled, so the next wheel event steps from the \
-                     top instead of jumping back from 14"
-                );
             });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let panel = app
+                .read(cx)
+                .remote_panels
+                .entity(RemoteMonitorKind::Docker)
+                .clone();
+            panel.update(cx, |panel, cx| {
+                assert!(panel.docker_resource_scroll.is_scrollable());
+                panel
+                    .docker_resource_scroll
+                    .scroll_to_item_strict(60, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let panel = app
+                .read(cx)
+                .remote_panels
+                .entity(RemoteMonitorKind::Docker)
+                .read(cx);
+            assert!(
+                panel
+                    .docker_resource_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y
+                    < gpui::px(0.)
+            );
+        });
+
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.remote_ops
+                    .apply_docker_resource(DockerResource::Images(vec![
+                        nyaterm_transport::DockerImage {
+                            id: "image-0".to_string(),
+                            repository: "repo-0".to_string(),
+                            tag: "latest".to_string(),
+                            created_since: "now".to_string(),
+                            size: "1 MB".to_string(),
+                        },
+                    ]));
+                app.flush_remote_panel_snapshots(cx);
+            });
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let panel = app
+                .read(cx)
+                .remote_panels
+                .entity(RemoteMonitorKind::Docker)
+                .read(cx);
+            assert!(!panel.docker_resource_scroll.is_scrollable());
+            assert_eq!(
+                panel
+                    .docker_resource_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                gpui::px(0.)
+            );
         });
     }
 }

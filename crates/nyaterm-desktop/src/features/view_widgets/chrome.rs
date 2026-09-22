@@ -330,7 +330,7 @@ pub(in crate::features) fn full_window_input_layer(id: impl Into<String>) -> Sta
 /// draws paint after the whole normal tree, so a handle would otherwise draw its
 /// border line across an overlay and win hit-testing inside its 5px band. `1`
 /// matches the window-wide contract documented in `nyaterm_ui::root`: above the
-/// main-interface dividers, below `gpui-component` popups and tooltips.
+/// main-interface dividers, below `gpui-kit` popups and tooltips.
 pub(in crate::features) const APP_OVERLAY_PRIORITY: usize = 1;
 
 /// `full_window_input_layer` lifted above the resize handles.
@@ -420,25 +420,6 @@ pub(in crate::features) fn dialog_action_button(
         .variant(variant)
         .small()
         .compact()
-        .on_click(on_click)
-}
-
-/// A dialog's primary action that can be inert.
-///
-/// Painting a disabled look-alike instead would drift from the enabled button's
-/// metrics and hover behavior the moment either changes.
-pub(in crate::features) fn dialog_primary_button(
-    id: impl Into<String>,
-    label: impl Into<SharedString>,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let label: SharedString = label.into();
-    NyaButton::new(id.into(), label)
-        .variant(NyaButtonVariant::Primary)
-        .small()
-        .compact()
-        .disabled(!enabled)
         .on_click(on_click)
 }
 

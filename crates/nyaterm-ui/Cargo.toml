@@ -10,13 +10,13 @@ repository.workspace = true
 gpui.workspace = true
 ropey = "=2.0.0-beta.1"
 gpui-base.workspace = true
-gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-go", "tree-sitter-html", "tree-sitter-javascript", "tree-sitter-markdown", "tree-sitter-python", "tree-sitter-rust", "tree-sitter-toml", "tree-sitter-typescript", "tree-sitter-yaml"] }
+gpui-kit = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-go", "tree-sitter-html", "tree-sitter-javascript", "tree-sitter-markdown", "tree-sitter-python", "tree-sitter-rust", "tree-sitter-toml", "tree-sitter-typescript", "tree-sitter-yaml"] }
 
 [dev-dependencies]
 # Tests assert the Base scrollbar projection, which is the global the
 # `Scrollbar` element reads. Production UI integration goes through the
 # nyaterm-ui facade.
 gpui = { workspace = true, features = ["test-support"] }
-# Only to assert that gpui-component reads the same process-wide locale that
+# Only to assert that gpui-kit reads the same process-wide locale that
 # nyaterm-desktop sets. Production code here never translates.
 rust-i18n.workspace = true

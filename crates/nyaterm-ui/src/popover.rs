@@ -7,7 +7,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_base::{POPUP_PRIORITY, PopoverState, Positioner};
-use gpui_component::{Selectable, ThemeStyled as _, popover::Popover, v_flex};
+use gpui_kit::component::{Selectable, ThemeStyled as _, popover::Popover, v_flex};
 
 type NyaPopoverOpenHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type NyaPopoverOutsideHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -470,7 +470,7 @@ mod tests {
 
     #[gpui::test]
     fn side_popover_is_adjacent_to_and_top_aligned_with_its_trigger(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| SidePopoverFixture);
         let cx: &mut VisualTestContext = cx;
         draw(cx);
@@ -485,7 +485,7 @@ mod tests {
 
     #[gpui::test]
     fn right_side_popover_is_adjacent_to_and_top_aligned_with_its_trigger(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| RightSidePopoverFixture);
         let cx: &mut VisualTestContext = cx;
         draw(cx);
@@ -500,7 +500,7 @@ mod tests {
 
     #[gpui::test]
     fn side_popover_in_flow_scroll_area_handles_wheel_input(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| SidePopoverFixture);
         let cx: &mut VisualTestContext = cx;
         draw(cx);
@@ -563,7 +563,7 @@ mod tests {
 
     #[gpui::test]
     fn side_popover_outside_click_closes_and_notifies_its_owner(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let outside_clicks = Rc::new(Cell::new(0));
         let (_, cx) = cx.add_window_view({
             let outside_clicks = outside_clicks.clone();
@@ -585,7 +585,7 @@ mod tests {
 
     #[gpui::test]
     fn anchored_popover_opens_above_later_content_and_owns_pointer_input(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let popup_clicks = Rc::new(Cell::new(0));
         let lower_clicks = Rc::new(Cell::new(0));
         let (_, cx) = cx.add_window_view({

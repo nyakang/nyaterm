@@ -38,7 +38,7 @@ crates/nyaterm-desktop/src/
 
 构造 GPUI element 的 helper 留在 view 或桌面 feature 中，不要为减少 `impl NyaTermApp` 数量而把视图构造移动到纯状态模型。
 
-普通输入、选择、菜单、开关和对话框使用 `nyaterm-ui` 暴露的稳定组件 API。桌面 feature 不直接依赖 `gpui-component`。普通文本字段使用 `NyaInput`/`NyaInputState` 或 `features/text_inputs.rs` 的 id registry，并为输入框提供明确尺寸。
+普通输入、选择、菜单、开关和对话框使用 `nyaterm-ui` 暴露的稳定组件 API。桌面 feature 不直接依赖 `gpui-kit`。普通文本字段使用 `NyaInput`/`NyaInputState` 或 `features/text_inputs.rs` 的 id registry，并为输入框提供明确尺寸。
 
 终端输入、粘贴审查和 `RemoteTextEditor` 是完整编辑面，不应替换成普通单行输入。
 

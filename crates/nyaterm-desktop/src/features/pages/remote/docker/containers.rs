@@ -1,12 +1,14 @@
+use std::sync::Arc;
+
 use gpui::{
-    Context, FontWeight, IntoElement, MouseButton, ScrollDelta, ScrollWheelEvent, SharedString,
-    div, prelude::*, px, rgb, rgba,
+    Context, FontWeight, IntoElement, MouseButton, SharedString, UniformListScrollHandle, div,
+    prelude::*, px, rgb, rgba, uniform_list,
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_transport::DockerContainer;
+use nyaterm_ui::NyaScrollable;
 
 use super::super::panels::RemoteMonitorPanel;
-use crate::features::remote::{DOCKER_VIEWPORT_ROWS, state_scrolled_list_range};
 use crate::features::{
     formatting::compact_id, formatting::docker_state_color, formatting::docker_state_rank,
     shell::gpui_code_font_family,
@@ -17,19 +19,19 @@ use crate::widgets::{empty_panel, status_pill, svg_icon_button};
 
 use super::{DockerRenderContext, docker_menu_layer};
 
-pub(in crate::features::pages::remote) struct DockerContainersPanelState<'a> {
+pub(in crate::features::pages::remote) struct DockerContainersPanelState {
     pub has_snapshot: bool,
     pub has_session: bool,
     pub docker_available: bool,
-    pub filtered_containers: &'a [DockerContainer],
+    pub filtered_containers: Arc<[DockerContainer]>,
     pub query_empty: bool,
-    pub open_menu_id: Option<&'a str>,
-    pub list_offset: usize,
+    pub open_menu_id: Option<String>,
 }
 
 pub(in crate::features::pages::remote) fn docker_containers_panel(
     context: DockerRenderContext,
-    state: DockerContainersPanelState<'_>,
+    state: DockerContainersPanelState,
+    scroll: UniformListScrollHandle,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> impl IntoElement {
     let DockerRenderContext {
@@ -44,7 +46,6 @@ pub(in crate::features::pages::remote) fn docker_containers_panel(
         filtered_containers,
         query_empty,
         open_menu_id,
-        list_offset,
     } = state;
     // Tauri Docker containers tab: dense ~66px rows, left accent, ⋮ action menu.
     if !has_snapshot {
@@ -96,51 +97,42 @@ pub(in crate::features::pages::remote) fn docker_containers_panel(
             .then(left.name.cmp(&right.name))
     });
 
-    // Wheel-driven row window. The offset replaces the rendered slice; this container
-    // does not have a native scroll position that could consume spacer padding.
-    const DOCKER_ROW_PX: f32 = 66.;
-    const DOCKER_OVERSCAN: usize = 6;
+    let containers: Arc<[DockerContainer]> = containers.into();
     let total = containers.len();
-    let visible_range =
-        state_scrolled_list_range(total, list_offset, DOCKER_VIEWPORT_ROWS, DOCKER_OVERSCAN);
+    let rows_context = context.clone();
+    let rows = uniform_list(
+        "docker-container-rows",
+        total,
+        cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
+            range
+                .filter_map(|index| containers.get(index).cloned())
+                .map(|container| {
+                    let menu_open = open_menu_id.as_deref() == Some(container.id.as_str());
+                    div()
+                        .h(px(66.))
+                        .pb(px(6.))
+                        .flex_none()
+                        .child(docker_container_row(
+                            rows_context.clone(),
+                            container,
+                            menu_open,
+                            cx,
+                        ))
+                        .into_any_element()
+                })
+                .collect()
+        }),
+    )
+    .size_full()
+    .track_scroll(&scroll);
 
-    let mut rows = div().flex().flex_col().gap(px(6.));
-    for container in containers.get(visible_range).unwrap_or(&[]).iter().cloned() {
-        let menu_open = open_menu_id == Some(container.id.as_str());
-        rows = rows.child(docker_container_row(
-            context.clone(),
-            container,
-            menu_open,
-            cx,
-        ));
-    }
     div()
         .id(SharedString::from("docker-containers-scroll"))
+        .relative()
         .size_full()
         .overflow_hidden()
-        .flex()
-        .flex_col()
-        .on_scroll_wheel(cx.listener(move |panel, event: &ScrollWheelEvent, _, cx| {
-            panel.with_app(cx, |this, cx| {
-                let max_offset = total.saturating_sub(DOCKER_VIEWPORT_ROWS.min(total));
-                if max_offset == 0 {
-                    return;
-                }
-                let delta_rows = match event.delta {
-                    ScrollDelta::Lines(delta) => delta.y,
-                    ScrollDelta::Pixels(delta) => f32::from(delta.y) / DOCKER_ROW_PX,
-                };
-                let current = this.remote_ops.docker_presentation().list_offset;
-                let next = (current as f32 - delta_rows)
-                    .round()
-                    .clamp(0., max_offset as f32) as usize;
-                if this.remote_ops.set_docker_list_offset(next) {
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            });
-        }))
         .child(rows)
+        .vertical_scrollbar(&scroll)
         .into_any_element()
 }
 

@@ -37,7 +37,7 @@ mod update;
 mod view_widgets;
 
 pub(crate) fn init(cx: &mut gpui::App) {
-    // gpui-component has already installed its bindings. Capture that immutable
+    // gpui-kit has already installed its bindings. Capture that immutable
     // baseline before adding NyaTerm's rebuildable bindings and protections.
     crate::shortcuts::init(cx);
     init_protection_key_bindings(cx);

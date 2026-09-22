@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{Context, IntoElement, div, prelude::*, px};
+use gpui::{Context, IntoElement, UniformListScrollHandle, div, prelude::*, px};
 
 use gpui::Entity;
 use nyaterm_core::truncate_preview;
@@ -32,6 +32,8 @@ pub(in crate::features::pages::remote) fn docker_panel(
     active_tab: DockerTab,
     panel_width: f32,
     search: Entity<NyaInputState>,
+    container_scroll: UniformListScrollHandle,
+    resource_scroll: UniformListScrollHandle,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
     let palette = chrome.palette;
@@ -98,38 +100,34 @@ pub(in crate::features::pages::remote) fn docker_panel(
                 has_snapshot: true,
                 has_session,
                 docker_available: overview.available,
-                filtered_containers: filtered.as_ref(),
+                filtered_containers: filtered,
                 query_empty,
-                open_menu_id: docker.container_menu_id.as_deref(),
-                list_offset: docker.list_offset,
+                open_menu_id: docker.container_menu_id.clone(),
             },
+            container_scroll,
             cx,
         )
         .into_any_element(),
         DockerDerivedItems::Images(filtered) => docker_images_panel(
             palette,
-            filtered.as_ref(),
-            docker.resource_list_offset,
+            filtered,
             labels.clone(),
+            resource_scroll.clone(),
             cx,
         )
         .into_any_element(),
         DockerDerivedItems::Volumes(filtered) => docker_volumes_panel(
             palette,
-            filtered.as_ref(),
-            docker.resource_list_offset,
+            filtered,
             labels.clone(),
+            resource_scroll.clone(),
             cx,
         )
         .into_any_element(),
-        DockerDerivedItems::Networks(filtered) => docker_networks_panel(
-            palette,
-            filtered.as_ref(),
-            docker.resource_list_offset,
-            labels.clone(),
-            cx,
-        )
-        .into_any_element(),
+        DockerDerivedItems::Networks(filtered) => {
+            docker_networks_panel(palette, filtered, labels.clone(), resource_scroll, cx)
+                .into_any_element()
+        }
         DockerDerivedItems::Compose(filtered) => docker_compose_panel(
             render_context.clone(),
             DockerComposePanelState {

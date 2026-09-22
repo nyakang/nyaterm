@@ -1,5 +1,5 @@
 use gpui::{App, SharedString, Window};
-use gpui_component::{
+use gpui_kit::component::{
     WindowExt as _,
     notification::{Notification, NotificationType},
 };

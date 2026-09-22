@@ -1,5 +1,5 @@
-//! Background-only syntax parsing behind the gpui-component integration boundary.
-use gpui_component::highlighter::SyntaxHighlighter;
+//! Background-only syntax parsing behind the gpui-kit integration boundary.
+use gpui_kit::component::highlighter::SyntaxHighlighter;
 use std::ops::Range;
 
 pub fn document_fold_ranges(content: &str, language: &str) -> Vec<Range<usize>> {

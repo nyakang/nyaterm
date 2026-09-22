@@ -1,8 +1,10 @@
-//! Bridge from NyaTerm's persisted theme palette to gpui-component's theme.
+//! Bridge from NyaTerm's persisted theme palette to gpui-kit's theme.
+
+use std::sync::Arc;
 
 use gpui::{App, Font, Global, Hsla, Pixels, font, hsla, px, rgb, transparent_black};
-use gpui_component::scroll::ScrollbarMode;
-use gpui_component::{Theme, ThemeMode, ThemeTokens};
+use gpui_kit::component::scroll::ScrollbarMode;
+use gpui_kit::component::{Theme, ThemeMode, ThemeTokens};
 
 use crate::theme::ThemePalette;
 
@@ -63,7 +65,7 @@ pub fn apply_component_theme(
     cx: &mut App,
 ) {
     if !cx.has_global::<Theme>() {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
     }
 
     let mode = theme_mode(palette);
@@ -202,7 +204,6 @@ pub fn apply_component_theme(
     component_theme.colors.table_foot_foreground = color(palette.text_muted);
     component_theme.colors.table_hover = color(palette.hover);
     component_theme.colors.table_row_border = color(palette.border);
-    component_theme.colors.tiles = color(palette.surface);
     component_theme.colors.overlay = hsla(0., 0., 0., if mode.is_dark() { 0.2 } else { 0.05 });
     component_theme.colors.window_border = color(palette.border);
     component_theme.colors.red = color(palette.danger);
@@ -217,6 +218,12 @@ pub fn apply_component_theme(
     component_theme.colors.magenta_light = color(palette.accent);
     component_theme.colors.cyan = color(palette.link);
     component_theme.colors.cyan_light = color(palette.link);
+    let editor_style = &mut Arc::make_mut(&mut component_theme.highlight_theme).style;
+    editor_style.editor_background = Some(color(palette.input));
+    editor_style.editor_active_line = None;
+    editor_style.editor_gutter_background = Some(color(palette.surface_elevated));
+    editor_style.editor_line_number = Some(color(palette.text_dimmed));
+    editor_style.editor_active_line_number = Some(color(palette.text));
     component_theme.tokens = ThemeTokens::from(&component_theme.colors);
 
     // `Scrollbar` reads mode, motion, and thumb colors from the Base theme, and
@@ -229,8 +236,8 @@ pub fn apply_component_theme(
 #[cfg(test)]
 mod tests {
     use gpui::{FontFallbacks, TestAppContext, font, px};
-    use gpui_component::scroll::ScrollbarMode;
-    use gpui_component::{Theme, ThemeMode};
+    use gpui_kit::component::scroll::ScrollbarMode;
+    use gpui_kit::component::{Theme, ThemeMode};
 
     use super::{
         apply_component_theme as apply_component_theme_with_typography, color, component_typography,
@@ -295,7 +302,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
             let palette = theme_palette("github-dark");
 
             apply_component_theme(palette, cx);
@@ -317,11 +324,33 @@ mod tests {
     }
 
     #[test]
+    fn editor_colors_follow_the_nyaterm_palette() {
+        let cx = TestAppContext::single();
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let palette = theme_palette("github-dark");
+
+            apply_component_theme(palette, cx);
+
+            let style = &Theme::global(cx).highlight_theme.style;
+            assert_eq!(style.editor_background, Some(color(palette.input)));
+            assert_eq!(style.editor_active_line, None);
+            assert_eq!(
+                style.editor_gutter_background,
+                Some(color(palette.surface_elevated))
+            );
+            assert_eq!(style.editor_line_number, Some(color(palette.text_dimmed)));
+            assert_eq!(style.editor_active_line_number, Some(color(palette.text)));
+        });
+    }
+
+    #[test]
     fn popover_tokens_follow_nyaterm_palette() {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
             let palette = theme_palette("github-dark");
 
             apply_component_theme(palette, cx);
@@ -339,7 +368,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
 
             apply_component_theme(theme_palette("github-dark"), cx);
             assert_eq!(Theme::global(cx).mode, ThemeMode::Dark);
@@ -356,7 +385,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
             let palette = theme_palette("github-dark");
 
             apply_component_theme(palette, cx);
@@ -373,7 +402,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
             let palette = theme_palette("github-dark");
 
             apply_component_theme(palette, cx);
@@ -398,7 +427,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
 
             apply_component_theme(theme_palette("github-dark"), cx);
 
@@ -424,7 +453,7 @@ mod tests {
         let cx = TestAppContext::single();
 
         cx.update(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
 
             apply_component_theme(theme_palette("github-dark"), cx);
             assert_eq!(Theme::global(cx).colors.overlay.a, 0.2);

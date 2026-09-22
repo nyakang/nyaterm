@@ -191,7 +191,7 @@ Note that the script compares heading counts, not translated wording.
 
 ## Changing third-party dependencies
 
-The third-party dependencies NyaTerm patches are **not vendored into this repository**. Each is a patch series on a fork under [github.com/nyakang](https://github.com/nyakang) on branch `nyaterm`, consumed from a revision pinned in the root `Cargo.toml`: `alacritty`, `gpui-component`, `IronRDP`, `russh`, `russh-sftp`, `sspi-rs`, `vnc-rs`, `zed` (`gpui`), and `zmodem2`.
+The third-party dependencies NyaTerm patches are **not vendored into this repository**. Each is a patch series on a fork under [github.com/nyakang](https://github.com/nyakang) on branch `nyaterm`, consumed from a revision pinned in the root `Cargo.toml`: `alacritty`, `gpui-kit`, `IronRDP`, `russh`, `russh-sftp`, `sspi-rs`, `vnc-rs`, `zed` (`gpui`), and `zmodem2`.
 
 The workflow is: commit to the fork branch, push, then bump the pinned revision in the root `Cargo.toml`. Keep the patch series split by concern rather than squashed, and record the reason and the validation performed on the patch commit and in that branch's `NYATERM.md`. Prefer rebasing an existing series onto a newer upstream revision over accumulating snapshots.
 

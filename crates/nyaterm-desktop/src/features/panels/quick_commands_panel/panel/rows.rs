@@ -23,6 +23,8 @@ use crate::models::QuickCommandViewMode;
 use super::{QuickCommandDragKind, QuickCommandDragPayload, QuickCommandDragPreview};
 use crate::features::{commands::QuickCommandDropPosition, commands::QuickCommandDropTarget};
 
+const QUICK_COMMAND_MENU_WIDTH: f32 = 148.;
+
 /// Tauri wraps every command icon in a fixed square so that a color dot and a
 /// brand glyph occupy the same slot and the label does not shift between the two.
 fn quick_command_icon_slot(slot_px: f32, icon: impl IntoElement) -> impl IntoElement {
@@ -177,6 +179,7 @@ impl NyaTermApp {
                             }),
                         menu_items,
                     )
+                    .min_width(px(QUICK_COMMAND_MENU_WIDTH))
                     .into_any_element()
                 }
                 QuickCommandViewMode::Compact => {
@@ -283,6 +286,7 @@ impl NyaTermApp {
                             .child(actions),
                         menu_items,
                     )
+                    .min_width(px(QUICK_COMMAND_MENU_WIDTH))
                     .into_any_element()
                 }
                 QuickCommandViewMode::List => {
@@ -411,6 +415,7 @@ impl NyaTermApp {
                             .child(actions),
                         menu_items,
                     )
+                    .min_width(px(QUICK_COMMAND_MENU_WIDTH))
                     .into_any_element()
                 }
             };
@@ -497,22 +502,20 @@ impl NyaTermApp {
         let edit_command_id = command_id.clone();
         let all_command_id = command_id.clone();
         let delete_command_id = command_id;
+        let send_to_all_disabled = self.session.live_session_count() == 0;
         let mut items = vec![
             NyaMenuItem::action(t!("quickCommands.edit"))
                 .icon("icons/net/edit.svg")
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.open_edit_quick_command_editor(edit_command_id.clone(), window, cx);
                 })),
+            NyaMenuItem::action(t!("quickCommands.sendToAll"))
+                .icon("icons/menu/broadcast.svg")
+                .disabled(send_to_all_disabled)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.send_quick_command_to_all_by_id(all_command_id.clone(), cx);
+                })),
         ];
-        if self.session.live_session_count() > 1 {
-            items.push(
-                NyaMenuItem::action(t!("quickCommands.sendToAll"))
-                    .icon("icons/menu/broadcast.svg")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.send_quick_command_to_all_by_id(all_command_id.clone(), cx);
-                    })),
-            );
-        }
         items.extend([
             NyaMenuItem::separator(),
             NyaMenuItem::action(t!("common.delete"))
@@ -523,5 +526,55 @@ impl NyaTermApp {
                 })),
         ]);
         items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
+
+    use super::QUICK_COMMAND_MENU_WIDTH;
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+
+    fn menu_app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {
+        let root = std::env::temp_dir().join(format!(
+            "nyaterm-quick-command-menu-{}-{}",
+            std::process::id(),
+            uuid()
+        ));
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.clone(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let stores = UiStoreHandles {
+            startup_restore: cx.new(|_| StartupRestoreStore::default()),
+            overlays: cx.new(|_| OverlayStore::default()),
+        };
+        cx.new(|cx| NyaTermApp::new(runtime, stores, cx))
+    }
+
+    #[test]
+    fn command_menu_keeps_send_to_all_visible_without_a_live_session() {
+        let mut cx = TestAppContext::single();
+        let app = menu_app(&mut cx);
+        let items = cx.update_entity(&app, |app, cx| {
+            app.quick_command_row_menu_items("command-1".to_string(), cx)
+        });
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.test_label())
+                .collect::<Vec<_>>(),
+            vec!["Edit", "Send to All", "", "Delete"]
+        );
+        assert!(items[1].test_presentation().3);
+        assert_eq!(QUICK_COMMAND_MENU_WIDTH, 148.);
     }
 }

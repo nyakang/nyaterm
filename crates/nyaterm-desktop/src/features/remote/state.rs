@@ -20,10 +20,7 @@ use nyaterm_transport::{
 
 use crate::features::formatting::docker_compose_project_key;
 use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
-use crate::features::remote::list_window::{
-    ACCELERATOR_PROCESS_VIEWPORT_ROWS, DOCKER_RESOURCE_VIEWPORT_ROWS, DOCKER_VIEWPORT_ROWS,
-    PROCESS_VIEWPORT_ROWS, max_list_offset,
-};
+use crate::features::remote::list_window::{ACCELERATOR_PROCESS_VIEWPORT_ROWS, max_list_offset};
 use crate::features::{
     runtime_jobs::DockerJobResult, runtime_jobs::DockerResource, runtime_jobs::GpuJobResult,
     runtime_jobs::NpuJobResult, runtime_jobs::ProcessJobOutput, runtime_jobs::ProcessJobResult,
@@ -84,8 +81,6 @@ struct DockerPaneState {
     pub compose_expanded: Arc<HashSet<String>>,
     pub compose_services: Arc<HashMap<String, Vec<DockerComposeService>>>,
     pub compose_service_errors: Arc<HashMap<String, String>>,
-    pub list_offset: usize,
-    pub resource_list_offset: usize,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -127,7 +122,6 @@ struct ProcessPaneState {
     pub search_draft: String,
     pub sort_key: RemoteProcessSortKey,
     pub sort_direction: RemoteProcessSortDirection,
-    pub list_offset: usize,
     pub selected_pid: Option<u32>,
     pub menu_pid: Option<u32>,
     pub nice_draft: String,
@@ -240,8 +234,6 @@ pub(in crate::features) struct DockerPresentationState {
     pub compose_expanded: Arc<HashSet<String>>,
     pub compose_services: Arc<HashMap<String, Vec<DockerComposeService>>>,
     pub compose_service_errors: Arc<HashMap<String, String>>,
-    pub list_offset: usize,
-    pub resource_list_offset: usize,
     pub pending: bool,
 }
 
@@ -253,7 +245,6 @@ pub(in crate::features) struct ProcessPresentationState {
     pub search_draft: String,
     pub sort_key: RemoteProcessSortKey,
     pub sort_direction: RemoteProcessSortDirection,
-    pub list_offset: usize,
     pub selected_pid: Option<u32>,
     pub menu_pid: Option<u32>,
     pub nice_draft: String,
@@ -316,8 +307,6 @@ impl RemoteOpsFeatureState {
                 compose_expanded: Arc::default(),
                 compose_services: Arc::default(),
                 compose_service_errors: Arc::default(),
-                list_offset: 0,
-                resource_list_offset: 0,
             },
             process: ProcessPaneState {
                 job: RemoteJobState::new(),
@@ -331,7 +320,6 @@ impl RemoteOpsFeatureState {
                 search_draft: String::new(),
                 sort_key: RemoteProcessSortKey::Cpu,
                 sort_direction: RemoteProcessSortDirection::Descending,
-                list_offset: 0,
                 selected_pid: None,
                 menu_pid: None,
                 nice_draft: "0".to_string(),
@@ -391,8 +379,6 @@ impl RemoteOpsFeatureState {
             compose_expanded: self.docker.compose_expanded.clone(),
             compose_services: self.docker.compose_services.clone(),
             compose_service_errors: self.docker.compose_service_errors.clone(),
-            list_offset: self.docker.list_offset,
-            resource_list_offset: self.docker.resource_list_offset,
             pending: self.docker.is_pending(),
         }
     }
@@ -419,7 +405,6 @@ impl RemoteOpsFeatureState {
             search_draft: self.process.search_draft.clone(),
             sort_key: self.process.sort_key,
             sort_direction: self.process.sort_direction,
-            list_offset: self.process.list_offset,
             selected_pid: self.process.selected_pid,
             menu_pid: self.process.menu_pid,
             nice_draft: self.process.nice_draft.clone(),
@@ -718,24 +703,6 @@ impl RemoteOpsFeatureState {
         self.docker.apply_search(text);
     }
 
-    pub(in crate::features) fn set_docker_list_offset(&mut self, offset: usize) -> bool {
-        if self.docker.list_offset == offset {
-            return false;
-        }
-        self.docker.list_offset = offset;
-        self.docker.touch();
-        true
-    }
-
-    pub(in crate::features) fn set_docker_resource_offset(&mut self, offset: usize) -> bool {
-        if self.docker.resource_list_offset == offset {
-            return false;
-        }
-        self.docker.resource_list_offset = offset;
-        self.docker.touch();
-        true
-    }
-
     pub(in crate::features) fn close_docker_details(&mut self) {
         self.docker.close_details();
     }
@@ -775,10 +742,6 @@ impl RemoteOpsFeatureState {
 
     pub(in crate::features) fn close_process_menu(&mut self) {
         self.process.close_menu();
-    }
-
-    pub(in crate::features) fn set_process_list_offset(&mut self, offset: usize) -> bool {
-        self.process.set_list_offset(offset)
     }
 
     pub(in crate::features) fn apply_process_nice_input(&mut self, text: String) {
@@ -1291,8 +1254,6 @@ impl DockerPaneState {
             return;
         }
         self.tab = tab;
-        self.list_offset = 0;
-        self.resource_list_offset = 0;
         self.reconcile();
         self.status = format!("Docker tab: {}", tab.label());
     }
@@ -1304,8 +1265,6 @@ impl DockerPaneState {
 
     pub(in crate::features) fn apply_search(&mut self, text: String) {
         self.search_draft = text;
-        self.list_offset = 0;
-        self.resource_list_offset = 0;
         self.reconcile();
         self.status = "Docker search updated".to_string();
     }
@@ -1399,8 +1358,8 @@ impl DockerPaneState {
 
     /// Record that the presentation changed.
     ///
-    /// `pub(super)` because seventeen mutators on `RemoteOpsFeatureState` write Docker
-    /// fields directly -- menus, offsets, details and compose state. Routing all of them
+    /// `pub(super)` because several mutators on `RemoteOpsFeatureState` write Docker
+    /// fields directly -- menus, details and compose state. Routing all of them
     /// through pane methods would be a larger change than this batch wants; what
     /// guarantees completeness either way is
     /// `docker_presentation_mutations_bump_the_revision`, which drives every one.
@@ -1430,31 +1389,10 @@ impl DockerPaneState {
         }
     }
 
-    /// Bring the derived list and both scroll offsets back in step.
-    ///
-    /// Called by every mutator that changes the overview, the query or the tab. Cheap
-    /// to call redundantly: the recompute is keyed and the clamps are integer compares.
+    /// Bring the derived list back in step with the overview, query and active tab.
     fn reconcile(&mut self) {
-        let items = self.derived_items(self.effective_tab());
-        match items {
-            DockerDerivedItems::Containers(items) => {
-                self.list_offset = self
-                    .list_offset
-                    .min(max_list_offset(items.len(), DOCKER_VIEWPORT_ROWS));
-            }
-            DockerDerivedItems::Images(items) => self.clamp_resource_offset(items.len()),
-            DockerDerivedItems::Volumes(items) => self.clamp_resource_offset(items.len()),
-            DockerDerivedItems::Networks(items) => self.clamp_resource_offset(items.len()),
-            // The compose list is not virtualised, so it has no offset to clamp.
-            DockerDerivedItems::Compose(_) => {}
-        }
+        self.derived_items(self.effective_tab());
         self.touch();
-    }
-
-    fn clamp_resource_offset(&mut self, total: usize) {
-        self.resource_list_offset = self
-            .resource_list_offset
-            .min(max_list_offset(total, DOCKER_RESOURCE_VIEWPORT_ROWS));
     }
 
     /// The filtered list for the effective tab, without recomputing.
@@ -1658,7 +1596,6 @@ impl ProcessPaneState {
         self.selected_pid = None;
         self.menu_pid = None;
         self.nice_draft = "0".to_string();
-        self.list_offset = 0;
         self.reconcile();
     }
 
@@ -1676,7 +1613,6 @@ impl ProcessPaneState {
                 | RemoteProcessSortKey::Command => RemoteProcessSortDirection::Ascending,
             };
         }
-        self.list_offset = 0;
         self.reconcile();
         self.status = format!(
             "sorted processes by {} {}",
@@ -1769,23 +1705,14 @@ impl ProcessPaneState {
         self.touch();
     }
 
-    fn set_list_offset(&mut self, offset: usize) -> bool {
-        if self.list_offset == offset {
-            return false;
-        }
-        self.list_offset = offset;
-        self.touch();
-        true
-    }
-
-    /// Bring the derived list, the sort key and the scroll offset back in step.
+    /// Bring the derived list and sort key back in step.
     ///
     /// Called by every mutator that changes one of their inputs, so a reader never has
     /// to trigger the recompute -- which is what the render pass used to do, by calling
     /// `derived_items` and `clamp_*` through `&mut self` while building elements.
     ///
     /// Cheap to call redundantly: the recompute is keyed, so an unchanged key returns
-    /// the cached list and the clamp is two integer compares.
+    /// the cached list.
     fn reconcile(&mut self) {
         // Sort first: the derived list is keyed on the sort key, so constraining after
         // recomputing would sort by a key the table cannot show.
@@ -1794,10 +1721,7 @@ impl ProcessPaneState {
         {
             self.sort_key = RemoteProcessSortKey::Cpu;
         }
-        let total = self.derived_items().len();
-        self.list_offset = self
-            .list_offset
-            .min(max_list_offset(total, PROCESS_VIEWPORT_ROWS));
+        self.derived_items();
         self.touch();
     }
 
@@ -3094,67 +3018,6 @@ mod tests {
         );
     }
 
-    /// A shorter list must pull the stored scroll offset down on its own.
-    ///
-    /// This is the property the render pass used to provide, by calling
-    /// `clamp_process_list_offset` through `&mut self` while building rows. It matters
-    /// beyond tidiness because the scroll handler does relative arithmetic on the
-    /// *stored* offset: left at 60 against a 3-row list, the first wheel event would
-    /// jump instead of stepping.
-    #[test]
-    fn shorter_process_results_clamp_the_stored_offset_with_no_render() {
-        let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
-        state.apply_processes((0..100).map(process).collect());
-        assert!(state.set_process_list_offset(60));
-        assert_eq!(state.process_presentation().list_offset, 60);
-
-        state.apply_processes((0..3).map(process).collect());
-
-        assert_eq!(
-            state.process_presentation().list_offset,
-            0,
-            "three rows cannot be scrolled, so the offset must come back to the top"
-        );
-        assert_eq!(state.derived_processes().len(), 3);
-    }
-
-    /// The same for Docker, whose two lists have different viewport heights.
-    #[test]
-    fn shorter_docker_results_clamp_the_stored_offsets_with_no_render() {
-        let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
-        state.apply_docker_overview(RemoteDockerOverview {
-            available: true,
-            containers: (0..100)
-                .map(|index| docker_container(&format!("c{index}"), "name"))
-                .collect(),
-            images: (0..100)
-                .map(|index| docker_image(&format!("i{index}"), "repo"))
-                .collect(),
-            ..Default::default()
-        });
-        assert!(state.set_docker_list_offset(50));
-        state.set_docker_tab(DockerTab::Images);
-        assert!(state.set_docker_resource_offset(50));
-
-        state.apply_docker_overview(RemoteDockerOverview {
-            available: true,
-            containers: vec![docker_container("c0", "name")],
-            images: vec![docker_image("i0", "repo")],
-            ..Default::default()
-        });
-
-        let presentation = state.docker_presentation();
-        assert_eq!(
-            presentation.resource_list_offset, 0,
-            "the images list shrank to one row"
-        );
-        assert_eq!(
-            presentation.list_offset, 0,
-            "and set_docker_tab already zeroed the container offset, which this pins so \
-             a later change cannot quietly leave it stale"
-        );
-    }
-
     /// And for a GPU card process list, which had no derived cache at all before: its
     /// filtering ran inside `stats_view`, so only the view knew the row count.
     #[test]
@@ -3459,12 +3322,6 @@ mod tests {
             (
                 "close_docker_compose_menu",
                 Box::new(|s: &mut RemoteOpsFeatureState| s.close_docker_compose_menu()),
-            ),
-            (
-                "set_docker_resource_offset",
-                Box::new(|s: &mut RemoteOpsFeatureState| {
-                    s.set_docker_resource_offset(5);
-                }),
             ),
             (
                 "toggle_compose_project",

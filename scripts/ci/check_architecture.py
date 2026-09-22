@@ -73,7 +73,7 @@ def check_budget(
 
 def dependency_errors() -> list[str]:
     errors: list[str] = []
-    dependency = re.compile(r"(?m)^\s*(gpui|gpui_platform|gpui-component)\s*=")
+    dependency = re.compile(r"(?m)^\s*(gpui|gpui_platform|gpui-kit)\s*=")
     low_level = (
         "nyaterm-core",
         "nyaterm-transport",
@@ -88,7 +88,7 @@ def dependency_errors() -> list[str]:
     desktop_manifest = (ROOT / "crates" / "nyaterm-desktop" / "Cargo.toml").read_text(
         encoding="utf-8"
     )
-    if re.search(r"(?m)^\s*(gpui-component|gpui_component)\s*=", desktop_manifest):
+    if re.search(r"(?m)^\s*(gpui-kit|gpui_component)\s*=", desktop_manifest):
         errors.append("crate_boundary: nyaterm-desktop must use nyaterm-ui wrappers")
     return errors
 

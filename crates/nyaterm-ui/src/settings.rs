@@ -5,7 +5,7 @@ use gpui::{
     prelude::*, px, rgb, rgba, svg,
 };
 
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::component::scroll::ScrollableElement;
 
 use crate::theme::{ThemePalette, theme_palette};
 use crate::tooltip::NyaTooltip;

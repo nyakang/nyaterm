@@ -188,7 +188,7 @@ pnpm --dir docs-site build
 
 ## 修改第三方依赖
 
-NyaTerm 打了补丁的第三方依赖**没有 vendor 到仓库里**。每个都是 [github.com/nyakang](https://github.com/nyakang) 下 fork 的 `nyaterm` 分支上的一条补丁序列，由根 `Cargo.toml` 固定 revision 消费：`alacritty`、`gpui-component`、`IronRDP`、`russh`、`russh-sftp`、`sspi-rs`、`vnc-rs`、`zed`（`gpui`）和 `zmodem2`。
+NyaTerm 打了补丁的第三方依赖**没有 vendor 到仓库里**。每个都是 [github.com/nyakang](https://github.com/nyakang) 下 fork 的 `nyaterm` 分支上的一条补丁序列，由根 `Cargo.toml` 固定 revision 消费：`alacritty`、`gpui-kit`、`IronRDP`、`russh`、`russh-sftp`、`sspi-rs`、`vnc-rs`、`zed`（`gpui`）和 `zmodem2`。
 
 改动流程是：提交到 fork 分支 → 推送 → 在根 `Cargo.toml` 里 bump revision。补丁按关注点拆分而不是压成一个提交，并在提交信息和该分支的 `NYATERM.md` 里记录原因与验证方式。已有序列优先 rebase 到更新的上游 revision，而不是不断累积快照。
 

@@ -1,5 +1,5 @@
 use gpui::{App, IntoElement, RenderOnce, ScrollHandle, SharedString, Window, div, prelude::*};
-use gpui_component::{
+use gpui_kit::component::{
     Sizable,
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
@@ -169,7 +169,7 @@ mod tests {
 
     #[gpui::test]
     fn natural_width_tabs_remain_scrollable_in_a_narrow_panel(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (fixture, cx) = cx.add_window_view(|_, _| ScrollTabsFixture {
             scroll: ScrollHandle::new(),
         });

@@ -6,7 +6,7 @@ use gpui::{
     Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored,
     deferred, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
+use gpui_kit::component::{
     Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     menu::PopupMenu,
@@ -29,7 +29,7 @@ const KEY_CONTEXT: &str = "NyaAppMenuBar";
 ///
 /// `PopupMenu` also expects its container to defer it at the popup layer, since
 /// each submenu defers itself at `priority + 1` relative to the menu's own
-/// `gpui_base::POPUP_PRIORITY` default. This matches what `gpui-component`'s
+/// `gpui_base::POPUP_PRIORITY` default. This matches what `gpui-kit`'s
 /// own menu-bar fallback, `Popover`, and `ContextMenu` use, and keeps the menu
 /// below tooltips.
 const MENU_POPUP_PRIORITY: usize = 100;
@@ -494,7 +494,7 @@ mod tests {
 
     #[gpui::test]
     fn click_toggle_and_hover_switch_build_only_the_active_menu(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let first_builds = Rc::new(Cell::new(0));
         let second_builds = Rc::new(Cell::new(0));
         let (root, cx) = cx.add_window_view({
@@ -542,7 +542,7 @@ mod tests {
     fn top_level_arrows_wrap_escape_restores_focus_and_submenu_arrows_stay_local(
         cx: &mut TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let (root, cx) = cx.add_window_view(move |window, cx| {
             let original_focus = cx.focus_handle();
             original_focus.focus(window, cx);
@@ -586,7 +586,7 @@ mod tests {
 
     #[gpui::test]
     fn labels_and_items_are_resolved_from_current_state(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let label = Rc::new(RefCell::new("File"));
         let item_label = Rc::new(RefCell::new("Open"));
         let (root, cx) = cx.add_window_view({
@@ -632,7 +632,7 @@ mod tests {
 
     #[gpui::test]
     fn reopening_refreshes_item_presentation_state(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let enabled = Rc::new(Cell::new(false));
         let (root, cx) = cx.add_window_view({
             let enabled = enabled.clone();
@@ -700,7 +700,7 @@ mod tests {
 
     #[gpui::test]
     fn dismiss_and_item_execution_close_the_bar_and_restore_focus(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let invoked = Rc::new(Cell::new(false));
         let (root, cx) = cx.add_window_view({
             let invoked = invoked.clone();
@@ -755,7 +755,7 @@ mod tests {
 
     #[gpui::test]
     fn an_open_menu_owns_the_pointer_over_the_deferred_resize_handles(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let divider_hovered = Rc::new(Cell::new(false));
         let (root, cx) = cx.add_window_view({
             let divider_hovered = divider_hovered.clone();
@@ -833,7 +833,7 @@ mod tests {
     /// had left focus on an element outside the bar.
     #[gpui::test]
     fn an_item_that_opens_a_dialog_keeps_it_focused(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let captured: Rc<RefCell<Option<Entity<MenuBarFixture>>>> = Rc::new(RefCell::new(None));
         let capture = captured.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {

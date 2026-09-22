@@ -2,7 +2,7 @@ use gpui::{
     App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     Window, px,
 };
-use gpui_component::{
+use gpui_kit::component::{
     Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{Dialog, DialogAction, DialogButtonProps, DialogClose, DialogFooter},
@@ -275,7 +275,7 @@ impl NyaDialogWindowExt for Window {
     }
 
     fn has_active_nya_dialog(&mut self, cx: &mut App) -> bool {
-        // `gpui-component` reads its `Root` with an `expect`, so asking a window
+        // `gpui-kit` reads its `Root` with an `expect`, so asking a window
         // that was not built with `nya_root` panics rather than answering. A
         // window with no component root has no dialog, which is the answer every
         // caller wants.

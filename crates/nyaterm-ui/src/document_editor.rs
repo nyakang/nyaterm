@@ -4,7 +4,7 @@ use gpui::{
     Action as _, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, Render, SharedString, Subscription, Window, div, prelude::*,
 };
-use gpui_component::input::{Editor, EditorState, InputEvent, Redo, Undo};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 
 use crate::input_focus::register_nya_input_focus;
 
@@ -16,8 +16,8 @@ pub enum NyaDocumentEditorEvent {
 
 /// Full-size native document editor used by modeless document windows.
 ///
-/// This type is the stable NyaTerm boundary around gpui-component's editor;
-/// desktop features never need to import gpui-component directly.
+/// This type is the stable NyaTerm boundary around gpui-kit's editor;
+/// desktop features never need to import gpui-kit directly.
 pub struct NyaDocumentEditorState {
     editor: Entity<EditorState>,
     subscription: Subscription,

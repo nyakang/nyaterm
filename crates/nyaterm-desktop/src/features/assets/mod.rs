@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use gpui::{AppContext as _, Context, Entity, Subscription, UniformListScrollHandle};
+use gpui::{AppContext as _, Context, Entity, ScrollHandle, Subscription, UniformListScrollHandle};
 use nyaterm_core::{
     AssetAcceleratorSnapshot, AssetAcceleratorType, AssetDiskSnapshot, AssetDisplayLabels,
     AssetFilterKey, AssetMonitoringCache, AssetRecord, AssetSortDirection, AssetSortKey,
@@ -16,6 +16,9 @@ use nyaterm_ui::{NyaInputEvent, NyaInputState, NyaSelectEvent, NyaSelectOption, 
 use crate::features::NyaTermApp;
 
 pub(in crate::features) const ASSET_TABLE_ROW_HEIGHT: f32 = 56.;
+// The Tauri table uses an 88px action column. GPUI scrollbars overlay their
+// viewport, so keep another 16px clear on the right for the vertical track.
+pub(in crate::features) const ASSET_TABLE_ACTIONS_WIDTH: f32 = 104.;
 pub(in crate::features) const ASSET_CARD_ROW_HEIGHT: f32 = 198.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +88,7 @@ pub(in crate::features) struct StartWorkspaceFeatureState {
     sort: Option<AssetSortState>,
     column_widths: [f32; 7],
     column_resize: Option<AssetColumnResize>,
+    table_horizontal_scroll: ScrollHandle,
     list_scroll: UniformListScrollHandle,
     card_scroll: UniformListScrollHandle,
     card_columns: usize,
@@ -152,6 +156,7 @@ impl StartWorkspaceFeatureState {
             ),
             column_widths: [280., 150., 170., 110., 110., 120., 190.],
             column_resize: None,
+            table_horizontal_scroll: ScrollHandle::new(),
             list_scroll: UniformListScrollHandle::new(),
             card_scroll: UniformListScrollHandle::new(),
             card_columns: 3,
@@ -242,7 +247,7 @@ impl StartWorkspaceFeatureState {
         self.column_widths[column.index()]
     }
     pub fn table_width(&self) -> f32 {
-        self.column_widths.iter().sum::<f32>() + 92.
+        self.column_widths.iter().sum::<f32>() + ASSET_TABLE_ACTIONS_WIDTH
     }
     pub fn begin_column_resize(&mut self, column: AssetColumn, pointer_x: f32) {
         self.column_resize = Some(AssetColumnResize {
@@ -277,6 +282,9 @@ impl StartWorkspaceFeatureState {
     }
     pub fn finish_column_resize(&mut self) -> bool {
         self.column_resize.take().is_some()
+    }
+    pub fn table_horizontal_scroll(&self) -> &ScrollHandle {
+        &self.table_horizontal_scroll
     }
     pub fn list_scroll(&self) -> &UniformListScrollHandle {
         &self.list_scroll

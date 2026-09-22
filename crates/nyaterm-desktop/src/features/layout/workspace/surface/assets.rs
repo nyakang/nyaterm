@@ -1,19 +1,26 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, ListHorizontalSizingBehavior, MouseButton,
-    MouseDownEvent, SharedString, canvas, div, prelude::*, px, rgb, uniform_list,
+    AnyElement, App, Bounds, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, Pixels, Point, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement,
+    UniformListDecoration, WeakEntity, Window, canvas, div, prelude::*, px, rgb, rgba,
+    uniform_list,
 };
 use nyaterm_core::{
     AssetDisplayLabels, AssetFilterKey, AssetRecord, AssetSortDirection, AssetViewMode,
     SavedConnection, StartWorkspaceMode, build_group_path, format_accelerators,
     format_asset_address, format_bytes, format_cpu_summary, format_disk_summary,
 };
-use nyaterm_ui::{NyaScrollable, NyaSearchInput, NyaSelect};
+use nyaterm_ui::{
+    NyaHorizontalScrollbar, NyaIconButton, NyaScrollable, NyaSearchInput, NyaSelect,
+    NyaUniformListScrollbar,
+};
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
-use crate::features::assets::{ASSET_CARD_ROW_HEIGHT, ASSET_TABLE_ROW_HEIGHT, AssetColumn};
+use crate::features::assets::{
+    ASSET_CARD_ROW_HEIGHT, ASSET_TABLE_ACTIONS_WIDTH, ASSET_TABLE_ROW_HEIGHT, AssetColumn,
+};
 use crate::features::formatting::format_last_used_ms;
 use crate::features::icons::resolve_connection_icon;
 use crate::features::view_widgets::connection_type_icon;
@@ -21,6 +28,147 @@ use crate::features::view_widgets::connection_type_icon;
 const ASSET_CARD_MIN_WIDTH: f32 = 300.;
 const ASSET_CARD_GAP: f32 = 8.;
 const ASSET_CARD_HORIZONTAL_PADDING: f32 = 24.;
+const ASSET_SCROLLBAR_TRACK_WIDTH: f32 = 12.;
+
+struct AssetRowActionsDecoration {
+    records: Arc<[AssetRecord]>,
+    app: WeakEntity<NyaTermApp>,
+    horizontal_scroll: ScrollHandle,
+    background: Rgba,
+    border: u32,
+}
+
+impl AssetRowActionsDecoration {
+    fn new(
+        records: Arc<[AssetRecord]>,
+        app: WeakEntity<NyaTermApp>,
+        horizontal_scroll: ScrollHandle,
+        background: Rgba,
+        border: u32,
+    ) -> Self {
+        Self {
+            records,
+            app,
+            horizontal_scroll,
+            background,
+            border,
+        }
+    }
+}
+
+impl UniformListDecoration for AssetRowActionsDecoration {
+    fn compute(
+        &self,
+        visible_range: Range<usize>,
+        _bounds: Bounds<Pixels>,
+        _scroll_offset: Point<Pixels>,
+        item_height: Pixels,
+        _item_count: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> AnyElement {
+        let viewport_width = self.horizontal_scroll.bounds().size.width;
+        let horizontal_offset = self.horizontal_scroll.offset().x;
+        let action_left = asset_action_left_in_decoration(viewport_width, horizontal_offset);
+        let mut layer = div().relative().size_full();
+
+        for index in visible_range {
+            let Some(record) = self.records.get(index) else {
+                continue;
+            };
+            let connection = record.connection.clone();
+            let edit = connection.clone();
+            let connect_app = self.app.clone();
+            let edit_app = self.app.clone();
+
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .left(action_left)
+                    .top(item_height * index)
+                    .h(item_height)
+                    .w(px(ASSET_TABLE_ACTIONS_WIDTH))
+                    .pl_1()
+                    .pr_4()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(rgb(self.border))
+                    .bg(self.background)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(asset_action_button(
+                        format!("asset-connect-{}", connection.id),
+                        "icons/conn/connect.svg",
+                        t!("savedConnections.connect"),
+                        self.border,
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            let Some(app) = connect_app.upgrade() else {
+                                return;
+                            };
+                            app.update(cx, |this, cx| {
+                                this.start_saved_connection(connection.clone(), window, cx);
+                            });
+                        },
+                    ))
+                    .child(asset_action_button(
+                        format!("asset-edit-{}", edit.id),
+                        "icons/edit.svg",
+                        t!("savedConnections.edit"),
+                        self.border,
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            let Some(app) = edit_app.upgrade() else {
+                                return;
+                            };
+                            app.update(cx, |this, cx| {
+                                this.open_connection_editor(
+                                    Some(edit.id.clone()),
+                                    None,
+                                    false,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        },
+                    )),
+            );
+        }
+
+        layer.into_any_element()
+    }
+}
+
+fn asset_action_left_in_decoration(viewport_width: Pixels, horizontal_scroll: Pixels) -> Pixels {
+    viewport_width - horizontal_scroll - px(ASSET_TABLE_ACTIONS_WIDTH)
+}
+
+fn asset_action_button(
+    id: impl Into<SharedString>,
+    icon_path: &'static str,
+    tooltip: impl Into<SharedString>,
+    border: u32,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .size(px(28.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(border))
+        .child(
+            NyaIconButton::new(id, icon_path)
+                .icon_size(px(15.))
+                .tooltip(tooltip)
+                .on_click(on_click),
+        )
+        .into_any_element()
+}
 
 fn responsive_asset_card_columns(viewport_width: f32) -> usize {
     if !viewport_width.is_finite() || viewport_width <= 0. {
@@ -386,11 +534,14 @@ impl NyaTermApp {
     ) -> AnyElement {
         let palette = self.theme_palette();
         let widths = AssetColumn::ALL.map(|column| self.start_workspace.column_width(column));
-        let table_width = self.start_workspace.table_width();
+        let min_table_width = self.start_workspace.table_width();
+        let horizontal_scroll = self.start_workspace.table_horizontal_scroll().clone();
         let scroll = self.start_workspace.list_scroll().clone();
+        let action_background = rgba((self.terminal_theme_palette().terminal_bg << 8) | 0xff);
         let mut header = div()
             .h(px(34.))
-            .w(px(table_width))
+            .w_full()
+            .min_w(px(min_table_width))
             .flex_none()
             .flex()
             .items_center()
@@ -410,29 +561,52 @@ impl NyaTermApp {
         }
         header = header.child(
             div()
-                .w(px(92.))
-                .px_2()
-                .text_right()
-                .text_size(px(11.))
-                .text_color(rgb(palette.text_muted))
-                .child(t!("assets.actions")),
+                .ml_auto()
+                .w(px(ASSET_TABLE_ACTIONS_WIDTH))
+                .h_full()
+                .flex_none(),
         );
 
         let row_records = records.clone();
+        let row_actions = AssetRowActionsDecoration::new(
+            records,
+            cx.weak_entity(),
+            horizontal_scroll.clone(),
+            action_background,
+            palette.border,
+        );
         let list = uniform_list(
             "asset-table-rows",
-            records.len(),
-            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+            row_records.len(),
+            cx.processor(move |this, range: std::ops::Range<usize>, _, _cx| {
                 range
                     .filter_map(|index| row_records.get(index).cloned())
-                    .map(|record| this.asset_table_row(record, &labels, &widths, table_width, cx))
+                    .map(|record| this.asset_table_row(record, &labels, &widths, min_table_width))
                     .collect::<Vec<_>>()
             }),
         )
-        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .with_decoration(row_actions)
+        .w_full()
         .flex_1()
         .min_h_0()
         .track_scroll(&scroll);
+
+        let scrolling_table = div()
+            .w_full()
+            .min_w(px(min_table_width))
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(list),
+            );
 
         div()
             .relative()
@@ -440,24 +614,59 @@ impl NyaTermApp {
             .min_h_0()
             .flex()
             .flex_col()
-            .overflow_x_scrollbar()
             .child(
                 div()
-                    .w(px(table_width))
-                    .h_full()
+                    .id("asset-table-horizontal-viewport")
+                    .size_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&horizontal_scroll)
+                    .child(scrolling_table),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .h(px(34.))
+                    .w(px(ASSET_TABLE_ACTIONS_WIDTH))
+                    .pl_2()
+                    .pr_4()
                     .flex()
-                    .flex_col()
-                    .child(header)
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .child(list)
-                            .vertical_scrollbar(&scroll),
-                    ),
+                    .items_center()
+                    .justify_end()
+                    .border_b_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.section_header))
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("assets.actions")),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right(px(ASSET_SCROLLBAR_TRACK_WIDTH))
+                    .bottom_0()
+                    .child(NyaHorizontalScrollbar::new(
+                        "asset-table-horizontal-scrollbar",
+                        &horizontal_scroll,
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(34.))
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(NyaUniformListScrollbar::new(
+                        "asset-table-vertical-scrollbar",
+                        &scroll,
+                    )),
             )
             .into_any_element()
     }
@@ -537,8 +746,7 @@ impl NyaTermApp {
         record: AssetRecord,
         labels: &AssetDisplayLabels,
         widths: &[f32; 7],
-        table_width: f32,
-        cx: &mut Context<Self>,
+        min_table_width: f32,
     ) -> AnyElement {
         let palette = self.theme_palette();
         let connection = record.connection.clone();
@@ -563,7 +771,8 @@ impl NyaTermApp {
         ];
         let mut row = div()
             .h(px(ASSET_TABLE_ROW_HEIGHT))
-            .w(px(table_width))
+            .w_full()
+            .min_w(px(min_table_width))
             .flex_none()
             .flex()
             .items_center()
@@ -628,58 +837,40 @@ impl NyaTermApp {
                     .child(value),
             );
         }
-        row.child(self.asset_row_actions(connection, cx))
-            .into_any_element()
+        row.into_any_element()
     }
 
     fn asset_row_actions(&self, connection: SavedConnection, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.theme_palette();
         let edit = connection.clone();
         div()
-            .w(px(92.))
+            .ml_auto()
+            .w(px(ASSET_TABLE_ACTIONS_WIDTH))
             .flex_none()
-            .px_1()
+            .pl_1()
+            .pr_4()
             .flex()
             .items_center()
             .justify_end()
             .gap_1()
-            .child(
-                div()
-                    .id(SharedString::from(format!(
-                        "asset-connect-{}",
-                        connection.id
-                    )))
-                    .h(px(26.))
-                    .px_2()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .text_size(px(10.))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.start_saved_connection(connection.clone(), window, cx);
-                    }))
-                    .child(t!("savedConnections.connect")),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("asset-edit-{}", edit.id)))
-                    .h(px(26.))
-                    .px_2()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .text_size(px(10.))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_connection_editor(Some(edit.id.clone()), None, false, window, cx);
-                    }))
-                    .child(t!("savedConnections.edit")),
-            )
+            .child(asset_action_button(
+                format!("asset-connect-{}", connection.id),
+                "icons/conn/connect.svg",
+                t!("savedConnections.connect"),
+                palette.border,
+                cx.listener(move |this, _, window, cx| {
+                    this.start_saved_connection(connection.clone(), window, cx);
+                }),
+            ))
+            .child(asset_action_button(
+                format!("asset-edit-{}", edit.id),
+                "icons/edit.svg",
+                t!("savedConnections.edit"),
+                palette.border,
+                cx.listener(move |this, _, window, cx| {
+                    this.open_connection_editor(Some(edit.id.clone()), None, false, window, cx);
+                }),
+            ))
             .into_any_element()
     }
 
@@ -919,7 +1110,9 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use super::responsive_asset_card_columns;
+    use gpui::px;
+
+    use super::{asset_action_left_in_decoration, responsive_asset_card_columns};
 
     #[test]
     fn asset_card_columns_follow_available_viewport_width() {
@@ -929,5 +1122,20 @@ mod tests {
         assert_eq!(responsive_asset_card_columns(939.), 2);
         assert_eq!(responsive_asset_card_columns(940.), 3);
         assert_eq!(responsive_asset_card_columns(1920.), 3);
+    }
+
+    #[test]
+    fn asset_actions_stay_fixed_at_the_viewport_right_edge() {
+        let viewport_width = px(960.);
+
+        for horizontal_scroll in [px(0.), px(-120.), px(-480.)] {
+            let decoration_left =
+                asset_action_left_in_decoration(viewport_width, horizontal_scroll);
+            assert_eq!(
+                horizontal_scroll + decoration_left,
+                px(856.),
+                "the 104px action column must stay pinned to the 960px viewport"
+            );
+        }
     }
 }

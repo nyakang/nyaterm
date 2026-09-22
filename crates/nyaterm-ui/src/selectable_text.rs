@@ -1,7 +1,7 @@
 use gpui::{IntoElement, RenderOnce, SharedString};
-use gpui_component::text::TextView;
+use gpui_kit::component::text::TextView;
 
-/// Selectable plain text backed by gpui-component's window selection support.
+/// Selectable plain text backed by gpui-kit's window selection support.
 #[derive(IntoElement)]
 pub struct NyaSelectableText {
     id: SharedString,

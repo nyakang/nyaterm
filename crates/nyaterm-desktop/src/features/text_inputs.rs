@@ -1,7 +1,7 @@
 //! A registry of real text inputs, keyed by an id the caller picks.
 //!
 //! Ordinary form, prompt and search inputs use [`NyaInputState`] entities
-//! backed by `gpui-component`. Full editing surfaces such as the terminal,
+//! backed by `gpui-kit`. Full editing surfaces such as the terminal,
 //! paste review and remote file editor keep their own input handlers because
 //! their selection and command semantics are different.
 //!

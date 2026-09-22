@@ -38,7 +38,7 @@ Follow these ownership rules:
 
 Helpers that build GPUI elements remain with views or desktop features. Do not move view construction onto pure state merely to reduce the number of `impl NyaTermApp` blocks.
 
-Ordinary inputs, selects, menus, switches, and dialogs use the stable component API exposed by `nyaterm-ui`. Desktop features do not depend directly on `gpui-component`. Ordinary text fields use `NyaInput`/`NyaInputState` or the id registry in `features/text_inputs.rs`, with definite dimensions around the input.
+Ordinary inputs, selects, menus, switches, and dialogs use the stable component API exposed by `nyaterm-ui`. Desktop features do not depend directly on `gpui-kit`. Ordinary text fields use `NyaInput`/`NyaInputState` or the id registry in `features/text_inputs.rs`, with definite dimensions around the input.
 
 Terminal input, paste review, and `RemoteTextEditor` are full editing surfaces and must not be replaced by ordinary single-line inputs.
 

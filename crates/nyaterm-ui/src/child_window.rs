@@ -175,7 +175,7 @@ mod tests {
     /// callback tears down a window that is still on screen.
     #[gpui::test]
     fn clear_if_only_clears_the_handle_it_was_given(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let first = cx.add_window(|window, cx| {
             let view = cx.new(|_| SlotWindowFixture);
             crate::nya_root(view, window, cx)
@@ -224,7 +224,7 @@ mod tests {
     /// the only signal, and it has to leave the slot empty.
     #[gpui::test]
     async fn raising_a_window_that_is_already_gone_clears_the_slot(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let window = cx.add_window(|window, cx| {
             let view = cx.new(|_| SlotWindowFixture);
             crate::nya_root(view, window, cx)

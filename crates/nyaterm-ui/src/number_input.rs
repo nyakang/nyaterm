@@ -3,9 +3,9 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement, Render, RenderOnce, SharedString,
     Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
 };
-use gpui_component::Disableable;
-use gpui_component::Sizable;
-use gpui_component::input::{
+use gpui_kit::component::Disableable;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{
     InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction,
 };
 
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn number_input_uses_standard_form_control_size() {
         assert_eq!(NYA_FORM_CONTROL_HEIGHT_PX, 32.);
-        assert_eq!(form_control_size(), gpui_component::Size::Medium);
+        assert_eq!(form_control_size(), gpui_kit::component::Size::Medium);
     }
 
     #[test]

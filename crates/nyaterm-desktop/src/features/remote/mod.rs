@@ -4,10 +4,7 @@ mod job_state;
 mod list_window;
 mod remote_runtime;
 
-pub(in crate::features) use list_window::{
-    ACCELERATOR_PROCESS_VIEWPORT_ROWS, DOCKER_RESOURCE_VIEWPORT_ROWS, DOCKER_VIEWPORT_ROWS,
-    PROCESS_VIEWPORT_ROWS, max_list_offset, state_scrolled_list_range,
-};
+pub(in crate::features) use list_window::{ACCELERATOR_PROCESS_VIEWPORT_ROWS, max_list_offset};
 pub(in crate::features) use remote_runtime::remote_refresh_due;
 mod state;
 

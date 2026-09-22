@@ -159,7 +159,7 @@ impl NyaTermApp {
         command_id: String,
         cx: &mut Context<Self>,
     ) {
-        self.apply_quick_command_by_id(&command_id, true, false, cx);
+        self.apply_quick_command_by_id(&command_id, false, cx);
     }
 
     pub(in crate::features) fn send_quick_command_to_all_by_id(
@@ -179,14 +179,12 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
-        let execute = command.execution_mode.as_deref() != Some("append");
-        self.apply_quick_command_by_id(&command.id, execute, true, cx);
+        self.apply_quick_command_by_id(&command.id, true, cx);
     }
 
     pub(in crate::features) fn apply_quick_command_by_id(
         &mut self,
         command_id: &str,
-        execute: bool,
         send_to_all: bool,
         cx: &mut Context<Self>,
     ) {
@@ -223,6 +221,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        let execute = quick_command_executes(&command);
         let variables = parse_quick_command_variables(&command_text);
         if !variables.is_empty() {
             self.commands
@@ -309,5 +308,51 @@ impl NyaTermApp {
             });
             cx.notify();
         }
+    }
+}
+
+fn quick_command_executes(command: &QuickCommand) -> bool {
+    command.execution_mode.as_deref() != Some("append")
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_core::QuickCommand;
+
+    use super::quick_command_executes;
+
+    fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
+        QuickCommand {
+            id: "command-1".to_string(),
+            label: "Command".to_string(),
+            command: "pwd".to_string(),
+            category_id: None,
+            description: None,
+            color_tag: None,
+            icon_tag: None,
+            pinned: None,
+            execution_mode: execution_mode.map(ToOwned::to_owned),
+            source: None,
+            risk_level: None,
+            updated_at: None,
+            created_at: None,
+            use_count: None,
+            sort_order: None,
+        }
+    }
+
+    #[test]
+    fn append_mode_inserts_without_execution() {
+        assert!(!quick_command_executes(&command_with_execution_mode(Some(
+            "append"
+        ))));
+    }
+
+    #[test]
+    fn execute_and_legacy_modes_execute() {
+        assert!(quick_command_executes(&command_with_execution_mode(Some(
+            "execute"
+        ))));
+        assert!(quick_command_executes(&command_with_execution_mode(None)));
     }
 }

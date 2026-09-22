@@ -593,7 +593,7 @@ mod tests {
             _ = window.draw(cx);
         });
         vcx.run_until_parked();
-        // 其它后台流程可能直接关闭窗口级对话框，gpui-component 此时不会调用
+        // 其它后台流程可能直接关闭窗口级对话框，gpui-kit 此时不会调用
         // `on_close`；生命周期兜底仍需释放第二个阻塞中的 resolver。
         vcx.update(|window, cx| window.close_nya_dialog(cx));
         vcx.run_until_parked();

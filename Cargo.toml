@@ -52,11 +52,10 @@ dirs = "6"
 encoding_rs = "0.8"
 futures = "0.3"
 glob = "0.3.4"
-gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "3b3066c872f29f5edacb7e68de167f7bcf550465" }
-gpui-base = { git = "https://github.com/nyakang/gpui-component", rev = "5d6f1b83418a971faa0a532fc5b41f6abcc240f7" }
-gpui-component = { git = "https://github.com/nyakang/gpui-component", rev = "5d6f1b83418a971faa0a532fc5b41f6abcc240f7" }
-gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/nyakang/gpui-component", rev = "5d6f1b83418a971faa0a532fc5b41f6abcc240f7" }
-gpui_platform = { git = "https://github.com/nyakang/zed", rev = "3b3066c872f29f5edacb7e68de167f7bcf550465" }
+gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "48eb3ec786db751018daa0cec8b529c679cd44f5" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "cc1daf27e7f26d0d00f8d2fbff66cad6c2062f17" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "cc1daf27e7f26d0d00f8d2fbff66cad6c2062f17" }
+gpui_platform = { git = "https://github.com/nyakang/zed", rev = "48eb3ec786db751018daa0cec8b529c679cd44f5" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
 # could pull in a breaking 0.8 without review. `embed-fonts` bundles the 14
@@ -177,7 +176,7 @@ ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "b6658790647b7
 ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "b6658790647b757e1b129859ff421300b53467a1" }
 ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "b6658790647b757e1b129859ff421300b53467a1" }
 
-# gpui-component takes zed-reqwest from git while this workspace uses the
+# gpui-kit takes zed-reqwest from git while this workspace uses the
 # published crate; without this both end up in the graph.
 [patch."https://github.com/zed-industries/reqwest.git"]
 zed-reqwest = { version = "0.12.15-zed" }
