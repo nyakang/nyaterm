@@ -252,6 +252,13 @@ impl DesktopController {
     }
 
     fn install_process_snapshot(&mut self, snapshot: BootstrapSnapshot, cx: &mut Context<Self>) {
+        if should_enable_startup_screen_lock(
+            self.process_state.is_some(),
+            snapshot.settings.enable_screen_lock,
+        ) {
+            self.screen_locked = true;
+        }
+
         if let Some(process_state) = self.process_state.clone() {
             let event = process_state.update(cx, |state, cx| {
                 state.mutate(
@@ -1516,6 +1523,13 @@ fn workspace_targets_from_order(
         .collect()
 }
 
+fn should_enable_startup_screen_lock(
+    process_state_loaded: bool,
+    screen_lock_enabled: bool,
+) -> bool {
+    !process_state_loaded && screen_lock_enabled
+}
+
 fn normalize_new_workspace_ui(mut ui: WorkspaceUiState) -> WorkspaceUiState {
     if NavItem::from_persistence_id(&ui.current_page).is_some_and(NavItem::opens_settings) {
         ui.current_page = NavItem::Workspace.persistence_id().to_string();
@@ -1530,7 +1544,7 @@ fn _assert_root_type(_: gpui::WindowHandle<NyaRoot>) {}
 mod tests {
     use super::{
         RecentActivationCache, next_recent_after_close, normalize_new_workspace_ui,
-        workspace_targets_from_order,
+        should_enable_startup_screen_lock, workspace_targets_from_order,
     };
     use nyaterm_core::{ACTIVATION_QUEUE_CAPACITY, WorkspaceId, WorkspaceUiState};
 
@@ -1592,5 +1606,16 @@ mod tests {
         };
 
         assert_eq!(normalize_new_workspace_ui(ui).current_page, "workspace");
+    }
+
+    #[test]
+    fn initial_bootstrap_enables_startup_screen_lock_from_persisted_setting() {
+        assert!(should_enable_startup_screen_lock(false, true));
+        assert!(!should_enable_startup_screen_lock(false, false));
+    }
+
+    #[test]
+    fn shared_state_refresh_does_not_retrigger_startup_screen_lock() {
+        assert!(!should_enable_startup_screen_lock(true, true));
     }
 }

@@ -310,6 +310,26 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn resume_startup_restore_if_unlocked(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.security.screen_locked() {
+            return;
+        }
+        self.try_restore_open_tabs(window, cx);
+        let pending_session_start = self.session.start_has_pending();
+        let should_pump = !self.session.restore_is_complete()
+            && self
+                .stores
+                .startup_restore
+                .update(cx, |store, _| store.can_pump_queue(pending_session_start));
+        if should_pump {
+            self.pump_startup_restore_queue(window, cx);
+        }
+    }
+
     pub(in crate::features) fn try_restore_open_tabs(
         &mut self,
         window: &mut Window,

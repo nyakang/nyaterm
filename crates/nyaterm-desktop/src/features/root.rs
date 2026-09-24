@@ -178,16 +178,7 @@ impl NyaTermApp {
         // point.
         self.ensure_pending_focus_clock(cx);
         self.ensure_post_start_work_clock(cx);
-        self.try_restore_open_tabs(window, cx);
-        let pending_session_start = self.session.start_has_pending();
-        let should_pump = !self.session.restore_is_complete()
-            && self
-                .stores
-                .startup_restore
-                .update(cx, |store, _| store.can_pump_queue(pending_session_start));
-        if should_pump {
-            self.pump_startup_restore_queue(window, cx);
-        }
+        self.resume_startup_restore_if_unlocked(window, cx);
 
         self.ensure_terminal_focus_reporting(window, cx);
         self.ensure_rdp_focus_reporting(window, cx);
