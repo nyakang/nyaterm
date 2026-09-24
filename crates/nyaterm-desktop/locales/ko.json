@@ -309,6 +309,7 @@
     "encodingFollowGlobal": "전역 설정 따르기"
   },
   "credentialAutofill": {
+    "connectionPasswordLabel": "연결 비밀번호",
     "dismiss": "닫기",
     "fill": "채우기",
     "passwordTitle": "비밀번호",

@@ -356,6 +356,7 @@
     "encodingFollowGlobal": "跟随全局设置"
   },
   "credentialAutofill": {
+    "connectionPasswordLabel": "连接密码",
     "dismiss": "关闭",
     "fill": "填充",
     "passwordTitle": "密码凭据",

@@ -309,6 +309,7 @@
     "encodingFollowGlobal": "グローバル設定に従う"
   },
   "credentialAutofill": {
+    "connectionPasswordLabel": "接続パスワード",
     "dismiss": "閉じる",
     "fill": "入力",
     "passwordTitle": "パスワード",

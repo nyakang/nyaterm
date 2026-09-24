@@ -309,6 +309,7 @@
     "encodingFollowGlobal": "跟隨全域設定"
   },
   "credentialAutofill": {
+    "connectionPasswordLabel": "連線密碼",
     "dismiss": "關閉",
     "fill": "填充",
     "passwordTitle": "密碼認證資訊",

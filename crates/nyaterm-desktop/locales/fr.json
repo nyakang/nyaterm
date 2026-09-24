@@ -309,6 +309,7 @@
     "encodingFollowGlobal": "Suivre les paramètres globaux"
   },
   "credentialAutofill": {
+    "connectionPasswordLabel": "mot de passe de connexion",
     "dismiss": "Ignorer",
     "fill": "Remplir",
     "passwordTitle": "Mot de passe",

@@ -1,6 +1,8 @@
 {
   "wildcard_super_import": [],
-  "desktop_feature_thread_spawn": [],
+  "desktop_feature_thread_spawn": [
+    {"path": "crates/nyaterm-desktop/src/features/update/install.rs", "max_count": 1, "reason": "The updater drops a detached delayed thread that best-effort cleans its temporary install directory."}
+  ],
   "desktop_thread_builder": [
     {"path": "crates/nyaterm-desktop/src/blocking_jobs.rs", "max_count": 1, "reason": "BlockingJobScheduler owns and joins its bounded worker pool."},
     {"path": "crates/nyaterm-desktop/src/lib.rs", "max_count": 1, "reason": "The one-shot i18n preload worker is joined before preload_i18n returns."},
@@ -16,7 +18,9 @@
     {"path": "crates/nyaterm-desktop/src/features/session/trzsz_runtime.rs", "max_count": 3, "reason": "Per-session trzsz state owns, stops, and joins prepare, upload, and download workers."},
     {"path": "crates/nyaterm-desktop/src/features/session/xymodem_runtime.rs", "max_count": 1, "reason": "Per-session X/YMODEM state owns, stops, and joins its upload worker."},
     {"path": "crates/nyaterm-desktop/src/features/session/zmodem_runtime.rs", "max_count": 1, "reason": "Per-session ZMODEM state owns, stops, and joins its transfer worker."},
-    {"path": "crates/nyaterm-desktop/src/features/transfers/external_sync_runtime.rs", "max_count": 2, "reason": "Transfer state owns and joins the external-editor watcher; its unit test also joins its fixture worker."}
+    {"path": "crates/nyaterm-desktop/src/features/transfers/external_sync_runtime.rs", "max_count": 2, "reason": "Transfer state owns and joins the external-editor watcher; its unit test also joins its fixture worker."},
+    {"path": "crates/nyaterm-desktop/src/app_shell/controller.rs", "max_count": 1, "reason": "Named update-check worker reports through an event channel and finishes on its own."},
+    {"path": "crates/nyaterm-desktop/src/features/update/download.rs", "max_count": 1, "reason": "Named update-download worker reports through an event channel and finishes on its own."}
   ],
   "raw_scroll_container": [
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/assets.rs", "max_count": 1, "reason": "Asset table uses a caller-owned horizontal scroll handle with an explicit NyaHorizontalScrollbar overlay."},

@@ -1,6 +1,8 @@
 use super::{
-    CredentialPromptKind, detect_credential_prompt_kind, extract_credential_prompt_text,
-    find_matching_credentials, find_password_only_fallback_credentials, validate_prompt_regex,
+    CredentialPromptKind, credential_password_prompt_target_user,
+    credential_password_prompt_targets_user, detect_credential_prompt_kind,
+    extract_credential_prompt_text, find_matching_credentials,
+    find_password_only_fallback_credentials, validate_prompt_regex,
 };
 use crate::SavedCredential;
 
@@ -74,4 +76,82 @@ fn validate_prompt_regex_rejects_empty_and_invalid() {
     assert!(validate_prompt_regex("Password"));
     assert!(!validate_prompt_regex(""));
     assert!(!validate_prompt_regex("("));
+}
+
+#[test]
+fn extracts_sudo_password_prompt_target_user() {
+    assert_eq!(
+        credential_password_prompt_target_user("[sudo] password for root:"),
+        Some("root".to_string())
+    );
+    assert_eq!(
+        credential_password_prompt_target_user("Password for alice:"),
+        Some("alice".to_string())
+    );
+    assert_eq!(
+        credential_password_prompt_target_user("Enter password for root@host:"),
+        Some("root@host".to_string())
+    );
+    assert_eq!(
+        credential_password_prompt_target_user("Enter password for user 'root':"),
+        Some("root".to_string())
+    );
+    assert_eq!(
+        credential_password_prompt_target_user("密码（root 的密码）"),
+        None
+    );
+}
+
+#[test]
+fn extracts_chinese_sudo_password_prompt_target_user() {
+    assert_eq!(
+        credential_password_prompt_target_user("用户 root 的密码："),
+        Some("root".to_string())
+    );
+    assert_eq!(
+        credential_password_prompt_target_user("账号 alice 的密码:"),
+        Some("alice".to_string())
+    );
+}
+
+#[test]
+fn plain_password_prompt_has_no_target_user() {
+    assert_eq!(credential_password_prompt_target_user("Password:"), None);
+    assert_eq!(credential_password_prompt_target_user("密码："), None);
+    assert!(!credential_password_prompt_targets_user(
+        "Password:",
+        "root"
+    ));
+}
+
+#[test]
+fn sudo_prompt_matches_only_the_named_user() {
+    assert!(credential_password_prompt_targets_user(
+        "[sudo] password for root:",
+        "root"
+    ));
+    assert!(!credential_password_prompt_targets_user(
+        "[sudo] password for root:",
+        "alice"
+    ));
+    assert!(credential_password_prompt_targets_user(
+        "用户 root 的密码：",
+        "root"
+    ));
+    assert!(!credential_password_prompt_targets_user(
+        "用户 root 的密码：",
+        "alice"
+    ));
+    assert!(credential_password_prompt_targets_user(
+        "Enter password for root@host:",
+        "root"
+    ));
+    assert!(credential_password_prompt_targets_user(
+        "[sudo] password for ROOT:",
+        "root"
+    ));
+    assert!(!credential_password_prompt_targets_user(
+        "[sudo] password for root:",
+        ""
+    ));
 }
