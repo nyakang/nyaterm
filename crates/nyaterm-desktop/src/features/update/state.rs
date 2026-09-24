@@ -6,6 +6,7 @@ use nyaterm_core::NativeUpdateInfo;
 use nyaterm_transport::connection_attempt::ConnectionAttempt;
 
 use super::download::DownloadState;
+use crate::blocking_jobs::BlockingJobScheduler;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateCheckKind {
@@ -50,6 +51,7 @@ pub(crate) struct UpdateStore {
     pub(in crate::features) install_requested: bool,
     tx: UnboundedSender<UpdateEvent>,
     rx: Option<UnboundedReceiver<UpdateEvent>>,
+    blocking_jobs: BlockingJobScheduler,
 }
 
 impl UpdateStore {
@@ -68,6 +70,7 @@ impl UpdateStore {
             install_requested: false,
             tx,
             rx: Some(rx),
+            blocking_jobs: BlockingJobScheduler::new(),
         }
     }
 
@@ -86,6 +89,10 @@ impl UpdateStore {
 
     pub(in crate::features) fn is_pending(&self) -> bool {
         matches!(self.phase, UpdatePhase::Checking)
+    }
+
+    pub(crate) fn blocking_jobs(&self) -> BlockingJobScheduler {
+        self.blocking_jobs.clone()
     }
 
     pub(crate) fn mark_startup_check_started(&mut self) -> bool {

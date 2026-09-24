@@ -33,6 +33,7 @@ impl NyaTermApp {
                 window.focus(&focus, cx);
             }
             self.ensure_pending_focus_clock(cx);
+            self.resume_startup_restore_if_unlocked(window, cx);
             cx.notify();
             return;
         }
@@ -62,16 +63,17 @@ impl NyaTermApp {
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status("screen unlocked".to_string());
         self.broadcast_screen_lock(false, cx);
-        if let Some(focus) = restore_focus {
-            cx.spawn(async move |this, cx| {
-                let _ = this.update_in(cx, |this, window, cx| {
-                    if !this.security.screen_locked() {
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !this.security.screen_locked() {
+                    if let Some(focus) = restore_focus {
                         window.focus(&focus, cx);
                     }
-                });
-            })
-            .detach();
-        }
+                    this.resume_startup_restore_if_unlocked(window, cx);
+                }
+            });
+        })
+        .detach();
         self.ensure_pending_focus_clock(cx);
         cx.notify();
     }

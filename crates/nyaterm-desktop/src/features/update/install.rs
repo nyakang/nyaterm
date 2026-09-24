@@ -1,13 +1,22 @@
+#[cfg(windows)]
 use std::ffi::OsString;
+#[cfg(windows)]
 use std::io::Read as _;
-use std::path::{Component, Path, PathBuf};
+#[cfg(windows)]
+use std::path::Component;
+#[cfg(any(windows, target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const PORTABLE_HELPER_FLAG: &str = "--nyaterm-portable-update-helper";
 const INSTALLED_HELPER_FLAG: &str = "--nyaterm-installed-update-helper";
 const UPDATE_CLEANUP_ENV: &str = "NYATERM_UPDATE_CLEANUP";
+#[cfg(windows)]
 const PORTABLE_ROOT: &str = "NyaTerm-portable";
+#[cfg(windows)]
 const PORTABLE_MARKER: &str = "nyaterm-portable";
+#[cfg(windows)]
 const PORTABLE_FILES: [&str; 7] = [
     "NyaTerm.exe",
     "nyaterm-rdp-helper.exe",
@@ -17,7 +26,9 @@ const PORTABLE_FILES: [&str; 7] = [
     "LICENSE",
     "VERSION",
 ];
+#[cfg(windows)]
 const MAX_PORTABLE_ENTRIES: usize = 128;
+#[cfg(windows)]
 const MAX_PORTABLE_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -377,15 +388,14 @@ pub fn run_update_helper_if_requested() -> bool {
     true
 }
 
-pub fn schedule_update_cleanup() {
-    let Some(path) = std::env::var_os(UPDATE_CLEANUP_ENV).map(PathBuf::from) else {
-        return;
-    };
+pub(crate) fn take_update_cleanup_path() -> Option<PathBuf> {
+    let path = std::env::var_os(UPDATE_CLEANUP_ENV).map(PathBuf::from)?;
     unsafe { std::env::remove_var(UPDATE_CLEANUP_ENV) };
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        let _ = std::fs::remove_dir_all(path);
-    });
+    Some(path)
+}
+
+pub(crate) fn cleanup_update_work_dir(path: PathBuf) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[cfg(windows)]

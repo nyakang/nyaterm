@@ -97,7 +97,7 @@ impl NyaTermApp {
             .panel_side_for_item(NavItem::SecurityAuth)
             .unwrap_or(PanelSide::Left);
         let viewport_width = self.shell.viewport_size().0;
-        let panel_width = match side {
+        match side {
             PanelSide::Left => {
                 let width = self.shell.left_panel_width().clamp(160., 720.);
                 if !cfg!(target_os = "macos") && viewport_width < 1024. {
@@ -114,8 +114,7 @@ impl NyaTermApp {
                     width
                 }
             }
-        };
-        panel_width
+        }
     }
 }
 
