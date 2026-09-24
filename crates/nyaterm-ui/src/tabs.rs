@@ -1,8 +1,11 @@
-use gpui::{App, IntoElement, RenderOnce, ScrollHandle, SharedString, Window, div, prelude::*};
+use gpui::{
+    App, IntoElement, Pixels, RenderOnce, ScrollHandle, SharedString, Window, div, prelude::*,
+};
 use gpui_kit::component::{
     Sizable,
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
+    tooltip::Tooltip,
 };
 
 use crate::sizing::form_control_size;
@@ -19,6 +22,7 @@ pub enum NyaTabsVariant {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NyaTabItem {
     label: SharedString,
+    accessible_label: Option<SharedString>,
     disabled: bool,
 }
 
@@ -26,12 +30,18 @@ impl NyaTabItem {
     pub fn new(label: impl Into<SharedString>) -> Self {
         Self {
             label: label.into(),
+            accessible_label: None,
             disabled: false,
         }
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessible_label = Some(label.into());
         self
     }
 }
@@ -43,6 +53,7 @@ pub struct NyaTabs {
     selected_index: Option<usize>,
     variant: NyaTabsVariant,
     full_width: bool,
+    max_tab_width: Option<Pixels>,
     scroll_handle: Option<ScrollHandle>,
     on_select: Option<NyaTabSelectHandler>,
 }
@@ -55,6 +66,7 @@ impl NyaTabs {
             selected_index: Some(0),
             variant: NyaTabsVariant::Segmented,
             full_width: true,
+            max_tab_width: None,
             scroll_handle: None,
             on_select: None,
         }
@@ -90,6 +102,11 @@ impl NyaTabs {
         self
     }
 
+    pub fn max_tab_width(mut self, width: Pixels) -> Self {
+        self.max_tab_width = Some(width);
+        self
+    }
+
     /// Keep labels at their natural width and expose a scrollbar and overflow menu.
     pub fn scrollable(mut self, handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(handle.clone());
@@ -116,6 +133,9 @@ impl RenderOnce for NyaTabs {
         if self.full_width {
             tabs = tabs.w_full();
         }
+        if let Some(width) = self.max_tab_width {
+            tabs = tabs.max_width(width);
+        }
         let scrolling = self.scroll_handle.is_some();
         if let Some(handle) = &self.scroll_handle {
             tabs = tabs.track_scroll(handle).menu(true);
@@ -127,6 +147,11 @@ impl RenderOnce for NyaTabs {
             .children(self.items.into_iter().map(|item| {
                 Tab::new()
                     .label(item.label)
+                    .when_some(item.accessible_label, |tab, label| {
+                        tab.aria_label(label.clone()).tooltip(move |window, cx| {
+                            Tooltip::new(label.clone()).build(window, cx)
+                        })
+                    })
                     .disabled(item.disabled)
                     .when(!scrolling, |tab| tab.flex_1().min_w_0())
                     .when(scrolling, |tab| tab.flex_none().whitespace_nowrap())
