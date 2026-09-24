@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::{FocusHandle, ScrollHandle};
+use gpui::FocusHandle;
 use nyaterm_core::{OtpEntry, SavedCredential, SavedPassword, SecretString, SshKey};
 use nyaterm_store::KnownHostEntry;
 
@@ -31,7 +31,6 @@ pub(in crate::features) struct SecurityFeatureState {
     known_hosts_generation: u64,
     known_hosts_loading: bool,
     known_hosts_pending: Option<(u64, Option<String>)>,
-    tabs_scroll: ScrollHandle,
 }
 
 /// Persisted secret-adjacent catalogs loaded through `ConnectionStore`.
@@ -215,16 +214,11 @@ impl SecurityFeatureState {
             known_hosts_generation: 0,
             known_hosts_loading: false,
             known_hosts_pending: None,
-            tabs_scroll: ScrollHandle::new(),
         }
     }
 
     pub(in crate::features) fn known_hosts(&self) -> &[KnownHostEntry] {
         &self.known_hosts
-    }
-
-    pub(in crate::features) fn tabs_scroll(&self) -> &ScrollHandle {
-        &self.tabs_scroll
     }
 
     pub(in crate::features) fn known_hosts_loading(&self) -> bool {

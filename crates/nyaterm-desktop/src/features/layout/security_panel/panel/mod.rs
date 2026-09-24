@@ -4,7 +4,7 @@ use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
     rgb,
 };
-use nyaterm_ui::{NyaScrollable, NyaTabItem, NyaTabs};
+use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaScrollable, NyaTabItem, NyaTabs};
 
 use crate::features::NyaTermApp;
 use crate::models::{NavItem, PanelSide, SecurityAuthTab};
@@ -18,6 +18,14 @@ mod passwords;
 
 const SECURITY_LIST_HORIZONTAL_PADDING: f32 = 24.;
 const SECURITY_LIST_COMPACT_BREAKPOINT: f32 = 224.;
+const SECURITY_TABS_MIN_WIDTH: f32 = 520.;
+const SECURITY_AUTH_TABS: [SecurityAuthTab; 5] = [
+    SecurityAuthTab::Keys,
+    SecurityAuthTab::Passwords,
+    SecurityAuthTab::Otp,
+    SecurityAuthTab::Credentials,
+    SecurityAuthTab::KnownHosts,
+];
 
 impl NyaTermApp {
     pub(in crate::features) fn security_auth_panel(
@@ -36,6 +44,35 @@ impl NyaTermApp {
         }
         .overflow_y_scrollbar();
 
+        let tab_switcher = if self.security_panel_width() < SECURITY_TABS_MIN_WIDTH {
+            NyaDropdownMenu::new("security-auth-tab-menu")
+                .label(t!(active_tab.i18n_key()))
+                .min_width(px(180.))
+                .items(SECURITY_AUTH_TABS.map(|tab| {
+                    NyaMenuItem::action(t!(tab.i18n_key()))
+                        .checked(tab == active_tab)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.set_security_auth_tab(tab, window, cx);
+                        }))
+                }))
+                .into_any_element()
+        } else {
+            NyaTabs::new("security-auth-tabs")
+                .items(SECURITY_AUTH_TABS.map(|tab| NyaTabItem::new(t!(tab.i18n_key()))))
+                .selected_index(
+                    SECURITY_AUTH_TABS
+                        .iter()
+                        .position(|tab| *tab == active_tab)
+                        .unwrap_or(0),
+                )
+                .on_select(cx.listener(|this, index, window, cx| {
+                    if let Some(tab) = SECURITY_AUTH_TABS.get(*index) {
+                        this.set_security_auth_tab(*tab, window, cx);
+                    }
+                }))
+                .into_any_element()
+        };
+
         div()
             .size_full()
             .relative()
@@ -43,36 +80,13 @@ impl NyaTermApp {
             .flex_col()
             .bg(self.shell_transparent_color(palette.surface))
             .child(
-                div().px_3().pt_3().pb_0().flex().flex_col().child(
-                    div().id("security-auth-tabs-scroll").w_full().child(
-                        NyaTabs::new("security-auth-tabs")
-                            .scrollable(self.security.tabs_scroll())
-                            .items([
-                                NyaTabItem::new(t!(SecurityAuthTab::Keys.i18n_key())),
-                                NyaTabItem::new(t!(SecurityAuthTab::Passwords.i18n_key())),
-                                NyaTabItem::new(t!(SecurityAuthTab::Otp.i18n_key())),
-                                NyaTabItem::new(t!(SecurityAuthTab::Credentials.i18n_key())),
-                                NyaTabItem::new(t!(SecurityAuthTab::KnownHosts.i18n_key())),
-                            ])
-                            .selected_index(match active_tab {
-                                SecurityAuthTab::Keys => 0,
-                                SecurityAuthTab::Passwords => 1,
-                                SecurityAuthTab::Otp => 2,
-                                SecurityAuthTab::Credentials => 3,
-                                SecurityAuthTab::KnownHosts => 4,
-                            })
-                            .on_select(cx.listener(|this, index, window, cx| {
-                                let tab = match *index {
-                                    0 => SecurityAuthTab::Keys,
-                                    1 => SecurityAuthTab::Passwords,
-                                    2 => SecurityAuthTab::Otp,
-                                    3 => SecurityAuthTab::Credentials,
-                                    _ => SecurityAuthTab::KnownHosts,
-                                };
-                                this.set_security_auth_tab(tab, window, cx);
-                            })),
-                    ),
-                ),
+                div()
+                    .px_3()
+                    .pt_3()
+                    .pb_0()
+                    .flex()
+                    .flex_col()
+                    .child(tab_switcher),
             )
             .child(body)
             .when(
@@ -93,6 +107,10 @@ impl NyaTermApp {
     }
 
     fn security_list_compact(&self) -> bool {
+        security_list_compact_for_panel_width(self.security_panel_width())
+    }
+
+    fn security_panel_width(&self) -> f32 {
         let side = self
             .panel_side_for_item(NavItem::SecurityAuth)
             .unwrap_or(PanelSide::Left);
@@ -115,7 +133,7 @@ impl NyaTermApp {
                 }
             }
         };
-        security_list_compact_for_panel_width(panel_width)
+        panel_width
     }
 }
 
