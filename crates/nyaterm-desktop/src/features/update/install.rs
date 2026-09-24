@@ -388,15 +388,14 @@ pub fn run_update_helper_if_requested() -> bool {
     true
 }
 
-pub fn schedule_update_cleanup() {
-    let Some(path) = std::env::var_os(UPDATE_CLEANUP_ENV).map(PathBuf::from) else {
-        return;
-    };
+pub(crate) fn take_update_cleanup_path() -> Option<PathBuf> {
+    let path = std::env::var_os(UPDATE_CLEANUP_ENV).map(PathBuf::from)?;
     unsafe { std::env::remove_var(UPDATE_CLEANUP_ENV) };
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        let _ = std::fs::remove_dir_all(path);
-    });
+    Some(path)
+}
+
+pub(crate) fn cleanup_update_work_dir(path: PathBuf) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[cfg(windows)]

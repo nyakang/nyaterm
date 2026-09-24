@@ -161,6 +161,17 @@ impl DesktopController {
     }
 
     fn start_update_runtime(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = crate::features::update::install::take_update_cleanup_path() {
+            let blocking_jobs = self.update_store.read(cx).blocking_jobs();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let _ = blocking_jobs.submit_detached("update-cleanup", move |_| {
+                    crate::features::update::install::cleanup_update_work_dir(path);
+                });
+            })
+            .detach();
+        }
+
         if let Some(mut rx) = self
             .update_store
             .update(cx, |store, _| store.take_event_receiver())
@@ -206,17 +217,15 @@ impl DesktopController {
             return;
         };
         let rejected_tx = tx.clone();
-        if let Err(error) = std::thread::Builder::new()
-            .name("nyaterm-update-check".to_string())
-            .spawn(move || {
-                let result = crate::http::update::check_native_update();
-                let _ = tx.unbounded_send(UpdateEvent::Check {
-                    generation,
-                    kind,
-                    result,
-                });
-            })
-        {
+        let blocking_jobs = self.update_store.read(cx).blocking_jobs();
+        if let Err(error) = blocking_jobs.submit_detached("update-check", move |_| {
+            let result = crate::http::update::check_native_update();
+            let _ = tx.unbounded_send(UpdateEvent::Check {
+                generation,
+                kind,
+                result,
+            });
+        }) {
             let _ = rejected_tx.unbounded_send(UpdateEvent::Check {
                 generation,
                 kind,
