@@ -57,6 +57,7 @@ pub(in crate::features) struct TextInputSetup {
     pub placeholder: SharedString,
     pub masked: bool,
     pub multi_line: bool,
+    pub submit_on_enter: bool,
     /// A multi-line box holding source, rendered with a line-number gutter.
     pub code: bool,
 }
@@ -81,6 +82,7 @@ impl TextInputSetup {
             placeholder: placeholder.into(),
             masked: false,
             multi_line: true,
+            submit_on_enter: false,
             code: false,
         }
     }
@@ -92,8 +94,14 @@ impl TextInputSetup {
             placeholder: placeholder.into(),
             masked: false,
             multi_line: true,
+            submit_on_enter: false,
             code: true,
         }
+    }
+
+    pub fn submit_on_enter(mut self) -> Self {
+        self.submit_on_enter = true;
+        self
     }
 }
 
@@ -200,7 +208,9 @@ impl NyaTermApp {
             } else {
                 input
             };
-            input.masked(setup.masked)
+            input
+                .masked(setup.masked)
+                .submit_on_enter(setup.submit_on_enter)
         });
         let subscription_id = id.clone();
         let subscription =

@@ -94,6 +94,7 @@ pub(super) fn ai_send_button(
 pub(super) fn ai_user_pre_wrap_text(palette: ThemePalette, text: &str) -> gpui::AnyElement {
     let mut block = div()
         .min_w_0()
+        .w_full()
         .flex()
         .flex_col()
         .text_size(px(12.))

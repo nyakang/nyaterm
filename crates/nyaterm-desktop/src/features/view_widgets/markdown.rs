@@ -15,6 +15,8 @@ pub(in crate::features) fn markdown_content_view(
 ) -> impl IntoElement {
     let blocks = parse_markdown_blocks(content);
     let mut root = div()
+        .min_w_0()
+        .w_full()
         .flex()
         .flex_col()
         .gap_1()

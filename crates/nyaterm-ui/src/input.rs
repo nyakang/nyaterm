@@ -92,6 +92,7 @@ pub struct NyaInputState {
     masked: bool,
     applied_masked: bool,
     multi_line: bool,
+    submit_on_enter: bool,
     code: bool,
     language: Option<SharedString>,
     rows: Option<usize>,
@@ -115,6 +116,7 @@ impl NyaInputState {
             masked: false,
             applied_masked: false,
             multi_line: false,
+            submit_on_enter: false,
             code: false,
             language: None,
             rows: None,
@@ -135,6 +137,12 @@ impl NyaInputState {
     pub fn multi_line(mut self, rows: Option<usize>) -> Self {
         self.multi_line = true;
         self.rows = rows;
+        self
+    }
+
+    /// Send plain Enter through the multi-line input; Shift+Enter inserts a newline.
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.submit_on_enter = submit;
         self
     }
 
@@ -278,6 +286,7 @@ impl NyaInputState {
         let placeholder = component_placeholder(self.placeholder.clone(), multi_line);
         let language = self.language.clone();
         let rows = self.rows;
+        let submit_on_enter = self.submit_on_enter;
         let (state, subscription) = if multi_line && self.code {
             let state = cx.new(|cx| {
                 let mut editor = EditorState::new(window, cx)
@@ -299,7 +308,8 @@ impl NyaInputState {
             let state = cx.new(|cx| {
                 let mut input = TextareaState::new(window, cx)
                     .default_value(value)
-                    .placeholder(placeholder);
+                    .placeholder(placeholder)
+                    .submit_on_enter(submit_on_enter);
                 if let Some(rows) = rows {
                     input = input.rows(rows);
                 }
@@ -721,6 +731,29 @@ mod tests {
         handled: Rc<Cell<usize>>,
     }
 
+    struct SubmitOnEnterFixture {
+        field: gpui::Entity<NyaInputState>,
+        submitted: Rc<Cell<usize>>,
+    }
+
+    impl Render for SubmitOnEnterFixture {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let submitted = Rc::clone(&self.submitted);
+            div()
+                .on_key_down(move |event, _, cx| {
+                    if event.keystroke.key == "enter" && !event.keystroke.modifiers.shift {
+                        submitted.set(submitted.get() + 1);
+                        cx.stop_propagation();
+                    }
+                })
+                .child(self.field.clone())
+        }
+    }
+
     impl Render for AncestorKeyListenerFixture {
         fn render(
             &mut self,
@@ -800,6 +833,40 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(masked.read_with(cx, |state, cx| state.value(cx)), "b");
         assert_eq!(handled.get(), 2);
+    }
+
+    #[gpui::test]
+    fn textarea_submit_on_enter_reaches_ancestor_and_shift_enter_inserts_newline(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let submitted = Rc::new(Cell::new(0));
+        let (fixture, cx) = cx.add_window_view({
+            let submitted = Rc::clone(&submitted);
+            move |_, cx| SubmitOnEnterFixture {
+                field: cx.new(|cx| {
+                    NyaInputState::new(cx, "hello")
+                        .multi_line(Some(4))
+                        .submit_on_enter(true)
+                }),
+                submitted,
+            }
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            window.focus(&field.read(cx).focus_handle(), cx);
+        });
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 1);
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "hello");
+
+        cx.simulate_keystrokes("shift-enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 1);
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "\nhello");
     }
 
     #[test]
