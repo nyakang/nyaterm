@@ -63,6 +63,7 @@ impl NyaTermApp {
                             placeholder: password_placeholder.into(),
                             masked: password_masked,
                             multi_line: false,
+                            submit_on_enter: false,
                             code: false,
                         },
                         cx,

@@ -230,7 +230,9 @@ impl AiPanel {
                     .id(SharedString::from("ai-transcript-scroll"))
                     .flex_1()
                     .min_h_0()
-                    .overflow_scrollbar()
+                    .min_w_0()
+                    .w_full()
+                    .overflow_y_scrollbar()
                     .px_3()
                     .py_2()
                     .flex()
@@ -900,7 +902,7 @@ impl AiPanel {
         command_rows: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut body = div().flex().flex_col().gap_2();
+        let mut body = div().min_w_0().w_full().flex().flex_col().gap_2();
         if snapshot.messages.is_empty() {
             body = body.child(self.ai_empty_transcript(snapshot, cx));
         } else {
@@ -1065,6 +1067,8 @@ impl AiPanel {
 
         let mut bubble = div()
             .id(SharedString::from(format!("ai-msg-{}", message.id)))
+            .min_w_0()
+            .w_full()
             .rounded_md()
             .border_1()
             .border_color(if is_user {
@@ -1108,6 +1112,8 @@ impl AiPanel {
         if let Some(reasoning) = reasoning {
             bubble = bubble.child(
                 div()
+                    .min_w_0()
+                    .w_full()
                     .rounded_md()
                     .border_1()
                     .border_color(if streaming {
@@ -1142,6 +1148,8 @@ impl AiPanel {
                     )
                     .child(
                         div()
+                            .min_w_0()
+                            .w_full()
                             .text_size(px(11.))
                             .text_color(rgb(palette.text_muted))
                             .line_height(px(16.))
@@ -2515,7 +2523,7 @@ impl NyaTermApp {
         self.ensure_text_input(
             "ai.chat.prompt",
             &prompt_draft,
-            TextInputSetup::multi_line(prompt_placeholder),
+            TextInputSetup::multi_line(prompt_placeholder).submit_on_enter(),
             cx,
         );
         let prompt_input = self
