@@ -5,6 +5,7 @@ use nyaterm_terminal::TerminalSnapshot;
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::LostTerminalSelectionRecovery;
+use crate::features::terminal::state::TerminalSelectionAutoscroll;
 use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_surface::{
     terminal_absolute_line_for_snapshot_row, terminal_snapshot_absolute_range,
@@ -23,6 +24,7 @@ use super::metrics::{
 };
 
 const TERMINAL_SELECTION_DRAG_NOTIFY_DELAY: Duration = Duration::from_millis(8);
+const TERMINAL_SELECTION_AUTOSCROLL_DELAY: Duration = Duration::from_millis(24);
 const TERMINAL_SELECTED_OCCURRENCE_DEBOUNCE: Duration = Duration::from_millis(100);
 const TERMINAL_SELECTED_OCCURRENCE_LIMIT: usize = 2000;
 const TERMINAL_SELECTED_OCCURRENCE_MAX_CHARS: usize = 256;
@@ -47,6 +49,9 @@ impl NyaTermApp {
         self.terminal.selection.selection = None;
         self.terminal.selection.session_id = None;
         self.terminal.selection.dragging = false;
+        self.terminal.selection.drag_pointer_position = None;
+        self.terminal.selection.scroll_rehit_armed = false;
+        self.stop_terminal_selection_autoscroll();
         self.clear_terminal_selected_occurrence_for_session(session_id);
     }
 
@@ -74,6 +79,9 @@ impl NyaTermApp {
             self.terminal.selection.selection = None;
             self.terminal.selection.session_id = None;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.drag_pointer_position = None;
+            self.terminal.selection.scroll_rehit_armed = false;
+            self.stop_terminal_selection_autoscroll();
             self.clear_terminal_selected_occurrence(cx);
             if let Some(previous_session_id) =
                 previous_session_id.filter(|session_id| !session_id.is_empty())
@@ -85,6 +93,10 @@ impl NyaTermApp {
 
     pub(in crate::features) fn select_all_terminal(&mut self, cx: &mut Context<Self>) {
         let (_, cols) = self.active_terminal_grid_size();
+        self.terminal.selection.dragging = false;
+        self.terminal.selection.drag_pointer_position = None;
+        self.terminal.selection.scroll_rehit_armed = false;
+        self.stop_terminal_selection_autoscroll();
         if cols == 0 {
             self.terminal.selection.selection = None;
             self.terminal.selection.session_id = None;
@@ -95,7 +107,6 @@ impl NyaTermApp {
         self.clear_terminal_selected_occurrence(cx);
         self.terminal.selection.selection = Some(TerminalSelection::all_buffer(cols));
         self.terminal.selection.session_id = self.session.active_id_owned();
-        self.terminal.selection.dragging = false;
         self.shell
             .set_status("selected all terminal text".to_string());
         self.notify_terminal_selection_owner_surface(cx);
@@ -161,6 +172,15 @@ impl NyaTermApp {
                     .active_id_owned()
                     .filter(|session_id| !session_id.is_empty())
             });
+        self.stop_terminal_selection_autoscroll();
+        self.terminal.selection.scroll_rehit_armed = false;
+        if let Some(session_id) = selection_session_id.as_deref()
+            && let Some(surface) = self.terminal.view.surfaces.get(session_id).cloned()
+            && let Some(state) =
+                surface.update(cx, |surface, _| surface.take_scroll_state_for_selection())
+        {
+            let _ = self.sync_terminal_local_scroll_visual_state_from_surface(state, cx);
+        }
         let Some(geometry) =
             self.terminal_hit_test_geometry_for_session(selection_session_id.as_deref(), cx)
         else {
@@ -236,6 +256,7 @@ impl NyaTermApp {
                 self.terminal.selection.session_id = selection_session_id;
             }
             self.terminal.selection.dragging = true;
+            self.terminal.selection.drag_pointer_position = Some(event.position);
             // Defer status-bar shell notify until selection finishes.
             self.notify_terminal_selection_owner_surface(cx);
             return;
@@ -270,6 +291,7 @@ impl NyaTermApp {
         self.terminal.selection.selection = Some(TerminalSelection::with_anchor(buffer_cell));
         self.terminal.selection.session_id = selection_session_id;
         self.terminal.selection.dragging = true;
+        self.terminal.selection.drag_pointer_position = Some(event.position);
         self.notify_terminal_selection_owner_surface(cx);
     }
 
@@ -361,19 +383,37 @@ impl NyaTermApp {
             }
         }
         if !self.terminal.selection.dragging {
+            self.stop_terminal_selection_autoscroll();
             return;
         }
+        self.terminal.selection.drag_pointer_position = Some(event.position);
         let selection_session_id = self
             .terminal
             .selection
             .session_id
             .as_deref()
             .or(self.session.active_id())
-            .filter(|session_id| !session_id.is_empty());
-        let Some(geometry) = self.terminal_hit_test_geometry_for_session(selection_session_id, cx)
+            .filter(|session_id| !session_id.is_empty())
+            .map(str::to_string);
+        let Some(geometry) =
+            self.terminal_hit_test_geometry_for_session(selection_session_id.as_deref(), cx)
         else {
+            self.stop_terminal_selection_autoscroll();
             return;
         };
+        if let Some(session_id) = selection_session_id.as_deref() {
+            self.update_terminal_selection_autoscroll(
+                session_id.to_string(),
+                event.position,
+                &geometry,
+                cx,
+            );
+        }
+        if let Some(session_id) = selection_session_id.as_deref()
+            && geometry.display_offset != self.terminal_display_offset_for_session(Some(session_id))
+        {
+            return;
+        }
         let Some(buffer_cell) =
             Self::terminal_buffer_cell_for_visual_geometry(event.position, &geometry)
         else {
@@ -384,7 +424,7 @@ impl NyaTermApp {
         {
             selection.head = buffer_cell;
             if self.terminal.selection.session_id.is_none() {
-                self.terminal.selection.session_id = selection_session_id.map(str::to_string);
+                self.terminal.selection.session_id = selection_session_id;
             }
             self.queue_terminal_selection_drag_visual_notify(cx);
         }
@@ -398,6 +438,8 @@ impl NyaTermApp {
         if event.button != MouseButton::Left {
             return;
         }
+        self.stop_terminal_selection_autoscroll();
+        self.terminal.selection.scroll_rehit_armed = false;
         if self.finish_terminal_mouse_report(event, cx) {
             self.clear_terminal_selection(cx);
             return;
@@ -434,6 +476,8 @@ impl NyaTermApp {
             .filter(|session_id| !session_id.is_empty());
         if let Some(geometry) =
             self.terminal_hit_test_geometry_for_session(selection_session_id, cx)
+            && geometry.display_offset
+                == self.terminal_display_offset_for_session(selection_session_id)
         {
             let buffer_cell =
                 Self::terminal_buffer_cell_for_visual_geometry(event.position, &geometry);
@@ -444,6 +488,7 @@ impl NyaTermApp {
             }
         }
         self.terminal.selection.dragging = false;
+        self.terminal.selection.drag_pointer_position = None;
         if self
             .terminal
             .selection
@@ -484,6 +529,7 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        self.stop_terminal_selection_autoscroll();
         let previous_session_id = self
             .terminal
             .selection
@@ -611,6 +657,232 @@ impl NyaTermApp {
         .detach();
     }
 
+    pub(in crate::features) fn terminal_selection_dragging_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.terminal.selection.dragging
+            && self.terminal.selection.session_id.as_deref() == Some(session_id)
+    }
+
+    pub(in crate::features) fn stop_terminal_selection_autoscroll(&mut self) {
+        if self.terminal.selection.autoscroll.take().is_some() {
+            self.terminal.selection.autoscroll_generation = self
+                .terminal
+                .selection
+                .autoscroll_generation
+                .saturating_add(1);
+        }
+    }
+
+    fn update_terminal_selection_autoscroll(
+        &mut self,
+        session_id: String,
+        position: gpui::Point<gpui::Pixels>,
+        geometry: &TerminalHitTestGeometry,
+        cx: &mut Context<Self>,
+    ) {
+        let direction = terminal_selection_autoscroll_delta(
+            f32::from(position.y),
+            f32::from(geometry.bounds.origin.y),
+            f32::from(geometry.bounds.origin.y + geometry.bounds.size.height),
+            geometry.cell_h,
+        );
+        if direction == 0 {
+            self.stop_terminal_selection_autoscroll();
+            return;
+        }
+        if let Some(autoscroll) = self.terminal.selection.autoscroll.as_mut()
+            && autoscroll.session_id == session_id
+        {
+            autoscroll.position = position;
+            autoscroll.direction = direction;
+            return;
+        }
+        self.stop_terminal_selection_autoscroll();
+        self.terminal.selection.autoscroll_generation = self
+            .terminal
+            .selection
+            .autoscroll_generation
+            .saturating_add(1);
+        let generation = self.terminal.selection.autoscroll_generation;
+        self.terminal.selection.autoscroll = Some(TerminalSelectionAutoscroll {
+            session_id,
+            position,
+            direction,
+        });
+        self.schedule_terminal_selection_autoscroll(generation, cx);
+    }
+
+    fn schedule_terminal_selection_autoscroll(&mut self, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(TERMINAL_SELECTION_AUTOSCROLL_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.advance_terminal_selection_autoscroll(generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn advance_terminal_selection_autoscroll(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.terminal.selection.autoscroll_generation {
+            return;
+        }
+        let Some(autoscroll) = self.terminal.selection.autoscroll.clone() else {
+            return;
+        };
+        if !self.terminal_selection_dragging_for_session(&autoscroll.session_id) {
+            self.stop_terminal_selection_autoscroll();
+            return;
+        }
+        self.refresh_terminal_selection_head_from_painted_geometry(
+            &autoscroll.session_id,
+            autoscroll.position,
+            cx,
+        );
+        let Some(previous) = self.terminal_scroll_visual_state_for_session(&autoscroll.session_id)
+        else {
+            self.stop_terminal_selection_autoscroll();
+            return;
+        };
+        let Some(next) = self.scroll_terminal_by_for_session_state_only(
+            Some(&autoscroll.session_id),
+            autoscroll.direction,
+        ) else {
+            self.stop_terminal_selection_autoscroll();
+            return;
+        };
+        if previous.scroll_offset == next.scroll_offset {
+            self.stop_terminal_selection_autoscroll();
+            return;
+        }
+        self.reconcile_terminal_selection_after_scroll(
+            &autoscroll.session_id,
+            autoscroll.position,
+            previous.scroll_offset,
+            next.scroll_offset,
+            cx,
+        );
+        self.notify_terminal_scroll_after_state_change(Some(&autoscroll.session_id), cx);
+        self.schedule_terminal_selection_autoscroll(generation, cx);
+    }
+
+    fn refresh_terminal_selection_head_from_painted_geometry(
+        &mut self,
+        session_id: &str,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(geometry) = self.terminal_hit_test_geometry_for_session(Some(session_id), cx)
+        else {
+            return false;
+        };
+        if self.terminal_display_offset_for_session(Some(session_id)) != geometry.display_offset {
+            return false;
+        }
+        if let Some(buffer_cell) =
+            Self::terminal_buffer_cell_for_visual_geometry(position, &geometry)
+            && let Some(selection) = self.terminal.selection.selection.as_mut()
+            && selection.head != buffer_cell
+        {
+            selection.head = buffer_cell;
+            self.queue_terminal_selection_drag_visual_notify(cx);
+        }
+        true
+    }
+
+    pub(in crate::features) fn queue_terminal_selection_scroll_rehit(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminal_selection_dragging_for_session(session_id)
+            || self.terminal.selection.scroll_rehit_armed
+        {
+            return;
+        }
+        self.terminal.selection.scroll_rehit_armed = true;
+        let session_id = session_id.to_string();
+        self.schedule_terminal_selection_scroll_rehit(session_id, 0, cx);
+    }
+
+    fn schedule_terminal_selection_scroll_rehit(
+        &mut self,
+        session_id: String,
+        attempt: usize,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(TERMINAL_SELECTION_AUTOSCROLL_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.terminal_selection_dragging_for_session(&session_id) {
+                    this.terminal.selection.scroll_rehit_armed = false;
+                    return;
+                }
+                let painted =
+                    this.terminal
+                        .selection
+                        .drag_pointer_position
+                        .is_some_and(|position| {
+                            this.refresh_terminal_selection_head_from_painted_geometry(
+                                &session_id,
+                                position,
+                                cx,
+                            )
+                        });
+                if !painted && attempt < 3 {
+                    this.schedule_terminal_selection_scroll_rehit(session_id, attempt + 1, cx);
+                } else {
+                    this.terminal.selection.scroll_rehit_armed = false;
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(in crate::features) fn reconcile_terminal_selection_after_scroll(
+        &mut self,
+        session_id: &str,
+        position: gpui::Point<gpui::Pixels>,
+        previous_offset: usize,
+        next_offset: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminal_selection_dragging_for_session(session_id) {
+            return;
+        }
+        let position = self
+            .terminal
+            .selection
+            .drag_pointer_position
+            .unwrap_or(position);
+        self.terminal.selection.drag_pointer_position = Some(position);
+        let Some(state) = self.terminal_scroll_visual_state_for_session(session_id) else {
+            return;
+        };
+        let Some(selection) = self.terminal.selection.selection.as_mut() else {
+            return;
+        };
+        let max_line = state
+            .scrollback_len
+            .saturating_add(state.viewport_rows)
+            .saturating_sub(1);
+        let line = terminal_selection_line_after_scroll(
+            selection.head.line,
+            previous_offset,
+            next_offset,
+            max_line,
+        );
+        if line != selection.head.line {
+            selection.head.line = line;
+            self.queue_terminal_selection_drag_visual_notify(cx);
+        }
+    }
+
     fn queue_terminal_selection_drag_visual_notify(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self
             .terminal
@@ -661,12 +933,57 @@ impl NyaTermApp {
         position: gpui::Point<gpui::Pixels>,
         geometry: &TerminalHitTestGeometry,
     ) -> Option<TerminalBufferCellPos> {
+        let top = f32::from(geometry.bounds.origin.y);
+        let bottom = (top + f32::from(geometry.bounds.size.height) - 1.0).max(top);
+        let position = gpui::Point {
+            x: position.x,
+            y: gpui::px(f32::from(position.y).clamp(top, bottom)),
+        };
         let snapshot_row = terminal_snapshot_row_for_visual_geometry(position, geometry)
             .min(geometry.snapshot_rows.saturating_sub(1));
         let absolute_line =
             terminal_absolute_line_for_snapshot_row(geometry.snapshot.as_ref(), snapshot_row)?;
         let viewport_cell = terminal_cell_for_visual_geometry(position, geometry);
         Some(TerminalBufferCellPos::new(absolute_line, viewport_cell.col))
+    }
+}
+
+fn terminal_selection_autoscroll_delta(
+    pointer_y: f32,
+    top: f32,
+    bottom: f32,
+    cell_height: f32,
+) -> i32 {
+    if !pointer_y.is_finite() || bottom <= top {
+        return 0;
+    }
+    let edge = cell_height.max(1.0).min((bottom - top) / 4.0);
+    let distance = if pointer_y < top + edge {
+        top + edge - pointer_y
+    } else if pointer_y >= bottom - edge {
+        bottom - edge - pointer_y
+    } else {
+        return 0;
+    };
+    let steps = (1.0 + distance.abs() / cell_height.max(1.0)).floor() as i32;
+    if distance > 0.0 {
+        steps.clamp(1, 6)
+    } else {
+        -steps.clamp(1, 6)
+    }
+}
+
+fn terminal_selection_line_after_scroll(
+    line: usize,
+    previous_offset: usize,
+    next_offset: usize,
+    max_line: usize,
+) -> usize {
+    if next_offset > previous_offset {
+        line.saturating_sub(next_offset - previous_offset)
+    } else {
+        line.saturating_add(previous_offset - next_offset)
+            .min(max_line)
     }
 }
 
@@ -837,14 +1154,18 @@ mod tests {
     use nyaterm_terminal::TerminalScreen;
 
     use super::super::metrics::TerminalHitTestGeometry;
-    use crate::features::terminal::terminal_surface::terminal_snapshot_absolute_range;
+    use crate::features::NyaTermApp;
+    use crate::features::terminal::terminal_surface::{
+        terminal_absolute_line_for_snapshot_row, terminal_snapshot_absolute_range,
+    };
     use crate::models::{TerminalBufferCellPos, TerminalSelection, TerminalViewState};
     use crate::terminal::{TerminalTextCell, terminal_text_cell_slice, terminal_text_cells};
 
     use super::{
         TERMINAL_SELECTED_OCCURRENCE_MAX_CHARS, TERMINAL_SELECTION_DRAG_NOTIFY_DELAY,
         terminal_all_lines_text, terminal_selected_occurrence_query,
-        terminal_selected_text_for_view, terminal_snapshot_covering_selection,
+        terminal_selected_text_for_view, terminal_selection_autoscroll_delta,
+        terminal_selection_line_after_scroll, terminal_snapshot_covering_selection,
         terminal_text_cell_is_word, terminal_word_bounds_for_visual_geometry,
     };
 
@@ -853,6 +1174,92 @@ mod tests {
         assert_eq!(
             TERMINAL_SELECTION_DRAG_NOTIFY_DELAY,
             Duration::from_millis(8)
+        );
+    }
+
+    #[test]
+    fn dragging_below_terminal_advances_selection_toward_newer_lines() {
+        assert_eq!(
+            terminal_selection_autoscroll_delta(101.0, 0.0, 100.0, 10.0),
+            -2
+        );
+        assert_eq!(terminal_selection_line_after_scroll(42, 8, 6, 99), 44);
+        assert_eq!(terminal_selection_line_after_scroll(99, 2, 0, 99), 99);
+    }
+
+    #[test]
+    fn dragging_above_terminal_advances_selection_into_scrollback() {
+        assert_eq!(
+            terminal_selection_autoscroll_delta(-1.0, 0.0, 100.0, 10.0),
+            2
+        );
+        assert_eq!(terminal_selection_line_after_scroll(42, 6, 8, 99), 40);
+        assert_eq!(terminal_selection_line_after_scroll(0, 98, 99, 99), 0);
+    }
+
+    #[test]
+    fn wheel_scroll_during_drag_keeps_selection_endpoint_with_viewport() {
+        assert_eq!(
+            terminal_selection_autoscroll_delta(50.0, 0.0, 100.0, 10.0),
+            0
+        );
+        assert_eq!(terminal_selection_line_after_scroll(40, 4, 7, 99), 37);
+        assert_eq!(terminal_selection_line_after_scroll(37, 7, 5, 99), 39);
+    }
+
+    #[test]
+    fn edge_drag_hit_test_stays_on_visible_rows_with_prefetched_snapshot() {
+        let mut screen = TerminalScreen::new(20, 3);
+        screen.advance(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        let snapshot = Arc::new(screen.viewport_snapshot_with_window(0, 2, 0));
+        assert!(snapshot.row_count() >= 5);
+        let anchor = snapshot.row_count() - 3;
+        let geometry = TerminalHitTestGeometry {
+            bounds: gpui::bounds(
+                Point {
+                    x: px(0.0),
+                    y: px(0.0),
+                },
+                Size {
+                    width: px(160.0),
+                    height: px(48.0),
+                },
+            ),
+            snapshot: snapshot.clone(),
+            cell_w: 8.0,
+            cell_h: 16.0,
+            padding_left: 0.0,
+            padding_top: 0.0,
+            gutter: 0.0,
+            rows: 3,
+            cols: snapshot.cols,
+            display_offset: 0,
+            viewport_anchor_row: anchor,
+            snapshot_rows: snapshot.row_count(),
+            viewport_rows: 3,
+            visual_y_offset: -(anchor as f32) * 16.0,
+        };
+        let above = NyaTermApp::terminal_buffer_cell_for_visual_geometry(
+            Point {
+                x: px(8.0),
+                y: px(-100.0),
+            },
+            &geometry,
+        );
+        let below = NyaTermApp::terminal_buffer_cell_for_visual_geometry(
+            Point {
+                x: px(8.0),
+                y: px(100.0),
+            },
+            &geometry,
+        );
+        assert_eq!(
+            above.map(|cell| cell.line),
+            terminal_absolute_line_for_snapshot_row(&snapshot, anchor)
+        );
+        assert_eq!(
+            below.map(|cell| cell.line),
+            terminal_absolute_line_for_snapshot_row(&snapshot, anchor + 2)
         );
     }
 

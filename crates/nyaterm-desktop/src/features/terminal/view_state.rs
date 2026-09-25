@@ -102,6 +102,9 @@ impl TerminalFeatureState {
                 let selection = if self.selection.session_id.as_deref() == Some(&session_id) {
                     self.selection.session_id = None;
                     self.selection.dragging = false;
+                    self.selection.drag_pointer_position = None;
+                    self.selection.autoscroll = None;
+                    self.selection.scroll_rehit_armed = false;
                     self.selection.selection.take()
                 } else {
                     None

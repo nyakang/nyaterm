@@ -96,10 +96,21 @@ pub(super) struct TerminalSelectionState {
     pub(super) session_id: Option<String>,
     pub(super) selected_occurrence: TerminalSelectedOccurrenceState,
     pub(super) dragging: bool,
+    pub(super) drag_pointer_position: Option<gpui::Point<gpui::Pixels>>,
+    pub(super) autoscroll: Option<TerminalSelectionAutoscroll>,
+    pub(super) autoscroll_generation: u64,
+    pub(super) scroll_rehit_armed: bool,
     pub(super) mouse_report_button: Option<u8>,
     pub(super) mouse_report_session_id: Option<String>,
     pub(super) mouse_report_peer_session_ids: Vec<String>,
     pub(super) mouse_report_position: Option<(u16, u16)>,
+}
+
+#[derive(Clone)]
+pub(super) struct TerminalSelectionAutoscroll {
+    pub(super) session_id: String,
+    pub(super) position: gpui::Point<gpui::Pixels>,
+    pub(super) direction: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +245,10 @@ impl TerminalFeatureState {
                     generation: 0,
                 },
                 dragging: false,
+                drag_pointer_position: None,
+                autoscroll: None,
+                autoscroll_generation: 0,
+                scroll_rehit_armed: false,
                 mouse_report_button: None,
                 mouse_report_session_id: None,
                 mouse_report_peer_session_ids: Vec::new(),
@@ -378,6 +393,9 @@ impl TerminalFeatureState {
             || self.menus.action_link_menu.is_some()
             || self.menus.action_link_tooltip.is_some();
         self.selection.dragging = false;
+        self.selection.drag_pointer_position = None;
+        self.selection.autoscroll = None;
+        self.selection.scroll_rehit_armed = false;
         self.menus.action_link_menu = None;
         self.menus.action_link_tooltip = None;
         self.menus.action_link_hover_pending = None;
@@ -391,6 +409,9 @@ impl TerminalFeatureState {
             return LostTerminalSelectionRecovery::None;
         }
         self.selection.dragging = false;
+        self.selection.drag_pointer_position = None;
+        self.selection.autoscroll = None;
+        self.selection.scroll_rehit_armed = false;
         if self
             .selection
             .selection

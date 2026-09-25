@@ -359,14 +359,17 @@ impl NyaTermApp {
         }
 
         let local_scroll = self.terminal_local_scroll_enabled_for_session(session_id);
+        let previous_residual = self.terminal_scroll_residual_for_session(Some(session_id));
         let delta = if local_scroll {
             self.terminal_local_scroll_delta_lines_for_session(Some(session_id), raw_lines)
         } else {
             self.terminal_scroll_delta_lines_for_session(Some(session_id), raw_lines)
         };
         if delta == 0 {
-            if local_scroll && self.terminal_scroll_residual_for_session(Some(session_id)) != 0.0 {
+            let residual = self.terminal_scroll_residual_for_session(Some(session_id));
+            if local_scroll && (residual != 0.0 || residual != previous_residual) {
                 self.note_terminal_fractional_scroll_after_local_surface_update(session_id, cx);
+                self.queue_terminal_selection_scroll_rehit(session_id, cx);
                 return TerminalScrollWheelStateResult {
                     visual_state: self.terminal_scroll_visual_state_for_session(session_id),
                     defer_repaint: false,
@@ -423,7 +426,20 @@ impl NyaTermApp {
             };
         }
 
+        let previous_offset = self
+            .terminal_scroll_visual_state_for_session(session_id)
+            .map(|state| state.scroll_offset);
         let visual_state = self.scroll_terminal_by_for_session_state_only(Some(session_id), delta);
+        if let (Some(previous_offset), Some(state)) = (previous_offset, visual_state.as_ref()) {
+            self.reconcile_terminal_selection_after_scroll(
+                session_id,
+                position,
+                previous_offset,
+                state.scroll_offset,
+                cx,
+            );
+            self.queue_terminal_selection_scroll_rehit(session_id, cx);
+        }
         if let Some(state) = visual_state.as_ref()
             && terminal_visual_scroll_active_for_state(
                 state.scroll_offset,

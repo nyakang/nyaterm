@@ -108,6 +108,9 @@ impl NyaTermApp {
         // Only drop an in-progress drag so a stuck drag cannot block further input.
         if self.terminal.selection.dragging {
             self.terminal.selection.dragging = false;
+            self.terminal.selection.drag_pointer_position = None;
+            self.terminal.selection.scroll_rehit_armed = false;
+            self.stop_terminal_selection_autoscroll();
         }
         let Some(session_id) = self.session.active_id_owned() else {
             if self.set_terminal_status_if_changed("start a session before typing") {
@@ -230,6 +233,9 @@ impl NyaTermApp {
         // the active session's wire bytes.
         if self.terminal.selection.dragging {
             self.terminal.selection.dragging = false;
+            self.terminal.selection.drag_pointer_position = None;
+            self.terminal.selection.scroll_rehit_armed = false;
+            self.stop_terminal_selection_autoscroll();
         }
         let Some(session_id) = self.session.active_id_owned() else {
             if self.set_terminal_status_if_changed("start a session before typing") {

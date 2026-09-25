@@ -1845,7 +1845,10 @@ impl TerminalSurface {
             ScrollDelta::Lines(delta) => delta.y,
             ScrollDelta::Pixels(delta) => f32::from(delta.y) / self.cell_height.max(1.0),
         };
-        if self.can_handle_scroll_wheel_locally()
+        if !app
+            .read(cx)
+            .terminal_selection_dragging_for_session(&session_id)
+            && self.can_handle_scroll_wheel_locally()
             && let Some(result) = self.apply_local_scroll_wheel_visual_state(raw_lines)
         {
             if result.visual_changed {
@@ -1916,6 +1919,9 @@ impl TerminalSurface {
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = result.visual_state {
+            self.pending_local_scroll_sync = None;
+            self.scroll_interaction_generation =
+                self.scroll_interaction_generation.saturating_add(1);
             let repaint_needed = self.scroll_visual_state_needs_repaint(&state);
             let text_updated = self.apply_scroll_visual_state(state.clone());
             let needs_text_first_repaint =
@@ -2010,6 +2016,14 @@ impl TerminalSurface {
             performance_overlay: self.performance_overlay,
             skipped_output_chars: self.skipped_output_chars,
         }
+    }
+
+    pub(in crate::features) fn take_scroll_state_for_selection(
+        &mut self,
+    ) -> Option<TerminalScrollVisualState> {
+        self.pending_local_scroll_sync.take()?;
+        self.scroll_interaction_generation = self.scroll_interaction_generation.saturating_add(1);
+        Some(self.current_scroll_visual_state())
     }
 
     fn queue_local_scroll_app_sync(
