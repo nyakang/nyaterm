@@ -299,6 +299,8 @@ def verify_windows_installer_script(content: str, version: str) -> None:
         f'VIAddVersionKey "ProductVersion" "{version}"',
         f'VIAddVersionKey "FileVersion" "{version}"',
         f'VIAddVersionKey "FileDescription" "{identity.display_name} native GPUI terminal"',
+        r'!define MUI_FINISHPAGE_RUN "$INSTDIR\NyaTerm.exe"',
+        f'!define MUI_FINISHPAGE_RUN_TEXT "Launch {identity.display_name}"',
         f'WriteRegStr HKCU "{identity.windows_registry_key}" "InstallDir" "$INSTDIR"',
         f'WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayName" "{identity.display_name}"',
         rf'WriteRegStr HKCU "Software\Classes\{identity.desktop_id}" "URL Protocol" ""',
