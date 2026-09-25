@@ -17,6 +17,22 @@
   font-display: block;
 }
 
+/* Symbols-only font (see src/lib/terminalSymbolFont.ts). Its glyphs fill the whole
+   character cell, so TUI art has no visible line gaps in the DOM renderer, which
+   has no custom glyph rasterization: Braille Patterns and the Symbols for Legacy
+   Computing ranges that ordinary fonts do not cover. The unicode-range is limited
+   to those ranges so the font can be listed first in the terminal font stack
+   without affecting any other glyph or the measured cell metrics. Keep the range
+   in sync with TERMINAL_SYMBOL_FONT_UNICODE_RANGE. */
+@font-face {
+  font-family: "NyaTerm Symbols";
+  src: url("/fonts/nyaterm-symbols.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  unicode-range: U+2800-28FF, U+1FB00-1FB3B, U+1FB68-1FB8B, U+1FBF0-1FBF9;
+  font-display: block;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme {

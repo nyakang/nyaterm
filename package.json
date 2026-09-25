@@ -20,6 +20,7 @@
     "dev": "vite",
     "build": "pnpm build:mcp-sidecar && tsc && vite build",
     "build:mcp-sidecar": "node scripts/build-mcp-sidecar.mjs",
+    "build:symbol-font": "node scripts/generate-symbol-font.mjs",
     "release": "node scripts/sync-version.mjs --commit && tauri build",
     "build:unlock-rescue": "powershell -ExecutionPolicy Bypass -File scripts/build-unlock-rescue.ps1",
     "preview": "vite preview",
@@ -36,7 +37,7 @@
     "fmt:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "i18n:check": "prettier --check src/i18n/locales/*.json",
     "i18n:fix": "prettier --write src/i18n/locales/*.json",
-    "postinstall": "node scripts/patch-xterm-webgl-clear-model.cjs && node scripts/patch-xterm-wide-char-selection.cjs && node scripts/patch-xterm-foreground-intense.cjs"
+    "postinstall": "node scripts/patch-xterm-webgl-clear-model.cjs && node scripts/patch-xterm-wide-char-selection.cjs && node scripts/patch-xterm-foreground-intense.cjs && node scripts/patch-xterm-braille-grid.cjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

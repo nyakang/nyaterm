@@ -57,6 +57,10 @@ import {
 import { registerTerminalContextProvider } from "@/lib/terminalContext";
 import { resolveTerminalFontSize } from "@/lib/terminalFontSize";
 import {
+  composeTerminalFontFamily,
+  ensureTerminalSymbolFontReady,
+} from "@/lib/terminalSymbolFont";
+import {
   applyTerminalInputData,
   applyTerminalInputPreview,
   canSuggestFromTracker,
@@ -820,7 +824,7 @@ export default function XTerminal({
         appearance.font_size,
         terminalSettings.font_size_delta,
       ),
-      fontFamily: appearance.font_family,
+      fontFamily: composeTerminalFontFamily(appearance.font_family),
       fontWeight: appearance.font_weight,
       fontWeightBold: appearance.font_weight_bold,
       minimumContrastRatio: appearance.minimum_contrast_ratio,
@@ -2423,6 +2427,20 @@ export default function XTerminal({
         },
       });
     }
+
+    // Rows painted before the bundled symbols font finished loading use a
+    // fallback glyph (with gaps). Repaint once the font is available. A snapshot
+    // replay paints with the font already loaded, so it is left untouched.
+    void ensureTerminalSymbolFontReady().then((loaded) => {
+      if (!loaded || !isTerminalAlive() || disposed) return;
+      if (restoringSnapshotRef.current) return;
+      fitScheduler.schedule({
+        reason: "braille-font",
+        force: true,
+        refresh: true,
+        clearTextureAtlas: true,
+      });
+    });
 
     return () => {
       disposed = true;

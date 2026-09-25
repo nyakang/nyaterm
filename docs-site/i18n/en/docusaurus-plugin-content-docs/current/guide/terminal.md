@@ -32,6 +32,7 @@ In **Settings → Interaction**, you can also adjust:
 - The default scrollback buffer keeps **10000 lines**
 - You can customize font family, font size, normal font weight, bold font weight, cursor style, and cursor blink
 - Use the menu or keyboard shortcuts to zoom in, zoom out, or reset zoom; the terminal root coordinates zoom handling so nested workspaces do not process it twice
+- Character-art symbols (Braille Patterns U+2800-U+28FF and the Legacy Computing sextant/eighth-block/segmented-digit ranges) are drawn to fill the whole cell: the WebGL renderer rasterizes them itself and the DOM renderer uses the bundled `NyaTerm Symbols` font, so dot art such as chafa output, sparklines or mosaic graphics has no phantom line spacing
 - **Hardware acceleration** is optional and is **not enabled by default**; you can toggle it manually in **Settings → Terminal** if you want to compare rendering behavior
 
 ### Paste and input compatibility
