@@ -17,7 +17,7 @@ pub use session_hub::SessionHub;
 pub use window_state::{AppShellStartup, MainWindowPlacement};
 
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
@@ -359,59 +359,70 @@ impl AppShell {
                 app.apply_shared_screen_lock(true, window, cx);
             }
         });
-        let shutdown_subscription =
-            cx.subscribe(&app, |this, _, event: &AppLifecycleEvent, cx| match event {
-                AppLifecycleEvent::ShutdownRequested => {
-                    if this.quit_requested || this.controller.read(cx).workspace_count() == 1 {
-                        if !this
-                            .controller
-                            .update(cx, |controller, _| controller.begin_process_quit())
-                        {
-                            return;
-                        }
-                        let workspace_id = this.workspace_id;
-                        let tasks = this.controller.update(cx, |controller, cx| {
-                            controller.prepare_other_workspaces_for_quit(workspace_id, cx)
-                        });
-                        match tasks {
-                            Ok(tasks) => this.pending_process_quit_tasks = tasks,
-                            Err(error) => {
-                                this.controller
-                                    .update(cx, |controller, _| controller.cancel_process_quit());
-                                if let Some(app) = &this.app {
-                                    app.update(cx, |app, cx| {
-                                        app.report_close_save_failed(error.to_string(), cx)
-                                    });
-                                }
+        let shutdown_subscription = cx.subscribe(&app, |_, _, event: &AppLifecycleEvent, cx| {
+            let shell = cx.weak_entity();
+            let event = *event;
+            // The app can emit this while AppShell is already in a close callback.
+            cx.defer(move |cx| {
+                let _ = shell.update(cx, |this, cx| match event {
+                    AppLifecycleEvent::ShutdownRequested => {
+                        if this.quit_requested || this.controller.read(cx).workspace_count() == 1 {
+                            if !this
+                                .controller
+                                .update(cx, |controller, _| controller.begin_process_quit())
+                            {
                                 return;
                             }
-                        }
-                        this.request_close(cx);
-                    } else {
-                        let Some(app) = this.app.clone() else { return };
-                        let persistence_task = match app.update(cx, |app, cx| {
-                            app.submit_shutdown_persistence(false).inspect_err(|error| {
-                                app.report_close_save_failed(error.to_string(), cx);
-                            })
-                        }) {
-                            Ok(task) => task,
-                            Err(_) => return,
-                        };
-                        this.enter_flushing(cx);
-                        let workspace_id = this.workspace_id;
-                        if let Err(error) = this.controller.update(cx, |controller, cx| {
-                            controller.request_close_workspace(workspace_id, persistence_task, cx)
-                        }) {
-                            tracing::error!(%error, "could not close workspace");
-                            this.lifecycle = AppShellLifecycle::FlushFailed(error.to_string());
-                            app.update(cx, |app, cx| {
-                                app.report_close_save_failed(error.to_string(), cx)
+                            let workspace_id = this.workspace_id;
+                            let tasks = this.controller.update(cx, |controller, cx| {
+                                controller.prepare_other_workspaces_for_quit(workspace_id, cx)
                             });
+                            match tasks {
+                                Ok(tasks) => this.pending_process_quit_tasks = tasks,
+                                Err(error) => {
+                                    this.controller.update(cx, |controller, _| {
+                                        controller.cancel_process_quit()
+                                    });
+                                    if let Some(app) = &this.app {
+                                        app.update(cx, |app, cx| {
+                                            app.report_close_save_failed(error.to_string(), cx)
+                                        });
+                                    }
+                                    return;
+                                }
+                            }
+                            this.request_close(cx);
+                        } else {
+                            let Some(app) = this.app.clone() else { return };
+                            let persistence_task = match app.update(cx, |app, cx| {
+                                app.submit_shutdown_persistence(false).inspect_err(|error| {
+                                    app.report_close_save_failed(error.to_string(), cx);
+                                })
+                            }) {
+                                Ok(task) => task,
+                                Err(_) => return,
+                            };
+                            this.enter_flushing(cx);
+                            let workspace_id = this.workspace_id;
+                            if let Err(error) = this.controller.update(cx, |controller, cx| {
+                                controller.request_close_workspace(
+                                    workspace_id,
+                                    persistence_task,
+                                    cx,
+                                )
+                            }) {
+                                tracing::error!(%error, "could not close workspace");
+                                this.lifecycle = AppShellLifecycle::FlushFailed(error.to_string());
+                                app.update(cx, |app, cx| {
+                                    app.report_close_save_failed(error.to_string(), cx)
+                                });
+                            }
                         }
                     }
-                }
-                AppLifecycleEvent::NewWindowRequested => this.request_new_window(cx),
+                    AppLifecycleEvent::NewWindowRequested => this.request_new_window(cx),
+                });
             });
+        });
         self._subscriptions.push(shutdown_subscription);
         self.app = Some(app);
         let update_subscription = cx.observe(&update_store, |this, _, cx| {
@@ -581,9 +592,11 @@ impl AppShell {
     pub(super) fn request_application_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quit_requested = true;
         if let Some(app) = &self.app {
-            let count = self
-                .controller
-                .update(cx, |controller, cx| controller.live_session_count(cx));
+            // This shell is already being updated; only visit other shells through the controller.
+            let count = app.read(cx).live_session_count()
+                + self.controller.update(cx, |controller, cx| {
+                    controller.live_session_count_excluding(self.workspace_id, cx)
+                });
             app.update(cx, |app, cx| {
                 app.handle_window_close_request_with_count(count, window, cx)
             });
@@ -627,6 +640,7 @@ impl AppShell {
     /// decision. The shell begins persistence and worker shutdown only after it
     /// receives `AppLifecycleEvent::ShutdownRequested`.
     pub fn request_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let started_at = Instant::now();
         match self.lifecycle {
             AppShellLifecycle::Ready | AppShellLifecycle::FlushFailed(_) => {
                 if let Some(app) = &self.app {
@@ -638,11 +652,28 @@ impl AppShell {
             AppShellLifecycle::Flushing => {}
             AppShellLifecycle::Loading | AppShellLifecycle::Recovery(_) => self.request_close(cx),
         }
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "window close callback completed"
+        );
     }
 
     fn quit_after_worker_shutdown(&mut self, launch_update: bool, cx: &mut Context<Self>) {
-        self.controller
-            .update(cx, |controller, cx| controller.shutdown_all_workspaces(cx));
+        let started_at = Instant::now();
+        // The current shell is already borrowed by the persistence completion callback.
+        if let Some(app) = &self.app {
+            app.update(cx, |app, _| {
+                app.shutdown_workspace_sessions();
+                app.shutdown_blocking_jobs();
+            });
+        }
+        self.controller.update(cx, |controller, cx| {
+            controller.shutdown_other_workspaces(self.workspace_id, cx)
+        });
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "workspace workers stopped"
+        );
         if launch_update && let Some(app) = &self.app {
             let update_result =
                 app.update(cx, |app, cx| app.launch_pending_update_after_shutdown(cx));
@@ -687,6 +718,7 @@ impl AppShell {
     }
 
     fn begin_shutdown(&mut self, cx: &mut Context<Self>) {
+        let started_at = Instant::now();
         let Some(store_runtime) = &self.store_runtime else {
             self.controller
                 .update(cx, |controller, _| controller.cancel_process_quit());
@@ -760,7 +792,12 @@ impl AppShell {
         };
         let pending_tasks = std::mem::take(&mut self.pending_process_quit_tasks);
         self.enter_flushing(cx);
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "shutdown persistence queued"
+        );
         cx.spawn(async move |this, cx| {
+            let flush_started_at = Instant::now();
             let mut failure = None;
             for pending in pending_tasks {
                 if let Err(error) = pending.await.outcome {
@@ -776,6 +813,10 @@ impl AppShell {
             if let Err(error) = task.await.outcome {
                 failure.get_or_insert(error);
             }
+            tracing::info!(
+                elapsed_ms = flush_started_at.elapsed().as_millis(),
+                "shutdown persistence finished"
+            );
             let _ = this.update(cx, |this, cx| {
                 if let Some(error) = failure {
                     if let Some(store_runtime) = &this.store_runtime {

@@ -1184,10 +1184,15 @@ impl DesktopController {
         }
     }
 
-    pub fn live_session_count(&self, cx: &mut Context<Self>) -> usize {
+    pub fn live_session_count_excluding(
+        &self,
+        excluded_workspace_id: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) -> usize {
         self.windows
-            .values()
-            .filter_map(|entry| {
+            .iter()
+            .filter(|(workspace_id, _)| **workspace_id != excluded_workspace_id)
+            .filter_map(|(_, entry)| {
                 entry
                     .shell
                     .update(cx, |shell, cx| {
@@ -1359,7 +1364,26 @@ impl DesktopController {
     }
 
     pub fn shutdown_all_workspaces(&mut self, cx: &mut Context<Self>) {
-        for entry in self.windows.values() {
+        self.shutdown_workspaces_except(None, cx);
+    }
+
+    pub fn shutdown_other_workspaces(
+        &mut self,
+        excluded_workspace_id: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) {
+        self.shutdown_workspaces_except(Some(excluded_workspace_id), cx);
+    }
+
+    fn shutdown_workspaces_except(
+        &mut self,
+        excluded_workspace_id: Option<WorkspaceId>,
+        cx: &mut Context<Self>,
+    ) {
+        for (workspace_id, entry) in &self.windows {
+            if excluded_workspace_id == Some(*workspace_id) {
+                continue;
+            }
             let _ = entry.shell.update(cx, |shell, cx| {
                 if let Some(app) = &shell.app {
                     app.update(cx, |app, _| {
