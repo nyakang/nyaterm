@@ -34,6 +34,23 @@ impl NyaTermApp {
         self.finish_session_registration(session_id, encoding, is_terminal);
     }
 
+    pub(in crate::features) fn register_session_for_reconnect(
+        &mut self,
+        session_id: &str,
+        metadata: SessionRuntimeMetadata,
+    ) {
+        let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
+        self.session
+            .register_provisional_reconnect(session_id, metadata);
+        if let Some(encoding) = encoding {
+            self.terminal.ensure_frame_session(
+                session_id.to_string(),
+                encoding,
+                self.terminal_scrollback_line_limit(),
+            );
+        }
+    }
+
     fn finish_session_registration(
         &mut self,
         session_id: &str,

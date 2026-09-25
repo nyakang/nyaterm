@@ -791,6 +791,15 @@ impl NyaTermApp {
     ) -> TerminalFrameApplyResult {
         match event {
             TerminalFrameEvent::Output(frame) => self.apply_terminal_output_frame(frame, cx),
+            TerminalFrameEvent::Rekeyed {
+                old_id,
+                new_id,
+                success,
+            } => TerminalFrameApplyResult {
+                chrome_dirty: self
+                    .complete_reconnected_session_frame(&old_id, &new_id, success, cx),
+                surface_notify: None,
+            },
             TerminalFrameEvent::Snapshot(snapshot) => {
                 self.apply_terminal_snapshot_frame(snapshot, cx)
             }
@@ -830,6 +839,9 @@ impl NyaTermApp {
             snapshot_stats,
             process_duration,
         } = frame;
+        if !self.session.has_session(&session_id) {
+            return TerminalFrameApplyResult::default();
+        }
         let has_snapshot = snapshot.is_some();
         let is_active = self.session.active_id() == Some(session_id.as_str());
         let presentation = TerminalPresentation::resolve(
@@ -1578,6 +1590,7 @@ fn pop_terminal_frame_critical_events_for_apply(
             TerminalFrameEvent::Output(_)
                 | TerminalFrameEvent::Snapshot(_)
                 | TerminalFrameEvent::ClearExceptInput(_)
+                | TerminalFrameEvent::Rekeyed { .. }
         )
     }) else {
         return (Vec::new(), 0);
@@ -1585,7 +1598,11 @@ fn pop_terminal_frame_critical_events_for_apply(
 
     if matches!(
         events.get(first_critical_index),
-        Some(TerminalFrameEvent::Snapshot(_) | TerminalFrameEvent::ClearExceptInput(_))
+        Some(
+            TerminalFrameEvent::Snapshot(_)
+                | TerminalFrameEvent::ClearExceptInput(_)
+                | TerminalFrameEvent::Rekeyed { .. }
+        )
     ) {
         let Some(event) = events.remove(first_critical_index) else {
             return (Vec::new(), 0);

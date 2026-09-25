@@ -867,6 +867,17 @@ impl TerminalViewState {
         self.recording_decoder.set_encoding(encoding);
     }
 
+    pub(crate) fn reset_reconnect_stream(&mut self, encoding: &str) {
+        self.screen.reset_stream_state();
+        self.output_decoder.reset_decoder();
+        self.recording_decoder.reset_decoder();
+        self.set_encoding(encoding);
+        self.pending_snapshot_offsets.clear();
+        self.priority_pending_snapshot_offsets.clear();
+        self.clear_terminal_query_caches();
+        self.render_cache.clear();
+    }
+
     pub(crate) fn append_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1396,6 +1407,28 @@ impl TerminalFramePipeline {
         });
     }
 
+    pub(crate) fn append_local_text(&self, session_id: impl Into<String>, text: impl Into<String>) {
+        let _ = self.command_tx.send(TerminalFrameCommand::AppendLocalText {
+            session_id: session_id.into(),
+            text: text.into(),
+        });
+    }
+
+    pub(crate) fn rekey_session(
+        &self,
+        old_id: impl Into<String>,
+        new_id: impl Into<String>,
+        encoding: impl Into<String>,
+        scrollback_limit: usize,
+    ) -> bool {
+        self.command_tx.send(TerminalFrameCommand::RekeySession {
+            old_id: old_id.into(),
+            new_id: new_id.into(),
+            encoding: encoding.into(),
+            scrollback_limit,
+        })
+    }
+
     pub(crate) fn clear_session_except_input(&self, session_id: impl Into<String>) {
         let _ = self
             .command_tx
@@ -1662,6 +1695,16 @@ enum TerminalFrameCommand {
     RemoveSession {
         session_id: String,
     },
+    AppendLocalText {
+        session_id: String,
+        text: String,
+    },
+    RekeySession {
+        old_id: String,
+        new_id: String,
+        encoding: String,
+        scrollback_limit: usize,
+    },
     ClearExceptInput {
         session_id: String,
     },
@@ -1719,6 +1762,11 @@ pub(crate) enum TerminalFrameEvent {
     Snapshot(TerminalFrameSnapshotEvent),
     ClearExceptInput(TerminalFrameSnapshotEvent),
     Search(TerminalFrameSearchEvent),
+    Rekeyed {
+        old_id: String,
+        new_id: String,
+        success: bool,
+    },
 }
 
 impl TerminalFrameEvent {
@@ -1727,6 +1775,7 @@ impl TerminalFrameEvent {
             Self::Output(event) => &event.session_id,
             Self::Snapshot(event) | Self::ClearExceptInput(event) => &event.session_id,
             Self::Search(event) => &event.session_id,
+            Self::Rekeyed { new_id, .. } => new_id,
         }
     }
 }
@@ -1954,6 +2003,7 @@ fn terminal_frame_event_wake_interest(event: &TerminalFrameEvent) -> u8 {
             TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT
         }
         TerminalFrameEvent::Search(_) => TERMINAL_FRAME_EVENT_WAKE_SEARCH,
+        TerminalFrameEvent::Rekeyed { .. } => TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT,
     }
 }
 
@@ -2132,7 +2182,8 @@ fn terminal_frame_event_can_drop_under_pressure(event: &TerminalFrameEvent) -> b
         }
         TerminalFrameEvent::Snapshot(_)
         | TerminalFrameEvent::ClearExceptInput(_)
-        | TerminalFrameEvent::Search(_) => false,
+        | TerminalFrameEvent::Search(_)
+        | TerminalFrameEvent::Rekeyed { .. } => false,
     }
 }
 
@@ -2193,6 +2244,15 @@ impl TerminalFrameSession {
         self.screen.set_scrollback_limit(scrollback_limit);
         self.output_decoder.set_encoding(encoding);
         self.recording_decoder.set_encoding(encoding);
+    }
+
+    fn reset_reconnect_stream(&mut self, encoding: &str, scrollback_limit: usize) {
+        self.screen.reset_stream_state();
+        self.output_decoder.reset_decoder();
+        self.recording_decoder.reset_decoder();
+        self.set_encoding_and_limit(encoding, scrollback_limit);
+        self.revision = self.revision.saturating_add(1);
+        self.action_link_cache = None;
     }
 
     fn seed(&mut self, output: String, encoding: &str, scrollback_limit: usize) {
@@ -2970,6 +3030,9 @@ fn compact_stale_terminal_frame_commands(commands: &mut VecDeque<TerminalFrameCo
 }
 
 fn terminal_frame_command_is_fence(_command: &TerminalFrameCommand) -> bool {
+    if matches!(_command, TerminalFrameCommand::RekeySession { .. }) {
+        return true;
+    }
     #[cfg(test)]
     if matches!(_command, TerminalFrameCommand::Fence { .. }) {
         return true;
@@ -3032,6 +3095,8 @@ fn run_terminal_frame_processor(
     recording_writer: RecordingWriteHandle,
 ) {
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
+    let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
+    let mut rekeyed_old_order = VecDeque::new();
     // Sessions that should include full live viewport snapshots on every output.
     // Default (empty) keeps include_live_snapshot as-is for existing sessions and
     // true for newly created ones until the first priority update arrives.
@@ -3109,6 +3174,76 @@ fn run_terminal_frame_processor(
                 }
                 sessions.remove(&session_id);
                 snapshot_priority.remove(&session_id);
+            }
+            TerminalFrameCommand::AppendLocalText { session_id, text } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let started_at = Instant::now();
+                    session.screen.reset_stream_state();
+                    session.output_decoder.reset_decoder();
+                    session.recording_decoder.reset_decoder();
+                    session.screen.advance_decoded_text(&text);
+                    session.revision = session.revision.saturating_add(1);
+                    session.action_link_cache = None;
+                    let event = session.resized_live_snapshot_event(session_id, started_at);
+                    push_terminal_frame_worker_event(
+                        &event_queue,
+                        TerminalFrameEvent::Snapshot(event),
+                    );
+                }
+            }
+            TerminalFrameCommand::RekeySession {
+                old_id,
+                new_id,
+                encoding,
+                scrollback_limit,
+            } => {
+                for id in [&old_id, &new_id] {
+                    if let Some(stale) = cancel_selected_occurrence_search_job_for_session(
+                        &mut selected_occurrence_search_jobs,
+                        id,
+                        "selected occurrence search was cancelled by reconnect",
+                    ) {
+                        push_terminal_frame_worker_event(
+                            &event_queue,
+                            TerminalFrameEvent::Search(stale),
+                        );
+                    }
+                }
+                let success = if let Some(mut session) = sessions.remove(&old_id) {
+                    session.reset_reconnect_stream(&encoding, scrollback_limit);
+                    session.include_live_snapshot = terminal_frame_live_snapshot_enabled(
+                        !priority_initialized || snapshot_priority.contains(&new_id),
+                    );
+                    sessions.insert(new_id.clone(), session);
+                    snapshot_priority.remove(&old_id);
+                    if rekeyed_old_ids.insert(old_id.clone()) {
+                        rekeyed_old_order.push_back(old_id.clone());
+                        if rekeyed_old_order.len() > 256
+                            && let Some(expired) = rekeyed_old_order.pop_front()
+                        {
+                            rekeyed_old_ids.remove(&expired);
+                        }
+                    }
+                    true
+                } else {
+                    false
+                };
+                push_terminal_frame_worker_event(
+                    &event_queue,
+                    TerminalFrameEvent::Rekeyed {
+                        old_id,
+                        new_id: new_id.clone(),
+                        success,
+                    },
+                );
+                if success {
+                    let session = sessions.get(&new_id).expect("rekeyed session exists");
+                    let event = session.resized_live_snapshot_event(new_id, Instant::now());
+                    push_terminal_frame_worker_event(
+                        &event_queue,
+                        TerminalFrameEvent::Snapshot(event),
+                    );
+                }
             }
             TerminalFrameCommand::ClearExceptInput { session_id } => {
                 if let Some(stale) = cancel_selected_occurrence_search_job_for_session(
@@ -3195,6 +3330,9 @@ fn run_terminal_frame_processor(
                 encoding,
                 scrollback_limit,
             } => {
+                if rekeyed_old_ids.contains(&session_id) {
+                    continue;
+                }
                 if let Some(stale) = cancel_selected_occurrence_search_job_for_session(
                     &mut selected_occurrence_search_jobs,
                     &session_id,

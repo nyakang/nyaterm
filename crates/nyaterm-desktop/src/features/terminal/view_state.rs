@@ -249,6 +249,21 @@ impl TerminalFeatureState {
             .remove_session(session_id.to_string());
     }
 
+    pub(in crate::features) fn request_session_rekey(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        encoding: &str,
+        scrollback_limit: usize,
+    ) -> bool {
+        self.view.frame_pipeline.rekey_session(
+            old_id.to_string(),
+            new_id.to_string(),
+            encoding.to_string(),
+            scrollback_limit,
+        )
+    }
+
     pub(in crate::features) fn seed_session_view(
         &mut self,
         session_id: String,
@@ -268,7 +283,10 @@ impl TerminalFeatureState {
         text: &str,
     ) {
         match self.view.views.entry(session_id.to_string()) {
-            Entry::Occupied(mut entry) => entry.get_mut().append_text(text),
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().reset_reconnect_stream(encoding);
+                entry.get_mut().append_text(text);
+            }
             Entry::Vacant(entry) => {
                 let mut view = TerminalViewState::new();
                 view.set_encoding(encoding);
@@ -276,6 +294,9 @@ impl TerminalFeatureState {
                 entry.insert(view);
             }
         }
+        self.view
+            .frame_pipeline
+            .append_local_text(session_id.to_string(), text.to_string());
     }
 
     pub(in crate::features) fn append_existing_session_text(
@@ -284,8 +305,54 @@ impl TerminalFeatureState {
         text: &str,
     ) {
         if let Some(view) = self.view.views.get_mut(session_id) {
+            view.screen.reset_stream_state();
+            view.output_decoder.reset_decoder();
+            view.recording_decoder.reset_decoder();
             view.append_text(text);
+            self.view
+                .frame_pipeline
+                .append_local_text(session_id.to_string(), text.to_string());
         }
+    }
+
+    pub(in crate::features) fn rekey_session_view(
+        &mut self,
+        old_id: &str,
+        new_id: &str,
+        encoding: &str,
+    ) {
+        self.view.retired_session_ids.push_back(old_id.to_string());
+        if self.view.retired_session_ids.len() > 256 {
+            self.view.retired_session_ids.pop_front();
+        }
+        if let Some(mut view) = self.view.views.remove(old_id) {
+            view.reset_reconnect_stream(encoding);
+            self.view.views.insert(new_id.to_string(), view);
+        }
+        if let Some(residual) = self.view.scroll_delta_residuals.remove(old_id) {
+            self.view
+                .scroll_delta_residuals
+                .insert(new_id.to_string(), residual);
+        }
+        if self.selection.session_id.as_deref() == Some(old_id) {
+            self.selection.session_id = Some(new_id.to_string());
+        }
+        if self.selection.selected_occurrence.session_id.as_deref() == Some(old_id) {
+            self.selection.selected_occurrence.session_id = Some(new_id.to_string());
+        }
+        self.view
+            .pending_frame_events
+            .retain(|event| event.session_id() != old_id);
+        self.view
+            .frame_pipeline
+            .take_events_for_transfer(&[old_id.to_string()]);
+    }
+
+    pub(in crate::features) fn session_id_is_retired(&self, session_id: &str) -> bool {
+        self.view
+            .retired_session_ids
+            .iter()
+            .any(|id| id == session_id)
     }
 
     pub(in crate::features) fn session_output(&self, session_id: &str) -> Option<&str> {

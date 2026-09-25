@@ -357,6 +357,9 @@ impl NyaTermApp {
         bytes: usize,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.terminal.session_id_is_retired(&session_id) {
+            return false;
+        }
         self.note_trzsz_output_discontinuity(&session_id);
         self.cancel_xymodem_transfer(&session_id);
         let mut root_chrome_dirty = self.note_zmodem_output_discontinuity(&session_id, bytes, cx);
@@ -385,6 +388,9 @@ impl NyaTermApp {
         reason: String,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.terminal.session_id_is_retired(&session_id) {
+            return false;
+        }
         let known_session = self.session.has_session(&session_id);
         tracing::warn!(
             diagnostic = "session_exited",
@@ -395,7 +401,7 @@ impl NyaTermApp {
         );
         let log_reason = terminal_log_plain_text(&reason);
         let log = format!("\n# session disconnected: {log_reason}\n");
-        if !session_id.is_empty() {
+        if known_session {
             self.recording.write_output(session_id.clone(), log.clone());
             self.append_terminal_log_for_session(Some(&session_id), &log, true);
         }
@@ -418,6 +424,9 @@ impl NyaTermApp {
     }
 
     fn handle_session_error_event(&mut self, session_id: String, message: String) -> bool {
+        if self.terminal.session_id_is_retired(&session_id) {
+            return false;
+        }
         tracing::warn!(
             diagnostic = "session_error",
             session_id = %session_id,
@@ -447,6 +456,12 @@ impl NyaTermApp {
         drain_timings: &mut SessionEventDrainTimings,
         cx: &mut Context<Self>,
     ) -> SessionOutputDrainStep {
+        if self.terminal.session_id_is_retired(&session_id) {
+            return SessionOutputDrainStep::SidebandOnly {
+                chunk_duration: Duration::ZERO,
+                root_chrome_dirty: false,
+            };
+        }
         let chunk_started_at = Instant::now();
         let chunk_input_bytes = data.len();
         let mut chunk_timings = SessionEventDrainTimings::default();

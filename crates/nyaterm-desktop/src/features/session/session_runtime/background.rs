@@ -8,7 +8,10 @@ use nyaterm_transport::{
     SshSessionConfig, TelnetSessionConfig, open_ssh_multiplex_handle,
 };
 
-use super::super::state::{failed_session_start_display_name, pending_session_start_display_name};
+use super::super::state::{
+    PendingReconnectCompletion, failed_session_start_display_name,
+    pending_session_start_display_name,
+};
 use super::{MultiplexSshStartRequest, PendingSessionStartRegistration};
 use crate::features::formatting::{session_kind_label, short_id};
 use crate::features::{
@@ -633,24 +636,56 @@ impl NyaTermApp {
                     .as_ref()
                     .map(|pending| pending.ai_execution_profile)
                     .unwrap_or(AiExecutionProfile::SendOnly);
-                self.register_session_for_start(
-                    &session_id,
-                    SessionRuntimeMetadata {
-                        ssh_config,
-                        ssh_multiplex_key,
-                        source_connection_id: source_connection_id.clone(),
-                        ai_execution_profile,
-                        launch_config,
-                        disconnected: false,
-                    },
-                    tab_placement,
-                    fallback_insert_index,
-                );
-                if let Some(connection_id) = source_connection_id.as_deref() {
-                    self.complete_mcp_session_open_success(connection_id, session_id.clone());
-                    if kind == nyaterm_transport::SessionKind::Ssh {
-                        self.start_auto_tunnels_for_connection(connection_id, cx);
-                    }
+                let metadata = SessionRuntimeMetadata {
+                    ssh_config,
+                    ssh_multiplex_key,
+                    source_connection_id: source_connection_id.clone(),
+                    ai_execution_profile,
+                    launch_config,
+                    disconnected: false,
+                };
+                let rekey_queued = if let Some(old_id) = reconnect_session_id.as_deref()
+                    && old_id != session_id
+                {
+                    let encoding = metadata
+                        .launch_config
+                        .encoding()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| {
+                            self.settings.summary().interaction_default_encoding.clone()
+                        });
+                    self.session
+                        .start
+                        .record_reconnect_completion(PendingReconnectCompletion {
+                            old_id: old_id.to_string(),
+                            new_id: session_id.clone(),
+                            connection_name: connection_name.clone(),
+                            session_name: session_info.name.clone(),
+                            kind,
+                            source_connection_id: source_connection_id.clone(),
+                            workspace_split: workspace_split.clone(),
+                            startup_command: pending
+                                .as_ref()
+                                .and_then(|pending| pending.startup_command.clone()),
+                        });
+                    self.terminal.request_session_rekey(
+                        old_id,
+                        &session_id,
+                        &encoding,
+                        self.terminal_scrollback_line_limit(),
+                    )
+                } else {
+                    true
+                };
+                if reconnect_session_id.is_some() {
+                    self.register_session_for_reconnect(&session_id, metadata);
+                } else {
+                    self.register_session_for_start(
+                        &session_id,
+                        metadata,
+                        tab_placement,
+                        fallback_insert_index,
+                    );
                 }
                 if let Some(custom_name) = pending
                     .as_ref()
@@ -667,6 +702,7 @@ impl NyaTermApp {
                 }
                 if let Some(seed_output) = pending
                     .as_ref()
+                    .filter(|_| reconnect_session_id.is_none())
                     .and_then(|pending| pending.seed_output.clone())
                 {
                     let encoding = self
@@ -681,6 +717,21 @@ impl NyaTermApp {
                     self.terminal
                         .seed_session_view(session_id.clone(), seed_output, &encoding);
                 }
+                if let Some(old_id) = reconnect_session_id.as_deref()
+                    && old_id != session_id
+                {
+                    if !rekey_queued {
+                        self.complete_reconnected_session_frame(old_id, &session_id, false, cx);
+                    }
+                    self.settle_session_start_tab_placements_if_idle();
+                    return;
+                }
+                if let Some(connection_id) = source_connection_id.as_deref() {
+                    self.complete_mcp_session_open_success(connection_id, session_id.clone());
+                    if kind == nyaterm_transport::SessionKind::Ssh {
+                        self.start_auto_tunnels_for_connection(connection_id, cx);
+                    }
+                }
                 if tab_placement.is_none()
                     && fallback_insert_index.is_none()
                     && let Some(after_session_id) = pending
@@ -689,14 +740,6 @@ impl NyaTermApp {
                 {
                     self.session
                         .move_session_after(&session_id, &after_session_id);
-                }
-                if let Some(stale_id) = reconnect_session_id
-                    && stale_id != session_id
-                {
-                    self.migrate_reconnected_session_state(&stale_id, &session_id, cx);
-                    self.remove_session_state(&stale_id, cx);
-                    self.persist_workspace_pane_layout();
-                    self.persist_terminal_window_layout();
                 }
                 let should_activate = self
                     .session
@@ -814,6 +857,77 @@ impl NyaTermApp {
         }
 
         self.settle_session_start_tab_placements_if_idle();
+    }
+
+    pub(in crate::features) fn complete_reconnected_session_frame(
+        &mut self,
+        old_id: &str,
+        new_id: &str,
+        success: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(completion) = self.session.start.take_reconnect_completion(new_id) else {
+            return false;
+        };
+        if completion.old_id != old_id
+            || !success
+            || !self.session.has_session(old_id)
+            || !self.session.has_session(new_id)
+        {
+            let error = "terminal history could not be transferred".to_string();
+            let _ = self.session.manager().close(new_id);
+            if self.session.has_session(new_id) {
+                self.remove_session_state(new_id, cx);
+            }
+            if self.session.has_session(old_id) {
+                self.session
+                    .start
+                    .set_reconnect_failure(old_id.to_string(), error.clone());
+            }
+            if let Some(connection_id) = completion.source_connection_id.as_deref() {
+                self.complete_mcp_session_open_failure(connection_id, &error);
+            }
+            self.shell.set_status(format!("reconnect failed: {error}"));
+            cx.notify();
+            return true;
+        }
+
+        self.migrate_reconnected_session_state(old_id, new_id, cx);
+        self.remove_session_state(old_id, cx);
+        self.persist_workspace_pane_layout();
+        self.persist_terminal_window_layout();
+        if let Some(connection_id) = completion.source_connection_id.as_deref() {
+            self.complete_mcp_session_open_success(connection_id, new_id.to_string());
+            if completion.kind == SessionKind::Ssh {
+                self.start_auto_tunnels_for_connection(connection_id, cx);
+            }
+        }
+        if self
+            .session
+            .start
+            .complete_success(false, self.session.active_id().is_none())
+        {
+            self.activate_session_id(new_id, cx);
+            self.load_transfer_browser_for_active_session_if_needed(cx);
+        }
+        self.enter_connect_settle();
+        self.terminal.enter_session_render_degraded(new_id);
+        self.shell.set_status(format!(
+            "running {} · {}",
+            short_id(new_id),
+            completion.connection_name
+        ));
+        if self.settings.summary().recording_auto_start {
+            self.recording
+                .schedule_auto_start(new_id.to_string(), completion.session_name);
+        }
+        self.apply_workspace_split_for_duplicate(cx, completion.workspace_split, new_id);
+        if let Some(startup_command) = completion.startup_command {
+            self.schedule_startup_command(new_id.to_string(), startup_command, cx);
+        }
+        self.shell.select_nav(NavItem::Workspace);
+        cx.notify();
+        true
     }
 }
 

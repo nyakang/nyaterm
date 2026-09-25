@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nyaterm_core::ActionLinksMatcherSettings;
-use nyaterm_terminal::{TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSnapshot};
+use nyaterm_terminal::{
+    TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
+    TerminalSearchQuery, TerminalSnapshot,
+};
 
 use crate::terminal::{TerminalLineDecorations, terminal_screen_from_output};
 
@@ -992,7 +995,8 @@ fn terminal_frame_pipeline_background_chunks_are_deterministic_after_priority_sn
             TerminalFrameEvent::Snapshot(event) => Some(event),
             TerminalFrameEvent::Output(_)
             | TerminalFrameEvent::ClearExceptInput(_)
-            | TerminalFrameEvent::Search(_) => None,
+            | TerminalFrameEvent::Search(_)
+            | TerminalFrameEvent::Rekeyed { .. } => None,
         })
         .expect("visible priority request should emit a snapshot");
     let expected = terminal_frame_snapshot_with_scroll_window(&reference, 0, true);
@@ -1562,6 +1566,126 @@ fn terminal_frame_transfer_preserves_multiple_sessions_and_returns_rejected_batc
     assert_eq!(rejected.len(), 2);
     assert_eq!(rejected[0].0, "first");
     assert_eq!(rejected[1].0, "second");
+}
+
+#[test]
+fn terminal_frame_rekey_preserves_full_scrollback_and_search_after_new_output() {
+    let pipeline = TerminalFramePipeline::default();
+    let mut old = TerminalFrameSession::new("UTF-8", 4_000);
+    old.screen.advance(b"FIRST-ROW\r\n");
+    for _ in 0..2_200 {
+        old.screen
+            .advance(format!("{}\r\n", "x".repeat(72)).as_bytes());
+    }
+    assert!(old.screen.scrollback_len() > 2_000);
+    pipeline
+        .insert_sessions_from_transfer(vec![("old".into(), old)])
+        .unwrap();
+    pipeline.ensure_session("new", "UTF-8", 4_000);
+    assert!(pipeline.rekey_session("old", "new", "UTF-8", 4_000));
+    pipeline.submit_output("new", b"AFTER-RECONNECT\r\n".to_vec(), "UTF-8", 4_000);
+    pipeline.submit_output("old", b"LATE-OLD-OUTPUT".to_vec(), "UTF-8", 4_000);
+
+    let moved = pipeline.take_session_for_transfer("new").unwrap().unwrap();
+    assert!(pipeline.take_session_for_transfer("old").unwrap().is_none());
+    let query = TerminalSearchQuery {
+        pattern: "FIRST-ROW".to_string(),
+        regex: false,
+        case_sensitive: true,
+        whole_word: false,
+        direction: TerminalSearchDirection::Forward,
+        limit: 10,
+    };
+    assert!(!moved.screen.search_grid(&query).unwrap().is_empty());
+    assert!(
+        moved
+            .screen
+            .lines()
+            .iter()
+            .any(|line| line.contains("AFTER-RECONNECT"))
+    );
+    assert!(matches!(
+        pipeline.event_queue.try_recv(),
+        Some(TerminalFrameEvent::Rekeyed {
+            old_id,
+            new_id,
+            success: true,
+        }) if old_id == "old" && new_id == "new"
+    ));
+    assert!(matches!(
+        pipeline.event_queue.try_recv(),
+        Some(TerminalFrameEvent::Snapshot(frame)) if frame.session_id == "new"
+    ));
+    assert!(matches!(
+        pipeline.event_queue.try_recv(),
+        Some(TerminalFrameEvent::Output(frame)) if frame.session_id == "new"
+    ));
+}
+
+#[test]
+fn terminal_frame_rekey_resets_partial_ansi_and_preserves_alternate_screen() {
+    let pipeline = TerminalFramePipeline::default();
+    let mut old = TerminalFrameSession::new("UTF-8", 1_000);
+    old.screen.advance(b"\x1b[?1049hALT\r\n\x1b[");
+    pipeline
+        .insert_sessions_from_transfer(vec![("old".into(), old)])
+        .unwrap();
+    assert!(pipeline.rekey_session("old", "new", "UTF-8", 1_000));
+    pipeline.submit_output("new", b"31mNEW\r\n".to_vec(), "UTF-8", 1_000);
+
+    let moved = pipeline.take_session_for_transfer("new").unwrap().unwrap();
+    assert!(moved.screen.alternate_screen());
+    assert!(
+        moved
+            .screen
+            .all_lines()
+            .iter()
+            .any(|line| line.contains("31mNEW"))
+    );
+}
+
+#[test]
+fn terminal_frame_rekey_discards_incomplete_utf8_from_old_connection() {
+    let pipeline = TerminalFramePipeline::default();
+    let mut old = TerminalFrameSession::new("UTF-8", 1_000);
+    old.screen.advance(&[0xe4, 0xbd]);
+    pipeline
+        .insert_sessions_from_transfer(vec![("old".into(), old)])
+        .unwrap();
+    assert!(pipeline.rekey_session("old", "new", "UTF-8", 1_000));
+    pipeline.submit_output("new", vec![0xa0, b'X'], "UTF-8", 1_000);
+
+    let moved = pipeline.take_session_for_transfer("new").unwrap().unwrap();
+    let lines = moved.screen.lines().join("\n");
+    assert!(lines.contains('X'));
+    assert!(!lines.contains('你'));
+}
+
+#[test]
+fn terminal_frame_rekey_keeps_local_disconnect_and_reconnect_notices() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.ensure_session("old", "UTF-8", 1_000);
+    pipeline.append_local_text("old", "\r\n[Session disconnected]\r\n");
+    pipeline.append_local_text("old", "[Reconnecting]\r\n");
+    assert!(pipeline.rekey_session("old", "new", "UTF-8", 1_000));
+
+    let moved = pipeline.take_session_for_transfer("new").unwrap().unwrap();
+    let live = moved.screen.lines().join("\n");
+    assert!(live.contains("[Session disconnected]"));
+    assert!(live.contains("[Reconnecting]"));
+}
+
+#[test]
+fn terminal_frame_rekey_reports_missing_source_without_replacing_target() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.ensure_session("new", "UTF-8", 1_000);
+    assert!(pipeline.rekey_session("missing", "new", "UTF-8", 1_000));
+    let target = pipeline.take_session_for_transfer("new").unwrap();
+    assert!(target.is_some());
+    assert!(matches!(
+        pipeline.event_queue.try_recv(),
+        Some(TerminalFrameEvent::Rekeyed { success: false, .. })
+    ));
 }
 
 #[test]
@@ -2928,6 +3052,43 @@ fn terminal_frame_command_priority_work_does_not_cross_fence() {
             priority: true,
             ..
         })
+    ));
+}
+
+#[test]
+fn terminal_frame_rekey_keeps_old_and_new_output_on_opposite_sides() {
+    let (tx, rx) = terminal_frame_command_channel();
+    assert!(tx.send(TerminalFrameCommand::Output {
+        session_id: "old".to_string(),
+        data: b"before".to_vec(),
+        encoding: "UTF-8".to_string(),
+        scrollback_limit: 1_000,
+    }));
+    assert!(tx.send(TerminalFrameCommand::RekeySession {
+        old_id: "old".to_string(),
+        new_id: "new".to_string(),
+        encoding: "UTF-8".to_string(),
+        scrollback_limit: 1_000,
+    }));
+    assert!(tx.send(TerminalFrameCommand::Output {
+        session_id: "new".to_string(),
+        data: b"after".to_vec(),
+        encoding: "UTF-8".to_string(),
+        scrollback_limit: 1_000,
+    }));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Some(TerminalFrameCommand::Output { session_id, .. }) if session_id == "old"
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Some(TerminalFrameCommand::RekeySession { old_id, new_id, .. })
+            if old_id == "old" && new_id == "new"
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Some(TerminalFrameCommand::Output { session_id, .. }) if session_id == "new"
     ));
 }
 

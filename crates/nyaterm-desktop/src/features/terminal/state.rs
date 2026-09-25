@@ -73,6 +73,7 @@ pub(super) struct TerminalViewRuntimeState {
     pub scroll_delta_residuals: HashMap<String, f32>,
     pub scrollbar_drag: Option<TerminalScrollbarDragState>,
     pub pending_frame_events: VecDeque<TerminalFrameEvent>,
+    pub retired_session_ids: VecDeque<String>,
 }
 
 /// Keyboard focus and IME composition for the terminal surface.
@@ -214,6 +215,7 @@ impl TerminalFeatureState {
                 scroll_delta_residuals: HashMap::new(),
                 scrollbar_drag: None,
                 pending_frame_events: VecDeque::new(),
+                retired_session_ids: VecDeque::new(),
             },
             input: TerminalInputState {
                 focus: focus.terminal,
@@ -669,6 +671,28 @@ mod tests {
 
         state.remove_frame_session("session-a");
         assert_eq!(state.session_output("session-a"), None);
+    }
+
+    #[test]
+    fn reconnect_view_rekey_preserves_scroll_and_selection() {
+        let mut state = terminal_state();
+        state.ensure_frame_session("old".to_string(), "UTF-8".to_string(), 1_000);
+        state.append_session_text_or_create("old", "UTF-8", "earlier output");
+        state.view.views.get_mut("old").unwrap().scroll_offset = 7;
+        state.selection.session_id = Some("old".to_string());
+        state.selection.selection = Some(crate::models::TerminalSelection::from_range(
+            crate::models::TerminalBufferCellPos::new(0, 0),
+            crate::models::TerminalBufferCellPos::new(0, 3),
+        ));
+
+        state.rekey_session_view("old", "new", "UTF-8");
+
+        assert!(!state.view.views.contains_key("old"));
+        assert_eq!(state.session_output("new"), Some("earlier output"));
+        assert_eq!(state.session_scroll_offset("new"), 7);
+        assert_eq!(state.selection.session_id.as_deref(), Some("new"));
+        assert!(state.selection.selection.is_some());
+        assert!(state.session_id_is_retired("old"));
     }
 
     #[test]

@@ -22,9 +22,10 @@ use crate::test_support::{TestConfigDir, blocking_test_store};
 
 use super::{
     CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
-    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider, PendingSessionStart,
-    PromptResolution, RenameSessionSubmission, SessionFeatureFocus, SessionFeatureState,
-    SessionPromptState, SessionStartEventRequest, SessionStartFeatureState,
+    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
+    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
+    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
+    SessionStartFeatureState,
 };
 
 fn pending(name: &str) -> PendingSessionStart {
@@ -932,6 +933,22 @@ fn reconnect_presentation_migration_preserves_destination_overrides() {
 }
 
 #[test]
+fn provisional_reconnect_keeps_one_visible_tab_until_replacement() {
+    let test_dir = TestConfigDir::new("nyaterm-session-state-test");
+    let cx = TestAppContext::single();
+    let mut sessions = session_state(&cx, test_dir.path());
+    sessions.register_session_metadata("old", session_metadata("ssh", None));
+
+    sessions.register_provisional_reconnect("new", session_metadata("ssh", None));
+    assert!(sessions.has_session("new"));
+    assert_eq!(sessions.session_order(), &["old".to_string()]);
+
+    sessions.replace_session_order_id("old", "new");
+    sessions.remove_session_catalog("old");
+    assert_eq!(sessions.session_order(), &["new".to_string()]);
+}
+
+#[test]
 fn removing_session_catalog_clears_all_session_scoped_entries() {
     let test_dir = TestConfigDir::new("nyaterm-session-state-test");
     let cx = TestAppContext::single();
@@ -1395,6 +1412,25 @@ fn reconnect_targets_are_owned_by_each_pending_request() {
             .get("request-fresh")
             .is_some_and(|pending| pending.reconnect_session_id.is_none())
     );
+}
+
+#[test]
+fn reconnect_stays_pending_until_frame_migration_finishes() {
+    let mut starts = SessionStartFeatureState::new();
+    starts.record_reconnect_completion(PendingReconnectCompletion {
+        old_id: "old".to_string(),
+        new_id: "new".to_string(),
+        connection_name: "ssh".to_string(),
+        session_name: "ssh".to_string(),
+        kind: SessionKind::Ssh,
+        source_connection_id: None,
+        workspace_split: None,
+        startup_command: None,
+    });
+
+    assert!(starts.reconnect_is_pending("old"));
+    assert!(starts.take_reconnect_completion("new").is_some());
+    assert!(!starts.reconnect_is_pending("old"));
 }
 
 #[test]

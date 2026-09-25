@@ -6,6 +6,8 @@ use crate::models::{SessionLaunchConfig, StartupCommandRequest};
 
 use super::session_runtime::MultiplexSshStartRequest;
 
+const RECONNECTING_BANNER: &str = "\r\n\x1b[36m[Reconnecting…]\x1b[0m\r\n";
+
 impl NyaTermApp {
     pub(in crate::features) fn duplicate_active_session(
         &mut self,
@@ -330,20 +332,9 @@ impl NyaTermApp {
             .then(|| self.session.cwd(&old_id))
             .flatten()
             .and_then(nyaterm_transport::build_ssh_reconnect_cwd_command);
-        let seed_output = self
-            .terminal
-            .session_output(&old_id)
-            .unwrap_or_default()
-            .to_string();
-
         // Tauri: write cyan reconnecting line into the buffer before recreating.
         self.terminal
-            .append_existing_session_text(&old_id, "\n\u{1b}[36m[Reconnecting…]\u{1b}[0m\n");
-        let seed_output = self
-            .terminal
-            .session_output(&old_id)
-            .map(str::to_string)
-            .unwrap_or(seed_output);
+            .append_existing_session_text(&old_id, RECONNECTING_BANNER);
 
         // Close live backend if still present.
         if self.remote_desktop.is_session(&old_id) {
@@ -365,7 +356,6 @@ impl NyaTermApp {
         let launch_config = metadata.launch_config;
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
-        let seed = Some(seed_output);
         match launch_config {
             SessionLaunchConfig::Local(mut config) => {
                 self.apply_desired_geometry_to_local_config(&mut config);
@@ -378,7 +368,6 @@ impl NyaTermApp {
                         custom_name,
                         tab_color: custom_color,
                         insert_index: Some(source_index),
-                        seed_output: seed,
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
                     },
@@ -395,7 +384,6 @@ impl NyaTermApp {
                         custom_name,
                         tab_color: custom_color,
                         insert_index: Some(source_index),
-                        seed_output: seed,
                         startup_command: reconnect_cwd_command.map(|command| {
                             crate::models::StartupCommandRequest {
                                 command,
@@ -418,7 +406,6 @@ impl NyaTermApp {
                         custom_name,
                         tab_color: custom_color,
                         insert_index: Some(source_index),
-                        seed_output: seed,
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
                     },
@@ -435,7 +422,6 @@ impl NyaTermApp {
                         custom_name,
                         tab_color: custom_color,
                         insert_index: Some(source_index),
-                        seed_output: seed,
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
                     },
@@ -462,9 +448,17 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.session.start.clear_reconnect_failure(old_id);
+        let encoding = self
+            .session
+            .metadata(new_id)
+            .and_then(|metadata| metadata.launch_config.encoding())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.settings.summary().interaction_default_encoding.clone());
+        self.terminal.rekey_session_view(old_id, new_id, &encoding);
         self.terminal
             .move_session_surface_bounds(old_id, new_id.to_string());
         self.terminal.move_search_session_state(old_id, new_id);
+        self.session.replace_session_order_id(old_id, new_id);
         self.session.migrate_session_presentation(old_id, new_id);
 
         self.shell.replace_workspace_session_id(old_id, new_id);
@@ -480,5 +474,27 @@ impl NyaTermApp {
             self.restore_transfer_browser_session_cache(new_id);
         }
         self.sync_workspace_split_from_active_tab();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_terminal::TerminalScreen;
+
+    use super::RECONNECTING_BANNER;
+
+    #[test]
+    fn reconnect_banner_returns_cursor_to_first_column_before_server_output() {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.advance(b"previous output");
+        screen.advance_decoded_text(RECONNECTING_BANNER);
+        screen.advance(b"Welcome to Ubuntu\r\n");
+
+        assert!(
+            screen
+                .lines()
+                .iter()
+                .any(|line| line.starts_with("Welcome to Ubuntu"))
+        );
     }
 }

@@ -1325,6 +1325,21 @@ impl SessionFeatureState {
         }
     }
 
+    pub(in crate::features) fn register_provisional_reconnect(
+        &mut self,
+        session_id: &str,
+        metadata: SessionRuntimeMetadata,
+    ) {
+        self.event_bridge.claim_session(session_id);
+        self.metadata.insert(session_id.to_string(), metadata);
+    }
+
+    pub(in crate::features) fn replace_session_order_id(&mut self, old_id: &str, new_id: &str) {
+        if let Some(id) = self.order.iter_mut().find(|id| id.as_str() == old_id) {
+            *id = new_id.to_string();
+        }
+    }
+
     pub(in crate::features) fn clear_start_tab_placements(&mut self) {
         self.start_tab_placements.clear();
     }
@@ -2613,6 +2628,17 @@ pub(in crate::features) struct PendingSessionStart {
     pub reconnect_session_id: Option<String>,
 }
 
+pub(in crate::features) struct PendingReconnectCompletion {
+    pub old_id: String,
+    pub new_id: String,
+    pub connection_name: String,
+    pub session_name: String,
+    pub kind: SessionKind,
+    pub source_connection_id: Option<String>,
+    pub workspace_split: Option<(WorkspaceSplitDirection, String)>,
+    pub startup_command: Option<StartupCommandRequest>,
+}
+
 /// A session start that remains visible after its worker failed.
 ///
 /// Tauri keeps the failed pane in its original tab, so the GPUI shell must
@@ -2641,6 +2667,7 @@ pub(super) struct SessionStartFeatureState {
     active_failed: Option<String>,
     cancelled: HashSet<String>,
     reconnect_failures: HashMap<String, String>,
+    reconnect_completions: HashMap<String, PendingReconnectCompletion>,
     pending_workspace_split: Option<(WorkspaceSplitDirection, String)>,
     preparing_saved_connections: HashMap<String, SessionStartTabPlacement>,
     next_request_sequence: u64,
@@ -2680,6 +2707,7 @@ impl SessionStartFeatureState {
             active_failed: None,
             cancelled: HashSet::new(),
             reconnect_failures: HashMap::new(),
+            reconnect_completions: HashMap::new(),
             pending_workspace_split: None,
             preparing_saved_connections: HashMap::new(),
             next_request_sequence: 0,
@@ -2892,6 +2920,10 @@ impl SessionStartFeatureState {
         self.pending
             .values()
             .any(|pending| pending.reconnect_session_id.as_deref() == Some(session_id))
+            || self
+                .reconnect_completions
+                .values()
+                .any(|completion| completion.old_id == session_id)
     }
 
     pub(in crate::features) fn reconnect_failure(&self, session_id: &str) -> Option<&str> {
@@ -2900,6 +2932,25 @@ impl SessionStartFeatureState {
 
     pub(in crate::features) fn clear_reconnect_failure(&mut self, session_id: &str) {
         self.reconnect_failures.remove(session_id);
+    }
+
+    pub(in crate::features) fn set_reconnect_failure(&mut self, session_id: String, error: String) {
+        self.reconnect_failures.insert(session_id, error);
+    }
+
+    pub(in crate::features) fn record_reconnect_completion(
+        &mut self,
+        completion: PendingReconnectCompletion,
+    ) {
+        self.reconnect_completions
+            .insert(completion.new_id.clone(), completion);
+    }
+
+    pub(in crate::features) fn take_reconnect_completion(
+        &mut self,
+        new_id: &str,
+    ) -> Option<PendingReconnectCompletion> {
+        self.reconnect_completions.remove(new_id)
     }
 
     pub(in crate::features) fn set_pending_workspace_split(
