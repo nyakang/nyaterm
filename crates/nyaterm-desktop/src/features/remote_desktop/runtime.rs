@@ -195,6 +195,7 @@ impl NyaTermApp {
                     window.modifiers(),
                     Some(window.capslock().on),
                 );
+                this.sync_rdp_keyboard_capture(window);
             }
         });
         let focus_out = cx.on_focus_out(
@@ -892,23 +893,26 @@ impl NyaTermApp {
 
     fn sync_rdp_keyboard_capture(&self, window: &Window) {
         let target = self.session.active_id().and_then(|session_id| {
-            (self.remote_desktop.focus.is_focused(window)
+            let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
+                matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Vnc(_)
+                )
+            });
+            (window.is_window_active()
+                && self.remote_desktop.focus.is_focused(window)
                 && self
                     .remote_desktop
                     .sessions
                     .get(session_id)
                     .is_some_and(|session| {
                         matches!(session.state, RemoteDesktopViewState::Connected)
+                            && (is_vnc
+                                || session.viewport.is_some_and(|bounds| {
+                                    bounds.contains(&window.mouse_position())
+                                }))
                     }))
-            .then(|| {
-                let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
-                    matches!(
-                        metadata.launch_config,
-                        crate::models::SessionLaunchConfig::Vnc(_)
-                    )
-                });
-                (session_id.to_string(), is_vnc)
-            })
+            .then(|| (session_id.to_string(), is_vnc))
         });
         super::keyboard_capture::set_keyboard_capture(
             self.remote_desktop.manager.clone(),

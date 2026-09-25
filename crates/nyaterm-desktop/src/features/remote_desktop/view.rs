@@ -3,8 +3,8 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use gpui::{
-    Bounds, Context, CursorStyle, FontWeight, IntoElement, KeyDownEvent, KeyUpEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Bounds, Context, CursorStyle, FontWeight, HoverListenerMode, IntoElement, KeyDownEvent,
+    KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Size, canvas,
     div, prelude::*, px, rgb,
 };
@@ -251,6 +251,12 @@ impl NyaTermApp {
         let key_up_id = session_id.clone();
         let modifiers_id = session_id.clone();
         let focus = surface_focus;
+        let release_keyboard_on_exit = self.session.metadata(&session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Rdp(_)
+            )
+        });
         div()
             .id(format!("rdp-surface-{session_id}"))
             .size_full()
@@ -263,6 +269,20 @@ impl NyaTermApp {
                 CursorStyle::Arrow
             })
             .track_focus(&focus)
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                if release_keyboard_on_exit
+                    && !hovered
+                    && this.remote_desktop.focus.is_focused(window)
+                {
+                    super::keyboard_capture::set_keyboard_capture(
+                        this.remote_desktop.manager.clone(),
+                        this.remote_desktop.vnc_manager.clone(),
+                        None,
+                    );
+                    window.blur(cx);
+                }
+            }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 if input_down.update(cx, |input, _| input.consumes_key(event)) {
                     return;

@@ -13,15 +13,16 @@ mod platform {
         RdpInputEvent, RdpSessionManager, VncInputEvent, VncSessionManager,
     };
     use windows_sys::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, VK_LWIN, VK_RWIN,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
-        LLKHF_UP, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
-        WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW,
+        GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_UP, MSG,
+        PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
+        WM_SYSKEYUP,
     };
 
     static CAPTURE: OnceLock<Arc<CaptureState>> = OnceLock::new();
@@ -204,6 +205,7 @@ mod platform {
         lparam: LPARAM,
     ) -> LRESULT {
         if code >= 0
+            && foreground_window_belongs_to_us()
             && let Some(state) = CAPTURE.get()
             && let Some(raw) = unsafe { (lparam as *const KBDLLHOOKSTRUCT).as_ref() }
             && let Some(event) =
@@ -249,6 +251,16 @@ mod platform {
                 lparam,
             )
         }
+    }
+
+    fn foreground_window_belongs_to_us() -> bool {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.is_null() {
+            return false;
+        }
+        let mut process_id = 0;
+        unsafe { GetWindowThreadProcessId(foreground, &mut process_id) };
+        process_id == unsafe { GetCurrentProcessId() }
     }
 
     fn captured_key_event(
