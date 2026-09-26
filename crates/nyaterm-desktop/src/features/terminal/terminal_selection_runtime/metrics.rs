@@ -395,7 +395,7 @@ impl NyaTermApp {
                 &self.settings.summary().terminal_timestamp_format,
             ),
             self.settings.summary().terminal_show_line_numbers,
-            terminal_line_number_digits(snapshot.as_ref()),
+            self.terminal_line_number_digits_for_session(session_id, snapshot.as_ref()),
         )
         .total_width()
     }
@@ -568,7 +568,7 @@ impl NyaTermApp {
                 &self.settings.summary().terminal_timestamp_format,
             ),
             self.settings.summary().terminal_show_line_numbers,
-            terminal_line_number_digits(snapshot.as_ref()),
+            self.terminal_line_number_digits_for_session(session_id, snapshot.as_ref()),
         )
         .total_width();
         Some(TerminalHitTestGeometry {
@@ -746,6 +746,20 @@ pub(in crate::features) fn terminal_gutter_metrics(
         line_number_width,
         gap_width,
         trailing_padding_width,
+    }
+}
+
+impl NyaTermApp {
+    pub(in crate::features) fn terminal_line_number_digits_for_session(
+        &self,
+        session_id: Option<&str>,
+        snapshot: &nyaterm_terminal::TerminalSnapshot,
+    ) -> usize {
+        let current = terminal_line_number_digits(snapshot);
+        session_id
+            .or_else(|| self.session.active_id())
+            .and_then(|id| self.terminal.view.views.get(id))
+            .map_or(current, |view| current.max(view.max_line_number_digits))
     }
 }
 

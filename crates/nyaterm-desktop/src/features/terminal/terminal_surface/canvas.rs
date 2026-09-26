@@ -16,7 +16,7 @@ use crate::features::formatting::{
 };
 use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_selection_runtime::{
-    terminal_bounds_tracker, terminal_gutter_metrics, terminal_line_number_digits,
+    terminal_bounds_tracker, terminal_gutter_metrics,
 };
 use crate::features::terminal::{
     TERMINAL_KEY_CONTEXT, TerminalControlC, TerminalShiftTab, TerminalTab,
@@ -512,7 +512,8 @@ impl NyaTermApp {
             )
         });
         let gutter = if session_id.is_empty() && gutter_enabled {
-            let line_number_digits = terminal_line_number_digits(snapshot.as_ref());
+            let line_number_digits =
+                self.terminal_line_number_digits_for_session(None, snapshot.as_ref());
             let gutter_metrics = terminal_gutter_metrics(
                 cell_w,
                 show_timestamps,

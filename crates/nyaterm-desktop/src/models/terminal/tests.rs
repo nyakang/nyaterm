@@ -38,6 +38,18 @@ use super::{
     try_next_terminal_frame_command,
 };
 
+#[test]
+fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
+    let mut view = TerminalViewState::new();
+    let mut snapshot = TerminalScreen::default().viewport_snapshot(0);
+    snapshot.total_rows = 1000;
+    view.observe_line_number_digits(&snapshot);
+    assert_eq!(view.max_line_number_digits, 4);
+    snapshot.total_rows = 9;
+    view.observe_line_number_digits(&snapshot);
+    assert_eq!(view.max_line_number_digits, 4);
+}
+
 fn selected_occurrence_test_key(
     query: &str,
     limit: usize,

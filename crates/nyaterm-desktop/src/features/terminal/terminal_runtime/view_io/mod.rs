@@ -725,6 +725,7 @@ impl NyaTermApp {
         let bold_weight = self.settings.summary().terminal_font_weight_bold as f32;
         let bold_default_foreground = self.settings.summary().bold_default_foreground;
         let show_line_numbers = self.settings.summary().terminal_show_line_numbers;
+        let max_line_number_digits = view.max_line_number_digits;
         let show_timestamps = self.settings.summary().terminal_show_timestamps;
         let timestamp_format = self.settings.summary().terminal_timestamp_format.clone();
         let (cell_w, cell_h) = self
@@ -830,6 +831,7 @@ impl NyaTermApp {
                 cell_width: cell_w,
                 cell_height: cell_h,
                 show_line_numbers,
+                max_line_number_digits,
                 show_timestamps,
                 timestamp_format: timestamp_format.clone(),
                 is_active,
@@ -1033,6 +1035,7 @@ impl NyaTermApp {
         let bold_weight = self.settings.summary().terminal_font_weight_bold as f32;
         let bold_default_foreground = self.settings.summary().bold_default_foreground;
         let show_line_numbers = self.settings.summary().terminal_show_line_numbers;
+        let max_line_number_digits = view.map_or(1, |view| view.max_line_number_digits);
         let show_timestamps = self.settings.summary().terminal_show_timestamps;
         let timestamp_format = self.settings.summary().terminal_timestamp_format.clone();
         let (cell_w, cell_h) = self
@@ -1098,6 +1101,7 @@ impl NyaTermApp {
                     cell_width: cell_w,
                     cell_height: cell_h,
                     show_line_numbers,
+                    max_line_number_digits,
                     show_timestamps,
                     timestamp_format: timestamp_format.clone(),
                     is_active,
@@ -1382,6 +1386,7 @@ impl NyaTermApp {
                 cell_width: cell_w,
                 cell_height: cell_h,
                 show_line_numbers,
+                max_line_number_digits,
                 show_timestamps,
                 timestamp_format,
                 is_active,

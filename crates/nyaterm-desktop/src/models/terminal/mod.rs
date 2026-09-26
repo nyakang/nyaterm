@@ -643,6 +643,7 @@ fn merge_terminal_effects(target: &mut TerminalEffects, mut incoming: TerminalEf
 pub(crate) struct TerminalViewState {
     pub(crate) output: String,
     pub(crate) screen: TerminalScreen,
+    pub(crate) max_line_number_digits: usize,
     /// Latest live viewport prepared by the background terminal frame processor.
     pub(crate) frame_snapshot: Option<Arc<TerminalSnapshot>>,
     pub(crate) frame_action_links: Option<TerminalFrameActionLinks>,
@@ -701,6 +702,7 @@ impl TerminalViewState {
         Self {
             output: String::new(),
             screen: TerminalScreen::default(),
+            max_line_number_digits: 1,
             frame_snapshot: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
@@ -745,6 +747,7 @@ impl TerminalViewState {
         Self {
             output,
             screen,
+            max_line_number_digits: 1,
             frame_snapshot: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
@@ -1073,6 +1076,7 @@ impl TerminalViewState {
         }
         let old_scrollback_len = self.scrollback_len_for_anchor();
         let new_scrollback_len = snapshot.scrollback_len;
+        self.observe_line_number_digits(&snapshot);
         let preserved_action_links = action_links.or_else(|| {
             self.frame_action_links
                 .take()
@@ -1101,6 +1105,7 @@ impl TerminalViewState {
     ) {
         let old_scrollback_len = self.scrollback_len_for_anchor();
         let new_scrollback_len = snapshot.scrollback_len;
+        self.observe_line_number_digits(&snapshot);
         let preserved_action_links = action_links.or_else(|| {
             self.frame_action_links
                 .take()
@@ -1126,6 +1131,7 @@ impl TerminalViewState {
         // Hidden sessions keep protocol/revision current without retaining a full
         // viewport snapshot until the surface becomes visible again.
         if let Some(snapshot) = snapshot {
+            self.observe_line_number_digits(&snapshot);
             self.frame_snapshot = Some(snapshot);
             self.frame_action_links = action_links;
             self.grid_resize_pending = false;
@@ -1182,12 +1188,19 @@ impl TerminalViewState {
         offset: usize,
         snapshot: Arc<TerminalSnapshot>,
     ) {
+        self.observe_line_number_digits(&snapshot);
         if offset == 0 {
             self.frame_snapshot = Some(snapshot);
             return;
         }
         self.scrollback_snapshots.insert(offset, snapshot);
         self.prune_scrollback_snapshot_cache(offset);
+    }
+
+    fn observe_line_number_digits(&mut self, snapshot: &TerminalSnapshot) {
+        self.max_line_number_digits = self
+            .max_line_number_digits
+            .max(snapshot.total_rows.max(1).to_string().len());
     }
 
     pub(crate) fn prune_scrollback_snapshot_cache(&mut self, keep_offset: usize) {
