@@ -27,6 +27,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc as tokio_mpsc;
 
 mod ascend_npu;
+mod directory_command;
 mod environment;
 mod file_browser;
 mod gpu;
@@ -78,6 +79,10 @@ mod trzsz;
 pub mod xymodem;
 mod zmodem;
 
+pub use directory_command::{
+    DirectoryShell, build_directory_change_command, local_directory_shell,
+    valid_terminal_directory_path,
+};
 pub use environment::{
     EnvironmentSnapshot, EnvironmentValue, ShellEnvironmentCache, ShellEnvironmentError,
     normalize_environment_variable_name,

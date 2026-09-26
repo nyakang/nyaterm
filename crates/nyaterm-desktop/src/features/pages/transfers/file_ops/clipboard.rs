@@ -145,6 +145,16 @@ fn local_clipboard_entry(path: PathBuf) -> Option<SftpFileEntry> {
 }
 
 impl NyaTermApp {
+    pub(in crate::features::pages::transfers) fn can_paste_transfer_file_clipboard(
+        &self,
+        cx: &gpui::App,
+    ) -> bool {
+        self.transfer
+            .file_clipboard()
+            .is_some_and(|clipboard| !clipboard.entries.is_empty())
+            || !external_file_paths(cx).is_empty()
+    }
+
     pub(in crate::features) fn capture_transfer_file_clipboard(
         &mut self,
         cut: bool,

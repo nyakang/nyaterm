@@ -33,6 +33,7 @@ mod properties;
 mod properties_dialog;
 mod queue;
 mod resize;
+mod terminal_directory;
 #[cfg(test)]
 pub(in crate::features::pages::transfers) mod tests_support;
 mod tree;

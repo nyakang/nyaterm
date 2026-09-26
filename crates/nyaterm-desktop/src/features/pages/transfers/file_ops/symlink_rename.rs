@@ -20,6 +20,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let parent_path = self.transfer_browser_operation_target_directory();
+        self.open_transfer_new_symlink_dialog_at(parent_path, window, cx);
+    }
+
+    pub(in crate::features::pages::transfers) fn open_transfer_new_symlink_dialog_at(
+        &mut self,
+        parent_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.transfer
             .open_new_symlink_dialog(TransferNewSymlinkState {
                 parent_path,

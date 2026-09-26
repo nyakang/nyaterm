@@ -13,7 +13,7 @@ use crate::models::{
 
 use super::super::helpers::remote_file_name;
 use super::helpers::{
-    RemoteFileTextKind, is_known_binary_file, open_local_path_with_editor, remote_file_text_kind,
+    RemoteFileTextKind, open_local_path_with_editor, remote_file_text_kind,
     sanitize_local_open_segment,
 };
 
@@ -185,17 +185,14 @@ impl NyaTermApp {
         &self,
         entry: &SftpFileEntry,
     ) -> bool {
-        entry.file_type != SftpFileType::Directory
-            && self.settings.summary().transfer_editor_type == "external"
-            && !is_known_binary_file(&entry.name)
+        !entry.is_directory() && self.settings.summary().transfer_editor_type == "external"
     }
 
     pub(in crate::features) fn show_transfer_open_external_menu_entry(
         &self,
         entry: &SftpFileEntry,
     ) -> bool {
-        entry.file_type != SftpFileType::Directory
-            && self.settings.summary().transfer_editor_type == "internal"
+        !entry.is_directory() && self.settings.summary().transfer_editor_type == "internal"
     }
 
     pub(in crate::features) fn open_transfer_default(

@@ -13,18 +13,12 @@ pub(super) enum TransferContextMenuAction {
     Refresh,
     Upload,
     Download,
-    DownloadToDirectory,
     SendTo,
-    Rename,
     Move,
-    Delete,
     AddToFavorites,
-    CopyPath,
-    CopyName,
+    CopyInfo,
     CopyDirectoryPath,
-    SendPath,
-    SendName,
-    SendDirectoryPath,
+    Terminal,
     Ai,
     Properties,
     GoUp,
@@ -42,12 +36,52 @@ pub(super) fn transfer_context_action_visible_for_backend(
             action,
             TransferContextMenuAction::Upload
                 | TransferContextMenuAction::Download
-                | TransferContextMenuAction::DownloadToDirectory
                 | TransferContextMenuAction::NewSymlink
         )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) fn transfer_visible_context_menu_nodes(
+    nodes: impl IntoIterator<Item = TransferContextMenuNode>,
+    backend: nyaterm_transport::FileBrowserBackendKind,
+) -> Vec<TransferContextMenuNode> {
+    let mut visible = Vec::new();
+    for node in nodes {
+        if let TransferContextMenuNode::Action(action) = node
+            && !transfer_context_action_visible_for_backend(action, backend)
+        {
+            continue;
+        }
+        if node == TransferContextMenuNode::Separator
+            && (visible.is_empty() || visible.last() == Some(&node))
+        {
+            continue;
+        }
+        visible.push(node);
+    }
+    if visible.last() == Some(&TransferContextMenuNode::Separator) {
+        visible.pop();
+    }
+    visible
+}
+
+pub(super) fn transfer_action_bar_enabled(selection_count: usize, can_paste: bool) -> [bool; 5] {
+    [
+        selection_count > 0,
+        selection_count > 0,
+        can_paste,
+        selection_count == 1,
+        selection_count > 0,
+    ]
+}
+
+pub(super) fn transfer_directory_terminal_actions_visible(
+    is_directory: bool,
+    is_symlink: bool,
+) -> bool {
+    is_directory && !is_symlink
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct TransferEntryMenuCapabilities {
     pub is_directory: bool,
     pub show_open_internal: bool,
@@ -58,6 +92,8 @@ pub(super) struct TransferEntryMenuCapabilities {
     /// selection to. Drives the "Send to" submenu after the download actions, matching
     /// the Tauri `openMoveDialog(getContextMenuEntries)` placement.
     pub has_send_targets: bool,
+    pub is_tree_view: bool,
+    pub terminal_available: bool,
 }
 
 pub(super) fn transfer_entry_context_menu_policy(
@@ -76,49 +112,39 @@ pub(super) fn transfer_entry_context_menu_policy(
     if capabilities.show_open_external {
         items.push(Item(Action::OpenExternal));
     }
-    items.extend([
-        Separator,
-        Item(Action::Refresh),
-        Item(Action::Upload),
-        Item(Action::Download),
-        Item(Action::DownloadToDirectory),
-    ]);
-    // Keep "Send to" after both download actions when a target session is available.
-    if capabilities.has_send_targets {
-        items.extend([Separator, Item(Action::SendTo)]);
+    items.extend([Separator, Item(Action::Refresh)]);
+    if capabilities.is_tree_view {
+        items.extend([Item(Action::NewFile), Item(Action::NewFolder)]);
     }
-    items.extend([
-        Separator,
-        Item(Action::Rename),
-        Item(Action::Move),
-        Item(Action::Delete),
-        Separator,
-    ]);
+    items.extend([Item(Action::Upload), Item(Action::Download), Separator]);
+    if capabilities.is_tree_view {
+        items.extend([Item(Action::NewSymlink), Separator]);
+    }
+    if capabilities.has_send_targets {
+        items.extend([Item(Action::SendTo), Separator]);
+    }
+    items.extend([Item(Action::Move), Separator]);
     if capabilities.is_directory {
         items.extend([Item(Action::AddToFavorites), Separator]);
     }
-    items.extend([
-        Item(Action::CopyPath),
-        Item(Action::CopyName),
-        Item(Action::CopyDirectoryPath),
-        Separator,
-        Item(Action::SendPath),
-        Item(Action::SendName),
-        Item(Action::SendDirectoryPath),
-        Separator,
-    ]);
-    if capabilities.has_ai_actions {
-        items.extend([Item(Action::Ai), Separator]);
+    items.push(Item(Action::CopyInfo));
+    if capabilities.terminal_available {
+        items.extend([Separator, Item(Action::Terminal)]);
     }
-    items.push(Item(Action::Properties));
+    if capabilities.has_ai_actions {
+        items.extend([Separator, Item(Action::Ai)]);
+    }
+    items.extend([Separator, Item(Action::Properties)]);
     items
 }
 
-pub(super) fn transfer_current_directory_context_menu_policy() -> Vec<TransferContextMenuNode> {
+pub(super) fn transfer_current_directory_context_menu_policy(
+    terminal_available: bool,
+) -> Vec<TransferContextMenuNode> {
     use TransferContextMenuAction as Action;
     use TransferContextMenuNode::{Action as Item, Separator};
 
-    vec![
+    let mut items = vec![
         Item(Action::Refresh),
         Item(Action::Upload),
         Separator,
@@ -127,10 +153,12 @@ pub(super) fn transfer_current_directory_context_menu_policy() -> Vec<TransferCo
         Item(Action::NewSymlink),
         Separator,
         Item(Action::CopyDirectoryPath),
-        Item(Action::SendDirectoryPath),
-        Separator,
-        Item(Action::Properties),
-    ]
+    ];
+    if terminal_available {
+        items.push(Item(Action::Terminal));
+    }
+    items.extend([Separator, Item(Action::Properties)]);
+    items
 }
 
 pub(super) fn transfer_parent_directory_context_menu_policy() -> Vec<TransferContextMenuNode> {
@@ -200,21 +228,42 @@ mod tests {
     use super::{
         SendToCandidate, TransferContextMenuAction as Action, TransferContextMenuNode as Node,
         TransferEntryMenuCapabilities, send_to_candidate_is_eligible, send_to_destination_path,
-        send_to_target_directory, transfer_context_action_visible_for_backend,
-        transfer_current_directory_context_menu_policy, transfer_entry_context_menu_policy,
-        transfer_parent_directory_context_menu_policy,
+        send_to_target_directory, transfer_action_bar_enabled,
+        transfer_context_action_visible_for_backend,
+        transfer_current_directory_context_menu_policy,
+        transfer_directory_terminal_actions_visible, transfer_entry_context_menu_policy,
+        transfer_parent_directory_context_menu_policy, transfer_visible_context_menu_nodes,
     };
+
+    #[test]
+    fn action_bar_enables_selection_and_clipboard_commands_independently() {
+        assert_eq!(transfer_action_bar_enabled(0, false), [false; 5]);
+        assert_eq!(
+            transfer_action_bar_enabled(0, true),
+            [false, false, true, false, false]
+        );
+        assert_eq!(
+            transfer_action_bar_enabled(1, false),
+            [true, true, false, true, true]
+        );
+        assert_eq!(
+            transfer_action_bar_enabled(3, true),
+            [true, true, true, false, true]
+        );
+    }
+
+    #[test]
+    fn directory_terminal_actions_exclude_files_and_symlinks() {
+        assert!(transfer_directory_terminal_actions_visible(true, false));
+        assert!(!transfer_directory_terminal_actions_visible(true, true));
+        assert!(!transfer_directory_terminal_actions_visible(false, false));
+    }
 
     #[test]
     fn local_backend_hides_remote_only_actions() {
         use nyaterm_transport::FileBrowserBackendKind::{Local, Remote};
 
-        for action in [
-            Action::Upload,
-            Action::Download,
-            Action::DownloadToDirectory,
-            Action::NewSymlink,
-        ] {
+        for action in [Action::Upload, Action::Download, Action::NewSymlink] {
             assert!(!transfer_context_action_visible_for_backend(action, Local));
             assert!(transfer_context_action_visible_for_backend(action, Remote));
         }
@@ -229,15 +278,13 @@ mod tests {
     }
 
     #[test]
-    fn file_menu_matches_tauri_group_order() {
+    fn file_menu_groups_copy_and_terminal_actions() {
         assert_eq!(
             transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
-                is_directory: false,
                 show_open_internal: true,
-                show_open_external: false,
-                show_preview: false,
                 has_ai_actions: true,
-                has_send_targets: false,
+                terminal_available: true,
+                ..Default::default()
             }),
             vec![
                 Node::Action(Action::Open),
@@ -246,19 +293,12 @@ mod tests {
                 Node::Action(Action::Refresh),
                 Node::Action(Action::Upload),
                 Node::Action(Action::Download),
-                Node::Action(Action::DownloadToDirectory),
                 Node::Separator,
-                Node::Action(Action::Rename),
                 Node::Action(Action::Move),
-                Node::Action(Action::Delete),
                 Node::Separator,
-                Node::Action(Action::CopyPath),
-                Node::Action(Action::CopyName),
-                Node::Action(Action::CopyDirectoryPath),
+                Node::Action(Action::CopyInfo),
                 Node::Separator,
-                Node::Action(Action::SendPath),
-                Node::Action(Action::SendName),
-                Node::Action(Action::SendDirectoryPath),
+                Node::Action(Action::Terminal),
                 Node::Separator,
                 Node::Action(Action::Ai),
                 Node::Separator,
@@ -270,12 +310,8 @@ mod tests {
     #[test]
     fn preview_action_follows_open_and_only_for_files() {
         let file = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
-            is_directory: false,
-            show_open_internal: false,
-            show_open_external: false,
             show_preview: true,
-            has_ai_actions: false,
-            has_send_targets: false,
+            ..Default::default()
         });
         assert_eq!(file[0], Node::Action(Action::Open));
         assert_eq!(file[1], Node::Action(Action::Preview));
@@ -283,11 +319,7 @@ mod tests {
         // A directory never offers preview, so the caller passes show_preview:false.
         let directory = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
             is_directory: true,
-            show_open_internal: false,
-            show_open_external: false,
-            show_preview: false,
-            has_ai_actions: false,
-            has_send_targets: false,
+            ..Default::default()
         });
         assert!(
             !directory.contains(&Node::Action(Action::Preview)),
@@ -296,22 +328,17 @@ mod tests {
     }
 
     #[test]
-    fn directory_menu_inserts_favorite_group_and_external_editor_alternative() {
+    fn directory_menu_inserts_favorite_group() {
         let items = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
             is_directory: true,
-            show_open_internal: false,
-            show_open_external: true,
-            show_preview: false,
-            has_ai_actions: false,
-            has_send_targets: false,
+            ..Default::default()
         });
-        assert_eq!(items[1], Node::Action(Action::OpenExternal));
         assert!(items.windows(3).any(|group| {
             group
                 == [
                     Node::Action(Action::AddToFavorites),
                     Node::Separator,
-                    Node::Action(Action::CopyPath),
+                    Node::Action(Action::CopyInfo),
                 ]
         }));
         assert_eq!(items.last(), Some(&Node::Action(Action::Properties)));
@@ -324,12 +351,9 @@ mod tests {
         // the window opens and shows the unsupported message. The capability is
         // driven by `show_transfer_preview_menu_entry`, which is `!is_directory`.
         let unrenderable = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
-            is_directory: false,
-            show_open_internal: false,
             show_open_external: true,
             show_preview: true,
-            has_ai_actions: false,
-            has_send_targets: false,
+            ..Default::default()
         });
         assert_eq!(unrenderable[0], Node::Action(Action::Open));
         assert_eq!(unrenderable[1], Node::Action(Action::Preview));
@@ -338,7 +362,7 @@ mod tests {
     #[test]
     fn current_and_parent_directory_menus_match_tauri_groups() {
         assert_eq!(
-            transfer_current_directory_context_menu_policy(),
+            transfer_current_directory_context_menu_policy(true),
             vec![
                 Node::Action(Action::Refresh),
                 Node::Action(Action::Upload),
@@ -348,7 +372,7 @@ mod tests {
                 Node::Action(Action::NewSymlink),
                 Node::Separator,
                 Node::Action(Action::CopyDirectoryPath),
-                Node::Action(Action::SendDirectoryPath),
+                Node::Action(Action::Terminal),
                 Node::Separator,
                 Node::Action(Action::Properties),
             ]
@@ -364,54 +388,71 @@ mod tests {
     }
 
     #[test]
-    fn send_to_submenu_follows_download_actions_with_its_own_separator() {
+    fn send_to_submenu_follows_download_with_its_own_separator() {
         let items = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
-            is_directory: false,
-            show_open_internal: false,
-            show_open_external: false,
-            show_preview: false,
-            has_ai_actions: false,
             has_send_targets: true,
+            ..Default::default()
         });
-        // Both download actions precede the separator, Send to, and Rename/Move/Delete group.
         let download = items
             .iter()
             .position(|node| node == &Node::Action(Action::Download))
             .expect("download action present");
-        assert_eq!(
-            items[download + 1],
-            Node::Action(Action::DownloadToDirectory)
-        );
-        assert_eq!(items[download + 2], Node::Separator);
-        assert_eq!(items[download + 3], Node::Action(Action::SendTo));
-        assert_eq!(items[download + 4], Node::Separator);
-        assert_eq!(items[download + 5], Node::Action(Action::Rename));
-        assert_eq!(items[download + 6], Node::Action(Action::Move));
-        assert_eq!(items[download + 7], Node::Action(Action::Delete));
+        assert_eq!(items[download + 1], Node::Separator);
+        assert_eq!(items[download + 2], Node::Action(Action::SendTo));
+        assert_eq!(items[download + 3], Node::Separator);
+        assert_eq!(items[download + 4], Node::Action(Action::Move));
     }
 
     #[test]
     fn send_to_submenu_absent_without_eligible_targets() {
         let items = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
-            is_directory: false,
-            show_open_internal: false,
-            show_open_external: false,
-            show_preview: false,
-            has_ai_actions: false,
-            has_send_targets: false,
+            ..Default::default()
         });
         assert!(!items.contains(&Node::Action(Action::SendTo)));
         let download = items
             .iter()
             .position(|node| node == &Node::Action(Action::Download))
             .expect("download action present");
-        // Without send targets, both download actions lead directly to Rename/Move/Delete.
-        assert_eq!(
-            items[download + 1],
-            Node::Action(Action::DownloadToDirectory)
+        assert_eq!(items[download + 1], Node::Separator);
+        assert_eq!(items[download + 2], Node::Action(Action::Move));
+    }
+
+    #[test]
+    fn tree_entries_offer_creation_and_terminal_requires_availability() {
+        let items = transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
+            is_tree_view: true,
+            ..Default::default()
+        });
+        assert!(items.contains(&Node::Action(Action::NewFile)));
+        assert!(items.contains(&Node::Action(Action::NewFolder)));
+        assert!(items.contains(&Node::Action(Action::NewSymlink)));
+        assert!(!items.contains(&Node::Action(Action::Terminal)));
+        assert!(
+            !transfer_current_directory_context_menu_policy(false)
+                .contains(&Node::Action(Action::Terminal))
         );
-        assert_eq!(items[download + 2], Node::Separator);
-        assert_eq!(items[download + 3], Node::Action(Action::Rename));
+    }
+
+    #[test]
+    fn local_menu_removes_remote_actions_without_empty_groups() {
+        use nyaterm_transport::FileBrowserBackendKind::Local;
+
+        let nodes = transfer_visible_context_menu_nodes(
+            transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {
+                is_tree_view: true,
+                ..Default::default()
+            }),
+            Local,
+        );
+        assert!(!nodes.contains(&Node::Action(Action::Upload)));
+        assert!(!nodes.contains(&Node::Action(Action::Download)));
+        assert!(!nodes.contains(&Node::Action(Action::NewSymlink)));
+        assert!(
+            !nodes
+                .windows(2)
+                .any(|pair| pair == [Node::Separator, Node::Separator])
+        );
+        assert_ne!(nodes.last(), Some(&Node::Separator));
     }
 
     #[test]

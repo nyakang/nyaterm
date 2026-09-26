@@ -281,6 +281,16 @@ impl NyaTermApp {
         kind: TransferPathPromptKind,
         cx: &mut Context<Self>,
     ) {
+        let remote_path = self.normalized_transfer_browser_upload_target();
+        self.prompt_transfer_browser_upload_path_at(kind, remote_path, cx);
+    }
+
+    pub(in crate::features) fn prompt_transfer_browser_upload_path_at(
+        &mut self,
+        kind: TransferPathPromptKind,
+        remote_path: String,
+        cx: &mut Context<Self>,
+    ) {
         if !matches!(
             kind,
             TransferPathPromptKind::UploadFile
@@ -330,7 +340,11 @@ impl NyaTermApp {
             },
             TransferPathPromptKind::DownloadDirectory => unreachable!(),
         };
-        let remote_path = self.normalized_transfer_browser_upload_target();
+        let remote_path = if remote_path == "/" {
+            remote_path
+        } else {
+            remote_path.trim_end_matches('/').to_string()
+        };
         if !self.transfer.begin_path_prompt(kind) {
             self.shell
                 .set_status("native path picker is already open".to_string());

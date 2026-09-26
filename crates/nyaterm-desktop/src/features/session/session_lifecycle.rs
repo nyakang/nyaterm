@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui::{Context, Window};
 
 use crate::features::formatting::short_id;
@@ -20,6 +22,25 @@ impl NyaTermApp {
     pub(in crate::features) fn duplicate_active_session_with_startup(
         &mut self,
         startup_command: Option<StartupCommandRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.duplicate_active_session_with_options(startup_command, None, window, cx);
+    }
+
+    pub(in crate::features) fn duplicate_active_local_session_in_directory(
+        &mut self,
+        working_dir: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.duplicate_active_session_with_options(None, Some(working_dir), window, cx);
+    }
+
+    fn duplicate_active_session_with_options(
+        &mut self,
+        startup_command: Option<StartupCommandRequest>,
+        working_dir: Option<PathBuf>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -50,6 +71,9 @@ impl NyaTermApp {
 
         match metadata.launch_config.clone() {
             SessionLaunchConfig::Local(mut config) => {
+                if let Some(working_dir) = working_dir {
+                    config.working_dir = Some(working_dir);
+                }
                 self.apply_desired_geometry_to_local_config(&mut config);
                 self.begin_background_session_start(
                     format!("{} duplicate", config.name),
