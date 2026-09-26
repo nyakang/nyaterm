@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use gpui::{
     Action as _, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, Render, SharedString, Subscription, Window, div, prelude::*,
+    IntoElement, Render, SharedString, Subscription, Window, div, prelude::*, px,
 };
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 
@@ -12,6 +12,7 @@ use crate::input_focus::register_nya_input_focus;
 pub enum NyaDocumentEditorEvent {
     Changed(String),
     Blurred(String),
+    Updated,
 }
 
 /// Full-size native document editor used by modeless document windows.
@@ -21,8 +22,12 @@ pub enum NyaDocumentEditorEvent {
 pub struct NyaDocumentEditorState {
     editor: Entity<EditorState>,
     subscription: Subscription,
+    observation: Subscription,
     pending_content: Option<SharedString>,
     silent_content: Option<SharedString>,
+    read_only: bool,
+    font_size: Option<f32>,
+    font_family: Option<SharedString>,
 }
 
 impl NyaDocumentEditorState {
@@ -40,11 +45,41 @@ impl NyaDocumentEditorState {
         content: impl Into<SharedString>,
         placeholder: impl Into<SharedString>,
     ) -> Self {
+        Self::build(window, cx, content.into(), placeholder.into(), None)
+    }
+
+    pub fn new_source(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        content: impl Into<SharedString>,
+        language: impl Into<SharedString>,
+    ) -> Self {
+        Self::build(
+            window,
+            cx,
+            content.into(),
+            SharedString::default(),
+            Some(language.into()),
+        )
+    }
+
+    fn build(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        content: SharedString,
+        placeholder: SharedString,
+        language: Option<SharedString>,
+    ) -> Self {
         let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
+            let state = EditorState::new(window, cx)
                 .default_value(content)
                 .placeholder(placeholder)
-                .soft_wrap(true)
+                .soft_wrap(true);
+            if let Some(language) = language {
+                state.language(language).folding(true).line_number(true)
+            } else {
+                state
+            }
         });
         register_nya_input_focus(&editor.read(cx).focus_handle(cx), cx);
         let subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
@@ -64,16 +99,67 @@ impl NyaDocumentEditorState {
                 InputEvent::Focus | InputEvent::PressEnter { .. } => {}
             }
         });
+        let observation = cx.observe(&editor, |_, _, cx| {
+            cx.emit(NyaDocumentEditorEvent::Updated);
+        });
         Self {
             editor,
             subscription,
+            observation,
             pending_content: None,
             silent_content: None,
+            read_only: false,
+            font_size: None,
+            font_family: None,
         }
+    }
+
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        if self.read_only != read_only {
+            self.read_only = read_only;
+            cx.notify();
+        }
+    }
+
+    pub fn set_font_size(&mut self, font_size: f32, cx: &mut Context<Self>) {
+        if self.font_size != Some(font_size) {
+            self.font_size = Some(font_size);
+            cx.notify();
+        }
+    }
+
+    pub fn set_font_family(
+        &mut self,
+        font_family: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let font_family = font_family.into();
+        if self.font_family.as_ref() != Some(&font_family) {
+            self.font_family = Some(font_family);
+            cx.notify();
+        }
+    }
+
+    pub fn cursor_position(&self, cx: &App) -> (usize, usize) {
+        let value = self.editor.read(cx).value();
+        let cursor = self.editor.read(cx).cursor().min(value.len());
+        let before = &value[..cursor];
+        let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        let line_start = before.rfind('\n').map(|index| index + 1).unwrap_or(0);
+        (line, before[line_start..].chars().count() + 1)
+    }
+
+    pub fn open_search(&mut self, replace: bool, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.open_search(replace, cx));
     }
 
     pub fn value(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
+    }
+
+    pub fn content_equals(&self, content: &str, cx: &App) -> bool {
+        self.editor.read(cx).value().as_ref() == content
     }
 
     pub fn selected_range(&self, cx: &App) -> Range<usize> {
@@ -148,16 +234,23 @@ impl Focusable for NyaDocumentEditorState {
 impl Render for NyaDocumentEditorState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _keep_subscription_alive = &self.subscription;
+        let _keep_observation_alive = &self.observation;
         if let Some(content) = self.pending_content.take() {
             self.editor
                 .update(cx, |editor, cx| editor.set_value(content, window, cx));
         }
-        div().size_full().min_h_0().min_w_0().child(
-            Editor::new(&self.editor)
-                .appearance(false)
-                .bordered(false)
-                .size_full(),
-        )
+        let mut editor = Editor::new(&self.editor)
+            .appearance(false)
+            .bordered(false)
+            .readonly(self.read_only)
+            .size_full();
+        if let Some(font_size) = self.font_size {
+            editor = editor.text_size(px(font_size));
+        }
+        if let Some(font_family) = &self.font_family {
+            editor = editor.font_family(font_family.clone());
+        }
+        div().size_full().min_h_0().min_w_0().child(editor)
     }
 }
 

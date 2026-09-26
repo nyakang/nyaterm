@@ -169,6 +169,7 @@ impl NoteEditorWindow {
                         this.save_now(false, cx);
                     }
                 }
+                NyaDocumentEditorEvent::Updated => {}
             },
         );
         let title_subscription =

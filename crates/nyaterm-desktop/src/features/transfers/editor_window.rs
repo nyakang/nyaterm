@@ -90,7 +90,8 @@ impl Render for RemoteFileEditorWindow {
             });
         self.editors.retain(|tab_id, _| tab_ids.contains(tab_id));
         if !self.editors.contains_key(&active_tab.id) {
-            let editor = cx.new(|cx| RemoteTextEditor::new(self.app.clone(), &active_tab, cx));
+            let editor =
+                cx.new(|cx| RemoteTextEditor::new(self.app.clone(), &active_tab, window, cx));
             self.editors.insert(active_tab.id.clone(), editor);
         }
         let editor = self
@@ -102,11 +103,11 @@ impl Render for RemoteFileEditorWindow {
         if self.active_editor_id.as_deref() != Some(active_tab.id.as_str()) {
             self.active_editor_id = Some(active_tab.id.clone());
             if active_tab.focused_field == crate::models::TransferEditorField::Content {
-                window.focus(&editor.read(cx).focus_handle(), cx);
+                window.focus(&editor.read(cx).focus_handle(cx), cx);
             }
         }
         window.set_window_title(&title);
-        let cursor_position = editor.read(cx).cursor_position();
+        let cursor_position = editor.read(cx).cursor_position(cx);
         let content = self.app.update(cx, |app, cx| {
             app.transfer_editor_window_view(editor, cursor_position, cx)
         });

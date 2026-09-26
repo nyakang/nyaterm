@@ -71,6 +71,7 @@ impl RemoteFilePreviewWindow {
         &mut self,
         tab_id: &str,
         text: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<RemoteTextEditor> {
         if let Some(surface) = self.text_surface.clone() {
@@ -80,7 +81,7 @@ impl RemoteFilePreviewWindow {
         let app = self.app.clone();
         let id = tab_id.to_string();
         let content = text.to_string();
-        let surface = cx.new(|cx| RemoteTextEditor::new_read_only(app, id, content, cx));
+        let surface = cx.new(|cx| RemoteTextEditor::new_read_only(app, id, content, window, cx));
         self.text_surface = Some(surface.clone());
         surface
     }
@@ -144,7 +145,7 @@ impl Render for RemoteFilePreviewWindow {
             });
         let header_close = on_close.clone();
 
-        let body = self.preview_body(palette, &active_tab, &tabs, cx);
+        let body = self.preview_body(palette, &active_tab, &tabs, window, cx);
 
         child_window_root(&self.shell_focus, false, on_close)
             .bg(rgb(palette.bg))
@@ -170,6 +171,7 @@ impl RemoteFilePreviewWindow {
         palette: ThemePalette,
         active_tab: &TransferPreviewState,
         tabs: &[(String, String)],
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         div()
@@ -183,7 +185,7 @@ impl RemoteFilePreviewWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(self.preview_content(palette, active_tab, cx)),
+                    .child(self.preview_content(palette, active_tab, window, cx)),
             )
             .child(self.preview_status_bar(palette, active_tab, cx))
             .into_any_element()
@@ -600,6 +602,7 @@ impl RemoteFilePreviewWindow {
         &mut self,
         palette: ThemePalette,
         active_tab: &TransferPreviewState,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match &active_tab.content {
@@ -609,11 +612,11 @@ impl RemoteFilePreviewWindow {
             }
             PreviewContent::Error(message) => error_message(palette, message),
             PreviewContent::Text(text) => {
-                let surface = self.text_surface_for(&active_tab.id, text, cx);
+                let surface = self.text_surface_for(&active_tab.id, text, window, cx);
                 text_surface_body(surface)
             }
             PreviewContent::Json { text, parse_error } => {
-                let surface = self.text_surface_for(&active_tab.id, text, cx);
+                let surface = self.text_surface_for(&active_tab.id, text, window, cx);
                 json_body(palette, surface, parse_error.as_deref())
             }
             PreviewContent::Markdown(text) => markdown_body(palette, text, active_tab.id.as_str()),
