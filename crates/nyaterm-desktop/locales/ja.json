@@ -857,6 +857,8 @@
   "fileExplorer": {
     "tree": "ファイルツリー",
     "toggleTree": "ファイルツリーの表示切替",
+    "switchToTreeView": "ツリービューに切り替え",
+    "switchToListView": "リストビューに切り替え",
     "treeUnexpectedResult": "ファイルツリーから予期しない結果が返されました。",
     "revealCurrentPath": "現在のディレクトリを表示",
     "expandFolder": "フォルダーを展開",

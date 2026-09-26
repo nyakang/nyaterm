@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{Context, KeyDownEvent, Window};
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
+use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath, SftpFileEntry, file_browser_join};
 
 use crate::features::NyaTermApp;
 use crate::models::{
@@ -87,7 +87,17 @@ impl NyaTermApp {
         let Some(backend) = self.session.active_file_browser_backend() else {
             return;
         };
-        let path = self.transfer.browser_remote_file_path();
+        let mut path = self.transfer.browser_remote_file_path();
+        if backend == FileBrowserBackendKind::Remote && !path.display_path.starts_with('/') {
+            let home = self.transfer.browser_view().home_dir;
+            if home.starts_with('/') && path.raw_path_token.is_none() {
+                path = RemoteFilePath::new(if path.display_path == "." {
+                    home.to_string()
+                } else {
+                    file_browser_join(backend, home, &path.display_path)
+                });
+            }
+        }
         let missing = self.transfer.reveal_tree_path(&session_id, backend, path);
         for path in missing {
             self.request_transfer_tree_listing(path, cx);

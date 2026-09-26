@@ -854,6 +854,8 @@
   "fileExplorer": {
     "tree": "檔案樹",
     "toggleTree": "顯示或隱藏檔案樹",
+    "switchToTreeView": "切換到樹狀檢視",
+    "switchToListView": "切換到列表檢視",
     "treeUnexpectedResult": "檔案樹傳回了非預期結果。",
     "revealCurrentPath": "定位目前目錄",
     "expandFolder": "展開目錄",

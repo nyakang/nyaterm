@@ -854,6 +854,8 @@
   "fileExplorer": {
     "tree": "Arborescence",
     "toggleTree": "Afficher ou masquer l’arborescence",
+    "switchToTreeView": "Passer à l’arborescence",
+    "switchToListView": "Passer à la liste",
     "treeUnexpectedResult": "L’arborescence a renvoyé un résultat inattendu.",
     "revealCurrentPath": "Afficher le dossier actuel",
     "expandFolder": "Développer le dossier",

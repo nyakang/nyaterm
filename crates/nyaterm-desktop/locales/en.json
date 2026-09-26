@@ -901,6 +901,8 @@
   "fileExplorer": {
     "tree": "Tree",
     "toggleTree": "Toggle file tree",
+    "switchToTreeView": "Switch to tree view",
+    "switchToListView": "Switch to list view",
     "treeUnexpectedResult": "The file tree returned an unexpected result.",
     "revealCurrentPath": "Reveal current directory",
     "expandFolder": "Expand folder",

@@ -169,7 +169,16 @@ impl TransferTreeState {
     ) -> Vec<RemoteFilePath> {
         let state = self.sessions.entry(session.to_string()).or_default();
         state.ensure_backend(backend);
-        let root = RemoteFilePath::new(file_browser_root(backend, &path.display_path));
+        let root = RemoteFilePath::new(match backend {
+            FileBrowserBackendKind::Remote => "/".to_string(),
+            FileBrowserBackendKind::Local => file_browser_root(backend, &path.display_path),
+        });
+        let path =
+            if backend == FileBrowserBackendKind::Remote && !path.display_path.starts_with('/') {
+                root.clone()
+            } else {
+                path
+            };
         if state
             .root
             .as_ref()
@@ -867,6 +876,21 @@ mod tests {
         );
         tree.presentation(Some("a"), false);
         assert!(!tree.sessions["a"].scroll_to_selection);
+    }
+
+    #[test]
+    fn initial_relative_remote_directory_uses_filesystem_root() {
+        let mut tree = TransferTreeState::default();
+        let missing = tree.reveal(
+            "a",
+            FileBrowserBackendKind::Remote,
+            RemoteFilePath::new("."),
+        );
+        assert_eq!(missing, vec![RemoteFilePath::new("/")]);
+        let view = tree.presentation(Some("a"), false);
+        assert_eq!(view.rows.len(), 1);
+        assert_eq!(view.rows[0].label, "/");
+        assert_eq!(view.rows[0].path, RemoteFilePath::new("/"));
     }
 
     #[test]

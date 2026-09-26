@@ -236,8 +236,10 @@ impl NyaTermApp {
         let mut dirty = false;
         let event_id = event.id.clone();
         let job_session_id = job.session_id.clone();
-        let reveal_tree_after_navigation = matches!(&job.kind, TransferJobKind::ListDir { .. })
-            || matches!(&event.event, TransferJobEvent::Finished(Ok(TransferJobOutput::CwdSynced { remote_path, .. })) if remote_path != &self.transfer.browser.path)
+        let reveal_tree_after_navigation = matches!(
+            &job.kind,
+            TransferJobKind::ListDir { .. } | TransferJobKind::ResolveHome
+        ) || matches!(&event.event, TransferJobEvent::Finished(Ok(TransferJobOutput::CwdSynced { remote_path, .. })) if remote_path != &self.transfer.browser.path)
             || job_session_id
                 .as_deref()
                 .is_some_and(|id| !self.transfer.tree_is_initialized(id));

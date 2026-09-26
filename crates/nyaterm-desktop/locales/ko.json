@@ -854,6 +854,8 @@
   "fileExplorer": {
     "tree": "파일 트리",
     "toggleTree": "파일 트리 표시 전환",
+    "switchToTreeView": "트리 보기로 전환",
+    "switchToListView": "목록 보기로 전환",
     "treeUnexpectedResult": "파일 트리가 예상하지 못한 결과를 반환했습니다.",
     "revealCurrentPath": "현재 디렉터리 표시",
     "expandFolder": "폴더 펼치기",

@@ -901,6 +901,8 @@
   "fileExplorer": {
     "tree": "文件树",
     "toggleTree": "显示或隐藏文件树",
+    "switchToTreeView": "切换到树视图",
+    "switchToListView": "切换到列表视图",
     "treeUnexpectedResult": "文件树返回了意外结果。",
     "revealCurrentPath": "定位当前目录",
     "expandFolder": "展开目录",

@@ -513,8 +513,8 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                 .child(compact_transfer_toolbar_button(
                                     palette,
                                     "transfer-browser-toggle-view-mode",
-                                    "icons/conn/folder.svg",
-                                    t!("fileExplorer.toggleTree"),
+                                    "icons/view-tree.svg",
+                                    t!("fileExplorer.switchToTreeView"),
                                     cx.listener(|panel, _, _, cx| panel.with_app(cx, |this, cx| {
                                         this.toggle_transfer_browser_view_mode(cx);
                                     })),
@@ -537,7 +537,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                     palette,
                                     "transfer-browser-toggle-view-mode",
                                     "icons/view-list.svg",
-                                    t!("fileExplorer.toggleTree"),
+                                    t!("fileExplorer.switchToListView"),
                                     cx.listener(|panel, _, _, cx| panel.with_app(cx, |this, cx| {
                                         this.toggle_transfer_browser_view_mode(cx);
                                     })),
