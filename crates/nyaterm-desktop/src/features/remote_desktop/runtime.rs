@@ -9,19 +9,21 @@ use nyaterm_remote_desktop::{
     CertificateDecision, CertificateMatchState, CertificatePromptReason, ClipboardOrigin,
     DirtyRect, DisplayScaleMode, DisplayTransform, Framebuffer, FramebufferLimits, LogicalPoint,
     LogicalRect, LogicalSize, RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpCertificatePolicy,
-    RdpCertificateRequest, RdpCertificateResponse, RdpClipboardMode, RdpDisplayMetrics,
-    RdpDisplayMode, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpRuntimeEvent,
-    RdpServerCapabilities, RdpSessionConfig, RdpSessionState, RemoteCursorEvent,
+    RdpCertificateRequest, RdpCertificateResponse, RdpClipboardMode, RdpClipboardTransferStatus,
+    RdpDisplayMetrics, RdpDisplayMode, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent,
+    RdpRuntimeEvent, RdpServerCapabilities, RdpSessionConfig, RdpSessionState, RemoteCursorEvent,
     RemoteDesktopError, RemoteDesktopViewState, RemotePoint, RemotePointerButton,
     RemotePointerEvent, RemoteWheelAxis, VNC_FRAMEBUFFER_LIMITS, VncError, VncInputEvent,
     VncRuntimeEvent, VncScaleMode, VncServerCapabilities, VncSessionConfig, VncSessionState,
     evaluate_certificate_match,
 };
 use nyaterm_store::{RdpCertificateMetadata, RdpKnownHostCheck, StoreDomain, store_request};
+use nyaterm_transport::SftpTransferProgress;
 
 use super::state::RdpCertificatePrompt;
 
 use crate::features::NyaTermApp;
+use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(150);
 const RESIZE_FAILURE_WINDOW: Duration = Duration::from_secs(3);
@@ -1564,6 +1566,12 @@ impl NyaTermApp {
                 if let Some(message) = message {
                     self.shell.set_status(message);
                 }
+                if matches!(
+                    state,
+                    RdpSessionState::Disconnected | RdpSessionState::Failed(_)
+                ) {
+                    self.stop_rdp_clipboard_jobs(session_id, cx);
+                }
             }
             RdpRuntimeEvent::Frame {
                 event:
@@ -1607,6 +1615,45 @@ impl NyaTermApp {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
+            RdpRuntimeEvent::ClipboardTransfer { progress, .. } => {
+                let status = match progress.status {
+                    RdpClipboardTransferStatus::Running => TransferJobStatus::Running,
+                    RdpClipboardTransferStatus::Completed => TransferJobStatus::Completed,
+                    RdpClipboardTransferStatus::Failed => TransferJobStatus::Failed,
+                    RdpClipboardTransferStatus::Cancelled => TransferJobStatus::Cancelled,
+                };
+                let sample = SftpTransferProgress {
+                    remote_path: "RDP clipboard".to_string(),
+                    local_path: std::path::PathBuf::new(),
+                    bytes_transferred: progress.transferred_bytes,
+                    total_bytes: Some(progress.total_bytes),
+                    item_count_completed: Some(progress.completed_files),
+                    item_count_total: Some(progress.total_files),
+                };
+                if let Some(job) = self.transfer.transfer_job_mut(&progress.id) {
+                    job.status = status;
+                    job.detail = progress.error.unwrap_or_default();
+                    job.update_progress(sample);
+                } else {
+                    self.transfer.enqueue_transfer_job(TransferJobState {
+                        id: progress.id,
+                        session_id: Some(session_id.to_string()),
+                        kind: TransferJobKind::RdpClipboard {
+                            file_name: progress.name.clone(),
+                        },
+                        status,
+                        detail: progress.error.unwrap_or_default(),
+                        created_at_ms: TransferJobState::now_ms(),
+                        display_name: progress.name,
+                        entries: Vec::new(),
+                        summary: None,
+                        progress: Some(sample),
+                        control: None,
+                        speed: Default::default(),
+                    });
+                }
+                self.defer_transfer_panel_snapshot_flush(cx);
+            }
             RdpRuntimeEvent::CertificateRequest(request) => {
                 self.handle_rdp_certificate_request(session_id, request, cx);
             }
@@ -1620,6 +1667,9 @@ impl NyaTermApp {
                 }
             }
             RdpRuntimeEvent::Error { error, fatal, .. } => {
+                if fatal {
+                    self.stop_rdp_clipboard_jobs(session_id, cx);
+                }
                 let should_reconnect = fatal && self.schedule_rdp_reconnect(session_id, &error);
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.error = Some(error.clone().into());
@@ -1636,6 +1686,26 @@ impl NyaTermApp {
                     self.shell.set_status(format_rdp_error(&error));
                 }
             }
+        }
+    }
+
+    fn stop_rdp_clipboard_jobs(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        let mut changed = false;
+        self.transfer.visit_transfer_jobs_mut(|job| {
+            if job.session_id.as_deref() == Some(session_id)
+                && matches!(job.kind, TransferJobKind::RdpClipboard { .. })
+                && matches!(
+                    job.status,
+                    TransferJobStatus::Running | TransferJobStatus::Cancelling
+                )
+            {
+                job.status = TransferJobStatus::Cancelled;
+                job.detail = "RDP session disconnected".to_string();
+                changed = true;
+            }
+        });
+        if changed {
+            self.defer_transfer_panel_snapshot_flush(cx);
         }
     }
 
@@ -2142,7 +2212,7 @@ impl NyaTermApp {
                 .metadata(&session_id)
                 .and_then(|metadata| match &metadata.launch_config {
                     crate::models::SessionLaunchConfig::Rdp(config)
-                        if config.clipboard.mode == RdpClipboardMode::TextOnly =>
+                        if config.clipboard.mode != RdpClipboardMode::Disabled =>
                     {
                         Some(RemoteDesktopClipboardTarget::Rdp)
                     }

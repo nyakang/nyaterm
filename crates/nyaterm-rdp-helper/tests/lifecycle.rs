@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 
 use nyaterm_remote_desktop::{
     PROTOCOL_VERSION, PixelFormat, RdpCapability, RdpCertificatePolicy, RdpCertificateRequest,
-    RdpCertificateResponse, RdpClipboardConfig, RdpControlMessage, RdpDisplayConfig,
-    RdpDisplayMetrics, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpReconnectConfig,
-    RdpServerCapabilities, RdpSessionConfig, RdpSessionState, decode_control, encode_control,
-    encode_frame_packet, read_packet, write_packet,
+    RdpCertificateResponse, RdpClipboardConfig, RdpClipboardTransferProgress,
+    RdpClipboardTransferStatus, RdpControlMessage, RdpDisplayConfig, RdpDisplayMetrics, RdpError,
+    RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpReconnectConfig, RdpServerCapabilities,
+    RdpSessionConfig, RdpSessionState, decode_control, encode_control, encode_frame_packet,
+    read_packet, write_packet,
 };
 
 fn helper_command() -> Command {
@@ -173,6 +174,10 @@ fn non_client_hello_messages() -> Vec<RdpControlMessage> {
             text: "clipboard".to_string(),
             generation: 0,
         },
+        RdpControlMessage::ClipboardTransferCancel {
+            session_id: "test-session".to_string(),
+            transfer_id: "transfer".to_string(),
+        },
         RdpControlMessage::CertificateRequest(certificate_request()),
         RdpControlMessage::CertificateResponse {
             request_id: "request".to_string(),
@@ -213,6 +218,19 @@ fn helper_only_messages() -> Vec<RdpControlMessage> {
             state: RdpSessionState::Connecting,
             message: None,
         },
+        RdpControlMessage::ClipboardTransfer {
+            session_id: "test-session".to_string(),
+            progress: RdpClipboardTransferProgress {
+                id: "transfer".to_string(),
+                name: "file".to_string(),
+                status: RdpClipboardTransferStatus::Running,
+                total_bytes: 1,
+                transferred_bytes: 0,
+                total_files: 1,
+                completed_files: 0,
+                error: None,
+            },
+        },
         RdpControlMessage::CertificateRequest(certificate_request()),
         RdpControlMessage::Capability {
             session_id: "test-session".to_string(),
@@ -248,6 +266,10 @@ fn foreign_session_messages() -> Vec<RdpControlMessage> {
             session_id: "foreign-session".to_string(),
             text: "clipboard".to_string(),
             generation: 0,
+        },
+        RdpControlMessage::ClipboardTransferCancel {
+            session_id: "foreign-session".to_string(),
+            transfer_id: "transfer".to_string(),
         },
         RdpControlMessage::RequestFullFrame {
             session_id: "foreign-session".to_string(),

@@ -8,7 +8,7 @@ use gpui::{
 use nyaterm_ui::NyaScrollable;
 
 use crate::features::NyaTermApp;
-use crate::models::{TransferJobMenuState, TransferJobStatus};
+use crate::models::{TransferJobKind, TransferJobMenuState, TransferJobStatus};
 use crate::theme::ThemePalette;
 
 use super::{transfer_job_can_retry, transfer_job_has_local_target, transfer_menu_position};
@@ -39,7 +39,7 @@ impl NyaTermApp {
             matches!(
                 job.status,
                 TransferJobStatus::Running | TransferJobStatus::Paused
-            ) && job.control.is_some()
+            ) && (job.control.is_some() || matches!(job.kind, TransferJobKind::RdpClipboard { .. }))
         });
         let can_retry = job.as_ref().is_some_and(transfer_job_can_retry);
         let can_open_target = job.as_ref().is_some_and(transfer_job_has_local_target);

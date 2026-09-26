@@ -4,7 +4,7 @@ use std::sync::Arc;
 use nyaterm_core::SecretString;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Maximum UTF-8 payload accepted for a single committed-text event.
 ///
@@ -161,6 +161,27 @@ pub enum RdpClipboardMode {
     Disabled,
     #[default]
     TextOnly,
+    TextAndFiles,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RdpClipboardTransferStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RdpClipboardTransferProgress {
+    pub id: String,
+    pub name: String,
+    pub status: RdpClipboardTransferStatus,
+    pub total_bytes: u64,
+    pub transferred_bytes: u64,
+    pub total_files: u64,
+    pub completed_files: u64,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +408,10 @@ pub enum RdpRuntimeEvent {
         session_id: String,
         text: String,
         generation: u64,
+    },
+    ClipboardTransfer {
+        session_id: String,
+        progress: RdpClipboardTransferProgress,
     },
     CertificateRequest(RdpCertificateRequest),
     Capability {
@@ -780,6 +805,14 @@ pub enum RdpControlMessage {
         text: String,
         generation: u64,
     },
+    ClipboardTransfer {
+        session_id: String,
+        progress: RdpClipboardTransferProgress,
+    },
+    ClipboardTransferCancel {
+        session_id: String,
+        transfer_id: String,
+    },
     CertificateRequest(RdpCertificateRequest),
     CertificateResponse {
         request_id: String,
@@ -874,6 +907,7 @@ pub fn parse_rdp_display_mode(value: &str) -> RdpDisplayMode {
 pub fn parse_rdp_clipboard_mode(value: &str) -> RdpClipboardMode {
     match value.trim() {
         "disabled" | "off" => RdpClipboardMode::Disabled,
+        "text-and-files" => RdpClipboardMode::TextAndFiles,
         _ => RdpClipboardMode::TextOnly,
     }
 }
@@ -897,8 +931,9 @@ pub fn parse_vnc_scale_mode(value: &str) -> VncScaleMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, RdpCertificatePolicy, RdpDisplayMode,
-        parse_rdp_certificate_policy, parse_rdp_display_mode, validate_committed_text,
+        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, RdpCertificatePolicy, RdpClipboardConfig,
+        RdpClipboardMode, RdpDisplayMode, parse_rdp_certificate_policy, parse_rdp_clipboard_mode,
+        parse_rdp_display_mode, validate_committed_text,
     };
 
     #[test]
@@ -924,6 +959,34 @@ mod tests {
     #[test]
     fn legacy_native_display_mode_is_fixed() {
         assert_eq!(parse_rdp_display_mode("native"), RdpDisplayMode::Fixed);
+    }
+
+    #[test]
+    fn clipboard_mode_keeps_legacy_values_and_defaults_to_text() {
+        assert_eq!(
+            parse_rdp_clipboard_mode("disabled"),
+            RdpClipboardMode::Disabled
+        );
+        assert_eq!(
+            parse_rdp_clipboard_mode("text-only"),
+            RdpClipboardMode::TextOnly
+        );
+        assert_eq!(
+            parse_rdp_clipboard_mode("text-and-files"),
+            RdpClipboardMode::TextAndFiles
+        );
+        assert_eq!(
+            parse_rdp_clipboard_mode("unknown"),
+            RdpClipboardMode::TextOnly
+        );
+        assert_eq!(
+            RdpClipboardConfig::default().mode,
+            RdpClipboardMode::TextOnly
+        );
+        assert_eq!(
+            serde_json::to_string(&RdpClipboardMode::TextAndFiles).unwrap(),
+            "\"text_and_files\""
+        );
     }
 
     #[test]

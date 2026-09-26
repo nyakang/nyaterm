@@ -471,6 +471,7 @@
     "rdpCertificateTemporary": "이번 세션만 허용",
     "rdpClipboard": "클립보드",
     "rdpClipboardTextOnly": "텍스트만",
+    "rdpClipboardTextAndFiles": "텍스트 및 파일",
     "rdpDisplay": "표시",
     "rdpDisplayFitWindow": "창에 맞춤",
     "rdpDisplayFixed": "고정",

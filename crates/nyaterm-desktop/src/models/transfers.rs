@@ -133,6 +133,9 @@ pub(crate) enum TransferJobKind {
         session_id: String,
         file_name: String,
     },
+    RdpClipboard {
+        file_name: String,
+    },
     /// In-band trzsz upload (local files -> remote `trz`).
     TrzszUpload {
         session_id: String,
@@ -253,6 +256,7 @@ impl TransferJobState {
             | TransferJobKind::YmodemUpload { file_name, .. }
             | TransferJobKind::ZmodemDownload { file_name, .. }
             | TransferJobKind::TrzszDownload { file_name, .. }
+            | TransferJobKind::RdpClipboard { file_name }
             | TransferJobKind::TrzszUpload { file_name, .. } => file_name.clone(),
             TransferJobKind::ResolveHome | TransferJobKind::SyncCwd => String::new(),
             TransferJobKind::ZmodemConflictProbe { remote_dir, .. } => remote_file_name(remote_dir),
@@ -280,6 +284,7 @@ impl TransferJobState {
                 | TransferJobKind::YmodemUpload { .. }
                 | TransferJobKind::ZmodemDownload { .. }
                 | TransferJobKind::TrzszDownload { .. }
+                | TransferJobKind::RdpClipboard { .. }
                 | TransferJobKind::TrzszUpload { .. }
         )
     }

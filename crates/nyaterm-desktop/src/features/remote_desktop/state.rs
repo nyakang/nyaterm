@@ -186,6 +186,15 @@ impl RemoteDesktopFeatureState {
         self.sessions.contains_key(session_id)
     }
 
+    pub(in crate::features) fn cancel_clipboard_transfer(
+        &self,
+        session_id: &str,
+        transfer_id: &str,
+    ) -> Result<(), RdpError> {
+        self.manager
+            .cancel_clipboard_transfer(session_id, transfer_id)
+    }
+
     pub(in crate::features) fn focus(&self) -> &FocusHandle {
         &self.focus
     }

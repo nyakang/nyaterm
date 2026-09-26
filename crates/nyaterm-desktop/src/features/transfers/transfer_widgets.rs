@@ -99,6 +99,7 @@ pub(in crate::features) fn transfer_job_title(kind: &TransferJobKind) -> String 
             file_name,
             session_id,
         } => format!("trzsz ↑ {file_name} ({session_id})"),
+        TransferJobKind::RdpClipboard { file_name } => format!("RDP clipboard {file_name}"),
         TransferJobKind::ZmodemConflictProbe {
             session_id,
             remote_dir,

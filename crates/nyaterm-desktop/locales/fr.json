@@ -471,6 +471,7 @@
     "rdpCertificateTemporary": "Accepter pour cette session",
     "rdpClipboard": "Presse-papiers",
     "rdpClipboardTextOnly": "Texte uniquement",
+    "rdpClipboardTextAndFiles": "Texte et fichiers",
     "rdpDisplay": "Affichage",
     "rdpDisplayFitWindow": "Ajuster à la fenêtre",
     "rdpDisplayFixed": "Fixe",

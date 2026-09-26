@@ -708,6 +708,7 @@ impl NyaTermApp {
         .collect::<Vec<_>>();
         let rdp_clipboard_options = [
             ("text-only", t!("dialog.rdpClipboardTextOnly")),
+            ("text-and-files", t!("dialog.rdpClipboardTextAndFiles")),
             ("disabled", t!("dialog.disabled")),
         ]
         .into_iter()

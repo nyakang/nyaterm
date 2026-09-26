@@ -71,6 +71,16 @@ fn control_byte_cost(event: &RdpRuntimeEvent) -> usize {
         RdpRuntimeEvent::Clipboard {
             session_id, text, ..
         } => session_id.len() + text.len() + 64,
+        RdpRuntimeEvent::ClipboardTransfer {
+            session_id,
+            progress,
+        } => {
+            session_id.len()
+                + progress.id.len()
+                + progress.name.len()
+                + progress.error.as_ref().map_or(0, String::len)
+                + 128
+        }
         RdpRuntimeEvent::CertificateRequest(request) => {
             request.request_id.len()
                 + request.host.len()
@@ -601,6 +611,20 @@ impl RdpSessionManager {
         )
     }
 
+    pub fn cancel_clipboard_transfer(
+        &self,
+        session_id: &str,
+        transfer_id: &str,
+    ) -> Result<(), RdpError> {
+        self.send(
+            session_id,
+            RdpControlMessage::ClipboardTransferCancel {
+                session_id: session_id.to_string(),
+                transfer_id: transfer_id.to_string(),
+            },
+        )
+    }
+
     pub fn respond_certificate(
         &self,
         request_id: &str,
@@ -901,6 +925,7 @@ fn handle_control(
         | RdpControlMessage::Input { .. }
         | RdpControlMessage::SecureAttention { .. }
         | RdpControlMessage::Resize { .. }
+        | RdpControlMessage::ClipboardTransferCancel { .. }
         | RdpControlMessage::CertificateResponse { .. }
         | RdpControlMessage::RequestFullFrame { .. }
         | RdpControlMessage::Disconnect { .. } => {
@@ -938,6 +963,15 @@ fn handle_control(
                 session_id: session_id.to_string(),
                 text,
                 generation,
+            });
+        }
+        RdpControlMessage::ClipboardTransfer {
+            session_id: event_session,
+            progress,
+        } if event_session == session_id => {
+            queue.push_control(RdpRuntimeEvent::ClipboardTransfer {
+                session_id: session_id.to_string(),
+                progress,
             });
         }
         RdpControlMessage::CertificateRequest(request) => {
@@ -1059,9 +1093,9 @@ mod tests {
 
     use super::{EventQueue, handle_control, require_server_hello, validate_rdp_input};
     use crate::{
-        CursorPosition, PROTOCOL_VERSION, PixelFormat, RdpCapability, RdpControlMessage,
-        RdpFrameEvent, RdpInputEvent, RdpRuntimeEvent, RdpServerCapabilities, RdpSessionState,
-        RemoteCursorEvent,
+        CursorPosition, PROTOCOL_VERSION, PixelFormat, RdpCapability, RdpClipboardTransferProgress,
+        RdpClipboardTransferStatus, RdpControlMessage, RdpFrameEvent, RdpInputEvent,
+        RdpRuntimeEvent, RdpServerCapabilities, RdpSessionState, RemoteCursorEvent,
     };
 
     #[test]
@@ -1214,6 +1248,40 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn clipboard_transfer_progress_is_delivered_as_typed_runtime_event() {
+        let queue = Arc::new(EventQueue::default());
+        let state = Arc::new(Mutex::new(RdpSessionState::Connected));
+        let capabilities = Arc::new(Mutex::new(None));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let mut hello_received = true;
+        let progress = RdpClipboardTransferProgress {
+            id: "transfer-1".to_string(),
+            name: "folder".to_string(),
+            status: RdpClipboardTransferStatus::Running,
+            total_bytes: 10,
+            transferred_bytes: 4,
+            total_files: 1,
+            completed_files: 0,
+            error: None,
+        };
+        handle_control(
+            "s",
+            RdpControlMessage::ClipboardTransfer {
+                session_id: "s".to_string(),
+                progress: progress.clone(),
+            },
+            &queue,
+            &state,
+            &capabilities,
+            &pending,
+            &mut hello_received,
+        )
+        .unwrap();
+        assert!(matches!(queue.drain().control.as_slice(),
+            [RdpRuntimeEvent::ClipboardTransfer { progress: delivered, .. }] if delivered == &progress));
     }
 
     fn frame(epoch: u64, x: u32, full: bool) -> RdpFrameEvent {

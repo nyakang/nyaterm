@@ -472,6 +472,7 @@
     "rdpCertificateTemporary": "このセッションのみ受け入れる",
     "rdpClipboard": "クリップボード",
     "rdpClipboardTextOnly": "テキストのみ",
+    "rdpClipboardTextAndFiles": "テキストとファイル",
     "rdpDisplay": "ディスプレイ",
     "rdpDisplayFitWindow": "ウィンドウに合わせる",
     "rdpDisplayFixed": "固定",

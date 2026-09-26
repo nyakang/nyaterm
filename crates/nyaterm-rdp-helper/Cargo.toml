@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+arboard = { version = "3", features = ["wayland-data-control"] }
+dirs.workspace = true
 ironrdp-client = { version = "0.1.0", features = ["clipboard", "rustls"] }
 ironrdp-cliprdr = "0.7"
 ironrdp-core = { version = "0.2", features = ["alloc"] }

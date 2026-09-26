@@ -253,6 +253,26 @@ impl NyaTermApp {
             return;
         }
 
+        if matches!(job.kind, TransferJobKind::RdpClipboard { .. }) {
+            let id = job.id.clone();
+            let session_id = job.session_id.clone();
+            job.status = TransferJobStatus::Cancelling;
+            job.detail = "Cancelling".to_string();
+            if let Some(session_id) = session_id
+                && let Err(error) = self
+                    .remote_desktop
+                    .cancel_clipboard_transfer(&session_id, &id)
+            {
+                job.status = TransferJobStatus::Cancelled;
+                job.detail = error.message;
+            } else if job.session_id.is_none() {
+                job.status = TransferJobStatus::Cancelled;
+                job.detail = "RDP session unavailable".to_string();
+            }
+            cx.notify();
+            return;
+        }
+
         // ZMODEM jobs have no SFTP control — cancel via the session ZMODEM state.
         if let TransferJobKind::ZmodemUpload { session_id, .. }
         | TransferJobKind::ZmodemDownload { session_id, .. } = job.kind.clone()
@@ -588,10 +608,21 @@ impl NyaTermApp {
         let active_session_id = self.session.active_id_owned();
         let xymodem_jobs =
             visible_xymodem_job_ids(self.transfer.transfer_jobs(), active_session_id.as_deref());
+        let rdp_jobs = self
+            .transfer
+            .transfer_jobs()
+            .iter()
+            .filter(|job| {
+                job.is_visible_for_session(active_session_id.as_deref())
+                    && job.status == TransferJobStatus::Running
+                    && matches!(job.kind, TransferJobKind::RdpClipboard { .. })
+            })
+            .map(|job| job.id.clone())
+            .collect::<Vec<_>>();
         let mut changed = self
             .transfer
             .cancel_visible_transfer_jobs(active_session_id.as_deref());
-        for job_id in xymodem_jobs {
+        for job_id in xymodem_jobs.into_iter().chain(rdp_jobs) {
             self.cancel_transfer_job(&job_id, cx);
             changed += 1;
         }

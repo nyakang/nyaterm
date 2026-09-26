@@ -471,6 +471,7 @@
     "rdpCertificateTemporary": "僅本次接受",
     "rdpClipboard": "剪貼簿",
     "rdpClipboardTextOnly": "僅文字",
+    "rdpClipboardTextAndFiles": "文字和檔案",
     "rdpDisplay": "顯示",
     "rdpDisplayFitWindow": "適應視窗",
     "rdpDisplayFixed": "固定尺寸",

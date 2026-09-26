@@ -69,6 +69,7 @@ fn validate_control_phase(message: &RdpControlMessage, hello_received: bool) -> 
         RdpControlMessage::ServerHello { .. }
         | RdpControlMessage::DesktopReset { .. }
         | RdpControlMessage::State { .. }
+        | RdpControlMessage::ClipboardTransfer { .. }
         | RdpControlMessage::CertificateRequest(_)
         | RdpControlMessage::Capability { .. }
         | RdpControlMessage::Error { .. } => {
@@ -79,6 +80,7 @@ fn validate_control_phase(message: &RdpControlMessage, hello_received: bool) -> 
         | RdpControlMessage::SecureAttention { .. }
         | RdpControlMessage::Resize { .. }
         | RdpControlMessage::Clipboard { .. }
+        | RdpControlMessage::ClipboardTransferCancel { .. }
         | RdpControlMessage::CertificateResponse { .. }
         | RdpControlMessage::RequestFullFrame { .. }
         | RdpControlMessage::Disconnect { .. } => Ok(()),
@@ -343,8 +345,20 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                     )?;
                 }
             }
+            RdpControlMessage::ClipboardTransferCancel {
+                session_id,
+                transfer_id,
+            } => {
+                validate_active_session_id(active_session_id.as_deref(), &session_id)?;
+                if let Some(bridge) = clipboard_bridge.as_ref() {
+                    bridge.cancel_transfer(&transfer_id);
+                }
+            }
             RdpControlMessage::Disconnect { session_id } => {
                 validate_active_session_id(active_session_id.as_deref(), &session_id)?;
+                if let Some(bridge) = clipboard_bridge.take() {
+                    bridge.stop();
+                }
                 send_control(
                     &output_tx,
                     RdpControlMessage::State {
@@ -383,6 +397,7 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
             RdpControlMessage::ServerHello { .. }
             | RdpControlMessage::DesktopReset { .. }
             | RdpControlMessage::State { .. }
+            | RdpControlMessage::ClipboardTransfer { .. }
             | RdpControlMessage::CertificateRequest(_)
             | RdpControlMessage::Capability { .. }
             | RdpControlMessage::Error { .. } => {
@@ -391,6 +406,9 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
         }
     }
 
+    if let Some(bridge) = clipboard_bridge {
+        bridge.stop();
+    }
     if let Some(sender) = iron_input {
         sender.request_graceful_close();
     }
@@ -555,7 +573,11 @@ fn build_config(
         config.clipboard.mode,
         nyaterm_remote_desktop::RdpClipboardMode::Disabled
     );
-    let clipboard = ClipboardBridge::new(session_id.to_string(), output_tx);
+    let clipboard = ClipboardBridge::new(
+        session_id.to_string(),
+        output_tx,
+        config.clipboard.mode == nyaterm_remote_desktop::RdpClipboardMode::TextAndFiles,
+    );
     let clipboard_factory = clipboard.clone();
     let use_credssp = config.use_nla && config.password.is_some();
     let mut builder = ConfigBuilder::new()
