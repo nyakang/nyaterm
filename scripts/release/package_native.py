@@ -348,6 +348,8 @@ def create_windows_packages(
             !insertmacro MUI_PAGE_WELCOME
             !insertmacro MUI_PAGE_DIRECTORY
             !insertmacro MUI_PAGE_INSTFILES
+            !define MUI_FINISHPAGE_RUN "$INSTDIR\NyaTerm.exe"
+            !define MUI_FINISHPAGE_RUN_TEXT "Launch {identity.display_name}"
             !insertmacro MUI_PAGE_FINISH
             !insertmacro MUI_UNPAGE_CONFIRM
             !insertmacro MUI_UNPAGE_INSTFILES

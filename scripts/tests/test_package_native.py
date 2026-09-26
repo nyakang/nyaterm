@@ -74,6 +74,11 @@ class PackageNativeTests(unittest.TestCase):
                 self.assertIn(f'VIAddVersionKey "ProductVersion" "{version}"', script)
                 self.assertIn(f'VIAddVersionKey "FileVersion" "{version}"', script)
                 self.assertIn(f'InstallDir "$LOCALAPPDATA\\Programs\\{identity.display_name}"', script)
+                self.assertIn(r'!define MUI_FINISHPAGE_RUN "$INSTDIR\NyaTerm.exe"', script)
+                self.assertIn(
+                    f'!define MUI_FINISHPAGE_RUN_TEXT "Launch {identity.display_name}"',
+                    script,
+                )
                 self.assertIn(f'DeleteRegKey HKCU "{identity.windows_registry_key}"', script)
                 other_version = "2.0.0-preview.1" if version == "2.0.0" else "2.0.0"
                 with self.assertRaises(RuntimeError):
