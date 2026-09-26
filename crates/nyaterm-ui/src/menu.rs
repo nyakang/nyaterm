@@ -301,9 +301,20 @@ impl NyaMenuItem {
                         .flex()
                         .flex_1()
                         .min_w_0()
+                        .relative()
                         // PopupMenu reserves an icon slot for the other rows.
                         .ml(px(-(NYA_MENU_ICON_SLOT_WIDTH + NYA_MENU_ITEM_GAP)))
                         .h(px(48.))
+                        // Cover the parent menu item's row hover so only each button highlights.
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(-8.))
+                                .right(px(-8.))
+                                .bg(cx.theme().popover),
+                        )
                         .children(items.iter().enumerate().map(|(index, item)| {
                             let label = item.label.clone();
                             let on_click = item.on_click.clone();
