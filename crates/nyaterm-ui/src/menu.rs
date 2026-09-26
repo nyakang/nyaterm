@@ -17,6 +17,8 @@ type MenuClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ContextMenuItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<NyaMenuItem>>;
 
 const NYA_MENU_WIDTH: f32 = 220.;
+const NYA_MENU_ICON_SLOT_WIDTH: f32 = 24.;
+const NYA_MENU_ITEM_GAP: f32 = 8.;
 const NYA_SUBMENU_OVERLAP: f32 = 8.;
 const NYA_MENU_ICON_OPTICAL_OFFSET_Y: f32 = 1.;
 
@@ -47,9 +49,9 @@ pub(crate) fn nya_popup_menu_appearance() -> PopupMenuAppearance {
         .row_height(px(28.))
         .font_size(px(12.))
         .icon_size(px(16.))
-        .icon_slot_width(px(24.))
+        .icon_slot_width(px(NYA_MENU_ICON_SLOT_WIDTH))
         .horizontal_padding(px(8.))
-        .item_gap(px(8.))
+        .item_gap(px(NYA_MENU_ITEM_GAP))
         .content_padding(px(4.))
         .row_gap(px(0.))
         .separator_thickness(px(1.))
@@ -297,7 +299,10 @@ impl NyaMenuItem {
                 menu.item(PopupMenuItem::element(move |_, cx| {
                     div()
                         .flex()
-                        .w_full()
+                        .flex_1()
+                        .min_w_0()
+                        // PopupMenu reserves an icon slot for the other rows.
+                        .ml(px(-(NYA_MENU_ICON_SLOT_WIDTH + NYA_MENU_ITEM_GAP)))
                         .h(px(48.))
                         .children(items.iter().enumerate().map(|(index, item)| {
                             let label = item.label.clone();
@@ -341,8 +346,19 @@ impl NyaMenuItem {
                                 });
                             }
                             div()
+                                .flex()
+                                .items_center()
                                 .flex_1()
                                 .min_w_0()
+                                .when(index > 0, |this| {
+                                    this.child(
+                                        div()
+                                            .flex_none()
+                                            .w(px(1.))
+                                            .h(px(24.))
+                                            .bg(cx.theme().border),
+                                    )
+                                })
                                 .when_some(
                                     on_confirm.filter(|_| !item.disabled),
                                     |this, handler| {
