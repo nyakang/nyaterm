@@ -423,6 +423,7 @@ impl std::fmt::Debug for TranslationSecretDraft {
 pub(crate) enum TransferPathPromptKind {
     UploadFile,
     UploadDirectory,
+    UploadDirectoryContents,
     DownloadDirectory,
 }
 

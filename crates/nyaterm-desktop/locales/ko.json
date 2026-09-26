@@ -1001,6 +1001,8 @@
     "unsupportedSessionDesc": "로컬 터미널 또는 파일 탐색이 활성화된 SSH 탭으로 전환하세요.",
     "upload": "파일 업로드",
     "uploadFolder": "폴더 업로드",
+    "uploadFolderContents": "폴더 내용 업로드",
+    "uploadFolderContentsEmpty": "선택한 폴더에 업로드할 항목이 없습니다.",
     "uploadOnce": "한 번만 업로드",
     "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?"
   },

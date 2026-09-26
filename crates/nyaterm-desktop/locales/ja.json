@@ -1004,6 +1004,8 @@
     "unsupportedSessionDesc": "ローカル端末、またはファイル参照を有効にした SSH タブへ切り替えてください。",
     "upload": "ファイルをアップロード",
     "uploadFolder": "フォルダーをアップロード",
+    "uploadFolderContents": "フォルダーの内容をアップロード",
+    "uploadFolderContentsEmpty": "選択したフォルダーにアップロードできる項目がありません。",
     "uploadOnce": "1 回だけアップロード",
     "uploadPrompt": "リモートファイルが変更されました。変更をアップロードしますか？"
   },

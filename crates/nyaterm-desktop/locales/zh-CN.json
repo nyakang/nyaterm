@@ -1048,6 +1048,8 @@
     "unsupportedSessionDesc": "请切换到本地终端，或已启用文件浏览的 SSH 标签页。",
     "upload": "上传文件",
     "uploadFolder": "上传文件夹",
+    "uploadFolderContents": "上传文件夹内容",
+    "uploadFolderContentsEmpty": "所选文件夹中没有可上传的内容。",
     "uploadOnce": "上传一次",
     "uploadPrompt": "远程文件已修改，是否上传更改？"
   },

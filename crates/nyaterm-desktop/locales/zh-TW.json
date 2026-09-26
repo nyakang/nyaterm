@@ -1001,6 +1001,8 @@
     "unsupportedSessionDesc": "請切換到本機終端，或已啟用檔案瀏覽的 SSH 標籤頁。",
     "upload": "上傳檔案",
     "uploadFolder": "上傳資料夾",
+    "uploadFolderContents": "上傳資料夾內容",
+    "uploadFolderContentsEmpty": "所選資料夾中沒有可上傳的內容。",
     "uploadOnce": "上傳一次",
     "uploadPrompt": "遠端檔案已修改，是否上傳變更？"
   },

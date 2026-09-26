@@ -1,7 +1,8 @@
 use rust_i18n::t;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gpui::{Context, PathPromptOptions, SharedString, Window};
 use nyaterm_core::truncate_preview;
@@ -282,7 +283,9 @@ impl NyaTermApp {
     ) {
         if !matches!(
             kind,
-            TransferPathPromptKind::UploadFile | TransferPathPromptKind::UploadDirectory
+            TransferPathPromptKind::UploadFile
+                | TransferPathPromptKind::UploadDirectory
+                | TransferPathPromptKind::UploadDirectoryContents
         ) {
             self.shell
                 .set_status("browser upload requires a file or directory".to_string());
@@ -318,7 +321,8 @@ impl NyaTermApp {
                 multiple: true,
                 prompt: Some(SharedString::from("Select upload files")),
             },
-            TransferPathPromptKind::UploadDirectory => PathPromptOptions {
+            TransferPathPromptKind::UploadDirectory
+            | TransferPathPromptKind::UploadDirectoryContents => PathPromptOptions {
                 files: false,
                 directories: true,
                 multiple: true,
@@ -337,6 +341,9 @@ impl NyaTermApp {
         self.shell.set_status(match kind {
             TransferPathPromptKind::UploadFile => "selecting upload file".to_string(),
             TransferPathPromptKind::UploadDirectory => "selecting upload directories".to_string(),
+            TransferPathPromptKind::UploadDirectoryContents => {
+                "selecting upload directory contents".to_string()
+            }
             TransferPathPromptKind::DownloadDirectory => unreachable!(),
         });
         let pending = PendingBrowserUpload {
@@ -346,11 +353,21 @@ impl NyaTermApp {
             config,
             path_options,
         };
+        let scheduler = self.blocking_jobs.clone();
         cx.spawn(async move |this, cx| {
             let result = match receiver.await {
                 Ok(Ok(Some(paths))) => {
                     if paths.is_empty() {
                         TransferPathPromptResult::Cancelled
+                    } else if kind == TransferPathPromptKind::UploadDirectoryContents {
+                        let task = scheduler.submit_task("upload-directory-children", move |_| {
+                            local_directory_children(&paths)
+                        });
+                        match crate::features::runtime_jobs::await_blocking_job(task).await {
+                            Ok(Ok(paths)) => TransferPathPromptResult::Selected(paths),
+                            Ok(Err(error)) => TransferPathPromptResult::Failed(error),
+                            Err(error) => TransferPathPromptResult::Failed(error.to_string()),
+                        }
                     } else {
                         TransferPathPromptResult::Selected(paths)
                     }
@@ -480,13 +497,19 @@ impl NyaTermApp {
         match result {
             TransferPathPromptResult::Selected(paths) => {
                 if paths.is_empty() {
-                    self.shell.set_status("path picker cancelled".to_string());
-                    self.transfer.browser.status = "upload selection cancelled".to_string();
+                    let status = if kind == TransferPathPromptKind::UploadDirectoryContents {
+                        t!("fileExplorer.uploadFolderContentsEmpty").to_string()
+                    } else {
+                        "upload selection cancelled".to_string()
+                    };
+                    self.shell.set_status(status.clone());
+                    self.transfer.browser.status = status;
                     return;
                 }
                 let fallback = match kind {
                     TransferPathPromptKind::UploadFile => "uploaded_file",
                     TransferPathPromptKind::UploadDirectory => "uploaded_folder",
+                    TransferPathPromptKind::UploadDirectoryContents => "uploaded_item",
                     TransferPathPromptKind::DownloadDirectory => unreachable!(),
                 };
                 self.enqueue_transfer_browser_upload_paths(
@@ -630,14 +653,21 @@ impl NyaTermApp {
             session_id,
             service,
         };
+        let mut target_locks: HashMap<String, Arc<Mutex<()>>> = HashMap::new();
         for path in paths {
             let upload_name = transfer_upload_local_name(&path, fallback_name);
             let target_path = transfer_upload_remote_child_path(&remote_path, &upload_name);
+            let target_lock = Arc::clone(
+                target_locks
+                    .entry(target_path.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            );
             self.enqueue_sftp_upload_job_for_target(
                 session.clone(),
                 path,
                 target_path,
                 path_options.clone(),
+                target_lock,
                 cx,
             );
         }
@@ -707,6 +737,28 @@ fn transfer_upload_local_name(path: &std::path::Path, fallback: &str) -> String 
         .to_string()
 }
 
+fn local_directory_children(directories: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut children = Vec::new();
+    let mut seen = HashSet::new();
+    for directory in directories {
+        if !seen.insert(directory) {
+            continue;
+        }
+        let metadata = std::fs::metadata(directory)
+            .map_err(|error| format!("cannot inspect {}: {error}", directory.display()))?;
+        if !metadata.is_dir() {
+            return Err(format!("not a directory: {}", directory.display()));
+        }
+        for entry in std::fs::read_dir(directory)
+            .map_err(|error| format!("cannot read {}: {error}", directory.display()))?
+        {
+            children.push(entry.map_err(|error| error.to_string())?.path());
+        }
+    }
+    children.sort();
+    Ok(children)
+}
+
 fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
     let remote_dir = remote_dir.trim();
     if remote_dir == "/" {
@@ -720,8 +772,39 @@ fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{transfer_upload_local_name, transfer_upload_remote_child_path};
+    use super::{
+        local_directory_children, transfer_upload_local_name, transfer_upload_remote_child_path,
+    };
     use std::path::PathBuf;
+
+    #[test]
+    fn upload_folder_contents_collects_direct_children_once() {
+        let root = std::env::temp_dir().join(format!("nyaterm-upload-{}", uuid::Uuid::new_v4()));
+        let first = root.join("first");
+        let second = root.join("second");
+        let empty = root.join("empty");
+        std::fs::create_dir_all(first.join("nested")).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(first.join("file.txt"), b"data").unwrap();
+        std::fs::write(second.join("other.txt"), b"data").unwrap();
+        std::fs::write(second.join("file.txt"), b"other data").unwrap();
+
+        let children =
+            local_directory_children(&[first.clone(), second.clone(), first.clone()]).unwrap();
+        assert_eq!(
+            children,
+            vec![
+                first.join("file.txt"),
+                first.join("nested"),
+                second.join("file.txt"),
+                second.join("other.txt")
+            ]
+        );
+        assert!(local_directory_children(&[empty]).unwrap().is_empty());
+        assert!(local_directory_children(&[first.join("file.txt")]).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn download_targets_preserve_raw_identity_and_respect_explicit_single_target() {

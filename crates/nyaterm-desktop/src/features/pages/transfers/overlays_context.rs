@@ -97,6 +97,14 @@ impl NyaTermApp {
                                     cx,
                                 );
                             })),
+                        NyaMenuItem::action(t!("fileExplorer.uploadFolderContents"))
+                            .icon("icons/fe/upload-folder.svg")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.prompt_transfer_browser_upload_path(
+                                    TransferPathPromptKind::UploadDirectoryContents,
+                                    cx,
+                                );
+                            })),
                     ],
                 )
                 .icon("icons/fe/upload.svg"),
@@ -320,6 +328,14 @@ impl NyaTermApp {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.prompt_transfer_browser_upload_path(
                                     TransferPathPromptKind::UploadDirectory,
+                                    cx,
+                                );
+                            })),
+                        NyaMenuItem::action(t!("fileExplorer.uploadFolderContents"))
+                            .icon("icons/fe/upload-folder.svg")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.prompt_transfer_browser_upload_path(
+                                    TransferPathPromptKind::UploadDirectoryContents,
                                     cx,
                                 );
                             })),

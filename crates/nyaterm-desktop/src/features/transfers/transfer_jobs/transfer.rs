@@ -1,7 +1,8 @@
 use rust_i18n::t;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::Duration;
 
 use gpui::{Context, Window};
 use nyaterm_transport::{
@@ -150,6 +151,7 @@ impl NyaTermApp {
         local_path: PathBuf,
         remote_path: String,
         path_options: SftpPathTransferOptions,
+        target_lock: Arc<Mutex<()>>,
         cx: &mut Context<Self>,
     ) {
         let id = self.transfer.next_transfer_job_id("sftp-upload");
@@ -186,32 +188,37 @@ impl NyaTermApp {
             id.clone(),
             finished_tx.clone(),
             move || {
+                // Siblings in one selection may have the same basename. Hold the
+                // target lock through conflict resolution and the upload itself.
                 let mut progress_sender = TransferProgressEventSender::new(id.clone(), progress_tx);
                 let service = session.service;
-                let result = service
-                    .upload_path_with_progress_and_path_options(
-                        local_path,
-                        &remote_path,
-                        control,
-                        path_options,
-                        move |progress| {
-                            progress_sender.send(progress);
-                        },
-                    )
-                    .map(|summary| {
-                        if summary.skipped {
-                            return TransferJobOutput::Summary(summary);
-                        }
-                        let parent_path = transfer_job_remote_parent_path(&summary.remote_path);
-                        match service.list_dir(&parent_path) {
-                            Ok(entries) => TransferJobOutput::Uploaded {
-                                summary,
-                                parent_path,
-                                entries,
+                let result = (|| {
+                    let _target_guard = lock_upload_target(&target_lock, &control)?;
+                    service
+                        .upload_path_with_progress_and_path_options(
+                            local_path,
+                            &remote_path,
+                            control,
+                            path_options,
+                            move |progress| {
+                                progress_sender.send(progress);
                             },
-                            Err(_) => TransferJobOutput::Summary(summary),
-                        }
-                    });
+                        )
+                        .map(|summary| {
+                            if summary.skipped {
+                                return TransferJobOutput::Summary(summary);
+                            }
+                            let parent_path = transfer_job_remote_parent_path(&summary.remote_path);
+                            match service.list_dir(&parent_path) {
+                                Ok(entries) => TransferJobOutput::Uploaded {
+                                    summary,
+                                    parent_path,
+                                    entries,
+                                },
+                                Err(_) => TransferJobOutput::Summary(summary),
+                            }
+                        })
+                })();
                 if let Err(error) = &result {
                     log_sftp_upload_job_failure(&id, error);
                 }
@@ -620,6 +627,47 @@ impl NyaTermApp {
             format!("cleared {removed} stopped transfer job(s)")
         });
         cx.notify();
+    }
+}
+
+fn lock_upload_target<'a>(
+    lock: &'a Mutex<()>,
+    control: &SftpTransferControl,
+) -> anyhow::Result<MutexGuard<'a, ()>> {
+    loop {
+        control.check_cancelled()?;
+        match lock.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod upload_target_tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use nyaterm_transport::SftpTransferControl;
+
+    use super::lock_upload_target;
+
+    #[test]
+    fn queued_same_target_upload_can_be_cancelled_before_it_starts() {
+        let lock = Mutex::new(());
+        let guard = lock.lock().unwrap();
+        let control = SftpTransferControl::new();
+
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| lock_upload_target(&lock, &control).is_err());
+            std::thread::sleep(Duration::from_millis(50));
+            control.cancel();
+            assert!(waiting.join().unwrap());
+        });
+
+        drop(guard);
+        assert!(lock_upload_target(&lock, &SftpTransferControl::new()).is_ok());
     }
 }
 

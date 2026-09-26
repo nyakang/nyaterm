@@ -115,6 +115,19 @@ impl NyaTermApp {
                                         cx,
                                     );
                                 }),
+                            ))
+                            .child(upload_menu_item(
+                                palette,
+                                "transfer-browser-upload-menu-folder-contents",
+                                "icons/fe/upload-folder.svg",
+                                t!("fileExplorer.uploadFolderContents"),
+                                cx.listener(|this, _, _, cx| {
+                                    this.close_transfer_browser_upload_menu(cx);
+                                    this.prompt_transfer_browser_upload_path(
+                                        TransferPathPromptKind::UploadDirectoryContents,
+                                        cx,
+                                    );
+                                }),
                             )),
                     ),
             )

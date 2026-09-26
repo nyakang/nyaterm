@@ -1048,6 +1048,8 @@
     "unsupportedSessionDesc": "Switch to a local terminal or an SSH tab with file browsing enabled.",
     "upload": "Upload Files",
     "uploadFolder": "Upload Folder",
+    "uploadFolderContents": "Upload Folder Contents",
+    "uploadFolderContentsEmpty": "The selected folder contains no items to upload.",
     "uploadOnce": "Upload Once",
     "uploadPrompt": "Remote file changed. Upload changes?"
   },

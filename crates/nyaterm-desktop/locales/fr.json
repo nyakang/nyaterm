@@ -1001,6 +1001,8 @@
     "unsupportedSessionDesc": "Passez à un terminal local ou à un onglet SSH avec l’exploration de fichiers activée.",
     "upload": "Téléverser des fichiers",
     "uploadFolder": "Téléverser un dossier",
+    "uploadFolderContents": "Téléverser le contenu du dossier",
+    "uploadFolderContentsEmpty": "Le dossier sélectionné ne contient aucun élément à téléverser.",
     "uploadOnce": "Téléverser une fois",
     "uploadPrompt": "Fichier distant modifié. Téléverser les modifications ?"
   },
