@@ -202,6 +202,7 @@ impl NyaTermApp {
                 }
                 match result {
                     Ok((id, catalog)) => {
+                        this.security.hide_revealed_password(&id);
                         this.security.replace_catalog_state(catalog);
                         this.request_shared_state_refresh(
                             crate::app_shell::SharedStateDomain::Security,

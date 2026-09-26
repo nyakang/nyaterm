@@ -1499,6 +1499,25 @@ mod tests {
     }
 
     #[test]
+    fn successful_save_hides_only_the_returned_secret_id() {
+        let mut security = security_state();
+        security.reveal_password("saved".to_string(), "old value".to_string());
+        security.reveal_password("other".to_string(), "keep".to_string());
+        security.reveal_credential("saved".to_string(), "old credential".to_string());
+        security.reveal_credential("other".to_string(), "keep credential".to_string());
+
+        assert!(security.hide_revealed_password("saved"));
+        assert!(security.hide_revealed_credential("saved"));
+        assert!(security.revealed_password("saved").is_none());
+        assert!(security.revealed_credential("saved").is_none());
+        assert_eq!(security.revealed_password("other"), Some("keep"));
+        assert_eq!(
+            security.revealed_credential("other"),
+            Some("keep credential")
+        );
+    }
+
+    #[test]
     fn private_key_results_are_ignored_after_close_or_replacement() {
         let mut security = security_state();
         let first = security.begin_private_key_view("first".to_string());

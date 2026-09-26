@@ -598,6 +598,50 @@ mod tests {
     }
 
     #[test]
+    fn local_backup_restore_requires_confirmation_before_password() {
+        let test_dir = TestConfigDir::new("nyaterm-backup-restore-confirm");
+        let mut cx = TestAppContext::single();
+        let app = test_app(&mut cx, test_dir.path());
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| SidebarHost { app: host_app });
+            nya_root(host, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.prompt_encrypted_portable_snapshot_import(window, cx)
+            });
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("nya-dialog-action-button").is_some());
+        assert!(
+            cx.debug_bounds("snapshot-password-dialog-content")
+                .is_none()
+        );
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        cx.update(|window, cx| {
+            assert!(!window.has_active_nya_dialog(cx));
+            assert!(!app.read(cx).settings.snapshot_password_prompt_active());
+        });
+
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.prompt_encrypted_portable_snapshot_import(window, cx)
+            });
+        });
+        draw(cx);
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        assert!(
+            cx.debug_bounds("snapshot-password-dialog-content")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn sync_sidebar_webdav_submission_reports_http_failure() {
         let (endpoint, server) = spawn_webdav_service_unavailable_server();
         let test_dir = TestConfigDir::new("nyaterm-sync-sidebar-webdav");
