@@ -191,6 +191,24 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn double_click_transfer_tree_row(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.active_id_owned() else {
+            return;
+        };
+        let Some(row) = self.transfer.selected_tree_row(&session) else {
+            return;
+        };
+        if row.directory && row.expanded {
+            self.expand_transfer_tree_row(&row.key, Some(false), cx);
+        } else {
+            self.navigate_transfer_tree_row(window, cx);
+        }
+    }
+
     pub(in crate::features) fn handle_transfer_tree_key_down(
         &mut self,
         event: &KeyDownEvent,
