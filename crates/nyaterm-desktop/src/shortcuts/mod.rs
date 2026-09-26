@@ -25,6 +25,7 @@ pub(crate) enum ShortcutId {
     ShowCommandSuggestions,
     ToggleRecording,
     NewSession,
+    OpenNewSessionMenu,
     TemporarySshLink,
     QuickSwitch,
     NewLocalTerminal,
@@ -38,6 +39,8 @@ pub(crate) enum ShortcutId {
     MultiplexSshWithCommand,
     ToggleLeftSidebar,
     ToggleRightSidebar,
+    TogglePaneFocus,
+    ToggleNativeFullscreen,
     ZoomIn,
     ZoomOut,
     ResetZoom,
@@ -62,6 +65,7 @@ impl ShortcutId {
             Self::ShowCommandSuggestions => "terminal.showCommandSuggestions",
             Self::ToggleRecording => "terminal.recording.toggle",
             Self::NewSession => "tab.newSession",
+            Self::OpenNewSessionMenu => "tab.openNewSessionMenu",
             Self::TemporarySshLink => "tab.temporarySshLink",
             Self::QuickSwitch => "tab.quickSwitch",
             Self::NewLocalTerminal => "tab.newLocalTerminal",
@@ -75,6 +79,8 @@ impl ShortcutId {
             Self::MultiplexSshWithCommand => "tab.multiplexSshWithCommand",
             Self::ToggleLeftSidebar => "view.toggleLeftSidebar",
             Self::ToggleRightSidebar => "view.toggleRightSidebar",
+            Self::TogglePaneFocus => "view.togglePaneFocus",
+            Self::ToggleNativeFullscreen => "view.toggleNativeFullscreen",
             Self::ZoomIn => "view.zoomIn",
             Self::ZoomOut => "view.zoomOut",
             Self::ResetZoom => "view.resetZoom",
@@ -355,7 +361,7 @@ macro_rules! shortcut {
     };
 }
 
-pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 32] = [
+pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 35] = [
     shortcut!(
         TerminalCopy,
         Terminal,
@@ -465,6 +471,17 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 32] = [
         "meta+shift+t",
         Supported,
         "Opens saved connections."
+    ),
+    shortcut!(
+        OpenNewSessionMenu,
+        Tab,
+        "settings.shortcutLabels.openNewSessionMenu",
+        Workspace,
+        ShortcutKind::Direct,
+        "ctrl+shift+o",
+        "meta+shift+o",
+        Supported,
+        "Opens the new session menu."
     ),
     shortcut!(
         TemporarySshLink,
@@ -608,6 +625,28 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 32] = [
         "meta+shift+b",
         Supported,
         "Toggles the Inspector panel."
+    ),
+    shortcut!(
+        TogglePaneFocus,
+        View,
+        "settings.shortcutLabels.togglePaneFocus",
+        Workspace,
+        ShortcutKind::Direct,
+        "ctrl+shift+enter",
+        "meta+shift+enter",
+        Supported,
+        "Focuses the active pane."
+    ),
+    shortcut!(
+        ToggleNativeFullscreen,
+        View,
+        "settings.shortcutLabels.toggleNativeFullscreen",
+        Workspace,
+        ShortcutKind::Direct,
+        "f11",
+        "ctrl+meta+f",
+        Supported,
+        "Toggles native fullscreen."
     ),
     shortcut!(
         ZoomIn,
@@ -960,6 +999,7 @@ fn binding_for_action(id: ShortcutId, chord: &ShortcutChord, context: Option<&st
         ShortcutId::ShowCommandSuggestions => binding!(ShowCommandSuggestions),
         ShortcutId::ToggleRecording => binding!(ToggleRecording),
         ShortcutId::NewSession => binding!(NewSession),
+        ShortcutId::OpenNewSessionMenu => binding!(OpenNewSessionMenu),
         ShortcutId::TemporarySshLink => binding!(TemporarySshLink),
         ShortcutId::QuickSwitch => binding!(QuickSwitch),
         ShortcutId::NewLocalTerminal => binding!(NewLocalTerminal),
@@ -973,6 +1013,8 @@ fn binding_for_action(id: ShortcutId, chord: &ShortcutChord, context: Option<&st
         ShortcutId::MultiplexSshWithCommand => binding!(MultiplexSshWithCommand),
         ShortcutId::ToggleLeftSidebar => binding!(ToggleLeftSidebar),
         ShortcutId::ToggleRightSidebar => binding!(ToggleRightSidebar),
+        ShortcutId::TogglePaneFocus => binding!(TogglePaneFocus),
+        ShortcutId::ToggleNativeFullscreen => binding!(ToggleNativeFullscreen),
         ShortcutId::ZoomIn => binding!(ZoomIn),
         ShortcutId::ZoomOut => binding!(ZoomOut),
         ShortcutId::ResetZoom => binding!(ResetZoom),
@@ -1240,7 +1282,7 @@ mod tests {
 
     #[test]
     fn registry_is_complete_unique_and_has_valid_platform_defaults() {
-        assert_eq!(SHORTCUT_REGISTRY.len(), 32);
+        assert_eq!(SHORTCUT_REGISTRY.len(), 35);
         let mut ids = HashSet::new();
         for definition in SHORTCUT_REGISTRY {
             assert!(ids.insert(definition.id));
@@ -1294,9 +1336,11 @@ mod tests {
             }
             let mac = definition.default_binding_for(ShortcutPlatform::MacOs);
             assert!(
-                mac.chords()
-                    .iter()
-                    .all(|chord| !chord.keystroke().modifiers.control),
+                definition.id == ShortcutId::ToggleNativeFullscreen
+                    || mac
+                        .chords()
+                        .iter()
+                        .all(|chord| !chord.keystroke().modifiers.control),
                 "{}",
                 definition.id.as_str()
             );

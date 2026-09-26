@@ -1,4 +1,5 @@
 use gpui::{Context, IntoElement, div, prelude::*};
+use rust_i18n::t;
 
 use super::super::NyaTermApp;
 use crate::models::{WorkspacePaneNode, WorkspaceSplitDirection};
@@ -62,6 +63,28 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .bg(self.shell_transparent_color(palette.bg));
+        if self.shell.pane_focus_mode() && self.session.active_id().is_some() {
+            workspace = workspace.child(
+                div()
+                    .h(gpui::px(30.))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .px_3()
+                    .child(
+                        div()
+                            .id("exit-pane-focus")
+                            .cursor_pointer()
+                            .text_xs()
+                            .child(t!("settings.shortcutLabels.togglePaneFocus"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.shell.set_pane_focus_mode(false);
+                                cx.notify();
+                            })),
+                    ),
+            );
+            return workspace.child(self.workspace_terminal_area(cx));
+        }
         if show_tab_strip {
             workspace = workspace.child(self.session_tab_strip(cx));
         }
@@ -91,6 +114,14 @@ impl NyaTermApp {
                 return self.failed_workspace_state().into_any_element();
             }
             return self.empty_workspace_state(cx).into_any_element();
+        }
+        if self.shell.pane_focus_mode() {
+            return self.render_workspace_pane_node(
+                WorkspacePaneNode::leaf(self.session.active_id_owned().unwrap()),
+                false,
+                PaneBorderEdges::ALL,
+                cx,
+            );
         }
         // Multi-leaf tab windows (Tauri TabWindowsWorkspace) take precedence over
         // single-tree pane splits when active.

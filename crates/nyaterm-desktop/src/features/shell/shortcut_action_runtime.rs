@@ -5,10 +5,11 @@ use crate::models::{BottomPanelMode, NavItem, StartupCommandAction};
 use crate::shortcuts::{
     CloseTab, CopySelectedConnections, DuplicateSession, DuplicateSessionWithCommand, LockScreen,
     ManageSyncGroups, MultiplexSsh, MultiplexSshWithCommand, NewLocalTerminal, NewSession, NextTab,
-    OpenChat, OpenSettings, PreviousTab, QuickSwitch, RenameFile, ResetZoom, ShortcutId,
-    ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions, SwitchToTab, TemporarySshLink,
-    TerminalClear, TerminalCopy, TerminalFind, TerminalPaste, TerminalPasteSelected,
-    TerminalSelectAll, ToggleLeftSidebar, ToggleRecording, ToggleRightSidebar, ZoomIn, ZoomOut,
+    OpenChat, OpenNewSessionMenu, OpenSettings, PreviousTab, QuickSwitch, RenameFile, ResetZoom,
+    ShortcutId, ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions, SwitchToTab,
+    TemporarySshLink, TerminalClear, TerminalCopy, TerminalFind, TerminalPaste,
+    TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar, ToggleNativeFullscreen,
+    TogglePaneFocus, ToggleRecording, ToggleRightSidebar, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -74,6 +75,20 @@ impl NyaTermApp {
             ShortcutId::ShowCommandSuggestions => self.show_manual_command_suggestions(cx),
             ShortcutId::ToggleRecording => self.toggle_active_session_recording(cx),
             ShortcutId::NewSession => self.open_connection_editor(None, None, false, window, cx),
+            ShortcutId::OpenNewSessionMenu => {
+                if self.session.active_id().is_some() {
+                    let anchor = self
+                        .shell
+                        .focused_terminal_leaf()
+                        .map(|id| {
+                            crate::features::shell::NewSessionMenuAnchor::TerminalLeaf(
+                                id.to_string(),
+                            )
+                        })
+                        .unwrap_or(crate::features::shell::NewSessionMenuAnchor::MainTabStrip);
+                    self.open_new_session_menu(anchor, cx);
+                }
+            }
             ShortcutId::TemporarySshLink => self.open_temporary_ssh_link_dialog(window, cx),
             ShortcutId::QuickSwitch => self.open_quick_switch(window, cx),
             ShortcutId::NewLocalTerminal => self.start_local_session(window, cx),
@@ -97,6 +112,17 @@ impl NyaTermApp {
             }
             ShortcutId::ToggleLeftSidebar => self.toggle_left_sidebar(cx),
             ShortcutId::ToggleRightSidebar => self.toggle_right_inspector(cx),
+            ShortcutId::TogglePaneFocus => {
+                if self.session.active_id().is_some() {
+                    self.shell
+                        .set_pane_focus_mode(!self.shell.pane_focus_mode());
+                    cx.notify();
+                }
+            }
+            ShortcutId::ToggleNativeFullscreen => {
+                window.toggle_fullscreen();
+                cx.notify();
+            }
             ShortcutId::ZoomIn => self.zoom_terminal_in(cx),
             ShortcutId::ZoomOut => self.zoom_terminal_out(cx),
             ShortcutId::ResetZoom => self.reset_terminal_font_size(cx),
@@ -167,6 +193,7 @@ impl NyaTermApp {
             ))
             .on_action(direct_handler!(ToggleRecording, ToggleRecording))
             .on_action(direct_handler!(NewSession, NewSession))
+            .on_action(direct_handler!(OpenNewSessionMenu, OpenNewSessionMenu))
             .on_action(direct_handler!(TemporarySshLink, TemporarySshLink))
             .on_action(direct_handler!(QuickSwitch, QuickSwitch))
             .on_action(direct_handler!(NewLocalTerminal, NewLocalTerminal))
@@ -196,6 +223,11 @@ impl NyaTermApp {
             ))
             .on_action(direct_handler!(ToggleLeftSidebar, ToggleLeftSidebar))
             .on_action(direct_handler!(ToggleRightSidebar, ToggleRightSidebar))
+            .on_action(direct_handler!(TogglePaneFocus, TogglePaneFocus))
+            .on_action(direct_handler!(
+                ToggleNativeFullscreen,
+                ToggleNativeFullscreen
+            ))
             .on_action(direct_handler!(ZoomIn, ZoomIn))
             .on_action(direct_handler!(ZoomOut, ZoomOut))
             .on_action(direct_handler!(ResetZoom, ResetZoom))

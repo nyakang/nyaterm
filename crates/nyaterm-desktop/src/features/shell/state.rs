@@ -185,6 +185,7 @@ pub(super) struct ShellChromeState {
 
 /// Global and per-tab pane trees for the workspace surface.
 pub(super) struct ShellWorkspaceState {
+    pub(super) pane_focus_mode: bool,
     pub(super) split: Option<WorkspaceSplitState>,
     pub(super) split_resize: Option<WorkspaceSplitResizeState>,
     pub(super) pane_roots: HashMap<String, WorkspacePaneNode>,
@@ -194,6 +195,14 @@ pub(super) struct ShellWorkspaceState {
 }
 
 impl ShellFeatureState {
+    pub(in crate::features) fn pane_focus_mode(&self) -> bool {
+        self.workspace.pane_focus_mode
+    }
+
+    pub(in crate::features) fn set_pane_focus_mode(&mut self, enabled: bool) {
+        self.workspace.pane_focus_mode = enabled;
+    }
+
     pub(in crate::features) fn new(init: ShellFeatureInit) -> Self {
         Self {
             status: init.status,
@@ -260,6 +269,7 @@ impl ShellFeatureState {
                 last_connect_failure_error: None,
             },
             workspace: ShellWorkspaceState {
+                pane_focus_mode: false,
                 split: None,
                 split_resize: None,
                 pane_roots: HashMap::new(),
@@ -847,6 +857,10 @@ impl ShellFeatureState {
         self.workspace.focused_terminal_leaf_id = leaf_id;
     }
 
+    pub(in crate::features) fn focused_terminal_leaf(&self) -> Option<&str> {
+        self.workspace.focused_terminal_leaf_id.as_deref()
+    }
+
     pub(in crate::features) fn set_workspace_pane_layout_restored(&mut self, restored: bool) {
         self.workspace.pane_layout_restored = restored;
     }
@@ -1265,6 +1279,28 @@ mod tests {
         assert_eq!(shell.status(), "connected");
         shell.set_status(String::new());
         assert!(shell.status().is_empty());
+    }
+
+    #[test]
+    fn pane_focus_toggle_preserves_the_workspace_tree() {
+        let mut shell = shell(BottomPanelMode::Hidden);
+        let tree = WorkspacePaneNode::Split {
+            id: "split".to_string(),
+            direction: WorkspaceSplitDirection::Horizontal,
+            ratio_percent: 50,
+            first: Box::new(WorkspacePaneNode::leaf("left".to_string())),
+            second: Box::new(WorkspacePaneNode::leaf("right".to_string())),
+        };
+        shell
+            .workspace
+            .pane_roots
+            .insert("workspace".to_string(), tree.clone());
+
+        shell.set_pane_focus_mode(true);
+        assert!(shell.pane_focus_mode());
+        shell.set_pane_focus_mode(false);
+        assert!(!shell.pane_focus_mode());
+        assert_eq!(shell.workspace.pane_roots.get("workspace"), Some(&tree));
     }
 
     #[test]

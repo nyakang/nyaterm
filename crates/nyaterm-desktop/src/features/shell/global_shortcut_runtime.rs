@@ -13,6 +13,12 @@ impl NyaTermApp {
             return false;
         }
 
+        if event.keystroke.key.as_str() == "escape" && self.shell.pane_focus_mode() {
+            self.shell.set_pane_focus_mode(false);
+            cx.notify();
+            return true;
+        }
+
         if event.keystroke.key.as_str() == "escape" && self.translation.dialog_is_open() {
             self.close_translation_dialog(window, cx);
             return true;

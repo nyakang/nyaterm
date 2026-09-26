@@ -42,11 +42,13 @@ impl NyaTermApp {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .child(
-                        div()
-                            .mb_9()
-                            .child(nyaterm_logo_mark(terminal_palette, 256., 0.13)),
-                    )
+                    .when(!self.wallpaper_enabled(), |this| {
+                        this.child(div().mb_9().child(nyaterm_logo_mark(
+                            terminal_palette,
+                            256.,
+                            0.13,
+                        )))
+                    })
                     .child(
                         // Tauri EmptyWorkspaceState: grid w-fit max-w-[30rem] gap-x-4 gap-y-3
                         div()
