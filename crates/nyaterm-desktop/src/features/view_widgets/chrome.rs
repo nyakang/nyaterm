@@ -96,6 +96,28 @@ pub(in crate::features) fn window_control_button(
     area: WindowControlArea,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    window_control_button_with_area(palette, id, icon_path, area, true, on_click)
+}
+
+fn child_window_control_button(
+    palette: ThemePalette,
+    id: &'static str,
+    icon_path: &'static str,
+    area: WindowControlArea,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // Windows dispatches non-client caption events separately from GPUI clicks.
+    window_control_button_with_area(palette, id, icon_path, area, false, on_click)
+}
+
+fn window_control_button_with_area(
+    palette: ThemePalette,
+    id: &'static str,
+    icon_path: &'static str,
+    area: WindowControlArea,
+    native_control: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let hovered_color = if matches!(area, WindowControlArea::Close) {
         0xffffff
     } else {
@@ -110,7 +132,7 @@ pub(in crate::features) fn window_control_button(
         .items_center()
         .justify_center()
         .text_color(rgb(palette.text_muted))
-        .window_control_area(area)
+        .when(native_control, |this| this.window_control_area(area))
         .cursor_pointer()
         .hover(|this| {
             if matches!(area, WindowControlArea::Close) {
@@ -130,6 +152,24 @@ pub(in crate::features) fn window_control_button(
                 }),
         )
         .on_click(on_click)
+}
+
+fn toggle_child_window_zoom(window: &mut Window) {
+    #[cfg(target_os = "windows")]
+    if window.is_maximized()
+        && let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window)
+        && let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw()
+    {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                handle.hwnd.get() as _,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+            );
+        }
+        return;
+    }
+
+    window.zoom_window();
 }
 
 /// The 40px bar every child window draws in place of a native title bar.
@@ -203,7 +243,7 @@ pub(in crate::features) fn child_window_header(
                 .flex()
                 .items_center()
                 .when(!cfg!(target_os = "macos") && minimizable, |this| {
-                    this.child(window_control_button(
+                    this.child(child_window_control_button(
                         palette,
                         "child-window-min",
                         "icons/window/minimize.svg",
@@ -212,7 +252,7 @@ pub(in crate::features) fn child_window_header(
                     ))
                 })
                 .when(!cfg!(target_os = "macos") && maximizable, |this| {
-                    this.child(window_control_button(
+                    this.child(child_window_control_button(
                         palette,
                         "child-window-max",
                         if is_maximized {
@@ -221,11 +261,11 @@ pub(in crate::features) fn child_window_header(
                             "icons/window/maximize.svg"
                         },
                         WindowControlArea::Max,
-                        |_, window, _| window.zoom_window(),
+                        |_, window, _| toggle_child_window_zoom(window),
                     ))
                 })
                 .when(!cfg!(target_os = "macos"), |this| {
-                    this.child(window_control_button(
+                    this.child(child_window_control_button(
                         palette,
                         "child-window-close",
                         "icons/window/close.svg",
@@ -432,12 +472,12 @@ mod tests {
     use gpui::{
         Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _,
         Render, StatefulInteractiveElement as _, Styled as _, TestAppContext, VisualTestContext,
-        Window, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
+        Window, WindowControlArea, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
     };
 
     use super::{
-        bounded_dialog_width, full_window_input_layer, horizontal_resize_handle_visual,
-        vertical_resize_handle_visual,
+        bounded_dialog_width, child_window_control_button, full_window_input_layer,
+        horizontal_resize_handle_visual, vertical_resize_handle_visual,
     };
     use crate::features::shell::ResizeHandleHoverState;
     use crate::theme::theme_palette;
@@ -446,6 +486,43 @@ mod tests {
         lower_events: Arc<AtomicUsize>,
         backdrop_clicks: Arc<AtomicUsize>,
         child_clicks: Arc<AtomicUsize>,
+    }
+
+    struct ChildControlsFixture {
+        clicks: Arc<[AtomicUsize; 3]>,
+    }
+
+    impl Render for ChildControlsFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let palette = theme_palette("github-dark");
+            div().w(px(138.)).h(px(40.)).flex().children(
+                [
+                    (
+                        "test-child-min",
+                        "icons/window/minimize.svg",
+                        WindowControlArea::Min,
+                    ),
+                    (
+                        "test-child-max",
+                        "icons/window/maximize.svg",
+                        WindowControlArea::Max,
+                    ),
+                    (
+                        "test-child-close",
+                        "icons/window/close.svg",
+                        WindowControlArea::Close,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (id, icon, area))| {
+                    let clicks = self.clicks.clone();
+                    child_window_control_button(palette, id, icon, area, move |_, _, _| {
+                        clicks[index].fetch_add(1, Ordering::SeqCst);
+                    })
+                }),
+            )
+        }
     }
 
     struct ResizeHandleFixture {
@@ -633,6 +710,22 @@ mod tests {
         cx.update(|window, cx| {
             _ = window.draw(cx);
         });
+    }
+
+    #[gpui::test]
+    fn child_window_controls_dispatch_clicks(cx: &mut TestAppContext) {
+        let clicks = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+        let fixture = ChildControlsFixture {
+            clicks: clicks.clone(),
+        };
+        let (_, cx) = cx.add_window_view(|_, _| fixture);
+        let cx: &mut VisualTestContext = cx;
+        draw(cx);
+
+        for (index, x) in [px(23.), px(69.), px(115.)].into_iter().enumerate() {
+            cx.simulate_click(point(x, px(20.)), Modifiers::default());
+            assert_eq!(clicks[index].load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]

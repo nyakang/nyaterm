@@ -8,7 +8,7 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, IntoElement, Render, Subscription, Window, div,
     prelude::*, px, rgb,
 };
-use nyaterm_ui::{NyaWindowHandle, activate_child_window, nya_root};
+use nyaterm_ui::{NyaRoot, NyaWindowHandle, nya_root};
 
 use super::remote_text_editor::RemoteTextEditor;
 use crate::features::{
@@ -45,9 +45,11 @@ impl RemoteFileEditorWindow {
 impl Render for RemoteFileEditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.app.read(cx).transfer.editor_has_workspace() {
+            let handle = window.window_handle().downcast::<NyaRoot>();
             self.app.update(cx, |app, cx| {
-                app.transfer.clear_editor_window_tracking();
-                cx.notify();
+                if handle.is_some_and(|handle| app.transfer.clear_editor_window_if(handle)) {
+                    cx.notify();
+                }
             });
             window.defer(cx, |window, _| window.remove_window());
             return div().size_full().into_any_element();
@@ -114,9 +116,14 @@ impl Render for RemoteFileEditorWindow {
         let close_app = self.app.clone();
         let on_close: ChildWindowCloseHandler =
             Rc::new(move |window: &mut Window, cx: &mut App| {
+                let handle = window.window_handle().downcast::<NyaRoot>();
                 let should_close = close_app.update(cx, |app, cx| {
                     app.close_transfer_editor(cx);
-                    !app.transfer.editor_has_workspace()
+                    let should_close = !app.transfer.editor_has_workspace();
+                    if should_close && let Some(handle) = handle {
+                        app.transfer.clear_editor_window_if(handle);
+                    }
+                    should_close
                 });
                 if should_close {
                     window.remove_window();
@@ -145,13 +152,9 @@ impl Render for RemoteFileEditorWindow {
 
 impl NyaTermApp {
     pub(in crate::features) fn open_remote_file_editor_window(&mut self, cx: &mut Context<Self>) {
-        if let Some(handle) = self.transfer.editor_window() {
-            activate_child_window(
-                &cx.entity(),
-                handle,
-                |app: &mut NyaTermApp| Some(app.transfer.editor_window_slot()),
-                cx,
-            );
+        if self.transfer.editor_window().is_some() {
+            let app = cx.entity();
+            cx.defer(move |cx| open_remote_file_editor_window_now_from_app(app, cx));
             return;
         }
         if !self.transfer.begin_editor_window_open() {
@@ -171,12 +174,19 @@ impl NyaTermApp {
 fn open_remote_file_editor_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut App) {
     if let Some(handle) = app.read(cx).transfer.editor_window() {
         let activate_result = handle.update(cx, |_, window, _| window.activate_window());
-        app.update(cx, |app, cx| {
-            app.transfer
+        let cleared = app.update(cx, |app, cx| {
+            let cleared = app
+                .transfer
                 .finish_editor_window_activation(handle, activate_result.is_ok());
             cx.notify();
+            cleared
         });
-        return;
+        if activate_result.is_ok() || !cleared {
+            return;
+        }
+        if !app.update(cx, |app, _| app.transfer.begin_editor_window_open()) {
+            return;
+        }
     }
     if !app.read(cx).transfer.editor_has_workspace() {
         app.update(cx, |app, cx| {
@@ -194,12 +204,13 @@ fn open_remote_file_editor_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut
     let close_app = app.clone();
     let view_app = app.clone();
     let result: anyhow::Result<NyaWindowHandle> = cx.open_window(options, move |window, cx| {
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
+            let handle = window.window_handle().downcast::<NyaRoot>();
             close_app.update(cx, |app, cx| {
                 app.close_transfer_editor(cx);
                 let should_close = !app.transfer.editor_has_workspace();
-                if should_close {
-                    app.transfer.clear_editor_window_tracking();
+                if should_close && let Some(handle) = handle {
+                    app.transfer.clear_editor_window_if(handle);
                 }
                 should_close
             })

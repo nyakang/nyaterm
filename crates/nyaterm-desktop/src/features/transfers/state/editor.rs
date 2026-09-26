@@ -543,10 +543,6 @@ impl TransferFeatureState {
         self.editor.window.is_pending()
     }
 
-    pub(in crate::features::transfers) fn editor_window_slot(&mut self) -> &mut ChildWindowSlot {
-        &mut self.editor.window
-    }
-
     /// Claim the right to open the editor window; also refuses when there is no
     /// workspace to show, so the caller can fall back to the inline overlay.
     pub(in crate::features) fn begin_editor_window_open(&mut self) -> bool {
@@ -579,6 +575,13 @@ impl TransferFeatureState {
         let changed = self.editor.window.is_open_or_pending();
         self.editor.window.clear();
         changed
+    }
+
+    pub(in crate::features::transfers) fn clear_editor_window_if(
+        &mut self,
+        handle: NyaWindowHandle,
+    ) -> bool {
+        self.editor.window.clear_if(handle)
     }
 
     fn clear_editor_close_state(workspace: &mut TransferEditorWorkspaceState) {
