@@ -42,6 +42,16 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
+#### Linux (Nix / NixOS)
+
+If you use Nix, you do not need to install Node.js, pnpm, Rust, or system libraries manually. Simply run in the repository root:
+
+```bash
+nix develop
+```
+
+This will drop you into a complete development environment with all required tools and libraries.
+
 ## Get the Source
 
 ```bash

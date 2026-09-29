@@ -68,7 +68,8 @@ if (process.argv.includes('--commit')) {
       'src-tauri/Cargo.toml',
       'src-tauri/Cargo.lock',
       sidecarManifestPath,
-      'src-tauri/crates/nyaterm-mcp/Cargo.lock'
+      'src-tauri/crates/nyaterm-mcp/Cargo.lock',
+      'nix/package.nix'
     ];
     execSync(`git add ${files.join(' ')}`, { stdio: 'inherit' });
     execSync(`git commit -m "chore: bump version to v${version}"`, { stdio: 'inherit' });

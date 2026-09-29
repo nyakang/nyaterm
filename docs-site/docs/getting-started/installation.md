@@ -51,6 +51,57 @@ NyaTerm 目前还没有使用 Apple Developer 证书签名。安装后如果 mac
 sudo xattr -cr /Applications/NyaTerm.app
 ```
 
+### Linux (Nix / NixOS)
+
+如果你使用 Nix 包管理器或 NixOS，可以通过仓库提供的 Flake 直接运行或安装：
+
+```bash
+# 免安装直接运行
+nix run github:nyakang/nyaterm
+
+# 安装到用户环境
+nix profile install github:nyakang/nyaterm
+```
+
+说明：
+- Nix 打包版本已自动屏蔽应用内置的自更新检查，版本升级由 Nix 统一管理。
+- 完整包含应用本体与 `nyaterm-mcp` sidecar，并已配置桌面图标及 `nyaterm://`、`ssh://`、`telnet://` 协议关联。
+- 运行时已自动封装 WebKitGTK、GTK3、xdg-utils 等依赖，并通过 `SSL_CERT_FILE` 默认提供 Nixpkgs CA 证书库（若宿主环境自定义了 `SSL_CERT_FILE` 则优先遵循宿主配置）。
+- 如需使用 Termius 等凭据导入功能，建议桌面环境中运行有 Secret Service 提供者（如 gnome-keyring 或 keepassxc）。
+- WebDAV 与 S3 云同步开箱即用；默认 Flake 构建未内置 GitHub OAuth Client ID。若需使用 GitHub Gist 云同步授权，可在 NixOS / Home Manager 中覆盖传入：
+
+```nix
+# NixOS（configuration.nix）
+environment.systemPackages = [
+  (inputs.nyaterm.packages.${pkgs.system}.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# 或导入 Flake 导出的 overlay 后在 NixOS 中使用：
+nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];
+environment.systemPackages = [
+  (pkgs.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# Home Manager（home.nix）
+home.packages = [
+  (inputs.nyaterm.packages.${pkgs.system}.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# 或在 Home Manager 中配合 overlay 使用：
+nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];
+home.packages = [
+  (pkgs.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+```
+
 ### 从源码构建
 
 如果你想从源码构建，请参考 [开发环境搭建](../development/setup) 章节。

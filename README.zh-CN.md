@@ -328,6 +328,32 @@ AUR 软件包：[`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 
 > `nyaterm-bin` 为社区维护的 AUR 二进制包。如果 AUR 版本暂未同步到最新发布版，可以从 [Releases](https://github.com/nyakang/nyaterm/releases) 下载官方安装包。
 
+### Nix / NixOS
+
+使用 Nix Flakes 免安装直接运行：
+
+```bash
+nix run github:nyakang/nyaterm
+```
+
+或安装到用户 profile：
+
+```bash
+nix profile install github:nyakang/nyaterm
+```
+
+进入包含完整工具链与系统依赖的开发环境：
+
+```bash
+nix develop
+```
+
+> **Nix 打包说明**：
+> - 已自动屏蔽应用内置的自更新检查及相关入口，版本升级由 Nix 统一管理。
+> - 完整包含应用本体、`nyaterm-mcp` sidecar、桌面图标及 `nyaterm://`、`ssh://`、`telnet://` 协议关联。
+> - 运行时已自动封装 GTK3/WebKitGTK、AppIndicator 托盘动态库、`xdg-utils` 以及 Nixpkgs CA 证书库（通过 `SSL_CERT_FILE`）。
+> - WebDAV 与 S3 云同步功能可直接使用。默认构建未包含 GitHub Gist Device Flow 登录所需的 OAuth Client ID；如需使用 GitHub Gist 云同步，可直接使用 Flake 包输出覆盖传入（`inputs.nyaterm.packages.${pkgs.system}.nyaterm.override { githubGistClientId = "your_id"; }`），或在 NixOS `environment.systemPackages` / Home Manager `home.packages` 中引入 overlay（`nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];` 后调用 `pkgs.nyaterm.override { githubGistClientId = "your_id"; }`）。
+
 
 ## 开发环境要求
 

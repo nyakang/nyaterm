@@ -19,6 +19,7 @@
     "version-sync": "node scripts/sync-version.mjs",
     "dev": "vite",
     "build": "pnpm build:mcp-sidecar && tsc && vite build",
+    "build:frontend": "tsc && vite build",
     "build:mcp-sidecar": "node scripts/build-mcp-sidecar.mjs",
     "prepare:conpty": "node scripts/prepare-conpty.mjs",
     "release": "node scripts/sync-version.mjs --commit && tauri build",

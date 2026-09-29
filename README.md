@@ -321,6 +321,32 @@ AUR package: [`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 
 > `nyaterm-bin` is a community-maintained binary AUR package. If the AUR package has not yet caught up with the latest release, download the official package from [Releases](https://github.com/nyakang/nyaterm/releases).
 
+### Nix / NixOS
+
+Run directly with Nix Flakes without installing:
+
+```bash
+nix run github:nyakang/nyaterm
+```
+
+Or install it into your user profile:
+
+```bash
+nix profile install github:nyakang/nyaterm
+```
+
+For development with all system and toolchain dependencies provided:
+
+```bash
+nix develop
+```
+
+> **Notes on Nix packaging**:
+> - Built-in auto-update checks and update UI are disabled; package updates are managed through Nix.
+> - Includes the `nyaterm-mcp` sidecar, desktop entry, and `nyaterm://`, `ssh://`, `telnet://` protocol handlers.
+> - Automatically wrapped with GTK3/WebKitGTK, AppIndicator tray libraries, `xdg-utils`, and Nixpkgs' CA certificate bundle (`SSL_CERT_FILE`).
+> - WebDAV and S3 cloud sync work out of the box. Default builds do not include a GitHub OAuth Client ID for GitHub Gist device flow sync. You can provide your own by overriding `githubGistClientId` via the Flake package output directly (`inputs.nyaterm.packages.${pkgs.system}.nyaterm.override { githubGistClientId = "your_id"; }`) or by adding the exported overlay to your configuration (`nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];` then `pkgs.nyaterm.override { githubGistClientId = "your_id"; }` in NixOS `environment.systemPackages` or Home Manager `home.packages`).
+
 
 ## Prerequisites for Development
 

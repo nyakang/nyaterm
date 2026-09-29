@@ -95,12 +95,13 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
       return;
     }
 
+    const isNix = supportInfo.packageManager === "nix";
     const text = [
       "NyaTerm Support Information",
       `Version: ${appVersion}`,
       `Operating System: ${supportInfo.os}`,
       `Application Architecture: ${supportInfo.architecture}`,
-      `Runtime: ${supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed")}`,
+      `Runtime: ${isNix ? "Nix" : supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed")}`,
       ...(conptyDisplay ? [`Local Terminal ConPTY: ${conptyDisplay}`] : []),
     ].join("\n");
     try {
@@ -121,9 +122,11 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
   const architectureDisplay =
     supportInfo?.architecture ?? (supportInfoFailed ? t("about.unknown") : t("common.loading"));
   const runtimeDisplay = supportInfo
-    ? supportInfo.runtime === "portable"
-      ? t("about.portable")
-      : t("about.installed")
+    ? supportInfo.packageManager === "nix"
+      ? "Nix"
+      : supportInfo.runtime === "portable"
+        ? t("about.portable")
+        : t("about.installed")
     : supportInfoFailed
       ? t("about.unknown")
       : t("common.loading");

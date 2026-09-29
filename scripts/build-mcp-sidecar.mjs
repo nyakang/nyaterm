@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = join(root, "src-tauri", "crates", "nyaterm-mcp", "Cargo.toml");
-const targetDir = join(root, "src-tauri", "crates", "nyaterm-mcp", "target");
+const targetDir =
+  process.env.NYATERM_MCP_TARGET_DIR ||
+  process.env.CARGO_TARGET_DIR ||
+  join(root, "src-tauri", "crates", "nyaterm-mcp", "target");
 const rustcInfo = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
 const host = rustcInfo.match(/^host:\s*(.+)$/m)?.[1]?.trim();
 const target =

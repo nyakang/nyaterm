@@ -233,6 +233,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
   portable: false,
   mode: "installed",
+  packageManager: null,
   executableDir: "",
   dataDir: "",
   configDir: "",

@@ -43,6 +43,16 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
+#### Linux (Nix / NixOS)
+
+如果你使用 Nix，无需手动安装 Node.js、pnpm、Rust 或系统开发库，只需在仓库根目录直接运行：
+
+```bash
+nix develop
+```
+
+即可进入配置好完整开发工具链与库依赖的开发环境。
+
 ## 获取源码
 
 ```bash

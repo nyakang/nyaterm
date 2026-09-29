@@ -30,6 +30,7 @@ export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 export interface AppRuntimeInfo {
   portable: boolean;
   mode: "installed" | "portable";
+  packageManager?: string | null;
   executableDir: string;
   dataDir: string;
   configDir: string;
@@ -42,6 +43,7 @@ export interface AppSupportInfo {
   os: string;
   architecture: string;
   runtime: "portable" | "installed";
+  packageManager?: string | null;
   conpty?: {
     available: boolean;
     activeBundled: number;

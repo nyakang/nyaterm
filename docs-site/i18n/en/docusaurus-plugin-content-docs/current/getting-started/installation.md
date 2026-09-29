@@ -51,6 +51,57 @@ NyaTerm is currently not signed with an Apple Developer certificate. If macOS re
 sudo xattr -cr /Applications/NyaTerm.app
 ```
 
+### Linux (Nix / NixOS)
+
+If you use Nix or NixOS, you can run or install NyaTerm directly using the repository Flake:
+
+```bash
+# Run directly without installation
+nix run github:nyakang/nyaterm
+
+# Install into your user profile
+nix profile install github:nyakang/nyaterm
+```
+
+Notes:
+- The Nix build automatically disables built-in auto-update checks; updates are managed through Nix.
+- It includes both the main application and the `nyaterm-mcp` sidecar, along with desktop entries and `nyaterm://`, `ssh://`, `telnet://` protocol handlers.
+- Runtime libraries (WebKitGTK, GTK3, xdg-utils) are wrapped automatically, with Nixpkgs CA certificates bundle provided via `SSL_CERT_FILE` as a fallback when not overridden by the host.
+- If using credential import from tools like Termius, ensure a Secret Service provider (such as gnome-keyring or keepassxc) is available in your desktop environment.
+- WebDAV and S3 cloud sync work out of the box. Default builds do not embed a GitHub OAuth Client ID for GitHub Gist sync. To enable GitHub Gist sync in your NixOS / Home Manager configuration:
+
+```nix
+# NixOS (configuration.nix)
+environment.systemPackages = [
+  (inputs.nyaterm.packages.${pkgs.system}.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# Or using the exported overlay in NixOS:
+nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];
+environment.systemPackages = [
+  (pkgs.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# Home Manager (home.nix)
+home.packages = [
+  (inputs.nyaterm.packages.${pkgs.system}.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+
+# Or using the exported overlay in Home Manager:
+nixpkgs.overlays = [ inputs.nyaterm.overlays.default ];
+home.packages = [
+  (pkgs.nyaterm.override {
+    githubGistClientId = "your_client_id";
+  })
+];
+```
+
 ### Build from source
 
 If you prefer to build NyaTerm yourself, see [Development Setup](../development/setup).

@@ -276,6 +276,7 @@ const RECENT_CONNECTION_LIMIT = 10;
 const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
   portable: false,
   mode: "installed",
+  packageManager: null,
   executableDir: "",
   dataDir: "",
   configDir: "",

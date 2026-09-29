@@ -12,9 +12,12 @@ const PORTABLE_KEY_FILE: &str = "portable.key";
 #[cfg(all(windows, target_vendor = "win7"))]
 const WIN7_WEBVIEW2_FIXED_RUNTIME_DIR: &str = "webview2-fixed-runtime";
 
+const PACKAGE_MANAGER: Option<&str> = option_env!("NYATERM_PACKAGE_MANAGER");
+
 #[derive(Clone, Debug)]
 pub struct AppRuntime {
     portable: bool,
+    package_manager: Option<String>,
     executable_dir: PathBuf,
     data_dir: PathBuf,
     config_dir: PathBuf,
@@ -30,6 +33,7 @@ pub struct AppRuntime {
 pub struct AppRuntimeInfo {
     pub portable: bool,
     pub mode: String,
+    pub package_manager: Option<String>,
     pub executable_dir: String,
     pub data_dir: String,
     pub config_dir: String,
@@ -41,6 +45,10 @@ pub struct AppRuntimeInfo {
 impl AppRuntime {
     pub fn portable(&self) -> bool {
         self.portable
+    }
+
+    pub fn package_manager(&self) -> Option<&str> {
+        self.package_manager.as_deref()
     }
 
     pub fn executable_dir(&self) -> &Path {
@@ -82,6 +90,7 @@ impl AppRuntime {
             } else {
                 "installed".to_string()
             },
+            package_manager: self.package_manager.clone(),
             executable_dir: path_to_string(&self.executable_dir),
             data_dir: path_to_string(&self.data_dir),
             config_dir: path_to_string(&self.config_dir),
@@ -184,6 +193,7 @@ fn resolve_portable(
 
     Ok(AppRuntime {
         portable: true,
+        package_manager: PACKAGE_MANAGER.map(ToString::to_string),
         executable_dir,
         data_dir,
         config_dir,
@@ -204,6 +214,7 @@ fn resolve_installed(executable_dir: PathBuf) -> AppResult<AppRuntime> {
 
     Ok(AppRuntime {
         portable: false,
+        package_manager: PACKAGE_MANAGER.map(ToString::to_string),
         executable_dir,
         data_dir: config_dir.clone(),
         config_dir,

@@ -364,7 +364,7 @@ function App() {
 
   // Background update check on startup
   useEffect(() => {
-    if (!runtimeInfoLoaded) return;
+    if (!runtimeInfoLoaded || runtimeInfo.packageManager === "nix") return;
 
     const timer = setTimeout(() => {
       checkForUpdate(portable)
@@ -377,7 +377,7 @@ function App() {
         .catch(() => {});
     }, 3000);
     return () => clearTimeout(timer);
-  }, [portable, runtimeInfoLoaded]);
+  }, [portable, runtimeInfo.packageManager, runtimeInfoLoaded]);
 
   const closeFloatingPanel = useCallback(
     (side: "left" | "right") => {
