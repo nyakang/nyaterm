@@ -40,6 +40,12 @@
         default = self.apps.${system}.nyaterm;
       });
 
+      checks = forAllSystems (system: {
+        nyaterm = self.packages.${system}.nyaterm;
+      });
+
+      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixpkgs-fmt);
+
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
@@ -49,7 +55,7 @@
             inputsFrom = [ self.packages.${system}.nyaterm ];
             packages = with pkgs; [
               cargo-tauri
-              pnpm_10
+              pnpm_10 # Note: pnpm_10 used as nixpkgs' pnpm_9 has known CVEs
               nodejs
               rustc
               cargo
@@ -58,16 +64,8 @@
               pkg-config
             ];
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
-            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
-              gtk3
-              webkitgtk_4_1
-              libsoup_3
-              libappindicator-gtk3
-              libayatana-appindicator
-              librsvg
-              openssl
-              udev
-            ]);
+            # Derived dynamically from package buildInputs to avoid dependency drift
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath self.packages.${system}.nyaterm.buildInputs;
           };
         }
       );

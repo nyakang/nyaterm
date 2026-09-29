@@ -1,26 +1,30 @@
-{
-  lib,
-  stdenv,
-  rustPlatform,
-  fetchPnpmDeps,
-  pnpmConfigHook,
-  nodejs,
-  pnpm_10,
-  pkg-config,
-  wrapGAppsHook3,
-  gtk3,
-  webkitgtk_4_1,
-  libsoup_3,
-  libappindicator-gtk3,
-  libayatana-appindicator,
-  librsvg,
-  openssl,
-  udev,
-  xdg-utils,
-  cacert,
-  copyDesktopItems,
-  makeDesktopItem,
-  githubGistClientId ? null,
+{ lib
+, stdenv
+, rustPlatform
+, fetchPnpmDeps
+, pnpmConfigHook
+, # Node and pnpm versions:
+  # nixpkgs' pnpm_9 has known CVEs; pnpm_10 is secure and reads lockfile v9 seamlessly.
+  # nodejs defaults to the current supported LTS in nixpkgs.
+  nodejs
+, pnpm_10
+, pkg-config
+, wrapGAppsHook3
+, gtk3
+, webkitgtk_4_1
+, libsoup_3
+, libappindicator-gtk3
+, libayatana-appindicator
+, librsvg
+, openssl
+, udev
+, xdg-utils
+, desktop-file-utils
+, cacert
+, copyDesktopItems
+, makeDesktopItem
+, githubGistClientId ? null
+,
 }:
 
 let
@@ -32,13 +36,13 @@ let
       let
         baseName = baseNameOf path;
       in
-      !(
-        baseName == "target" ||
-        baseName == "node_modules" ||
-        baseName == "dist" ||
-        baseName == ".git" ||
-        lib.hasPrefix "result" baseName
-      );
+        !(
+          baseName == "target" ||
+          baseName == "node_modules" ||
+          baseName == "dist" ||
+          baseName == ".git" ||
+          lib.hasPrefix "result" baseName
+        );
   };
 
   mcp-sidecar = rustPlatform.buildRustPackage {
@@ -64,6 +68,8 @@ let
       pnpm = pnpm_10;
       fetcherVersion = 4;
       hash = "sha256-2Qtar7sVKGGhWR2vQsKH4UyUN7WiOoaqKCZcw6IDD1A=";
+      # Uses npmmirror registry to avoid network timeouts during dependency fetch;
+      # integrity is strictly verified by the hash above.
       prePnpmInstall = ''
         echo registry=https://registry.npmmirror.com >> ~/.npmrc
         echo registry=https://registry.npmmirror.com >> .npmrc
@@ -77,9 +83,8 @@ let
     ];
 
     preBuild = ''
-      node scripts/patch-xterm-webgl-clear-model.cjs
-      node scripts/patch-xterm-wide-char-selection.cjs
-      node scripts/patch-xterm-foreground-intense.cjs
+      # pnpmConfigHook skips root postinstall in Nix sandbox; run it explicitly
+      pnpm run postinstall
     '';
 
     buildPhase = ''
@@ -90,7 +95,8 @@ let
 
     installPhase = ''
       runHook preInstall
-      cp -r dist $out
+      mkdir -p $out
+      cp -r dist/. $out
       runHook postInstall
     '';
   };
@@ -169,7 +175,7 @@ rustPlatform.buildRustPackage {
 
   preFixup = ''
     gappsWrapperArgs+=(
-      --prefix PATH : "${lib.makeBinPath [ xdg-utils ]}"
+      --prefix PATH : "${lib.makeBinPath [ xdg-utils desktop-file-utils ]}"
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [ libayatana-appindicator libappindicator-gtk3 ]}"
       --set-default SSL_CERT_FILE "${cacert}/etc/ssl/certs/ca-bundle.crt"
     )
