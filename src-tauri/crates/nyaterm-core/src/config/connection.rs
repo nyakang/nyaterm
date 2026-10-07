@@ -417,6 +417,14 @@ pub enum SshProfile {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum SshTransport {
+    #[default]
+    Ssh,
+    Mosh,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum SshRuntimeMode {
     #[default]
     Standard,
@@ -585,6 +593,10 @@ fn is_default_sftp_settings(value: &SftpSettings) -> bool {
 
 fn is_standard_ssh_profile(value: &SshProfile) -> bool {
     *value == SshProfile::Standard
+}
+
+fn is_default_ssh_transport(value: &SshTransport) -> bool {
+    *value == SshTransport::Ssh
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1231,6 +1243,8 @@ pub struct SavedConnection {
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
     #[serde(default, skip_serializing_if = "is_standard_ssh_profile")]
     pub ssh_profile: SshProfile,
+    #[serde(default, skip_serializing_if = "is_default_ssh_transport")]
+    pub ssh_transport: SshTransport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_type: Option<SshTerminalType>,
     #[serde(default, skip_serializing_if = "is_default_sftp_settings")]
@@ -1508,6 +1522,7 @@ mod tests {
         SerialFlowControl, SerialModemUploadProtocol, SftpCwdFollowMode, SftpSettings,
         SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
         SshAgentForwardingSources, SshAlgorithmMode, SshProfile, SshTerminalType,
+        SshTransport,
         effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
         migrate_legacy_asset_tags, migrate_legacy_ssh_agent_settings, normalize_connection_tags,
         resolve_ssh_terminal_type, validate_ssh_agent_endpoint, validate_ssh_agent_settings,
@@ -1612,6 +1627,41 @@ mod tests {
 
         assert!(matches!(connection.config, ConnectionType::Ssh { .. }));
         assert!(connection.post_login.is_none());
+    }
+
+    #[test]
+    fn saved_connection_defaults_missing_ssh_transport_to_ssh() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Test",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root"
+        }))
+        .expect("legacy ssh connection");
+
+        assert_eq!(connection.ssh_transport, SshTransport::Ssh);
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert!(encoded.get("ssh_transport").is_none());
+    }
+
+    #[test]
+    fn saved_connection_round_trips_mosh_transport() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Mosh",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 2222,
+            "username": "root",
+            "ssh_transport": "mosh"
+        }))
+        .expect("mosh connection");
+
+        assert_eq!(connection.ssh_transport, SshTransport::Mosh);
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert_eq!(encoded["ssh_transport"], "mosh");
     }
 
     #[test]

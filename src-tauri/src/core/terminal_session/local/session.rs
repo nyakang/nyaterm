@@ -37,11 +37,9 @@ pub async fn create_local_session(
     ensure_local_terminal_supported()?;
     tracing::info!("Creating local PTY session");
     let resolved_shell_spec = match &config {
-        Some(cfg) if !cfg.shell_path.trim().is_empty() => resolve_shell_command(
-            &cfg.shell_path,
-            &cfg.shell_args,
-        )
-        .map_err(crate::error::AppError::Config)?,
+        Some(cfg) if !cfg.shell_path.trim().is_empty() => {
+            resolve_local_session_shell(cfg).map_err(crate::error::AppError::Config)?
+        }
         _ => default_shell_spec(),
     };
     validate_working_dir_before_spawn(config.as_ref(), &resolved_shell_spec)?;
@@ -106,10 +104,17 @@ pub async fn create_local_session(
         None
     };
 
+    let session_type = config
+        .as_ref()
+        .map_or(SessionType::Local, |cfg| cfg.session_type.clone());
+    let remote_file_browser_enabled = config
+        .as_ref()
+        .is_some_and(|cfg| cfg.remote_file_browser_enabled);
+    let remote_stats_enabled = config.as_ref().is_some_and(|cfg| cfg.remote_stats_enabled);
     let session_info = SessionInfo {
         id: session_id.clone(),
         name: session_name,
-        session_type: SessionType::Local,
+        session_type,
         started_at: crate::core::now_session_started_at(),
         connection_id: config.as_ref().and_then(|cfg| cfg.connection_id.clone()),
         connected: true,
@@ -121,8 +126,8 @@ pub async fn create_local_session(
             dynamic_title_enabled,
             trusted_initial_title,
         ),
-        remote_file_browser_enabled: false,
-        remote_stats_enabled: false,
+        remote_file_browser_enabled,
+        remote_stats_enabled,
         ssh_profile: None,
         ssh_runtime_mode: None,
     };
@@ -444,6 +449,7 @@ fn pty_session_thread(
     ready_marker: String,
     encoding: String,
 ) {
+    let zmodem_enabled = config.as_ref().is_none_or(|cfg| cfg.zmodem_enabled);
     let mut dynamic_title_integration_requested = dynamic_title_integration_requested;
     let (startup_script, startup_script_file) = match startup_script {
         Some(source) => match prepare_local_startup_injection(source) {
@@ -724,7 +730,14 @@ fn pty_session_thread(
                                 .is_active()
                         },
                     );
-                    let process_raw = match detect_local_zmodem(&mut zmodem_detector, raw) {
+                    let zmodem_result = if zmodem_enabled {
+                        detect_local_zmodem(&mut zmodem_detector, raw)
+                    } else {
+                        ZmodemDetectResult::NoMatch {
+                            passthrough: raw.to_vec(),
+                        }
+                    };
+                    let process_raw = match zmodem_result {
                             ZmodemDetectResult::Detected {
                                 direction,
                                 passthrough,

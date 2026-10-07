@@ -5,11 +5,12 @@ import { useTerminalFileDrop } from "@/hooks/useTerminalFileDrop";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { getTerminalDropOverlayCopy, handleTerminalFileDrop } from "@/lib/terminalFileDrop";
-import type { SessionType } from "@/types/global";
+import type { SessionType, SshRuntimeMode } from "@/types/global";
 
 interface UseTerminalExternalDropParams {
   sessionId: string;
   sessionType: SessionType;
+  sshRuntimeMode?: SshRuntimeMode | null;
   visible: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   t: (key: string) => string;
@@ -19,12 +20,15 @@ interface UseTerminalExternalDropParams {
 export function useTerminalExternalDrop({
   sessionId,
   sessionType,
+  sshRuntimeMode,
   visible,
   containerRef,
   t,
   duplicateStrategy,
 }: UseTerminalExternalDropParams) {
   const [isExternalDropActive, setIsExternalDropActive] = useState(false);
+  const sshZmodemEnabled =
+    sessionType !== "SSH" || sshRuntimeMode === "standard" || sshRuntimeMode === "terminal";
 
   const resetExternalDropHover = useCallback(() => {
     setIsExternalDropActive(false);
@@ -65,6 +69,8 @@ export function useTerminalExternalDrop({
           entries: resolvedLocalEntries,
           t,
           duplicateStrategy,
+          sshTransport:
+            sessionType === "SSH" ? (sshZmodemEnabled ? "ssh" : "mosh") : undefined,
         });
       } catch (error) {
         logger.error({
@@ -78,13 +84,13 @@ export function useTerminalExternalDrop({
         toast.error(String(error));
       }
     },
-    [duplicateStrategy, resolveLocalDropPaths, sessionId, sessionType, t],
+    [duplicateStrategy, resolveLocalDropPaths, sessionId, sessionType, sshZmodemEnabled, t],
   );
 
   useTerminalFileDrop({
     sessionId,
     sessionType,
-    enabled: visible,
+    enabled: visible && sshZmodemEnabled,
     containerRef,
     resetExternalDropHover,
     setIsExternalDropActive,

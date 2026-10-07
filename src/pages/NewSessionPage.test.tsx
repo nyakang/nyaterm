@@ -127,6 +127,12 @@ vi.mock("@/components/sessions/SshForm", () => ({
         >
           choose-key
         </button>
+        <button
+          type="button"
+          onClick={() => (props.setSshTransport as (value: string) => void)("mosh")}
+        >
+          choose-mosh
+        </button>
       </>
     );
   },
@@ -541,6 +547,37 @@ describe("NewSessionPage", () => {
               password_id: "",
               password: "",
             }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("defaults legacy SSH connections to SSH transport and saves Mosh as UTF-8", async () => {
+    window.history.replaceState({}, "", `/?edit=${sshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(sshFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sshTransport: "ssh", showMoshTransport: false }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "choose-mosh" }));
+    await waitFor(() => {
+      expect(sshFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sshTransport: "mosh" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "ssh",
+            ssh_transport: "mosh",
+            encoding: "UTF-8",
           }),
         }),
       );

@@ -274,6 +274,93 @@ describe("PaneWorkspace RDP routing", () => {
       expect.objectContaining({ sessionId: reconnectedPane.sessionId }),
     );
   });
+
+  it("updates XTerminal runtime mode when the same SSH pane reconnects as Mosh", () => {
+    const pane = terminalPane();
+    const tab = tabWithRoot(pane, pane.id);
+    const view = render(
+      <PaneWorkspace
+        tab={tab}
+        visible
+        sessionInfoById={
+          new Map([[pane.sessionId, { id: pane.sessionId, ssh_runtime_mode: "standard" } as never]])
+        }
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(xTerminalMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: pane.sessionId,
+        connectionId: pane.connectionId,
+        sshRuntimeMode: "standard",
+      }),
+    );
+
+    const reconnectedPane = { ...pane, sessionId: "mosh-session-2" };
+    view.rerender(
+      <PaneWorkspace
+        tab={tabWithRoot(reconnectedPane, reconnectedPane.id)}
+        visible
+        sessionInfoById={new Map([[reconnectedPane.sessionId, { id: reconnectedPane.sessionId } as never]])}
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(xTerminalMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: reconnectedPane.sessionId,
+        connectionId: pane.connectionId,
+        sshRuntimeMode: undefined,
+      }),
+    );
+  });
+
+  it("updates XTerminal runtime mode when the same Mosh pane reconnects as SSH", () => {
+    const pane = terminalPane();
+    const tab = tabWithRoot(pane, pane.id);
+    const view = render(
+      <PaneWorkspace
+        tab={tab}
+        visible
+        sessionInfoById={new Map([[pane.sessionId, { id: pane.sessionId } as never]])}
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(xTerminalMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sshRuntimeMode: undefined }),
+    );
+
+    const reconnectedPane = { ...pane, sessionId: "ssh-session-2" };
+    view.rerender(
+      <PaneWorkspace
+        tab={tabWithRoot(reconnectedPane, reconnectedPane.id)}
+        visible
+        sessionInfoById={
+          new Map([
+            [
+              reconnectedPane.sessionId,
+              { id: reconnectedPane.sessionId, ssh_runtime_mode: "standard" } as never,
+            ],
+          ])
+        }
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(xTerminalMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: reconnectedPane.sessionId,
+        connectionId: pane.connectionId,
+        sshRuntimeMode: "standard",
+      }),
+    );
+  });
 });
 
 function tabWithRoot(root: Tab["root"], activePaneId: string): Tab {

@@ -299,11 +299,16 @@ mod tests {
             connection_id: None,
             shell_path: "pwsh.exe".to_string(),
             shell_args: String::new(),
+            shell_argv: None,
             working_dir: Some(missing_dir.to_string_lossy().to_string()),
             fail_on_missing_working_dir: true,
             name: "Local Terminal".to_string(),
             encoding: "UTF-8".to_string(),
             dynamic_tab_title: false,
+            session_type: crate::core::SessionType::Local,
+            remote_file_browser_enabled: false,
+            remote_stats_enabled: false,
+            zmodem_enabled: true,
         };
 
         let shell_spec = resolve_shell_command(&config.shell_path, &config.shell_args)
@@ -326,17 +331,51 @@ mod tests {
             connection_id: Some("saved-local".to_string()),
             shell_path: "pwsh.exe".to_string(),
             shell_args: String::new(),
+            shell_argv: None,
             working_dir: Some(missing_dir.to_string_lossy().to_string()),
             fail_on_missing_working_dir: false,
             name: "Saved Local".to_string(),
             encoding: "UTF-8".to_string(),
             dynamic_tab_title: false,
+            session_type: crate::core::SessionType::Local,
+            remote_file_browser_enabled: false,
+            remote_stats_enabled: false,
+            zmodem_enabled: true,
         };
 
         let shell_spec = resolve_shell_command(&config.shell_path, &config.shell_args)
             .expect("shell command spec");
         assert!(
             validate_working_dir_before_spawn(Some(&config), &shell_spec).is_ok()
+        );
+    }
+
+    #[test]
+    fn structured_local_shell_arguments_are_not_reparsed() {
+        let config = LocalSessionConfig {
+            connection_id: None,
+            shell_path: "wsl.exe".to_string(),
+            shell_args: "ignored --string".to_string(),
+            shell_argv: Some(vec![
+                "--exec".to_string(),
+                "mosh".to_string(),
+                "user;literal@host with spaces".to_string(),
+            ]),
+            working_dir: None,
+            fail_on_missing_working_dir: false,
+            name: "Mosh".to_string(),
+            encoding: "UTF-8".to_string(),
+            dynamic_tab_title: false,
+            session_type: crate::core::SessionType::SSH,
+            remote_file_browser_enabled: false,
+            remote_stats_enabled: false,
+            zmodem_enabled: false,
+        };
+
+        let spec = super::resolve_local_session_shell(&config).expect("structured command spec");
+        assert_eq!(
+            spec.args,
+            vec!["--exec", "mosh", "user;literal@host with spaces"]
         );
     }
 

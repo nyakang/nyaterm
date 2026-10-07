@@ -5,6 +5,8 @@ import { parsePluginPanelId } from "@/lib/plugins";
 import type {
   ActivityBarLayout,
   ActivityBarZone,
+  SavedConnection,
+  SessionInfo,
   SessionPane,
   Tab,
   UiConfig,
@@ -130,6 +132,47 @@ export function canCreateSessionFromPane(
     pane.paneKind !== "file" &&
     (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
+}
+
+type SessionActionPane = Pick<
+  SessionPane,
+  "paneKind" | "type" | "connectionId" | "temporaryConfig" | "sessionId"
+>;
+
+export function isSavedMoshSessionPane(
+  pane: SessionActionPane | null | undefined,
+  savedConnections: SavedConnection[],
+) {
+  if (
+    !pane ||
+    pane.paneKind !== "terminal" ||
+    pane.type !== "SSH" ||
+    !pane.connectionId
+  ) {
+    return false;
+  }
+  const connection = savedConnections.find((item) => item.id === pane.connectionId);
+  return connection?.type === "ssh" && connection.ssh_transport === "mosh";
+}
+
+export function canUseStartupCommandForPane(
+  pane: SessionActionPane | null | undefined,
+  savedConnections: SavedConnection[],
+) {
+  return (
+    !!pane &&
+    pane.paneKind === "terminal" &&
+    !isSavedMoshSessionPane(pane, savedConnections)
+  );
+}
+
+export function canMultiplexSshPane(
+  pane: SessionActionPane | null | undefined,
+  sessionInfoById: Map<string, SessionInfo> | null | undefined,
+) {
+  if (!pane || pane.paneKind !== "terminal" || pane.type !== "SSH") return false;
+  const runtimeMode = sessionInfoById?.get(pane.sessionId)?.ssh_runtime_mode;
+  return runtimeMode === "standard" || runtimeMode === "terminal";
 }
 
 export function hasMatchingTemporaryConfig(

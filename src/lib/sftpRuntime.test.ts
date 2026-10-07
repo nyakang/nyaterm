@@ -22,6 +22,15 @@ describe("canOpenSavedConnectionWithSftp", () => {
     ).toBe(false);
   });
 
+  it("hides the action for Mosh transport", () => {
+    expect(
+      canOpenSavedConnectionWithSftp({
+        ...connection("ssh"),
+        ssh_transport: "mosh",
+      }),
+    ).toBe(false);
+  });
+
   it("hides the action for non-SSH connections", () => {
     expect(canOpenSavedConnectionWithSftp(connection("telnet"))).toBe(false);
   });

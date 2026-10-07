@@ -57,6 +57,7 @@ import type {
   SshAlgorithmPreferences,
   SshProfile,
   SshTerminalType,
+  SshTransport,
 } from "@/types/global";
 
 const isValidPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -283,6 +284,7 @@ export default function NewSessionPage() {
   const [sshAlgorithms, setSshAlgorithms] =
     useState<SshAlgorithmPreferences>(DEFAULT_SSH_ALGORITHMS);
   const [sshProfile, setSshProfile] = useState<SshProfile>("standard");
+  const [sshTransport, setSshTransport] = useState<SshTransport>("ssh");
   const [sshTerminalType, setSshTerminalType] = useState<SshTerminalTypeSelection>("default");
   const [sftpSettings, setSftpSettings] = useState<SftpSettings>(DEFAULT_SFTP_SETTINGS);
   const [remoteDynamicTabTitle, setRemoteDynamicTabTitle] = useState(false);
@@ -410,6 +412,7 @@ export default function NewSessionPage() {
           );
           setSshAlgorithms(normalizeSshAlgorithms(found.ssh_algorithms));
           setSshProfile(found.ssh_profile || "standard");
+          setSshTransport(found.ssh_transport || "ssh");
           setSshTerminalType(found.terminal_type || "default");
           setSftpSettings(normalizeSftpSettings(found.sftp));
           setRemoteDynamicTabTitle(found.dynamic_tab_title ?? false);
@@ -548,6 +551,7 @@ export default function NewSessionPage() {
     setX11Forwarding(false);
     setSshAlgorithms({ ...DEFAULT_SSH_ALGORITHMS });
     setSshProfile("standard");
+    setSshTransport("ssh");
     setSshTerminalType("default");
     setSftpSettings({ ...DEFAULT_SFTP_SETTINGS });
     setSerialPortName("");
@@ -638,11 +642,14 @@ export default function NewSessionPage() {
   }, [groupId, groupsById, newGroupNamePending, t]);
   const remoteStatsEnabled = appSettings.ui.show_remote_stats ?? true;
   const iconAutoDetectDisabled =
-    !remoteStatsEnabled || (currentTab === "ssh" && sshProfile === "network_device");
+    !remoteStatsEnabled ||
+    (currentTab === "ssh" && (sshProfile === "network_device" || sshTransport === "mosh"));
   const iconAutoDetectTooltip = !remoteStatsEnabled
     ? t("dialog.iconAutoDetectRemoteStatsDisabledTooltip")
-    : currentTab === "ssh" && sshProfile === "network_device"
-      ? t("dialog.iconAutoDetectNetworkDeviceTooltip")
+    : currentTab === "ssh" && sshTransport === "mosh"
+      ? t("dialog.iconAutoDetectMoshTooltip")
+      : currentTab === "ssh" && sshProfile === "network_device"
+        ? t("dialog.iconAutoDetectNetworkDeviceTooltip")
       : t("dialog.iconAutoDetectTooltip");
   const hasCustomIcon = isCustomConnectionIcon(iconKey);
 
@@ -841,30 +848,37 @@ export default function NewSessionPage() {
         return t("dialog.portInvalid", "Port must be between 1 and 65535");
       }
       const accountUsername = savedAccounts.find((account) => account.id === accountId)?.username;
-      if (!(accountUsername?.trim() || username.trim())) {
+      if (
+        sshTransport === "mosh"
+          ? !username.trim()
+          : !(accountUsername?.trim() || username.trim())
+      ) {
         return t("dialog.usernameRequired", "Username is required");
       }
-      if (authAgentEndpointError) {
+      if (sshTransport === "ssh" && authAgentEndpointError) {
         return authAgentEndpointError;
       }
-      if (postLoginEnabled && !postLoginCommand.trim()) {
+      if (sshTransport === "ssh" && postLoginEnabled && !postLoginCommand.trim()) {
         return t("dialog.postLoginCommandRequired");
       }
-      if (!isValidPostLoginDelay(postLoginDelayMs)) {
+      if (sshTransport === "ssh" && !isValidPostLoginDelay(postLoginDelayMs)) {
         return t("dialog.postLoginDelayInvalid", {
           min: MIN_POST_LOGIN_DELAY_MS,
           max: MAX_POST_LOGIN_DELAY_MS,
           defaultValue: "Delay must be between {{min}} and {{max}} ms",
         });
       }
-      if (!isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)) {
+      if (
+        sshTransport === "ssh" &&
+        !isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)
+      ) {
         return t("dialog.sftpShellDetectionTimeoutInvalid", {
           min: MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
           max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
           defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
         });
       }
-      if (agentForwardingEndpointError) {
+      if (sshTransport === "ssh" && agentForwardingEndpointError) {
         return agentForwardingEndpointError;
       }
     }
@@ -951,6 +965,7 @@ export default function NewSessionPage() {
     serialPortName,
     shellPath,
     sshPort,
+    sshTransport,
     sftpSettings.shell_detection_timeout_ms,
     telnetPort,
     t,
@@ -1150,7 +1165,12 @@ export default function NewSessionPage() {
         sort_order: sortOrder,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
-        encoding: encoding === "global" ? undefined : encoding,
+        encoding:
+          currentTab === "ssh" && sshTransport === "mosh"
+            ? "UTF-8"
+            : encoding === "global"
+              ? undefined
+              : encoding,
         recording,
         ...(currentTab === "ssh"
           ? {
@@ -1162,6 +1182,7 @@ export default function NewSessionPage() {
               post_login: postLogin,
               ssh_algorithms: sshAlgorithms,
               ssh_profile: sshProfile,
+              ssh_transport: sshTransport,
               terminal_type: sshTerminalType === "default" ? undefined : sshTerminalType,
               sftp: sftpSettings,
               backspace_mode: sshBackspaceMode,
@@ -1693,6 +1714,9 @@ export default function NewSessionPage() {
               setSshAlgorithms={setSshAlgorithms}
               sshProfile={sshProfile}
               setSshProfile={setSshProfile}
+              sshTransport={sshTransport}
+              setSshTransport={setSshTransport}
+              showMoshTransport={runtime === "desktop" && isWindows}
               sshTerminalType={sshTerminalType}
               setSshTerminalType={setSshTerminalType}
               sftpSettings={sftpSettings}

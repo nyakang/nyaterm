@@ -581,6 +581,7 @@ function PaneXTerminal({
       visible={visible}
       sessionType={sessionType}
       connectionId={connectionId}
+      sshRuntimeMode={sessionInfoById?.get(sessionId)?.ssh_runtime_mode}
       temporaryConfig={temporaryConfig}
       onReconnected={onReconnected}
       onDisconnectedCloseRequested={onDisconnectedCloseRequested}

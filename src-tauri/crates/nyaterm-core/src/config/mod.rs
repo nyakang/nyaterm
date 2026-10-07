@@ -35,7 +35,7 @@ pub use connection::{
     SerialFlowControl, SerialModemUploadProtocol, SessionsConfig, SftpCwdFollowMode, SftpSettings,
     SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
     SshAgentForwardingSources, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
-    SshRuntimeMode, SshTerminalType, TelnetAutoLoginConfig, VncClipboardSettings,
+    SshRuntimeMode, SshTerminalType, SshTransport, TelnetAutoLoginConfig, VncClipboardSettings,
     VncDisplaySettings, VncReconnectSettings, VncSecuritySettings,
     connection_custom_icon_from_data_url, connection_custom_icon_id_for_data_url,
     effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
