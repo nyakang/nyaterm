@@ -823,6 +823,7 @@ impl SessionManager {
     pub async fn add_session(&self, handle: SessionHandle) {
         let id = handle.info.id.clone();
         let awaits_shell_event = session_awaits_shell_event(&handle.info);
+        self.recent_output.open(&id);
         self.sessions.lock().await.insert(id.clone(), handle);
         self.command_submissions.lock().await.insert(
             id.clone(),
@@ -958,6 +959,29 @@ impl SessionManager {
 
     pub fn recent_output(&self, session_id: &str, lines: usize) -> String {
         self.recent_output.read(session_id, lines)
+    }
+
+    pub fn recent_output_tail_cursor(
+        &self,
+        session_id: &str,
+    ) -> Result<u64, super::capabilities::RecentOutputReadError> {
+        self.recent_output.tail_cursor(session_id)
+    }
+
+    pub fn recent_output_since(
+        &self,
+        session_id: &str,
+        cursor: u64,
+    ) -> Result<super::capabilities::RecentOutputSnapshot, super::capabilities::RecentOutputReadError>
+    {
+        self.recent_output.read_since(session_id, cursor)
+    }
+
+    pub fn recent_output_notification(
+        &self,
+        session_id: &str,
+    ) -> Result<Arc<tokio::sync::Notify>, super::capabilities::RecentOutputReadError> {
+        self.recent_output.notification(session_id)
     }
 
     /// Returns the validated dynamic-title cwd presentation for a session.

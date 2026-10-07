@@ -1839,6 +1839,16 @@
     "newCategoryPlaceholder": "새 카테고리...",
     "newCategoryRootHint": "최상위에 카테고리를 생성합니다",
     "noCommandsFound": "명령이 없습니다.",
+    "nyascript": "NyaScript",
+    "nyascriptHint": "네이티브 터미널 자동화 스크립트를 실행합니다. Windows 데스크톱에서 사용할 수 있습니다.",
+    "nyascriptLine": "{{line}}행",
+    "nyascriptState": {
+      "cancelled": "NyaScript 취소됨",
+      "completed": "NyaScript 완료됨",
+      "failed": "NyaScript 실패",
+      "running": "NyaScript 실행 중"
+    },
+    "nyascriptUnsupported": "NyaScript는 현재 Windows 데스크톱에서만 사용할 수 있습니다.",
     "parentCategory": "상위",
     "pin": "고정",
     "renameCategory": "카테고리 이름 바꾸기",

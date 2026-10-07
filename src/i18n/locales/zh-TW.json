@@ -1839,6 +1839,16 @@
     "newCategoryPlaceholder": "新增分類...",
     "newCategoryRootHint": "將在頂層建立分類",
     "noCommandsFound": "未找到符合的命令。",
+    "nyascript": "NyaScript",
+    "nyascriptHint": "執行原生終端自動化指令碼。目前支援 Windows 桌面版。",
+    "nyascriptLine": "第 {{line}} 行",
+    "nyascriptState": {
+      "cancelled": "NyaScript 已取消",
+      "completed": "NyaScript 已完成",
+      "failed": "NyaScript 執行失敗",
+      "running": "NyaScript 執行中"
+    },
+    "nyascriptUnsupported": "NyaScript 目前僅支援 Windows 桌面版。",
     "parentCategory": "父級",
     "pin": "置頂顯示",
     "renameCategory": "重新命名分類",
