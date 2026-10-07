@@ -1293,7 +1293,11 @@ impl Session {
                 // data from it.
                 self.common.alive_timeouts = 0;
             }
-            if self.common.received_data || sent_keepalive {
+            if should_reset_keepalive_timer(
+                self.common.config.keepalive_mode,
+                self.common.received_data,
+                sent_keepalive,
+            ) {
                 if let (futures::future::Either::Right(ref mut sleep), Some(d)) = (
                     keepalive_timer.as_mut().as_pin_mut(),
                     self.common.config.keepalive_interval,
@@ -1880,6 +1884,20 @@ mod tests {
     }
 
     #[test]
+    fn compatible_keepalive_timer_is_not_postponed_by_received_data() {
+        assert!(!should_reset_keepalive_timer(
+            KeepaliveMode::Compatible,
+            true,
+            false
+        ));
+        assert!(should_reset_keepalive_timer(
+            KeepaliveMode::Compatible,
+            true,
+            true
+        ));
+    }
+
+    #[test]
     fn strict_keepalive_tick_times_out_after_max_is_exceeded() {
         let config = Config {
             keepalive_mode: KeepaliveMode::Strict,
@@ -1900,6 +1918,25 @@ mod tests {
         let err = process_keepalive_tick(&config, alive_timeouts)
             .expect_err("fourth unanswered keepalive exceeds max");
         assert!(matches!(err, crate::Error::KeepaliveTimeout));
+    }
+
+    #[test]
+    fn strict_keepalive_timer_restarts_after_received_data() {
+        assert!(should_reset_keepalive_timer(
+            KeepaliveMode::Strict,
+            true,
+            false
+        ));
+        assert!(should_reset_keepalive_timer(
+            KeepaliveMode::Strict,
+            false,
+            true
+        ));
+        assert!(!should_reset_keepalive_timer(
+            KeepaliveMode::Strict,
+            false,
+            false
+        ));
     }
 
     #[cfg(feature = "flate2")]
@@ -2185,6 +2222,14 @@ fn process_keepalive_tick(config: &Config, alive_timeouts: usize) -> Result<(usi
     }
 }
 
+fn should_reset_keepalive_timer(
+    mode: KeepaliveMode,
+    received_data: bool,
+    sent_keepalive: bool,
+) -> bool {
+    sent_keepalive || (received_data && mode == KeepaliveMode::Strict)
+}
+
 /// The configuration of clients.
 #[derive(Debug)]
 pub struct Config {
@@ -2202,7 +2247,8 @@ pub struct Config {
     pub preferred: negotiation::Preferred,
     /// Time after which the connection is garbage-collected.
     pub inactivity_timeout: Option<std::time::Duration>,
-    /// If nothing is received from the server for this amount of time, send a keepalive message.
+    /// Interval for client keepalive traffic. Strict mode restarts the interval
+    /// after server traffic; Compatible mode keeps a fixed send cadence.
     pub keepalive_interval: Option<std::time::Duration>,
     /// If this many keepalives have been sent without reply, close the connection.
     pub keepalive_max: usize,
