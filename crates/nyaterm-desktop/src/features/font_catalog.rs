@@ -553,6 +553,26 @@ fn is_user_selectable_font_family(family: &str, kind: FontCatalogKind) -> bool {
                 | "serif"
         )
         && !is_internal_font_family(&family, kind)
+        && !is_symbol_icon_font_family(&family)
+}
+
+/// Symbol faces cannot serve as the primary font for ordinary UI or terminal text.
+/// This only filters user options; the font catalog retains them for internal use.
+fn is_symbol_icon_font_family(family: &str) -> bool {
+    matches!(
+        family,
+        "wingdings"
+            | "wingdings 2"
+            | "wingdings 3"
+            | "webdings"
+            | "marlett"
+            | "symbol"
+            | "segoe fluent icons"
+            | "segoe mdl2 assets"
+            | "segoe ui symbol"
+            | "hololens mdl2 assets"
+            | "segmdl2"
+    )
 }
 
 #[cfg(test)]
@@ -643,6 +663,55 @@ mod tests {
         ));
         assert!(snapshot.terminal_options().is_empty());
         assert!(snapshot.ui_options().is_empty());
+    }
+
+    #[test]
+    fn icon_faces_are_kept_out_of_both_user_font_lists() {
+        let available = |family: &str| {
+            super::FontCatalogEntry::new(
+                family.to_string(),
+                FontAvailability::Available {
+                    resolved_family: family.into(),
+                },
+                FontAvailability::Available {
+                    resolved_family: family.into(),
+                },
+            )
+        };
+        let snapshot = FontCatalogSnapshot::from_entries(
+            0,
+            [
+                available("Segoe Fluent Icons"),
+                available("Segoe MDL2 Assets"),
+                available("HoloLens MDL2 Assets"),
+                available("Wingdings"),
+                available("Wingdings 2"),
+                available("Wingdings 3"),
+                available("Cascadia Mono"),
+            ],
+        );
+
+        assert_eq!(snapshot.terminal_options(), ["Cascadia Mono"]);
+        assert_eq!(snapshot.ui_options(), ["Cascadia Mono"]);
+        assert!(
+            snapshot
+                .availability("Segoe MDL2 Assets", FontCatalogKind::Ui)
+                .is_available()
+        );
+    }
+
+    #[test]
+    fn localized_and_non_latin_text_fonts_remain_user_options() {
+        for family in ["宋体", "微软雅黑", "Microsoft Himalaya", "Himalaya"] {
+            assert!(super::is_user_selectable_font_family(
+                family,
+                FontCatalogKind::Ui
+            ));
+            assert!(super::is_user_selectable_font_family(
+                family,
+                FontCatalogKind::Terminal
+            ));
+        }
     }
 
     #[test]

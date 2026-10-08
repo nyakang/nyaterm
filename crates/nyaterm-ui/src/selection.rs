@@ -221,6 +221,7 @@ impl NyaSelectOption {
         self
     }
 
+    /// Font used by the glyph sample. The option name always inherits the UI font.
     pub fn font_family(mut self, font_family: impl Into<SharedString>) -> Self {
         self.font_family = Some(font_family.into());
         self
@@ -252,20 +253,32 @@ impl gpui_kit::component::select::SelectItem for NyaSelectItem {
     }
 
     fn display_title(&self) -> Option<AnyElement> {
-        self.font_family.as_ref().map(|font_family| {
-            div()
-                .font_family(font_family.clone())
-                .child(self.label.clone())
-                .into_any_element()
-        })
+        // The closed selector uses the ordinary UI font even for font options.
+        None
     }
 
     fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
         div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(self.label.clone()),
+            )
             .when_some(self.font_family.clone(), |this, font_family| {
-                this.font_family(font_family)
+                this.child(
+                    div()
+                        .flex_none()
+                        .font_family(font_family)
+                        .child("AaBb 0123"),
+                )
             })
-            .child(self.label.clone())
     }
 
     fn value(&self) -> &Self::Value {
@@ -672,6 +685,7 @@ mod tests {
 
     use super::{NyaSelectOption, NyaSelectState};
     use crate::sizing::{NYA_FORM_CONTROL_HEIGHT_PX, form_control_size};
+    use gpui_kit::component::select::SelectItem as _;
 
     #[test]
     fn selected_value_tracks_pre_render_updates() {
@@ -760,5 +774,22 @@ mod tests {
     fn select_uses_standard_form_control_size() {
         assert_eq!(NYA_FORM_CONTROL_HEIGHT_PX, 32.);
         assert_eq!(form_control_size(), gpui_kit::component::Size::Medium);
+    }
+
+    #[test]
+    fn font_names_use_ui_titles_regardless_of_their_script() {
+        let mut cx = TestAppContext::single();
+        let options = ["Inter", "宋体", "微软雅黑"]
+            .map(|family| NyaSelectOption::new(family, family).font_family(family));
+        let select = cx.new(|cx| NyaSelectState::new(cx, options.to_vec(), None));
+        let items = cx.read_entity(&select, |select, _| select.items());
+        for item in items {
+            assert_eq!(item.title().as_ref(), item.value());
+            assert!(
+                item.display_title().is_none(),
+                "font names inherit the UI font"
+            );
+            assert_eq!(item.font_family.as_deref(), Some(item.value().as_str()));
+        }
     }
 }
