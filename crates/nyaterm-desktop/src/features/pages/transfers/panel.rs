@@ -472,6 +472,14 @@ mod tests {
                 Modifiers::none(),
             );
             draw_path_fixture(vcx);
+            if remote && cfg!(target_os = "linux") {
+                // Linux deliberately has no remote file drag export; the local
+                // case must still exercise the first-press drag gesture.
+                vcx.update(|_, cx| assert!(!cx.has_active_drag()));
+                assert!(vcx.debug_bounds("transfer-file-drag-preview").is_none());
+                vcx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
+                continue;
+            }
             vcx.update(|_, cx| {
                 assert!(
                     cx.has_active_drag(),
