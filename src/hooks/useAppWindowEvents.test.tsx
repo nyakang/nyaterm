@@ -27,6 +27,7 @@ vi.mock("@/i18n", () => ({ default: { t: (key: string) => key } }));
 function eventOptions(): Parameters<typeof useAppWindowEvents>[0] {
   return {
     addTab: vi.fn().mockReturnValue("created-tab"),
+    applyTmuxState: vi.fn(),
     replaceAppSettings: vi.fn(),
     setTerminalWindows: vi.fn(),
     queueSecurityPrompt: vi.fn(),
@@ -291,7 +292,7 @@ describe("useAppWindowEvents", () => {
     );
     const options = eventOptions();
     const { unmount } = renderHook(() => useAppWindowEvents(options), { wrapper: StrictMode });
-    expect(registrations).toHaveLength(34);
+    expect(registrations).toHaveLength(38);
     unmount();
     await act(async () => {
       for (const registration of registrations) registration.resolve(registration.dispose);

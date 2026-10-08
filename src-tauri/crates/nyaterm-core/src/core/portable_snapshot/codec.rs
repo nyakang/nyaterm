@@ -117,8 +117,9 @@ fn encode_portable_snapshot_redb(snapshot: &PortableSnapshot) -> AppResult<Vec<u
     fs::read(temp.path()).map_err(Into::into)
 }
 
-#[cfg(test)]
-pub(crate) fn encode_v3_raw_snapshot_redb_for_test(
+/// Test-visible helper: `cloud_sync` tests outside this crate encode fixture
+/// snapshots, so this cannot stay `#[cfg(test)]`/`pub(crate)`.
+pub fn encode_v3_raw_snapshot_redb_for_test(
     snapshot: &PortableSnapshot,
     entities: &BTreeMap<String, String>,
     payload_hash: String,

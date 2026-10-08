@@ -531,6 +531,7 @@ async fn telnet_session_task(
                             "Direct modem upload is only available for Serial sessions".to_string(),
                         ));
                     }
+                    Some(SessionCommand::TmuxCommand { .. } | SessionCommand::TmuxDetach) => {}
                     Some(SessionCommand::Close) | None => {
                         break;
                     }

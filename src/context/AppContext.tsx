@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { TmuxSessionState } from "@/lib/tmux/types";
 import type {
   AppRuntimeInfo,
   AppSettings,
@@ -88,6 +89,8 @@ export interface AppContextType {
     options?: { immediatePersist?: boolean; nextActiveTabId?: string | null },
   ) => void;
   closeTab: (tabId: string) => void;
+  /** Reconcile a tmux control-mode state into the owning tab's pane tree. */
+  applyTmuxState: (state: TmuxSessionState) => void;
   persistTabsNow: (extraUi?: Partial<UiConfig>) => Promise<void>;
   appSettings: AppSettings;
   updateAppSettings: (

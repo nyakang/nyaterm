@@ -3156,6 +3156,16 @@
     "selectAll": "全選",
     "translate": "翻譯"
   },
+  "tmux": {
+    "commandError": "tmux 指令失敗：{{message}}",
+    "commandPlaceholder": "tmux 指令，例如 resize-pane -Z",
+    "detach": "分離（遠端 tmux 工作階段保留）",
+    "newWindow": "新增視窗",
+    "splitHorizontal": "上下分割",
+    "splitVertical": "左右分割",
+    "window": "視窗",
+    "zoom": "縮放目前窗格（再按一次還原）"
+  },
   "translation": {
     "ali": "阿里翻譯",
     "baidu": "百度翻譯",

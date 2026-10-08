@@ -288,6 +288,8 @@ pub fn run() {
             cmd::session::attach_session,
             cmd::session::detach_session_renderer,
             cmd::session::close_session,
+            cmd::tmux::tmux_send_command,
+            cmd::tmux::tmux_detach,
             cmd::session::list_sessions,
             cmd::session::get_session_cwd_presentation,
             cmd::session::add_command_history,

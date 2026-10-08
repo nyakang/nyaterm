@@ -1,5 +1,6 @@
 import { listen } from "@/lib/backend/api";
 import { type Dispatch, type SetStateAction, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import type { HostKeyVerifyRequest } from "@/components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
@@ -13,13 +14,15 @@ import { focusTerminalSession } from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
 import { insertTabIntoLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
 import { setBackendTransferDuplicatePrompt } from "@/lib/transferDuplicatePrompt";
+import { updateTmuxState } from "@/lib/tmux/store";
+import type { TmuxSessionState } from "@/lib/tmux/types";
 import { eventTargetsCurrentWindow } from "@/lib/windowManager";
 import type { AppSettings, CloudConflictPreview, WorkspaceSessionType } from "@/types/global";
 import type { SessionConnectAfterEditPayload } from "./useConnectAfterEdit";
 import type { useSecurityPromptQueue } from "./useSecurityPromptQueue";
 
 interface AppWindowEventsOptions
-  extends Pick<AppContextType, "addTab" | "replaceAppSettings">,
+  extends Pick<AppContextType, "addTab" | "applyTmuxState" | "replaceAppSettings">,
     Pick<
       ReturnType<typeof useSecurityPromptQueue>,
       "queueSecurityPrompt" | "removeSecurityPrompt"
@@ -34,6 +37,7 @@ interface AppWindowEventsOptions
 
 export function useAppWindowEvents({
   addTab,
+  applyTmuxState,
   replaceAppSettings,
   setTerminalWindows,
   queueSecurityPrompt,
@@ -44,6 +48,7 @@ export function useAppWindowEvents({
   handleConnectAfterEdit,
   handleOpenPanel,
 }: AppWindowEventsOptions) {
+  const { t } = useTranslation();
   const lastCloudConflictRevisionRef = useRef<string | null>(null);
 
   // Cross-window event listeners
@@ -226,6 +231,20 @@ export function useAppWindowEvents({
       }),
     );
 
+    unsubs.push(
+      listen<TmuxSessionState>("tmux-session-state", (event) => {
+        updateTmuxState(event.payload);
+        applyTmuxState(event.payload);
+      }),
+    );
+
+    unsubs.push(
+      listen<{ message?: string }>("tmux-command-error", (event) => {
+        const message = event.payload?.message;
+        if (message) toast.error(t("tmux.commandError", { message }));
+      }),
+    );
+
     return () => {
       unsubs.forEach((p) => {
         p.then((unsub) => unsub());
@@ -233,7 +252,9 @@ export function useAppWindowEvents({
     };
   }, [
     addTab,
+    applyTmuxState,
     replaceAppSettings,
+    t,
     setTerminalWindows,
     queueSecurityPrompt,
     removeSecurityPrompt,

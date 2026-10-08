@@ -28,6 +28,12 @@ import {
   normalizeQuickCommandUiConfig,
 } from "@/lib/quickCommandSettings";
 import {
+  buildTmuxPaneTree,
+  findTmuxTab,
+  tmuxFallbackLeaf,
+} from "@/lib/tmux/tree";
+import type { TmuxSessionState } from "@/lib/tmux/types";
+import {
   collectSessionPanes,
   createFileDocumentPane,
   createSessionPane,
@@ -1031,6 +1037,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [closeTabs],
   );
 
+  const applyTmuxState = useCallback(
+    (state: TmuxSessionState) => {
+      const currentTabs = tabsRef.current;
+      const tab = findTmuxTab(currentTabs, state.controlSessionId);
+      if (!tab) return;
+
+      if (state.exited) {
+        // Control client detached: fall back to a plain shell leaf so the
+        // tab keeps working as a normal terminal.
+        const leaf = tmuxFallbackLeaf(state, tab);
+        const nextTabs = currentTabs.map((item) =>
+          item.id === tab.id
+            ? { ...item, root: leaf, activePaneId: leaf.id }
+            : item,
+        );
+        void commitTabs(nextTabs);
+        return;
+      }
+
+      const built = buildTmuxPaneTree(state, tab);
+      if (!built) return;
+      const nextTabs = currentTabs.map((item) =>
+        item.id === tab.id
+          ? ensureActivePane({
+              ...item,
+              root: built.root,
+              activePaneId: built.activePaneId,
+            })
+          : item,
+      );
+      void commitTabs(nextTabs);
+    },
+    [commitTabs],
+  );
+
   const reorderTabs = useCallback(
     (fromTabId: string, toIndex: number) => {
       const nextTabs = moveTab(tabsRef.current, fromTabId, toIndex);
@@ -1327,6 +1368,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTab,
       closeTabs,
       closeTab,
+      applyTmuxState,
       persistTabsNow,
       appSettings,
       updateAppSettings,
@@ -1376,6 +1418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTab,
       closeTabs,
       closeTab,
+      applyTmuxState,
       persistTabsNow,
       appSettings,
       updateAppSettings,
