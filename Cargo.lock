@@ -3653,6 +3653,7 @@ dependencies = [
  "gpui_macros",
  "gpui_shared_string",
  "gpui_util",
+ "hdrhistogram",
  "heapless",
  "http_client",
  "image",
@@ -3974,6 +3975,7 @@ dependencies = [
  "gpui_linux",
  "gpui_macos",
  "gpui_web",
+ "gpui_wgpu",
  "gpui_windows",
 ]
 
@@ -4037,6 +4039,7 @@ dependencies = [
  "etagere",
  "gpui",
  "gpui_util",
+ "image",
  "itertools 0.14.0",
  "log",
  "parking_lot",
@@ -4340,6 +4343,16 @@ dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
  "zune-jpeg 0.5.15",
+]
+
+[[package]]
+name = "hdrhistogram"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
+dependencies = [
+ "byteorder",
+ "num-traits",
 ]
 
 [[package]]
@@ -6649,11 +6662,13 @@ dependencies = [
  "aho-corasick",
  "futures",
  "gpui",
+ "gpui_platform",
  "image",
  "nyaterm-core",
  "nyaterm-terminal",
  "nyaterm-ui",
  "regex",
+ "serde_json",
  "smallvec",
  "tracing",
 ]

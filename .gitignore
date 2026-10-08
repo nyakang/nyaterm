@@ -47,6 +47,7 @@ __pycache__/
 
 # Rust / native app
 target/
+/artifacts/renderer*/
 /data/
 nyaterm-portable
 /gen/schemas

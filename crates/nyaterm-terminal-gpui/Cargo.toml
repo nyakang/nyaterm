@@ -17,3 +17,12 @@ regex.workspace = true
 tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 smallvec = "1"
+gpui_platform = { workspace = true, optional = true, features = ["test-support"] }
+serde_json = { workspace = true, optional = true }
+
+[features]
+renderer-bench = ["gpui/test-support", "gpui/profiler", "dep:gpui_platform", "dep:serde_json"]
+
+[[example]]
+name = "renderer_probe"
+required-features = ["renderer-bench"]

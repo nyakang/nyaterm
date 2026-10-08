@@ -184,7 +184,7 @@ fn box_rects(arms: [u8; 4], cell: Rect, thin: f32, mut emit: impl FnMut(Rect)) {
 // Foreground tint, font size and DPI do not create additional texture variants.
 const SHADE_TILE_SIZE: u32 = 64;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct ShadeStyle {
     density: u8,
     color: u32,
@@ -203,6 +203,17 @@ fn shade_asset(density: u8) -> (&'static str, &'static [u8]) {
 pub(super) struct CellGlyphPaintPlan {
     quads: Vec<PaintQuad>,
     shades: Vec<ShadePaint>,
+    shade_regions: Vec<ShadeRegion>,
+    shade_row_top: Option<f32>,
+    previous_shade_regions: Vec<usize>,
+    current_shade_regions: Vec<usize>,
+    previous_shade_cursor: usize,
+}
+
+struct ShadeRegion {
+    rect: Rect,
+    style: ShadeStyle,
+    scale: f32,
 }
 
 struct ShadePaint {
@@ -213,10 +224,36 @@ struct ShadePaint {
 
 impl CellGlyphPaintPlan {
     pub fn primitive_count(&self) -> usize {
-        self.quads.len() + self.shades.len()
+        self.quads.len()
+            + self.shades.len()
+            + self
+                .shade_regions
+                .iter()
+                .map(|region| {
+                    let tiles = |start: f32, end: f32| {
+                        ((end as i32 - 1).div_euclid(SHADE_TILE_SIZE as i32)
+                            - (start as i32).div_euclid(SHADE_TILE_SIZE as i32)
+                            + 1) as usize
+                    };
+                    tiles(region.rect.left, region.rect.right)
+                        * tiles(region.rect.top, region.rect.bottom)
+                })
+                .sum::<usize>()
+    }
+
+    /// Tile after merging neighboring rows, so shared tiles are submitted once.
+    pub fn finish(&mut self) {
+        for region in self.shade_regions.drain(..) {
+            tile_shade(region.rect, region.style, region.scale, &mut self.shades);
+        }
+        self.previous_shade_regions.clear();
+        self.current_shade_regions.clear();
+        self.shade_row_top = None;
+        self.previous_shade_cursor = 0;
     }
 
     pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
+        self.finish();
         for quad in self.quads.drain(..) {
             window.paint_quad(quad);
         }
@@ -243,6 +280,51 @@ fn push_shade(cell: Rect, style: ShadeStyle, scale: f32, out: &mut CellGlyphPain
     if cell.right <= cell.left || cell.bottom <= cell.top {
         return;
     }
+    if out.shade_row_top != Some(cell.top) {
+        std::mem::swap(
+            &mut out.previous_shade_regions,
+            &mut out.current_shade_regions,
+        );
+        out.current_shade_regions.clear();
+        out.previous_shade_cursor = 0;
+        out.shade_row_top = Some(cell.top);
+    }
+    // Glyph runs arrive in column order. A cursor into the previous row makes
+    // matching multiple shade bands linear, without a lookup table or sorting.
+    while let Some(&index) = out.previous_shade_regions.get(out.previous_shade_cursor) {
+        if out.shade_regions[index].rect.right > cell.left {
+            break;
+        }
+        out.previous_shade_cursor += 1;
+    }
+    let previous = out
+        .previous_shade_regions
+        .get(out.previous_shade_cursor)
+        .copied()
+        .filter(|&index| {
+            let last = &out.shade_regions[index];
+            last.style == style
+                && last.scale == scale
+                && last.rect.left == cell.left
+                && last.rect.right == cell.right
+                && last.rect.bottom == cell.top
+        });
+    let index = if let Some(index) = previous {
+        out.shade_regions[index].rect.bottom = cell.bottom;
+        index
+    } else {
+        let index = out.shade_regions.len();
+        out.shade_regions.push(ShadeRegion {
+            rect: cell,
+            style,
+            scale,
+        });
+        index
+    };
+    out.current_shade_regions.push(index);
+}
+
+fn tile_shade(cell: Rect, style: ShadeStyle, scale: f32, out: &mut Vec<ShadePaint>) {
     let tile_size = SHADE_TILE_SIZE as i32;
     let first_x = (cell.left as i32).div_euclid(tile_size) * tile_size;
     let first_y = (cell.top as i32).div_euclid(tile_size) * tile_size;
@@ -264,7 +346,7 @@ fn push_shade(cell: Rect, style: ShadeStyle, scale: f32, out: &mut CellGlyphPain
                     px(SHADE_TILE_SIZE as f32 / scale),
                 ),
             );
-            out.shades.push(ShadePaint {
+            out.push(ShadePaint {
                 bounds,
                 image_bounds,
                 style,
@@ -443,6 +525,7 @@ fn box_arms(ch: char) -> Option<[u8; 4]> {
 
 #[cfg(test)]
 mod tests {
+    use super::SHADE_TILE_SIZE;
     use gpui::{Bounds, point, px, size};
 
     use super::{
@@ -581,13 +664,12 @@ mod tests {
                 for row in 0..24 {
                     push_cell_glyphs(&glyphs, row, geometry(), scale, &mut plan);
                 }
+                plan.finish();
                 if ch == '▓' {
                     assert!(plan.quads.is_empty());
-                    assert!(
-                        plan.primitive_count() < 1_300,
-                        "{} at {scale}",
-                        plan.primitive_count()
-                    );
+                    let width = (800. * scale / SHADE_TILE_SIZE as f32).ceil() as usize;
+                    let height = (480. * scale / SHADE_TILE_SIZE as f32).ceil() as usize;
+                    assert_eq!(plan.primitive_count(), width * height);
                 } else {
                     assert!(plan.shades.is_empty());
                     assert!(plan.quads.len() <= 48);
@@ -626,8 +708,12 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 let mut plan = CellGlyphPaintPlan::default();
-                push_cell_glyphs(&glyphs, 0, geometry, scale, &mut plan);
-                let cell = cell_rect(0, 8, 0, geometry, scale);
+                for row in 0..3 {
+                    push_cell_glyphs(&glyphs, row, geometry, scale, &mut plan);
+                }
+                plan.finish();
+                let mut cell = cell_rect(0, 8, 0, geometry, scale);
+                cell.bottom = cell_rect(0, 8, 2, geometry, scale).bottom;
                 for y in cell.top as i32..cell.bottom as i32 {
                     for x in cell.left as i32..cell.right as i32 {
                         let matching = plan
@@ -657,8 +743,86 @@ mod tests {
     }
 
     #[test]
+    fn vertical_shade_merging_preserves_gaps_colors_densities_and_widths() {
+        let mut plan = CellGlyphPaintPlan::default();
+        for (row, ch, color, width) in [
+            (0, '░', 1, 4),
+            (1, '▒', 1, 4),
+            (3, '▒', 1, 4),
+            (4, '▒', 2, 4),
+            (5, '▒', 2, 2),
+        ] {
+            let glyphs = (0..width)
+                .map(|col| CellGlyph { col, ch, color })
+                .collect::<Vec<_>>();
+            push_cell_glyphs(&glyphs, row, geometry(), 1., &mut plan);
+        }
+        let before = plan.primitive_count();
+        plan.finish();
+        assert_eq!(plan.primitive_count(), before);
+        for row in 0..6 {
+            for col in 0..4 {
+                let x = px(col as f32 * 10. + 5.);
+                let y = px(row as f32 * 20. + 5.);
+                let styles = plan
+                    .shades
+                    .iter()
+                    .filter(|shade| {
+                        shade
+                            .bounds
+                            .intersect(&shade.image_bounds)
+                            .contains(&point(x, y))
+                    })
+                    .map(|shade| (shade.style.density, shade.style.color))
+                    .collect::<Vec<_>>();
+                let expected = match row {
+                    0 => vec![(1, 1)],
+                    1 | 3 => vec![(2, 1)],
+                    4 => vec![(2, 2)],
+                    5 if col < 2 => vec![(2, 2)],
+                    _ => Vec::new(),
+                };
+                assert_eq!(styles, expected, "row={row}, col={col}");
+            }
+        }
+    }
+
+    #[test]
+    fn neighboring_rows_merge_multiple_shade_bands_without_filling_between_them() {
+        let glyphs = (0..8)
+            .map(|col| CellGlyph {
+                col,
+                ch: if col < 4 { '░' } else { '▒' },
+                color: 0x123456,
+            })
+            .collect::<Vec<_>>();
+        let mut plan = CellGlyphPaintPlan::default();
+        for row in 0..3 {
+            push_cell_glyphs(&glyphs, row, geometry(), 1., &mut plan);
+        }
+        plan.finish();
+        assert_eq!(plan.primitive_count(), 3);
+        for y in 0..60 {
+            for x in 0..80 {
+                let owners = plan
+                    .shades
+                    .iter()
+                    .filter(|shade| {
+                        shade
+                            .bounds
+                            .intersect(&shade.image_bounds)
+                            .contains(&point(px(x as f32 + 0.5), px(y as f32 + 0.5)))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(owners.len(), 1);
+                assert_eq!(owners[0].style.density, if x < 40 { 1 } else { 2 });
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "manual CPU paint-plan benchmark; excludes GPU upload and presentation"]
-    fn cell_glyph_plan_benchmark() {
+    fn shade_plan_vs_naive_pixels_benchmark() {
         use std::hint::black_box;
         use std::time::{Duration, Instant};
 
@@ -672,14 +836,14 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for scale in [1., 1.5, 2.] {
-            let baseline = || {
+            let naive_pixels = || {
                 let mut quads = Vec::new();
                 for row in 0..24 {
                     for col in 0..80 {
                         let cell = cell_rect(col, col + 1, row, geometry(), scale);
                         let mut rects = Vec::new();
-                        // Preserve the old per-pixel shade implementation as a
-                        // benchmark baseline, including its temporary cell Vec.
+                        // Algorithmic control only: production previously used font
+                        // glyphs, not this naive per-pixel rectangle builder.
                         for y in cell.top as i32..cell.bottom as i32 {
                             for x in cell.left as i32..cell.right as i32 {
                                 if x.rem_euclid(2) == 1 && y.rem_euclid(2) == 0
@@ -706,6 +870,7 @@ mod tests {
                 for row in 0..24 {
                     push_cell_glyphs(&glyphs, row, geometry(), scale, &mut plan);
                 }
+                plan.finish();
                 black_box(&plan).primitive_count()
             };
             let measure = |iterations, build: &mut dyn FnMut() -> usize| {
@@ -716,12 +881,12 @@ mod tests {
                 }
                 (started.elapsed() / iterations, count)
             };
-            let (old_time, old_count) = measure(4, &mut || baseline());
+            let (old_time, old_count) = measure(4, &mut || naive_pixels());
             let (new_time, new_count) = measure(256, &mut || optimized());
             assert!(new_count < old_count / 100);
             assert!(new_time > Duration::ZERO);
             println!(
-                "scale={scale}: primitives {old_count} -> {new_count}; CPU plan {old_time:?} -> {new_time:?}"
+                "scale={scale}: naive pixel quads {old_count} -> tiled sprites {new_count}; CPU plan {old_time:?} -> {new_time:?}"
             );
         }
     }

@@ -129,7 +129,7 @@ impl TerminalGridSelection {
 struct CachedTerminalPaintRow {
     line: Arc<ShapedLine>,
     background_ranges: Vec<TerminalRowBackgroundRange>,
-    underline_ranges: Vec<TerminalRowUnderlineRange>,
+    text_decorations: TerminalRowTextDecorations,
     text_run_count: usize,
     cell_glyphs: Vec<CellGlyph>,
 }
@@ -142,10 +142,16 @@ struct TerminalRowBackgroundRange {
 }
 
 #[derive(Debug, Clone)]
-struct TerminalRowUnderlineRange {
+struct TerminalRowDecorationRange {
     color: u32,
     start: usize,
     end: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TerminalRowTextDecorations {
+    underlines: Vec<TerminalRowDecorationRange>,
+    strikethroughs: Vec<TerminalRowDecorationRange>,
 }
 
 #[cfg(test)]
@@ -250,7 +256,14 @@ impl NyaTerminalLayoutCache {
     ) -> (Arc<ShapedLine>, bool, std::time::Duration) {
         let (row, did_shape, duration) = self.paint_row(_row, key, || {
             let (line, duration) = shape();
-            (line, duration, 0, Vec::new(), Vec::new(), Vec::new())
+            (
+                line,
+                duration,
+                0,
+                Vec::new(),
+                TerminalRowTextDecorations::default(),
+                Vec::new(),
+            )
         });
         (Arc::clone(&row.line), did_shape, duration)
     }
@@ -265,7 +278,7 @@ impl NyaTerminalLayoutCache {
             std::time::Duration,
             usize,
             Vec<TerminalRowBackgroundRange>,
-            Vec<TerminalRowUnderlineRange>,
+            TerminalRowTextDecorations,
             Vec<CellGlyph>,
         ),
     ) -> (Arc<CachedTerminalPaintRow>, bool, std::time::Duration) {
@@ -283,7 +296,7 @@ impl NyaTerminalLayoutCache {
             std::time::Duration,
             usize,
             Vec<TerminalRowBackgroundRange>,
-            Vec<TerminalRowUnderlineRange>,
+            TerminalRowTextDecorations,
             Vec<CellGlyph>,
         ),
     ) -> (Arc<CachedTerminalPaintRow>, bool, std::time::Duration) {
@@ -304,7 +317,7 @@ impl NyaTerminalLayoutCache {
         if self.rows.len() >= TERMINAL_LAYOUT_CACHE_ROW_CAP {
             self.evict_oldest_row();
         }
-        let (line, duration, text_run_count, background_ranges, underline_ranges, cell_glyphs) =
+        let (line, duration, text_run_count, background_ranges, text_decorations, cell_glyphs) =
             build();
         self.shape_calls = self.shape_calls.saturating_add(1);
         self.shape_duration_us = self
@@ -313,7 +326,7 @@ impl NyaTerminalLayoutCache {
         let row = Arc::new(CachedTerminalPaintRow {
             line: Arc::clone(&line),
             background_ranges,
-            underline_ranges,
+            text_decorations,
             text_run_count,
             cell_glyphs,
         });
@@ -412,11 +425,19 @@ pub struct NyaTerminalElement {
     fill_height: bool,
     zebra_stripes_enabled: bool,
     target_line: Option<TerminalLineId>,
+    #[cfg(feature = "renderer-bench")]
+    cell_glyph_rendering: bool,
 }
 
 struct TerminalPaintRow {
     y: Pixels,
     line: Arc<ShapedLine>,
+}
+
+struct TerminalStrikethroughPaint {
+    origin: gpui::Point<Pixels>,
+    width: Pixels,
+    color: u32,
 }
 
 pub struct TerminalImagePaint {
@@ -447,6 +468,7 @@ pub struct NyaTerminalPaintPlan {
     cell_glyphs: CellGlyphPaintPlan,
     /// Terminal underline decorations painted with current scroll geometry.
     underlines: Vec<PaintQuad>,
+    strikethroughs: Vec<TerminalStrikethroughPaint>,
     /// Decoded graphics with Kitty z>0, painted above terminal text.
     images_above: Vec<TerminalImagePaint>,
     /// Accent placeholders for undecodable above-text images.
@@ -499,12 +521,32 @@ impl NyaTerminalElement {
             fill_height: false,
             zebra_stripes_enabled: false,
             target_line: None,
+            #[cfg(feature = "renderer-bench")]
+            cell_glyph_rendering: true,
         }
     }
 
     pub fn with_layout_cache(mut self, cache: Arc<Mutex<NyaTerminalLayoutCache>>) -> Self {
         self.layout_cache = Some(cache);
         self
+    }
+
+    /// Diagnostic control for comparing font glyphs with the cell graphics layer.
+    #[cfg(feature = "renderer-bench")]
+    pub fn with_cell_glyph_rendering(mut self, enabled: bool) -> Self {
+        self.cell_glyph_rendering = enabled;
+        self
+    }
+
+    fn cell_glyph_rendering_enabled(&self) -> bool {
+        #[cfg(feature = "renderer-bench")]
+        {
+            self.cell_glyph_rendering
+        }
+        #[cfg(not(feature = "renderer-bench"))]
+        {
+            true
+        }
     }
 
     pub fn with_bold_default_foreground(mut self, enabled: bool) -> Self {
@@ -639,6 +681,8 @@ impl NyaTerminalElement {
         self.bold_weight.to_bits().hash(&mut hasher);
         self.bold_default_foreground.hash(&mut hasher);
         self.cell_width.max(1.0).to_bits().hash(&mut hasher);
+        #[cfg(feature = "renderer-bench")]
+        self.cell_glyph_rendering.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -878,8 +922,18 @@ fn append_terminal_glyph_span(
         return append_padded_wide_cells(output, &span.text);
     }
     let start = output.len();
-    for ch in span.text.chars() {
-        if is_cell_glyph(ch) {
+    let mut chars = span.text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // Keep the original base glyph for attached marks, even if highlighting
+        // splits the mark into another span. Shaping a space changes its anchor.
+        let has_attached_mark = is_cell_glyph(ch)
+            && (chars
+                .peek()
+                .is_some_and(|ch| terminal_is_zero_width_mark(*ch))
+                || cells.and_then(|cells| cells.get(*col)).is_some_and(|cell| {
+                    cell.text.chars().skip(1).any(terminal_is_zero_width_mark)
+                }));
+        if is_cell_glyph(ch) && !has_attached_mark {
             if !cells
                 .and_then(|cells| cells.get(*col))
                 .is_some_and(|cell| cell.style.hidden)
@@ -906,6 +960,12 @@ fn append_terminal_glyph_span(
     output.len() - start
 }
 
+fn cursor_cell_glyph(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    (is_cell_glyph(ch) && chars.next().is_none()).then_some(ch)
+}
+
 fn terminal_text_run_for_span(
     span: &TerminalHighlightSpan,
     len: usize,
@@ -930,14 +990,8 @@ fn terminal_text_run_for_span(
             .into(),
         background_color: None,
         underline: None,
-        strikethrough: span.strikeout.then(|| {
-            line_strike_color(
-                span.color
-                    .map(rgb)
-                    .unwrap_or_else(|| rgb(palette.terminal_fg))
-                    .into(),
-            )
-        }),
+        // Cell graphics must be below decorations, so strikes paint separately.
+        strikethrough: None,
     }
 }
 
@@ -1030,42 +1084,75 @@ fn terminal_background_ranges_for_cells(
     out
 }
 
+#[cfg(test)]
 fn terminal_underline_ranges_for_spans(
     spans: &[TerminalHighlightSpan],
     palette: nyaterm_ui::ThemePalette,
-) -> Vec<TerminalRowUnderlineRange> {
-    let mut out = Vec::new();
-    let mut pending: Option<TerminalRowUnderlineRange> = None;
+) -> Vec<TerminalRowDecorationRange> {
+    terminal_text_decorations_for_row(spans, None, palette, false).underlines
+}
+
+fn append_terminal_decoration_range(
+    out: &mut Vec<TerminalRowDecorationRange>,
+    color: u32,
+    start: usize,
+    end: usize,
+) {
+    if end <= start {
+        return;
+    }
+    if let Some(last) = out
+        .last_mut()
+        .filter(|last| last.color == color && last.end == start)
+    {
+        last.end = end;
+    } else {
+        out.push(TerminalRowDecorationRange { color, start, end });
+    }
+}
+
+fn terminal_text_decorations_for_row(
+    spans: &[TerminalHighlightSpan],
+    cells: Option<&[nyaterm_terminal::RenderCell]>,
+    palette: nyaterm_ui::ThemePalette,
+    bold_default_foreground: bool,
+) -> TerminalRowTextDecorations {
+    let mut out = TerminalRowTextDecorations::default();
     let mut col = 0usize;
     for span in spans {
         let span_cols = terminal_cell_count(&span.text);
-        if span_cols == 0 {
-            continue;
-        }
         if span.underline {
-            let color = span.color.unwrap_or(palette.accent);
-            match pending.as_mut() {
-                Some(current) if current.color == color && current.end == col => {
-                    current.end = col + span_cols;
-                }
-                _ => {
-                    if let Some(range) = pending.take() {
-                        out.push(range);
-                    }
-                    pending = Some(TerminalRowUnderlineRange {
-                        color,
-                        start: col,
-                        end: col + span_cols,
-                    });
-                }
-            }
-        } else if let Some(range) = pending.take() {
-            out.push(range);
+            append_terminal_decoration_range(
+                &mut out.underlines,
+                span.color.unwrap_or(palette.accent),
+                col,
+                col + span_cols,
+            );
+        }
+        if span.strikeout {
+            append_terminal_decoration_range(
+                &mut out.strikethroughs,
+                span.color.unwrap_or(palette.terminal_fg),
+                col,
+                col + span_cols,
+            );
         }
         col += span_cols;
     }
-    if let Some(range) = pending.take() {
-        out.push(range);
+    // Highlight/search colors apply within shaped text. Full cells remain the
+    // authority for decorated blanks beyond that trimmed text boundary.
+    for (col, cell) in cells.unwrap_or_default().iter().enumerate().skip(col) {
+        let color = if cell.style.hidden {
+            crate::resolve_cell_bg(palette, cell.style).unwrap_or(palette.terminal_bg)
+        } else {
+            crate::resolve_cell_fg(palette, cell.style, bold_default_foreground)
+        };
+        if cell.style.underline {
+            append_terminal_decoration_range(&mut out.underlines, color, col, col + 1);
+        }
+        if cell.style.strikeout {
+            append_terminal_decoration_range(&mut out.strikethroughs, color, col, col + 1);
+        }
     }
     out
 }
@@ -1167,7 +1254,7 @@ fn terminal_underline_bounds(
 
 fn push_terminal_underline_ranges(
     row: usize,
-    ranges: &[TerminalRowUnderlineRange],
+    ranges: &[TerminalRowDecorationRange],
     geometry: TerminalPaintGeometry,
     out: &mut Vec<PaintQuad>,
 ) {
@@ -1617,7 +1704,7 @@ impl Element for NyaTerminalElement {
                         line_started_at.elapsed(),
                         text_runs.len(),
                         Vec::new(),
-                        Vec::new(),
+                        TerminalRowTextDecorations::default(),
                         Vec::new(),
                     );
                 }
@@ -1666,8 +1753,12 @@ impl Element for NyaTerminalElement {
                 let background_ranges = snapshot_row
                     .map(|row| terminal_background_ranges_for_cells(&row.cells, self.palette))
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
-                let underline_ranges =
-                    terminal_underline_ranges_for_spans(glyph_spans, self.palette);
+                let text_decorations = terminal_text_decorations_for_row(
+                    glyph_spans,
+                    snapshot_row.map(|row| row.cells.as_ref()),
+                    self.palette,
+                    self.bold_default_foreground,
+                );
 
                 let mut text =
                     String::with_capacity(display_line.len().saturating_add(glyph_spans.len()));
@@ -1675,14 +1766,18 @@ impl Element for NyaTerminalElement {
                 let mut cell_glyphs = Vec::new();
                 let mut col = 0;
                 for span in glyph_spans {
-                    let run_len = append_terminal_glyph_span(
-                        &mut text,
-                        span,
-                        &mut col,
-                        &mut cell_glyphs,
-                        snapshot_row.map(|row| row.cells.as_ref()),
-                        self.palette.terminal_fg,
-                    );
+                    let run_len = if self.cell_glyph_rendering_enabled() {
+                        append_terminal_glyph_span(
+                            &mut text,
+                            span,
+                            &mut col,
+                            &mut cell_glyphs,
+                            snapshot_row.map(|row| row.cells.as_ref()),
+                            self.palette.terminal_fg,
+                        )
+                    } else {
+                        append_padded_wide_cells(&mut text, &span.text)
+                    };
                     if run_len > 0 {
                         text_runs.push(terminal_text_run_for_span(
                             span,
@@ -1724,7 +1819,7 @@ impl Element for NyaTerminalElement {
                     line_started_at.elapsed(),
                     text_runs.len(),
                     background_ranges,
-                    underline_ranges,
+                    text_decorations,
                     cell_glyphs,
                 )
             };
@@ -1738,14 +1833,14 @@ impl Element for NyaTerminalElement {
                     duration,
                     text_run_count,
                     background_ranges,
-                    underline_ranges,
+                    text_decorations,
                     cell_glyphs,
                 ) = build_row(window);
                 (
                     Arc::new(CachedTerminalPaintRow {
                         line,
                         background_ranges,
-                        underline_ranges,
+                        text_decorations,
                         text_run_count,
                         cell_glyphs,
                     }),
@@ -1781,10 +1876,22 @@ impl Element for NyaTerminalElement {
                 });
                 push_terminal_underline_ranges(
                     row,
-                    &painted_row.underline_ranges,
+                    &painted_row.text_decorations.underlines,
                     paint_geometry,
                     &mut plan.underlines,
                 );
+                // Match GPUI's font-metric strike position, including its
+                // vertical centering, while painting above custom cell glyphs.
+                let ascent = painted_row.line.ascent;
+                let baseline = (px(cell_h) - ascent - painted_row.line.descent) / 2. + ascent;
+                let strike_y = y + (ascent * 0.5 + baseline) * 0.5;
+                for range in &painted_row.text_decorations.strikethroughs {
+                    plan.strikethroughs.push(TerminalStrikethroughPaint {
+                        origin: point(bounds.left() + px(range.start as f32 * cell_w), strike_y),
+                        width: px((range.end - range.start) as f32 * cell_w),
+                        color: range.color,
+                    });
+                }
             } else {
                 plan.prefetched_row_count = plan.prefetched_row_count.saturating_add(1);
             }
@@ -1919,7 +2026,9 @@ impl Element for NyaTerminalElement {
             {
                 let cursor_line = self.snapshot.line(self.snapshot.cursor.row).unwrap_or("");
                 let cursor_text = terminal_cell_text_at_col(cursor_line, self.snapshot.cursor.col);
-                if let Some(ch) = cursor_text.chars().next().filter(|&ch| is_cell_glyph(ch)) {
+                if let Some(ch) =
+                    cursor_cell_glyph(&cursor_text).filter(|_| self.cell_glyph_rendering_enabled())
+                {
                     push_cell_glyphs(
                         &[CellGlyph {
                             col: self.snapshot.cursor.col,
@@ -1981,6 +2090,8 @@ impl Element for NyaTerminalElement {
             }
         }
 
+        plan.cell_glyphs.finish();
+        plan.cursor_cell_glyphs.finish();
         let cache_stats_after = self
             .layout_cache
             .as_ref()
@@ -2158,6 +2269,13 @@ impl Element for NyaTerminalElement {
                 );
             }
             prepaint.cell_glyphs.paint(window, cx);
+            for strike in prepaint.strikethroughs.drain(..) {
+                window.paint_strikethrough(
+                    strike.origin,
+                    strike.width,
+                    &line_strike_color(rgb(strike.color).into()),
+                );
+            }
             for quad in prepaint.underlines.drain(..) {
                 window.paint_quad(quad);
             }
