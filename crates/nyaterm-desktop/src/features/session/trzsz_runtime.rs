@@ -2447,6 +2447,37 @@ mod tests {
     }
 
     #[test]
+    fn idle_zmodem_output_stays_in_active_trzsz_protocol() {
+        let root = TestConfigDir::new("nyaterm-zmodem-idle-trzsz");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "protocol-session");
+        cx.update_entity(&app, |app, cx| {
+            let state = app.trzsz_state_mut("protocol-session");
+            state.protocol_active = true;
+            // A binary trzsz frame consumes raw payload bytes, including '*'.
+            state.protocol.filter_terminal_output(b"#DATA:2\n");
+            assert_eq!(
+                app.process_zmodem_output("protocol-session", b"*", cx),
+                (Vec::new(), false)
+            );
+            assert_eq!(
+                app.drain_zmodem_idle_output(Instant::now() + Duration::from_millis(100), cx),
+                (Vec::new(), false)
+            );
+            let output = app
+                .trzsz_state_mut("protocol-session")
+                .protocol
+                .filter_terminal_output(b"x");
+            assert!(output.passthrough.is_empty());
+            assert_eq!(output.frames.len(), 1);
+            assert_eq!(
+                output.frames[0].payload,
+                TrzszProtocolPayload::EncodedBytes(b"*x".to_vec())
+            );
+        });
+    }
+
+    #[test]
     fn idle_trzsz_prefix_reaches_terminal_without_a_second_output_event() {
         let root = TestConfigDir::new("nyaterm-trzsz-idle-colon");
         let mut cx = TestAppContext::single();

@@ -21,6 +21,11 @@ const ZBIN32: u8 = 0x43; // 'C'
 /// Minimum header bytes: ZPAD ZPAD ZDLE (ZHEX|ZBIN|ZBIN32)
 const ZMODEM_HEADER_LEN: usize = 4;
 
+// Bare asterisks can be shell echoes; prefixes containing ZDLE get more time
+// for fragmented delivery, but neither may hide terminal text indefinitely.
+const ZMODEM_ASTERISK_IDLE_TIMEOUT: Duration = Duration::from_millis(50);
+const ZMODEM_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Five consecutive CAN (0x18) bytes abort a ZMODEM session.
 const CANCEL_SEQ_LEN: usize = 5;
 
@@ -108,6 +113,7 @@ pub enum ZmodemDetectResult {
 pub struct ZmodemDetector {
     /// Bytes withheld until they are known not to be a split ZMODEM header.
     pending: Vec<u8>,
+    pending_updated_at: Option<Instant>,
     /// Whether `pending[0]` is at the beginning of the stream or directly after a newline.
     pending_starts_at_line_start: bool,
 }
@@ -122,6 +128,7 @@ impl ZmodemDetector {
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),
+            pending_updated_at: None,
             pending_starts_at_line_start: true,
         }
     }
@@ -149,7 +156,14 @@ impl ZmodemDetector {
     /// When an upload is detected, the "rz -y" shell echo is stripped from
     /// passthrough so the user doesn't see the command.
     pub fn feed(&mut self, data: &[u8]) -> ZmodemDetectResult {
+        self.feed_at(data, Instant::now())
+    }
+
+    fn feed_at(&mut self, data: &[u8], now: Instant) -> ZmodemDetectResult {
         self.pending.extend_from_slice(data);
+        if !data.is_empty() {
+            self.pending_updated_at = Some(now);
+        }
 
         if let Some((direction, header_start)) = detect_zmodem_start(&self.pending) {
             let mut passthrough = self.pending[..header_start].to_vec();
@@ -171,12 +185,37 @@ impl ZmodemDetector {
             self.pending.drain(..keep_from);
             self.pending_starts_at_line_start = ends_at_line_start(&passthrough);
         }
+        if self.pending.is_empty() {
+            self.pending_updated_at = None;
+        }
 
         ZmodemDetectResult::NoMatch { passthrough }
     }
 
+    /// Release an incomplete header without waiting for another output chunk.
+    /// Callers must route these bytes through downstream protocol detectors
+    /// before displaying them, preserving their order relative to later output.
+    pub fn flush_pending_if_idle(&mut self, now: Instant) -> Vec<u8> {
+        let Some(updated_at) = self.pending_updated_at else {
+            return Vec::new();
+        };
+        let timeout = if suffix_contains_zdle(&self.pending) {
+            ZMODEM_HEADER_IDLE_TIMEOUT
+        } else {
+            ZMODEM_ASTERISK_IDLE_TIMEOUT
+        };
+        if now.saturating_duration_since(updated_at) < timeout {
+            return Vec::new();
+        }
+        let bytes = std::mem::take(&mut self.pending);
+        self.pending_updated_at = None;
+        self.pending_starts_at_line_start = ends_at_line_start(&bytes);
+        bytes
+    }
+
     pub fn reset(&mut self) {
         self.pending.clear();
+        self.pending_updated_at = None;
         self.pending_starts_at_line_start = true;
     }
 }
@@ -1258,6 +1297,148 @@ mod tests {
         assert_eq!(
             detected_direction(detector.feed(b"1rest")),
             ZmodemDirection::Upload
+        );
+    }
+
+    #[test]
+    fn isolated_asterisks_are_released_without_another_output_chunk() {
+        for text in [b"*".as_slice(), b"**", b"\r\n*", b"\r\n**"] {
+            let mut detector = ZmodemDetector::new();
+            let now = Instant::now();
+            let ZmodemDetectResult::NoMatch { mut passthrough } = detector.feed_at(text, now)
+            else {
+                panic!("ordinary asterisks must not trigger a transfer");
+            };
+            assert!(
+                detector
+                    .flush_pending_if_idle(now + Duration::from_millis(25))
+                    .is_empty()
+            );
+            passthrough.extend(detector.flush_pending_if_idle(now + Duration::from_millis(100)));
+            assert_eq!(passthrough, text);
+            assert!(detector.is_idle());
+            assert!(
+                detector
+                    .flush_pending_if_idle(now + Duration::from_secs(2))
+                    .is_empty()
+            );
+            let ZmodemDetectResult::NoMatch { passthrough } = detector.feed(b"*") else {
+                panic!("ordinary asterisk must not trigger a transfer");
+            };
+            assert_eq!(passthrough, b"*", "idle flush must preserve line position");
+        }
+    }
+
+    #[test]
+    fn repeated_asterisk_echoes_and_backspace_preserve_wire_order() {
+        let mut detector = ZmodemDetector::new();
+        let started_at = Instant::now();
+        let mut visible = Vec::new();
+        for press in 0..7 {
+            let now = started_at + Duration::from_millis(press * 300);
+            let ZmodemDetectResult::NoMatch { passthrough } = detector.feed_at(b"*", now) else {
+                panic!("asterisk echo must not trigger a transfer");
+            };
+            visible.extend(passthrough);
+            visible.extend(detector.flush_pending_if_idle(now + Duration::from_millis(100)));
+            assert_eq!(visible, vec![b'*'; press as usize + 1]);
+        }
+        let ZmodemDetectResult::NoMatch { passthrough } = detector.feed(b"\x08\x1b[K") else {
+            panic!("backspace must not trigger a transfer");
+        };
+        assert_eq!(passthrough, b"\x08\x1b[K");
+
+        detector.reset();
+        detector.feed_at(b"**", started_at);
+        let ZmodemDetectResult::NoMatch { passthrough } =
+            detector.feed_at(b"\x08\x1b[K", started_at + Duration::from_millis(20))
+        else {
+            panic!("backspace must release held asterisks");
+        };
+        assert_eq!(passthrough, b"**\x08\x1b[K");
+        assert!(
+            detector
+                .flush_pending_if_idle(started_at + Duration::from_secs(2))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn idle_flush_preserves_split_zmodem_headers() {
+        for (header, direction) in [
+            (b"**\x18B00".as_slice(), ZmodemDirection::Download),
+            (b"**\x18B01".as_slice(), ZmodemDirection::Upload),
+            (b"**\x18A\x01".as_slice(), ZmodemDirection::Upload),
+            (b"**\x18C\x00".as_slice(), ZmodemDirection::Download),
+        ] {
+            for split in 1..header.len() {
+                let mut detector = ZmodemDetector::new();
+                let now = Instant::now();
+                let ZmodemDetectResult::NoMatch { passthrough } =
+                    detector.feed_at(&header[..split], now)
+                else {
+                    panic!("incomplete header must wait for remaining bytes");
+                };
+                assert!(passthrough.is_empty());
+                assert!(
+                    detector
+                        .flush_pending_if_idle(now + Duration::from_millis(25))
+                        .is_empty()
+                );
+                let ZmodemDetectResult::Detected {
+                    direction: actual_direction,
+                    passthrough,
+                    initial_bytes,
+                } = detector.feed_at(&header[split..], now + Duration::from_millis(30))
+                else {
+                    panic!("split header must still be detected at boundary {split}");
+                };
+                assert_eq!(actual_direction, direction);
+                assert_eq!(initial_bytes, header);
+                assert!(passthrough.is_empty());
+                assert!(
+                    detector
+                        .flush_pending_if_idle(now + Duration::from_secs(2))
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recognizable_header_gets_more_time_but_eventually_releases() {
+        let mut detector = ZmodemDetector::new();
+        let now = Instant::now();
+        detector.feed_at(b"**\x18B0", now);
+        assert!(
+            detector
+                .flush_pending_if_idle(now + Duration::from_millis(100))
+                .is_empty()
+        );
+        // Empty polls must not postpone the idle deadline.
+        detector.feed_at(b"", now + Duration::from_millis(900));
+        assert_eq!(
+            detector.flush_pending_if_idle(now + Duration::from_secs(1)),
+            b"**\x18B0"
+        );
+        assert!(detector.is_idle());
+    }
+
+    #[test]
+    fn reset_discards_pending_header_before_idle_flush() {
+        let mut detector = ZmodemDetector::new();
+        let now = Instant::now();
+        detector.feed_at(b"**", now);
+        detector.reset();
+        assert!(
+            detector
+                .flush_pending_if_idle(now + Duration::from_secs(2))
+                .is_empty()
+        );
+        detector.feed_at(b"*", now);
+        assert_eq!(
+            detector.flush_pending_if_idle(now + Duration::from_millis(100)),
+            b"*"
         );
     }
 

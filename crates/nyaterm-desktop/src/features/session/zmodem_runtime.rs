@@ -4,7 +4,7 @@ use nyaterm_transport::{
     SftpService, SftpTransferDirection, SftpTransferProgress, SshSessionConfig, ZmodemAction,
     ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
 };
-use std::{collections::HashSet, path::PathBuf, sync::mpsc, thread};
+use std::{collections::HashSet, path::PathBuf, sync::mpsc, thread, time::Instant};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::short_id;
@@ -121,6 +121,13 @@ impl Default for ZmodemSessionState {
 }
 
 impl ZmodemSessionState {
+    fn flush_idle_output(&mut self, now: Instant) -> Vec<u8> {
+        if self.transfer.is_some() || self.worker.is_some() {
+            return Vec::new();
+        }
+        self.detector.flush_pending_if_idle(now)
+    }
+
     pub(super) fn is_active(&self) -> bool {
         self.transfer.is_some()
             || self.worker.is_some()
@@ -579,6 +586,37 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn drain_zmodem_idle_output(
+        &mut self,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> (Vec<(String, Vec<u8>)>, bool) {
+        let expired = self
+            .session
+            .zmodem_states_mut()
+            .filter_map(|(session_id, state)| {
+                let bytes = state.flush_idle_output(now);
+                (!bytes.is_empty()).then(|| (session_id.clone(), bytes))
+            })
+            .collect::<Vec<_>>();
+        let mut outputs = Vec::new();
+        let mut root_chrome_dirty = false;
+        for (session_id, bytes) in expired {
+            if !self.session.has_session(&session_id)
+                || self.terminal.session_id_is_retired(&session_id)
+            {
+                continue;
+            }
+            // Match the ordinary output path: ZMODEM precedes trzsz.
+            let (bytes, dirty) = self.process_trzsz_output(&session_id, &bytes, cx);
+            root_chrome_dirty |= dirty;
+            if !bytes.is_empty() {
+                outputs.push((session_id, bytes));
+            }
+        }
+        (outputs, root_chrome_dirty)
+    }
+
     pub(in crate::features) fn zmodem_output_can_bypass_detector(
         &self,
         session_id: &str,
@@ -1029,6 +1067,8 @@ const ZMODEM_WORKER_EVENT_DRAIN_BATCH: usize = 32;
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use gpui::{AppContext as _, Context, Subscription, TestAppContext};
     use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
     use nyaterm_transport::{
@@ -1037,7 +1077,9 @@ mod tests {
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
+    use crate::test_support::TestConfigDir;
 
     use super::{ZmodemTransferJobUpdate, ZmodemWorkerCommand, process_zmodem_worker_command};
 
@@ -1103,6 +1145,46 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> usize {
         cx.update_entity(observer, |observer, _| observer.count)
+    }
+
+    #[test]
+    fn idle_zmodem_asterisk_reaches_terminal_without_a_second_output_event() {
+        let root = TestConfigDir::new("nyaterm-zmodem-idle-asterisk");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(
+                app.process_zmodem_output(SESSION_ID, b"*", cx),
+                (Vec::new(), false)
+            );
+            assert!(app.session.has_protocol_runtime_sessions());
+            let now = Instant::now() + Duration::from_millis(100);
+            assert_eq!(
+                app.drain_zmodem_idle_output(now, cx),
+                (vec![(SESSION_ID.to_string(), b"*".to_vec())], false)
+            );
+            assert!(app.zmodem_output_can_bypass_detector(SESSION_ID, b"normal output"));
+            assert_eq!(app.drain_zmodem_idle_output(now, cx), (Vec::new(), false));
+            assert_eq!(
+                app.process_zmodem_output(SESSION_ID, b"*", cx),
+                (b"*".to_vec(), false)
+            );
+        });
+    }
+
+    #[test]
+    fn output_discontinuity_discards_zmodem_prefix_before_idle_flush() {
+        let root = TestConfigDir::new("nyaterm-zmodem-idle-reset");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
+        cx.update_entity(&app, |app, cx| {
+            app.process_zmodem_output(SESSION_ID, b"**", cx);
+            app.note_zmodem_output_discontinuity(SESSION_ID, 1, cx);
+            assert_eq!(
+                app.drain_zmodem_idle_output(Instant::now() + Duration::from_secs(2), cx),
+                (Vec::new(), false)
+            );
+        });
     }
 
     #[test]

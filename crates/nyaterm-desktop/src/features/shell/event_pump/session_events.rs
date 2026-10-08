@@ -304,8 +304,12 @@ impl NyaTermApp {
             && self.session.pending_events_are_empty()
             && !self.session.event_bridge_has_pending_ui_work()
         {
-            let (outputs, dirty) = self.drain_trzsz_idle_output(Instant::now(), cx);
+            let now = Instant::now();
+            let (mut outputs, dirty) = self.drain_zmodem_idle_output(now, cx);
             root_chrome_dirty |= dirty;
+            let (trzsz_outputs, dirty) = self.drain_trzsz_idle_output(now, cx);
+            root_chrome_dirty |= dirty;
+            outputs.extend(trzsz_outputs);
             for (session_id, data) in outputs {
                 let started_at = Instant::now();
                 output_event_count += 1;
