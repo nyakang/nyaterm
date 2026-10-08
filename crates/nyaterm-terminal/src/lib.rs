@@ -2673,10 +2673,9 @@ fn compress_render_row(row: &[RenderCell]) -> Vec<StyledSpan> {
             style: CellStyle::default(),
         });
     }
-    while spans
-        .last()
-        .is_some_and(|span| span.text.trim_end().is_empty() && spans.len() > 1)
-    {
+    while spans.last().is_some_and(|span| {
+        span.text.trim_end().is_empty() && span.style == CellStyle::default() && spans.len() > 1
+    }) {
         spans.pop();
     }
     spans

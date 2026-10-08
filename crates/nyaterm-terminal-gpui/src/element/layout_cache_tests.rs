@@ -10,16 +10,17 @@ use super::{
     NyaTerminalElement, NyaTerminalLayoutCache, TERMINAL_LAYOUT_CACHE_ROW_CAP,
     TERMINAL_LAYOUT_CACHE_ROW_ORDER_MIN_COMPACT, TerminalGridSelection, TerminalKeywordLayoutState,
     TerminalLineDecorations, TerminalRowBackgroundRange, TerminalRowUnderlineRange,
-    append_padded_wide_cells, hash_styled_spans, pad_wide_cells,
+    append_padded_wide_cells, append_terminal_glyph_span, hash_styled_spans, pad_wide_cells,
     push_dynamic_decoration_backgrounds, push_dynamic_link_underlines,
     push_dynamic_selection_background, push_terminal_zebra_stripes,
-    terminal_background_ranges_for_spans, terminal_cursor_cell_hidden,
-    terminal_glyph_decorations_needed, terminal_layout_height_px, terminal_layout_prefetch_row,
-    terminal_link_underline_color, terminal_plain_row_fast_path, terminal_row_layout_key,
-    terminal_selection_cols_for_snapshot_row, terminal_text_run_for_span,
+    terminal_background_ranges_for_cells, terminal_background_ranges_for_spans,
+    terminal_cursor_cell_hidden, terminal_glyph_decorations_needed, terminal_layout_height_px,
+    terminal_layout_prefetch_row, terminal_link_underline_color, terminal_plain_row_fast_path,
+    terminal_row_layout_key, terminal_selection_cols_for_snapshot_row, terminal_text_run_for_span,
     terminal_underline_bounds, terminal_underline_ranges_for_spans,
     terminal_visible_rows_for_bounds, terminal_visible_rows_for_clipped_bounds,
 };
+use crate::glyphs::CellGlyph;
 use crate::keywords::{
     TerminalKeywordHighlightLookup, compile_terminal_keyword_highlighter,
     precompute_terminal_keyword_highlights, terminal_keyword_row_reuse_keys,
@@ -290,6 +291,7 @@ fn row_cache_evicts_incrementally_when_full() {
                 1,
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             )
         });
     }
@@ -525,6 +527,7 @@ fn zebra_state_does_not_invalidate_row_shaping() {
             1,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         )
     });
     assert!(did_shape);
@@ -631,6 +634,11 @@ fn paint_row_cache_reuses_full_row_payload() {
                 start: 1,
                 end: 3,
             }],
+            vec![CellGlyph {
+                col: 2,
+                ch: '█',
+                color: 0xabcdef,
+            }],
         )
     });
 
@@ -655,6 +663,91 @@ fn paint_row_cache_reuses_full_row_payload() {
     assert_eq!(cached.underline_ranges[0].color, 0x00ffff);
     assert_eq!(cached.underline_ranges[0].start, 1);
     assert_eq!(cached.underline_ranges[0].end, 3);
+    assert_eq!(
+        cached.cell_glyphs,
+        vec![CellGlyph {
+            col: 2,
+            ch: '█',
+            color: 0xabcdef
+        }]
+    );
+}
+
+#[test]
+fn cell_backgrounds_cover_trailing_blanks_wide_spacers_and_reverse_video() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut screen = TerminalScreen::new(24, 3);
+    screen.advance("\x1b[41m中TEXT\x1b[44m        \x1b[0m\r\n\x1b[7m    \x1b[0m".as_bytes());
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+    assert_eq!(row.text, "中TEXT");
+    let ranges = terminal_background_ranges_for_cells(&row.cells, palette);
+    assert_eq!(ranges.len(), 2);
+    assert_eq!((ranges[0].start, ranges[0].end), (0, 6));
+    assert_eq!((ranges[1].start, ranges[1].end), (6, 14));
+    assert_eq!(ranges[1].bg, palette.terminal_ansi_color(4));
+    let ranges = terminal_background_ranges_for_cells(&snapshot.row(1).unwrap().cells, palette);
+    assert_eq!(
+        (ranges[0].start, ranges[0].end, ranges[0].bg),
+        (0, 4, palette.terminal_fg)
+    );
+}
+
+#[test]
+fn custom_glyphs_preserve_columns_after_wide_text_and_combining_marks() {
+    let mut span = highlight_span("中e\u{301}█▀A", Some(0x123456), None, false);
+    span.bold = true;
+    span.italic = true;
+    let mut text = String::new();
+    let mut col = 0;
+    let mut glyphs = Vec::new();
+    let len = append_terminal_glyph_span(&mut text, &span, &mut col, &mut glyphs, None, 0);
+    assert_eq!(text, "中 e\u{301}  A");
+    assert_eq!(len, text.len());
+    assert_eq!(col, 6);
+    assert_eq!(
+        glyphs,
+        vec![
+            CellGlyph {
+                col: 3,
+                ch: '█',
+                color: 0x123456
+            },
+            CellGlyph {
+                col: 4,
+                ch: '▀',
+                color: 0x123456
+            }
+        ]
+    );
+}
+
+#[test]
+fn hidden_custom_glyphs_do_not_paint_over_selection() {
+    let mut screen = TerminalScreen::new(8, 2);
+    screen.advance("\x1b[8m█\x1b[0m▀".as_bytes());
+    let snapshot = screen.snapshot();
+    let mut text = String::new();
+    let mut col = 0;
+    let mut glyphs = Vec::new();
+    let span = highlight_span("█▀", Some(0x123456), None, false);
+    append_terminal_glyph_span(
+        &mut text,
+        &span,
+        &mut col,
+        &mut glyphs,
+        Some(&snapshot.row(0).unwrap().cells),
+        0,
+    );
+    assert_eq!(text, "  ");
+    assert_eq!(
+        glyphs,
+        vec![CellGlyph {
+            col: 1,
+            ch: '▀',
+            color: 0x123456
+        }]
+    );
 }
 
 #[test]
@@ -666,6 +759,7 @@ fn paint_row_cache_promotes_equivalent_keyword_result() {
             Arc::new(ShapedLine::default()),
             std::time::Duration::ZERO,
             1,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         )
@@ -693,6 +787,7 @@ fn paint_row_cache_promotion_does_not_accumulate_stale_order_keys() {
             Arc::new(ShapedLine::default()),
             std::time::Duration::ZERO,
             1,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         )
@@ -768,6 +863,7 @@ fn cached_keyword_rows_reuse_without_surface_background() {
             std::time::Duration::ZERO,
             1,
             background_ranges,
+            Vec::new(),
             Vec::new(),
         )
     });

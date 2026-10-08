@@ -18,6 +18,47 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
 }
 
 #[test]
+fn snapshot_preserves_styled_trailing_blanks_while_trimming_plain_text() {
+    for alternate in [false, true] {
+        let mut screen = TerminalScreen::new(24, 3);
+        if alternate {
+            screen.advance(b"\x1b[?1049h");
+        }
+        screen.advance(b"\x1b[41mTEXT\x1b[44m                \x1b[0m\r\n");
+        let snapshot = screen.snapshot();
+        let row = snapshot.row(0).unwrap();
+        assert_eq!(row.text, "TEXT");
+        assert_eq!(row.styled_spans.len(), 2);
+        assert_eq!(row.styled_spans[1].text, "                ");
+        assert_eq!(row.styled_spans[1].style.bg, Some(4));
+        assert!(row.cells[4..20].iter().all(|cell| cell.style.bg == Some(4)));
+        // Erasing the row must invalidate both the cell and compressed paint data.
+        screen.advance(b"\x1b[1;1H\x1b[2K");
+        let cleared = screen.snapshot();
+        assert!(
+            cleared
+                .row(0)
+                .unwrap()
+                .cells
+                .iter()
+                .all(|cell| cell.style.bg.is_none())
+        );
+    }
+}
+
+#[test]
+fn snapshot_retains_reverse_and_underlined_blank_spans() {
+    let mut screen = TerminalScreen::new(16, 2);
+    screen.advance(b"X\x1b[7m    \x1b[0;4m    \x1b[0m");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+    assert_eq!(row.text, "X");
+    assert_eq!(row.styled_spans.len(), 3);
+    assert!(row.styled_spans[1].style.reverse);
+    assert!(row.styled_spans[2].style.underline);
+}
+
+#[test]
 fn osc133_input_columns_rebuild_snapshot_without_changing_text_revision() {
     let mut screen = TerminalScreen::new(40, 2);
     screen.advance(b"prompt> input");

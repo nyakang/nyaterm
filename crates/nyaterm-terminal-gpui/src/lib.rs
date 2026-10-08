@@ -8,6 +8,7 @@ mod types;
 
 mod ansi;
 mod element;
+mod glyphs;
 mod images;
 mod input;
 mod keywords;
