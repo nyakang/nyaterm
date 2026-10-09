@@ -1826,7 +1826,7 @@
     "newCategoryParentHint": "Créer comme sous-catégorie de « %{category} »",
     "newCategoryRootHint": "Créer au niveau supérieur",
     "moveToParentLevel": "Déplacer au niveau supérieur",
-    "dropRootCategory": "Déposez une catégorie ici pour la déplacer à la racine",
+    "dropRootCategory": "Déplacer à la racine",
     "dropBeforeCategory": "Insérer avant « %{category} »",
     "dropAfterCategory": "Insérer après « %{category} »",
     "dropInsideCategory": "Déplacer dans « %{category} »",

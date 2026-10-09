@@ -1826,7 +1826,7 @@
     "newCategoryParentHint": "將在「%{category}」下建立子分類",
     "newCategoryRootHint": "將在頂層建立分類",
     "moveToParentLevel": "移動到上一層",
-    "dropRootCategory": "將分類拖到此處，移動到根層級",
+    "dropRootCategory": "移動到根層級",
     "dropBeforeCategory": "插入到「%{category}」之前",
     "dropAfterCategory": "插入到「%{category}」之後",
     "dropInsideCategory": "移動到「%{category}」內",

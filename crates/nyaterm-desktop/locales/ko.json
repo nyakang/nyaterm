@@ -1826,7 +1826,7 @@
     "newCategoryParentHint": "\"%{category}\" 아래에 하위 카테고리를 생성합니다",
     "newCategoryRootHint": "최상위에 카테고리를 생성합니다",
     "moveToParentLevel": "상위 단계로 이동",
-    "dropRootCategory": "카테고리를 여기에 놓아 최상위로 이동",
+    "dropRootCategory": "최상위로 이동",
     "dropBeforeCategory": "“%{category}” 앞에 삽입",
     "dropAfterCategory": "“%{category}” 뒤에 삽입",
     "dropInsideCategory": "“%{category}” 안으로 이동",

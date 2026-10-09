@@ -1826,7 +1826,7 @@
     "newCategoryParentHint": "「%{category}」のサブカテゴリとして作成",
     "newCategoryRootHint": "最上位に作成",
     "moveToParentLevel": "一つ上の階層へ移動",
-    "dropRootCategory": "ここにカテゴリをドロップして最上位へ移動",
+    "dropRootCategory": "最上位へ移動",
     "dropBeforeCategory": "「%{category}」の前に挿入",
     "dropAfterCategory": "「%{category}」の後に挿入",
     "dropInsideCategory": "「%{category}」内へ移動",
