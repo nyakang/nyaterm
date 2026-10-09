@@ -37,6 +37,28 @@ function ctrlUEvent(keyCode: number, key = "Process"): KeyboardEvent {
   return event;
 }
 
+function shiftEvent(
+  code: "ShiftLeft" | "ShiftRight",
+  key = "Shift",
+  keyCode = 16,
+  isComposing = false,
+  modifiers: KeyboardEventInit = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+    ...modifiers,
+  });
+  Object.defineProperties(event, {
+    isComposing: { value: isComposing },
+    keyCode: { value: keyCode },
+  });
+  return event;
+}
+
 function createHarness(
   imeRoute: XTerminalImeKeyboardRoute,
   sessionType: SessionType = "Local",
@@ -142,6 +164,119 @@ function shortcutEvent(key: string, code: string, options: KeyboardEventInit = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("installXTerminalKeyboardController Shift IME toggle", () => {
+  it("delegates composing Process/ShiftLeft to the native IME", () => {
+    const harness = createHarness("native-ime");
+    const event = shiftEvent("ShiftLeft", "Process", 229, true);
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledExactlyOnceWith(event);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("delegates ending composition ShiftRight to the native IME", () => {
+    const harness = createHarness("native-ime");
+    const event = shiftEvent("ShiftRight");
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledExactlyOnceWith(event);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("delegates legacy keyCode 229 ShiftRight to xterm", () => {
+    const harness = createHarness("xterm");
+    const event = shiftEvent("ShiftRight", "Process", 229);
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledExactlyOnceWith(event);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it.each(["ShiftLeft", "ShiftRight"] as const)(
+    "allows the OS to toggle input language for idle %s without sending input",
+    (code) => {
+      const harness = createHarness("application");
+      const event = shiftEvent(code);
+
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+      expect(harness.routeKeyboardEvent).toHaveBeenCalledExactlyOnceWith(event);
+      expect(harness.terminal.input).not.toHaveBeenCalled();
+      expect(harness.sendRawInput).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["ControlLeft", "Control", { ctrlKey: true }],
+    ["AltRight", "Alt", { altKey: true }],
+    ["MetaLeft", "Meta", { metaKey: true }],
+  ] as const)("keeps standalone %s blocked", (code, key, modifiers) => {
+    const harness = createHarness("native-ime");
+    const event = new KeyboardEvent("keydown", {
+      key,
+      code,
+      ...modifiers,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Ctrl+Shift", { ctrlKey: true }],
+    ["Alt+Shift", { altKey: true }],
+    ["Meta+Shift", { metaKey: true }],
+  ] as const)("keeps %s modifier-only events blocked", (_label, modifiers) => {
+    const harness = createHarness("native-ime");
+    const event = shiftEvent("ShiftLeft", "Shift", 16, false, modifiers);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps Shift blocked while the app is locked", () => {
+    const harness = createHarness("native-ime", "SSH", {}, { appLocked: true });
+    const event = shiftEvent("ShiftLeft", "Process", 229, true);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Shift+Insert paste shortcut", () => {
+    const harness = createHarness("application", "SSH");
+    const event = new KeyboardEvent("keydown", {
+      key: "Insert",
+      code: "Insert",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.pasteClipboard).toHaveBeenCalledOnce();
+    expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
 });
 
 describe("installXTerminalKeyboardController IME Backspace routing", () => {

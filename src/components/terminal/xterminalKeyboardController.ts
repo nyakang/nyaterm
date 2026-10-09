@@ -132,6 +132,16 @@ export function installXTerminalKeyboardController({
     }
 
     if (isModifierOnlyKeyEvent(e)) {
+      if (
+        (e.code === "ShiftLeft" || e.code === "ShiftRight") &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey
+      ) {
+        // Leave the native IME's language switch intact. Only let xterm
+        // handle Shift when the IME owns the composition boundary.
+        return imeTracker.routeKeyboardEvent(e) !== "application";
+      }
       e.preventDefault();
       return false;
     }
