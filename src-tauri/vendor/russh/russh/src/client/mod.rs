@@ -1195,6 +1195,7 @@ impl Session {
         while !self.common.disconnected {
             self.common.received_data = false;
             let mut sent_keepalive = false;
+            let mut keepalive_timer_elapsed = false;
             tokio::select! {
                 r = &mut reading => {
                     let (stream_read, mut buffer, mut opening_cipher) = match r {
@@ -1225,6 +1226,9 @@ impl Session {
                     reading.set(start_reading(stream_read, buffer, opening_cipher));
                 }
                 () = &mut keepalive_timer => {
+                    // An expired timer must be rearmed even when authentication
+                    // is still waiting for MFA / keyboard-interactive input.
+                    keepalive_timer_elapsed = true;
                     if let Some(ref mut enc) = self.common.encrypted {
                         if matches!(enc.state, EncryptedState::Authenticated) {
                             let (alive_timeouts, want_reply) =
@@ -1296,7 +1300,7 @@ impl Session {
             if should_reset_keepalive_timer(
                 self.common.config.keepalive_mode,
                 self.common.received_data,
-                sent_keepalive,
+                keepalive_timer_elapsed,
             ) {
                 if let (futures::future::Either::Right(ref mut sleep), Some(d)) = (
                     keepalive_timer.as_mut().as_pin_mut(),
@@ -1723,8 +1727,11 @@ mod tests {
     use std::io::Write;
     use std::num::Wrapping;
     use std::sync::Arc;
+    use std::time::Duration;
 
-    use ssh_encoding::Encode;
+    use futures::FutureExt;
+    use ssh_encoding::{Decode, Encode};
+    use tokio::io::{AsyncReadExt, DuplexStream};
     use tokio::sync::mpsc::channel;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1862,6 +1869,180 @@ mod tests {
         "".encode(&mut packet).unwrap();
         u32::MAX.encode(&mut packet).unwrap();
         packet
+    }
+
+    fn spawn_keepalive_loop(
+        mut session: Session,
+    ) -> (DuplexStream, tokio::task::JoinHandle<Result<(), crate::Error>>) {
+        let (client, peer) = tokio::io::duplex(4096);
+        let task = tokio::spawn(async move {
+            let (reader, mut writer) = SshRead::new(client).split();
+            let mut handler = TestHandler;
+            let mut kex_done_signal = None;
+            session
+                .run_inner(reader, &mut writer, &mut handler, &mut kex_done_signal)
+                .await
+                .map(|_| ())
+        });
+        (peer, task)
+    }
+
+    fn expect_keepalive_packet(peer: &mut DuplexStream, want_reply: bool) {
+        let mut bytes = [0; 128];
+        let n = match peer.read(&mut bytes).now_or_never() {
+            Some(Ok(n)) => n,
+            other => panic!("keepalive was not sent on its scheduled tick: {other:?}"),
+        };
+        assert!(n >= 6);
+        let packet_length = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+        assert_eq!(n, packet_length + 4);
+        let padding_length = bytes[4] as usize;
+        let mut payload = &bytes[5..(4 + packet_length - padding_length)];
+        assert_eq!(u8::decode(&mut payload).unwrap(), msg::GLOBAL_REQUEST);
+        assert_eq!(String::decode(&mut payload).unwrap(), "keepalive@openssh.com");
+        assert_eq!(u8::decode(&mut payload).unwrap(), u8::from(want_reply));
+        assert!(payload.is_empty());
+    }
+
+    fn assert_no_keepalive_packet(peer: &mut DuplexStream) {
+        let mut bytes = [0; 128];
+        assert!(
+            peer.read(&mut bytes).now_or_never().is_none(),
+            "unexpected keepalive before the next timer deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn compatible_keepalive_waiting_for_auth_rearms_without_sending() {
+        let interval = Duration::from_secs(10);
+        let (mut session, _sender, mut replies) = keyboard_interactive_session();
+        session.common.config = Arc::new(Config {
+            keepalive_interval: Some(interval),
+            keepalive_mode: KeepaliveMode::Compatible,
+            ..Config::default()
+        });
+        let (mut peer, task) = spawn_keepalive_loop(session);
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(interval).await;
+        tokio::task::yield_now().await;
+        assert_no_keepalive_packet(&mut peer);
+
+        // A delayed keyboard-interactive/MFA exchange completes *between*
+        // ticks: an expired-but-unrearmed Sleep would send immediately here.
+        tokio::time::advance(interval / 2).await;
+        let mut packets = PacketWriter::clear();
+        packets.packet_raw(&[msg::USERAUTH_SUCCESS]).unwrap();
+        packets.flush_into(&mut peer).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(matches!(replies.try_recv(), Ok(Reply::AuthSuccess)));
+        tokio::task::yield_now().await;
+        assert_no_keepalive_packet(&mut peer);
+
+        tokio::time::advance(interval / 2).await;
+        tokio::task::yield_now().await;
+        expect_keepalive_packet(&mut peer, false);
+        tokio::time::advance(interval).await;
+        tokio::task::yield_now().await;
+        expect_keepalive_packet(&mut peer, false);
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[cfg(feature = "flate2")]
+    #[tokio::test(start_paused = true)]
+    async fn compatible_keepalive_emits_periodic_requests_amid_inbound_traffic() {
+        let interval = Duration::from_secs(5);
+        let mut session = authenticated_session();
+        session.common.config = Arc::new(Config {
+            keepalive_interval: Some(interval),
+            keepalive_max: 1,
+            keepalive_mode: KeepaliveMode::Compatible,
+            ..Config::default()
+        });
+        // The fixture's compression is only for its other tests.
+        session.common.encrypted.as_mut().unwrap().decompress = Decompress::None;
+        let (_sender, receiver) = channel(session.common.config.channel_buffer_size);
+        session.receiver = receiver;
+        let (mut peer, task) = spawn_keepalive_loop(session);
+        tokio::task::yield_now().await;
+
+        let mut packets = PacketWriter::clear();
+        for _ in 0..3 {
+            for _ in 0..4 {
+                tokio::time::advance(Duration::from_secs(1)).await;
+                packets.packet_raw(&[msg::IGNORE]).unwrap();
+                packets.flush_into(&mut peer).await.unwrap();
+                tokio::task::yield_now().await;
+                assert_no_keepalive_packet(&mut peer);
+            }
+            tokio::time::advance(Duration::from_secs(1)).await;
+            tokio::task::yield_now().await;
+            expect_keepalive_packet(&mut peer, false);
+            assert!(!task.is_finished(), "Compatible must not time out without replies");
+        }
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[cfg(feature = "flate2")]
+    #[tokio::test(start_paused = true)]
+    async fn strict_keepalive_resets_on_inbound_and_times_out_without_reply() {
+        let interval = Duration::from_secs(5);
+        let mut session = authenticated_session();
+        session.common.config = Arc::new(Config {
+            keepalive_interval: Some(interval),
+            keepalive_max: 1,
+            keepalive_mode: KeepaliveMode::Strict,
+            ..Config::default()
+        });
+        session.common.encrypted.as_mut().unwrap().decompress = Decompress::None;
+        let (_sender, receiver) = channel(session.common.config.channel_buffer_size);
+        session.receiver = receiver;
+        let (mut peer, task) = spawn_keepalive_loop(session);
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(4)).await;
+        let mut packets = PacketWriter::clear();
+        packets.packet_raw(&[msg::IGNORE]).unwrap();
+        packets.flush_into(&mut peer).await.unwrap();
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_no_keepalive_packet(&mut peer); // original deadline was postponed
+
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+        expect_keepalive_packet(&mut peer, true);
+
+        tokio::time::advance(interval).await;
+        tokio::task::yield_now().await;
+        assert!(matches!(task.await, Ok(Err(crate::Error::KeepaliveTimeout))));
+    }
+
+    #[cfg(feature = "flate2")]
+    #[tokio::test(start_paused = true)]
+    async fn disabled_keepalive_stays_pending() {
+        let mut session = authenticated_session();
+        session.common.config = Arc::new(Config {
+            keepalive_interval: None,
+            ..Config::default()
+        });
+        let (_sender, receiver) = channel(session.common.config.channel_buffer_size);
+        session.receiver = receiver;
+        let (mut peer, task) = spawn_keepalive_loop(session);
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+        assert_no_keepalive_packet(&mut peer);
+        assert!(!task.is_finished());
+
+        task.abort();
+        let _ = task.await;
     }
 
     #[test]
@@ -2225,9 +2406,9 @@ fn process_keepalive_tick(config: &Config, alive_timeouts: usize) -> Result<(usi
 fn should_reset_keepalive_timer(
     mode: KeepaliveMode,
     received_data: bool,
-    sent_keepalive: bool,
+    keepalive_timer_elapsed: bool,
 ) -> bool {
-    sent_keepalive || (received_data && mode == KeepaliveMode::Strict)
+    keepalive_timer_elapsed || (received_data && mode == KeepaliveMode::Strict)
 }
 
 /// The configuration of clients.
