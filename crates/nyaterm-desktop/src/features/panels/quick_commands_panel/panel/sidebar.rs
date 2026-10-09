@@ -10,8 +10,6 @@ use crate::features::{
 
 use super::{QuickCommandDragKind, QuickCommandDragPayload, QuickCommandDragPreview};
 
-const ROOT_DROP_TARGET: &str = "quick-command.category-root-drop";
-
 impl NyaTermApp {
     pub(super) fn quick_command_category_sidebar(
         &mut self,
@@ -55,6 +53,7 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .gap_1();
+        let mut all_categories = None;
         for option in categories {
             let id = option.id.clone();
             let drag_option_id = option.id.clone();
@@ -268,6 +267,42 @@ impl NyaTermApp {
                             },
                         ))
                 })
+                .when(option.id == "all", |this| {
+                    this.on_drag_move(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<QuickCommandDragPayload>, _, cx| {
+                            let payload = event.drag(cx);
+                            if payload.kind != QuickCommandDragKind::Category
+                                || !event.bounds.contains(&event.event.position)
+                            {
+                                if this
+                                    .commands
+                                    .quick_drop_target()
+                                    .is_some_and(|target| target.id == "all")
+                                {
+                                    this.commands.clear_quick_drop_target();
+                                    cx.notify();
+                                }
+                                return;
+                            }
+                            if this.commands.set_quick_drop_target(QuickCommandDropTarget {
+                                id: "all".to_string(),
+                                position: QuickCommandDropPosition::Inside,
+                            }) {
+                                this.ensure_drop_hover_clock(cx);
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drop(cx.listener(
+                        |this, payload: &QuickCommandDragPayload, _, cx| {
+                            cx.stop_propagation();
+                            let config = (payload.kind == QuickCommandDragKind::Category)
+                                .then(|| this.commands.move_quick_category_to_root(&payload.id))
+                                .flatten();
+                            this.finish_quick_command_reorder(config, cx);
+                        },
+                    ))
+                })
                 .when(option.id == "uncategorized", |this| {
                     this.on_drop(cx.listener(
                         move |this, payload: &QuickCommandDragPayload, _, cx| {
@@ -282,21 +317,38 @@ impl NyaTermApp {
                         },
                     ))
                 });
-            category_sidebar =
-                category_sidebar.child(NyaContextMenu::new(row, menu_items).into_any_element());
+            let row = NyaContextMenu::new(row, menu_items).into_any_element();
+            if option.id == "all" {
+                // Keep the root drop target reachable when the category tree scrolls.
+                all_categories = Some(row);
+            } else {
+                category_sidebar = category_sidebar.child(row);
+            }
         }
-        // Keep the root target outside the scroll viewport so it remains reachable
-        // even when the category tree fills the sidebar.
-        let root_hover = cx.has_active_drag()
-            && self
-                .commands
-                .quick_drop_target()
-                .is_some_and(|target| target.id == ROOT_DROP_TARGET);
+        category_sidebar = category_sidebar.child(
+            NyaContextMenu::new(
+                div()
+                    .id("quick-command-category-blank")
+                    .debug_selector(|| "quick-command-category-blank".to_string())
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(32.)),
+                [NyaMenuItem::action(t!("quickCommands.addCategory"))
+                    .icon("icons/fe/new-folder.svg")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_new_quick_command_category(None, window, cx);
+                    }))],
+            )
+            .into_any_element(),
+        );
         let drop_hint = self
             .commands
             .quick_drop_target()
             .filter(|_| cx.has_active_drag())
             .and_then(|target| {
+                if target.id == "all" {
+                    return Some(t!("quickCommands.dropRootCategory").to_string());
+                }
                 self.commands
                     .quick_command_categories()
                     .iter()
@@ -327,77 +379,21 @@ impl NyaTermApp {
             .flex_col()
             .border_r_1()
             .border_color(rgb(palette.border))
+            .when_some(all_categories, |sidebar, row| {
+                sidebar.child(div().flex_shrink_0().p(px(6.)).pb(px(0.)).child(row))
+            })
             .child(category_sidebar)
-            .child(
-                NyaContextMenu::new(
+            .when_some(drop_hint, |sidebar, hint| {
+                sidebar.child(
                     div()
-                        .id("quick-command-category-blank")
-                        .debug_selector(|| "quick-command-category-blank".to_string())
-                        .m(px(6.))
-                        .h(px(80.))
+                        .debug_selector(|| "quick-command-category-drop-hint".to_string())
                         .flex_shrink_0()
                         .p_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(if root_hover {
-                            rgb(palette.link)
-                        } else {
-                            rgb(palette.border)
-                        })
-                        .when(root_hover, |target| {
-                            target.bg(rgba((palette.primary << 8) | 0x24))
-                        })
                         .text_size(px(10.))
-                        .text_color(rgb(palette.text_dimmed))
-                        .child(t!("quickCommands.dropRootCategory").to_string())
-                        .child(
-                            div()
-                                .mt_2()
-                                .text_color(rgb(palette.link))
-                                .child(drop_hint.unwrap_or_default()),
-                        )
-                        .on_drag_move(cx.listener(
-                            |this, event: &gpui::DragMoveEvent<QuickCommandDragPayload>, _, cx| {
-                                let payload = event.drag(cx);
-                                if payload.kind != QuickCommandDragKind::Category
-                                    || !event.bounds.contains(&event.event.position)
-                                {
-                                    if this
-                                        .commands
-                                        .quick_drop_target()
-                                        .is_some_and(|target| target.id == ROOT_DROP_TARGET)
-                                    {
-                                        this.commands.clear_quick_drop_target();
-                                        cx.notify();
-                                    }
-                                    return;
-                                }
-                                if this.commands.set_quick_drop_target(QuickCommandDropTarget {
-                                    id: ROOT_DROP_TARGET.to_string(),
-                                    position: QuickCommandDropPosition::Inside,
-                                }) {
-                                    this.ensure_drop_hover_clock(cx);
-                                    cx.notify();
-                                }
-                            },
-                        ))
-                        .on_drop(
-                            cx.listener(|this, payload: &QuickCommandDragPayload, _, cx| {
-                                cx.stop_propagation();
-                                let config = (payload.kind == QuickCommandDragKind::Category)
-                                    .then(|| this.commands.move_quick_category_to_root(&payload.id))
-                                    .flatten();
-                                this.finish_quick_command_reorder(config, cx);
-                            }),
-                        ),
-                    [NyaMenuItem::action(t!("quickCommands.addCategory"))
-                        .icon("icons/fe/new-folder.svg")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_new_quick_command_category(None, window, cx);
-                        }))],
+                        .text_color(rgb(palette.link))
+                        .child(hint),
                 )
-                .into_any_element(),
-            )
+            })
             .into_any_element()
     }
 

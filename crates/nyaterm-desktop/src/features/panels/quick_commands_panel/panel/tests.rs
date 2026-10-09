@@ -323,7 +323,7 @@ fn category_drag_tracks_only_the_hovered_row_and_shows_before_after_inside() {
 }
 
 #[test]
-fn category_drag_to_root_works_with_only_one_root_and_keeps_children() {
+fn category_drag_to_all_moves_to_root_and_keeps_children() {
     let root = TestTempDir::new("nyaterm-category-root-drag");
     let mut cx = TestAppContext::single();
     let app = app(&mut cx, &root);
@@ -343,20 +343,22 @@ fn category_drag_to_root_works_with_only_one_root_and_keeps_children() {
         .unwrap()
         .center();
     let target = cx
-        .debug_bounds("quick-command-category-blank")
+        .debug_bounds("quick-command-category-all")
         .unwrap()
         .center();
     drag(cx, source, target);
     app.read_with(cx, |app, _| {
-        assert_eq!(
-            app.commands.quick_drop_target().unwrap().id,
-            "quick-command.category-root-drop"
-        )
+        assert_eq!(app.commands.quick_drop_target().unwrap().id, "all")
     });
+    assert!(
+        cx.debug_bounds("quick-command-category-drop-hint")
+            .is_some()
+    );
     cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
     draw(cx);
     app.read_with(cx, |app, _| {
         let categories = app.commands.quick_command_categories();
+        assert!(app.commands.quick_drop_target().is_none());
         assert_eq!(
             categories
                 .iter()
@@ -375,6 +377,10 @@ fn category_drag_to_root_works_with_only_one_root_and_keeps_children() {
             Some("child")
         );
     });
+    assert!(
+        cx.debug_bounds("quick-command-category-drop-hint")
+            .is_none()
+    );
     let stored = app.update(cx, |app, _| {
         app.store_blocking_client()
             .request_fn(nyaterm_store::StoreDomain::Commands, |store| {
@@ -667,9 +673,9 @@ fn category_after_marker_follows_the_whole_subtree_and_root_target_stays_visible
             .replace_quick_command_catalog(Vec::new(), categories);
     });
     let cx = host(&mut cx, &app);
-    let footer = cx.debug_bounds("quick-command-category-blank").unwrap();
+    let all = cx.debug_bounds("quick-command-category-all").unwrap();
     assert!(
-        footer.top() > px(0.) && footer.bottom() <= px(500.),
+        all.top() > px(0.) && all.bottom() <= px(500.),
         "root target must stay in the visible viewport"
     );
     let source = cx
@@ -688,16 +694,124 @@ fn category_after_marker_follows_the_whole_subtree_and_root_target_stays_visible
         cx.debug_bounds("quick-command-category-insertion-root")
             .is_none()
     );
-    // The pinned footer remains a usable root drop target despite overflowing rows.
-    let target = footer.center();
+    // "All" remains pinned when the tree is scrolled during a drag.
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: child.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-200.))),
+        ..Default::default()
+    });
+    draw(cx);
+    assert_eq!(cx.debug_bounds("quick-command-category-all").unwrap(), all);
+    assert!(
+        cx.debug_bounds("quick-command-category-root")
+            .unwrap()
+            .top()
+            < row.top()
+    );
+    let target = all.center();
     cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
     draw(cx);
     app.read_with(cx, |app, _| {
-        assert_eq!(
-            app.commands.quick_drop_target().unwrap().id,
-            "quick-command.category-root-drop"
-        )
+        assert_eq!(app.commands.quick_drop_target().unwrap().id, "all")
     });
     cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
     draw(cx);
+}
+
+#[test]
+fn all_category_drop_target_clears_on_leave_and_cancel() {
+    let root = TestTempDir::new("nyaterm-category-all-cancel");
+    let mut cx = TestAppContext::single();
+    let app = app(&mut cx, &root);
+    app.update(&mut cx, |app, _| {
+        app.commands.replace_quick_command_catalog(
+            Vec::new(),
+            vec![
+                category("root", None, 0),
+                category("child", Some("root"), 0),
+            ],
+        );
+    });
+    let cx = host(&mut cx, &app);
+    let source = cx
+        .debug_bounds("quick-command-category-child")
+        .unwrap()
+        .center();
+    let target = cx
+        .debug_bounds("quick-command-category-all")
+        .unwrap()
+        .center();
+    drag(cx, source, target);
+    cx.simulate_mouse_move(
+        point(px(790.), px(490.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert!(app.commands.quick_drop_target().is_none())
+    });
+    assert!(
+        cx.debug_bounds("quick-command-category-drop-hint")
+            .is_none()
+    );
+    cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.commands.quick_drop_target().unwrap().id, "all")
+    });
+    cx.update(|window, cx| assert!(cx.stop_active_drag(window)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(32));
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert!(app.commands.quick_drop_target().is_none());
+        assert_eq!(
+            app.commands.quick_command_categories()[1]
+                .parent_id
+                .as_deref(),
+            Some("root")
+        );
+    });
+    assert!(
+        cx.debug_bounds("quick-command-category-drop-hint")
+            .is_none()
+    );
+}
+
+#[test]
+fn command_drag_to_all_keeps_category_but_uncategorized_removes_it() {
+    let root = TestTempDir::new("nyaterm-command-all-drag");
+    let mut cx = TestAppContext::single();
+    let app = app(&mut cx, &root);
+    app.update(&mut cx, |app, _| {
+        let mut cmd = command("cmd", "pwd");
+        cmd.category_id = Some("root".into());
+        app.commands
+            .replace_quick_command_catalog(vec![cmd], vec![category("root", None, 0)]);
+    });
+    let cx = host(&mut cx, &app);
+    for (selector, expected_category) in [
+        ("quick-command-category-all", Some("root")),
+        ("quick-command-category-uncategorized", None),
+    ] {
+        let source = cx.debug_bounds("quick-command-row-cmd").unwrap().center();
+        let target = cx.debug_bounds(selector).unwrap().center();
+        drag(cx, source, target);
+        app.read_with(cx, |app, _| {
+            assert!(app.commands.quick_drop_target().is_none())
+        });
+        assert!(
+            cx.debug_bounds("quick-command-category-drop-hint")
+                .is_none()
+        );
+        cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                app.commands.quick_commands()[0].category_id.as_deref(),
+                expected_category
+            );
+        });
+    }
 }
