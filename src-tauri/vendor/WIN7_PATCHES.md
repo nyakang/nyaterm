@@ -27,3 +27,20 @@ This file records dependency patches that are only present because the isolated
   loader from source. `.github/scripts/prepare-webview2-win7-loader.ps1` also
   verifies/reinstalls that loader and replaces already-copied Cargo
   `target/**/out/x64` build outputs with the same pinned binary.
+
+## arboard 3.6.1
+
+- Source: crates.io `arboard` 3.6.1 (MIT OR Apache-2.0).
+- Reason: its Windows `CF_HDROP` file-list writer calls
+  `PathCchStripPrefix` from `api-ms-win-core-path-l1-1-0.dll`, which is
+  unavailable on Windows 7 and causes a load-time failure.
+- Patch: `.github/scripts/enable-win7-cargo-patches.ps1` verifies the exact
+  registry source version and `src/platform/windows.rs` SHA-256, then patches
+  a temporary crate copy selected by Win7-only `[patch.crates-io]`.
+  `GetFinalPathNameByHandleW` (supported since Vista) still retrieves the
+  final UTF-16 path. The temporary patch strips the extended `\\?\` prefix
+  from DOS drive paths and converts `\\?\UNC\` to `\\` for file-list
+  clipboard consumers, preserving Unicode and a terminating NUL.
+- Scope: regular Windows 10/11 and other platform builds continue to use the
+  unmodified registry package. The Win7 PE audit rejects both the unsupported
+  API-set DLL and `PathCchStripPrefix` before NSIS packaging.
