@@ -2684,6 +2684,8 @@
     "syncGistCapacityHint": "Gitee 程式碼片段可能已達檔案數上限。清理舊快照後重新推送通常即可恢復。",
     "syncMasterPasswordMissingDesc": "請先設定主密碼。未設定主密碼前，雲端同步保持停用。",
     "syncMasterPasswordReadyDesc": "雲端同步會使用你的主密碼加密遠端快照。",
+    "syncMergeConnections": "合併新增連線",
+    "syncMergeConnectionsHint": "只合併雙方新增的連線及其分組、圖示、金鑰、帳號、驗證碼與代理。相同 ID 內容衝突或其他設定不同時不會自動合併，仍可上傳本機或下載遠端版本。",
     "syncProvider": "提供方",
     "syncProviderConfig": "儲存提供方設定",
     "syncProviderConfigDesc": "設定雲端同步使用的遠端儲存提供方與名稱空間。",
@@ -2697,6 +2699,7 @@
     "syncRecoverCurrentSuccess": "遠端同步中繼資料已復原。",
     "syncRemoteIncompleteTitle": "遠端同步資料不完整",
     "syncResolveDownloadSuccess": "遠端版本已成功下載。",
+    "syncResolveMergeSuccess": "新增連線已合併並同步。",
     "syncResolveUploadSuccess": "本機版本已成功上傳。",
     "syncSaveSuccess": "雲端同步設定已儲存。",
     "syncState": {

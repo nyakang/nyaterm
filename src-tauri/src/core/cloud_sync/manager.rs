@@ -33,7 +33,9 @@ use super::remote::{
 };
 
 use crate::core::portable_snapshot::{
-    PortableSnapshot, PortableSnapshotKind, apply_portable_snapshot, build_portable_snapshot,
+    PortableSnapshot, PortableSnapshotKind, apply_merged_connection_entities,
+    apply_portable_snapshot, build_portable_snapshot, calculate_payload_hash,
+    merge_additive_sync_connections,
 };
 
 const CLOUD_SYNC_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -349,6 +351,7 @@ impl CloudSyncManager {
                 "upload_local" => self.push_snapshot("resolve_upload", true).await,
                 "download_remote" => self.pull_snapshot("resolve_download", true).await,
                 "recover_current_remote" => self.recover_current_remote(action).await,
+                "merge_connections" => self.merge_connections_conflict().await,
                 _ => Err(AppError::Config(format!(
                     "Unsupported conflict resolution action '{}'",
                     action
@@ -367,6 +370,163 @@ impl CloudSyncManager {
                 Err(error)
             }
         }
+    }
+
+    async fn merge_connections_conflict(self: &Arc<Self>) -> AppResult<()> {
+        const TRIGGER: &str = "resolve_merge_connections";
+        let _guard = self.operation_lock.lock().await;
+        let _ = require_master_password()?;
+        let settings = self.settings.lock().await.clone();
+        if !settings.enabled {
+            return Err(AppError::Config(
+                "Cloud sync is disabled in settings".into(),
+            ));
+        }
+        let conflict = self
+            .status
+            .lock()
+            .await
+            .conflict
+            .clone()
+            .filter(|conflict| conflict.kind == "content_conflict")
+            .ok_or_else(|| {
+                AppError::Config(
+                    "Cloud sync merge requires a current content conflict; check for changes again"
+                        .into(),
+                )
+            })?;
+        if conflict.provider != settings.provider {
+            return Err(AppError::Config(
+                "Cloud sync provider changed; check for conflicts again".into(),
+            ));
+        }
+
+        let started = Instant::now();
+        let state_snapshot = self.state.lock().await.clone();
+        let app = self.app()?;
+        let local =
+            build_portable_snapshot(&app, PortableSnapshotKind::Sync, &state_snapshot.device_id)?;
+        if local.payload_hash != conflict.local_payload_hash {
+            return Err(AppError::Config(
+                "Local cloud sync data changed; check for conflicts again".into(),
+            ));
+        }
+        let remote = trace_cloud_sync_step(TRIGGER, "build_remote", async {
+            self.build_remote_with_recovery(settings.clone()).await
+        })
+        .await?;
+        let latest = trace_cloud_sync_step(TRIGGER, "load_sync_pointer", async {
+            load_sync_pointer(&remote, &settings.remote_root).await
+        })
+        .await?
+        .ok_or_else(|| AppError::Config("No remote sync snapshot found".into()))?;
+        if conflict.remote_revision != latest.revision_id
+            || conflict.remote_payload_hash != latest.payload_hash
+        {
+            return Err(AppError::Config(
+                "Remote cloud sync data changed; check for conflicts again".into(),
+            ));
+        }
+        let remote_snapshot =
+            match trace_cloud_sync_step(TRIGGER, "resolve_remote_snapshot", async {
+                resolve_remote_snapshot(&remote, &settings.remote_root, &latest).await
+            })
+            .await?
+            {
+                RemoteSnapshotResolution::Current(snapshot)
+                | RemoteSnapshotResolution::LegacyMigrated(snapshot) => snapshot,
+                RemoteSnapshotResolution::Inconsistent { .. } => {
+                    return Err(AppError::Config(
+                        "Remote cloud sync metadata is inconsistent; use recovery instead".into(),
+                    ));
+                }
+            };
+
+        let mut merged = merge_additive_sync_connections(&local, &remote_snapshot)?;
+        merged.device_id = state_snapshot.device_id.clone();
+        merged.revision_id = uuid::Uuid::new_v4().to_string();
+        merged.created_at_ms = current_time_ms();
+        merged.payload_hash = calculate_payload_hash(&merged)?;
+
+        let pointer = pointer_from_snapshot(&merged);
+        publish_verified_merge_snapshot(
+            TRIGGER,
+            &remote,
+            &settings,
+            &latest,
+            &merged,
+            &local.payload_hash,
+            || async {
+                Ok(build_portable_snapshot(
+                    &app,
+                    PortableSnapshotKind::Sync,
+                    &state_snapshot.device_id,
+                )?
+                .payload_hash)
+            },
+        )
+        .await?;
+
+        // The checked local state must still match before applying the remote
+        // union. Never turn a partial/local mismatch into a synced success.
+        let before_apply =
+            build_portable_snapshot(&app, PortableSnapshotKind::Sync, &state_snapshot.device_id)?;
+        if before_apply.payload_hash != local.payload_hash {
+            return Err(AppError::Config(
+                "Merged snapshot was published but local data changed; check sync again before applying"
+                    .into(),
+            ));
+        }
+        apply_merged_connection_entities(&app, &merged)?;
+        let persisted =
+            build_portable_snapshot(&app, PortableSnapshotKind::Sync, &state_snapshot.device_id)?;
+        if persisted.payload_hash != merged.payload_hash {
+            return Err(AppError::Config(
+                "Merged cloud data was published but the local snapshot differs; check sync again"
+                    .into(),
+            ));
+        }
+
+        if let Err(error) =
+            trace_cloud_sync_step(TRIGGER, "write_current_sync_snapshot_compat", async {
+                write_current_sync_snapshot_compat(&remote, &settings.remote_root, &merged).await
+            })
+            .await
+        {
+            tracing::warn!(error = %error, "Compatible current snapshot refresh failed after merge");
+        }
+        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
+            .await?;
+        {
+            let mut state = self.state.lock().await;
+            state.last_synced_payload_hash = Some(merged.payload_hash.clone());
+            state.last_applied_remote_revision = Some(merged.revision_id.clone());
+            state.last_synced_at_ms = Some(current_time_ms());
+            state.last_checked_at_ms = Some(current_time_ms());
+            state.last_validated_remote_revision = Some(merged.revision_id.clone());
+            state.last_full_validation_at_ms = Some(current_time_ms());
+            config::save_cloud_sync_state(&app, &state)?;
+        }
+        self.append_history(CloudSyncHistoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: current_time_ms(),
+            kind: "sync".to_string(),
+            status: "success".to_string(),
+            trigger: TRIGGER.to_string(),
+            provider: Some(settings.provider),
+            revision: Some(merged.revision_id),
+            duration_ms: Some(elapsed_ms(started.elapsed())),
+            message: "Cloud sync connections merged".to_string(),
+        })
+        .await;
+        self.set_status(
+            "idle",
+            "Cloud sync connections merged".to_string(),
+            None,
+            None,
+        )
+        .await;
+        Ok(())
     }
 
     async fn startup_check(self: &Arc<Self>) -> AppResult<RemoteCheckOutcome> {
@@ -1782,6 +1942,122 @@ async fn prune_gist_snapshots_step(
     .await;
 }
 
+/// Publish only after the encrypted snapshot is read back and both conflict
+/// inputs are rechecked. This is a read-before-write check, not a provider CAS.
+async fn publish_verified_merge_snapshot<F, Fut>(
+    trigger: &str,
+    remote: &super::operator::CloudRemote,
+    settings: &CloudSyncSettings,
+    latest: &RemoteSyncPointer,
+    merged: &PortableSnapshot,
+    expected_local_hash: &str,
+    current_local_hash: F,
+) -> AppResult<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = AppResult<String>>,
+{
+    let pointer = pointer_from_snapshot(merged);
+    let gist_backend = is_gist_provider(&settings.provider);
+    if gist_backend {
+        prune_gist_snapshots_step(
+            trigger,
+            remote,
+            &settings.remote_root,
+            Some(latest),
+            &merged.revision_id,
+        )
+        .await;
+    }
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let upload = trace_cloud_sync_step(trigger, "upload_sync_snapshot", async {
+            upload_sync_snapshot(remote, &settings.remote_root, merged).await
+        })
+        .await;
+        match upload {
+            Ok(()) => {}
+            Err(error)
+                if gist_backend
+                    && attempts < 2
+                    && matches!(
+                        &error,
+                        AppError::CloudSync(CloudSyncError::RemoteFileRejected { .. })
+                    ) =>
+            {
+                prune_gist_snapshots_step(
+                    trigger,
+                    remote,
+                    &settings.remote_root,
+                    Some(latest),
+                    &merged.revision_id,
+                )
+                .await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+
+        match trace_cloud_sync_step(trigger, "verify_uploaded_sync_snapshot", async {
+            verify_uploaded_sync_snapshot(remote, &settings.remote_root, &pointer).await
+        })
+        .await
+        {
+            Ok(_) => break,
+            Err(error)
+                if gist_backend
+                    && attempts < 2
+                    && matches!(
+                        &error,
+                        AppError::CloudSync(
+                            CloudSyncError::SnapshotNotAccepted { .. }
+                                | CloudSyncError::RemoteFileRejected { .. }
+                        )
+                    ) =>
+            {
+                prune_gist_snapshots_step(
+                    trigger,
+                    remote,
+                    &settings.remote_root,
+                    Some(latest),
+                    &merged.revision_id,
+                )
+                .await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if current_local_hash().await? != expected_local_hash {
+        return Err(AppError::Config(
+            "Local cloud sync data changed while merging; check for conflicts again".into(),
+        ));
+    }
+    trace_cloud_sync_step(trigger, "recheck_sync_pointer", async {
+        let actual = load_sync_pointer(remote, &settings.remote_root).await?;
+        confirm_merge_remote_head(latest, actual.as_ref())
+    })
+    .await?;
+    trace_cloud_sync_step(trigger, "commit_sync_pointer", async {
+        commit_sync_pointer(remote, &settings.remote_root, &pointer).await
+    })
+    .await
+}
+
+fn confirm_merge_remote_head(
+    expected: &RemoteSyncPointer,
+    actual: Option<&RemoteSyncPointer>,
+) -> AppResult<()> {
+    if !actual.is_some_and(|pointer| {
+        pointer.revision_id == expected.revision_id && pointer.payload_hash == expected.payload_hash
+    }) {
+        return Err(AppError::Config(
+            "Remote cloud sync pointer changed during merge; check for conflicts again".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn decide_remote_check(
     state: &CloudSyncState,
     local_hash: &str,
@@ -1995,8 +2271,264 @@ pub async fn notify_config_changed(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MASTER_PASSWORD_TEST_LOCK;
+    use super::super::operator::{CloudRemote, MemoryRemote};
+    use super::super::protocol::read_snapshot_for_pointer;
     use super::*;
     use crate::config::{CloudSyncSettings, S3SyncSettings, WebdavSyncSettings};
+    use crate::core::portable_snapshot::{PORTABLE_SNAPSHOT_SCHEMA_VERSION, PortableAppSettings};
+    use crate::utils::crypto::set_master_password;
+    use std::collections::HashMap;
+
+    fn merge_test_snapshot(revision_id: &str) -> PortableSnapshot {
+        let mut snapshot = PortableSnapshot {
+            schema_version: PORTABLE_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_kind: PortableSnapshotKind::Sync,
+            revision_id: revision_id.to_string(),
+            device_id: "test-device".to_string(),
+            created_at_ms: 100,
+            payload_hash: String::new(),
+            app_version: "test".to_string(),
+            settings: PortableAppSettings::from_app_settings(
+                &config::AppSettings::default(),
+                &PortableSnapshotKind::Sync,
+            ),
+            sessions: Default::default(),
+            keys: Default::default(),
+            passwords: Default::default(),
+            credentials: Default::default(),
+            otp: Default::default(),
+            proxies: Default::default(),
+            proxy_groups: Default::default(),
+            tunnels: Default::default(),
+            tunnel_groups: Default::default(),
+            quick_commands: Default::default(),
+            history: Default::default(),
+            master_key_token: None,
+            known_hosts: String::new(),
+            notes: Default::default(),
+        };
+        snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("snapshot hash");
+        snapshot
+    }
+
+    async fn merge_test_remote() -> (
+        MemoryRemote,
+        CloudRemote,
+        CloudSyncSettings,
+        RemoteSyncPointer,
+    ) {
+        let memory = MemoryRemote::with_files(HashMap::new());
+        let remote = CloudRemote::Memory(memory.clone());
+        let mut settings = CloudSyncSettings::default();
+        settings.remote_root = "nyaterm".to_string();
+        let base = merge_test_snapshot("base");
+        let pointer = pointer_from_snapshot(&base);
+        upload_sync_snapshot(&remote, &settings.remote_root, &base)
+            .await
+            .expect("seed encrypted base snapshot");
+        commit_sync_pointer(&remote, &settings.remote_root, &pointer)
+            .await
+            .expect("seed base pointer");
+        (memory, remote, settings, pointer)
+    }
+
+    async fn assert_merge_pointer_is(
+        remote: &CloudRemote,
+        settings: &CloudSyncSettings,
+        expected: &RemoteSyncPointer,
+    ) {
+        let head = load_sync_pointer(remote, &settings.remote_root)
+            .await
+            .expect("load pointer")
+            .expect("pointer");
+        assert_eq!(head.revision_id, expected.revision_id);
+        assert_eq!(head.payload_hash, expected.payload_hash);
+        read_snapshot_for_pointer(remote, &settings.remote_root, &head)
+            .await
+            .expect("original pointed-to snapshot still readable");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn publish_verified_merge_snapshot_rejects_failures_without_committing() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK
+            .lock()
+            .expect("master password lock");
+        set_master_password(Some("merge-fixture-password".to_string()));
+        let source_hash = "local-payload-hash";
+        let merged = merge_test_snapshot("merged");
+
+        // A rejected upload does not alter latest or the local source.
+        let (memory, remote, settings, base) = merge_test_remote().await;
+        memory.fail_next_write_containing("snapshots/merged");
+        let failure = publish_verified_merge_snapshot(
+            "test_merge",
+            &remote,
+            &settings,
+            &base,
+            &merged,
+            source_hash,
+            || async { Ok(source_hash.to_string()) },
+        )
+        .await
+        .expect_err("injected snapshot upload failure");
+        assert_merge_pointer_is(&remote, &settings, &base).await;
+        let manager = CloudSyncManager::new();
+        {
+            let mut status = manager.status.lock().await;
+            status.state = "conflict".to_string();
+            status.conflict = Some(cloud_conflict_preview(&settings, source_hash, &base));
+        }
+        manager
+            .record_failure("sync", "merge_connections", &failure)
+            .await;
+        let status = manager.status.lock().await;
+        assert_eq!(status.state, "conflict");
+        assert_eq!(
+            status
+                .conflict
+                .as_ref()
+                .map(|conflict| conflict.kind.as_str()),
+            Some("content_conflict")
+        );
+        drop(status);
+        let synced_state = manager.state.lock().await;
+        assert!(synced_state.last_synced_payload_hash.is_none());
+        assert!(synced_state.last_applied_remote_revision.is_none());
+        drop(synced_state);
+
+        // A provider that acknowledges but drops the encrypted upload must
+        // fail readback verification before any latest pointer write.
+        let (memory, remote, settings, base) = merge_test_remote().await;
+        memory.drop_next_write_containing("snapshots/merged");
+        assert!(
+            publish_verified_merge_snapshot(
+                "test_merge",
+                &remote,
+                &settings,
+                &base,
+                &merged,
+                source_hash,
+                || async { Ok(source_hash.to_string()) },
+            )
+            .await
+            .is_err()
+        );
+        assert_merge_pointer_is(&remote, &settings, &base).await;
+
+        // After a successful upload/readback, a changed local hash must still
+        // leave the original pointer untouched.
+        let (_memory, remote, settings, base) = merge_test_remote().await;
+        assert!(
+            publish_verified_merge_snapshot(
+                "test_merge",
+                &remote,
+                &settings,
+                &base,
+                &merged,
+                source_hash,
+                || async { Ok("local-changed".to_string()) },
+            )
+            .await
+            .is_err()
+        );
+        assert_merge_pointer_is(&remote, &settings, &base).await;
+
+        // A competing device may advance the revision between upload and
+        // commit. The merge must not overwrite that new pointer.
+        let (_memory, remote, settings, base) = merge_test_remote().await;
+        let competing = merge_test_snapshot("competing");
+        let competing_pointer = pointer_from_snapshot(&competing);
+        upload_sync_snapshot(&remote, &settings.remote_root, &competing)
+            .await
+            .expect("stage concurrent snapshot");
+        let remote_for_concurrent_write = remote.clone();
+        let root = settings.remote_root.clone();
+        let expected_competing_pointer = competing_pointer.clone();
+        assert!(
+            publish_verified_merge_snapshot(
+                "test_merge",
+                &remote,
+                &settings,
+                &base,
+                &merged,
+                source_hash,
+                || async move {
+                    commit_sync_pointer(&remote_for_concurrent_write, &root, &competing_pointer)
+                        .await?;
+                    Ok(source_hash.to_string())
+                },
+            )
+            .await
+            .is_err()
+        );
+        assert_merge_pointer_is(&remote, &settings, &expected_competing_pointer).await;
+
+        // Even if the revision is unchanged, a different remote payload hash
+        // must not be replaced by the stale merged snapshot.
+        let (_memory, remote, settings, base) = merge_test_remote().await;
+        let mut changed_hash = base.clone();
+        changed_hash.payload_hash = "changed-payload-hash".to_string();
+        let changed_hash_for_assertion = changed_hash.clone();
+        let remote_for_concurrent_write = remote.clone();
+        let root = settings.remote_root.clone();
+        assert!(
+            publish_verified_merge_snapshot(
+                "test_merge",
+                &remote,
+                &settings,
+                &base,
+                &merged,
+                source_hash,
+                || async move {
+                    commit_sync_pointer(&remote_for_concurrent_write, &root, &changed_hash).await?;
+                    Ok(source_hash.to_string())
+                },
+            )
+            .await
+            .is_err()
+        );
+        let head = load_sync_pointer(&remote, &settings.remote_root)
+            .await
+            .expect("read changed head")
+            .expect("head");
+        assert_eq!(head.revision_id, changed_hash_for_assertion.revision_id);
+        assert_eq!(head.payload_hash, changed_hash_for_assertion.payload_hash);
+        set_master_password(None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn publish_verified_merge_snapshot_commits_readable_revision() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK
+            .lock()
+            .expect("master password lock");
+        set_master_password(Some("merge-fixture-password".to_string()));
+        let (_memory, remote, settings, base) = merge_test_remote().await;
+        let merged = merge_test_snapshot("merged");
+        publish_verified_merge_snapshot(
+            "test_merge",
+            &remote,
+            &settings,
+            &base,
+            &merged,
+            "local-payload-hash",
+            || async { Ok("local-payload-hash".to_string()) },
+        )
+        .await
+        .expect("publish verified merge");
+        let head = load_sync_pointer(&remote, &settings.remote_root)
+            .await
+            .expect("read merged head")
+            .expect("head");
+        assert_eq!(head.revision_id, merged.revision_id);
+        assert_eq!(head.payload_hash, merged.payload_hash);
+        let decoded = read_snapshot_for_pointer(&remote, &settings.remote_root, &head)
+            .await
+            .expect("decrypt and validate committed merged snapshot");
+        assert_eq!(decoded.revision_id, merged.revision_id);
+        assert_eq!(decoded.payload_hash, merged.payload_hash);
+        set_master_password(None);
+    }
 
     #[test]
     fn default_manager_constructs() {
@@ -2027,6 +2559,21 @@ mod tests {
         assert_eq!(settings.provider, "webdav");
         assert!(settings.webdav.password.is_some());
         assert!(settings.s3.secret_access_key.is_some());
+    }
+
+    #[test]
+    fn merge_recheck_requires_both_remote_revision_and_hash() {
+        let expected = remote_pointer("r1", "hash-a");
+        assert!(
+            confirm_merge_remote_head(&expected, Some(&remote_pointer("r1", "hash-a"))).is_ok()
+        );
+        assert!(
+            confirm_merge_remote_head(&expected, Some(&remote_pointer("r2", "hash-a"))).is_err()
+        );
+        assert!(
+            confirm_merge_remote_head(&expected, Some(&remote_pointer("r1", "hash-b"))).is_err()
+        );
+        assert!(confirm_merge_remote_head(&expected, None).is_err());
     }
 
     fn remote_pointer(revision_id: &str, payload_hash: &str) -> RemoteSyncPointer {

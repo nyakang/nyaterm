@@ -54,8 +54,8 @@ pub use credential::{
 };
 #[allow(unused_imports)]
 pub use key::{
-    KeysConfig, SshKey, decrypt_key_cert, decrypt_key_pem, key_sort_order, load_key_by_id,
-    load_keys, reorder_ssh_keys, save_keys,
+    KeysConfig, SshKey, apply_merged_sync_entities, decrypt_key_cert, decrypt_key_pem,
+    key_sort_order, load_key_by_id, load_keys, reorder_ssh_keys, save_keys,
 };
 pub use key::{ssh_key_change_epoch, ssh_key_read_guard};
 #[allow(unused_imports)]

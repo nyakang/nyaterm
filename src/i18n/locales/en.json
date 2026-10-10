@@ -2686,6 +2686,8 @@
     "syncGistCapacityHint": "Gitee Snippet may have reached its file limit. Cleaning old snapshots and pushing again usually recovers sync.",
     "syncMasterPasswordMissingDesc": "Set a master password first. Cloud sync stays disabled until one is configured.",
     "syncMasterPasswordReadyDesc": "Cloud sync uses your master password to encrypt the remote snapshot.",
+    "syncMergeConnections": "Merge New Connections",
+    "syncMergeConnectionsHint": "Keep connections and their referenced groups, icons, keys, accounts, OTPs, and proxies from both versions. Conflicting IDs or unrelated changes cannot be merged automatically; Upload Local and Download Remote remain available.",
     "syncProvider": "Provider",
     "syncProviderConfig": "Provider Configuration",
     "syncProviderConfigDesc": "Configure the remote storage used by cloud sync.",
@@ -2699,6 +2701,7 @@
     "syncRecoverCurrentSuccess": "Remote metadata recovered.",
     "syncRemoteIncompleteTitle": "Incomplete Remote Sync Data",
     "syncResolveDownloadSuccess": "Remote version downloaded.",
+    "syncResolveMergeSuccess": "New connections merged and synced.",
     "syncResolveUploadSuccess": "Local version uploaded.",
     "syncSaveSuccess": "Cloud sync settings saved.",
     "syncState": {

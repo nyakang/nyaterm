@@ -2684,6 +2684,8 @@
     "syncGistCapacityHint": "Gitee 代码片段可能已达文件数上限。清理旧快照后重新推送通常即可恢复。",
     "syncMasterPasswordMissingDesc": "请先设置主密码。未配置主密码前，云同步保持禁用。",
     "syncMasterPasswordReadyDesc": "云同步会使用你的主密码加密远端快照。",
+    "syncMergeConnections": "合并新增连接",
+    "syncMergeConnectionsHint": "仅合并两端新增的连接及其关联的分组、图标、密钥、账号、验证码和代理。相同 ID 内容冲突或其他配置不同将拒绝自动合并，仍可选择上传本地或下载远端版本。",
     "syncProvider": "提供方",
     "syncProviderConfig": "存储提供方配置",
     "syncProviderConfigDesc": "配置云同步使用的远程存储提供方与命名空间。",
@@ -2697,6 +2699,7 @@
     "syncRecoverCurrentSuccess": "远端同步元数据已恢复。",
     "syncRemoteIncompleteTitle": "远端同步数据不完整",
     "syncResolveDownloadSuccess": "远程版本已成功下载。",
+    "syncResolveMergeSuccess": "新增连接已合并并同步。",
     "syncResolveUploadSuccess": "本地版本已成功上传。",
     "syncSaveSuccess": "云同步设置已保存。",
     "syncState": {

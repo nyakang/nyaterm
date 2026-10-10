@@ -254,16 +254,17 @@ fn short_hash(hash: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
     use crate::config::{self, AppSettings};
     use crate::core::portable_snapshot::{
         PortableAppSettings, PortableSnapshotKind, calculate_payload_hash,
-        calculate_v3_raw_payload_hash, encode_v3_raw_snapshot_redb_for_test,
+        calculate_v3_raw_payload_hash_for_test as calculate_v3_raw_payload_hash,
+        encode_v3_raw_snapshot_redb_for_test,
     };
     use crate::error::{AppError, CloudSyncError};
     use crate::utils::crypto::set_master_password;
 
+    use super::super::MASTER_PASSWORD_TEST_LOCK;
     use super::super::gc::prune_gist_snapshots_best_effort;
     use super::super::migration::{
         RemoteSnapshotResolution, recover_current_remote_snapshot, resolve_remote_snapshot,
@@ -271,8 +272,6 @@ mod tests {
     use super::super::operator::MemoryRemote;
     use super::super::remote::{load_sync_pointer, remote_path};
     use super::*;
-
-    static MASTER_PASSWORD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn memory_remote() -> (MemoryRemote, CloudRemote) {
         let memory = MemoryRemote::with_files(HashMap::new());
