@@ -62,6 +62,8 @@ Set-Content -LiteralPath $resolvedReport -Value $imports -Encoding UTF8
 $forbiddenImports = [ordered]@{
   "combase.dll" = "COMBASE is only available starting with Windows 8; use Win7-safe OLE32 imports instead."
   "api-ms-win-core-winrt-" = "WinRT API sets are unavailable on Windows 7."
+  "api-ms-win-core-path-l1-1-0.dll" = "The Path API set is unavailable on Windows 7; remove the mandatory import."
+  "PathCchStripPrefix" = "PathCchStripPrefix requires Windows 8; normalize extended file paths without this API."
   "CoIncrementMTAUsage" = "CoIncrementMTAUsage is unavailable on Windows 7."
   "EventSetInformation" = "EventSetInformation is unavailable on Windows 7; use a legacy WebView2 static loader."
   "GetSystemTimePreciseAsFileTime" = "GetSystemTimePreciseAsFileTime is unavailable on Windows 7."
