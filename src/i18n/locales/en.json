@@ -3158,6 +3158,16 @@
     "selectAll": "Select All",
     "translate": "Translate"
   },
+  "tmux": {
+    "commandError": "tmux command failed: {{message}}",
+    "commandPlaceholder": "tmux command, e.g. resize-pane -Z",
+    "detach": "Detach (tmux session stays on the server)",
+    "newWindow": "New window",
+    "splitHorizontal": "Split top/bottom",
+    "splitVertical": "Split left/right",
+    "window": "Window",
+    "zoom": "Zoom active pane (toggle)"
+  },
   "translation": {
     "ali": "Alibaba",
     "baidu": "Baidu",

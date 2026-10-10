@@ -93,6 +93,8 @@ export interface SessionInfo {
   ai_execution_profile: AIExecutionProfile;
   /** True when backend shell command-confirmation integration is active. */
   injection_active: boolean;
+  /** True when the backend reports cwd without shell hooks (tmux panes). */
+  cwd_tracking_active?: boolean;
   /** Whether application/remote dynamic titles may be promoted. */
   dynamic_title_enabled: boolean;
   /** Whether the selected shell received NyaTerm dynamic-title/cwd hooks. */
@@ -128,6 +130,15 @@ export interface WorkspacePaneBase {
   createRequestId?: string;
   /** Populated when session creation failed and the pane should stay visible as an error state. */
   connectError?: string;
+  /**
+   * Set when this pane is a tmux control-mode pane: `sessionId` is then a
+   * virtual session owned by `controlSessionId`'s SSH channel, and `paneId`
+   * is the tmux pane id (e.g. `%5`). Not persisted across restarts.
+   */
+  tmux?: {
+    controlSessionId: string;
+    paneId: string;
+  };
 }
 
 /** Leaf node representing one terminal session inside a workspace tab. */

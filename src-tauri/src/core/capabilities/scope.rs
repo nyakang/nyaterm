@@ -129,6 +129,7 @@ mod tests {
             owner_window_label: Some(owner.into()),
             ai_execution_profile: AiExecutionProfile::Auto,
             injection_active: true,
+            cwd_tracking_active: false,
             dynamic_title_capabilities: DynamicTitleCapabilities::default(),
             remote_file_browser_enabled: true,
             remote_stats_enabled: true,

@@ -57,7 +57,7 @@ export function canTrackTerminalCwd(
   session:
     | Pick<
         SessionInfo,
-        "session_type" | "injection_active" | "dynamic_title_integration_active"
+        "session_type" | "injection_active" | "dynamic_title_integration_active" | "cwd_tracking_active"
       >
     | null
     | undefined,
@@ -66,7 +66,10 @@ export function canTrackTerminalCwd(
   if (session.session_type === "Local") {
     return session.dynamic_title_integration_active;
   }
-  return session.session_type === "SSH" && session.injection_active;
+  return (
+    session.session_type === "SSH" &&
+    (session.injection_active || session.cwd_tracking_active === true)
+  );
 }
 
 export function subscribeFileExplorerSessionSnapshots<T>({

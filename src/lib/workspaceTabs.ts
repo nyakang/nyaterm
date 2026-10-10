@@ -549,7 +549,11 @@ export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
     .sort((a, b) => a.persistOrder - b.persistOrder)
     .flatMap((tab) => {
-      const root = serializePane(tab.root);
+      // tmux control-mode panes share one SSH channel: persist the tab as a
+      // single leaf so restart restores one connection (the user can re-run
+      // `tmux -CC attach` to re-enter control mode).
+      const tmuxPane = collectSessionPanes(tab.root).find((p) => p.tmux);
+      const root = tmuxPane ? serializePane(tmuxPane) : serializePane(tab.root);
       if (!root) return [];
       const fallback = findFirstRestorableLeaf(root);
       const activePaneId = hasRestorablePaneId(root, tab.activePaneId)

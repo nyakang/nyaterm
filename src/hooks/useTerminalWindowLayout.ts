@@ -13,7 +13,8 @@ import {
   type TerminalWindowNode,
   updateTerminalWindowSplitRatio,
 } from "@/lib/tabWindows";
-import { collectSessionPanes } from "@/lib/workspaceTabs";
+import { invoke } from "@/lib/invoke";
+import { collectSessionPanes, findSessionPaneById } from "@/lib/workspaceTabs";
 import type { AppSettings, Tab, UiConfig } from "@/types/global";
 
 interface TerminalWindowLayoutOptions
@@ -229,6 +230,16 @@ export function useTerminalWindowLayout({
       restoredGlobalActiveTabIdRef.current = null;
       setActiveTabId(tabId);
       setActivePane(tabId, paneId);
+      // tmux panes: keep the remote "current pane" in sync with local focus
+      // so untargeted commands (kill-pane, respawn-pane, ...) act on it.
+      const tab = tabsRef.current.find((item) => item.id === tabId);
+      const pane = tab ? findSessionPaneById(tab.root, paneId) : null;
+      if (pane?.kind === "leaf" && pane.tmux) {
+        void invoke("tmux_send_command", {
+          sessionId: pane.tmux.controlSessionId,
+          command: `select-pane -t '${pane.tmux.paneId}'`,
+        }).catch(() => {});
+      }
     },
     [setActivePane, setActiveTabId],
   );

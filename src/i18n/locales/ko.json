@@ -3156,6 +3156,16 @@
     "selectAll": "모두 선택",
     "translate": "번역"
   },
+  "tmux": {
+    "commandError": "tmux 명령 실패: {{message}}",
+    "commandPlaceholder": "tmux 명령, 예: resize-pane -Z",
+    "detach": "분리 (원격 tmux 세션 유지)",
+    "newWindow": "새 창",
+    "splitHorizontal": "위아래 분할",
+    "splitVertical": "좌우 분할",
+    "window": "창",
+    "zoom": "현재 창 확대/축소"
+  },
   "translation": {
     "ali": "알리바바",
     "baidu": "바이두",

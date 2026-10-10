@@ -93,7 +93,9 @@ fn log_snapshot_hash_normalized(snapshot: &PortableSnapshot, source_payload_hash
     );
 }
 
-pub(crate) fn calculate_v3_raw_payload_hash(
+/// Test-visible helper: `cloud_sync` tests outside this crate hash the raw
+/// entity map to build fixture snapshots.
+pub fn calculate_v3_raw_payload_hash(
     entities: &BTreeMap<String, String>,
 ) -> AppResult<String> {
     let settings = read_raw_entity(entities, "settings")?;

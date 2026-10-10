@@ -839,6 +839,7 @@ mod tests {
                     owner_window_label: None,
                     ai_execution_profile: AiExecutionProfile::default(),
                     injection_active: true,
+                    cwd_tracking_active: false,
                     dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                     remote_file_browser_enabled: true,
                     remote_stats_enabled: true,
