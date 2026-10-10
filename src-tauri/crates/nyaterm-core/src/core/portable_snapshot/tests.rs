@@ -641,6 +641,7 @@ mod tests {
                     recording: None,
                     ssh_algorithms: None,
                     ssh_profile: Default::default(),
+                    ssh_transport: Default::default(),
                     terminal_type: None,
                     sftp: config::SftpSettings::default(),
                     asset: None,
@@ -675,6 +676,7 @@ mod tests {
                     recording: None,
                     ssh_algorithms: None,
                     ssh_profile: Default::default(),
+                    ssh_transport: Default::default(),
                     terminal_type: None,
                     sftp: config::SftpSettings::default(),
                     asset: None,
@@ -717,6 +719,7 @@ mod tests {
                 recording: None,
                 ssh_algorithms: None,
                 ssh_profile: Default::default(),
+                ssh_transport: Default::default(),
                 terminal_type: None,
                 sftp: config::SftpSettings::default(),
                 asset: Some(config::AssetMetadata {

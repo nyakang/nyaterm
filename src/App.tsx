@@ -63,7 +63,9 @@ import {
 } from "./lib/appSessionFactory";
 import {
   buildPanelOpenUpdate,
+  canMultiplexSshPane,
   canCreateSessionFromPane,
+  canUseStartupCommandForPane,
   canUseFloatingPanel,
   clearUnavailableFloatingPanels,
   collectActiveNonSerialSessionIds,
@@ -1865,7 +1867,12 @@ function App() {
     ) => {
       const pane = sourcePane ?? getActivePane(tab);
       if (!canCreateSessionFromPane(pane)) return;
-      if (startupCommand && isSftpOnlyPane(pane, liveSessionsById)) return;
+      if (
+        startupCommand &&
+        (isSftpOnlyPane(pane, liveSessionsById) ||
+          !canUseStartupCommandForPane(pane, savedConnections))
+      )
+        return;
 
       try {
         const pending = addPendingTab(
@@ -1949,6 +1956,7 @@ function App() {
       updateAutoIconForSessionStart,
       updateTabSession,
       liveSessionsById,
+      savedConnections,
       setTerminalWindows,
     ],
   );
@@ -1960,6 +1968,7 @@ function App() {
         !pane ||
         pane.paneKind !== "terminal" ||
         pane.type !== "SSH" ||
+        !canMultiplexSshPane(pane, liveSessionsById) ||
         isSftpOnlyPane(pane, liveSessionsById) ||
         pane.connecting ||
         pane.connectError
@@ -2062,22 +2071,24 @@ function App() {
   const handleDuplicateActiveSessionWithCommand = useCallback(() => {
     const tab = getActiveTab();
     if (!tab) return;
+    if (!canUseStartupCommandForPane(getActivePane(tab), savedConnections)) return;
     window.dispatchEvent(
       new CustomEvent("nyaterm:open-tab-startup-command-dialog", {
         detail: { tabId: tab.id, action: "duplicate" },
       }),
     );
-  }, [getActiveTab]);
+  }, [getActiveTab, savedConnections]);
 
   const handleMultiplexActiveSshSessionWithCommand = useCallback(() => {
     const tab = getActiveTab();
     if (!tab) return;
+    if (!canMultiplexSshPane(getActivePane(tab), liveSessionsById)) return;
     window.dispatchEvent(
       new CustomEvent("nyaterm:open-tab-startup-command-dialog", {
         detail: { tabId: tab.id, action: "multiplex" },
       }),
     );
-  }, [getActiveTab]);
+  }, [getActiveTab, liveSessionsById]);
 
   const hasFileDocumentDependency = useCallback(
     (sessionId: string) =>

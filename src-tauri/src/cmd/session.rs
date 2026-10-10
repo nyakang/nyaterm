@@ -40,6 +40,47 @@ pub fn get_default_local_shell() -> String {
     core::default_local_shell_path()
 }
 
+fn build_mosh_local_session_config(
+    connection: &config::SavedConnection,
+) -> AppResult<core::LocalSessionConfig> {
+    let config::ConnectionType::Ssh {
+        host,
+        port,
+        username,
+        ..
+    } = &connection.config
+    else {
+        return Err(AppError::Config(
+            "Mosh transport requires an SSH connection".to_string(),
+        ));
+    };
+
+    Ok(core::LocalSessionConfig {
+        connection_id: Some(connection.id.clone()),
+        shell_path: "wsl.exe".to_string(),
+        shell_args: String::new(),
+        shell_argv: Some(vec![
+            "--exec".to_string(),
+            "env".to_string(),
+            "LANG=C.UTF-8".to_string(),
+            "LC_CTYPE=C.UTF-8".to_string(),
+            "TERM=xterm-256color".to_string(),
+            "mosh".to_string(),
+            format!("--ssh=ssh -p {port}"),
+            format!("{username}@{host}"),
+        ]),
+        working_dir: None,
+        fail_on_missing_working_dir: false,
+        name: connection.name.clone(),
+        encoding: "UTF-8".to_string(),
+        dynamic_tab_title: false,
+        session_type: core::SessionType::SSH,
+        remote_file_browser_enabled: false,
+        remote_stats_enabled: false,
+        zmodem_enabled: false,
+    })
+}
+
 #[tauri::command]
 pub async fn create_ssh_session(
     app: tauri::AppHandle,
@@ -52,6 +93,39 @@ pub async fn create_ssh_session(
     startup_command: Option<StartupCommandPayload>,
     runtime_mode: Option<crate::config::SshRuntimeMode>,
 ) -> AppResult<String> {
+    let connection = config::load_connection_by_id(&app, &connection_id)?;
+    if connection.ssh_transport == config::SshTransport::Mosh {
+        if runtime_mode == Some(config::SshRuntimeMode::Sftp) {
+            return Err(AppError::Unsupported(
+                "SFTP is unavailable for Mosh connections".to_string(),
+            ));
+        }
+        if !cfg!(target_os = "windows") {
+            return Err(AppError::Unsupported(
+                "Mosh via WSL is only available on Windows".to_string(),
+            ));
+        }
+
+        let mosh_config = build_mosh_local_session_config(&connection)?;
+        let pending_creation = state.begin_session_creation(create_request_id).await;
+        let guard = pending_creation.map(|(guard, _cancel_rx)| guard);
+        let session_id = core::create_local_session(
+            app.clone(),
+            state.inner().clone(),
+            Some(mosh_config),
+            Some(window.label().to_string()),
+            Some(build_auto_recording_hook(
+                app.clone(),
+                recording_state.inner().clone(),
+                recording_scope_id,
+            )),
+        )
+        .await?;
+        drop(guard);
+        mark_connection_used(&app, &connection_id);
+        return Ok(session_id);
+    }
+
     let mut ssh_config = ssh::load_saved_ssh_config(&app, &connection_id)?;
     if let Some(runtime_mode) = runtime_mode {
         ssh_config.runtime_mode = runtime_mode;
@@ -218,11 +292,16 @@ pub async fn create_local_session(
                     connection_id: Some(cid.clone()),
                     shell_path,
                     shell_args,
+                    shell_argv: None,
                     working_dir,
                     fail_on_missing_working_dir,
                     name: conn.name,
                     encoding,
                     dynamic_tab_title,
+                    session_type: core::SessionType::Local,
+                    remote_file_browser_enabled: false,
+                    remote_stats_enabled: false,
+                    zmodem_enabled: true,
                 })
             }
             _ => None,
@@ -235,11 +314,16 @@ pub async fn create_local_session(
             connection_id: None,
             shell_path: String::new(),
             shell_args: String::new(),
+            shell_argv: None,
             working_dir,
             fail_on_missing_working_dir: true,
             name: "Local Terminal".to_string(),
             encoding,
             dynamic_tab_title: false,
+            session_type: core::SessionType::Local,
+            remote_file_browser_enabled: false,
+            remote_stats_enabled: false,
+            zmodem_enabled: true,
         })
     } else {
         None
@@ -738,10 +822,54 @@ fn default_recording_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        StartupCommandPayload, normalize_temporary_ssh_config, resolve_local_working_dir,
-        resolve_telnet_connection_password, startup_command_payload_to_ssh,
+        StartupCommandPayload, build_mosh_local_session_config, normalize_temporary_ssh_config,
+        resolve_local_working_dir, resolve_telnet_connection_password,
+        startup_command_payload_to_ssh,
     };
     use crate::config::{self, ConnectionAuth, SshRuntimeMode};
+
+    #[test]
+    fn mosh_uses_structured_wsl_arguments_and_utf8_without_ssh_capabilities() {
+        let connection: config::SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "mosh-1",
+            "name": "Mosh",
+            "type": "ssh",
+            "host": "host with spaces",
+            "port": 2222,
+            "username": "user;echo-not-a-shell",
+            "ssh_transport": "mosh",
+            "encoding": "GBK",
+            "auth": {"mode": "password", "password": "ciphertext"}
+        }))
+        .expect("mosh connection");
+
+        let config = build_mosh_local_session_config(&connection).expect("mosh local config");
+
+        assert_eq!(config.shell_path, "wsl.exe");
+        assert!(config.shell_args.is_empty());
+        assert_eq!(
+            config.shell_argv,
+            Some(
+                [
+                    "--exec",
+                    "env",
+                    "LANG=C.UTF-8",
+                    "LC_CTYPE=C.UTF-8",
+                    "TERM=xterm-256color",
+                    "mosh",
+                    "--ssh=ssh -p 2222",
+                    "user;echo-not-a-shell@host with spaces",
+                ]
+                .map(str::to_string)
+                .to_vec()
+            )
+        );
+        assert_eq!(config.encoding, "UTF-8");
+        assert_eq!(config.session_type, crate::core::SessionType::SSH);
+        assert!(!config.remote_file_browser_enabled);
+        assert!(!config.remote_stats_enabled);
+        assert!(!config.zmodem_enabled);
+    }
 
     #[test]
     fn temporary_ssh_config_drops_saved_connection_features() {

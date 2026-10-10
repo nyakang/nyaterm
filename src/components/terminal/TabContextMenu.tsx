@@ -23,9 +23,14 @@ import { TbArrowBarToRight, TbCircleDotFilled } from "react-icons/tb";
 import { toast } from "sonner";
 import { useApp } from "@/context/AppContext";
 import { openAIAssistant } from "@/lib/aiEvents";
-import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
+import {
+  canMultiplexSshPane,
+  canUseStartupCommandForPane,
+  hasMatchingTemporaryConfig,
+  isSavedMoshSessionPane,
+} from "@/lib/appWorkspace";
 import { getActivePane } from "@/lib/workspaceTabs";
-import type { PaneSplitDirection, Tab } from "@/types/global";
+import type { PaneSplitDirection, SessionInfo, Tab } from "@/types/global";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -56,6 +61,7 @@ interface TabContextMenuProps {
   children: ReactNode;
   tooltipContent?: ReactNode;
   tab: Tab;
+  sessionInfoById?: Map<string, SessionInfo> | null;
   sftpOnly?: boolean;
   tabs: Tab[];
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
@@ -85,6 +91,7 @@ export default function TabContextMenu({
   children,
   tooltipContent,
   tab,
+  sessionInfoById,
   sftpOnly: effectiveSftpOnly,
   tabs,
   onDuplicateSession,
@@ -107,7 +114,7 @@ export default function TabContextMenu({
   onCopyServerIp,
 }: TabContextMenuProps) {
   const { t } = useTranslation();
-  const { updateTab } = useApp();
+  const { savedConnections, updateTab } = useApp();
 
   const activePane = getActivePane(tab);
   const sftpOnly =
@@ -121,12 +128,8 @@ export default function TabContextMenu({
     (activePane.type === "Local" ||
       !!activePane.connectionId ||
       hasMatchingTemporaryConfig(activePane));
-  const supportsSshMultiplex =
-    !!activePane &&
-    isTerminalPane &&
-    activePane.type === "SSH" &&
-    (!!activePane.connectionId ||
-      activePane.temporaryConfig?.protocol === "ssh");
+  const moshTransport = isSavedMoshSessionPane(activePane, savedConnections);
+  const supportsSshMultiplex = canMultiplexSshPane(activePane, sessionInfoById);
   const supportsReconnect = supportsSessionSpawn;
   const supportsDisconnect = !!activePane && isTerminalPane;
   const supportsAI = !!activePane && isTerminalPane;
@@ -139,10 +142,12 @@ export default function TabContextMenu({
     supportsAI;
   const showSplitActionsGroup = supportsSplit;
   const canSpawnSession = supportsSessionSpawn;
-  const canSpawnSessionWithCommand = canSpawnSession && !sftpOnly;
+  const canSpawnSessionWithCommand =
+    canSpawnSession && !sftpOnly && canUseStartupCommandForPane(activePane, savedConnections);
   const canReconnect = supportsReconnect && !activePane.connecting;
   const canMultiplexSsh =
     supportsSshMultiplex &&
+    !!activePane &&
     !activePane.connecting &&
     !activePane.connectError &&
     !sftpOnly &&
@@ -306,13 +311,15 @@ export default function TabContextMenu({
                   <MdPlayArrow className={iconClass} />
                   {t("tabCtx.duplicate")}
                 </ContextMenuItem>
-                <ContextMenuItem
-                  disabled={!canSpawnSessionWithCommand}
-                  onClick={() => void onDuplicateSessionWithCommand(tab)}
-                >
-                  <MdInput className={iconClass} />
-                  {t("tabCtx.duplicateWithCommand")}
-                </ContextMenuItem>
+                {!moshTransport && (
+                  <ContextMenuItem
+                    disabled={!canSpawnSessionWithCommand}
+                    onClick={() => void onDuplicateSessionWithCommand(tab)}
+                  >
+                    <MdInput className={iconClass} />
+                    {t("tabCtx.duplicateWithCommand")}
+                  </ContextMenuItem>
+                )}
               </>
             )}
 

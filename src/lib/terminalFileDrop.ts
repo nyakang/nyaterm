@@ -6,7 +6,7 @@ import {
   isZmodemUploadErrorHandled,
   uploadFilesViaZmodem,
 } from "@/lib/terminalZmodemUpload";
-import type { SessionType } from "@/types/global";
+import type { SessionType, SshTransport } from "@/types/global";
 
 function quoteLocalPath(path: string): string {
   if (!/[\s'"\\]/.test(path)) {
@@ -52,9 +52,14 @@ export async function handleTerminalFileDrop(params: {
   entries: ResolvedLocalDropPathEntry[];
   t: (key: string) => string;
   duplicateStrategy?: string;
+  sshTransport?: SshTransport;
 }): Promise<void> {
-  const { sessionId, sessionType, entries, t, duplicateStrategy = "ask" } = params;
+  const { sessionId, sessionType, entries, t, duplicateStrategy = "ask", sshTransport } = params;
   if (entries.length === 0) {
+    return;
+  }
+  if (sessionType === "SSH" && sshTransport === "mosh") {
+    toast.error(t("terminal.dropMoshUnsupported"));
     return;
   }
 

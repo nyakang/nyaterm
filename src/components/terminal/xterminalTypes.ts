@@ -1,4 +1,9 @@
-import type { RecordingMode, RecordingStatus, SessionType } from "@/types/global";
+import type {
+  RecordingMode,
+  RecordingStatus,
+  SessionType,
+  SshRuntimeMode,
+} from "@/types/global";
 import type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 
 export interface SyncOverlayState {
@@ -19,6 +24,7 @@ export interface XTerminalProps {
   visible?: boolean;
   sessionType: SessionType;
   connectionId?: string;
+  sshRuntimeMode?: SshRuntimeMode | null;
   temporaryConfig?: TemporaryLinkConfig;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: () => void;

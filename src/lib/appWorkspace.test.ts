@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SessionPane, UiConfig } from "@/types/global";
+import type { SavedConnection, SessionInfo, SessionPane, UiConfig } from "@/types/global";
 import {
   canCreateSessionFromPane,
+  canMultiplexSshPane,
+  canUseStartupCommandForPane,
   canUseFloatingPanel,
   clearUnavailableFloatingPanels,
   cloneDefaultActivityBarLayout,
@@ -112,6 +114,90 @@ describe("canCreateSessionFromPane", () => {
 
   it("still allows local panes without connection metadata", () => {
     expect(canCreateSessionFromPane(pane({ type: "Local" }))).toBe(true);
+  });
+});
+
+describe("SSH transport session action capabilities", () => {
+  const standardSsh = {
+    id: "ssh-standard",
+    name: "Standard SSH",
+    type: "ssh",
+    ssh_transport: "ssh",
+  } as SavedConnection;
+  const mosh = {
+    id: "ssh-mosh",
+    name: "Mosh",
+    type: "ssh",
+    ssh_transport: "mosh",
+  } as SavedConnection;
+  const connections = [standardSsh, mosh];
+  const runtimeSessions = (
+    transport: "ssh" | "mosh",
+  ): Map<string, SessionInfo> =>
+    new Map([
+      [
+        "session-1",
+        {
+          id: "session-1",
+          name: transport,
+          session_type: "SSH",
+          started_at: "",
+          connected: true,
+          ai_execution_profile: "auto",
+          injection_active: false,
+          dynamic_title_enabled: false,
+          dynamic_title_integration_active: false,
+          remote_file_browser_enabled: transport === "ssh",
+          remote_stats_enabled: transport === "ssh",
+          ssh_runtime_mode: transport === "ssh" ? "standard" : null,
+        } as SessionInfo,
+      ],
+    ]);
+
+  it("blocks russh-only and startup-command actions for saved Mosh panes", () => {
+    const moshPane = pane({ type: "SSH", connectionId: mosh.id });
+
+    expect(canCreateSessionFromPane(moshPane)).toBe(true);
+    expect(canMultiplexSshPane(moshPane, runtimeSessions("mosh"))).toBe(false);
+    expect(canUseStartupCommandForPane(moshPane, connections)).toBe(false);
+  });
+
+  it("keeps ordinary SSH and temporary SSH actions available", () => {
+    const sshPane = pane({ type: "SSH", connectionId: standardSsh.id });
+    const temporarySshPane = pane({
+      type: "SSH",
+      temporaryConfig: {
+        protocol: "ssh",
+        runtime_mode: "standard",
+        name: "root@example.com:22",
+        host: "example.com",
+        port: 22,
+        username: "root",
+        auth: { type: "password", password: "secret" },
+        backspace_mode: "del",
+        x11_forwarding: false,
+        x11_display: "",
+        proxy: null,
+        proxy_jump: null,
+        post_login: null,
+      },
+    });
+
+    expect(canMultiplexSshPane(sshPane, runtimeSessions("ssh"))).toBe(true);
+    expect(canUseStartupCommandForPane(sshPane, connections)).toBe(true);
+    expect(canMultiplexSshPane(temporarySshPane, runtimeSessions("ssh"))).toBe(true);
+    expect(canUseStartupCommandForPane(temporarySshPane, connections)).toBe(true);
+  });
+
+  it("keeps multiplex capability tied to the running source session when saved transport changes", () => {
+    const sourcePane = pane({ type: "SSH", connectionId: standardSsh.id });
+
+    expect(
+      canMultiplexSshPane(sourcePane, runtimeSessions("mosh")),
+    ).toBe(false);
+    expect(
+      canMultiplexSshPane(sourcePane, runtimeSessions("ssh")),
+    ).toBe(true);
   });
 });
 
