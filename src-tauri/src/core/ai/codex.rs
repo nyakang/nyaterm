@@ -720,6 +720,8 @@ impl CodexAppServerManager {
             created_at: now_rfc3339(),
             reasoning_content: None,
             command_cards: vec![],
+            attachments: vec![],
+            references: vec![],
         };
         if context.settings.record_history {
             let _ = append_message(&context.app, message.clone());
@@ -1696,6 +1698,7 @@ mod tests {
             default_target_session_id: Some("term-1".to_string()),
             existing_external_session_id: None,
             attachments: vec![],
+            references: vec![],
             action: super::super::types::AiAction::GenerateCommand,
             user_input: "check load".to_string(),
             context: Default::default(),

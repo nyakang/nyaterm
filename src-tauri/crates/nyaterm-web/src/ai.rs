@@ -274,6 +274,8 @@ async fn start(state: &Arc<State>, owner: &str, args: &Value) -> Result<Value> {
                     created_at: now_rfc3339(),
                     reasoning_content: reasoning,
                     command_cards: cards.clone(),
+                    attachments: vec![],
+                    references: vec![],
                 };
                 if settings.record_history {
                     let _ = history::append_message(&(), message.clone());

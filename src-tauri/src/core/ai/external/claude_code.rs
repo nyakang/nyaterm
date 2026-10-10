@@ -402,6 +402,8 @@ async fn run_claude_code_stream_inner(
         created_at: now_rfc3339(),
         reasoning_content: None,
         command_cards: vec![],
+        attachments: vec![],
+        references: vec![],
     };
     if settings.record_history {
         append_message(&app, message.clone())?;
@@ -879,6 +881,7 @@ mod tests {
             default_target_session_id: Some("term-1".to_string()),
             existing_external_session_id: Some("claude-session-1".to_string()),
             attachments: vec![],
+            references: vec![],
             action: crate::core::ai::types::AiAction::GenerateCommand,
             user_input: "inspect".to_string(),
             context: Default::default(),

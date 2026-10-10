@@ -284,6 +284,8 @@ async fn run_chat_stream(
                 created_at: super::types::now_rfc3339(),
                 reasoning_content,
                 command_cards: command_cards.clone(),
+                attachments: vec![],
+                references: vec![],
             };
 
             if settings.record_history {

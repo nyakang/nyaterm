@@ -863,6 +863,7 @@ mod tests {
             default_target_session_id: None,
             existing_external_session_id: None,
             attachments: vec![],
+            references: vec![],
             action: AiAction::GenerateCommand,
             user_input: "test".to_string(),
             context: AiContext::default(),

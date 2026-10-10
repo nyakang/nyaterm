@@ -58,15 +58,59 @@ pub struct AiTargetContext {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct AiAttachment {
+pub struct AiReferenceMetadata {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub start: Option<usize>,
+    #[serde(default)]
+    pub end: Option<usize>,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
     #[serde(default)]
     pub path: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub terminal_session_id: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
+}
+
+// 旧历史和旧请求仍使用 attachments；新 AyaAgent 请求使用 references。
+pub type AiAttachment = AiReferenceMetadata;
+pub type AiReference = AiReferenceMetadata;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AyaReferencedFile {
+    pub reference_id: String,
+    pub source_session_id: String,
+    pub source_endpoint: String,
+    pub backend: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AyaReferenceContext {
+    #[serde(default)]
+    pub references: Vec<AiReference>,
+    #[serde(default)]
+    pub files: Vec<AyaReferencedFile>,
+    #[serde(default)]
+    pub execution_target_session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,6 +294,8 @@ pub struct AiContext {
     pub selected_text: String,
     #[serde(default)]
     pub input_buffer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aya_context: Option<AyaReferenceContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +357,8 @@ pub struct AiChatRequest {
     pub existing_external_session_id: Option<String>,
     #[serde(default)]
     pub attachments: Vec<AiAttachment>,
+    #[serde(default)]
+    pub references: Vec<AiReference>,
     pub action: AiAction,
     pub user_input: String,
     #[serde(default)]
@@ -398,6 +446,10 @@ pub struct AiMessage {
     pub reasoning_content: Option<String>,
     #[serde(default)]
     pub command_cards: Vec<AiCommandCard>,
+    #[serde(default)]
+    pub attachments: Vec<AiAttachment>,
+    #[serde(default)]
+    pub references: Vec<AiReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

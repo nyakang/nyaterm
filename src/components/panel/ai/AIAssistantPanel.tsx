@@ -2,6 +2,7 @@ import { randomUUID } from "@/lib/uuid";
 import { supports } from "@/lib/backend/runtime";
 import { emit, listen, type UnlistenFn } from "@/lib/backend/api";
 import {
+  type ClipboardEvent,
   memo,
   type ReactNode,
   useCallback,
@@ -20,6 +21,7 @@ import {
   MdContentCopy,
   MdDeleteOutline,
   MdErrorOutline,
+  MdExpandMore,
   MdHistory,
   MdOutlineSettings,
   MdRule,
@@ -47,7 +49,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
@@ -60,6 +61,7 @@ import {
 } from "@/lib/aiSettings";
 import { classifyAIStreamControlEvent } from "@/lib/aiStreamEvent";
 import { getErrorMessage } from "@/lib/errors";
+import { getFileDocumentController } from "@/lib/fileDocumentRegistry";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
 import { buildAIContext, getTerminalContextProvider } from "@/lib/terminalContext";
@@ -71,6 +73,9 @@ import type {
   AIAgentCommandExecutionMode,
   AIAgentKind,
   AICommandCard,
+  AIContext,
+  AIFileAttachment,
+  AIFileReference,
   AIMessage,
   AIMode,
   AIModelConfigItem,
@@ -88,9 +93,31 @@ import type {
 } from "@/types/global";
 import { AgentStepView } from "./AgentStepView";
 import { AICommandCardView } from "./AICommandCardView";
+import {
+  type AIInlineMention,
+  AIReferenceComposer,
+  type AIReferenceComposerHandle,
+} from "./AIReferenceComposer";
+import { AIUserMessageContent } from "./AIUserMessageContent";
 import { AssistantReasoning } from "./AssistantReasoning";
 import { AssistantResponse } from "./AssistantResponse";
+import {
+  type AIReferenceGroup,
+  type AIReferenceOption,
+  buildAIReferenceGroups,
+  formatAIFileReferenceContext,
+} from "./aiReferences";
+import { buildAyaContext, buildAyaTarget, resolveAyaPanes } from "./ayaReferences";
 import { ModelCombobox } from "./ModelCombobox";
+import { ReferenceTooltip } from "./ReferenceTooltip";
+import type { AIReferenceClipboardPayload } from "./referenceClipboard";
+import {
+  applyPastedText,
+  applyReferenceSelection,
+  referenceOptionAvailable,
+  referenceTreeChildren,
+  visibleReferenceChildren,
+} from "./referenceSelection";
 import type {
   AIAssistantPanelProps,
   AICommandExecutionState,
@@ -99,10 +126,30 @@ import type {
 } from "./types";
 import { actionTitle, buildPrismThemeFromColors, createLocalMessage, slugCategory } from "./utils";
 
+type ReferenceCandidate =
+  | { kind: "host"; id: string; label: string; title: string; sessionIds: string[] }
+  | AIReferenceOption;
+
+type VisibleMentionItem =
+  | { kind: "host"; id: string; group: AIReferenceGroup }
+  | {
+      kind: "session" | "file";
+      id: string;
+      group: AIReferenceGroup;
+      option: AIReferenceOption;
+      depth: 1 | 2;
+    };
+
+interface DraftMention extends AIInlineMention {
+  sessionIds: string[];
+  fileReference?: AIFileReference;
+}
+
 interface AIDraft {
   text: string;
+  mentions: DraftMention[];
   quotedText: QuotedText | null;
-  targetPaneIds: string[];
+  action: AIAction | null;
 }
 
 type AIPanelView = { mode: "draft" } | { mode: "session"; sessionId: string };
@@ -114,7 +161,7 @@ interface AIStreamRuntime {
   assistantMessageId: string;
 }
 
-const EMPTY_DRAFT: AIDraft = { text: "", quotedText: null, targetPaneIds: [] };
+const EMPTY_DRAFT: AIDraft = { text: "", mentions: [], quotedText: null, action: null };
 
 function isGenaiModel(model: AIModelConfigItem | null | undefined) {
   return (model?.backend ?? "genai") === "genai";
@@ -135,11 +182,22 @@ function resolveRunMode(mode: AIMode, agentKind: AIAgentKind | null | undefined)
   return "nyaterm_agent";
 }
 
+const AI_WORKSPACE_SCOPE_KEY = "workspace:ai";
+
 function buildAIScopeKey(pane: SessionPane | null) {
   return pane ? `terminal:${pane.sessionId}` : "unbound:";
 }
 
-function buildOwnerScope(pane: SessionPane | null): AISessionScope {
+function buildAIWorkspaceScope(): AISessionScope {
+  return {
+    type: "workspace",
+    targetId: "main",
+    connectionIds: [],
+    label: "AI Assistant",
+  };
+}
+
+function buildTerminalOwnerScope(pane: SessionPane | null): AISessionScope {
   if (!pane) return { type: "unbound", targetId: null, connectionIds: [], label: null };
   return {
     type: "terminal",
@@ -147,6 +205,10 @@ function buildOwnerScope(pane: SessionPane | null): AISessionScope {
     connectionIds: pane.connectionId ? [pane.connectionId] : [],
     label: pane.name,
   };
+}
+
+function sameAIScope(left: AISessionScope | null | undefined, right: AISessionScope) {
+  return left?.type === right.type && left.targetId === right.targetId;
 }
 
 function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantPanelProps) {
@@ -173,11 +235,15 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const [detectedError, setDetectedError] = useState<AIErrorDetectedDetail | null>(null);
   const [showMentionPopover, setShowMentionPopover] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionRange, setMentionRange] = useState<{ start: number; end: number } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [expandedMentionGroups, setExpandedMentionGroups] = useState<Set<string>>(new Set());
+  const [collapsedMentionGroups, setCollapsedMentionGroups] = useState<Set<string>>(new Set());
   const [commandExecution, setCommandExecution] = useState<Record<string, AICommandExecutionState>>(
     {},
   );
   const [agentStepsMap, setAgentStepsMap] = useState<Record<string, AgentStepPayload[]>>({});
+  const [liveSessions, setLiveSessions] = useState<SessionInfo[]>([]);
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
   const [showExecutionMenu, setShowExecutionMenu] = useState(false);
   const [autoModeDialogOpen, setAutoModeDialogOpen] = useState(false);
@@ -190,7 +256,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const historyButtonRef = useRef<HTMLButtonElement | null>(null);
   const historyCardRef = useRef<HTMLDivElement | null>(null);
   const mentionPopoverRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerRef = useRef<AIReferenceComposerHandle | null>(null);
   const isComposingRef = useRef(false);
   const streamUnlistenersRef = useRef<Map<string, UnlistenFn>>(new Map());
   const streamSessionByStreamIdRef = useRef<Map<string, string>>(new Map());
@@ -235,8 +301,16 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         : null;
   const agentExecutionMode = aiSettings.agent_command_execution_mode ?? "confirm_each";
   const agentBackgroundExecutionEnabled = aiSettings.agent_background_execution_enabled ?? false;
-  const scopeKey = useMemo(() => buildAIScopeKey(activePane), [activePane]);
-  const ownerScope = useMemo(() => buildOwnerScope(activePane), [activePane]);
+  // AyaAgent 对话属于当前主窗口 workspace；其他模式保留原有 terminal scope。
+  const usesWorkspaceScope = runMode === "nyaterm_agent";
+  const scopeKey = useMemo(
+    () => (usesWorkspaceScope ? AI_WORKSPACE_SCOPE_KEY : buildAIScopeKey(activePane)),
+    [activePane, usesWorkspaceScope],
+  );
+  const ownerScope = useMemo(
+    () => (usesWorkspaceScope ? buildAIWorkspaceScope() : buildTerminalOwnerScope(activePane)),
+    [activePane, usesWorkspaceScope],
+  );
   const currentPanelView = panelViewByScope[scopeKey] ?? null;
   const currentSessionId =
     currentPanelView?.mode === "draft"
@@ -272,50 +346,137 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     return keys;
   }, [tabs]);
 
+  useEffect(() => {
+    let disposed = false;
+    const refreshLiveSessions = async () => {
+      try {
+        const sessions = await invoke<SessionInfo[]>("list_sessions");
+        if (!disposed) setLiveSessions(sessions);
+      } catch {
+        if (!disposed) setLiveSessions([]);
+      }
+    };
+
+    void refreshLiveSessions();
+    const unlisten = listen("sessions-changed", () => void refreshLiveSessions());
+    return () => {
+      disposed = true;
+      unlisten.then((dispose) => dispose()).catch(() => {});
+    };
+  }, []);
+
   const allSessionPanes = useMemo(() => {
     const panes: SessionPane[] = [];
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
-        if (!pane.connecting && !pane.connectError) {
-          panes.push(pane);
-        }
+        if (!pane.connecting && !pane.connectError) panes.push(pane);
       }
     }
     return panes;
   }, [tabs]);
 
-  const filteredMentionPanes = useMemo(() => {
-    const q = mentionQuery.toLowerCase();
-    if (!q) return allSessionPanes;
-    return allSessionPanes.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.sessionId.toLowerCase().includes(q) ||
-        p.type.toLowerCase().includes(q),
-    );
-  }, [allSessionPanes, mentionQuery]);
-
-  const targetPanes = useMemo(
+  const referenceGroups = useMemo(
     () =>
-      currentDraft.targetPaneIds
-        .map((sessionId) => allSessionPanes.find((pane) => pane.sessionId === sessionId))
-        .filter((pane): pane is SessionPane => !!pane),
-    [allSessionPanes, currentDraft.targetPaneIds],
+      buildAIReferenceGroups(
+        allSessionPanes,
+        liveSessions,
+        savedConnections,
+        runMode === "nyaterm_agent",
+      ),
+    [allSessionPanes, liveSessions, runMode, savedConnections],
+  );
+  const referenceCandidates = useMemo<ReferenceCandidate[]>(
+    () =>
+      referenceGroups.flatMap((group) => [
+        {
+          kind: "host" as const,
+          id: `host:${group.id}`,
+          label: group.id === "local" ? t("ai.localReferenceRoot") : group.label,
+          title: group.title,
+          sessionIds: group.sessions,
+        },
+        ...group.children,
+      ]),
+    [referenceGroups, t],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection whenever the filtered mention list changes.
+  const filteredReferenceGroups = useMemo(() => {
+    const query = mentionQuery.trim().toLowerCase();
+    if (!query) return referenceGroups;
+    return referenceGroups
+      .map((group) => {
+        const groupMatches = `${group.label} ${group.title} ${group.host ?? ""}`
+          .toLowerCase()
+          .includes(query);
+        const children = group.children.filter((option) =>
+          `${option.label} ${option.title} ${option.id} ${option.sessionIds.join(" ")}`
+            .toLowerCase()
+            .includes(query),
+        );
+        return {
+          ...group,
+          children: groupMatches ? group.children : children,
+          queryExpanded: groupMatches || children.length > 0,
+        };
+      })
+      .filter((group) => group.queryExpanded);
+  }, [mentionQuery, referenceGroups]);
+  const visibleMentionItems = useMemo<VisibleMentionItem[]>(
+    () =>
+      filteredReferenceGroups.flatMap((group) => {
+        const root = { kind: "host" as const, id: group.id, group };
+        const expanded =
+          !collapsedMentionGroups.has(group.id) &&
+          (!!mentionQuery.trim() || expandedMentionGroups.has(group.id));
+        return expanded
+          ? [
+              root,
+              ...referenceTreeChildren(group).map(({ option, depth }) => ({
+                kind: option.kind,
+                id: option.id,
+                group,
+                option,
+                depth,
+              })),
+            ]
+          : [root];
+      }),
+    [collapsedMentionGroups, expandedMentionGroups, filteredReferenceGroups, mentionQuery],
+  );
+  const referencedSessionIds = useMemo(
+    () => [...new Set(currentDraft.mentions.flatMap((mention) => mention.sessionIds))],
+    [currentDraft.mentions],
+  );
+  const targetPanes = useMemo(
+    () =>
+      referencedSessionIds
+        .map((sessionId) =>
+          allSessionPanes.find((pane) => pane.sessionId === sessionId && pane.paneKind !== "file"),
+        )
+        .filter((pane): pane is SessionPane => !!pane),
+    [allSessionPanes, referencedSessionIds],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection whenever the filtered tree changes.
   useEffect(() => {
     setMentionIndex(0);
-  }, [filteredMentionPanes]);
+  }, [filteredReferenceGroups]);
+
+  useEffect(() => {
+    setMentionIndex((index) => Math.min(index, Math.max(0, visibleMentionItems.length - 1)));
+  }, [visibleMentionItems.length]);
 
   const effectivePanes = useMemo(() => {
+    if (runMode === "nyaterm_agent") {
+      return resolveAyaPanes(allSessionPanes, activePane, currentDraft.mentions).panes;
+    }
     const paneMap = new Map<string, SessionPane>();
-    if (activePane) paneMap.set(activePane.sessionId, activePane);
-    for (const pane of targetPanes) {
-      paneMap.set(pane.sessionId, pane);
+    for (const pane of targetPanes) paneMap.set(pane.sessionId, pane);
+    if (activePane && !paneMap.has(activePane.sessionId)) {
+      paneMap.set(activePane.sessionId, activePane);
     }
     return [...paneMap.values()];
-  }, [activePane, targetPanes]);
+  }, [activePane, allSessionPanes, currentDraft.mentions, runMode, targetPanes]);
   const panelMeta =
     effectivePanes.length > 1 && activePane
       ? t("ai.panelMetaMultiTarget", {
@@ -357,15 +518,12 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     );
   }, [historyQuery, sessions]);
 
-  const updateDraftForScope = useCallback(
-    (updater: (draft: AIDraft) => AIDraft) => {
-      setDraftsByScope((prev) => ({
-        ...prev,
-        [scopeKey]: updater(prev[scopeKey] ?? EMPTY_DRAFT),
-      }));
-    },
-    [scopeKey],
-  );
+  const updateDraftForScope = useCallback((updater: (draft: AIDraft) => AIDraft) => {
+    setDraftsByScope((prev) => ({
+      ...prev,
+      [scopeKey]: updater(prev[scopeKey] ?? EMPTY_DRAFT),
+    }));
+  }, [scopeKey]);
 
   const updateMessagesForSession = useCallback(
     (sessionId: string, updater: (messages: AIMessage[]) => AIMessage[]) => {
@@ -448,28 +606,25 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     setHistoryLoadError(null);
   }, [scopeKey]);
 
-  const loadSessionMessages = useCallback(
-    async (sessionId: string, requestId: number) => {
-      const items = await invoke<AIMessage[]>("get_ai_messages", {
-        sessionId,
-      });
-      if (historyLoadRequestRef.current !== requestId) return false;
-      setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
-      setActiveSessionIdByScope((prev) => ({
-        ...prev,
-        [scopeKey]: sessionId,
-      }));
-      setPanelViewByScope((prev) => ({
-        ...prev,
-        [scopeKey]: { mode: "session", sessionId },
-      }));
-      setHistoryLoadingSessionId(null);
-      setHistoryLoadError(null);
-      setShowHistory(false);
-      return true;
-    },
-    [scopeKey],
-  );
+  const loadSessionMessages = useCallback(async (sessionId: string, requestId: number) => {
+    const items = await invoke<AIMessage[]>("get_ai_messages", {
+      sessionId,
+    });
+    if (historyLoadRequestRef.current !== requestId) return false;
+    setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
+    setActiveSessionIdByScope((prev) => ({
+      ...prev,
+      [scopeKey]: sessionId,
+    }));
+    setPanelViewByScope((prev) => ({
+      ...prev,
+      [scopeKey]: { mode: "session", sessionId },
+    }));
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
+    setShowHistory(false);
+    return true;
+  }, [scopeKey]);
 
   const appendAudit = useCallback(
     (params: {
@@ -554,6 +709,9 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
 
   const buildTargetForPane = useCallback(
     (pane: SessionPane): AITerminalTarget => {
+      if (runMode === "nyaterm_agent") {
+        return buildAyaTarget(pane, allSessionPanes, savedConnections);
+      }
       const conn = pane.connectionId
         ? (savedConnections.find((item) => item.id === pane.connectionId) ??
           null)
@@ -569,8 +727,21 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         sessionType: pane.type,
       };
     },
-    [activeConnection, activePane?.sessionId, savedConnections],
+    [activeConnection, activePane?.sessionId, allSessionPanes, runMode, savedConnections],
   );
+
+  const ayaExecutionLabel =
+    runMode === "nyaterm_agent"
+      ? resolveAyaPanes(allSessionPanes, activePane, currentDraft.mentions)
+          .executionIds.map((id) => {
+            const pane = effectivePanes.find((item) => item.sessionId === id);
+            return pane ? buildTargetForPane(pane).label : id;
+          })
+          .join(", ")
+      : "";
+  const ayaFileSourceTitles = currentDraft.mentions
+    .filter((mention) => mention.kind === "file")
+    .map((mention) => mention.title);
 
   const buildTargetContexts = useCallback(
     async (
@@ -674,8 +845,23 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   );
 
   const startChat = useCallback(
-    async (action: AIAction, userInput: string, selectedText?: string) => {
-      const panes = effectivePanes;
+    async (
+      action: AIAction,
+      userInput: string,
+      selectedText?: string,
+      fileReferences: AIFileReference[] = [],
+      draftMentions: DraftMention[] = [],
+      referenceOffset = 0,
+    ) => {
+      const aya =
+        runMode === "nyaterm_agent"
+          ? resolveAyaPanes(allSessionPanes, activePane, draftMentions)
+          : null;
+      const panes = aya?.panes ?? effectivePanes;
+      if (aya?.missingIds.length) {
+        toast.error(t("ai.referenceUnavailable"));
+        return;
+      }
       if (panes.length === 0) {
         toast.error(t("panel.noActiveSessions"));
         return;
@@ -712,7 +898,36 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const requestStreamId = `ai-stream-${randomUUID()}`;
       let resolvedSessionId = requestSessionId ?? `pending-${requestStreamId}`;
-      const userMessage = createLocalMessage("user", userInput, resolvedSessionId);
+      const ayaContext = aya
+        ? buildAyaContext(draftMentions, fileReferences, aya.executionIds, referenceOffset)
+        : undefined;
+      const references = ayaContext?.references ?? [];
+      const messageFileReferences = draftMentions
+        .map((mention) => mention.fileReference)
+        .filter((reference): reference is AIFileReference => !!reference);
+      const attachmentReferences = messageFileReferences.length
+        ? messageFileReferences
+        : fileReferences;
+      const attachments: AIFileAttachment[] = aya
+        ? []
+        : attachmentReferences.map((reference) => ({
+            id: reference.id,
+            name: reference.name,
+            path: reference.path,
+            mimeType: reference.mimeType,
+            sizeBytes: reference.sizeBytes,
+            host: reference.host,
+            connectionId: reference.connectionId,
+            terminalSessionId: reference.terminalSessionId,
+            backend: reference.backend,
+          }));
+      const userMessage = createLocalMessage(
+        "user",
+        userInput,
+        resolvedSessionId,
+        attachments,
+        references,
+      );
       const assistantMessage: AIMessage = {
         id: assistantId,
         sessionId: resolvedSessionId,
@@ -788,6 +1003,12 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       };
 
       try {
+        if (requestSessionId && !sameAIScope(currentSession?.scope, ownerScope)) {
+          await invoke<AISession>("rebind_ai_session", {
+            sessionId: requestSessionId,
+            ownerScope,
+          });
+        }
         const unlisten = await listen<AIStreamEventPayload | AgentStepPayload>(
           `ai-stream-${requestStreamId}`,
           (event) => {
@@ -907,7 +1128,32 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         const targetContexts = await buildTargetContexts(panes, selectedText);
         // The primary context belongs to the default target. Other targets keep
         // their own complete snapshots rather than mixing hosts and metadata.
-        const context = targetContexts[0].context;
+        const primaryContext = targetContexts[0]?.context ?? {
+          connectionName: null,
+          host: null,
+          port: null,
+          username: null,
+          cwd: null,
+          os: null,
+          arch: null,
+          recentOutput: "",
+          selectedText: "",
+          inputBuffer: "",
+        };
+        const fileContext = formatAIFileReferenceContext(
+          fileReferences.map((reference) => ({
+            title: `${reference.host ? `${reference.host}:` : ""}${reference.path}`,
+            content: reference.content,
+          })),
+          t("ai.referencedFile"),
+        );
+        const context: AIContext = {
+          ...primaryContext,
+          selectedText: ayaContext
+            ? primaryContext.selectedText
+            : [primaryContext.selectedText, fileContext].filter(Boolean).join("\n\n"),
+          ...(ayaContext ? { ayaContext } : {}),
+        };
         const primaryConn = panes[0].connectionId
           ? (savedConnections.find((c) => c.id === panes[0].connectionId) ?? null)
           : activeConnection;
@@ -930,7 +1176,10 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     aiSettings.external_agent_permission_mode ??
                     "confirm")
                   : "confirm",
-            defaultTargetSessionId: panes[0]?.sessionId ?? null,
+            defaultTargetSessionId:
+              aya && aya.executionIds.length !== 1
+                ? null
+                : (aya?.executionIds[0] ?? panes[0]?.sessionId ?? null),
             existingExternalSessionId:
               currentSession?.agentKind === requestAgentKind
                 ? (currentSession.externalSessionId ?? null)
@@ -938,6 +1187,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             ownerScope,
             targets,
             targetContexts,
+            attachments,
+            references,
             action,
             userInput,
             mode: requestMode,
@@ -968,6 +1219,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     },
     [
       activeConnection,
+      activePane,
+      allSessionPanes,
       aiSettings.claude_code?.default_model,
       aiSettings.claude_code?.permission_mode,
       aiSettings.codex?.default_model,
@@ -987,9 +1240,9 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       runMode,
       savedConnections,
       selectedModel,
-      scopeKey,
       t,
       updateMessagesForSession,
+      scopeKey,
     ],
   );
 
@@ -997,22 +1250,112 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     if (!intent || handledIntentIdRef.current === intent.id) return;
     handledIntentIdRef.current = intent.id;
     const fallbackText = actionTitle(intent.action);
-    void startChat(intent.action, intent.userInput?.trim() || fallbackText, intent.selectedText);
-  }, [intent, startChat]);
+    const prompt = intent.userInput?.trim() || fallbackText;
+    if (intent.fileReference) {
+      const fileReference = intent.fileReference;
+      const sizeBytes = new TextEncoder().encode(fileReference.content).byteLength;
+      if (sizeBytes > aiSettings.max_ai_file_size_bytes) {
+        toast.error(
+          t("ai.fileReferenceTooLarge", {
+            limit: aiSettings.max_ai_file_size_bytes.toLocaleString(),
+          }),
+        );
+        return;
+      }
+      const stagedReference = { ...fileReference, sizeBytes };
+      const token = `@${fileReference.name}`;
+      const prefix = prompt ? `${prompt} ` : "";
+      const start = prefix.length;
+      updateDraftForScope((draft) => ({
+        ...draft,
+        action: intent.action,
+        text: `${prefix}${token} `,
+        mentions: [
+          {
+            id: fileReference.id,
+            kind: "file",
+            label: fileReference.name,
+            title: `${fileReference.host ? `${fileReference.host}:` : ""}${fileReference.path}`,
+            start,
+            end: start + token.length,
+            sessionIds: [fileReference.terminalSessionId],
+            fileReference: stagedReference,
+          },
+        ],
+        quotedText: null,
+      }));
+      setShowMentionPopover(false);
+      setMentionQuery("");
+      setMentionRange(null);
+      requestAnimationFrame(() => composerRef.current?.focusAt(start + token.length + 1));
+      return;
+    }
+    void startChat(intent.action, prompt, intent.selectedText);
+  }, [aiSettings.max_ai_file_size_bytes, intent, startChat, t, updateDraftForScope]);
 
   const submit = useCallback(() => {
     const value = input.trim();
     if (!value || loading) return;
     const fullInput = quotedText ? `> ${quotedText.text}\n\n${value}` : value;
-    updateDraftForScope((draft) => ({
-      ...draft,
-      text: "",
-      quotedText: null,
-      targetPaneIds: [],
-    }));
+    const action = currentDraft.action ?? "generate_command";
+    const uniqueFileReferences = new Map<string, AIFileReference>();
+    for (const mention of currentDraft.mentions) {
+      if (mention.fileReference)
+        uniqueFileReferences.set(mention.fileReference.id, mention.fileReference);
+    }
+    const fileReferences = [...uniqueFileReferences.values()].map((reference) => {
+      if (runMode !== "nyaterm_agent") return reference;
+      const pane = allSessionPanes.find(
+        (item) =>
+          item.paneKind === "file" &&
+          item.sessionId === reference.terminalSessionId &&
+          item.file.backend === reference.backend &&
+          item.file.path === reference.path,
+      );
+      const snapshot = pane ? getFileDocumentController(pane.id)?.getSnapshot?.() : undefined;
+      const content = snapshot?.content ?? reference.content;
+      return { ...reference, content, sizeBytes: new TextEncoder().encode(content).byteLength };
+    });
+    if (runMode === "nyaterm_agent") {
+      if (resolveAyaPanes(allSessionPanes, activePane, currentDraft.mentions).missingIds.length) {
+        toast.error(t("ai.referenceUnavailable"));
+        return;
+      }
+      if (
+        fileReferences.reduce((sum, file) => sum + (file.sizeBytes ?? 0), 0) >
+        aiSettings.max_ai_file_size_bytes
+      ) {
+        toast.error(
+          t("ai.fileReferenceTooLarge", {
+            limit: aiSettings.max_ai_file_size_bytes.toLocaleString(),
+          }),
+        );
+        return;
+      }
+    }
+    const offset =
+      (quotedText ? `> ${quotedText.text}\n\n`.length : 0) -
+      (input.length - input.trimStart().length);
+    updateDraftForScope(() => EMPTY_DRAFT);
+    setShowMentionPopover(false);
+    setMentionQuery("");
+    setMentionRange(null);
     shouldAutoScrollRef.current = true;
-    void startChat("generate_command", fullInput);
-  }, [input, loading, quotedText, startChat, updateDraftForScope]);
+    void startChat(action, fullInput, undefined, fileReferences, currentDraft.mentions, offset);
+  }, [
+    activePane,
+    aiSettings.max_ai_file_size_bytes,
+    allSessionPanes,
+    runMode,
+    t,
+    currentDraft.action,
+    currentDraft.mentions,
+    input,
+    loading,
+    quotedText,
+    startChat,
+    updateDraftForScope,
+  ]);
 
   const cancelStream = useCallback(() => {
     const activeStreamId = currentStreamRuntime?.streamId;
@@ -1179,7 +1522,10 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     const other: AISession[] = [];
     for (const session of filteredSessions) {
       const scope = session.scope;
-      if (scope?.type === "terminal" && scope.targetId === activePane?.sessionId) {
+      if (
+        session.id === currentSessionId ||
+        (scope?.type === "terminal" && scope.targetId === activePane?.sessionId)
+      ) {
         current.push(session);
       } else if (
         activePane?.connectionId &&
@@ -1204,16 +1550,15 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       },
       { key: "other", label: t("ai.historyOtherSessions"), sessions: other },
     ];
-  }, [activePane?.connectionId, activePane?.sessionId, filteredSessions, t]);
+  }, [activePane?.connectionId, activePane?.sessionId, currentSessionId, filteredSessions, t]);
 
   const isSessionUsedByAnotherScope = useCallback(
     (sessionId: string) =>
       !!streamRuntimeBySession[sessionId] ||
       Object.entries(activeSessionIdByScope).some(
-        ([key, value]) =>
-          key !== scopeKey && value === sessionId && openTerminalScopeKeys.has(key),
+        ([key, value]) => key !== scopeKey && value === sessionId && openTerminalScopeKeys.has(key),
       ),
-    [activeSessionIdByScope, openTerminalScopeKeys, scopeKey, streamRuntimeBySession],
+    [activeSessionIdByScope, openTerminalScopeKeys, streamRuntimeBySession, scopeKey],
   );
 
   const openHistorySession = useCallback(
@@ -1222,29 +1567,19 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       setHistoryLoadingSessionId(session.id);
       setHistoryLoadError(null);
       try {
-        if (activePane) {
-          const exactScope =
-            session.scope?.type === "terminal" && session.scope.targetId === activePane.sessionId;
-          if (!exactScope) {
-            await invoke<AISession>("rebind_ai_session", {
-              sessionId: session.id,
-              ownerScope,
-            });
+        if (!sameAIScope(session.scope, ownerScope)) {
+          await invoke<AISession>("rebind_ai_session", {
+            sessionId: session.id,
+            ownerScope,
+          });
+          if (historyLoadRequestRef.current !== requestId) return;
+          setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: session.id }));
+          try {
+            const nextSessions = await invoke<AISession[]>("get_ai_sessions");
             if (historyLoadRequestRef.current !== requestId) return;
-            setActiveSessionIdByScope((prev) => {
-              const next = { ...prev, [scopeKey]: session.id };
-              for (const [key, value] of Object.entries(next)) {
-                if (key !== scopeKey && value === session.id) next[key] = null;
-              }
-              return next;
-            });
-            try {
-              const nextSessions = await invoke<AISession[]>("get_ai_sessions");
-              if (historyLoadRequestRef.current !== requestId) return;
-              setSessions(nextSessions);
-            } catch {
-              if (historyLoadRequestRef.current !== requestId) return;
-            }
+            setSessions(nextSessions);
+          } catch {
+            if (historyLoadRequestRef.current !== requestId) return;
           }
         }
         await loadSessionMessages(session.id, requestId);
@@ -1256,7 +1591,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         toast.error(`${t("ai.historyLoadFailed")}: ${message}`);
       }
     },
-    [activePane, loadSessionMessages, ownerScope, scopeKey, t],
+    [loadSessionMessages, ownerScope, scopeKey, t],
   );
 
   const newChat = useCallback(() => {
@@ -1270,79 +1605,247 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     setDetectedError(null);
     setCommandExecution({});
     setShowMentionPopover(false);
+    setMentionQuery("");
+    setMentionRange(null);
     shouldAutoScrollRef.current = true;
   }, [loading, scopeKey, updateDraftForScope]);
 
   const handleCopySelection = useCallback(() => {
     const sel = window.getSelection()?.toString();
-    if (sel) {
-      void navigator.clipboard.writeText(sel);
-    }
+    if (!sel) return;
+    // 先走浏览器 copy 事件，让消息/编辑器的引用元数据一并写入自定义剪贴板格式。
+    if (typeof document.execCommand === "function" && document.execCommand("copy")) return;
+    void navigator.clipboard.writeText(sel);
   }, []);
 
   const handleQuoteSelection = useCallback(() => {
     const sel = window.getSelection()?.toString()?.trim();
     if (sel) {
       updateDraftForScope((draft) => ({ ...draft, quotedText: { text: sel } }));
-      textareaRef.current?.focus();
+      composerRef.current?.focus();
     }
   }, [updateDraftForScope]);
 
-  const handleInputChange = useCallback(
-    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const value = event.target.value;
-      updateDraftForScope((draft) => ({ ...draft, text: value }));
-
-      const cursorPos = event.target.selectionStart;
-      const textBeforeCursor = value.slice(0, cursorPos);
-      const atMatch = textBeforeCursor.match(/@(\S*)$/);
-      if (atMatch) {
-        setMentionQuery(atMatch[1]);
-        if (!showMentionPopover) setMentionIndex(0);
-        setShowMentionPopover(true);
-      } else {
-        setShowMentionPopover(false);
-        setMentionQuery("");
-      }
-    },
-    [showMentionPopover, updateDraftForScope],
-  );
-
-  const selectMentionPane = useCallback(
-    (pane: SessionPane) => {
-      updateDraftForScope((draft) => {
-        const exists = draft.targetPaneIds.includes(pane.sessionId);
-        return {
-          ...draft,
-          targetPaneIds: exists
-            ? draft.targetPaneIds.filter((id) => id !== pane.sessionId)
-            : [...draft.targetPaneIds, pane.sessionId],
-        };
-      });
-
-      const cursorPos = textareaRef.current?.selectionStart ?? input.length;
-      const textBeforeCursor = input.slice(0, cursorPos);
-      const textAfterCursor = input.slice(cursorPos);
-      const cleaned = textBeforeCursor.replace(/@\S*$/, "");
+  const handleComposerChange = useCallback(
+    (value: string, mentions: AIInlineMention[]) => {
       updateDraftForScope((draft) => ({
         ...draft,
-        text: `${cleaned}${textAfterCursor}`,
-      }));
-      setShowMentionPopover(false);
-      setMentionQuery("");
-      textareaRef.current?.focus();
-    },
-    [input, updateDraftForScope],
-  );
-
-  const removeTargetPane = useCallback(
-    (sessionId: string) => {
-      updateDraftForScope((draft) => ({
-        ...draft,
-        targetPaneIds: draft.targetPaneIds.filter((id) => id !== sessionId),
+        text: value,
+        mentions: mentions.map((mention) => {
+          const previous = draft.mentions.find((item) => item.id === mention.id);
+          return {
+            ...mention,
+            sessionIds: previous?.sessionIds ?? [],
+            fileReference: previous?.fileReference,
+          };
+        }),
       }));
     },
     [updateDraftForScope],
+  );
+
+  const handleMentionQuery = useCallback(
+    (query: string, range: { start: number; end: number } | null) => {
+      setMentionQuery(query);
+      setMentionRange(range);
+      setShowMentionPopover(!!range);
+      if (range) {
+        setCollapsedMentionGroups(new Set());
+        if (!showMentionPopover) setMentionIndex(0);
+      }
+    },
+    [showMentionPopover],
+  );
+
+  const closeMentionPopover = useCallback(() => {
+    setShowMentionPopover(false);
+    setMentionQuery("");
+    setMentionRange(null);
+    setCollapsedMentionGroups(new Set());
+  }, []);
+
+  const toggleMentionGroup = useCallback((groupId: string, expanded: boolean) => {
+    if (expanded) {
+      setCollapsedMentionGroups((previous) => new Set(previous).add(groupId));
+      setExpandedMentionGroups((previous) => {
+        const next = new Set(previous);
+        next.delete(groupId);
+        return next;
+      });
+      return;
+    }
+    setCollapsedMentionGroups((previous) => {
+      const next = new Set(previous);
+      next.delete(groupId);
+      return next;
+    });
+    setExpandedMentionGroups((previous) => new Set(previous).add(groupId));
+  }, []);
+
+  const buildDraftMention = useCallback(
+    (option: ReferenceCandidate): DraftMention | null => {
+      const group = referenceGroups.find((candidateGroup) =>
+        option.kind === "host"
+          ? `host:${candidateGroup.id}` === option.id
+          : candidateGroup.children.some((child) => child.id === option.id),
+      );
+      const available =
+        !!group &&
+        (option.kind === "host"
+          ? group.sessions.length > 0
+          : referenceOptionAvailable(group, option));
+      if (!available) {
+        toast.error(t("ai.referenceUnavailable"));
+        return null;
+      }
+      if (option.kind !== "file") {
+        return {
+          id: option.id,
+          kind: option.kind,
+          label: option.label,
+          title: option.title,
+          start: 0,
+          end: 0,
+          sessionIds: option.sessionIds,
+        };
+      }
+      const current =
+        getFileDocumentController(option.pane.id)?.getSnapshot?.() ?? option.pane.file.initial;
+      const sizeBytes = new TextEncoder().encode(current.content).byteLength;
+      const currentFileIds = new Set<string>();
+      const currentFileBytes = currentDraft.mentions.reduce((total, item) => {
+        const reference = item.fileReference;
+        if (!reference || currentFileIds.has(reference.id)) return total;
+        currentFileIds.add(reference.id);
+        return total + (reference.sizeBytes ?? 0);
+      }, 0);
+      const alreadyReferenced = currentFileIds.has(option.id);
+      const maximum = Math.max(0, aiSettings.max_ai_file_size_bytes);
+      if (sizeBytes > maximum || (!alreadyReferenced && currentFileBytes + sizeBytes > maximum)) {
+        toast.error(t("ai.fileReferenceTooLarge", { limit: maximum.toLocaleString() }));
+        return null;
+      }
+      return {
+        id: option.id,
+        kind: "file",
+        label: option.label,
+        title: option.title,
+        start: 0,
+        end: 0,
+        sessionIds: [option.pane.sessionId],
+        fileReference: {
+          id: option.id,
+          name: option.pane.name,
+          path: option.pane.file.path,
+          backend: option.pane.file.backend,
+          terminalSessionId: option.pane.sessionId,
+          connectionId: option.pane.connectionId ?? null,
+          host: option.host,
+          sizeBytes,
+          mimeType: "text/plain",
+          content: current.content,
+          openedAt: option.pane.openedAt,
+        },
+      };
+    },
+    [aiSettings.max_ai_file_size_bytes, currentDraft.mentions, referenceGroups, t],
+  );
+
+  const insertMention = useCallback(
+    (
+      option:
+        | AIReferenceOption
+        | { kind: "host"; id: string; label: string; title: string; sessionIds: string[] },
+    ) => {
+      const range = mentionRange ?? { start: input.length, end: input.length };
+      const mention = buildDraftMention(option);
+      if (!mention) return;
+      const result = applyReferenceSelection(currentDraft, mention, range);
+      updateDraftForScope((draft) => ({ ...draft, text: result.text, mentions: result.mentions }));
+      closeMentionPopover();
+      requestAnimationFrame(() => composerRef.current?.focusAt(result.caret));
+    },
+    [
+      buildDraftMention,
+      closeMentionPopover,
+      currentDraft,
+      input,
+      mentionRange,
+      updateDraftForScope,
+    ],
+  );
+
+  const handlePasteReferences = useCallback(
+    (
+      event: ClipboardEvent<HTMLDivElement>,
+      pastedText: string,
+      range: { start: number; end: number },
+      payload: AIReferenceClipboardPayload | null,
+    ) => {
+      const candidates = referenceCandidates;
+      const findCandidate = (reference: {
+        id?: string;
+        kind: "host" | "session" | "file";
+        label: string;
+        title?: string;
+        sessionIds?: string[];
+        file?: { path?: string | null; backend?: string | null; terminalSessionId?: string | null };
+      }) => {
+        const exact = reference.id
+          ? candidates.filter((candidate) => candidate.id === reference.id)
+          : [];
+        if (exact.length === 1) return exact[0];
+        const matches = candidates.filter((candidate) => {
+          if (candidate.kind !== reference.kind || candidate.label !== reference.label)
+            return false;
+          if (candidate.kind === "file") {
+            return (
+              (!reference.file?.path || candidate.pane.file.path === reference.file.path) &&
+              (!reference.file?.backend ||
+                candidate.pane.file.backend === reference.file.backend) &&
+              (!reference.file?.terminalSessionId ||
+                candidate.pane.sessionId === reference.file.terminalSessionId)
+            );
+          }
+          return (
+            !reference.title ||
+            candidate.title === reference.title ||
+            (!!reference.sessionIds?.length &&
+              candidate.sessionIds.some((id) => reference.sessionIds?.includes(id)))
+          );
+        });
+        return matches.length === 1 ? matches[0] : null;
+      };
+
+      if (!payload || payload.text !== pastedText) return false;
+      const mentions: DraftMention[] = [];
+      for (const serialized of payload.references) {
+        if (
+          serialized.start < 0 ||
+          serialized.end <= serialized.start ||
+          serialized.end > pastedText.length ||
+          pastedText.slice(serialized.start, serialized.end) !== `@${serialized.label}`
+        ) {
+          continue;
+        }
+        const candidate = findCandidate(serialized);
+        if (!candidate) continue;
+        const mention = buildDraftMention(candidate);
+        if (!mention) continue;
+        mentions.push({
+          ...mention,
+          start: serialized.start,
+          end: serialized.end,
+        });
+      }
+      if (mentions.length === 0) return false;
+      event.preventDefault();
+      const result = applyPastedText(currentDraft, pastedText, range, mentions);
+      updateDraftForScope((draft) => ({ ...draft, text: result.text, mentions: result.mentions }));
+      requestAnimationFrame(() => composerRef.current?.focusAt(result.caret));
+      return true;
+    },
+    [buildDraftMention, currentDraft, referenceCandidates, updateDraftForScope],
   );
 
   const updateAgentExecutionMode = useCallback(
@@ -1447,6 +1950,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         }
         if (showMentionPopover && !mentionPopoverRef.current?.contains(target)) {
           setShowMentionPopover(false);
+          setMentionQuery("");
+          setMentionRange(null);
         }
       }}
     >
@@ -1635,9 +2140,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     {section.sessions.map((session) => {
                       const inUse = isSessionUsedByAnotherScope(session.id);
                       const isLoadingHistory = historyLoadingSessionId === session.id;
-                      const exactScope =
-                        session.scope?.type === "terminal" &&
-                        session.scope.targetId === activePane?.sessionId;
+                      const exactScope = sameAIScope(session.scope, ownerScope);
                       return (
                         <div
                           key={session.id}
@@ -1812,7 +2315,9 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                             }}
                           />
                         ) : (
-                          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                          <div className="whitespace-pre-wrap break-words">
+                            <AIUserMessageContent message={message} />
+                          </div>
                         )}
                         {message.commandCards?.length ? (
                           <div className="mt-3 space-y-2">
@@ -1850,63 +2355,205 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       </ContextMenu>
 
       <div className="shrink-0 border-t border-border/70 p-2">
-        {targetPanes.length > 0 ? (
-          <div className="mb-1.5 flex flex-wrap items-center gap-1">
-            <span className="text-[0.625rem] font-medium text-muted-foreground">
-              {t("ai.targetSession")}:
-            </span>
-            {targetPanes.map((p) => (
-              <span
-                key={p.sessionId}
-                className="inline-flex items-center gap-0.5 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary"
-              >
-                {p.name}
-                <button
-                  type="button"
-                  className="ml-0.5 rounded-full p-0 hover:text-destructive"
-                  onClick={() => removeTargetPane(p.sessionId)}
-                >
-                  <MdClose className="text-[0.625rem]" />
-                </button>
-              </span>
-            ))}
+        {runMode === "nyaterm_agent" && currentDraft.mentions.length > 0 ? (
+          <div className="mb-1.5 space-y-0.5 text-[0.625rem] text-muted-foreground">
+            <ReferenceTooltip text={ayaExecutionLabel}>
+              <div className="truncate">
+                {t("ai.ayaExecutionTargets")}: {ayaExecutionLabel}
+              </div>
+            </ReferenceTooltip>
+            {ayaFileSourceTitles.length > 0 ? (
+              <ReferenceTooltip text={ayaFileSourceTitles.join("\n")}>
+                <div className="truncate">
+                  {t("ai.ayaFileSources")}: {ayaFileSourceTitles.join(", ")}
+                </div>
+              </ReferenceTooltip>
+            ) : null}
           </div>
         ) : null}
         <div className="relative">
           {showMentionPopover ? (
             <div
               ref={mentionPopoverRef}
-              className="absolute bottom-full left-0 right-0 z-30 mb-1 flex max-h-48 flex-col overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg"
+              className="absolute bottom-full left-0 right-0 z-30 mb-1 flex max-h-64 flex-col overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg"
               style={{ borderColor: "var(--df-border)" }}
             >
               <div className="min-h-0 overflow-auto p-1 terminal-scroll">
-                {filteredMentionPanes.length === 0 ? (
+                {visibleMentionItems.length === 0 ? (
                   <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    {t("ai.noSessions")}
+                    {t("ai.noReferenceMatches")}
                   </div>
                 ) : (
-                  filteredMentionPanes.map((pane, idx) => {
-                    const isSelected = targetPanes.some((p) => p.sessionId === pane.sessionId);
-                    const isFocused = idx === mentionIndex;
+                  visibleMentionItems.map((item, idx) => {
+                    const focused = idx === mentionIndex;
+                    if (item.kind === "host") {
+                      const scopeTitle = `${item.group.title}\n${t("ai.referenceHostScope", { count: item.group.sessions.length })}`;
+                      const fileCount =
+                        referenceGroups
+                          .find((group) => group.id === item.group.id)
+                          ?.children.filter((option) => option.kind === "file").length ?? 0;
+                      const expanded =
+                        !collapsedMentionGroups.has(item.group.id) &&
+                        (!!mentionQuery.trim() || expandedMentionGroups.has(item.group.id));
+                      const disabled = item.group.sessions.length === 0;
+                      return (
+                        <div
+                          key={item.id}
+                          ref={(element) => {
+                            if (focused) element?.scrollIntoView({ block: "nearest" });
+                          }}
+                          className={`flex items-center rounded ${focused ? "bg-accent" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            aria-label={
+                              expanded
+                                ? t("ai.collapseReferenceGroup")
+                                : t("ai.expandReferenceGroup")
+                            }
+                            aria-expanded={expanded}
+                            disabled={visibleReferenceChildren(item.group).length === 0}
+                            className="flex size-7 shrink-0 items-center justify-center rounded hover:bg-muted/60 disabled:invisible"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => toggleMentionGroup(item.group.id, expanded)}
+                          >
+                            <MdExpandMore
+                              className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+                            />
+                          </button>
+                          <ReferenceTooltip
+                            text={scopeTitle}
+                            disabled={disabled}
+                            triggerClassName="flex min-w-0 flex-1"
+                          >
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              aria-label={scopeTitle}
+                              data-reference-host-group={item.group.id}
+                              className="flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1.5 text-left text-xs disabled:opacity-50"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() =>
+                                insertMention({
+                                  kind: "host",
+                                  id: `host:${item.group.id}`,
+                                  label:
+                                    item.group.id === "local"
+                                      ? t("ai.localReferenceRoot")
+                                      : item.group.label,
+                                  title: item.group.title,
+                                  sessionIds: item.group.sessions,
+                                })
+                              }
+                              onPointerEnter={() => setMentionIndex(idx)}
+                            >
+                              <span className="size-2 shrink-0 rounded-full bg-primary/70" />
+                              <span className="min-w-0 flex-1 truncate font-semibold">
+                                {item.group.id === "local"
+                                  ? t("ai.localReferenceRoot")
+                                  : item.group.label}
+                                {runMode === "nyaterm_agent" && item.group.host ? (
+                                  <span className="block truncate text-[0.625rem] font-normal text-muted-foreground">
+                                    {item.group.title}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="shrink-0 text-[0.625rem] text-muted-foreground">
+                                {t("ai.referenceGroupCounts", {
+                                  sessions: item.group.sessions.length,
+                                  files: fileCount,
+                                })}
+                              </span>
+                            </button>
+                          </ReferenceTooltip>
+                        </div>
+                      );
+                    }
+
+                    const option = item.option;
+                    const startedAt =
+                      option.kind === "session" && option.sortTime > 0
+                        ? new Date(option.sortTime).toLocaleString(undefined, {
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })
+                        : "-";
+                    const optionTitle =
+                      option.kind === "session"
+                        ? `${option.title}\n${t("ai.referenceSessionStartedAt", { time: startedAt })}\n${option.pane.sessionId}`
+                        : option.title;
+                    const selectedFileIds = new Set<string>();
+                    const selectedFileBytes = currentDraft.mentions.reduce((total, mention) => {
+                      const reference = mention.fileReference;
+                      if (
+                        !reference ||
+                        reference.id === option.id ||
+                        selectedFileIds.has(reference.id)
+                      ) {
+                        return total;
+                      }
+                      selectedFileIds.add(reference.id);
+                      return total + (reference.sizeBytes ?? 0);
+                    }, 0);
+                    const optionAvailable = referenceOptionAvailable(item.group, option);
+                    const overLimit =
+                      option.kind === "file" &&
+                      (option.sizeBytes > aiSettings.max_ai_file_size_bytes ||
+                        selectedFileBytes + option.sizeBytes > aiSettings.max_ai_file_size_bytes);
+                    const disabled = !optionAvailable || overLimit;
+                    const detail =
+                      option.kind === "file" ? t("ai.fileReference") : option.pane.type;
+                    const optionIndent =
+                      item.depth === 2
+                        ? "ml-8 border-l border-border/50 pl-1"
+                        : "ml-2 border-l border-border/50 pl-1";
                     return (
-                      <button
-                        key={pane.sessionId}
-                        ref={(el) => {
-                          if (isFocused && el) el.scrollIntoView({ block: "nearest" });
-                        }}
-                        type="button"
-                        className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted/60 ${isFocused ? "bg-accent" : ""} ${isSelected ? "bg-primary/10" : ""}`}
-                        onClick={() => selectMentionPane(pane)}
-                        onPointerEnter={() => setMentionIndex(idx)}
-                      >
-                        <span
-                          className={`size-2 shrink-0 rounded-full ${isSelected ? "bg-primary" : "bg-muted-foreground/40"}`}
-                        />
-                        <span className="min-w-0 truncate font-medium">{pane.name}</span>
-                        <span className="ml-auto shrink-0 text-[0.625rem] text-muted-foreground">
-                          {pane.type}
-                        </span>
-                      </button>
+                      <div key={item.id} data-reference-depth={item.depth} className={optionIndent}>
+                        <ReferenceTooltip
+                          text={
+                            !optionAvailable
+                              ? t("ai.referenceUnavailable")
+                              : overLimit
+                                ? t("ai.fileReferenceTooLarge", {
+                                    limit: aiSettings.max_ai_file_size_bytes.toLocaleString(),
+                                  })
+                                : optionTitle
+                          }
+                          disabled={disabled}
+                          triggerClassName="block w-full"
+                        >
+                          <button
+                            ref={(element) => {
+                              if (focused) element?.scrollIntoView({ block: "nearest" });
+                            }}
+                            type="button"
+                            disabled={disabled}
+                            data-reference-option={option.id}
+                            data-reference-depth={item.depth}
+                            className={`flex w-full items-center gap-2 rounded px-2 py-1.5 pl-8 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${focused ? "bg-accent" : ""}`}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => insertMention(option)}
+                            onPointerEnter={() => setMentionIndex(idx)}
+                          >
+                            <span className="size-2 shrink-0 rounded-full bg-muted-foreground/40" />
+                            <span className="min-w-0 flex-1 font-medium">
+                              <span className="block truncate">{option.label}</span>
+                              {option.kind === "session" ? (
+                                <span className="block truncate text-[0.625rem] font-normal text-muted-foreground">
+                                  {t("ai.referenceSessionStartedAt", { time: startedAt })} ·{" "}
+                                  {option.pane.sessionId.slice(0, 8)}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="max-w-[45%] shrink-0 truncate text-[0.625rem] text-muted-foreground">
+                              {detail}
+                            </span>
+                          </button>
+                        </ReferenceTooltip>
+                      </div>
                     );
                   })
                 )}
@@ -1935,53 +2582,112 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                 </button>
               </div>
             ) : null}
-            <Textarea
-              ref={textareaRef}
+            <AIReferenceComposer
+              ref={composerRef}
               value={input}
+              mentions={currentDraft.mentions}
               disabled={loading || !aiSettings.enabled}
               placeholder={aiSettings.enabled ? t("ai.placeholder") : t("ai.goToSettingsToEnable")}
-              className="max-h-32 min-h-16 resize-none overflow-y-auto text-xs terminal-scroll"
-              onChange={handleInputChange}
+              className="max-h-32 min-h-16 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-input bg-background px-2 py-2 text-xs leading-5 text-foreground outline-none terminal-scroll focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
+              onChange={handleComposerChange}
+              onMentionQuery={handleMentionQuery}
               onCompositionStart={() => {
                 isComposingRef.current = true;
               }}
               onCompositionEnd={() => {
                 isComposingRef.current = false;
               }}
+              onPasteReferences={handlePasteReferences}
               onKeyDown={(event) => {
-                const isComposing =
+                const composing =
                   isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
                 if (showMentionPopover) {
                   if (event.key === "Escape") {
                     event.preventDefault();
-                    setShowMentionPopover(false);
+                    closeMentionPopover();
                     return;
                   }
-                  if (event.key === "ArrowDown") {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                     event.preventDefault();
-                    setMentionIndex((i) =>
-                      filteredMentionPanes.length === 0 ? 0 : (i + 1) % filteredMentionPanes.length,
-                    );
+                    setMentionIndex((index) => {
+                      if (visibleMentionItems.length === 0) return 0;
+                      const delta = event.key === "ArrowDown" ? 1 : -1;
+                      return (
+                        (index + delta + visibleMentionItems.length) % visibleMentionItems.length
+                      );
+                    });
                     return;
                   }
-                  if (event.key === "ArrowUp") {
+                  const item = visibleMentionItems[mentionIndex];
+                  if (
+                    event.key === "ArrowRight" &&
+                    item?.kind === "host" &&
+                    visibleReferenceChildren(item.group).length > 0
+                  ) {
                     event.preventDefault();
-                    setMentionIndex((i) =>
-                      filteredMentionPanes.length === 0
-                        ? 0
-                        : (i - 1 + filteredMentionPanes.length) % filteredMentionPanes.length,
-                    );
+                    setCollapsedMentionGroups((previous) => {
+                      const next = new Set(previous);
+                      next.delete(item.group.id);
+                      return next;
+                    });
+                    setExpandedMentionGroups((previous) => new Set(previous).add(item.group.id));
                     return;
                   }
-                  if (event.key === "Enter" && !isComposing) {
+                  if (event.key === "ArrowLeft" && item && item.kind !== "host") {
                     event.preventDefault();
-                    const target = filteredMentionPanes[mentionIndex];
-                    if (target) selectMentionPane(target);
-                    else setShowMentionPopover(false);
+                    setExpandedMentionGroups((previous) => {
+                      const next = new Set(previous);
+                      next.delete(item.group.id);
+                      return next;
+                    });
+                    setCollapsedMentionGroups((previous) => new Set(previous).add(item.group.id));
+                    return;
+                  }
+                  if (event.key === "Enter" && !composing) {
+                    event.preventDefault();
+                    if (!item) {
+                      closeMentionPopover();
+                    } else if (item.kind === "host") {
+                      if (item.group.sessions.length > 0) {
+                        insertMention({
+                          kind: "host",
+                          id: `host:${item.group.id}`,
+                          label:
+                            item.group.id === "local"
+                              ? t("ai.localReferenceRoot")
+                              : item.group.label,
+                          title: item.group.title,
+                          sessionIds: item.group.sessions,
+                        });
+                      }
+                    } else {
+                      const limit = aiSettings.max_ai_file_size_bytes;
+                      const currentFileIds = new Set<string>();
+                      const currentBytes = currentDraft.mentions.reduce((total, mention) => {
+                        const reference = mention.fileReference;
+                        if (
+                          !reference ||
+                          reference.id === item.option.id ||
+                          currentFileIds.has(reference.id)
+                        ) {
+                          return total;
+                        }
+                        currentFileIds.add(reference.id);
+                        return total + (reference.sizeBytes ?? 0);
+                      }, 0);
+                      if (
+                        referenceOptionAvailable(item.group, item.option) &&
+                        (item.option.kind !== "file" ||
+                          (item.option.sizeBytes <= limit &&
+                            currentBytes + item.option.sizeBytes <= limit))
+                      ) {
+                        insertMention(item.option);
+                      }
+                    }
                     return;
                   }
                 }
-                if (event.key === "Enter" && !event.shiftKey && !isComposing) {
+                if (event.key === "Enter" && !event.shiftKey && !composing) {
                   event.preventDefault();
                   submit();
                 }
@@ -1999,16 +2705,10 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     </SelectTrigger>
                     <SelectContent position="popper">
                       <SelectItem value="ask">{t("ai.modeAsk")}</SelectItem>
-                      <SelectItem
-                        value="nyaterm_agent"
-                        disabled={!supports("aiAgents")}
-                      >
+                      <SelectItem value="nyaterm_agent" disabled={!supports("aiAgents")}>
                         {t("ai.modeNyatermAgent")}
                       </SelectItem>
-                      <SelectItem
-                        value="codex_agent"
-                        disabled={!codexAgentEnabled}
-                      >
+                      <SelectItem value="codex_agent" disabled={!codexAgentEnabled}>
                         {t("ai.modeCodexAgent")}
                       </SelectItem>
                       <SelectItem value="claude_code_agent" disabled={!claudeCodeAgentEnabled}>
@@ -2044,7 +2744,11 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                           ? configuredReasoningEffort
                           : "auto";
                         updateAppSettings({
-                          ai: { ...aiSettings, default_model_id: model.id, default_reasoning_effort },
+                          ai: {
+                            ...aiSettings,
+                            default_model_id: model.id,
+                            default_reasoning_effort,
+                          },
                         });
                       }}
                       onSelectReasoningEffort={(default_reasoning_effort) =>

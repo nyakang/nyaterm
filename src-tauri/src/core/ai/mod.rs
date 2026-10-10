@@ -1,4 +1,5 @@
 mod agent;
+mod aya_references;
 mod codex;
 pub(crate) mod external;
 mod history;

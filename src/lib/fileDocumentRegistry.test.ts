@@ -29,6 +29,26 @@ describe("fileDocumentRegistry", () => {
     expect(getFileDocumentController("pane-file")).toBeNull();
   });
 
+  it("exposes the current editor snapshot for AI file references", () => {
+    const snapshot = {
+      content: "latest unsaved text",
+      size: 19,
+      mtime: 42,
+      contentHash: "snapshot-hash",
+    };
+    const unregister = registerFileDocument("pane-file", {
+      save: vi.fn().mockResolvedValue("saved" as const),
+      discard: vi.fn(),
+      getSnapshot: () => snapshot,
+    });
+
+    try {
+      expect(getFileDocumentController("pane-file")?.getSnapshot?.()).toEqual(snapshot);
+    } finally {
+      unregister();
+    }
+  });
+
   it("stops a multi-document close when any save is blocked", async () => {
     const firstSave = vi.fn().mockResolvedValue("saved" as const);
     const blockedSave = vi.fn().mockResolvedValue("conflict" as const);

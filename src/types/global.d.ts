@@ -176,6 +176,8 @@ export interface FileDocumentSnapshot {
 export interface FileDocumentPane extends WorkspacePaneBase {
   paneKind: "file";
   type: SessionType;
+  /** 文件首次在工作区打开的时间，用于最近引用排序。 */
+  openedAt?: string;
   file: {
     backend: FileDocumentBackend;
     path: string;
@@ -1615,6 +1617,8 @@ export interface AIContext {
   recentOutput: string;
   selectedText: string;
   inputBuffer: string;
+  /** 仅 AyaAgent 使用；文件正文与执行目标分开传递，不写入历史。 */
+  ayaContext?: AyaReferenceContext;
 }
 
 export type AIAction =
@@ -1673,6 +1677,56 @@ export interface AITargetContext {
   context: AIContext;
 }
 
+export interface AIFileAttachment {
+  id: string;
+  name: string;
+  /** 缺省为旧版文件附件；AyaAgent 同时保存 host/session 原子引用。 */
+  kind?: "host" | "session" | "file";
+  title?: string;
+  start?: number;
+  end?: number;
+  sessionIds?: string[];
+  path?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  host?: string | null;
+  connectionId?: string | null;
+  terminalSessionId?: string | null;
+  backend?: FileDocumentBackend | null;
+}
+
+export interface AIReferenceMetadata extends AIFileAttachment {
+  kind: "host" | "session" | "file";
+  title: string;
+  start: number;
+  end: number;
+  sessionIds: string[];
+}
+
+/** 当前 AI 请求中显式选中的文件；正文不写入历史记录。 */
+export interface AIFileReference extends AIFileAttachment {
+  path: string;
+  backend: FileDocumentBackend;
+  terminalSessionId: string;
+  content: string;
+  openedAt?: string;
+}
+
+export interface AyaReferencedFile {
+  referenceId: string;
+  sourceSessionId: string;
+  sourceEndpoint: string;
+  backend: FileDocumentBackend;
+  path: string;
+  content: string;
+}
+
+export interface AyaReferenceContext {
+  references: AIReferenceMetadata[];
+  files: AyaReferencedFile[];
+  executionTargetSessionIds: string[];
+}
+
 export interface AIMessage {
   id: string;
   sessionId: string;
@@ -1681,6 +1735,9 @@ export interface AIMessage {
   createdAt: string;
   reasoningContent?: string | null;
   commandCards?: AICommandCard[];
+  /** 新版通用引用元数据；attachments 仅兼容旧历史。 */
+  references?: AIReferenceMetadata[];
+  attachments?: AIFileAttachment[];
 }
 
 export interface AISession {

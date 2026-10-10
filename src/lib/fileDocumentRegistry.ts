@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from "react";
+import type { FileDocumentSnapshot } from "@/types/global";
 
 export type FileDocumentSaveResult = "saved" | "conflict";
 
 export interface FileDocumentController {
   save: (force?: boolean) => Promise<FileDocumentSaveResult>;
   discard: () => void;
+  getSnapshot?: () => FileDocumentSnapshot;
 }
 
 export interface FileDocumentRuntimeState {

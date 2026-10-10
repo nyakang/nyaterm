@@ -1,6 +1,12 @@
 import type { CSSProperties } from "react";
 import type { ThemeColors } from "@/lib/themes";
-import type { AIAction, AIMessage, AISession } from "@/types/global";
+import type {
+  AIAction,
+  AIFileAttachment,
+  AIMessage,
+  AIReferenceMetadata,
+  AISession,
+} from "@/types/global";
 
 export function actionTitle(action: AIAction) {
   switch (action) {
@@ -25,6 +31,8 @@ export function createLocalMessage(
   role: "user" | "assistant",
   content: string,
   sessionId = "local",
+  attachments: AIFileAttachment[] = [],
+  references: AIReferenceMetadata[] = [],
 ) {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -34,6 +42,8 @@ export function createLocalMessage(
     createdAt: new Date().toISOString(),
     reasoningContent: null,
     commandCards: [],
+    attachments,
+    references,
   } satisfies AIMessage;
 }
 

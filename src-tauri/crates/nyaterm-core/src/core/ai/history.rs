@@ -160,6 +160,8 @@ pub fn save_user_message(
             created_at: now,
             reasoning_content: None,
             command_cards: vec![],
+            attachments: request.attachments.clone(),
+            references: request.references.clone(),
         });
         trim_history(history);
         Ok(())
@@ -452,6 +454,8 @@ mod tests {
                     ),
                     reasoning_content: None,
                     command_cards: vec![],
+                    attachments: vec![],
+                    references: vec![],
                 });
             }
         }

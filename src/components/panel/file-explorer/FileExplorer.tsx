@@ -81,6 +81,7 @@ import { useApp } from "@/context/AppContext";
 import { useTransfer } from "@/context/TransferContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
+import { buildFileAIAssistantIntent } from "@/lib/fileAiIntent";
 import { getErrorMessage } from "@/lib/errors";
 import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
@@ -115,6 +116,7 @@ import {
 } from "@/lib/workspaceTabs";
 import type {
   AICustomActionConfig,
+  AIFileReference,
   FileEntry,
   FileExplorerProps,
   SavedConnection,
@@ -2912,17 +2914,42 @@ function FileExplorerPane({
           maxBytes: appSettings.ai.max_ai_file_size_bytes,
         },
       );
-      openAIAssistant({
-        action: "custom_file_action",
-        userInput: action.prompt,
-        selectedText: result.content,
-        metadata: {
-          actionId: action.id,
-          actionName: action.name,
+      const connection = savedConnections.find((item) => item.id === activeConnectionId) ?? null;
+      const sourcePane = tabs
+        .map((tab) => findSessionPaneBySessionId(tab.root, activeSessionId))
+        .find((candidate) => candidate?.paneKind === "terminal");
+      const temporarySsh =
+        sourcePane?.temporaryConfig && sourcePane.temporaryConfig.protocol === "ssh"
+          ? sourcePane.temporaryConfig
+          : null;
+      const remoteHost = connection?.host ?? temporarySsh?.host ?? activeSessionName ?? "SSH";
+      const remoteUser = connection?.username ?? temporarySsh?.username;
+      const remotePort = connection?.port ?? temporarySsh?.port;
+      const fileReference: AIFileReference = {
+        id: `file:${backend}:${activeSessionId}:${filePath}`,
+        name: entry.name,
+        path: filePath,
+        backend,
+        terminalSessionId: activeSessionId,
+        connectionId: activeConnectionId ?? null,
+        host:
+          backend === "remote"
+            ? `${remoteUser ? `${remoteUser}@` : ""}${remoteHost}${remotePort ? `:${remotePort}` : ""}`
+            : null,
+        sizeBytes: result.size,
+        mimeType: "text/plain",
+        content: result.content,
+      };
+      openAIAssistant(
+        buildFileAIAssistantIntent({
+          runtime,
+          action,
+          content: result.content,
           filePath,
           fileSize: result.size,
-        },
-      });
+          fileReference,
+        }),
+      );
     } catch (error) {
       toast.error(getErrorMessage(error) || t("ai.fileUnsupported"));
     }

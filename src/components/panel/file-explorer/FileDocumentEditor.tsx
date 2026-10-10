@@ -19,7 +19,7 @@ import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
 import { clampFileEditorFontSize } from "@/lib/fileEditorFontSize";
 import { formatSize } from "@/lib/utils";
-import type { FileDocumentPane } from "@/types/global";
+import type { FileDocumentPane, FileDocumentSnapshot } from "@/types/global";
 import { languageFromFilename, type TextFileOpenResult } from "./model";
 
 interface WriteFileTextResult {
@@ -226,6 +226,13 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
       registerFileDocument(pane.id, {
         save: (force) => saveRef.current(force),
         discard: () => discardRef.current(),
+        getSnapshot: (): FileDocumentSnapshot => ({
+          content: contentRef.current,
+          size: new Blob([contentRef.current]).size,
+          mtime: baseRef.current.mtime,
+          mtimeNanos: baseRef.current.mtimeNanos,
+          contentHash: baseRef.current.contentHash,
+        }),
       }),
     [pane.id],
   );

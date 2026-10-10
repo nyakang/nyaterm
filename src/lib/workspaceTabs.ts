@@ -113,6 +113,7 @@ export function createFileDocumentPane({
     name,
     type,
     connectionId,
+    openedAt: new Date().toISOString(),
     file: { backend, path, initial: file },
   };
 }
