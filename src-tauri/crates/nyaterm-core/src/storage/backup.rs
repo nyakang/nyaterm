@@ -1,7 +1,12 @@
 use super::{
-    SettingsDocKey, Storage, credentials::*, history::replace_command_history_in_txn,
-    known_hosts::replace_known_hosts_text_in_txn, notes::replace_notes_in_txn,
-    sessions::replace_sessions_in_txn, tables::SETTINGS_TABLE, util::*,
+    SettingsDocKey, Storage,
+    credentials::*,
+    history::replace_command_history_in_txn,
+    known_hosts::replace_known_hosts_text_in_txn,
+    notes::replace_notes_in_txn,
+    sessions::{replace_sessions_in_txn, replace_synced_sessions_in_txn},
+    tables::SETTINGS_TABLE,
+    util::*,
 };
 use crate::{config, core::portable_snapshot::PortableSnapshot, error::AppResult};
 
@@ -83,6 +88,40 @@ pub fn import_connections(
     keys: &config::KeysConfig,
 ) -> AppResult<()> {
     super::storage()?.import_connections(sessions, passwords, keys)
+}
+
+/// Commit only the synchronized entities touched by additive connection merge.
+/// History, app settings, notes, known hosts and device-local data are untouched.
+pub fn apply_merged_sync_entities(
+    snapshot: &PortableSnapshot,
+    sessions: &config::SessionsConfig,
+) -> AppResult<()> {
+    crate::core::portable_snapshot::validate_portable_snapshot(snapshot)?;
+    validate_backup_data(snapshot)?;
+    super::storage()?.apply_merged_sync_entities(snapshot, sessions)
+}
+
+impl Storage {
+    pub(super) fn apply_merged_sync_entities(
+        &self,
+        snapshot: &PortableSnapshot,
+        sessions: &config::SessionsConfig,
+    ) -> AppResult<()> {
+        let txn = self.db.begin_write().map_err(storage_error)?;
+        replace_synced_sessions_in_txn(&txn, sessions)?;
+        replace_passwords_in_txn(&txn, &snapshot.passwords)?;
+        replace_ssh_keys_in_txn(&txn, &snapshot.keys)?;
+        replace_otp_in_txn(&txn, &snapshot.otp)?;
+        replace_proxies_in_txn(&txn, &snapshot.proxies)?;
+        write_json_in_txn(
+            &txn,
+            SETTINGS_TABLE,
+            SettingsDocKey::ProxyGroups.storage_key(),
+            &serde_json::json!({ "groups": snapshot.proxy_groups }),
+        )?;
+        txn.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 /// Reject ambiguous entity IDs before writes can silently replace another entity.

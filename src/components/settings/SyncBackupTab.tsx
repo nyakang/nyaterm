@@ -1148,6 +1148,11 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
                 </div>
               ) : null}
             </div>
+            {status.conflict.kind === "content_conflict" ? (
+              <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                {t("settings.syncMergeConnectionsHint")}
+              </p>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {isRemoteInconsistent ? (
                 <Button
@@ -1169,24 +1174,45 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
                   {t("settings.useCurrentRemoteSnapshot")}
                 </Button>
               ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    void runAction(
-                      "resolve-download",
-                      t("settings.syncResolveDownloadSuccess"),
-                      () =>
-                        invoke("resolve_cloud_sync_conflict", {
-                          action: "download_remote",
-                        }),
-                      { allowWhenDisabled: true },
-                    )
-                  }
-                  disabled={isBusy || !canRunConfigDependentActions}
-                >
-                  {t("settings.downloadRemoteVersion")}
-                </Button>
+                <>
+                  {status.conflict.kind === "content_conflict" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void runAction(
+                          "resolve-merge-connections",
+                          t("settings.syncResolveMergeSuccess"),
+                          () =>
+                            invoke("resolve_cloud_sync_conflict", {
+                              action: "merge_connections",
+                            }),
+                        )
+                      }
+                      disabled={isBusy || !canRunEnabledActions}
+                    >
+                      {t("settings.syncMergeConnections")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      void runAction(
+                        "resolve-download",
+                        t("settings.syncResolveDownloadSuccess"),
+                        () =>
+                          invoke("resolve_cloud_sync_conflict", {
+                            action: "download_remote",
+                          }),
+                        { allowWhenDisabled: true },
+                      )
+                    }
+                    disabled={isBusy || !canRunConfigDependentActions}
+                  >
+                    {t("settings.downloadRemoteVersion")}
+                  </Button>
+                </>
               )}
               <Button
                 size="sm"

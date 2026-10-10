@@ -9,6 +9,10 @@ mod protocol;
 mod remote;
 mod snapshot_decode_helper;
 
+// Serialize tests that temporarily replace the process-wide master password.
+#[cfg(test)]
+static MASTER_PASSWORD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use github_gist_auth::{
     GithubGistDeviceFlowPoll, GithubGistDeviceFlowStart, begin_github_gist_device_flow,
     cancel_github_gist_device_flow, poll_github_gist_device_flow,
