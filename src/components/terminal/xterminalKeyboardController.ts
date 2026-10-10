@@ -125,6 +125,15 @@ export function installXTerminalKeyboardController({
   };
 
   terminal.attachCustomKeyEventHandler((e) => {
+    if (
+      e.type === "keyup" &&
+      (e.code === "ShiftLeft" || e.code === "ShiftRight")
+    ) {
+      // Shift keydown is either filtered here or owned by the composition
+      // helper. Keep its release out of Kitty/Win32 reports without cancelling
+      // the native IME's language switch or other keys' release reports.
+      return false;
+    }
     if (e.type !== "keydown") return true;
     if (appLockedRef.current) {
       e.preventDefault();
@@ -132,6 +141,16 @@ export function installXTerminalKeyboardController({
     }
 
     if (isModifierOnlyKeyEvent(e)) {
+      if (
+        (e.code === "ShiftLeft" || e.code === "ShiftRight") &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey
+      ) {
+        // Leave the native IME's language switch intact. Only let xterm
+        // handle Shift when the IME owns the composition boundary.
+        return imeTracker.routeKeyboardEvent(e) !== "application";
+      }
       e.preventDefault();
       return false;
     }
