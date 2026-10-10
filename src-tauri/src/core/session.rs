@@ -31,6 +31,8 @@ const COMMAND_QUEUE_CRITICAL_THRESHOLD: usize = 1000;
 const COMMAND_QUEUE_HIGH_RESET_THRESHOLD: usize = 50;
 const COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD: usize = 500;
 
+include!("session_execution.rs");
+
 /// Safe, backend-resolved cwd values used by the dynamic-title UI.
 ///
 /// This is intentionally separate from the legacy cwd projection: existing
@@ -265,6 +267,7 @@ pub enum SessionCommand {
         marker_id: String,
         wrapped_command: Vec<u8>,
         result_tx: oneshot::Sender<CapturedOutput>,
+        execution: TerminalExecutionGuard,
     },
     /// AI capture: cancel a marker-wrapped command capture that no longer has a caller.
     CancelCapture { marker_id: String },
@@ -743,6 +746,9 @@ pub struct SessionManager {
     app_handle: OnceLock<tauri::AppHandle>,
     recording_manager: OnceLock<Arc<RecordingManager>>,
     recent_output: Arc<RecentOutputStore>,
+    terminal_executions: StdMutex<HashMap<String, ExecutionEntry>>,
+    pub(crate) powershell_dispatch:
+        StdMutex<HashMap<String, Arc<super::capture::PowershellDispatch>>>,
 }
 
 impl SessionManager {
@@ -761,6 +767,8 @@ impl SessionManager {
             app_handle: OnceLock::new(),
             recording_manager: OnceLock::new(),
             recent_output: Arc::new(RecentOutputStore::default()),
+            terminal_executions: StdMutex::new(HashMap::new()),
+            powershell_dispatch: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -854,6 +862,9 @@ impl SessionManager {
     pub async fn remove_session(&self, id: &str) -> bool {
         let removed = self.sessions.lock().await.remove(id).is_some();
         if removed {
+            self.terminal_executions.lock().unwrap().remove(id);
+            self.powershell_dispatch.lock().unwrap().remove(id);
+            self.emit_execution_state(id, TerminalExecutionState::Idle);
             self.recent_output.remove(id);
             self.flush_pending_submission(id).await;
             self.command_submissions.lock().await.remove(id);
@@ -904,6 +915,16 @@ impl SessionManager {
     pub async fn send_command(&self, id: &str, cmd: SessionCommand) -> AppResult<()> {
         let sessions = self.sessions.lock().await;
         if let Some(handle) = sessions.get(id) {
+            if let SessionCommand::Write { data, origin, .. } = &cmd {
+                if self.terminal_executions.lock().unwrap().contains_key(id)
+                    && *origin != InputOrigin::TerminalResponse
+                    && data.as_slice() != [3]
+                {
+                    return Err(AppError::SessionBusy(
+                        "This session is executing an automated command.".into(),
+                    ));
+                }
+            }
             if matches!(cmd, SessionCommand::Write { .. })
                 && handle.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
             {
@@ -1477,6 +1498,83 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("nyaterm-session-history-{name}-{nanos}.json"))
+    }
+
+    #[tokio::test]
+    async fn automated_execution_blocks_other_input_but_allows_interrupts_and_terminal_responses() {
+        let manager = Arc::new(SessionManager::new());
+        let (tx, mut rx) = session_command_channel("busy");
+        manager
+            .add_session(test_handle_with_sender(
+                "busy",
+                SessionType::Local,
+                false,
+                tx,
+            ))
+            .await;
+        let guard = manager
+            .begin_terminal_execution("busy", "first")
+            .await
+            .unwrap();
+        for origin in [InputOrigin::Keyboard, InputOrigin::AiAgent] {
+            let result = manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data: b"echo other\r".to_vec(),
+                        raw: false,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::error::AppError::SessionBusy(_))
+            ));
+        }
+        for (data, origin) in [
+            (vec![3], InputOrigin::Keyboard),
+            (b"\x1b[1;1R".to_vec(), InputOrigin::TerminalResponse),
+        ] {
+            manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data,
+                        raw: true,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                rx.recv().await,
+                Some(SessionCommand::Write { .. })
+            ));
+        }
+        manager.remove_session("busy").await;
+        let newer = manager
+            .begin_terminal_execution("busy", "newer")
+            .await
+            .unwrap();
+        drop(guard);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_err()
+        );
+        drop(newer);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

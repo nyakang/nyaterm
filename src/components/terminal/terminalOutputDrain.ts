@@ -234,6 +234,23 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
     return this.writeQueue;
   }
 
+  /** Reserve a status write now, before subsequently received shell output. */
+  writeExternalAfterQueued(write: () => Promise<void> | void) {
+    this.cancelForeground();
+    this.cancelBackground();
+    while (hasOutputQueueItems(this.queue)) {
+      const payload = dequeueOutputChunk(
+        this.queue,
+        this.options.getWriteChunkBytes(),
+      );
+      if (!payload) break;
+      void this.writePayload(payload);
+    }
+    const result = this.writeExternal(write);
+    void result.then(() => this.schedule());
+    return result;
+  }
+
   dispose(options: { ackRemaining?: boolean } = {}) {
     if (this.disposed) return;
     this.disposed = true;

@@ -500,7 +500,12 @@ pub struct AiModelDiscovery {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AiCaptureEvent {
     #[serde(rename_all = "camelCase")]
-    CommandStart { command: String, step_index: u16 },
+    CommandStart {
+        command: String,
+        step_index: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     CommandEnd {
         output: String,

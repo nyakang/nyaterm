@@ -144,6 +144,17 @@ struct McpTerminalPresentation {
     next_step_index: AtomicU16,
 }
 
+fn external_terminal_presentation(
+    settings: &ExternalMcpSettings,
+    max_lines: u16,
+) -> Option<McpTerminalPresentation> {
+    matches!(
+        settings.terminal_display_mode,
+        crate::config::McpTerminalDisplayMode::Inline
+    )
+    .then(|| McpTerminalPresentation::new(max_lines))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct McpTerminalPresentationSpec {
     step_index: u16,
@@ -334,7 +345,14 @@ impl McpManager {
             owner_window_label: Some(owner_window_label.to_string()),
             cancellation: cancellation.clone(),
             opened_session_ids: RwLock::new(HashSet::new()),
-            terminal_presentation: None,
+            terminal_presentation: external_terminal_presentation(
+                &settings,
+                crate::config::load_app_settings(self.app.get().ok_or_else(|| {
+                    AppError::Config("The MCP bridge is not initialized.".into())
+                })?)?
+                .ai
+                .terminal_output_lines,
+            ),
         });
         self.credentials
             .write()
@@ -1408,6 +1426,8 @@ impl McpManager {
                         .credential
                         .next_terminal_presentation_spec()
                         .map(|spec| TerminalExecutionPresentation {
+                            source: (context.credential.source == EXTERNAL_SOURCE)
+                                .then(|| "MCP".into()),
                             app: app.clone(),
                             step_index: spec.step_index,
                             max_lines: spec.max_lines,
@@ -1862,6 +1882,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, RpcError> {
 }
 fn map_error(error: AppError) -> RpcError {
     match error {
+        AppError::SessionBusy(message) => failure("session_busy", &message),
         AppError::Cancelled(message) => failure("cancelled", &message),
         AppError::Config(message) if message.contains("MCP scope") => {
             failure("scope_denied", &message)
@@ -2115,7 +2136,8 @@ mod tests {
     }
 
     #[test]
-    fn external_credentials_do_not_enable_terminal_presentation() {
+    fn external_credentials_follow_terminal_display_mode() {
+        let mut settings = ExternalMcpSettings::default();
         let credential = Credential {
             token: "token".into(),
             scope: Arc::new(McpScope::AllSessions),
@@ -2124,10 +2146,29 @@ mod tests {
             owner_window_label: Some("main".into()),
             cancellation: CancellationToken::new(),
             opened_session_ids: RwLock::new(HashSet::new()),
-            terminal_presentation: None,
+            terminal_presentation: external_terminal_presentation(&settings, 17),
         };
 
-        assert_eq!(credential.next_terminal_presentation_spec(), None);
+        assert_eq!(
+            credential.next_terminal_presentation_spec(),
+            Some(McpTerminalPresentationSpec {
+                step_index: 0,
+                max_lines: 17
+            })
+        );
+        assert_eq!(
+            credential
+                .next_terminal_presentation_spec()
+                .unwrap()
+                .step_index,
+            1
+        );
+        settings.terminal_display_mode = crate::config::McpTerminalDisplayMode::Silent;
+        assert!(external_terminal_presentation(&settings, 17).is_none());
+        assert_eq!(
+            map_error(AppError::SessionBusy("busy".into())).code,
+            "session_busy"
+        );
     }
 
     #[test]

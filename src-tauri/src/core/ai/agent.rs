@@ -194,6 +194,7 @@ async fn execute_command_on_session(
             timeout_ms,
         },
         Some(TerminalExecutionPresentation {
+            source: None,
             app: app.clone(),
             step_index,
             max_lines: terminal_output_lines,

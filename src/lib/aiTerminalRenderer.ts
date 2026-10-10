@@ -19,7 +19,8 @@ export function renderAiCommandStart(
 ): string {
   const step = event.stepIndex + 1;
   const command = sanitizeCommandForTerminal(event.command);
-  const header = `${DIM}${ACCENT}┌ AI #${step}${RESET}${DIM} ${"─".repeat(30)}${RESET}`;
+  const source = event.source === "MCP" ? "MCP" : "AI";
+  const header = `${DIM}${ACCENT}┌ ${source} #${step}${RESET}${DIM} ${"─".repeat(30)}${RESET}`;
   return `${BOLD}${command}${RESET}\r\n${header}\r\n`;
 }
 

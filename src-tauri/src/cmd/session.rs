@@ -1225,7 +1225,10 @@ pub async fn attach_session(
         .await?;
     ack_rx
         .await
-        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))
+        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))?;
+    // Send a fresh snapshot after listeners attach (including after hibernation).
+    state.publish_terminal_execution_state(&session_id);
+    Ok(())
 }
 
 #[tauri::command]

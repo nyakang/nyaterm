@@ -1328,7 +1328,7 @@ pub(super) async fn ssh_io_loop(
                     Some(SessionCommand::AckOutput { bytes }) => {
                         output.ack(bytes);
                     }
-                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx }) => {
+                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx, execution }) => {
                         handle_input_before_initial_injection(
                             &mut phase,
                             &mut pending_script,
@@ -1339,9 +1339,9 @@ pub(super) async fn ssh_io_loop(
                             &mut post_login_deadline,
                         )
                         .await;
-                        capture_processor.register(marker_id, result_tx);
+                        if !capture_processor.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                         let send_command = encode_terminal_input(&wrapped_command, &encoding);
-                        let _ = channel.data(&send_command[..]).await;
+                        if channel.data(&send_command[..]).await.is_err() { capture_processor.abort(&marker_id); }
                     }
                     Some(SessionCommand::CancelCapture { marker_id }) => {
                         capture_processor.cancel(&marker_id);
@@ -1519,6 +1519,9 @@ pub(super) async fn ssh_io_loop(
 
                                     if capture_processor.has_active() {
                                         result.visible = capture_processor.process(&result.visible);
+                                        if result.ready {
+                                            capture_processor.finish_abandoned_at_prompt();
+                                        }
                                     }
 
                                     handle_osc_result(
@@ -2354,6 +2357,10 @@ mod tests {
                     marker_id: "capture".to_string(),
                     wrapped_command: b"echo blocked".to_vec(),
                     result_tx: capture_tx,
+                    execution: manager
+                        .begin_terminal_execution(&session_id, "capture")
+                        .await
+                        .unwrap(),
                 },
             )
             .await

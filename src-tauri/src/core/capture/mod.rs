@@ -19,9 +19,13 @@
 //! 3. Variable names avoid `__` to prevent the end-marker parser from
 //!    finding false `__` suffixes inside echoed variable references.
 //!
-//! 4. After the END marker, a `PostCapture` phase suppresses the shell
-//!    prompt that would otherwise appear as a blank line (since the
-//!    command itself was invisible).
+//! 4. END is a stream boundary, never a transport-chunk boundary. Output
+//!    after END is preserved, including the shell prompt.
+//!
+//! 5. PowerShell uses compact printable markers and a short session dispatcher.
+//!    ConPTY rewrites long lines at narrow widths; OSC markers bypass its paint
+//!    queue and can arrive ahead of the command output, so they are unsuitable
+//!    as capture boundaries.
 
 use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashMap;
@@ -32,5 +36,7 @@ use crate::config::AiExecutionProfile;
 
 include!("types.rs");
 include!("command.rs");
+include!("powershell.rs");
 include!("processor.rs");
 include!("tests.rs");
+include!("conpty_tests.rs");

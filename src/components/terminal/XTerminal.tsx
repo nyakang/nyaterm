@@ -79,7 +79,7 @@ import {
 } from "@/lib/terminalSessionCwd";
 import { buildStartupCommandPayload } from "@/lib/appSessionFactory";
 import { TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT } from "@/lib/terminalSearch";
-import type { AiCaptureEvent } from "@/types/global";
+import type { AiCaptureEvent, TerminalExecutionState } from "@/types/global";
 import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
@@ -221,6 +221,8 @@ export default function XTerminal({
     null,
   );
   const aiCapturingRef = useRef(false);
+  const [terminalExecutionState, setTerminalExecutionState] =
+    useState<TerminalExecutionState>("idle");
   const appLockedRef = useRef(appLocked);
   appLockedRef.current = appLocked;
 
@@ -505,6 +507,8 @@ export default function XTerminal({
       );
       unlistenBag.add(
         listen<void>(`session-closed-${sessionId}`, () => {
+          aiCapturingRef.current = false;
+          setTerminalExecutionState("idle");
           wake({ type: "closed" });
         }),
       );
@@ -525,6 +529,17 @@ export default function XTerminal({
         listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
           wake({ type: "ai", payload: event.payload });
         }),
+      );
+      unlistenBag.add(
+        listen<TerminalExecutionState>(
+          `terminal-execution-${sessionId}`,
+          (event) => {
+            aiCapturingRef.current = event.payload !== "idle";
+            setTerminalExecutionState(event.payload);
+            if (event.payload !== "idle")
+              wake({ type: "execution", payload: event.payload });
+          },
+        ),
       );
       unlistenBag.add(
         listen<void>(`focus-terminal-${sessionId}`, () => {
@@ -2132,7 +2147,6 @@ export default function XTerminal({
             break;
           case "ai":
             if (event.payload.type === "commandStart") {
-              aiCapturingRef.current = true;
               inputStateRef.current = createTerminalInputState();
               clearCredentialPromptInputMode();
               dismissSuggestions();
@@ -2140,11 +2154,14 @@ export default function XTerminal({
                 renderAiCommandStart(event.payload),
               );
             } else if (event.payload.type === "commandEnd") {
-              aiCapturingRef.current = false;
               void writeTerminalTextAfterOutputQueue(
                 renderAiCommandEnd(event.payload),
               );
             }
+            break;
+          case "execution":
+            // The wake listener and attach snapshot already update ownership.
+            // A queued running event may predate a subsequently received idle.
             break;
         }
       }
@@ -2203,6 +2220,7 @@ export default function XTerminal({
       visibleRef,
       lastErrorNoticeAtRef,
       aiCapturingRef,
+      onExecutionState: setTerminalExecutionState,
       zmodemActiveRef,
       inputStateRef,
       alternateScreenTrackerRef,
@@ -2266,7 +2284,10 @@ export default function XTerminal({
         return;
       }
       if (shouldBlockXTerminalData(appLockedRef.current, origin)) return;
-      if (aiCapturingRef.current) return;
+      if (aiCapturingRef.current) {
+        if (data === "\x03") void sendRawInput(data, null, origin);
+        return;
+      }
       if (hibernationPhaseRef.current !== "idle") {
         requestWake("input");
       }
@@ -2977,6 +2998,18 @@ export default function XTerminal({
         )}
 
         {syncOverlay && <SyncActionOverlay overlay={syncOverlay} />}
+
+        {terminalExecutionState !== "idle" && (
+          <output
+            className="pointer-events-none absolute bottom-2 right-2 z-10 rounded-md border border-border/70 bg-background/90 px-2 py-1 text-xs text-muted-foreground"
+          >
+            {t(
+              terminalExecutionState === "awaitingEnd"
+                ? "terminal.automatedExecutionAwaitingEnd"
+                : "terminal.automatedExecutionRunning",
+            )}
+          </output>
+        )}
 
         <TerminalSearchBar
           show={showSearchBar}

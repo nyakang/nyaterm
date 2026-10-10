@@ -21,6 +21,7 @@ describe("External MCP defaults", () => {
       enabled: false,
       permission_mode: "confirm",
       session_scope: "current_window",
+      terminal_display_mode: "inline",
     });
   });
 });

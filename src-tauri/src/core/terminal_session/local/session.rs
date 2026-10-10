@@ -91,10 +91,22 @@ pub async fn create_local_session(
     let LocalStartupScript {
         script: startup_script,
         shell_init_args,
-        pwsh_init_args,
+        mut pwsh_init_args,
         cmd_prompt,
         dynamic_title_integration_requested,
     } = startup;
+    if ai_execution_profile == AiExecutionProfile::Powershell && allow_injection {
+        let dispatch = crate::core::capture::PowershellDispatch::new()?;
+        let helper = dispatch.init_script();
+        if let Some(args) = pwsh_init_args.as_mut() {
+            if let Some(init) = args.last_mut() {
+                init.insert_str(0, &helper);
+            }
+        } else {
+            pwsh_init_args = Some(vec!["-NoExit".into(), "-Command".into(), helper]);
+        }
+        manager.powershell_dispatch.lock().unwrap().insert(session_id.clone(), dispatch);
+    }
     let startup_input_barrier = startup_script
         .as_ref()
         .map(|_| Arc::new(StartupInputBarrier::new()));
@@ -1016,6 +1028,9 @@ fn pty_session_thread(
                     if let Ok(mut proc) = capture_for_reader.lock() {
                         if proc.has_active() {
                             result.visible = proc.process(&result.visible);
+                            if result.ready {
+                                proc.finish_abandoned_at_prompt();
+                            }
                         }
                     }
 
@@ -1381,12 +1396,14 @@ fn pty_session_thread(
                 marker_id,
                 wrapped_command,
                 result_tx,
+                execution,
             } => {
                 if let Ok(mut proc) = capture_processor.lock() {
-                    proc.register(marker_id, result_tx);
+                    if !proc.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                 }
                 let send_command = encode_terminal_input(&wrapped_command, &encoding);
                 if let Err(error) = write_to_pty(&mut *writer, &send_command) {
+                    if let Ok(mut proc) = capture_processor.lock() { proc.abort(&marker_id); }
                     tracing::warn!(
                         session_id = %session_id,
                         error = %error,

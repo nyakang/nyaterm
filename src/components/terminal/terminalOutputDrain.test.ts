@@ -131,6 +131,27 @@ function createHarness(
 }
 
 describe("TerminalOutputDrain", () => {
+  it("reserves command cards before a subsequently received prompt without acknowledging card bytes", async () => {
+    const { drain, terminal, writes, acks, advance } = createHarness({
+      writeChunkBytes: 2,
+    });
+    drain.setMode("background");
+    drain.enqueue({ data: "before", bytes: 6 });
+    const card = drain.writeExternalAfterQueued(() => {
+      terminal.write("card");
+    });
+    drain.enqueue({ data: "prompt", bytes: 6 });
+    await card;
+    await settle();
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    await settle();
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    await settle();
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    await settle();
+    expect(writes.join("")).toBe("beforecardprompt");
+    expect(acks.reduce((sum, value) => sum + value, 0)).toBe(12);
+  });
   it("uses normal background cadence for small hidden queues", async () => {
     const { advance, backgroundDrains, drain, timers, writes } =
       createHarness();

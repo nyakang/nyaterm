@@ -104,6 +104,19 @@ impl Default for ExternalMcpSessionScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTerminalDisplayMode {
+    Inline,
+    Silent,
+}
+
+impl Default for McpTerminalDisplayMode {
+    fn default() -> Self {
+        Self::Inline
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalMcpSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -111,6 +124,8 @@ pub struct ExternalMcpSettings {
     pub permission_mode: AiPermissionMode,
     #[serde(default)]
     pub session_scope: ExternalMcpSessionScope,
+    #[serde(default)]
+    pub terminal_display_mode: McpTerminalDisplayMode,
 }
 
 impl Default for ExternalMcpSettings {
@@ -119,6 +134,7 @@ impl Default for ExternalMcpSettings {
             enabled: false,
             permission_mode: AiPermissionMode::Confirm,
             session_scope: ExternalMcpSessionScope::CurrentWindow,
+            terminal_display_mode: McpTerminalDisplayMode::default(),
         }
     }
 }
@@ -1031,6 +1047,7 @@ mod tests {
         .expect("legacy External MCP settings");
 
         assert!(settings.enabled);
+        assert_eq!(settings.terminal_display_mode, McpTerminalDisplayMode::Inline);
         assert_eq!(settings.permission_mode, AiPermissionMode::Confirm);
         assert_eq!(
             settings.session_scope,
@@ -1039,6 +1056,12 @@ mod tests {
         let serialized = serde_json::to_value(settings).expect("serialized External MCP settings");
         assert!(serialized.get("server_mode").is_none());
         assert!(serialized.get("idle_timeout_minutes").is_none());
+        assert_eq!(serialized["terminal_display_mode"], "inline");
+        let silent: ExternalMcpSettings = serde_json::from_value(serde_json::json!({
+            "terminal_display_mode": "silent"
+        }))
+        .unwrap();
+        assert_eq!(silent.terminal_display_mode, McpTerminalDisplayMode::Silent);
     }
 
     #[test]

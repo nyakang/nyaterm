@@ -336,14 +336,16 @@ fn serial_session_thread(
                 marker_id,
                 wrapped_command,
                 result_tx,
+                execution,
             } => {
                 if let Ok(mut proc) = capture_processor.lock() {
-                    proc.register(marker_id, result_tx);
+                    if !proc.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                 }
                 let send_command = encode_terminal_input(&wrapped_command, &encoding);
                 let mut p = port_writer.lock().unwrap();
-                let _ = p.write_all(&send_command);
-                let _ = p.flush();
+                if p.write_all(&send_command).and_then(|_| p.flush()).is_err() {
+                    if let Ok(mut proc) = capture_processor.lock() { proc.abort(&marker_id); }
+                }
             }
             SessionCommand::CancelCapture { marker_id } => {
                 if let Ok(mut proc) = capture_processor.lock() {

@@ -26,6 +26,9 @@ pub enum AppError {
     SessionNotFound(String),
 
     #[error("{0}")]
+    SessionBusy(String),
+
+    #[error("{0}")]
     Auth(String),
 
     #[error("{0}")]

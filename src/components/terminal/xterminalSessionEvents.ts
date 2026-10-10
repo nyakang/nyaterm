@@ -8,7 +8,7 @@ import {
 } from "@/lib/aiTerminalRenderer";
 import { invoke } from "@/lib/invoke";
 import { createTerminalInputState } from "@/lib/terminalInputTracker";
-import type { AiCaptureEvent } from "@/types/global";
+import type { AiCaptureEvent, TerminalExecutionState } from "@/types/global";
 import type { Dec2026FrameGate } from "./dec2026FrameGate";
 import type { SerialModemEventPayload } from "./serialModemTerminalEvents";
 import { hasErrorKeyword } from "./terminalInputSelection";
@@ -50,6 +50,7 @@ interface CreateXTerminalSessionEventsParams {
   visibleRef: MutableRef<boolean>;
   lastErrorNoticeAtRef: MutableRef<number>;
   aiCapturingRef: MutableRef<boolean>;
+  onExecutionState?: (state: TerminalExecutionState) => void;
   zmodemActiveRef: MutableRef<boolean>;
   inputStateRef: MutableRef<ReturnType<typeof createTerminalInputState>>;
   alternateScreenTrackerRef: MutableRef<{
@@ -105,6 +106,7 @@ export function createXTerminalSessionEvents({
   visibleRef,
   lastErrorNoticeAtRef,
   aiCapturingRef,
+  onExecutionState,
   zmodemActiveRef,
   inputStateRef,
   alternateScreenTrackerRef,
@@ -223,6 +225,8 @@ export function createXTerminalSessionEvents({
       `session-error-${sessionId}`,
       (event) => {
         if (!isTerminalAlive()) return;
+        aiCapturingRef.current = false;
+        onExecutionState?.("idle");
         requestWake("session_error");
         const message = String(
           event.payload || tRef.current("terminal.connectionFailed"),
@@ -243,6 +247,8 @@ export function createXTerminalSessionEvents({
       `session-closed-${sessionId}`,
       () => {
         if (!isTerminalAlive()) return;
+        aiCapturingRef.current = false;
+        onExecutionState?.("idle");
         requestWake("session_closed");
         enterDisconnectedState({
           title: tRef.current("terminal.sessionDisconnected"),
@@ -265,6 +271,22 @@ export function createXTerminalSessionEvents({
     );
     if (!addUnlistener(nextFocusUnlisten)) return;
 
+    const nextExecutionUnlisten = await listen<TerminalExecutionState>(
+      `terminal-execution-${sessionId}`,
+      (event) => {
+        if (!isTerminalAlive()) return;
+        aiCapturingRef.current = event.payload !== "idle";
+        onExecutionState?.(event.payload);
+        if (aiCapturingRef.current) {
+          requestWake("ai");
+          inputStateRef.current = createTerminalInputState();
+          clearCredentialPromptInputMode();
+          dismissSuggestions();
+        }
+      },
+    );
+    if (!addUnlistener(nextExecutionUnlisten)) return;
+
     const nextCaptureUnlisten = await listen<AiCaptureEvent>(
       `ai-capture-${sessionId}`,
       (event) => {
@@ -272,7 +294,6 @@ export function createXTerminalSessionEvents({
         const payload = event.payload;
         requestWake("ai");
         if (payload.type === "commandStart") {
-          aiCapturingRef.current = true;
           inputStateRef.current = createTerminalInputState();
           clearCredentialPromptInputMode();
           dismissSuggestions();
@@ -282,7 +303,6 @@ export function createXTerminalSessionEvents({
             );
           }
         } else if (payload.type === "commandEnd") {
-          aiCapturingRef.current = false;
           if (isTerminalAlive()) {
             void writeTerminalTextAfterOutputQueue(renderAiCommandEnd(payload));
           }

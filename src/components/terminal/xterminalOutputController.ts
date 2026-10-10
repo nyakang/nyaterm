@@ -309,8 +309,9 @@ export function createXTerminalOutputController({
   };
 
   const writeTerminalTextAfterOutputQueue = async (data: string) => {
-    await flushFrameGateAndDrain("terminal_status_write");
-    return outputDrain.writeExternal(
+    clearHibernateTimer();
+    frameGateRef.current?.flush("terminal_status_write");
+    return outputDrain.writeExternalAfterQueued(
       () =>
         new Promise<void>((resolve) => {
           if (!isTerminalAlive()) {

@@ -6,4 +6,5 @@ pub struct CapturedOutput {
 }
 
 const MARKER_PREFIX: &str = "__DF_CMD_";
+const POWERSHELL_MARKER_PREFIX: &str = "__NT_";
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;

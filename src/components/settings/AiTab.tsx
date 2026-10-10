@@ -487,6 +487,7 @@ export function AiAgentsTab() {
     enabled: false,
     permission_mode: "confirm",
     session_scope: "current_window",
+    terminal_display_mode: "inline",
   };
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -1000,6 +1001,23 @@ export function AiAgentsTab() {
           >
             <SelectItem value="current_window">{t("ai.externalMcpCurrentWindow")}</SelectItem>
             <SelectItem value="all_sessions">{t("ai.externalMcpAllSessions")}</SelectItem>
+          </SettingSelect>
+          <SettingSelect
+            label={t("ai.externalMcpTerminalDisplay")}
+            value={externalMcp.terminal_display_mode ?? "inline"}
+            onValueChange={(terminal_display_mode) =>
+              updateExternalMcp({
+                terminal_display_mode:
+                  terminal_display_mode as ExternalMcpSettings["terminal_display_mode"],
+              })
+            }
+          >
+            <SelectItem value="inline">
+              {t("ai.externalMcpTerminalInline")}
+            </SelectItem>
+            <SelectItem value="silent">
+              {t("ai.externalMcpTerminalSilent")}
+            </SelectItem>
           </SettingSelect>
         </SettingFieldGrid>
         <div className="text-xs text-muted-foreground">

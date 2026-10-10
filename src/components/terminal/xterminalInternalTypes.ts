@@ -1,4 +1,4 @@
-import type { AiCaptureEvent } from "@/types/global";
+import type { AiCaptureEvent, TerminalExecutionState } from "@/types/global";
 import type { SerialModemEventPayload } from "./serialModemTerminalEvents";
 import type { ZmodemEventPayload } from "./zmodemTerminalEvents";
 
@@ -40,6 +40,7 @@ export type PendingWakeEvent =
   | { type: "focus" }
   | { type: "zmodem"; payload: ZmodemEventPayload }
   | { type: "serialModem"; payload: SerialModemEventPayload }
+  | { type: "execution"; payload: TerminalExecutionState }
   | { type: "ai"; payload: AiCaptureEvent };
 
 export type HibernationPhase =

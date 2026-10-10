@@ -21,7 +21,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 use crate::error::{AppError, AppResult};
 
-pub(super) fn set_current_user_only(path: &Path, directory: bool) -> AppResult<()> {
+pub(crate) fn set_current_user_only(path: &Path, directory: bool) -> AppResult<()> {
     let user = current_user_sid(path)?;
     let acl = create_private_acl(path, user.sid(), directory)?;
     let path_wide = wide_path(path)?;
@@ -202,7 +202,7 @@ impl<T> Drop for LocalAllocation<T> {
 }
 
 #[cfg(test)]
-pub(super) fn assert_current_user_only(path: &Path, directory: bool) {
+pub(crate) fn assert_current_user_only(path: &Path, directory: bool) {
     use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid, GetAce,

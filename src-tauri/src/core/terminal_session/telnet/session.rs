@@ -453,10 +453,11 @@ async fn telnet_session_task(
                             break;
                         }
                     }
-                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx }) => {
-                        capture_processor.lock().await.register(marker_id, result_tx);
+                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx, execution }) => {
+                        if !capture_processor.lock().await.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                         let send_command = encode_terminal_input(&wrapped_command, &encoding);
                         if let Err(e) = writer.write_all(&send_command).await {
+                            capture_processor.lock().await.abort(&marker_id);
                             tracing::warn!(
                                 session_id = %session_id,
                                 error = %e,

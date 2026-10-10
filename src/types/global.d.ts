@@ -1414,6 +1414,7 @@ export interface ExternalMcpSettings {
   enabled: boolean;
   permission_mode: AIPermissionMode;
   session_scope: ExternalMcpSessionScope;
+  terminal_display_mode: "inline" | "silent";
 }
 export type AIReasoningEffort =
   | "auto"
@@ -1762,7 +1763,7 @@ export interface AgentStepPayload {
 }
 
 export type AiCaptureEvent =
-  | { type: "commandStart"; command: string; stepIndex: number }
+  | { type: "commandStart"; command: string; stepIndex: number; source?: "AI" | "MCP" }
   | {
       type: "commandEnd";
       output: string;
@@ -1770,6 +1771,8 @@ export type AiCaptureEvent =
       durationMs: number;
       truncated: boolean;
     };
+
+export type TerminalExecutionState = "idle" | "running" | "awaitingEnd";
 
 export interface TunnelConfig {
   id: string;

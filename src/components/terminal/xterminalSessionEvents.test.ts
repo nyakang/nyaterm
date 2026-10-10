@@ -31,6 +31,7 @@ function params(overrides: Record<string, unknown> = {}) {
     visibleRef: { current: false },
     lastErrorNoticeAtRef: { current: 0 },
     aiCapturingRef: { current: false },
+    onExecutionState: vi.fn(),
     zmodemActiveRef: { current: false },
     inputStateRef: { current: {} },
     alternateScreenTrackerRef: { current: { ingest: vi.fn() } },
@@ -71,6 +72,43 @@ describe("xterminalSessionEvents setup lifecycle", () => {
     resetDynamicTitlesForTests();
     vi.clearAllMocks();
     mocks.invoke.mockResolvedValue(undefined);
+  });
+
+  it("keeps silent and timed-out executions busy independently of presentation", async () => {
+    const handlers = new Map<string, (event: { payload: unknown }) => void>();
+    mocks.listen.mockImplementation(
+      async (name: string, handler: (event: { payload: unknown }) => void) => {
+        handlers.set(name, handler);
+        return vi.fn();
+      },
+    );
+    const options = params();
+    const events = createXTerminalSessionEvents(options as never);
+    await events.setup();
+    handlers.get("terminal-execution-ssh-1")?.({ payload: "running" });
+    expect(options.aiCapturingRef.current).toBe(true);
+    expect(options.dismissSuggestions).toHaveBeenCalled();
+    expect(options.writeTerminalTextAfterOutputQueue).not.toHaveBeenCalled();
+    handlers.get("ai-capture-ssh-1")?.({
+      payload: {
+        type: "commandEnd",
+        output: "timeout",
+        exitCode: null,
+        durationMs: 1000,
+        truncated: false,
+      },
+    });
+    expect(options.aiCapturingRef.current).toBe(true);
+    handlers.get("terminal-execution-ssh-1")?.({ payload: "awaitingEnd" });
+    expect(options.aiCapturingRef.current).toBe(true);
+    expect(options.onExecutionState).toHaveBeenLastCalledWith("awaitingEnd");
+    handlers.get("terminal-execution-ssh-1")?.({ payload: "idle" });
+    expect(options.aiCapturingRef.current).toBe(false);
+    handlers.get("terminal-execution-ssh-1")?.({ payload: "running" });
+    handlers.get("session-closed-ssh-1")?.({ payload: undefined });
+    expect(options.aiCapturingRef.current).toBe(false);
+    expect(options.onExecutionState).toHaveBeenLastCalledWith("idle");
+    events.dispose();
   });
 
   it("keeps backend output detached until a slow listener retry succeeds", async () => {

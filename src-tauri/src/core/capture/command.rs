@@ -25,25 +25,25 @@ fn build_powershell_capture_command(marker_id: &str, command: &str) -> String {
     let encoded_command = general_purpose::STANDARD.encode(command.as_bytes());
     format!(
         concat!(
-            "$nyaiEc = 0; ",
+            "$nyaiEc = 1; ",
             "$nyaiSuccess = $true; ",
             "$nyaiLastExit = 0; ",
             "$global:LASTEXITCODE = 0; ",
-            "Write-Output (\"`n{MARKER_PREFIX}\" + \"START_{marker_id}__\"); ",
+            "[Console]::Out.Write(\"`r`n{POWERSHELL_MARKER_PREFIX}\" + \"S_{marker_id}__`r`n\"); ",
             "try {{ ",
             "$nyaiScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\"{encoded_command}\")); ",
             "$nyaiScript = $nyaiScript + \"`r`n`$nyaiSuccess = `$?; `$nyaiLastExit = `$LASTEXITCODE\"; ",
-            ". ([scriptblock]::Create($nyaiScript)); ",
+            ". ([scriptblock]::Create($nyaiScript)) | Out-Default; ",
             "if (($nyaiLastExit -is [int]) -and $nyaiLastExit -ne 0) {{ $nyaiEc = $nyaiLastExit }} ",
             "elseif ($nyaiSuccess) {{ $nyaiEc = 0 }} else {{ $nyaiEc = 1 ",
             "}} ",
-            "}} catch {{ Write-Error $_; $nyaiEc = 1 }}; ",
-            "Write-Output (\"`n{MARKER_PREFIX}\" + \"END_{marker_id}_\" + $nyaiEc + \"__\"); ",
-            "Remove-Variable nyaiEc,nyaiSuccess,nyaiLastExit,nyaiScript -ErrorAction SilentlyContinue\r\n",
+            "}} catch {{ $nyaiEc = 1; $_ | Out-String | ForEach-Object {{ [Console]::Out.Write($_) }} }} ",
+            "finally {{ [Console]::Out.Write(\"`r`n{POWERSHELL_MARKER_PREFIX}\" + \"E_{marker_id}_\" + $nyaiEc + \"__`r`n\"); ",
+            "Remove-Variable nyaiEc,nyaiSuccess,nyaiLastExit,nyaiScript -ErrorAction SilentlyContinue }}\r\n",
         ),
-        MARKER_PREFIX = MARKER_PREFIX,
         marker_id = marker_id,
         encoded_command = encoded_command,
+        POWERSHELL_MARKER_PREFIX = POWERSHELL_MARKER_PREFIX,
     )
 }
 
@@ -70,4 +70,3 @@ fn build_cmd_capture_command(marker_id: &str, command: &str) -> String {
         command_segment = command_segment,
     )
 }
-
