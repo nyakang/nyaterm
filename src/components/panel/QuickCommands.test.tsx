@@ -63,6 +63,10 @@ vi.mock("@/lib/invoke", () => ({
   invoke: mocks.invoke,
 }));
 
+vi.mock("@/lib/backend/runtime", () => ({ runtime: "desktop" }));
+vi.mock("@/lib/platform", () => ({ isWindows: true }));
+vi.mock("@/lib/backend/api", () => ({ listen: mocks.listen }));
+
 vi.mock("@/lib/windowManager", () => ({
   openQuickCommand: mocks.openQuickCommand,
 }));
@@ -129,7 +133,11 @@ function renderQuickCommands(options?: {
   const onSend = vi.fn();
   const onSendToAll = vi.fn();
   const view = render(
-    <QuickCommands onSend={onSend} onSendToAll={onSendToAll} />,
+    <QuickCommands
+      onSend={onSend}
+      onSendToAll={onSendToAll}
+      currentSessionId="session-1"
+    />,
   );
   return { ...view, onSend, onSendToAll };
 }
@@ -272,5 +280,63 @@ describe("QuickCommands context actions", () => {
     expect(mocks.openQuickCommand).toHaveBeenCalledWith(undefined, {
       categoryId: dockerCategory.id,
     });
+  });
+
+  it("starts and cancels NyaScript without sending script text to the terminal", async () => {
+    const scriptCommand: QuickCommand = {
+      id: "bootstrap",
+      label: "Bootstrap",
+      command: 'sendln "show status"\nwait "ready>"',
+      execution_mode: "nyascript",
+    };
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_quick_commands") {
+        return Promise.resolve({ commands: [scriptCommand], categories: [] });
+      }
+      if (command === "start_nyascript") {
+        expect(args).toEqual({
+          source: scriptCommand.command,
+          currentSessionId: "session-1",
+        });
+        return Promise.resolve("run-1");
+      }
+      if (command === "get_nyascript_status") {
+        return Promise.resolve({
+          runId: "run-1",
+          state: "running",
+          currentLine: 2,
+          activeAlias: "current",
+          sessionId: "session-1",
+          logs: ["waiting"],
+          error: null,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { onSend, onSendToAll } = renderQuickCommands({
+      commands: [scriptCommand],
+      categories: [],
+    });
+    await screen.findByText("Bootstrap");
+
+    fireEvent.click(screen.getByText("Bootstrap"));
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith("start_nyascript", {
+        source: scriptCommand.command,
+        currentSessionId: "session-1",
+      });
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onSendToAll).not.toHaveBeenCalled();
+    expect((await screen.findByTestId("nyascript-run-status")).textContent).toContain("waiting");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith("cancel_nyascript", { runId: "run-1" });
+    });
+
+    fireEvent.contextMenu(screen.getByText("Bootstrap"));
+    expect(screen.queryByText("Send to all")).toBeNull();
   });
 });

@@ -1846,6 +1846,16 @@
     "newCategoryPlaceholder": "New category...",
     "newCategoryRootHint": "Create at the top level",
     "noCommandsFound": "No commands.",
+    "nyascript": "NyaScript",
+    "nyascriptHint": "Run a native terminal automation script. Available on Windows desktop.",
+    "nyascriptLine": "line {{line}}",
+    "nyascriptState": {
+      "cancelled": "NyaScript cancelled",
+      "completed": "NyaScript completed",
+      "failed": "NyaScript failed",
+      "running": "NyaScript running"
+    },
+    "nyascriptUnsupported": "NyaScript is currently available only on Windows desktop.",
     "parentCategory": "Parent",
     "pin": "Pin",
     "renameCategory": "Rename Category",

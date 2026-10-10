@@ -95,6 +95,10 @@ import {
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
 import {
+  NyaScriptSessionOpenLifecycle,
+  type NyaScriptPendingSessionOpen,
+} from "./lib/nyascriptSessionOpenLifecycle";
+import {
   listenOpenSendCommandPanel,
   type SendCommandPanelDraft,
 } from "./lib/sendCommandPanelEvents";
@@ -115,7 +119,7 @@ import {
   splitTerminalWindowForTab,
   type TerminalWindowNode,
 } from "./lib/tabWindows";
-import type { TemporaryLinkConfig } from "./lib/temporaryLink";
+import { parseTemporaryLink, type TemporaryLinkConfig } from "./lib/temporaryLink";
 import { preserveTerminalReconnectContent } from "./lib/terminalReconnectHistory";
 import {
   buildDirectoryChangeCommand,
@@ -146,6 +150,8 @@ import {
 import type {
   McpSessionOpenCancel,
   McpSessionOpenRequest,
+  NyaScriptSessionOpenCancel,
+  NyaScriptSessionOpenRequest,
   PaneSplitDirection,
   SavedConnection,
   SessionInfo,
@@ -854,7 +860,15 @@ function App() {
   }, [closeTabs, connectSavedConnection, savedConnections]);
 
   const connectTemporaryConnection = useCallback(
-    async (config: TemporaryLinkConfig) => {
+    async (
+      config: TemporaryLinkConfig,
+      options?: {
+        failureContext?: string;
+        propagateError?: boolean;
+        onPending?: (pending: { tabId: string; createRequestId: string }) => void;
+        onSuccess?: (sessionId: string) => void;
+      },
+    ) => {
       const pending = addPendingTab(
         config.name,
         getTemporaryLinkSessionType(config),
@@ -864,6 +878,7 @@ function App() {
         { temporaryConfig: config },
       );
       const { tabId, createRequestId } = pending;
+      options?.onPending?.({ tabId, createRequestId });
 
       try {
         const sessionId = await createTemporarySession(
@@ -878,23 +893,151 @@ function App() {
         }
         updateTabSession(tabId, sessionId);
         focusTerminalSession(sessionId);
+        options?.onSuccess?.(sessionId);
       } catch (error) {
         if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          if (options?.propagateError) throw error;
           return;
         }
         const errorMessage = getErrorMessage(error);
         logger.error({
           domain: "session.lifecycle",
           event: "temporary_link.open_failed",
-          message: "Temporary connection failed",
+          message: options?.failureContext ?? "Temporary connection failed",
           error,
         });
         markTabConnectionFailed(tabId, errorMessage);
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+        if (options?.propagateError) throw error;
       }
     },
     [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
   );
+
+  const nyascriptSessionOpenLifecycleRef = useRef(new NyaScriptSessionOpenLifecycle());
+  useEffect(() => {
+    let disposed = false;
+    let unlistenOpen: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+    const lifecycle = nyascriptSessionOpenLifecycleRef.current;
+    const cancelPendingSessionOpen = (pending: NyaScriptPendingSessionOpen) => {
+      closeTabs([pending.tabId]);
+      void invoke("cancel_session_creation", {
+        createRequestId: pending.createRequestId,
+      }).catch(() => {});
+    };
+
+    void listen<NyaScriptSessionOpenRequest>(
+      "nyascript-session-open-request",
+      ({ payload }) => {
+        if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+        void (async () => {
+          if (!lifecycle.begin(payload.requestId)) {
+            lifecycle.finish(payload.requestId);
+            return;
+          }
+
+          let openedSessionId: string | null = null;
+          const lifecycleOptions = {
+            failureContext: "NyaScript session open failed",
+            propagateError: true,
+            onPending: (pending: { tabId: string; createRequestId: string }) => {
+              if (
+                !lifecycle.registerPending(
+                  payload.requestId,
+                  pending,
+                  cancelPendingSessionOpen,
+                )
+              ) {
+                throw new Error("NyaScript session-open request was cancelled.");
+              }
+            },
+            onSuccess: (sessionId: string) => {
+              if (!lifecycle.markOpened(payload.requestId)) {
+                void closeStaleCreatedSession(sessionId);
+                return;
+              }
+              openedSessionId = sessionId;
+            },
+          };
+
+          const target = payload.target.trim();
+          if (target.startsWith("saved:")) {
+            const connectionId = target.slice("saved:".length).trim();
+            const connections = savedConnections.some((item) => item.id === connectionId)
+              ? savedConnections
+              : await invoke<SavedConnection[]>("get_saved_connections");
+            const connection = connections.find((item) => item.id === connectionId);
+            if (!connection || connection.type === "rdp" || connection.type === "vnc") {
+              throw new Error(
+                "The NyaScript saved target does not exist or is not a supported terminal connection.",
+              );
+            }
+            await connectSavedConnection(connection, lifecycleOptions);
+          } else {
+            const protocol = /^telnet(?::\/\/|\s)/i.test(target)
+              ? "telnet"
+              : /^ssh(?::\/\/|\s)/i.test(target)
+                ? "ssh"
+                : null;
+            if (!protocol) {
+              throw new Error(
+                "NyaScript connect target must be saved:<id>, ssh://..., ssh ..., telnet://..., or telnet ...",
+              );
+            }
+            const parsed = parseTemporaryLink(protocol, target);
+            if (!parsed.ok) {
+              throw new Error(`Invalid NyaScript connect target: ${parsed.errorKey}`);
+            }
+            await connectTemporaryConnection(parsed.config, lifecycleOptions);
+          }
+
+          await invoke("respond_nyascript_session_open", {
+            requestId: payload.requestId,
+            sessionId: openedSessionId,
+            error: openedSessionId
+              ? null
+              : "The NyaScript session-open request did not create a session.",
+          });
+        })()
+          .catch((error) => {
+            void invoke("respond_nyascript_session_open", {
+              requestId: payload.requestId,
+              sessionId: null,
+              error: getErrorMessage(error),
+            }).catch(() => {});
+          })
+          .finally(() => {
+            lifecycle.finish(payload.requestId);
+          });
+      },
+    ).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenOpen = dispose;
+    });
+
+    void listen<NyaScriptSessionOpenCancel>(
+      "nyascript-session-open-cancel",
+      ({ payload }) => {
+        if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+        lifecycle.cancel(payload.requestId, cancelPendingSessionOpen);
+      },
+    ).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenCancel = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenOpen?.();
+      unlistenCancel?.();
+    };
+  }, [
+    closeTabs,
+    connectSavedConnection,
+    connectTemporaryConnection,
+    savedConnections,
+  ]);
 
   const connectExternalLocalSession = useCallback(
     async (workingDir: string | null) => {

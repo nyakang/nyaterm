@@ -31,8 +31,8 @@ use crate::core::ssh::{
     TunnelManager,
 };
 use crate::core::{
-    CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
-    VncSessionManager,
+    CloudSyncManager, NyaScriptManager, QuickCommandsStore, RdpSessionManager, RecordingManager,
+    SessionManager, VncSessionManager,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -45,6 +45,7 @@ pub fn run() {
     runtime::prepare_webview_environment(&runtime);
 
     let session_manager = Arc::new(SessionManager::new());
+    let nyascript_manager = NyaScriptManager::new(session_manager.clone());
     let rdp_session_manager = Arc::new(RdpSessionManager::new());
     let vnc_session_manager = Arc::new(VncSessionManager::new());
     let tunnel_manager = Arc::new(TunnelManager::new());
@@ -104,6 +105,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(session_manager.clone())
+        .manage(nyascript_manager.clone())
         .manage(rdp_session_manager.clone())
         .manage(vnc_session_manager.clone())
         .manage(tunnel_manager.clone())
@@ -135,6 +137,7 @@ pub fn run() {
                 cloud_sync_manager,
                 runtime_for_setup.clone(),
             )?;
+            nyascript_manager.initialize(a.handle().clone());
             let manager = mcp_manager.clone();
             let app_handle = a.handle().clone();
             if let Err(error) = tauri::async_runtime::block_on(manager.initialize(app_handle)) {
@@ -216,6 +219,10 @@ pub fn run() {
             cmd::mcp::report_mcp_active_session,
             cmd::mcp::respond_mcp_session_open,
             cmd::mcp::get_external_mcp_client_configs,
+            cmd::nyascript::start_nyascript,
+            cmd::nyascript::cancel_nyascript,
+            cmd::nyascript::get_nyascript_status,
+            cmd::nyascript::respond_nyascript_session_open,
             cmd::ai::detect_claude_code_cli,
             cmd::ai::get_claude_code_account_status,
             cmd::ai::respond_agent_step,

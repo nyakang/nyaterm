@@ -426,6 +426,25 @@ Button_2_Action=whoami
     }
 
     #[test]
+    fn imports_nyascript_execution_mode_without_changing_script_text() {
+        let raw = r#"[{
+            "label":"Bootstrap",
+            "command":"sendln \"show status\"\nwait \"ready>\"",
+            "execution_mode":"nyascript"
+        }]"#;
+        let import_config = parse_nyaterm_import(raw).unwrap();
+        let mut config = empty_config();
+
+        merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(config.commands[0].execution_mode, "nyascript");
+        assert_eq!(
+            config.commands[0].command,
+            "sendln \"show status\"\nwait \"ready>\""
+        );
+    }
+
+    #[test]
     fn windterm_without_valid_commands_is_empty() {
         let import_config = parse_windterm_quickbar(
             r#"[{"quick.label":"","quick.text":"echo no"},{"quick.label":"No text"}]"#,

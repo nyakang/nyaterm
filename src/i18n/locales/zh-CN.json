@@ -1844,6 +1844,16 @@
     "newCategoryPlaceholder": "新建分类...",
     "newCategoryRootHint": "将在顶层创建分类",
     "noCommandsFound": "未找到匹配的命令。",
+    "nyascript": "NyaScript",
+    "nyascriptHint": "运行原生终端自动化脚本。目前支持 Windows 桌面版。",
+    "nyascriptLine": "第 {{line}} 行",
+    "nyascriptState": {
+      "cancelled": "NyaScript 已取消",
+      "completed": "NyaScript 已完成",
+      "failed": "NyaScript 运行失败",
+      "running": "NyaScript 运行中"
+    },
+    "nyascriptUnsupported": "NyaScript 目前仅支持 Windows 桌面版。",
     "parentCategory": "父级",
     "pin": "置顶显示",
     "renameCategory": "重命名分类",

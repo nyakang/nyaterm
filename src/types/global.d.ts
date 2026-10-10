@@ -1114,6 +1114,8 @@ export interface QuickCommandCategory {
   sort_order?: number;
 }
 
+export type QuickCommandExecutionMode = "execute" | "append" | "nyascript";
+
 export interface QuickCommand {
   id: string;
   label: string;
@@ -1123,7 +1125,7 @@ export interface QuickCommand {
   color_tag?: string;
   icon_tag?: string;
   pinned?: boolean;
-  execution_mode?: string;
+  execution_mode?: QuickCommandExecutionMode;
   source?: "manual" | "ai";
   risk_level?: RiskLevel;
   updated_at?: number;
@@ -1592,6 +1594,40 @@ export interface McpSessionOpenRequest {
 export interface McpSessionOpenCancel {
   requestId: string;
   targetWindowLabel: string;
+}
+
+export interface NyaScriptSessionOpenRequest {
+  requestId: string;
+  target: string;
+  targetWindowLabel: string;
+}
+
+export interface NyaScriptSessionOpenCancel {
+  requestId: string;
+  targetWindowLabel: string;
+}
+
+export type NyaScriptRunState = "running" | "completed" | "failed" | "cancelled";
+
+export interface NyaScriptRunStatus {
+  runId: string;
+  state: NyaScriptRunState;
+  currentLine?: number | null;
+  activeAlias?: string | null;
+  sessionId?: string | null;
+  logs: string[];
+  error?: string | null;
+}
+
+export interface NyaScriptRunEvent {
+  runId: string;
+  event: "started" | "line" | "log" | "completed" | "failed" | "cancelled";
+  state: NyaScriptRunState;
+  currentLine?: number | null;
+  activeAlias?: string | null;
+  sessionId?: string | null;
+  log?: string | null;
+  error?: string | null;
 }
 
 export interface AIContext {

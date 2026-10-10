@@ -262,6 +262,27 @@ Download installers from [nyaterm.app](https://nyaterm.app) or the [Releases](ht
 | Telnet | Legacy network devices or lab systems | Lightweight terminal session without SSH-only features, with `Backspace Mode` for `Ctrl+H (BS)` or `DEL (0x7F)` |
 | Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, `Backspace Mode`, and XMODEM/YMODEM/ZMODEM drag-and-drop upload protocol |
 
+## NyaScript terminal automation (Windows desktop)
+
+Quick Commands can use the **NyaScript** execution mode for small, native terminal
+automation flows without an embedded JavaScript/Lua runtime. The MVP supports
+`connect <target> [as <alias>]`, `use <alias>`, `send`, `sendln`, `wait`,
+`wait_regex`, `timeout`, `if matched` / `if timeout` with `else` / `end`, finite
+`repeat <count>` blocks, `log`, and `secret(<credential-ref>)`. `connect` accepts
+`saved:<connection-id>`, SSH links/commands, and Telnet links/commands and opens a
+real terminal pane in the current workspace. Multiple connected panes can be
+addressed sequentially with aliases.
+
+`wait` and `wait_regex` read only output that has not already been consumed by
+that script alias. The cursor is captured when a terminal is bound, so a fast
+response that arrives between `sendln` and `wait` is still visible; a successful
+match consumes output only through the end of that match. Timeouts are bounded
+and branchable, and retention overrun, terminal closure, or cancellation ends the
+wait explicitly. `secret(...)` resolves a Credential Manager entry by ID or a
+unique exact name only at execution time; the plaintext is sent as secret input
+and is not added to script logs or command transcripts. NyaScript is not executed
+in the Web runtime.
+
 ---
 
 <a name="getting-started"></a>

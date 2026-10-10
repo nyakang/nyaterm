@@ -31,6 +31,7 @@ export interface SendSessionInputOptions {
 export type InputOrigin =
   | "keyboard"
   | "quick_command"
+  | "nya_script"
   | "startup_command"
   | "post_login"
   | "ai_agent"

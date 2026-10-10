@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod monitoring;
 pub mod network;
 pub mod note_export;
+pub mod nyascript;
 mod output;
 pub mod plugins;
 pub mod portable_snapshot;
@@ -36,6 +37,7 @@ pub mod watcher;
 pub mod zmodem;
 
 pub use cloud_sync::CloudSyncManager;
+pub use nyascript::{NyaScriptManager, NyaScriptRunStatus};
 pub(crate) use output::{SessionOutputCoalescer, TerminalOutputPayload};
 pub use quick_commands::{
     QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore,
