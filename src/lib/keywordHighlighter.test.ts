@@ -77,6 +77,8 @@ interface CellSpec {
   chars: string;
   width: number;
   fgDefault?: boolean;
+  inverse?: boolean;
+  invisible?: boolean;
 }
 
 function createCell(spec: CellSpec = { chars: "", width: 1 }): IBufferCell {
@@ -84,6 +86,8 @@ function createCell(spec: CellSpec = { chars: "", width: 1 }): IBufferCell {
     getChars: () => spec.chars,
     getWidth: () => spec.width,
     isFgDefault: () => spec.fgDefault ?? true,
+    isInverse: () => (spec.inverse ? 1 : 0),
+    isInvisible: () => (spec.invisible ? 1 : 0),
   } as unknown as IBufferCell;
 }
 
@@ -122,6 +126,7 @@ interface DecorationRecord {
 
 function createHarness(options: {
   lines: FakeLine[];
+  alternateLines?: FakeLine[];
   baseY: number;
   viewportY: number;
   rows?: number;
@@ -130,16 +135,25 @@ function createHarness(options: {
   const writeListeners = new Set<() => void>();
   const resizeListeners = new Set<() => void>();
   const renderListeners = new Set<() => void>();
+  const bufferListeners = new Set<() => void>();
+  const selectionListeners = new Set<() => void>();
   const markers: FakeMarker[] = [];
   const decorations: DecorationRecord[] = [];
-  const getLineSpy = vi.fn((lineY: number) => options.lines[lineY]);
+  const getLineSpy = vi.fn((lineY: number) =>
+    active.type === "alternate" && options.alternateLines
+      ? options.alternateLines[lineY]
+      : options.lines[lineY],
+  );
   const active = {
     type: "normal" as "normal" | "alternate",
     baseY: options.baseY,
     cursorY: 0,
+    cursorX: 0,
     viewportY: options.viewportY,
     get length() {
-      return options.lines.length;
+      return active.type === "alternate" && options.alternateLines
+        ? options.alternateLines.length
+        : options.lines.length;
     },
     getLine: getLineSpy,
     getNullCell: () => createCell(),
@@ -148,14 +162,41 @@ function createHarness(options: {
     listeners.add(listener);
     return { dispose: () => listeners.delete(listener) };
   };
+  const element = document.createElement("div");
+  const screen = document.createElement("div");
+  screen.className = "xterm-screen";
+  element.appendChild(screen);
+  const cols = options.cols ?? 80;
+  const rows = options.rows ?? 1;
+  const dimensions = {
+    css: {
+      cell: { width: 10, height: 20 },
+      canvas: { width: cols * 10, height: rows * 20 },
+    },
+    device: {
+      canvas: { width: cols * 10, height: rows * 20 },
+      cell: { width: 10, height: 20 },
+      char: { width: 8, height: 16, left: 1, top: 2 },
+    },
+  };
+  let selection: { start: { x: number; y: number }; end: { x: number; y: number } } | undefined;
   const terminal = {
-    rows: options.rows ?? 1,
-    cols: options.cols ?? 80,
-    buffer: { active },
+    rows,
+    cols,
+    element,
+    dimensions,
+    options: { fontSize: 14, fontFamily: "monospace", fontWeight: "normal" },
+    getSelectionPosition: () => selection,
+    buffer: {
+      active,
+      onBufferChange: (listener: () => void) => subscribe(bufferListeners, listener),
+    },
     onWriteParsed: (listener: () => void) => subscribe(writeListeners, listener),
     onResize: (listener: () => void) => subscribe(resizeListeners, listener),
     onRender: (listener: () => void) => subscribe(renderListeners, listener),
+    onSelectionChange: (listener: () => void) => subscribe(selectionListeners, listener),
     registerMarker: (offset = 0) => {
+      if (active.type === "alternate") return undefined;
       const marker = new FakeMarker(active.baseY + active.cursorY + offset);
       markers.push(marker);
       return marker;
@@ -166,6 +207,7 @@ function createHarness(options: {
       width?: number;
       foregroundColor?: string;
     }) => {
+      if (active.type === "alternate") return undefined;
       const decoration = new FakeDecoration();
       decorations.push({ decoration, ...decorationOptions });
       return decoration;
@@ -175,9 +217,25 @@ function createHarness(options: {
   return {
     active,
     decorations,
+    element,
+    screen,
+    dimensions,
     getLineSpy,
     markers,
     terminal,
+    setSelection: (range: typeof selection) => {
+      selection = range;
+      for (const listener of selectionListeners) listener();
+    },
+    get selectionListenerCount() {
+      return selectionListeners.size;
+    },
+    switchBuffer: (type: "normal" | "alternate") => {
+      active.type = type;
+      active.baseY = type === "alternate" ? 0 : options.baseY;
+      active.viewportY = type === "alternate" ? 0 : options.viewportY;
+      for (const listener of bufferListeners) listener();
+    },
     render: () => {
       for (const listener of renderListeners) listener();
     },
@@ -206,6 +264,36 @@ function flushScrollRefresh() {
   vi.advanceTimersByTime(XTERM_PERFORMANCE_CONFIG.highlighting.scrollIdleDebounceMs);
 }
 
+function mockCanvas() {
+  const painted: Array<{
+    text: string;
+    x: number;
+    y: number;
+    width: number;
+    color: string;
+  }> = [];
+  const context = {
+    fillStyle: "",
+    font: "",
+    textBaseline: "" as CanvasTextBaseline,
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+    save: vi.fn(),
+    beginPath: vi.fn(),
+    rect: vi.fn(),
+    clip: vi.fn(),
+    restore: vi.fn(),
+    fillText: vi.fn((text: string, x: number, y: number, width: number) => {
+      painted.push({ text, x, y, width, color: context.fillStyle });
+    }),
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    (() =>
+      context as unknown as CanvasRenderingContext2D) as unknown as HTMLCanvasElement["getContext"],
+  );
+  return { context, painted };
+}
+
 describe("KeywordHighlighter", () => {
   let rafCallbacks: Map<number, FrameRequestCallback>;
   let nextRafId: number;
@@ -224,6 +312,7 @@ describe("KeywordHighlighter", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -369,26 +458,370 @@ describe("KeywordHighlighter", () => {
     highlighter.dispose();
   });
 
-  it("invalidates decorations and match state in the alternate screen", () => {
-    const lines = Array.from({ length: 80 }, (_, index) =>
-      createLine(index === 20 ? "ERROR" : ""),
-    );
-    const harness = createHarness({ lines, baseY: 60, viewportY: 20 });
+  it("switches from normal decorations to an alt canvas, then rebuilds normal decorations", () => {
+    const { painted } = mockCanvas();
+    const lines = Array.from({ length: 80 }, (_, index) => createLine(index === 20 ? "ERROR" : ""));
+    const alternateLines = [createLine("ERROR")];
+    const harness = createHarness({
+      lines,
+      alternateLines,
+      baseY: 60,
+      viewportY: 20,
+    });
     const highlighter = new KeywordHighlighter(harness.terminal);
     highlighter.setRules([rule()], true);
     flushWriteRefresh();
     const firstDecoration = harness.decorations.find((entry) => entry.marker.line === 20);
 
-    harness.active.type = "alternate";
-    harness.write();
+    harness.switchBuffer("alternate");
     expect(firstDecoration?.decoration).toHaveProperty("disposed", true);
-    const internals = highlighter as unknown as { lineMatchCache: Map<number, unknown> };
+    const internals = highlighter as unknown as {
+      lineMatchCache: Map<number, unknown>;
+    };
     expect(internals.lineMatchCache).toHaveLength(0);
+    const markersBefore = harness.markers.length;
+    flushWriteRefresh();
+    expect(harness.markers).toHaveLength(markersBefore);
+    expect(
+      harness.screen.querySelectorAll("canvas.nyaterm-keyword-alternate-overlay"),
+    ).toHaveLength(1);
+    expect(painted.some((entry) => entry.text === "R" && entry.color === "#ff0000")).toBe(true);
 
-    harness.active.type = "normal";
-    harness.write();
+    harness.switchBuffer("normal");
+    expect(harness.screen.querySelector("canvas.nyaterm-keyword-alternate-overlay")).toBeNull();
     flushWriteRefresh();
     expect(lines[20].translateSpy).toHaveBeenCalledTimes(2);
+    expect(harness.decorations.filter((entry) => entry.marker.line === 20)).toHaveLength(2);
+    highlighter.dispose();
+  });
+
+  it("refreshes changed Vim cells on the same row and repaints after an alt scroll", () => {
+    const { painted, context } = mockCanvas();
+    const alternateLines = [
+      createLine("ERROR"),
+      createLine("nothing"),
+      createLine("ERROR"),
+      createLine(""),
+    ];
+    const harness = createHarness({
+      lines: [createLine("shell")],
+      alternateLines,
+      baseY: 0,
+      viewportY: 0,
+      rows: 2,
+    });
+    harness.active.cursorX = 80;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.filter((glyph) => glyph.color === "#ff0000")).toHaveLength(5);
+
+    alternateLines[0] = createLine("done");
+    harness.write();
+    flushWriteRefresh();
+    expect(context.clearRect).toHaveBeenCalledTimes(2);
+    expect(painted).toHaveLength(5);
+
+    harness.active.viewportY = 2;
+    harness.render();
+    flushWriteRefresh();
+    expect(painted).toHaveLength(10);
+    expect(painted[5]).toMatchObject({ text: "E", x: 1, y: 18 });
+    const overlay = harness.screen.querySelector<HTMLCanvasElement>("canvas");
+    expect(overlay?.style.pointerEvents).toBe("none");
+    highlighter.dispose();
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+  });
+
+  it("respects existing ANSI foreground, inverted and cursor cells in the alternate screen", () => {
+    const { painted } = mockCanvas();
+    const alternateLines = [
+      createLine("ERROR", { fgDefault: false }),
+      createLine("ERROR", { cells: new Map([[1, { chars: "R", width: 1, inverse: true }]]) }),
+    ];
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines,
+      baseY: 0,
+      viewportY: 0,
+      rows: 2,
+    });
+    harness.active.cursorY = 1;
+    harness.active.cursorX = 2;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.map(({ text, y }) => [text, y])).toEqual([
+      ["E", 38],
+      ["O", 38],
+      ["R", 38],
+    ]);
+    highlighter.dispose();
+  });
+
+  it("draws CJK matches at their double-width cell positions", () => {
+    const { painted } = mockCanvas();
+    const alt = [
+      createLine("错误", {
+        cells: new Map<number, CellSpec>([
+          [0, { chars: "错", width: 2 }],
+          [1, { chars: "", width: 0 }],
+          [2, { chars: "误", width: 2 }],
+          [3, { chars: "", width: 0 }],
+        ]),
+      }),
+    ];
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: alt,
+      baseY: 0,
+      viewportY: 0,
+    });
+    harness.active.cursorX = 80;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule("错误", "#aa00ff")], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.map(({ text, x, width }) => [text, x, width])).toEqual([
+      ["错", 1, 20],
+      ["误", 21, 20],
+    ]);
+    highlighter.dispose();
+  });
+
+  it("leaves selected alternate-screen cells to the terminal renderer", () => {
+    const { painted } = mockCanvas();
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: [createLine("ERROR")],
+      baseY: 0,
+      viewportY: 0,
+    });
+    harness.active.cursorX = 80;
+    // xterm 6.1's runtime returns zero-based buffer rows/columns.
+    harness.setSelection({ start: { x: 2, y: 0 }, end: { x: 4, y: 0 } });
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.map(({ text }) => text)).toEqual(["E", "R", "R"]);
+    highlighter.dispose();
+  });
+
+  it("does not overpaint the selected part of multiple alternate-screen rows", () => {
+    const { painted } = mockCanvas();
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: [createLine("ERROR"), createLine("ERROR"), createLine("ERROR")],
+      baseY: 0,
+      viewportY: 0,
+      rows: 3,
+    });
+    harness.active.cursorX = 80;
+    // Select from column 2 on row 0 through (but not including) column 2 on row 2.
+    harness.setSelection({ start: { x: 2, y: 0 }, end: { x: 2, y: 2 } });
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.map(({ text, y }) => [text, y])).toEqual([
+      ["E", 18],
+      ["R", 18],
+      ["R", 58],
+      ["O", 58],
+      ["R", 58],
+    ]);
+    highlighter.dispose();
+  });
+
+  it("clears and repaints alternate selection changes without writes or render events", () => {
+    const { painted, context } = mockCanvas();
+    const harness = createHarness({
+      lines: [createLine("normal")],
+      alternateLines: [createLine("ERROR")],
+      baseY: 0,
+      viewportY: 0,
+    });
+    harness.active.cursorX = 80;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.map(({ text }) => text)).toEqual(["E", "R", "R", "O", "R"]);
+    expect(harness.selectionListenerCount).toBe(1);
+    expect(context.clearRect).toHaveBeenCalledTimes(1);
+
+    // The xterm selection service can change without onWriteParsed/onRender.
+    harness.setSelection({ start: { x: 2, y: 0 }, end: { x: 4, y: 0 } });
+    expect(context.clearRect).toHaveBeenCalledTimes(2); // clear stale overlay immediately
+    flushWriteRefresh();
+    expect(painted.slice(-3).map(({ text }) => text)).toEqual(["E", "R", "R"]);
+
+    // Dragging further and clearing the selection must also refresh the overlay.
+    harness.setSelection({ start: { x: 1, y: 0 }, end: { x: 5, y: 0 } });
+    expect(context.clearRect).toHaveBeenCalledTimes(4);
+    flushWriteRefresh();
+    expect(painted[painted.length - 1]?.text).toBe("E");
+
+    harness.setSelection(undefined);
+    expect(context.clearRect).toHaveBeenCalledTimes(6);
+    flushWriteRefresh();
+    expect(painted.slice(-5).map(({ text }) => text)).toEqual(["E", "R", "R", "O", "R"]);
+
+    // Normal screen selection does not invalidate its marker-based highlights.
+    harness.switchBuffer("normal");
+    flushWriteRefresh();
+    const clearsBeforeNormalSelection = context.clearRect.mock.calls.length;
+    harness.setSelection({ start: { x: 0, y: 0 }, end: { x: 2, y: 0 } });
+    flushWriteRefresh();
+    expect(context.clearRect).toHaveBeenCalledTimes(clearsBeforeNormalSelection);
+
+    highlighter.dispose();
+    expect(harness.selectionListenerCount).toBe(0);
+    harness.setSelection(undefined);
+    flushWriteRefresh();
+    expect(context.clearRect).toHaveBeenCalledTimes(clearsBeforeNormalSelection);
+  });
+
+  it("uses the same user priority, UTF-16 cell widths and wrapped matching in alt", () => {
+    const { painted } = mockCanvas();
+    const alternateLines = [
+      createLine("🙂ERROR", {
+        cells: new Map<number, CellSpec>([
+          [0, { chars: "🙂", width: 2 }],
+          ...[..."ERROR"].map((char, index) => [index + 2, { chars: char, width: 1 }] as const),
+        ]),
+      }),
+      createLine("ERR"),
+      createLine("OR", { wrapped: true }),
+    ];
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines,
+      baseY: 0,
+      viewportY: 0,
+      rows: 3,
+      cols: 20,
+    });
+    harness.active.cursorX = 20;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule("ERROR", "#1100ff"), rule("ERR", "#00ff11")], true, true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(painted.slice(0, 5).map(({ x, color }) => [x, color])).toEqual([
+      [21, "#1100ff"],
+      [31, "#1100ff"],
+      [41, "#1100ff"],
+      [51, "#1100ff"],
+      [61, "#1100ff"],
+    ]);
+    expect(painted.filter((glyph) => glyph.y === 38)).toHaveLength(3);
+    expect(painted.filter((glyph) => glyph.y === 58)).toHaveLength(2);
+    expect(painted.some((glyph) => glyph.color === "#00ff11")).toBe(false);
+    highlighter.dispose();
+  });
+
+  it("updates alt colors and cell geometry, and cleans up when suspended or disabled", () => {
+    const { painted, context } = mockCanvas();
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: [createLine("ERROR")],
+      baseY: 0,
+      viewportY: 0,
+    });
+    harness.active.cursorX = 80;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+    highlighter.setRules([rule("ERROR", "#ff0000")], true);
+    flushWriteRefresh();
+    const firstOverlay = harness.screen.querySelector<HTMLCanvasElement>("canvas");
+    expect(firstOverlay).not.toBeNull();
+    expect(painted[0].color).toBe("#ff0000");
+
+    harness.dimensions.css.cell.width = 12;
+    harness.dimensions.css.canvas.width = 960;
+    harness.dimensions.device.canvas.width = 960;
+    harness.resize();
+    flushWriteRefresh();
+    expect(context.clearRect).toHaveBeenCalled();
+    expect(harness.screen.querySelector<HTMLCanvasElement>("canvas")?.style.width).toBe("960px");
+    expect(painted[5].x).toBe(1);
+    expect(painted[6].x).toBe(13);
+
+    highlighter.setRules([rule("ERROR", "#00ff00")], true);
+    flushWriteRefresh();
+    expect(painted[painted.length - 1]?.color).toBe("#00ff00");
+    harness.terminal.options.fontSize = 19;
+    harness.render();
+    flushWriteRefresh();
+    expect(context.font).toContain("19px");
+    highlighter.setSuspended(true);
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+    harness.write();
+    flushWriteRefresh();
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+    highlighter.setSuspended(false);
+    vi.advanceTimersByTime(XTERM_PERFORMANCE_CONFIG.highlighting.resumeIdleDelayMs);
+    for (const frame of rafCallbacks.values()) frame(0);
+    expect(harness.screen.querySelector("canvas")).not.toBeNull();
+    highlighter.setRules([rule()], false);
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+    highlighter.dispose();
+  });
+
+  it("does not cache alt matches, create markers, or exceed the match cap", () => {
+    const { painted } = mockCanvas();
+    const alt = [createLine("ERROR ".repeat(40))];
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: alt,
+      baseY: 0,
+      viewportY: 0,
+      cols: 300,
+    });
+    harness.active.cursorX = 300;
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    const overlay = harness.screen.querySelector("canvas");
+    const internals = highlighter as unknown as {
+      lineMatchCache: Map<number, unknown>;
+      decorationCache: Map<string, unknown>;
+    };
+    expect(internals.lineMatchCache.size).toBe(0);
+    expect(internals.decorationCache.size).toBe(0);
+    expect(harness.markers).toHaveLength(0);
+    expect(painted).toHaveLength(XTERM_PERFORMANCE_CONFIG.highlighting.maxMatchesPerLine * 5);
+    expect(overlay).not.toBeNull();
+    highlighter.dispose();
+    harness.write();
+    expect(harness.screen.querySelector("canvas")).toBeNull();
+  });
+
+  it("stops repainting alternate glyphs when the per-refresh deadline expires", () => {
+    const { context } = mockCanvas();
+    const harness = createHarness({
+      lines: [createLine("")],
+      alternateLines: [createLine("ERROR")],
+      baseY: 0,
+      viewportY: 0,
+    });
+    harness.active.cursorX = 80;
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    context.fillText.mockImplementation(() => {
+      now = XTERM_PERFORMANCE_CONFIG.highlighting.maxRefreshTimeMs + 1;
+    });
+    const highlighter = new KeywordHighlighter(harness.terminal);
+    highlighter.setRules([rule()], true);
+    harness.switchBuffer("alternate");
+    flushWriteRefresh();
+    expect(context.fillText).toHaveBeenCalledTimes(1);
     highlighter.dispose();
   });
 

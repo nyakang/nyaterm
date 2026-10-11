@@ -88,7 +88,8 @@ interface RefreshStats {
  * - Deduplicates scroll/render events: onRender viewport-Y check replaces the redundant onScroll.
  * - Auto-invalidation: each decoration subscribes to its own onDispose without
  *   invalidating the independent match cache.
- * - Alternate buffer guard: clears decorations immediately when TUI apps (vim, htop) take over.
+ * - Alternate buffer: paints visible keyword glyphs on a transparent canvas, since
+ *   xterm's marker/decoration API is only available in the normal buffer.
  */
 export class KeywordHighlighter implements IDisposable {
   private term: XTerm;
@@ -110,6 +111,9 @@ export class KeywordHighlighter implements IDisposable {
   private highlightAcrossWrappedLines = false;
   private disposables: IDisposable[] = [];
   private lastViewportY = -1;
+  private activeBufferType: "normal" | "alternate";
+  private alternateCanvas: HTMLCanvasElement | null = null;
+  private alternateContext: CanvasRenderingContext2D | null = null;
 
   /** Marker anchored at buffer line 0 to detect scrollback trimming. */
   private sentinelMarker: IMarker | null = null;
@@ -123,20 +127,39 @@ export class KeywordHighlighter implements IDisposable {
     private readonly sessionId?: string,
   ) {
     this.term = term;
+    this.activeBufferType = term.buffer.active.type;
 
     this.disposables.push(
-      this.term.onWriteParsed(() => this.triggerWriteRefresh()),
+      this.term.buffer.onBufferChange(() => this.syncActiveBuffer()),
+      this.term.onWriteParsed(() => {
+        this.syncActiveBuffer();
+        this.triggerWriteRefresh();
+      }),
       this.term.onResize(() => {
         this.invalidateAll();
         this.lastViewportY = -1;
         this.triggerWriteRefresh("resize");
       }),
       this.term.onRender(() => {
+        this.syncActiveBuffer();
+        if (this.term.buffer.active.type === "alternate") {
+          // TUI redraws can replace cells in place without changing viewportY.
+          this.triggerWriteRefresh();
+          return;
+        }
         const currentViewportY = this.term.buffer.active?.viewportY ?? 0;
         if (currentViewportY !== this.lastViewportY) {
           this.lastViewportY = currentViewportY;
           this.triggerScrollRefresh();
         }
+      }),
+      this.term.onSelectionChange(() => {
+        if (this.term.buffer.active.type !== "alternate" || !this.canRefresh()) return;
+        // xterm redraws its selection without necessarily emitting onRender.
+        // Clear our higher-layer glyphs immediately, then repaint unselected cells.
+        const screen = this.term.dimensions?.css.canvas;
+        if (screen) this.alternateContext?.clearRect(0, 0, screen.width, screen.height);
+        this.triggerWriteRefresh();
       }),
     );
   }
@@ -192,6 +215,7 @@ export class KeywordHighlighter implements IDisposable {
 
     if (suspended) {
       this.clearAllTimers();
+      this.removeAlternateCanvas();
       return;
     }
 
@@ -237,6 +261,22 @@ export class KeywordHighlighter implements IDisposable {
     }
   }
 
+  /** A buffer switch invalidates normal scrollback markers even if viewportY is unchanged. */
+  private syncActiveBuffer(): void {
+    const type = this.term.buffer.active.type;
+    if (type === this.activeBufferType) return;
+    this.activeBufferType = type;
+    this.invalidateAll();
+    this.lastViewportY = -1;
+    this.triggerWriteRefresh();
+  }
+
+  private removeAlternateCanvas(): void {
+    this.alternateCanvas?.remove();
+    this.alternateCanvas = null;
+    this.alternateContext = null;
+  }
+
   /**
    * Place a marker at buffer line 0. When xterm trims the scrollback (buffer
    * full), this line is evicted and the marker is disposed, letting us detect
@@ -267,12 +307,7 @@ export class KeywordHighlighter implements IDisposable {
   }
 
   private canRefresh(): boolean {
-    if (!this.enabled || this.suspended || this.compiledRules.length === 0) return false;
-    if (this.term.buffer.active.type === "alternate") {
-      this.invalidateAll();
-      return false;
-    }
-    return true;
+    return this.enabled && !this.suspended && this.compiledRules.length > 0;
   }
 
   /** Delayed refresh that batches writes without postponing work during continuous output. */
@@ -370,6 +405,7 @@ export class KeywordHighlighter implements IDisposable {
 
   private invalidateAll(): void {
     this.clearAllTimers();
+    this.removeAlternateCanvas();
     this.clearDecorations();
     this.clearMatchCache();
     this.continuationSkippedRows.clear();
@@ -983,6 +1019,155 @@ export class KeywordHighlighter implements IDisposable {
     }
   }
 
+  /** Create one pointer-transparent overlay, without using xterm's normal-buffer markers. */
+  private ensureAlternateCanvas(): CanvasRenderingContext2D | null {
+    const screen = this.term.element?.querySelector<HTMLElement>(".xterm-screen");
+    if (!screen || !this.term.dimensions) return null;
+    if (this.alternateCanvas?.parentElement === screen && this.alternateContext) {
+      return this.alternateContext;
+    }
+    this.removeAlternateCanvas();
+    const canvas = document.createElement("canvas");
+    canvas.className = "nyaterm-keyword-alternate-overlay";
+    canvas.setAttribute("aria-hidden", "true");
+    canvas.style.pointerEvents = "none";
+    canvas.style.position = "absolute";
+    canvas.style.left = "0";
+    canvas.style.top = "0";
+    canvas.style.zIndex = "2";
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    screen.appendChild(canvas);
+    this.alternateCanvas = canvas;
+    this.alternateContext = context;
+    return context;
+  }
+
+  /** Repaint only the current alt viewport, without an immutable scrollback cache. */
+  private refreshAlternateViewport(): void {
+    const dimensions = this.term.dimensions;
+    const context = this.ensureAlternateCanvas();
+    if (!dimensions || !context || !this.alternateCanvas) return;
+    const { cell, canvas: screen } = dimensions.css;
+    if (!(cell.width > 0 && cell.height > 0 && screen.width > 0 && screen.height > 0)) {
+      this.removeAlternateCanvas();
+      return;
+    }
+
+    const canvas = this.alternateCanvas;
+    const dpr = dimensions.device.canvas.width / screen.width || window.devicePixelRatio || 1;
+    const width = Math.round(screen.width * dpr);
+    const height = Math.round(screen.height * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    canvas.style.width = `${screen.width}px`;
+    canvas.style.height = `${screen.height}px`;
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, screen.width, screen.height);
+    context.textBaseline = "alphabetic";
+    context.font = `${this.term.options.fontWeight ?? "normal"} ${this.term.options.fontSize ?? 14}px ${this.term.options.fontFamily ?? "monospace"}`;
+
+    const buffer = this.term.buffer.active;
+    const startY = buffer.viewportY;
+    const endY = Math.min(buffer.length - 1, startY + this.term.rows - 1);
+    const config = getKeywordHighlightPerformanceConfig();
+    const budget: RefreshBudget = {
+      createdDecorations: 0,
+      deadlineMs: performance.now() + config.maxRefreshTimeMs,
+      hitLimit: false,
+      hitTotalDecorationLimit: false,
+    };
+    const scratchCell = buffer.getNullCell();
+    const processed = new Set<number>();
+    const selection = this.term.getSelectionPosition?.();
+    const charOffsetX = dimensions.device.char.left / dpr;
+    const baselineY = (dimensions.device.char.top + dimensions.device.char.height) / dpr;
+
+    for (let lineY = startY; lineY <= endY && !this.isBudgetExhausted(budget); lineY++) {
+      if (processed.has(lineY)) continue;
+      const bounds = this.getLogicalLineBounds(
+        buffer,
+        lineY,
+        buffer.length,
+        config.maxLogicalLineRows,
+        budget,
+      );
+      if (bounds.status !== "complete") {
+        if (bounds.status === "budget") break;
+        continue;
+      }
+      const result = this.highlightAcrossWrappedLines
+        ? this.scanWrappedLogicalLine(
+            buffer,
+            bounds.startY,
+            bounds.endY,
+            scratchCell,
+            config,
+            budget,
+          )
+        : this.scanPhysicalLogicalLine(
+            buffer,
+            bounds.startY,
+            bounds.endY,
+            scratchCell,
+            config,
+            budget,
+          );
+      if (!result.complete || this.isBudgetExhausted(budget)) break;
+
+      for (let y = Math.max(startY, bounds.startY); y <= Math.min(endY, bounds.endY); y++) {
+        processed.add(y);
+        const line = buffer.getLine(y);
+        if (!line || result.suppressedByHardLimit) continue;
+        for (const span of result.spansByLine.get(y) ?? []) {
+          if (budget.createdDecorations >= config.maxDecorationsPerRefresh) {
+            budget.hitLimit = true;
+            break;
+          }
+          budget.createdDecorations++;
+          context.fillStyle = span.color;
+          const row = y - startY;
+          const right = Math.min(this.term.cols, span.cellStartCol + span.cellWidth);
+          for (let col = span.cellStartCol; col < right; col++) {
+            if (this.isBudgetExhausted(budget)) break;
+            const glyph = line.getCell(col, scratchCell);
+            if (!glyph || glyph.getWidth() <= 0 || !glyph.getChars() || !glyph.isFgDefault())
+              continue;
+            // Do not paint over Vim's inverse-video cells, cursor or xterm selection.
+            if (glyph.isInverse?.() || glyph.isInvisible?.()) continue;
+            if (y === buffer.baseY + buffer.cursorY && col === buffer.cursorX) continue;
+            // xterm 6.1 returns zero-based buffer coordinates, with an exclusive end.
+            if (
+              selection &&
+              (y > selection.start.y ||
+                (y === selection.start.y && col >= selection.start.x)) &&
+              (y < selection.end.y || (y === selection.end.y && col < selection.end.x))
+            ) {
+              continue;
+            }
+            const x = col * cell.width;
+            const top = row * cell.height;
+            context.save();
+            context.beginPath();
+            context.rect(x, top, glyph.getWidth() * cell.width, cell.height);
+            context.clip();
+            context.fillText(
+              glyph.getChars(),
+              x + charOffsetX,
+              top + baselineY,
+              glyph.getWidth() * cell.width,
+            );
+            context.restore();
+          }
+        }
+        if (budget.hitLimit) break;
+      }
+      lineY = bounds.endY;
+    }
+  }
+
   private refreshViewport(reason: RefreshReason): void {
     if (!this.enabled || this.suspended || this.compiledRules.length === 0) return;
     if (!this.term?.buffer?.active) return;
@@ -992,7 +1177,7 @@ export class KeywordHighlighter implements IDisposable {
     }
 
     if (this.term.buffer.active.type === "alternate") {
-      this.invalidateAll();
+      this.refreshAlternateViewport();
       return;
     }
 
