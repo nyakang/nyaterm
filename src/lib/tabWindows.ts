@@ -365,17 +365,24 @@ export function moveTabBetweenLeaves(
     return reorderTabsInLeaf(node, tabId, insertIndex);
   }
 
-  let next: TerminalWindowNode | null = removeTabFromTerminalWindows(node, tabId);
-  if (!next) return null;
+  // Do not use removeTabFromTerminalWindows here. When the source split leaf
+  // contains only the dragged tab, that helper intentionally collapses empty
+  // leaves. During a cross-pane drag the target leaf may be the sibling of
+  // that empty leaf, so collapsing first loses the target and the drop fails.
+  const next = updateLeafById(node, sourceLeaf.id, (leaf) =>
+    normalizeLeaf({
+      ...leaf,
+      tabIds: leaf.tabIds.filter((id) => id !== tabId),
+      activeTabId: leaf.activeTabId === tabId ? null : leaf.activeTabId,
+    }),
+  );
 
-  next = updateLeafById(next, targetLeafId, (leaf) => {
+  return updateLeafById(next, targetLeafId, (leaf) => {
     const nextTabIds = [...leaf.tabIds];
     const bounded = Math.max(0, Math.min(nextTabIds.length, insertIndex));
     nextTabIds.splice(bounded, 0, tabId);
     return normalizeLeaf({ ...leaf, tabIds: nextTabIds, activeTabId: tabId });
   });
-
-  return next;
 }
 
 export function splitLeafWithTab(

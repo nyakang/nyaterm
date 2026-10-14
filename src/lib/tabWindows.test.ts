@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createTerminalWindowLeaf,
   insertTabAfterInLeaf,
+  moveTabBetweenLeaves,
   restoreTerminalWindowLayout,
   serializeTerminalWindowLayout,
   splitTerminalWindowForTab,
@@ -16,6 +17,36 @@ import {
 } from "./workspaceTabs";
 
 describe("terminal window persistence", () => {
+  it("moves a single tab across split leaves without losing the target pane", () => {
+    const layout = {
+      kind: "split" as const,
+      direction: "vertical" as const,
+      ratio: 0.5,
+      id: "split-1",
+      first: createTerminalWindowLeaf(["tab-a"], "tab-a"),
+      second: {
+        ...createTerminalWindowLeaf(["tab-b"], "tab-b"),
+        id: "leaf-b",
+      },
+    };
+
+    const moved = moveTabBetweenLeaves(layout, "tab-a", "leaf-b", 1);
+
+    expect(moved).toEqual({
+      ...layout,
+      first: {
+        ...layout.first,
+        tabIds: [],
+        activeTabId: null,
+      },
+      second: {
+        ...layout.second,
+        tabIds: ["tab-b", "tab-a"],
+        activeTabId: "tab-a",
+      },
+    });
+  });
+
   it("indexes window tabs against the restorable tab list", () => {
     const fileTab = createWorkspaceTab(
       createFileDocumentPane({
