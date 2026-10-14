@@ -664,6 +664,11 @@ impl RemoteFileService {
                 let bytes = self
                     .shell(kind)
                     .exec_ok(format!("cat -- {}", shell_quote(&remote_path)), None)?;
+                // Shell downloads stage in the destination directory, so a caller that
+                // targets a directory that does not exist yet (for example the per-open
+                // temp directory used to open a file in an external editor) must have it
+                // created here; the SFTP path does the same before staging a write.
+                ensure_download_parent(&local_path)?;
                 crate::download_path::staged_write_file(download_root, &local_path, &bytes)?;
                 Ok(SftpTransferSummary {
                     remote_path,
@@ -728,6 +733,7 @@ impl RemoteFileService {
                     None,
                 )?;
                 control.wait_if_paused_blocking()?;
+                ensure_download_parent(&local_path)?;
                 crate::download_path::staged_write_file(download_root, &local_path, &bytes)?;
                 progress(SftpTransferProgress {
                     remote_path: remote_path.display_path.clone(),
@@ -1332,6 +1338,24 @@ fn resolve_copy_remote_target(
             unreachable!()
         }
     }
+}
+
+/// Create the directory that will contain a single-file shell download.
+///
+/// Shell downloads stage their content inside the destination directory, so that
+/// directory has to exist before `staged_write_file` runs. Batch downloads via
+/// `download_shell_path` and all SFTP downloads already create it; single-file
+/// downloads to a caller-owned path (for example the per-open temp directory used
+/// to open a remote file in an external editor) previously did not, which failed
+/// with a Windows `ERROR_PATH_NOT_FOUND` (os error 3).
+fn ensure_download_parent(local_path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = local_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 fn download_shell_path<F>(
@@ -2210,10 +2234,10 @@ mod tests {
     };
 
     use super::{
-        BackendProbeStage, RemoteFileBackendKind, ensure_safe_delete_target,
-        ensure_supported_download_source, ensure_unique_download_name, format_permissions,
-        parse_enhanced_listing, parse_normal_listing, select_backend_with_probe,
-        symbolic_permissions_to_mode,
+        BackendProbeStage, RemoteFileBackendKind, ensure_download_parent,
+        ensure_safe_delete_target, ensure_supported_download_source, ensure_unique_download_name,
+        format_permissions, parse_enhanced_listing, parse_normal_listing,
+        select_backend_with_probe, symbolic_permissions_to_mode,
     };
 
     #[test]
@@ -2254,6 +2278,28 @@ mod tests {
         assert!(ensure_unique_download_name(&mut target_keys, "report.txt").is_err());
         #[cfg(any(target_os = "macos", windows))]
         assert!(ensure_unique_download_name(&mut target_keys, "REPORT.TXT").is_err());
+    }
+
+    #[test]
+    fn single_file_shell_download_creates_a_missing_destination_directory() -> anyhow::Result<()> {
+        // The external-editor flow stages a remote file into a fresh per-open temp
+        // directory (see `transfer_external_open_path`), so the single-file shell
+        // download must create the container before staging the write. Without this
+        // the write failed with a Windows ERROR_PATH_NOT_FOUND (os error 3).
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-shell-download-parent");
+        std::fs::create_dir_all(root.path())?;
+        let missing = root.path().join("nyaterm").join("session").join("123");
+        let target = missing.join("file.txt");
+        assert!(!missing.exists());
+
+        ensure_download_parent(&target)?;
+        assert!(missing.is_dir());
+        crate::download_path::staged_write_file(&missing, &target, b"contents")?;
+        assert_eq!(std::fs::read(&target)?, b"contents");
+
+        // A bare relative name has no parent directory to create.
+        ensure_download_parent(std::path::Path::new("file.txt"))?;
+        Ok(())
     }
 
     #[test]
