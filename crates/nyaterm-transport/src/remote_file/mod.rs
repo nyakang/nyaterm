@@ -897,10 +897,11 @@ impl RemoteFileService {
                     progress,
                 )
             }
-            _ => {
+            kind => {
                 control.wait_if_paused_blocking()?;
                 let summary = self.upload_file(&local_path, &remote_path)?;
                 control.wait_if_paused_blocking()?;
+                apply_shell_upload_mode(self, kind, &remote_path, &options)?;
                 progress(SftpTransferProgress {
                     remote_path: summary.remote_path.clone(),
                     local_path: summary.local_path.clone(),
@@ -936,9 +937,53 @@ impl RemoteFileService {
                     options,
                     progress,
                 ),
-            _ => {
+            kind => {
                 control.wait_if_paused_blocking()?;
                 let summary = self.upload_file(&local_path, &remote_path.display_path)?;
+                control.wait_if_paused_blocking()?;
+                apply_shell_upload_mode(self, kind, &remote_path.display_path, &options)?;
+                progress(SftpTransferProgress {
+                    remote_path: summary.remote_path.clone(),
+                    local_path: summary.local_path.clone(),
+                    bytes_transferred: summary.bytes,
+                    total_bytes: Some(summary.bytes),
+                    item_count_completed: Some(1),
+                    item_count_total: Some(1),
+                });
+                Ok(summary)
+            }
+        }
+    }
+
+    /// Replace a remote file with a local file while keeping the target's ownership and
+    /// permissions.
+    ///
+    /// Used by the external-editor sync-back so an edit round trip does not rewrite the
+    /// file's identity, matching the built-in editor save.
+    pub fn upload_remote_file_preserving_attributes<F>(
+        &self,
+        local_path: impl Into<PathBuf>,
+        remote_path: &RemoteFilePath,
+        control: SftpTransferControl,
+        options: SftpTransferOptions,
+        mut progress: F,
+    ) -> anyhow::Result<SftpTransferSummary>
+    where
+        F: FnMut(SftpTransferProgress) + Send + 'static,
+    {
+        let local_path = local_path.into();
+        match self.backend()? {
+            RemoteFileBackendKind::Sftp => self.sftp()?.upload_remote_file_preserving_attributes(
+                local_path,
+                remote_path,
+                control,
+                options,
+                progress,
+            ),
+            kind => {
+                control.wait_if_paused_blocking()?;
+                let summary =
+                    upload_shell_file_preserving_attributes(self, kind, &local_path, remote_path)?;
                 control.wait_if_paused_blocking()?;
                 progress(SftpTransferProgress {
                     remote_path: summary.remote_path.clone(),
@@ -1440,6 +1485,84 @@ fn ensure_unique_download_name(
     Ok(())
 }
 
+/// Apply the configured default file mode to a finished shell upload.
+///
+/// The shell backend stages uploads through a `umask 077` temporary file, so without this
+/// an uploaded file would keep mode 600 instead of the configured default.
+fn apply_shell_upload_mode(
+    service: &RemoteFileService,
+    kind: RemoteFileBackendKind,
+    remote_path: &str,
+    options: &SftpTransferOptions,
+) -> anyhow::Result<()> {
+    if let Some(mode) = options.default_file_mode {
+        service.shell(kind).exec_ok(
+            format!("chmod {mode:o} -- {}", shell_quote(remote_path)),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+/// Replace a shell-backend remote file while preserving its ownership and permissions.
+///
+/// Mirrors the built-in editor save: stage the new bytes next to the target, restore the
+/// original uid/gid/mode on the staged file, then rename it over the target. The write is
+/// refused rather than replacing the original with unprotected attributes.
+fn upload_shell_file_preserving_attributes(
+    service: &RemoteFileService,
+    kind: RemoteFileBackendKind,
+    local_path: &Path,
+    remote_path: &RemoteFilePath,
+) -> anyhow::Result<SftpTransferSummary> {
+    let shell = service.shell(kind);
+    let properties = shell_properties(&shell, remote_path)?;
+    anyhow::ensure!(
+        properties.file_type == SftpFileType::File,
+        "external edit target is not a regular file"
+    );
+    let bytes = fs::read(local_path)?;
+    let temporary = format!(
+        "{}.nyaterm-upload-{}",
+        remote_path.display_path,
+        uuid::Uuid::new_v4().simple()
+    );
+    let command = shell_preserving_upload_command(
+        &properties,
+        &temporary,
+        &remote_path.display_path,
+        bytes.len(),
+    )?;
+    if let Err(error) = shell.exec_ok(command, Some(bytes.clone())) {
+        let _ = shell.exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
+        return Err(error);
+    }
+    Ok(SftpTransferSummary {
+        remote_path: remote_path.display_path.clone(),
+        local_path: local_path.to_path_buf(),
+        bytes: bytes.len() as u64,
+        skipped: false,
+    })
+}
+
+/// Build the shell command that streams bytes into a staged file and replaces the target
+/// while restoring its original owner, group and mode.
+///
+/// Kept separate from the IO so the generated command can be executed against a real
+/// `sh` in tests.
+fn shell_preserving_upload_command(
+    properties: &SftpFileProperties,
+    temporary: &str,
+    target: &str,
+    length: usize,
+) -> anyhow::Result<String> {
+    let replace = shell_editor_replace_command(properties, temporary, target)?;
+    let quoted_temporary = shell_quote(temporary);
+    Ok(format!(
+        "umask 077; cat > {quoted_temporary} && test $(wc -c < {quoted_temporary}) -eq {length} && {replace}"
+    ))
+}
+
 fn upload_shell_path<F>(
     service: &RemoteFileService,
     kind: RemoteFileBackendKind,
@@ -1473,12 +1596,7 @@ where
     } else {
         let summary = service.upload_file(local_path, remote_path)?;
         control.wait_if_paused_blocking()?;
-        if let Some(mode) = transfer_options.default_file_mode {
-            service.shell(kind).exec_ok(
-                format!("chmod {mode:o} -- {}", shell_quote(remote_path)),
-                None,
-            )?;
-        }
+        apply_shell_upload_mode(service, kind, remote_path, transfer_options)?;
         progress(SftpTransferProgress {
             remote_path: remote_path.to_string(),
             local_path: local_path.to_path_buf(),

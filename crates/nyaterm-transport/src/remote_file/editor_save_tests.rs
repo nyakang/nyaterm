@@ -1,4 +1,4 @@
-use crate::remote_file::shell_editor_replace_command;
+use crate::remote_file::{shell_editor_replace_command, shell_preserving_upload_command};
 use crate::sftp::{SftpFileProperties, SftpFileType};
 
 fn properties(uid: u32, gid: u32, mode: u32) -> SftpFileProperties {
@@ -35,15 +35,30 @@ fn shell_editor_save_refuses_missing_original_attributes() {
     }
 }
 
+#[test]
+fn shell_preserving_upload_refuses_missing_original_attributes() {
+    for missing in ["uid", "gid", "mode"] {
+        let mut attrs = properties(1000, 1001, 0o644);
+        match missing {
+            "uid" => attrs.uid = None,
+            "gid" => attrs.gid = None,
+            "mode" => attrs.permissions = None,
+            _ => unreachable!(),
+        }
+        assert!(shell_preserving_upload_command(&attrs, "/tmp/new", "/tmp/original", 3).is_err());
+    }
+}
+
 #[cfg(unix)]
 mod posix {
     use std::fs;
+    use std::io::Write as _;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::process::CommandExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use crate::remote_file::editor_save_tests::properties;
-    use crate::remote_file::shell_editor_replace_command;
+    use crate::remote_file::{shell_editor_replace_command, shell_preserving_upload_command};
 
     fn run_replace(
         uid: u32,
@@ -146,5 +161,50 @@ mod posix {
         run_replace(65534, 65534, 0o6755, "", false, true);
         run_replace(65534, 65534, 0o644, "", true, true);
         run_replace(0, 0, 0o644, "", true, false);
+    }
+
+    /// The external-editor sync-back streams bytes into a staged file and must keep the
+    /// target's owner, group and mode instead of resetting them to the login user.
+    #[test]
+    fn shell_preserving_upload_keeps_original_ownership_and_mode() {
+        // SAFETY: getuid/getgid only read process identity.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original ' $file [*].txt");
+        let temporary = directory.path().join("staged ' $file [*].txt");
+        fs::write(&original, b"old").unwrap();
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o754)).unwrap();
+        let command = shell_preserving_upload_command(
+            &properties(uid, gid, 0o754),
+            temporary.to_str().unwrap(),
+            original.to_str().unwrap(),
+            b"replacement".len(),
+        )
+        .unwrap();
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"replacement")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(&original).unwrap(), b"replacement");
+        assert!(!temporary.exists());
+        let metadata = fs::metadata(&original).unwrap();
+        assert_eq!((metadata.uid(), metadata.gid()), (uid, gid));
+        assert_eq!(metadata.mode() & 0o7777, 0o754);
     }
 }

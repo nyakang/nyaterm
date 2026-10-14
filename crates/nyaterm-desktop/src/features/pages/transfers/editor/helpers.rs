@@ -351,7 +351,7 @@ pub(super) fn upload_external_editor_file(
         raw_path_token,
     };
     let result = service
-        .upload_remote_file_with_progress_and_control_options(
+        .upload_remote_file_preserving_attributes(
             local_path.to_path_buf(),
             &remote_file_path,
             control,

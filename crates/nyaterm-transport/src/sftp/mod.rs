@@ -2255,6 +2255,7 @@ impl SftpService {
                         &remote_path,
                         &control,
                         &options,
+                        false,
                         &mut progress,
                     )
                     .await?;
@@ -2283,6 +2284,55 @@ impl SftpService {
         remote_path: &RemoteFilePath,
         control: SftpTransferControl,
         options: SftpTransferOptions,
+        progress: F,
+    ) -> anyhow::Result<SftpTransferSummary>
+    where
+        F: FnMut(SftpTransferProgress) + Send + 'static,
+    {
+        self.upload_remote_file_preserving(
+            local_path,
+            remote_path,
+            control,
+            options,
+            false,
+            progress,
+        )
+    }
+
+    /// Replace a remote file with the local file's bytes while keeping the target's
+    /// ownership and permissions.
+    ///
+    /// Used by the external-editor sync-back so an edit round trip does not rewrite the
+    /// file's identity, matching the built-in editor save. Refuses the write rather than
+    /// dropping the original attributes when the server does not report them.
+    pub fn upload_remote_file_preserving_attributes<F>(
+        &self,
+        local_path: impl Into<PathBuf>,
+        remote_path: &RemoteFilePath,
+        control: SftpTransferControl,
+        options: SftpTransferOptions,
+        progress: F,
+    ) -> anyhow::Result<SftpTransferSummary>
+    where
+        F: FnMut(SftpTransferProgress) + Send + 'static,
+    {
+        self.upload_remote_file_preserving(
+            local_path,
+            remote_path,
+            control,
+            options,
+            true,
+            progress,
+        )
+    }
+
+    fn upload_remote_file_preserving<F>(
+        &self,
+        local_path: impl Into<PathBuf>,
+        remote_path: &RemoteFilePath,
+        control: SftpTransferControl,
+        options: SftpTransferOptions,
+        preserve_existing_attributes: bool,
         mut progress: F,
     ) -> anyhow::Result<SftpTransferSummary>
     where
@@ -2314,6 +2364,7 @@ impl SftpService {
                         &remote_path.display_path,
                         &control,
                         &options,
+                        preserve_existing_attributes,
                         &mut progress,
                     )
                     .await?;
@@ -3382,11 +3433,13 @@ where
         remote_path,
         control,
         options,
+        false,
         progress,
     )
     .await
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn upload_local_file_bytes<F>(
     sftp: &SftpSession,
     raw_path: Vec<u8>,
@@ -3394,6 +3447,7 @@ async fn upload_local_file_bytes<F>(
     remote_path: &str,
     control: &SftpTransferControl,
     options: &SftpTransferOptions,
+    preserve_existing_attributes: bool,
     progress: &mut F,
 ) -> anyhow::Result<u64>
 where
@@ -3405,18 +3459,23 @@ where
     let total_bytes = local_metadata.as_ref().map(|metadata| metadata.len());
     // Permission preservation is best-effort: unsupported lstat or a disappearing target
     // must not break existing overwrite behavior. Direct lstat also saves a round trip
-    // compared with an exists check followed by lstat.
-    let existing_permissions = if options.default_file_mode.is_some() {
-        None
-    } else {
+    // compared with an exists check followed by lstat. A preserving upload always needs
+    // the current attributes, even when a default mode is configured.
+    let existing_attributes = if preserve_existing_attributes || options.default_file_mode.is_none()
+    {
         sftp.symlink_metadata_bytes(raw_path.clone())
             .await
             .ok()
-            .and_then(|metadata| {
-                (metadata.file_type() == russh_sftp::protocol::FileType::File)
-                    .then_some(metadata.permissions)
-                    .flatten()
-            })
+            .filter(|metadata| metadata.file_type() == russh_sftp::protocol::FileType::File)
+    } else {
+        None
+    };
+    let existing_permissions = if preserve_existing_attributes {
+        None
+    } else {
+        existing_attributes
+            .as_ref()
+            .and_then(|metadata| metadata.permissions)
     };
     let mut remote = sftp.create_bytes(raw_path.clone()).await?;
     let mut buffer = vec![0_u8; sftp_upload_buffer_size(options)];
@@ -3449,13 +3508,21 @@ where
     }
     remote.flush().await?;
     remote.shutdown().await?;
-    apply_remote_upload_file_mode_bytes(
-        sftp,
-        raw_path.clone(),
-        existing_permissions,
-        options.default_file_mode,
-    )
-    .await;
+    // A preserving upload keeps the target's identity: the in-place write already
+    // retains the inode, so only ownership and permissions have to be re-asserted.
+    // Refuse rather than silently rewrite them when the server omits the attributes,
+    // matching the built-in editor save.
+    if preserve_existing_attributes && let Some(original) = existing_attributes.as_ref() {
+        preserve_editor_metadata(sftp, &raw_path, original).await?;
+    } else {
+        apply_remote_upload_file_mode_bytes(
+            sftp,
+            raw_path.clone(),
+            existing_permissions,
+            options.default_file_mode,
+        )
+        .await;
+    }
     if options.preserve_timestamps {
         preserve_remote_modified_time_bytes(sftp, raw_path, local_metadata).await;
     }
