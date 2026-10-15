@@ -168,3 +168,11 @@ pub(crate) fn calculate_v3_raw_payload_hash(
     }
     Ok(hash)
 }
+
+/// Test-only access for the desktop protocol's legacy pointer/hash fixtures.
+#[cfg(feature = "test-support")]
+pub fn calculate_v3_raw_payload_hash_for_test(
+    entities: &BTreeMap<String, String>,
+) -> AppResult<String> {
+    calculate_v3_raw_payload_hash(entities)
+}

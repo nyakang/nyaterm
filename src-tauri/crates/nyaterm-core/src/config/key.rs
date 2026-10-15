@@ -80,6 +80,19 @@ pub fn save_keys(app: &impl Sized, config: &KeysConfig) -> AppResult<()> {
     Ok(())
 }
 
+/// Share the saved-key write guard and cache epoch with the atomic cloud merge.
+pub fn apply_merged_sync_entities(
+    snapshot: &crate::core::portable_snapshot::PortableSnapshot,
+    sessions: &super::SessionsConfig,
+) -> AppResult<()> {
+    let _write_guard = SSH_KEY_ACCESS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    storage::backup::apply_merged_sync_entities(snapshot, sessions)?;
+    SSH_KEY_CHANGE_EPOCH.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
 /// Returns the process-local epoch of the last successful saved-key update.
 ///
 /// Forwarding brokers may cache parsed signing identities for one epoch. Signing must still

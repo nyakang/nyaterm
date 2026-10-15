@@ -118,6 +118,148 @@ fn sample_custom_icon(id: &str, data_url: &str) -> ConnectionCustomIcon {
         updated_at_ms: 10,
     }
 }
+
+#[test]
+fn merged_sync_apply_preserves_stored_hash_and_unrelated_data() {
+    use crate::core::portable_snapshot::{
+        PORTABLE_SNAPSHOT_SCHEMA_VERSION, PortableAppSettings, PortableSnapshot,
+        PortableSnapshotKind, calculate_payload_hash, validate_portable_snapshot,
+    };
+    let (dir, storage) = test_storage("merged-sync-apply");
+    let original_settings = serde_json::json!({"sentinel":"unchanged-settings"});
+    storage
+        .save_settings_doc(SettingsDocKey::AppSettings, &original_settings)
+        .expect("seed unrelated settings");
+    storage
+        .append_command_history(&crate::core::history::HistoryEntry {
+            command: "preserved-command".into(),
+            last_used_at_ms: 55,
+            use_count: 1,
+        })
+        .expect("seed history");
+    storage
+        .replace_known_hosts_export("# original known hosts\n")
+        .expect("seed known hosts");
+
+    let mut connection = sample_connection("remote", Some("group"), 1);
+    connection.created_at_ms = Some(20);
+    connection.updated_at_ms = Some(30);
+    {
+        let auth = connection.auth.as_mut().expect("auth");
+        auth.has_password = true;
+        auth.account_id = Some("account".into());
+        auth.key_id = Some("key".into());
+        auth.otp_id = Some("otp".into());
+    }
+    connection.network = Some(crate::config::ConnectionNetwork {
+        proxy_id: Some("proxy".into()),
+        proxy_jump_id: None,
+    });
+    let mut group = sample_group("group", 0);
+    group.created_at_ms = Some(10);
+    group.updated_at_ms = Some(15);
+    let mut snapshot = PortableSnapshot {
+        schema_version: PORTABLE_SNAPSHOT_SCHEMA_VERSION,
+        snapshot_kind: PortableSnapshotKind::Sync,
+        revision_id: "merge".into(),
+        device_id: "device".into(),
+        created_at_ms: 50,
+        payload_hash: String::new(),
+        app_version: "test".into(),
+        settings: PortableAppSettings::from_app_settings(
+            &crate::config::AppSettings::default(),
+            &PortableSnapshotKind::Sync,
+        ),
+        sessions: SessionsConfig {
+            groups: vec![group],
+            connections: vec![connection],
+            custom_icons: vec![],
+        },
+        keys: Default::default(),
+        passwords: Default::default(),
+        credentials: Default::default(),
+        otp: Default::default(),
+        proxies: Default::default(),
+        proxy_groups: Default::default(),
+        tunnels: Default::default(),
+        tunnel_groups: Default::default(),
+        quick_commands: Default::default(),
+        history: Default::default(),
+        master_key_token: None,
+        known_hosts: String::new(),
+        notes: Default::default(),
+    };
+    snapshot.passwords.passwords = serde_json::from_value(serde_json::json!([
+        { "id":"account", "name":"Account", "username":"user", "password":"encrypted" }
+    ]))
+    .expect("saved account");
+    snapshot.keys.keys = serde_json::from_value(serde_json::json!([
+        { "id":"key", "name":"Key", "key":"encrypted-key" }
+    ]))
+    .expect("SSH key");
+    snapshot.otp.entries = serde_json::from_value(serde_json::json!([
+        { "id":"otp", "otp_type":"totp", "issuer":"Test", "username":"user" }
+    ]))
+    .expect("OTP");
+    snapshot.proxy_groups = serde_json::from_value(serde_json::json!([
+        { "id":"proxy-group", "name":"Proxy Group" }
+    ]))
+    .expect("proxy group");
+    snapshot.proxies = serde_json::from_value(serde_json::json!([
+        { "id":"proxy", "name":"Proxy", "group_id":"proxy-group" }
+    ]))
+    .expect("proxy");
+    snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("source hash");
+    storage
+        .apply_merged_sync_entities(&snapshot, &snapshot.sessions)
+        .expect("apply merged entities");
+
+    let mut loaded = snapshot.clone();
+    loaded.sessions = storage.load_sessions().expect("read merged sessions");
+    loaded.keys.keys = storage.list_ssh_keys().expect("read merged keys");
+    loaded.passwords.passwords = storage.list_passwords().expect("read accounts");
+    loaded.otp.entries = storage.list_otp_accounts().expect("read OTP");
+    loaded.proxies = storage.list_proxies().expect("read proxies");
+    loaded.proxy_groups = storage
+        .get_settings_doc::<crate::config::ProxyGroupsConfig>(SettingsDocKey::ProxyGroups)
+        .expect("read proxy groups")
+        .unwrap_or_default()
+        .groups;
+    loaded.payload_hash = calculate_payload_hash(&loaded).expect("rebuilt hash");
+    assert_eq!(loaded.payload_hash, snapshot.payload_hash);
+    validate_portable_snapshot(&loaded).expect("valid persisted snapshot");
+    assert_eq!(loaded.sessions.connections[0].created_at_ms, Some(20));
+    assert_eq!(loaded.sessions.connections[0].updated_at_ms, Some(30));
+    assert_eq!(loaded.sessions.groups[0].updated_at_ms, Some(15));
+    assert_eq!(
+        loaded.sessions.connections[0]
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.password.as_deref()),
+        Some("cipher-remote"),
+    );
+    assert_eq!(
+        storage
+            .get_settings_doc::<serde_json::Value>(SettingsDocKey::AppSettings)
+            .expect("read untouched settings"),
+        Some(original_settings),
+    );
+    assert_eq!(
+        storage
+            .list_recent_command_history(10)
+            .expect("read untouched history")[0]
+            .command,
+        "preserved-command",
+    );
+    assert!(
+        storage
+            .render_known_hosts_export()
+            .expect("read untouched known hosts")
+            .contains("# original known hosts"),
+    );
+    drop(storage);
+    fs::remove_dir_all(dir).expect("remove test database");
+}
 #[test]
 fn new_storage_initializes_schema_v3_without_json_files() {
     let (dir, storage) = test_storage("init");

@@ -70,6 +70,22 @@ pub async fn apply_portable_snapshot(
     Ok(())
 }
 
+/// Only update merged connection data after a verified remote publish. Do not
+/// invoke apply_portable_snapshot: ordinary Sync restores overwrite unrelated
+/// data including local command history.
+pub fn apply_merged_connection_entities(
+    app: &AppHandle,
+    snapshot: &PortableSnapshot,
+) -> AppResult<()> {
+    validate_portable_snapshot(snapshot)?;
+    let mut sessions = snapshot.sessions.clone();
+    let current_sessions = config::load_sessions(app)?;
+    preserve_device_local_sessions(&mut sessions, &current_sessions);
+    config::apply_merged_sync_entities(snapshot, &sessions)?;
+    let _ = app.emit("connections-changed", ());
+    Ok(())
+}
+
 fn install_snapshot_master_key_token(snapshot: &PortableSnapshot) -> AppResult<()> {
     let Some(master_key) = &snapshot.master_key_token else {
         return Ok(());

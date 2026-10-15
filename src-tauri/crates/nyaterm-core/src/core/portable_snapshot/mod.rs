@@ -27,6 +27,7 @@ const SNAPSHOT_ENTITIES_TABLE: TableDefinition<&str, &str> = TableDefinition::ne
 const SNAPSHOT_V2_JSON_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("json_docs");
 const SNAPSHOT_V2_TEXT_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("text_docs");
 include!("types.rs");
+include!("merge.rs");
 include!("codec.rs");
 include!("hash.rs");
 include!("legacy.rs");

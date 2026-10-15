@@ -214,6 +214,64 @@ pub(super) fn replace_sessions_in_txn(
     }
     Ok(())
 }
+
+/// Preserve the serialized Sync snapshot fields, including timestamps, so a
+/// rebuild after merge has the same payload hash as the published snapshot.
+/// Ordinary editing must continue to use replace_sessions_in_txn instead.
+pub(super) fn replace_synced_sessions_in_txn(
+    txn: &redb::WriteTransaction,
+    config: &crate::config::SessionsConfig,
+) -> AppResult<()> {
+    clear_prefix_in_txn(txn, GROUPS_TABLE, GROUP_PREFIX)?;
+    clear_prefix_in_txn(txn, CONNECTIONS_TABLE, CONNECTION_PREFIX)?;
+    clear_prefix_in_txn(txn, CONNECTIONS_TABLE, CONNECTION_CUSTOM_ICON_PREFIX)?;
+    clear_prefix_in_txn(txn, CREDENTIALS_TABLE, CONNECTION_PASSWORD_PREFIX)?;
+    clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_GROUP_TABLE, "")?;
+    clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_LAST_USED_TABLE, "")?;
+    clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_PROTOCOL_TABLE, "")?;
+
+    for group in &config.groups {
+        write_json_in_txn(
+            txn,
+            GROUPS_TABLE,
+            &entity_key(GROUP_PREFIX, &group.id),
+            group,
+        )?;
+    }
+    for connection in &config.connections {
+        let mut connection = connection.clone();
+        if let Some(auth) = connection.auth.as_mut() {
+            if let Some(password) = auth.password.take().filter(|value| !value.is_empty()) {
+                let now = current_time_ms();
+                let record = ConnectionPasswordRecord {
+                    id: connection.id.clone(),
+                    connection_id: connection.id.clone(),
+                    password,
+                    created_at_ms: now,
+                    updated_at_ms: now,
+                };
+                write_json_in_txn(
+                    txn,
+                    CREDENTIALS_TABLE,
+                    &entity_key(CONNECTION_PASSWORD_PREFIX, &connection.id),
+                    &record,
+                )?;
+            }
+            auth.has_password = false;
+        }
+        write_json_in_txn(
+            txn,
+            CONNECTIONS_TABLE,
+            &entity_key(CONNECTION_PREFIX, &connection.id),
+            &connection,
+        )?;
+        insert_connection_indexes(txn, &connection)?;
+    }
+    for icon in &config.custom_icons {
+        save_connection_custom_icon_in_txn(txn, icon)?;
+    }
+    Ok(())
+}
 pub(super) fn save_group_in_txn(
     txn: &redb::WriteTransaction,
     group: &crate::config::Group,
