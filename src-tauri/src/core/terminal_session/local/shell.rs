@@ -95,3 +95,17 @@ fn resolve_shell_command(shell_path: &str, shell_args: &str) -> Result<ShellComm
     })
 }
 
+fn resolve_local_session_shell(config: &LocalSessionConfig) -> Result<ShellCommandSpec, String> {
+    if let Some(args) = config.shell_argv.as_ref() {
+        let program = trim_wrapping_quotes(config.shell_path.trim());
+        if program.is_empty() {
+            return Err("Shell path is required".to_string());
+        }
+        return Ok(ShellCommandSpec {
+            program: resolve_program_for_spawn(program),
+            args: args.clone(),
+            resolution_source: ShellResolutionSource::Direct,
+        });
+    }
+    resolve_shell_command(&config.shell_path, &config.shell_args)
+}

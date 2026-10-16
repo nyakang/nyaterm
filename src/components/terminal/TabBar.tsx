@@ -34,7 +34,11 @@ import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
 import { HOTKEY_OPTIONS } from "@/hooks/useGlobalShortcuts";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
-import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
+import {
+  canMultiplexSshPane,
+  canUseStartupCommandForPane,
+  hasMatchingTemporaryConfig,
+} from "@/lib/appWorkspace";
 import { useFileDocumentStates } from "@/lib/fileDocumentRegistry";
 import type { TabMouseAction } from "@/lib/interactionSettings";
 import { normalizeTabMouseAction } from "@/lib/interactionSettings";
@@ -211,14 +215,6 @@ function getTabConnection(tab: Tab, savedConnections: SavedConnection[]) {
     : undefined;
 }
 
-function isSshTab(tab: Tab, savedConnections: SavedConnection[]): boolean {
-  const pane = getActivePane(tab);
-  if (pane?.type !== "SSH") return false;
-  if (pane.temporaryConfig?.protocol === "ssh") return true;
-  const connection = getTabConnection(tab, savedConnections);
-  return connection?.type === "ssh";
-}
-
 function getTabServerIp(tab: Tab, savedConnections: SavedConnection[]): string | null {
   const pane = getActivePane(tab);
   if (pane?.paneKind !== "terminal" || pane.type !== "SSH") return null;
@@ -228,19 +224,28 @@ function getTabServerIp(tab: Tab, savedConnections: SavedConnection[]): string |
 
 function canMultiplexTab(
   tab: Tab,
-  savedConnections: SavedConnection[],
   sessionInfoById?: Map<string, SessionInfo> | null,
 ): boolean {
   const pane = getActivePane(tab);
   return (
     !!pane &&
     pane.paneKind === "terminal" &&
-    isSshTab(tab, savedConnections) &&
+    canMultiplexSshPane(pane, sessionInfoById) &&
     pane.sshRuntimeMode !== "sftp" &&
-    sessionInfoById?.get(pane.sessionId)?.ssh_runtime_mode !== "sftp" &&
     !pane.connecting &&
     !pane.connectError &&
     !!pane.sessionId
+  );
+}
+
+function canSpawnSessionWithCommandFromTab(
+  tab: Tab,
+  savedConnections: SavedConnection[],
+): boolean {
+  const pane = getActivePane(tab);
+  return (
+    canSpawnSessionFromTab(tab) &&
+    canUseStartupCommandForPane(pane, savedConnections)
   );
 }
 
@@ -712,6 +717,15 @@ function TabBar({
       return;
     }
     const { action, tab } = commandDialog;
+    if (
+      (action === "duplicate" &&
+        !canSpawnSessionWithCommandFromTab(tab, savedConnections)) ||
+      (action === "multiplex" &&
+        !canMultiplexTab(tab, sessionInfoById))
+    ) {
+      closeCommandDialog();
+      return;
+    }
     const delayMs = Math.max(0, Math.min(60000, Math.round(commandDelayMs)));
     closeCommandDialog();
 
@@ -727,6 +741,8 @@ function TabBar({
     commandValue,
     onDuplicateSessionWithCommand,
     onMultiplexSshSessionWithCommand,
+    savedConnections,
+    sessionInfoById,
     t,
   ]);
 
@@ -755,10 +771,14 @@ function TabBar({
       if (!tab) return;
       if (
         detail.action === "multiplex" &&
-        !canMultiplexTab(tab, savedConnections, sessionInfoById)
+        !canMultiplexTab(tab, sessionInfoById)
       )
         return;
-      if (detail.action === "duplicate" && !canSpawnSessionFromTab(tab)) return;
+      if (
+        detail.action === "duplicate" &&
+        !canSpawnSessionWithCommandFromTab(tab, savedConnections)
+      )
+        return;
       openCommandDialog(tab, detail.action);
     };
 
@@ -787,7 +807,7 @@ function TabBar({
         case "duplicate_session":
           return canSpawnSessionFromTab(tab);
         case "multiplex_ssh":
-          return canMultiplexTab(tab, savedConnections, sessionInfoById);
+          return canMultiplexTab(tab, sessionInfoById);
         case "reconnect_session":
           return canReconnectTab(tab);
         case "disconnect_session":
@@ -1528,6 +1548,7 @@ function TabBar({
 
         <TabContextMenu
           tab={tab}
+          sessionInfoById={sessionInfoById}
           sftpOnly={
             getActivePane(tab)?.sshRuntimeMode === "sftp" ||
             sessionInfoById?.get(getActivePane(tab)?.sessionId ?? "")?.ssh_runtime_mode ===
