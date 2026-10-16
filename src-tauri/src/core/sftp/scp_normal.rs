@@ -479,6 +479,11 @@ async fn download_file_inner(
     use tokio::io::AsyncWriteExt;
 
     register_transfer(controller.clone());
+    if let Err(error) = wait_for_transfer_chain(&controller, parent_controller.as_ref()).await {
+        unregister_transfer(&controller.id());
+        return Err(error);
+    }
+    let mut local_file_created = false;
     let _ = app.emit(
         "transfer-event",
         &controller.build_event("started", 0, None),
@@ -505,9 +510,11 @@ async fn download_file_inner(
         let cmd = format!("cat -- {}", sh_quote(remote_path));
         channel.exec(true, cmd.as_bytes()).await?;
 
+        wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
         let mut local_file = tokio::fs::File::create(local_path)
             .await
             .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
+        local_file_created = true;
 
         const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
         let mut last_progress = Instant::now();
@@ -587,7 +594,13 @@ async fn download_file_inner(
         }
         Err(e) => {
             if matches!(e, AppError::Cancelled(_)) {
-                cleanup_cancelled_download(local_path).await;
+                if local_file_created {
+                    cleanup_cancelled_download(local_path).await;
+                }
+                let _ = app.emit(
+                    "transfer-event",
+                    &controller.build_event("cancelled", 0, None),
+                );
             } else {
                 let _ = app.emit(
                     "transfer-event",
@@ -787,9 +800,30 @@ async fn resolve_remote_path(
     }
     let file_name = file_name_from_path(remote_path);
     let is_directory = resolve_remote_is_directory(ssh_handle, remote_path).await;
-    match strategy {
-        "skip" => None,
-        "rename" => {
+    let choice = if strategy == "ask" {
+        match super::duplicate::prompt_duplicate_choice(
+            app,
+            session_manager,
+            session_id,
+            remote_path,
+            &file_name,
+            is_directory,
+        )
+        .await
+        {
+            Ok(choice) => choice,
+            Err(_) => return None,
+        }
+    } else {
+        match strategy {
+            "skip" => super::duplicate::DuplicateChoice::Skip,
+            "rename" => super::duplicate::DuplicateChoice::Rename,
+            _ => super::duplicate::DuplicateChoice::Overwrite,
+        }
+    };
+    match choice {
+        super::duplicate::DuplicateChoice::Skip => None,
+        super::duplicate::DuplicateChoice::Rename => {
             let path = std::path::Path::new(remote_path);
             let stem = path
                 .file_stem()
@@ -812,23 +846,7 @@ async fn resolve_remote_path(
             }
             Some(remote_path.to_string())
         }
-        "ask" => {
-            match super::duplicate::prompt_duplicate_choice(
-                app,
-                session_manager,
-                session_id,
-                remote_path,
-                &file_name,
-                is_directory,
-            )
-            .await
-            {
-                Ok(super::duplicate::DuplicateChoice::Skip) => None,
-                Ok(super::duplicate::DuplicateChoice::Overwrite) => Some(remote_path.to_string()),
-                Err(_) => None,
-            }
-        }
-        _ => Some(remote_path.to_string()),
+        super::duplicate::DuplicateChoice::Overwrite => Some(remote_path.to_string()),
     }
 }
 
@@ -1189,44 +1207,32 @@ impl RemoteFs for ScpNormalBackend {
     ) -> AppResult<()> {
         let max_retries = transfer_settings.max_transfer_retries;
         let safe_local_path = sanitize_local_download_target(local_path, remote_path);
-        let actual_local_path =
-            match resolve_local_path(&safe_local_path, &transfer_settings.duplicate_strategy) {
-                Some(path) => path,
-                None => {
-                    let file_name = file_name_from_path(remote_path);
-                    let transfer_id = transfer_id
-                        .clone()
-                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                    remember_transfer_target_external(
-                        transfer_id.clone(),
-                        safe_local_path.clone(),
-                        "download".to_string(),
-                        "file".to_string(),
-                    );
-                    let _ = app.emit(
-                        "transfer-event",
-                        &TransferEvent {
-                            id: transfer_id,
-                            session_id: session_id.to_string(),
-                            file_name,
-                            remote_path: remote_path.to_string(),
-                            local_path: safe_local_path,
-                            direction: "download".to_string(),
-                            kind: "file".to_string(),
-                            source: None,
-                            status: "completed".to_string(),
-                            size: 0,
-                            bytes_transferred: 0,
-                            total_size: 0,
-                            parent_id: None,
-                            item_count_total: None,
-                            item_count_completed: None,
-                            error_msg: None,
-                        },
-                    );
-                    return Ok(());
-                }
-            };
+        let session_manager = app.state::<Arc<crate::core::SessionManager>>();
+        let actual_local_path = match resolve_local_path_with_prompt(
+            app,
+            session_manager.inner(),
+            session_id,
+            &safe_local_path,
+            remote_path,
+            &transfer_settings.duplicate_strategy,
+            false,
+            transfer_id.as_deref(),
+        )
+        .await?
+        {
+            Some(path) => path,
+            None => {
+                emit_skipped_download(
+                    app,
+                    session_id,
+                    remote_path,
+                    &safe_local_path,
+                    transfer_id,
+                    false,
+                );
+                return Ok(());
+            }
+        };
 
         let mut last_err = None;
         for attempt in 0..=max_retries {
@@ -1359,18 +1365,45 @@ impl RemoteFs for ScpNormalBackend {
         local_path: &str,
         transfer_id: Option<String>,
     ) -> AppResult<()> {
+        let transfer_settings = crate::config::load_app_settings(app)
+            .map(|s| s.transfer)
+            .unwrap_or_default();
+        let session_manager = app.state::<Arc<crate::core::SessionManager>>();
+        let actual_local_path = match resolve_local_path_with_prompt(
+            app,
+            session_manager.inner(),
+            session_id,
+            local_path,
+            remote_path,
+            &transfer_settings.duplicate_strategy,
+            true,
+            transfer_id.as_deref(),
+        )
+        .await?
+        {
+            Some(path) => path,
+            None => {
+                emit_skipped_download(app, session_id, remote_path, local_path, transfer_id, true);
+                return Ok(());
+            }
+        };
         let total_files = self.count_remote_files(remote_path).await?;
         let directory_controller = create_directory_transfer_controller(
             transfer_id,
             session_id,
             file_name_from_path(remote_path),
             remote_path,
-            local_path,
+            &actual_local_path,
             "download",
             total_files,
             0,
         );
         register_transfer(directory_controller.clone());
+        if let Err(error) = wait_for_transfer_ready(&directory_controller).await {
+            unregister_transfer(&directory_controller.id());
+            return Err(error);
+        }
+        let target_existed = std::fs::symlink_metadata(&*actual_local_path).is_ok();
         let _ = app.emit(
             "transfer-event",
             &directory_controller.build_event("started", 0, None),
@@ -1382,7 +1415,7 @@ impl RemoteFs for ScpNormalBackend {
                 app,
                 session_id,
                 remote_path,
-                local_path,
+                &actual_local_path,
                 directory_controller.clone(),
                 &mut completed_count,
             )
@@ -1404,7 +1437,9 @@ impl RemoteFs for ScpNormalBackend {
                         "transfer-event",
                         &directory_controller.build_event("cancelled", 0, None),
                     );
-                    cleanup_cancelled_download(local_path).await;
+                    if !target_existed {
+                        cleanup_cancelled_download(&actual_local_path).await;
+                    }
                 } else {
                     let _ = app.emit(
                         "transfer-event",

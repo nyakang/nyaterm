@@ -264,6 +264,19 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       const kind = (p.kind ?? "file") as TransferKind;
       const now = Date.now();
 
+      if (p.status === "skipped") {
+        // 没有实际传输，不保留完成记录；同时释放队列和相关临时状态。
+        cleanupTransferArtifacts(p.id);
+        setTransferMap((prev) => {
+          if (!prev.has(p.id)) return pruneRetainedTransfers(prev, now);
+          const next = new Map(prev);
+          next.delete(p.id);
+          return pruneRetainedTransfers(next, now);
+        });
+        setQueueRevision((revision) => revision + 1);
+        return;
+      }
+
       if (p.status === "started") {
         if (p.parent_id) {
           setTransferMap((prev) => pruneRetainedTransfers(prev, now));
@@ -377,6 +390,13 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           updated = {
             ...existing,
             status: p.status as TransferStatus,
+            localPath:
+              p.status === "completed" &&
+              existing.direction === "download" &&
+              (existing.source ?? "sftp") === "sftp" &&
+              p.local_path
+                ? p.local_path
+                : existing.localPath,
             size: p.size,
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: undefined,
@@ -481,7 +501,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [pruneRetainedTransfers, t]);
+  }, [cleanupTransferArtifacts, pruneRetainedTransfers, t]);
 
   useEffect(() => {
     void queueRevision;

@@ -165,6 +165,18 @@ function TransferRow({
         : 0;
   const isModemTransfer = isBackendModemTransfer(item);
   const isRestrictedTransfer = isRestrictedBackendTransfer(item);
+  const isLocalDownload =
+    supports("nativeFiles") && item.direction === "download" && !isRestrictedTransfer;
+  const localName = isLocalDownload
+    ? item.localPath.split(/[\\/]/).filter(Boolean).pop()
+    : undefined;
+  const isRenamed =
+    !!localName &&
+    localName !== item.fileName &&
+    item.status !== "queued" &&
+    item.queueState !== "pending";
+  const displayName =
+    isLocalDownload && item.status === "completed" && localName ? localName : item.fileName;
   const canPause =
     supports("transferControl") &&
     !isRestrictedTransfer &&
@@ -240,15 +252,48 @@ function TransferRow({
               e.currentTarget.style.backgroundColor = "var(--df-bg-panel)";
             }
           }}
-          title={item.error || `${item.fileName} — ${statusText}`}
+          title={[
+            item.error || `${displayName} — ${statusText}`,
+            ...(isRenamed ? [t("fileTransfer.originalName", { name: item.fileName })] : []),
+            ...(isLocalDownload && item.localPath
+              ? [
+                  t(isRenamed ? "fileTransfer.saveAs" : "fileTransfer.savePath", {
+                    path: item.localPath,
+                  }),
+                ]
+              : []),
+          ].join("\n")}
         >
           <div className="flex items-center gap-2">
             <DirIcon className="text-sm shrink-0" style={{ color: dirColor }} />
 
             <div className="flex-1 min-w-0">
-              <div className="text-xs truncate" style={{ color: "var(--df-text)" }}>
-                {item.fileName}
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="truncate text-xs" style={{ color: "var(--df-text)" }}>
+                  {displayName}
+                </div>
+                {isRenamed && (
+                  <span
+                    className="shrink-0 whitespace-nowrap rounded px-1 py-0.5 text-[0.5625rem]"
+                    style={{
+                      color: "var(--df-text-dimmed)",
+                      backgroundColor: "var(--df-bg-hover)",
+                    }}
+                  >
+                    {t("fileTransfer.renamed")}
+                  </span>
+                )}
               </div>
+              {isRenamed && (
+                <div
+                  className="truncate text-[0.625rem]"
+                  style={{ color: "var(--df-text-dimmed)" }}
+                >
+                  {item.status === "completed"
+                    ? t("fileTransfer.originalName", { name: item.fileName })
+                    : t("fileTransfer.saveAs", { path: localName })}
+                </div>
+              )}
               <div
                 className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[0.625rem]"
                 style={{ color: "var(--df-text-dimmed)" }}

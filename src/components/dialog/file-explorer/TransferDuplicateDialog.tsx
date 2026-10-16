@@ -23,7 +23,7 @@ import { logger } from "@/lib/logger";
 import {
   getActiveTransferDuplicatePrompt,
   resolveTransferDuplicatePrompt,
-  setBackendTransferDuplicatePrompt,
+  removeBackendTransferDuplicatePrompt,
   subscribeTransferDuplicatePrompt,
   type TransferDuplicateChoice,
   type TransferDuplicatePromptChoice,
@@ -38,6 +38,33 @@ export function TransferDuplicateDialog() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => subscribeTransferDuplicatePrompt(setRequest), []);
+
+  useEffect(() => {
+    if (!request?.respondViaBackend || !request.requiresActivation) return;
+    let disposed = false;
+    // 只有真正显示的弹窗启动回答计时；Web 和本地预检查不走这条 IPC。
+    void invoke("respond_transfer_duplicate", {
+      requestId: request.requestId,
+      action: "shown",
+    }).catch(async (error) => {
+      if (disposed) return;
+      logger.error({
+        domain: "transfer.lifecycle",
+        event: "duplicate.activation_failed",
+        message: "Failed to activate duplicate prompt",
+        ids: { request_id: request.requestId },
+        error,
+      });
+      await invoke("respond_transfer_duplicate", {
+        requestId: request.requestId,
+        action: "skip",
+      }).catch(() => {});
+      removeBackendTransferDuplicatePrompt(request.requestId);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [request]);
 
   const handleChoice = async (choice: TransferDuplicatePromptChoice) => {
     if (!request || submitting) return;
@@ -76,7 +103,7 @@ export function TransferDuplicateDialog() {
 
     setSubmitting(false);
     if (request.respondViaBackend) {
-      setBackendTransferDuplicatePrompt(null);
+      removeBackendTransferDuplicatePrompt(request.requestId);
     }
   };
 
@@ -84,6 +111,21 @@ export function TransferDuplicateDialog() {
     ? t("fileTransfer.duplicateKindFolder")
     : t("fileTransfer.duplicateKindFile");
   const canApplyToTask = !!request?.allowApplyToTask && !request.respondViaBackend;
+  const isLocalConflict = request?.destinationKind === "local";
+
+  const descriptionText = request?.unverified
+    ? t("fileTransfer.duplicateUnverifiedDescription", {
+        name: request?.fileName ?? "",
+      })
+    : isLocalConflict
+      ? t("fileTransfer.duplicateLocalDescription", {
+          kind: kindLabel,
+          name: request?.fileName ?? "",
+        })
+      : t("fileTransfer.duplicateDescription", {
+          kind: kindLabel,
+          name: request?.fileName ?? "",
+        });
 
   return (
     <AlertDialog
@@ -96,11 +138,14 @@ export function TransferDuplicateDialog() {
     >
       <AlertDialogContent
         size="sm"
-        className="w-[min(22rem,calc(100vw-2rem))] sm:max-w-md"
+        className="w-[min(24rem,calc(100vw-2rem))] sm:max-w-md"
         onKeyDown={(event) => {
+          if ((event.target as HTMLElement).closest("button, [role='menuitem']")) return;
           if (event.key === "Enter" && !submitting && request) {
             event.preventDefault();
-            void handleChoice(request.unverified ? "skip" : "overwrite");
+            void handleChoice(
+              request.unverified ? "skip" : isLocalConflict ? "rename" : "overwrite",
+            );
           }
         }}
       >
@@ -111,14 +156,7 @@ export function TransferDuplicateDialog() {
               : t("fileTransfer.duplicateTitle")}
           </AlertDialogTitle>
           <AlertDialogDescription className="text-xs leading-relaxed">
-            {request?.unverified
-              ? t("fileTransfer.duplicateUnverifiedDescription", {
-                  name: request?.fileName ?? "",
-                })
-              : t("fileTransfer.duplicateDescription", {
-                  kind: kindLabel,
-                  name: request?.fileName ?? "",
-                })}
+            {descriptionText}
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -131,7 +169,13 @@ export function TransferDuplicateDialog() {
           </div>
         )}
 
-        <AlertDialogFooter className="grid grid-cols-2 gap-3 sm:grid sm:justify-stretch">
+        <AlertDialogFooter
+          className={
+            isLocalConflict
+              ? "grid grid-cols-3 gap-2 group-data-[size=sm]/alert-dialog-content:grid-cols-3 sm:grid sm:justify-stretch"
+              : "grid grid-cols-2 gap-3 sm:grid sm:justify-stretch"
+          }
+        >
           <AlertDialogCancel
             className="w-full text-xs"
             disabled={submitting}
@@ -142,6 +186,20 @@ export function TransferDuplicateDialog() {
           >
             {t("fileTransfer.duplicateSkip")}
           </AlertDialogCancel>
+          {isLocalConflict && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full text-xs"
+              disabled={submitting}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleChoice("rename");
+              }}
+            >
+              {t("fileTransfer.duplicateRename")}
+            </Button>
+          )}
           <div className="flex min-w-0 items-center gap-0">
             <AlertDialogAction
               className={

@@ -20,6 +20,8 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
     static ref RECENT_TRANSFER_TARGETS: Arc<Mutex<VecDeque<(String, TransferTargetSnapshot)>>> =
         Arc::new(Mutex::new(VecDeque::new()));
+    static ref LOCAL_DOWNLOAD_TARGETS: Mutex<HashMap<PathBuf, bool>> =
+        Mutex::new(HashMap::new());
 }
 
 /// Event payload emitted to the frontend to track file transfer lifecycle.
@@ -36,7 +38,7 @@ pub struct TransferEvent {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// "started", "progress", "paused", "resumed", "completed", "cancelled", or "error"
+    /// "started", "progress", "paused", "resumed", "completed", "skipped", "cancelled", or "error"
     pub status: String,
     pub size: u64,
     pub bytes_transferred: u64,
@@ -296,7 +298,11 @@ pub(crate) fn unregister_transfer(id: &str) {
     }
     let removed = ACTIVE_TRANSFERS.lock().unwrap().remove(id);
     if let Some(controller) = removed {
-        remember_transfer_target(id.to_string(), controller.target_snapshot());
+        let snapshot = controller.target_snapshot();
+        // 询问阶段尚未确定输出，不把跳过或提前取消登记为下载目标。
+        if !snapshot.local_path.is_empty() {
+            remember_transfer_target(id.to_string(), snapshot);
+        }
     }
 }
 
@@ -497,7 +503,7 @@ lazy_static::lazy_static! {
     static ref RETAINED_TRANSFERS: Mutex<HashMap<String, ()>> = Mutex::new(HashMap::new());
 }
 
-// A move must remain cancellable after its copy finishes, through verification.
+// 保留注册以覆盖下载询问/重试，以及移动完成后的验证阶段。
 pub(crate) struct RetainedTransfer(String);
 impl RetainedTransfer {
     pub(crate) fn new(controller: Arc<TransferController>) -> Self {
@@ -629,31 +635,253 @@ pub async fn cancel_transfer(app: tauri::AppHandle, transfer_id: &str) -> AppRes
     Ok(())
 }
 
-/// Resolve the actual local path, applying duplicate strategy.
-pub(crate) fn resolve_local_path(local_path: &str, strategy: &str) -> Option<String> {
-    let path = std::path::Path::new(local_path);
-    if !path.exists() {
-        return Some(local_path.to_string());
+/// 持有目标占用直到下载结束，避免并发任务选中尚未创建的同一路径。
+pub(crate) struct LocalDownloadTarget {
+    path: String,
+    key: PathBuf,
+}
+
+impl std::ops::Deref for LocalDownloadTarget {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
     }
-    match strategy {
-        "skip" => None,
-        "rename" => {
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-            let ext = path
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy()))
-                .unwrap_or_default();
-            let parent = path.parent().unwrap_or(std::path::Path::new("."));
-            for i in 1..=999 {
-                let candidate = parent.join(format!("{}({}){}", stem, i, ext));
-                if !candidate.exists() {
-                    return Some(candidate.to_string_lossy().to_string());
-                }
-            }
-            Some(local_path.to_string())
+}
+
+impl Drop for LocalDownloadTarget {
+    fn drop(&mut self) {
+        LOCAL_DOWNLOAD_TARGETS.lock().unwrap().remove(&self.key);
+    }
+}
+
+fn local_download_target_key(path: &str) -> AppResult<PathBuf> {
+    let absolute = std::path::absolute(path)
+        .map_err(|error| AppError::Channel(format!("Invalid download path: {error}")))?;
+    // 未创建的父目录也从最近的已有祖先规范化，保持创建前后的占用键一致。
+    let mut ancestor = absolute.as_path();
+    let mut suffix = Vec::new();
+    let mut key = loop {
+        if let Ok(existing) = ancestor.canonicalize() {
+            break existing;
         }
-        _ => Some(local_path.to_string()),
+        if let Some(name) = ancestor.file_name() {
+            suffix.push(name.to_os_string());
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            None => {
+                return Err(AppError::Channel(format!(
+                    "Failed to normalize download path: {path}"
+                )));
+            }
+        }
+    };
+    for component in suffix.into_iter().rev() {
+        key.push(component);
     }
+    #[cfg(windows)]
+    let key = PathBuf::from(key.to_string_lossy().to_lowercase());
+    Ok(key)
+}
+
+fn local_path_exists(path: &str) -> AppResult<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::Channel(format!(
+            "Failed to inspect download path '{path}': {error}"
+        ))),
+    }
+}
+
+fn reserve_local_download_target(
+    path: &str,
+    is_directory: bool,
+    overwrite: bool,
+) -> AppResult<Option<LocalDownloadTarget>> {
+    let key = local_download_target_key(path)?;
+    let mut targets = LOCAL_DOWNLOAD_TARGETS.lock().unwrap();
+    let occupied = targets.iter().any(|(target, directory)| {
+        *target == key
+            || (*directory && key.starts_with(target))
+            || (is_directory && target.starts_with(&key))
+    });
+    if occupied {
+        return if overwrite {
+            Err(AppError::Channel(format!(
+                "Download destination is in use by another transfer: {path}"
+            )))
+        } else {
+            Ok(None)
+        };
+    }
+    if !overwrite && local_path_exists(path)? {
+        return Ok(None);
+    }
+    targets.insert(key.clone(), is_directory);
+    Ok(Some(LocalDownloadTarget {
+        path: path.to_string(),
+        key,
+    }))
+}
+
+fn local_rename_candidate(local_path: &str, is_directory: bool, index: u32) -> String {
+    let path = Path::new(local_path);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = if is_directory {
+        path.file_name()
+    } else {
+        path.file_stem()
+    }
+    .and_then(|value| value.to_str())
+    .filter(|value| !value.is_empty())
+    .unwrap_or(if is_directory { "folder" } else { "file" });
+    let ext = if is_directory {
+        String::new()
+    } else {
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_default()
+    };
+    parent
+        .join(format!("{stem}({index}){ext}"))
+        .to_string_lossy()
+        .to_string()
+}
+
+pub(crate) fn generate_unique_local_path(
+    local_path: &str,
+    is_directory: bool,
+) -> AppResult<String> {
+    if !local_path_exists(local_path)? {
+        return Ok(local_path.to_string());
+    }
+    for index in 1..=999 {
+        let candidate = local_rename_candidate(local_path, is_directory, index);
+        if !local_path_exists(&candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::Channel(format!(
+        "No available download name for '{local_path}'"
+    )))
+}
+
+fn reserve_renamed_local_download_target(
+    local_path: &str,
+    is_directory: bool,
+) -> AppResult<LocalDownloadTarget> {
+    for index in 1..=999 {
+        let candidate = local_rename_candidate(local_path, is_directory, index);
+        if let Some(target) = reserve_local_download_target(&candidate, is_directory, false)? {
+            return Ok(target);
+        }
+    }
+    Err(AppError::Channel(format!(
+        "No available download name for '{local_path}'"
+    )))
+}
+
+pub(crate) async fn resolve_local_path_with_prompt(
+    app: &tauri::AppHandle,
+    session_manager: &crate::core::SessionManager,
+    session_id: &str,
+    local_path: &str,
+    remote_path: &str,
+    strategy: &str,
+    is_directory: bool,
+    transfer_id: Option<&str>,
+) -> AppResult<Option<LocalDownloadTarget>> {
+    use super::duplicate::DuplicateChoice;
+
+    let controller = transfer_id.and_then(find_transfer);
+    if let Some(controller) = &controller {
+        wait_for_transfer_ready(controller).await?;
+    }
+    if let Some(target) = reserve_local_download_target(local_path, is_directory, false)? {
+        return Ok(Some(target));
+    }
+    let choice = match strategy {
+        "skip" => DuplicateChoice::Skip,
+        "rename" => DuplicateChoice::Rename,
+        "overwrite" => DuplicateChoice::Overwrite,
+        "ask" => {
+            let file_name = remote_path
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(remote_path);
+            super::duplicate::prompt_duplicate_choice_with_destination(
+                app,
+                session_manager,
+                session_id,
+                local_path,
+                file_name,
+                is_directory,
+                Some("local"),
+                controller.as_ref(),
+            )
+            .await?
+        }
+        _ => {
+            return Err(AppError::Config(format!(
+                "Invalid duplicate strategy: {strategy}"
+            )));
+        }
+    };
+    if let Some(controller) = &controller {
+        wait_for_transfer_ready(controller).await?;
+    }
+    match choice {
+        DuplicateChoice::Skip => Ok(None),
+        DuplicateChoice::Overwrite => reserve_local_download_target(local_path, is_directory, true),
+        DuplicateChoice::Rename => {
+            reserve_renamed_local_download_target(local_path, is_directory).map(Some)
+        }
+    }
+}
+
+pub(crate) fn emit_skipped_download(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    transfer_id: Option<String>,
+    is_directory: bool,
+) {
+    let event = build_skipped_download_event(
+        session_id,
+        remote_path,
+        local_path,
+        transfer_id,
+        is_directory,
+    );
+    let _ = app.emit("transfer-event", &event);
+}
+
+fn build_skipped_download_event(
+    session_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    transfer_id: Option<String>,
+    is_directory: bool,
+) -> TransferEvent {
+    let controller = TransferController::new_with_kind(
+        transfer_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        session_id.to_string(),
+        file_name_from_path(remote_path),
+        remote_path.to_string(),
+        local_path.to_string(),
+        "download".to_string(),
+        if is_directory { "directory" } else { "file" }.to_string(),
+        None,
+        if is_directory { Some(0) } else { None },
+        if is_directory { Some(0) } else { None },
+    );
+    // 跳过并未产生下载文件，不登记目标历史，也不能作为下载完成上报。
+    controller.build_event("skipped", 0, None)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -699,3 +927,7 @@ pub(crate) async fn collect_local_directory_stats(
 
     Ok(stats)
 }
+
+#[cfg(test)]
+#[path = "transfer_tests.rs"]
+mod tests;

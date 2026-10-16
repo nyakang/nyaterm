@@ -12,7 +12,10 @@ import type { AppContextType } from "@/context/AppContext";
 import { focusTerminalSession } from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
 import { insertTabIntoLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
-import { setBackendTransferDuplicatePrompt } from "@/lib/transferDuplicatePrompt";
+import {
+  removeBackendTransferDuplicatePrompt,
+  setBackendTransferDuplicatePrompt,
+} from "@/lib/transferDuplicatePrompt";
 import { eventTargetsCurrentWindow } from "@/lib/windowManager";
 import type { AppSettings, CloudConflictPreview, WorkspaceSessionType } from "@/types/global";
 import type { SessionConnectAfterEditPayload } from "./useConnectAfterEdit";
@@ -205,18 +208,25 @@ export function useAppWindowEvents({
         fileName: string;
         isDirectory: boolean;
         targetWindowLabel?: string | null;
+        destinationKind?: "local" | "remote";
+        requiresActivation?: boolean;
       }>("transfer-duplicate-request", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setBackendTransferDuplicatePrompt({
-          requestId: event.payload.requestId,
-          sessionId: event.payload.sessionId,
-          remotePath: event.payload.remotePath,
-          fileName: event.payload.fileName,
-          isDirectory: event.payload.isDirectory,
-          targetWindowLabel: event.payload.targetWindowLabel,
+          ...event.payload,
           respondViaBackend: true,
         });
       }),
+    );
+
+    unsubs.push(
+      listen<{ requestId: string; targetWindowLabel?: string | null }>(
+        "transfer-duplicate-resolved",
+        (event) => {
+          if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
+          removeBackendTransferDuplicatePrompt(event.payload.requestId);
+        },
+      ),
     );
 
     unsubs.push(

@@ -350,6 +350,11 @@ pub(super) async fn download_remote_file_inner_with_controller(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     register_transfer(controller.clone());
+    if let Err(error) = wait_for_transfer_chain(&controller, parent_controller.as_ref()).await {
+        unregister_transfer(&controller.id());
+        return Err(error);
+    }
+    let mut local_file_created = false;
     let _ = app.emit(
         "transfer-event",
         &controller.build_event("started", 0, None),
@@ -378,9 +383,11 @@ pub(super) async fn download_remote_file_inner_with_controller(
         let total_size = remote_size.unwrap_or(0);
         controller.update_progress(0, total_size);
 
+        wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
         let mut local_file = tokio::fs::File::create(&actual_path)
             .await
             .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
+        local_file_created = true;
 
         if total_size > 0 {
             let _ = local_file.set_len(total_size).await;
@@ -520,7 +527,13 @@ pub(super) async fn download_remote_file_inner_with_controller(
         }
         Err(e) => {
             if matches!(e, AppError::Cancelled(_)) {
-                cleanup_cancelled_download(actual_path).await;
+                if local_file_created {
+                    cleanup_cancelled_download(actual_path).await;
+                }
+                let _ = app.emit(
+                    "transfer-event",
+                    &controller.build_event("cancelled", 0, None),
+                );
             } else {
                 let _ = app.emit(
                     "transfer-event",

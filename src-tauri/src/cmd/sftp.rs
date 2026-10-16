@@ -365,9 +365,14 @@ pub async fn respond_transfer_duplicate(
     request_id: String,
     action: String,
 ) -> AppResult<()> {
-    let choice = DuplicateChoice::from_action(&action)
-        .ok_or_else(|| AppError::Config(format!("Invalid duplicate action: {action}")))?;
-    if state.respond(&request_id, choice).await {
+    let accepted = if action == "shown" {
+        state.mark_displayed(&request_id).await
+    } else {
+        let choice = DuplicateChoice::from_action(&action)
+            .ok_or_else(|| AppError::Config(format!("Invalid duplicate action: {action}")))?;
+        state.respond(&request_id, choice).await
+    };
+    if accepted {
         Ok(())
     } else {
         Err(AppError::Config(format!(

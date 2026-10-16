@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   focusTerminalSession: vi.fn(),
   setBackendTransferDuplicatePrompt: vi.fn(),
+  removeBackendTransferDuplicatePrompt: vi.fn(),
   toastError: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: vi.fn() }));
@@ -20,6 +21,7 @@ vi.mock("@/lib/invoke", () => ({ invoke: mocks.invoke }));
 vi.mock("@/lib/appSessionFactory", () => ({ focusTerminalSession: mocks.focusTerminalSession }));
 vi.mock("@/lib/transferDuplicatePrompt", () => ({
   setBackendTransferDuplicatePrompt: mocks.setBackendTransferDuplicatePrompt,
+  removeBackendTransferDuplicatePrompt: mocks.removeBackendTransferDuplicatePrompt,
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 vi.mock("@/i18n", () => ({ default: { t: (key: string) => key } }));
@@ -118,6 +120,7 @@ describe("useAppWindowEvents", () => {
     "rdp-certificate-verify",
     "vnc-server-key-verify",
     "transfer-duplicate-request",
+    "transfer-duplicate-resolved",
     "session-connect-after-edit",
   ])("ignores %s addressed to another window", async (name) => {
     const { result, options } = renderEvents();
@@ -129,6 +132,7 @@ describe("useAppWindowEvents", () => {
     expect(options.handleConnectAfterEdit).not.toHaveBeenCalled();
     expect(mocks.focusTerminalSession).not.toHaveBeenCalled();
     expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
+    expect(mocks.removeBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
     expect(result.current).toEqual([]);
   });
 
@@ -246,6 +250,8 @@ describe("useAppWindowEvents", () => {
     const transfer = {
       requestId: "transfer-1",
       sessionId: "ssh-1",
+      destinationKind: "local",
+      requiresActivation: true,
       remotePath: "/notes",
       fileName: "notes",
       isDirectory: false,
@@ -256,6 +262,13 @@ describe("useAppWindowEvents", () => {
       ...transfer,
       respondViaBackend: true,
     });
+  });
+
+  it("removes ended duplicate prompts by request ID in the owner window", async () => {
+    renderEvents();
+    await receive("transfer-duplicate-resolved", { requestId: "ended", targetWindowLabel: "main-test" });
+    expect(mocks.removeBackendTransferDuplicatePrompt).toHaveBeenCalledExactlyOnceWith("ended");
+    expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
   });
 
   it("deduplicates cloud conflicts across subscription updates", async () => {
@@ -291,7 +304,7 @@ describe("useAppWindowEvents", () => {
     );
     const options = eventOptions();
     const { unmount } = renderHook(() => useAppWindowEvents(options), { wrapper: StrictMode });
-    expect(registrations).toHaveLength(34);
+    expect(registrations).toHaveLength(36);
     unmount();
     await act(async () => {
       for (const registration of registrations) registration.resolve(registration.dispose);

@@ -47,9 +47,30 @@ pub(super) async fn resolve_remote_path(
         .await
         .map(|attrs| sftp_attrs_is_dir(&attrs))
         .unwrap_or(false);
-    match strategy {
-        "skip" => None,
-        "rename" => {
+    let choice = if strategy == "ask" {
+        match super::super::duplicate::prompt_duplicate_choice(
+            app,
+            session_manager,
+            session_id,
+            remote_path,
+            file_name,
+            is_directory,
+        )
+        .await
+        {
+            Ok(choice) => choice,
+            Err(_) => return None,
+        }
+    } else {
+        match strategy {
+            "skip" => super::super::duplicate::DuplicateChoice::Skip,
+            "rename" => super::super::duplicate::DuplicateChoice::Rename,
+            _ => super::super::duplicate::DuplicateChoice::Overwrite,
+        }
+    };
+    match choice {
+        super::super::duplicate::DuplicateChoice::Skip => None,
+        super::super::duplicate::DuplicateChoice::Rename => {
             let path = std::path::Path::new(remote_path);
             let stem = path
                 .file_stem()
@@ -72,25 +93,7 @@ pub(super) async fn resolve_remote_path(
             }
             Some(remote_path.to_string())
         }
-        "ask" => {
-            match super::super::duplicate::prompt_duplicate_choice(
-                app,
-                session_manager,
-                session_id,
-                remote_path,
-                file_name,
-                is_directory,
-            )
-            .await
-            {
-                Ok(super::super::duplicate::DuplicateChoice::Skip) => None,
-                Ok(super::super::duplicate::DuplicateChoice::Overwrite) => {
-                    Some(remote_path.to_string())
-                }
-                Err(_) => None,
-            }
-        }
-        _ => Some(remote_path.to_string()),
+        super::super::duplicate::DuplicateChoice::Overwrite => Some(remote_path.to_string()),
     }
 }
 

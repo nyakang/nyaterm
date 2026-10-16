@@ -499,51 +499,32 @@ async fn resolve_local_copy_target(
             existed: false,
         }));
     }
-    let resolved = match strategy {
-        "skip" => None,
-        "ask" => match duplicate::prompt_duplicate_choice(
+    let choice = if strategy == "ask" {
+        duplicate::prompt_duplicate_choice_with_destination(
             app,
             manager,
             session_id,
             path,
             file_name,
             is_directory,
+            Some("local"),
+            None,
         )
         .await?
-        {
-            duplicate::DuplicateChoice::Skip => None,
-            duplicate::DuplicateChoice::Overwrite => Some(CopyResolvedTarget {
-                path: path.to_string(),
-                existed: true,
-            }),
-        },
-        "rename" => {
-            let parent = target.parent().unwrap_or_else(|| Path::new("."));
-            let stem = target
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.is_empty())
-                .unwrap_or(if is_directory { "folder" } else { "file" });
-            let ext = target
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(|value| format!(".{value}"))
-                .unwrap_or_default();
-            for index in 1..=999 {
-                let candidate = parent.join(format!("{stem}({index}){ext}"));
-                if !candidate.exists() {
-                    return Ok(Some(CopyResolvedTarget {
-                        path: candidate.to_string_lossy().to_string(),
-                        existed: false,
-                    }));
-                }
-            }
-            Some(CopyResolvedTarget {
-                path: path.to_string(),
-                existed: true,
-            })
+    } else {
+        match strategy {
+            "skip" => duplicate::DuplicateChoice::Skip,
+            "rename" => duplicate::DuplicateChoice::Rename,
+            _ => duplicate::DuplicateChoice::Overwrite,
         }
-        _ => Some(CopyResolvedTarget {
+    };
+    let resolved = match choice {
+        duplicate::DuplicateChoice::Skip => None,
+        duplicate::DuplicateChoice::Rename => Some(CopyResolvedTarget {
+            path: transfer::generate_unique_local_path(path, is_directory)?,
+            existed: false,
+        }),
+        duplicate::DuplicateChoice::Overwrite => Some(CopyResolvedTarget {
             path: path.to_string(),
             existed: true,
         }),
@@ -831,9 +812,26 @@ async fn resolve_remote_copy_target_generic(
         }));
     };
 
-    let resolved = match strategy {
-        "skip" => None,
-        "rename" => {
+    let choice = if strategy == "ask" {
+        duplicate::prompt_duplicate_choice(
+            app,
+            manager,
+            session_id,
+            target_path,
+            file_name,
+            existing.is_dir,
+        )
+        .await?
+    } else {
+        match strategy {
+            "skip" => duplicate::DuplicateChoice::Skip,
+            "rename" => duplicate::DuplicateChoice::Rename,
+            _ => duplicate::DuplicateChoice::Overwrite,
+        }
+    };
+    let resolved = match choice {
+        duplicate::DuplicateChoice::Skip => None,
+        duplicate::DuplicateChoice::Rename => {
             let mut candidate = target_path.to_string();
             for index in 1..=999 {
                 candidate = remote_copy_rename_candidate(target_path, file_name, index);
@@ -849,23 +847,7 @@ async fn resolve_remote_copy_target_generic(
                 existed: true,
             })
         }
-        "ask" => match duplicate::prompt_duplicate_choice(
-            app,
-            manager,
-            session_id,
-            target_path,
-            file_name,
-            existing.is_dir,
-        )
-        .await?
-        {
-            duplicate::DuplicateChoice::Skip => None,
-            duplicate::DuplicateChoice::Overwrite => Some(CopyResolvedTarget {
-                path: target_path.to_string(),
-                existed: true,
-            }),
-        },
-        _ => Some(CopyResolvedTarget {
+        duplicate::DuplicateChoice::Overwrite => Some(CopyResolvedTarget {
             path: target_path.to_string(),
             existed: true,
         }),
@@ -2310,19 +2292,30 @@ pub async fn download_remote_file(
     local_path: &str,
     transfer_id: Option<String>,
 ) -> AppResult<()> {
+    let preparing = transfer::create_child_file_transfer_controller(
+        transfer_id,
+        session_id,
+        file_name_from_path(remote_path),
+        remote_path,
+        "",
+        "download",
+        None,
+    );
+    let retained = transfer::RetainedTransfer::new(preparing.clone());
     let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
     let transfer_settings = crate::config::load_app_settings(&app)
         .map(|s| s.transfer)
         .unwrap_or_default();
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
+    retained.ready().await?;
     fs.download_file(
         &app,
         session_id,
         remote_path,
         local_path,
         &transfer_settings,
-        transfer_id,
+        Some(preparing.id()),
     )
     .await
 }
@@ -2593,11 +2586,29 @@ pub async fn download_remote_directory(
     local_path: &str,
     transfer_id: Option<String>,
 ) -> AppResult<()> {
+    let preparing = transfer::create_directory_transfer_controller(
+        transfer_id,
+        session_id,
+        file_name_from_path(remote_path),
+        remote_path,
+        "",
+        "download",
+        0,
+        0,
+    );
+    let retained = transfer::RetainedTransfer::new(preparing.clone());
     let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    fs.download_directory(&app, session_id, remote_path, local_path, transfer_id)
-        .await
+    retained.ready().await?;
+    fs.download_directory(
+        &app,
+        session_id,
+        remote_path,
+        local_path,
+        Some(preparing.id()),
+    )
+    .await
 }
 
 pub async fn upload_local_directory(
