@@ -229,6 +229,14 @@ impl NyaTermApp {
             .session_info(session_id)
             .filter(|_| !self.session.is_disconnected(session_id))
             .map(|session| match session.kind {
+                // An SSH session can land on a network-device CLI instead of a
+                // shell. Those devices do not run the marker wrapper, so the
+                // agent must send the bare command and fall back to quiet-output
+                // completion; otherwise every command times out waiting for
+                // markers that never appear (issue #910).
+                SessionKind::Ssh if self.ssh_session_looks_like_network_cli(session_id) => {
+                    AiExecutionProfile::SendOnly
+                }
                 SessionKind::LocalPty
                 | SessionKind::Ssh
                 | SessionKind::Telnet
@@ -238,6 +246,19 @@ impl NyaTermApp {
                 }
             })
             .unwrap_or(AiExecutionProfile::SendOnly)
+    }
+
+    /// Whether the most recent output of an SSH session ends in a network
+    /// device CLI prompt. Anything unrecognised keeps the shell profile.
+    ///
+    /// `allow(dead_code)`: the lib-test build only reaches this through the
+    /// agent entry point, and the lint job compiles that target with
+    /// `-D warnings`.
+    #[allow(dead_code)]
+    fn ssh_session_looks_like_network_cli(&self, session_id: &str) -> bool {
+        nyaterm_core::network_cli_prompt::looks_like_network_cli_prompt(
+            &self.terminal_buffer_text_for_session(session_id),
+        )
     }
 
     pub(in crate::features) fn start_ai_agent_continuation(
