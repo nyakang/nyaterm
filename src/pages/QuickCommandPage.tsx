@@ -25,6 +25,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { runtime } from "@/lib/backend/runtime";
+import { isWindows } from "@/lib/platform";
 import {
   buildQuickCommandCategoryPath,
   buildQuickCommandCategoryTree,
@@ -33,7 +35,11 @@ import {
   hasQuickCommandCategorySiblingName,
 } from "@/lib/quickCommandCategories";
 import { parseJsonSearchParam } from "@/lib/utils";
-import type { QuickCommand, QuickCommandCategory } from "@/types/global";
+import type {
+  QuickCommand,
+  QuickCommandCategory,
+  QuickCommandExecutionMode,
+} from "@/types/global";
 
 interface QuickCommandsConfig {
   commands: QuickCommand[];
@@ -80,9 +86,10 @@ export default function QuickCommandPage() {
     initialData?.icon_tag,
   );
   const [pinned, setPinned] = useState(initialData?.pinned || false);
-  const [executionMode, setExecutionMode] = useState<"execute" | "append">(
-    (initialData?.execution_mode as "execute" | "append") || "execute",
+  const [executionMode, setExecutionMode] = useState<QuickCommandExecutionMode>(
+    initialData?.execution_mode || "execute",
   );
+  const nyascriptSupported = runtime === "desktop" && isWindows;
   const [errors, setErrors] = useState<{
     label?: string;
     category?: string;
@@ -559,24 +566,33 @@ export default function QuickCommandPage() {
           </Label>
           <Tabs
             value={executionMode}
-            onValueChange={(val) =>
-              setExecutionMode(val as "execute" | "append")
-            }
+            onValueChange={(val) => setExecutionMode(val as QuickCommandExecutionMode)}
             className="w-full"
           >
-            <TabsList className="grid w-full grid-cols-2 h-8">
+            <TabsList className="grid w-full grid-cols-3 h-8">
               <TabsTrigger value="execute" className="text-xs">
                 {t("quickCommands.executeImmediately")}
               </TabsTrigger>
               <TabsTrigger value="append" className="text-xs">
                 {t("quickCommands.appendOnly")}
               </TabsTrigger>
+              <TabsTrigger
+                value="nyascript"
+                className="text-xs"
+                disabled={!nyascriptSupported && executionMode !== "nyascript"}
+              >
+                {t("quickCommands.nyascript")}
+              </TabsTrigger>
             </TabsList>
           </Tabs>
           <p className="text-[0.6875rem] text-muted-foreground pl-1 mt-1">
             {executionMode === "execute"
               ? t("quickCommands.executeHint")
-              : t("quickCommands.appendHint")}
+              : executionMode === "append"
+                ? t("quickCommands.appendHint")
+                : nyascriptSupported
+                  ? t("quickCommands.nyascriptHint")
+                  : t("quickCommands.nyascriptUnsupported")}
           </p>
         </div>
 

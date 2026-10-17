@@ -16,6 +16,7 @@ pub mod log;
 pub mod macos_menu;
 pub mod mcp;
 pub mod note;
+pub mod nyascript;
 pub mod otp;
 pub mod plugins;
 pub mod process;
