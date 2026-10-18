@@ -262,6 +262,15 @@ Download installers from [nyaterm.app](https://nyaterm.app) or the [Releases](ht
 | Telnet | Legacy network devices or lab systems | Lightweight terminal session without SSH-only features, with `Backspace Mode` for `Ctrl+H (BS)` or `DEL (0x7F)` |
 | Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, `Backspace Mode`, and XMODEM/YMODEM/ZMODEM drag-and-drop upload protocol |
 
+On Windows desktop builds, a saved SSH connection can use **Mosh (WSL)** instead of
+NyaTerm's built-in SSH transport. NyaTerm launches the `mosh` client in the default
+WSL distribution, so install `mosh` there and `mosh-server` on the remote host;
+the normal Mosh UDP range is 60000–61000 unless the server is configured otherwise.
+Initial authentication is handled by WSL OpenSSH, and the terminal uses UTF-8.
+NyaTerm SSH-only features such as SFTP, remote monitoring, proxy/jump hosts, X11,
+agent forwarding, post-login commands, legacy terminal encodings, and ZMODEM are
+not available for Mosh sessions.
+
 ---
 
 <a name="getting-started"></a>

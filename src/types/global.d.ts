@@ -63,6 +63,7 @@ export type AIExecutionProfile =
   | "send_only"
   | "disabled";
 export type SshProfile = "standard" | "network_device";
+export type SshTransport = "ssh" | "mosh";
 export type SshRuntimeMode = "standard" | "terminal" | "sftp";
 export type SshTerminalType =
   | "xterm-256color"
@@ -586,6 +587,8 @@ export interface SavedConnection {
   ssh_algorithms?: SshAlgorithmPreferences;
   /** SSH-only: runtime profile. Network devices skip Linux-only probes and integrations. */
   ssh_profile?: SshProfile;
+  /** SSH-only: transport used when opening this saved connection. */
+  ssh_transport?: SshTransport;
   /** SSH-only: PTY terminal type. Omitted means profile default. */
   terminal_type?: SshTerminalType;
   sftp?: SftpSettings;

@@ -90,6 +90,7 @@ import type {
   SshKey,
   SshProfile,
   SshTerminalType,
+  SshTransport,
   SupportedSshAlgorithms,
 } from "@/types/global";
 
@@ -167,6 +168,9 @@ interface SshFormProps {
   setSshAlgorithms: (v: SshAlgorithmPreferences) => void;
   sshProfile: SshProfile;
   setSshProfile: (v: SshProfile) => void;
+  sshTransport: SshTransport;
+  setSshTransport: (v: SshTransport) => void;
+  showMoshTransport: boolean;
   sshTerminalType: SshTerminalTypeSelection;
   setSshTerminalType: (v: SshTerminalTypeSelection) => void;
   sftpSettings: SftpSettings;
@@ -506,6 +510,9 @@ export function SshForm({
   setSshAlgorithms,
   sshProfile,
   setSshProfile,
+  sshTransport,
+  setSshTransport,
+  showMoshTransport,
   sshTerminalType,
   setSshTerminalType,
   sftpSettings,
@@ -759,6 +766,7 @@ export function SshForm({
     });
   };
   const networkDeviceProfile = sshProfile === "network_device";
+  const moshTransport = sshTransport === "mosh";
   const sftpDisabled = !sftpSettings.enabled || networkDeviceProfile;
   const defaultTerminalType = networkDeviceProfile ? "vt100" : "xterm-256color";
 
@@ -817,20 +825,52 @@ export function SshForm({
           />
         </div>
       </div>
-      <AccountSelector
-        accounts={accounts}
-        value={accountId}
-        onChange={(nextAccountId) => {
-          setAccountId(nextAccountId);
-          if (nextAccountId) {
-            setPasswordSource("account");
-            setPassword("");
-            setHasPassword(false);
-          } else if (!nextAccountId && passwordSource === "account") {
-            setPasswordSource("ask");
-          }
-        }}
-      />
+      {showMoshTransport && (
+        <div className="max-w-md">
+          <Label className="text-xs font-medium text-foreground/80">
+            {t("dialog.sshTransport")}
+          </Label>
+          <Select
+            value={sshTransport}
+            onValueChange={(value) => {
+              const transport = value as SshTransport;
+              setSshTransport(transport);
+            }}
+          >
+            <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ssh">{t("dialog.sshTransportSsh")}</SelectItem>
+              <SelectItem value="mosh">{t("dialog.sshTransportMosh")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+            {t("dialog.sshTransportDesc")}
+          </p>
+        </div>
+      )}
+      {moshTransport && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[0.6875rem] leading-relaxed text-amber-800 dark:text-amber-200">
+          {t(showMoshTransport ? "dialog.moshRequirements" : "dialog.moshUnsupportedPlatform")}
+        </div>
+      )}
+      {!moshTransport && (
+        <AccountSelector
+          accounts={accounts}
+          value={accountId}
+          onChange={(nextAccountId) => {
+            setAccountId(nextAccountId);
+            if (nextAccountId) {
+              setPasswordSource("account");
+              setPassword("");
+              setHasPassword(false);
+            } else if (!nextAccountId && passwordSource === "account") {
+              setPasswordSource("ask");
+            }
+          }}
+        />
+      )}
       <div>
         <Label className="text-xs font-medium text-foreground/80">
           {t("dialog.username")}
@@ -838,11 +878,11 @@ export function SshForm({
         </Label>
         <Input
           className="mt-1 text-xs h-8"
-          value={accountProvidesUsername ? selectedAccount?.username : username}
+          value={!moshTransport && accountProvidesUsername ? selectedAccount?.username : username}
           onChange={(e) => setUsername(e.target.value)}
-          readOnly={accountProvidesUsername}
+          readOnly={!moshTransport && accountProvidesUsername}
         />
-        {accountId ? (
+        {!moshTransport && accountId ? (
           <p className="mt-1 text-[0.6875rem] text-muted-foreground">
             {accountProvidesUsername
               ? t("dialog.usernameProvidedByAccount")
@@ -850,7 +890,7 @@ export function SshForm({
           </p>
         ) : null}
       </div>
-      <div>
+      <div className={cn(moshTransport && "hidden")}>
         <Label className="text-xs font-medium text-foreground/80">
           {t("dialog.authentication")}
         </Label>
@@ -1170,7 +1210,11 @@ export function SshForm({
         </Tabs>
       </div>
 
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+      <Collapsible
+        className={cn(moshTransport && "hidden")}
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+      >
         <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
           <MdChevronRight
             className={`text-sm transition-transform duration-200 ${advancedOpen ? "rotate-90" : ""}`}
@@ -1595,7 +1639,7 @@ export function SshForm({
               </div>
             </TabsContent>
           </Tabs>
-          <Tabs defaultValue="post-login" className="w-full">
+          <Tabs defaultValue="post-login" className={cn("w-full", moshTransport && "hidden")}>
             <TabsList className="grid h-8 w-full grid-cols-5 pointer-events-auto">
               <TabsTrigger
                 disabled={!supports("nativeFiles")}
@@ -1793,7 +1837,7 @@ export function SshForm({
                     onCheckedChange={setRemoteDynamicTabTitle}
                   />
                 </div>
-                {supports("recording") && (
+                {!moshTransport && supports("recording") && (
                   <ConnectionRecordingSettings
                     useGlobal={recordingUseGlobal}
                     onUseGlobalChange={setRecordingUseGlobal}
@@ -2143,6 +2187,16 @@ export function SshForm({
           </div>
         </CollapsibleContent>
       </Collapsible>
+      {moshTransport && supports("recording") && (
+        <ConnectionRecordingSettings
+          useGlobal={recordingUseGlobal}
+          onUseGlobalChange={setRecordingUseGlobal}
+          autoStart={recordingAutoStart}
+          onAutoStartChange={setRecordingAutoStart}
+          mode={recordingMode}
+          onModeChange={setRecordingMode}
+        />
+      )}
 
       <Dialog
         disablePointerDismissal

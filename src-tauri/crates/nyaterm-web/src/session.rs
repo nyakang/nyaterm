@@ -246,6 +246,9 @@ pub(crate) fn jump_target(id: &str) -> Result<Target> {
 fn target_for(args: &Value, transport_only: bool) -> Result<Target> {
     if let Some(id) = args["connectionId"].as_str() {
         let conn = config::load_connection_by_id(&(), id)?;
+        if conn.ssh_transport != config::SshTransport::Ssh {
+            return Err(WebError::unsupported());
+        }
         let config::ConnectionType::Ssh {
             host,
             port,

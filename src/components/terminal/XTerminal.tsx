@@ -186,6 +186,7 @@ export default function XTerminal({
   suspendHibernation = false,
   sessionType,
   connectionId,
+  sshRuntimeMode,
   temporaryConfig,
   onReconnected,
   onDisconnectedCloseRequested,
@@ -2967,6 +2968,7 @@ export default function XTerminal({
   const { isExternalDropActive, dropOverlayCopy } = useTerminalExternalDrop({
     sessionId,
     sessionType,
+    sshRuntimeMode,
     visible,
     containerRef,
     t,

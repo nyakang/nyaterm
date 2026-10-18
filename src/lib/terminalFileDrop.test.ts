@@ -67,6 +67,21 @@ describe("handleTerminalFileDrop", () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
+  it("rejects Mosh SSH drops instead of starting ZMODEM", async () => {
+    await handleTerminalFileDrop({
+      sessionId: "mosh-1",
+      sessionType: "SSH",
+      sshTransport: "mosh",
+      entries: [{ path: "/tmp/fw.bin", isDir: false }],
+      t,
+    });
+
+    expect(mocks.toastError).toHaveBeenCalledWith("terminal.dropMoshUnsupported");
+    expect(mocks.uploadFilesViaZmodem).not.toHaveBeenCalled();
+    expect(mocks.sendSessionInput).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
   it("rejects Serial directories before starting a modem upload", async () => {
     await handleTerminalFileDrop({
       sessionId: "serial-1",
