@@ -168,7 +168,7 @@ impl NyaTermApp {
     pub(in crate::features) fn multiplex_active_ssh_session_with_startup(
         &mut self,
         startup_command: Option<StartupCommandRequest>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
@@ -221,6 +221,9 @@ impl NyaTermApp {
             cx,
         );
         self.shell.show_workspace();
+        if self.session.start_has_active_pending() {
+            self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
+        }
         cx.notify();
     }
 
@@ -509,6 +512,7 @@ impl NyaTermApp {
 mod tests {
     use gpui::TestAppContext;
     use nyaterm_terminal::TerminalScreen;
+    use nyaterm_transport::SshSessionConfig;
 
     use super::RECONNECTING_BANNER;
     use crate::features::test_support::{
@@ -589,6 +593,43 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn multiplex_session_focus_handoff_survives_menu_dismissal() {
+        let root = TestConfigDir::new("nyaterm-multiplex-focus");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+        let cx = session_focus_test_window(&mut cx, &app);
+
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut metadata = app.session.metadata("source").unwrap().clone();
+                // Multiplexing needs SSH metadata. A closed loopback port keeps the
+                // worker from reaching a real server while still exercising the
+                // user-initiated start path.
+                metadata.launch_config = SessionLaunchConfig::Ssh(Box::new(SshSessionConfig {
+                    name: "source".to_string(),
+                    host: "127.0.0.1".to_string(),
+                    port: 1,
+                    username: "nya".to_string(),
+                    ..SshSessionConfig::default()
+                }));
+                app.session.register_session_metadata("source", metadata);
+                window.focus(app.session.dialog_tab_actions_focus(), cx);
+
+                app.multiplex_active_ssh_session(window, cx);
+                assert!(app.session.start_has_active_pending());
+                assert!(app.terminal.input_focus().is_focused(window));
+                // Menus restore their previous focus after the action returns.
+                window.focus(app.session.dialog_tab_actions_focus(), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(app.read(cx).terminal.input_focus().is_focused(window));
+        });
     }
 
     #[test]
