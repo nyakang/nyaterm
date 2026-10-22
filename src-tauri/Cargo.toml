@@ -93,6 +93,7 @@ nyaterm-otp = { path = "crates/otp" }
 nyaterm-mcp-protocol = { path = "crates/nyaterm-mcp-protocol" }
 nyaterm-plugin-runtime = { path = "crates/nyaterm-plugin-runtime" }
 tauri = { version = "2", features = ["tray-icon", "protocol-asset", "macos-private-api"] }
+tauri-plugin-notification = "2.7"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -213,10 +214,10 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 ironrdp = { path = "vendor/ironrdp/crates/ironrdp", default-features = false, features = ["native-tls"] }
-webview2-com = "0.38.2"
-# Native Acrylic window material. Pinned to 0.6 to match the version
-# tauri 2.x already pulls in transitively, avoiding duplicate crate versions.
-window-vibrancy = "0.6"
+webview2-com = "0.39"
+# Native Acrylic window material. Pinned to the version Tauri 2.12
+# pulls in transitively, avoiding duplicate crate versions.
+window-vibrancy = "0.8"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -226,7 +227,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

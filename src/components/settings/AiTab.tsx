@@ -489,6 +489,7 @@ export function AiAgentsTab() {
     permission_mode: "confirm",
     session_scope: "current_window",
     terminal_display_mode: "inline",
+    system_notification: true,
   };
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -978,6 +979,17 @@ export function AiAgentsTab() {
             />
           </div>
         </SettingRow>
+        {runtime === "desktop" ? (
+          <SettingRow
+            label={t("ai.externalMcpSystemNotification")}
+            desc={t("ai.externalMcpSystemNotificationDesc")}
+          >
+            <SettingSwitch
+              checked={externalMcp.system_notification !== false}
+              onChange={(system_notification) => updateExternalMcp({ system_notification })}
+            />
+          </SettingRow>
+        ) : null}
         {mcpStatus?.error ? (
           <div className="text-xs text-destructive">{mcpStatus.error}</div>
         ) : null}

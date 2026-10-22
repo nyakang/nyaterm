@@ -33,6 +33,7 @@
       ]
     },
     "dialog:default",
+    "notification:default",
     "core:window:allow-show",
     "core:window:allow-close",
     "core:window:allow-destroy",

@@ -104,6 +104,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(session_manager.clone())
         .manage(rdp_session_manager.clone())
         .manage(vnc_session_manager.clone())
@@ -128,6 +129,7 @@ pub fn run() {
         .manage(portable_update_state)
         .on_menu_event(cmd::macos_menu::handle_menu_event)
         .setup(move |a| {
+            core::mcp::install_approval_notifications(a.handle());
             app::setup(
                 a,
                 session_manager,

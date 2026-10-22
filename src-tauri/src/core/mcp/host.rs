@@ -861,7 +861,9 @@ impl McpManager {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> AppResult<()> {
-        self.approvals.respond(request_id, decision).await
+        self.approvals
+            .respond(self.app.get(), request_id, decision)
+            .await
     }
 
     pub async fn set_active_session(
@@ -890,7 +892,7 @@ impl McpManager {
     }
 
     pub async fn cancel_pending_approvals(&self) {
-        self.approvals.cancel_all().await;
+        self.approvals.cancel_all(self.app.get()).await;
     }
 
     fn sidecar_path(&self) -> AppResult<PathBuf> {
@@ -1023,7 +1025,9 @@ impl McpManager {
                 context.cancellation.cancel();
             }
         }
-        self.approvals.cancel_connection(&context.id).await;
+        self.approvals
+            .cancel_connection(self.app.get(), &context.id)
+            .await;
         if is_external {
             self.external_connections.fetch_sub(1, Ordering::SeqCst);
             self.emit_status();

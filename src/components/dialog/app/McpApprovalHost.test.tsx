@@ -24,7 +24,10 @@ vi.mock("@/lib/backend/api", () => ({
 vi.mock("@/lib/invoke", () => ({ invoke: mocks.invoke }));
 vi.mock("sonner", () => ({ toast: { error: mocks.error } }));
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: "en" },
+  }),
 }));
 vi.mock("@/components/ui/alert-dialog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ui/alert-dialog")>();
@@ -202,5 +205,26 @@ describe("McpApprovalHost", () => {
       ["respond_external_mcp_approval", { requestId: "new", decision: "allow_once" }],
     ]);
     expect(mocks.error).toHaveBeenCalledTimes(outcome === "rejected" ? 1 : 0);
+  });
+
+  it("drops a request resolved from the system notification without denying it or the next one", async () => {
+    render(<McpApprovalHost />);
+    queueRequest("one");
+    queueRequest("two");
+
+    emit("mcp-approval-resolved", { requestId: "two", decision: "allow_once" });
+    expect(screen.getByText("client-one")).toBeTruthy();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    act(() => mocks.onOpenChange?.(false));
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("respond_external_mcp_approval", {
+      requestId: "one",
+      decision: "deny",
+    });
+
+    emit("mcp-approval-resolved", { requestId: "one", decision: "deny" });
+    act(() => mocks.onOpenChange?.(false));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mocks.invoke).toHaveBeenCalledOnce();
   });
 });

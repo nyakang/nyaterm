@@ -62,7 +62,8 @@ pub async fn save_app_settings(
 ) -> AppResult<()> {
     let previous_mcp = config::load_app_settings(&app)?.ai.external_mcp;
     let next_mcp = settings.ai.external_mcp.clone();
-    let external_owner = if previous_mcp != next_mcp && next_mcp.enabled {
+    let bridge_changed = previous_mcp.bridge_config_changed(&next_mcp);
+    let external_owner = if bridge_changed && next_mcp.enabled {
         let owner = owner_window_label.ok_or_else(|| {
             AppError::Config("External MCP requires an owner main-window label.".into())
         })?;
@@ -78,7 +79,7 @@ pub async fn save_app_settings(
         allow_master_password_change.unwrap_or(false),
     )
     .await?;
-    if previous_mcp != next_mcp {
+    if bridge_changed {
         if next_mcp.enabled {
             let owner = external_owner.expect("validated External MCP owner");
             if let Err(error) = mcp_manager.configure_external(next_mcp, &owner).await {

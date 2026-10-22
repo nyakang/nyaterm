@@ -8,7 +8,7 @@ pub(crate) use windows_acl::assert_current_user_only;
 #[cfg(windows)]
 pub(crate) use windows_acl::set_current_user_only;
 
-pub use approval::ApprovalDecision;
+pub use approval::{ApprovalDecision, install_approval_notifications};
 pub use host::{
     McpClientConfigs, McpManager, McpRuntimeStatus, McpTurnGuard, SessionMcpCredential,
 };

@@ -1492,6 +1492,7 @@ export interface ExternalMcpSettings {
   permission_mode: AIPermissionMode;
   session_scope: ExternalMcpSessionScope;
   terminal_display_mode: "inline" | "silent";
+  system_notification?: boolean;
 }
 export type AIReasoningEffort =
   | "auto"

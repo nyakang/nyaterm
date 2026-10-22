@@ -126,6 +126,21 @@ pub struct ExternalMcpSettings {
     pub session_scope: ExternalMcpSessionScope,
     #[serde(default)]
     pub terminal_display_mode: McpTerminalDisplayMode,
+    /// Show a system notification when an approval is waiting and the owner window is not focused.
+    /// Missing values stay enabled so existing configs keep the new attention path.
+    #[serde(default = "default_true")]
+    pub system_notification: bool,
+}
+
+impl ExternalMcpSettings {
+    /// Bridge identity and permission changes restart the external MCP listener.
+    /// The notification preference does not.
+    pub fn bridge_config_changed(&self, other: &Self) -> bool {
+        self.enabled != other.enabled
+            || self.permission_mode != other.permission_mode
+            || self.session_scope != other.session_scope
+            || self.terminal_display_mode != other.terminal_display_mode
+    }
 }
 
 impl Default for ExternalMcpSettings {
@@ -135,6 +150,7 @@ impl Default for ExternalMcpSettings {
             permission_mode: AiPermissionMode::Confirm,
             session_scope: ExternalMcpSessionScope::CurrentWindow,
             terminal_display_mode: McpTerminalDisplayMode::default(),
+            system_notification: true,
         }
     }
 }
@@ -1048,6 +1064,7 @@ mod tests {
 
         assert!(settings.enabled);
         assert_eq!(settings.terminal_display_mode, McpTerminalDisplayMode::Inline);
+        assert!(settings.system_notification);
         assert_eq!(settings.permission_mode, AiPermissionMode::Confirm);
         assert_eq!(
             settings.session_scope,
@@ -1057,6 +1074,7 @@ mod tests {
         assert!(serialized.get("server_mode").is_none());
         assert!(serialized.get("idle_timeout_minutes").is_none());
         assert_eq!(serialized["terminal_display_mode"], "inline");
+        assert_eq!(serialized["system_notification"], true);
         let silent: ExternalMcpSettings = serde_json::from_value(serde_json::json!({
             "terminal_display_mode": "silent"
         }))

@@ -740,6 +740,7 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
     permission_mode: "confirm",
     session_scope: "current_window",
     terminal_display_mode: "inline",
+    system_notification: true,
   },
 };
 
