@@ -33,6 +33,7 @@ impl TranscriptEventKind {
 pub enum InputOrigin {
     Keyboard,
     QuickCommand,
+    NyaScript,
     StartupCommand,
     PostLogin,
     AiAgent,

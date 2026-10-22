@@ -105,7 +105,7 @@ fn merge_import(
 
         validate_one_of(
             &execution_mode,
-            &["execute", "append"],
+            &["execute", "append", "nyascript"],
             "command.execution_mode",
         )?;
         if let Some(source) = source.as_deref() {

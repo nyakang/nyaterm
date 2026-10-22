@@ -88,6 +88,7 @@ import {
 import { useApp } from "@/context/AppContext";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { writeClipboardText } from "@/lib/clipboard";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import {
@@ -112,8 +113,11 @@ import {
   reorderQuickCommandsWithinCategory,
 } from "@/lib/quickCommands";
 import { normalizeQuickCommandSortMode } from "@/lib/quickCommandSettings";
+import { isWindows } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
+  NyaScriptRunEvent,
+  NyaScriptRunStatus,
   QuickCommand,
   QuickCommandCategory,
   QuickCommandImportResult,
@@ -132,6 +136,7 @@ interface QuickCommandsProps {
   onSend: (command: string, execute?: boolean) => void;
   onSendToAll?: (command: string, execute?: boolean) => void;
   sendDisabled?: boolean;
+  currentSessionId?: string | null;
 }
 
 interface NewQuickCommandCategoryDraft {
@@ -290,9 +295,15 @@ function NewQuickCommandCategoryDialog({
   );
 }
 
-function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickCommandsProps) {
+function QuickCommands({
+  onSend,
+  onSendToAll,
+  sendDisabled = false,
+  currentSessionId,
+}: QuickCommandsProps) {
   const { t } = useTranslation();
   const { appSettings, updateUi } = useApp();
+  const nyascriptSupported = runtime === "desktop" && isWindows;
   const [commands, setCommands] = useState<QuickCommand[]>([]);
   const [savedCategories, setSavedCategories] = useState<
     QuickCommandCategory[]
@@ -338,6 +349,8 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
   const [promptCmd, setPromptCmd] = useState<QuickCommand | null>(null);
   const [promptVars, setPromptVars] = useState<VariableDef[]>([]);
   const [promptSendToAll, setPromptSendToAll] = useState(false);
+  const [nyascriptRun, setNyaScriptRun] = useState<NyaScriptRunStatus | null>(null);
+  const nyascriptRunIdRef = useRef<string | null>(null);
 
   const loadQuickCommands = useCallback(async () => {
     const cfg = await invoke<QuickCommandsConfig>("get_quick_commands");
@@ -375,6 +388,30 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
 
   const handleDelete = useCallback((id: string) => {
     setCommands((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  useEffect(() => {
+    const unsub = listen<NyaScriptRunEvent>("nyascript-run-event", ({ payload }) => {
+      if (payload.runId !== nyascriptRunIdRef.current) return;
+      setNyaScriptRun((current) => {
+        if (!current || current.runId !== payload.runId) return current;
+        const logs = payload.log
+          ? [...current.logs, payload.log].slice(-5)
+          : current.logs;
+        return {
+          ...current,
+          state: payload.state,
+          currentLine: payload.currentLine ?? current.currentLine,
+          activeAlias: payload.activeAlias ?? current.activeAlias,
+          sessionId: payload.sessionId ?? current.sessionId,
+          logs,
+          error: payload.error ?? current.error,
+        };
+      });
+    });
+    return () => {
+      unsub.then((dispose) => dispose());
+    };
   }, []);
 
   const handleConfirmDeleteCommand = useCallback(() => {
@@ -486,6 +523,42 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     invoke("increment_quick_command_use_count", { id }).catch(() => {});
   }, []);
 
+  const startNyaScript = useCallback(
+    async (cmd: QuickCommand) => {
+      if (!nyascriptSupported) {
+        toast.error(t("quickCommands.nyascriptUnsupported"));
+        return;
+      }
+      try {
+        const runId = await invoke<string>("start_nyascript", {
+          source: cmd.command,
+          currentSessionId: currentSessionId ?? null,
+        });
+        nyascriptRunIdRef.current = runId;
+        incrementUseCount(cmd.id);
+        const status = await invoke<NyaScriptRunStatus>("get_nyascript_status", { runId });
+        setNyaScriptRun(status);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      }
+    },
+    [currentSessionId, incrementUseCount, nyascriptSupported, t],
+  );
+
+  const cancelNyaScript = useCallback(() => {
+    const runId = nyascriptRunIdRef.current;
+    if (!runId) return;
+    void invoke("cancel_nyascript", { runId }).catch((error) => {
+      toast.error(getErrorMessage(error));
+    });
+  }, []);
+
+  const commandDisabled = useCallback(
+    (cmd: QuickCommand) =>
+      cmd.execution_mode === "nyascript" ? !nyascriptSupported : sendDisabled,
+    [nyascriptSupported, sendDisabled],
+  );
+
   // Listen for quick-command-saved events from child window
   useEffect(() => {
     const unsub = listen<{
@@ -515,6 +588,10 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
 
   const handleCommandClick = useCallback(
     (cmd: QuickCommand) => {
+      if (cmd.execution_mode === "nyascript") {
+        void startNyaScript(cmd);
+        return;
+      }
       if (sendDisabled) return;
       incrementUseCount(cmd.id);
       const vars = parseCommandVariables(cmd.command);
@@ -526,12 +603,12 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
         onSend(cmd.command, cmd.execution_mode !== "append");
       }
     },
-    [incrementUseCount, onSend, sendDisabled],
+    [incrementUseCount, onSend, sendDisabled, startNyaScript],
   );
 
   const handleSendToAll = useCallback(
     (cmd: QuickCommand) => {
-      if (!onSendToAll || sendDisabled) return;
+      if (cmd.execution_mode === "nyascript" || !onSendToAll || sendDisabled) return;
       incrementUseCount(cmd.id);
       const vars = parseCommandVariables(cmd.command);
       if (vars.length > 0) {
@@ -1062,13 +1139,17 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
           className,
         )}
       >
-        {cmd.execution_mode === "append" ? (
+        {cmd.execution_mode === "nyascript" ? (
+          <MdTerminal className="text-[0.7rem]" />
+        ) : cmd.execution_mode === "append" ? (
           <MdKeyboardReturn className="text-[0.7rem]" />
         ) : (
           <MdBolt className="text-[0.7rem]" />
         )}
         <span className="truncate">
-          {cmd.execution_mode === "append"
+          {cmd.execution_mode === "nyascript"
+            ? t("quickCommands.nyascript")
+            : cmd.execution_mode === "append"
             ? t("quickCommands.appendOnlyBadge")
             : t("quickCommands.executeImmediately")}
         </span>
@@ -1185,7 +1266,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
             <MdEdit className="text-[0.875rem]" />
             {t("quickCommands.edit")}
           </DropdownMenuItem>
-          {onSendToAll && (
+          {onSendToAll && cmd.execution_mode !== "nyascript" && (
             <DropdownMenuItem
               disabled={sendDisabled}
               onClick={() => handleSendToAll(cmd)}
@@ -1218,7 +1299,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
               size="icon-sm"
               className="h-7 w-7 rounded p-0 text-muted-foreground hover:bg-[var(--df-bg-hover)] hover:text-foreground"
               aria-label={t("quickCommands.send")}
-              disabled={sendDisabled}
+              disabled={commandDisabled(cmd)}
               onClick={() => handleCommandClick(cmd)}
             >
               <MdSend className="text-[0.875rem]" />
@@ -1232,10 +1313,10 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     ),
     [
       handleCommandClick,
+      commandDisabled,
       renderCommandDetailsPopover,
       renderExecutionBadge,
       renderMoreMenu,
-      sendDisabled,
       t,
     ],
   );
@@ -1256,10 +1337,10 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
           <MdContentCopy className="text-[0.875rem]" />
           {t("quickCommands.copyCommand")}
         </ContextMenuItem>
-        {onSendToAll && (
+        {onSendToAll && cmd.execution_mode !== "nyascript" && (
           <ContextMenuItem
             className="text-xs gap-2"
-            disabled={sendDisabled}
+            disabled={commandDisabled(cmd)}
             onClick={() => handleSendToAll(cmd)}
           >
             <BsFillSendPlusFill className="text-[0.875rem]" />
@@ -1275,7 +1356,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
         </ContextMenuItem>
       </ContextMenuContent>
     ),
-    [handleCopyCommand, handleSendToAll, onSendToAll, sendDisabled, t],
+    [commandDisabled, handleCopyCommand, handleSendToAll, onSendToAll, t],
   );
   const renderCommandListItem = useCallback(
     (cmd: QuickCommand) => {
@@ -1302,7 +1383,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
           <button
             type="button"
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded px-1 text-left"
-            disabled={sendDisabled}
+            disabled={commandDisabled(cmd)}
             onClick={() => handleCommandClick(cmd)}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -1328,6 +1409,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     },
     [
       canDragCommand,
+      commandDisabled,
       commandDragTarget,
       draggingCommandId,
       handleCommandClick,
@@ -1337,7 +1419,6 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
       resetCommandDrag,
       renderCommandActions,
       renderCommandIcon,
-      sendDisabled,
     ],
   );
   const renderCommandCompactItem = useCallback(
@@ -1365,7 +1446,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
           <button
             type="button"
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-0.5 text-left"
-            disabled={sendDisabled}
+            disabled={commandDisabled(cmd)}
             onClick={() => handleCommandClick(cmd)}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -1387,6 +1468,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     },
     [
       canDragCommand,
+      commandDisabled,
       commandDragTarget,
       draggingCommandId,
       handleCommandClick,
@@ -1396,7 +1478,6 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
       resetCommandDrag,
       renderCommandActions,
       renderCommandIcon,
-      sendDisabled,
     ],
   );
   const renderCommandTile = useCallback(
@@ -1424,7 +1505,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
                 isDropTarget && "ring-1 ring-primary/70",
               )}
               style={{ color: "var(--df-text)" }}
-              disabled={sendDisabled}
+              disabled={commandDisabled(cmd)}
               onClick={() => handleCommandClick(cmd)}
             >
               <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
@@ -1461,12 +1542,16 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
                   )}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-                  {cmd.execution_mode === "append" ? (
+                  {cmd.execution_mode === "nyascript" ? (
+                    <MdTerminal className="text-[0.75rem]" />
+                  ) : cmd.execution_mode === "append" ? (
                     <MdKeyboardReturn className="text-[0.75rem]" />
                   ) : (
                     <MdBolt className="text-[0.75rem]" />
                   )}
-                  {cmd.execution_mode === "append"
+                  {cmd.execution_mode === "nyascript"
+                    ? t("quickCommands.nyascript")
+                    : cmd.execution_mode === "append"
                     ? t("quickCommands.appendOnly")
                     : t("quickCommands.executeImmediately")}
                 </div>
@@ -1488,6 +1573,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     },
     [
       canDragCommand,
+      commandDisabled,
       commandDragTarget,
       draggingCommandId,
       getCommandCategoryName,
@@ -1498,7 +1584,6 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
       resetCommandDrag,
       renderCommandIcon,
       renderCommandPreview,
-      sendDisabled,
       t,
     ],
   );
@@ -1763,6 +1848,34 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
             </>
           }
         />
+
+        {nyascriptRun && (
+          <div
+            data-testid="nyascript-run-status"
+            className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-2.5 py-1.5 text-[0.6875rem]"
+          >
+            <MdTerminal className="shrink-0 text-sm text-primary" />
+            <span className="font-medium">
+              {t(`quickCommands.nyascriptState.${nyascriptRun.state}`)}
+            </span>
+            {nyascriptRun.activeAlias && (
+              <span className="text-muted-foreground">{nyascriptRun.activeAlias}</span>
+            )}
+            {nyascriptRun.currentLine && (
+              <span className="text-muted-foreground">
+                {t("quickCommands.nyascriptLine", { line: nyascriptRun.currentLine })}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+              {nyascriptRun.error || nyascriptRun.logs[nyascriptRun.logs.length - 1] || ""}
+            </span>
+            {nyascriptRun.state === "running" && (
+              <Button size="xs" variant="outline" onClick={cancelNyaScript}>
+                {t("common.cancel")}
+              </Button>
+            )}
+          </div>
+        )}
 
         <div className="flex min-h-0 flex-1">
           <aside

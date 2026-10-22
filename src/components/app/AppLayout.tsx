@@ -526,6 +526,9 @@ export default function AppLayout({
                     onSend={bottomPanel.onCommandSend}
                     onSendToAll={bottomPanel.onSendToAllSessions}
                     sendDisabled={bottomPanel.quickCommandsDisabled}
+                    currentSessionId={
+                      bottomPanel.activeNonSerialSessionId ?? bottomPanel.activeSerialSessionId
+                    }
                   />
                 </div>
               </>
