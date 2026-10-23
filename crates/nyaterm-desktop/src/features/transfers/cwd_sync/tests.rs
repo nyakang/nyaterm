@@ -872,3 +872,28 @@ fn tree_mode_follows_cwd_and_seeds_the_target_directory_listing() {
         });
     });
 }
+
+#[cfg(windows)]
+#[test]
+fn posix_local_shell_cwds_are_translated_for_the_windows_file_browser() {
+    with_browser(|app, cx, _root| {
+        report(app, cx, "/mnt/d/Codes/RustProjects".into());
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).session.cwd(SESSION),
+                Some(r"D:\Codes\RustProjects")
+            );
+        });
+        let id = latest_request(app, cx);
+        finish(app, cx, &id, Ok("nyaterm"));
+        assert_directory(app, cx, r"D:\Codes\RustProjects", "nyaterm");
+
+        report(app, cx, "/home/debian/notes".into());
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).session.cwd(SESSION),
+                Some("/home/debian/notes")
+            );
+        });
+    });
+}

@@ -2,7 +2,10 @@
 //! transfer browser owns only navigation requests and a deferred editing intent.
 
 use gpui::Context;
-use nyaterm_transport::{FileBrowserBackendKind, SftpCwdFollowMode, file_browser_path_eq};
+use nyaterm_transport::{
+    FileBrowserBackendKind, SftpCwdFollowMode, file_browser_path_eq,
+    local_shell_cwd_to_browser_path,
+};
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
@@ -28,6 +31,17 @@ pub(super) fn cwd_paths_equal(backend: FileBrowserBackendKind, left: &str, right
     file_browser_path_eq(backend, &normalize(left), &normalize(right))
 }
 
+/// WSL, Git Bash, and drive-letter OSC 7 payloads report POSIX paths the
+/// Windows local browser cannot list; only a Windows host may translate them.
+fn translate_local_browser_cwd(backend: Option<FileBrowserBackendKind>, cwd: String) -> String {
+    match backend {
+        Some(FileBrowserBackendKind::Local) if cfg!(target_os = "windows") => {
+            local_shell_cwd_to_browser_path(&cwd).unwrap_or(cwd)
+        }
+        _ => cwd,
+    }
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn apply_session_cwd(
         &mut self,
@@ -41,9 +55,11 @@ impl NyaTermApp {
         {
             return false;
         }
-        let equivalent = self
+        let backend = self
             .session
-            .file_browser_backend_support_for_session(session_id)
+            .file_browser_backend_support_for_session(session_id);
+        let cwd = translate_local_browser_cwd(backend, cwd);
+        let equivalent = backend
             .zip(self.session.cwd(session_id))
             .is_some_and(|(backend, previous)| cwd_paths_equal(backend, previous, &cwd));
         let changed = self.session.update_cwd(session_id, cwd);

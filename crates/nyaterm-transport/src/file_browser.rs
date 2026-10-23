@@ -476,6 +476,47 @@ pub fn file_browser_path_eq(kind: FileBrowserBackendKind, left: &str, right: &st
     file_browser_identity(kind, left) == file_browser_identity(kind, right)
 }
 
+/// Translate a POSIX working directory reported by a local Windows shell into
+/// the Windows path shape the local file browser uses. Covers WSL's
+/// `/mnt/<drive>` automounts, drive-letter OSC 7 payloads such as `/d:/x`, and
+/// MSYS-style single-letter roots like `/d/x`.
+///
+/// Returns `None` when the path needs no translation. The rules are
+/// deliberately platform-agnostic: only callers on a Windows host may apply
+/// them, because `/mnt/...` and `/d/...` are ordinary directories elsewhere.
+pub fn local_shell_cwd_to_browser_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    if let Some(tail) = rest.strip_prefix("mnt/") {
+        return windows_path_for_drive(tail);
+    }
+    windows_path_for_drive(rest)
+}
+
+fn windows_path_for_drive(path: &str) -> Option<String> {
+    let mut chars = path.chars();
+    let drive = chars.next()?;
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut remainder = chars.as_str();
+    if let Some(tail) = remainder.strip_prefix(':') {
+        remainder = tail;
+    } else if !remainder.is_empty() && !remainder.starts_with('/') {
+        return None;
+    }
+    let mut mapped = String::with_capacity(path.len() + 2);
+    mapped.push(drive.to_ascii_uppercase());
+    mapped.push_str(":\\");
+    mapped.push_str(
+        remainder
+            .strip_prefix('/')
+            .unwrap_or(remainder)
+            .replace('/', "\\")
+            .as_str(),
+    );
+    Some(mapped)
+}
+
 pub fn file_browser_path_is_root(kind: FileBrowserBackendKind, path: &str) -> bool {
     file_browser_path_eq(kind, path, &file_browser_root(kind, path))
 }
@@ -557,7 +598,7 @@ mod tests {
     use super::{
         FileBrowserBackendKind, file_browser_copy_destination_invalid, file_browser_join,
         file_browser_name, file_browser_parent, file_browser_path_is_root, file_browser_root,
-        valid_file_browser_child_name,
+        local_shell_cwd_to_browser_path, valid_file_browser_child_name,
     };
 
     #[test]
@@ -680,6 +721,49 @@ mod tests {
             r"C:\other\file",
             true
         ));
+    }
+
+    #[test]
+    fn local_shell_cwd_translation_covers_wsl_drive_and_msys_forms() {
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/mnt/d/Codes/RustProjects"),
+            Some(r"D:\Codes\RustProjects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/mnt/c"),
+            Some(r"C:\".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/mnt/d/"),
+            Some(r"D:\".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/d:/Projects"),
+            Some(r"D:\Projects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/d/Projects"),
+            Some(r"D:\Projects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path("/D/Codes"),
+            Some(r"D:\Codes".to_string())
+        );
+    }
+
+    #[test]
+    fn local_shell_cwd_translation_leaves_unrelated_paths_untouched() {
+        assert_eq!(local_shell_cwd_to_browser_path("/mnt/backup/data"), None);
+        assert_eq!(local_shell_cwd_to_browser_path("/mnt/"), None);
+        assert_eq!(local_shell_cwd_to_browser_path("/mnt/1/x"), None);
+        assert_eq!(local_shell_cwd_to_browser_path("/home/debian"), None);
+        assert_eq!(local_shell_cwd_to_browser_path("/Debian/mnt/d/x"), None);
+        assert_eq!(local_shell_cwd_to_browser_path(r"D:\Codes"), None);
+        assert_eq!(local_shell_cwd_to_browser_path("relative/path"), None);
+        assert_eq!(
+            local_shell_cwd_to_browser_path("//wsl.localhost/Debian/home"),
+            None
+        );
     }
 }
 

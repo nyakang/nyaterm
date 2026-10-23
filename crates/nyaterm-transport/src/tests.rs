@@ -278,6 +278,58 @@ fn windows_local_session_close_releases_conpty_reader() {
     closer.join().expect("Windows local session closer");
 }
 
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a working WSL installation; manual transport smoke test"]
+fn wsl_local_session_reports_cwd_through_injected_integration() {
+    let manager = SessionManager::new();
+    let info = manager
+        .create_local_session(LocalSessionConfig {
+            name: "wsl-cwd-smoke".to_string(),
+            shell_path: Some("wsl.exe".to_string()),
+            cols: 120,
+            rows: 30,
+            ..Default::default()
+        })
+        .expect("wsl session");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    std::thread::sleep(Duration::from_secs(10));
+    manager
+        .write(&info.id, b"echo NYA-PROBE-OK\r\n")
+        .expect("probe write");
+    let mut visible = Vec::new();
+    let mut cwds = Vec::new();
+    while Instant::now() < deadline && cwds.is_empty() {
+        let before = visible.len();
+        for event in manager.drain_events(32).expect("events").events {
+            match event {
+                SessionEvent::Output { data, .. } => visible.extend(data),
+                SessionEvent::CwdChanged { cwd, .. } => cwds.push(cwd),
+                SessionEvent::Error { message, .. } => panic!("session error: {message}"),
+                _ => {}
+            }
+        }
+        if visible[before..]
+            .windows(4)
+            .any(|window| window == b"\x1b[6n")
+        {
+            manager
+                .write(&info.id, b"\x1b[1;1R")
+                .expect("cursor report");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let tail_start = visible.len().saturating_sub(300);
+    let tail = String::from_utf8_lossy(&visible[tail_start..]).to_string();
+    let probe_seen = String::from_utf8_lossy(&visible).contains("NYA-PROBE-OK");
+    manager.close(&info.id).expect("close");
+    assert!(
+        !cwds.is_empty(),
+        "no cwd reported (probe visible: {probe_seen}); visible output: {tail:?}"
+    );
+}
+
 #[test]
 fn local_session_info_preserves_working_dir() {
     if cfg!(target_os = "windows") {
@@ -1809,6 +1861,55 @@ fn ssh_ready_marker_helpers_strip_current_and_legacy_markers() {
         super::strip_ssh_ready_markers(&payload, &ready, Some(&legacy)),
         b"beforemiddleafter"
     );
+}
+
+#[test]
+fn local_reader_thread_routes_filtered_cwd_events_and_suppressed_output() {
+    let integration = crate::local_shell_integration::LocalShellIntegration::prepare(
+        &crate::local_shell::ResolvedLocalShell {
+            program: "wsl.exe".to_string(),
+            args: Vec::new(),
+        },
+        "session-1",
+    )
+    .expect("wsl.exe receives the prompt script");
+
+    let mailbox = crate::WriterMailbox::default();
+    integration.inject_now(mailbox.clone());
+    let (command, _permit) = mailbox
+        .receive(None)
+        .expect("mailbox open")
+        .expect("injection script queued");
+    let crate::TransportWriterCommand::Write(_) = command else {
+        panic!("injection writes a shell script");
+    };
+
+    let mut payload = b"startup noise".to_vec();
+    payload.extend_from_slice(b"\x1b]7777;NyaTermReady:session-1\x07prompt> ");
+    payload.extend_from_slice(b"\x1b]7;file://host/mnt/d/Codes\x07");
+
+    let queue = SessionEventQueue::new();
+    let handle = super::spawn_reader_thread(
+        "session-1".to_string(),
+        Box::new(std::io::Cursor::new(payload)),
+        queue.clone(),
+        Some(integration),
+    )
+    .expect("reader thread spawns");
+    handle.join().expect("reader thread reaches EOF");
+
+    let drain = queue.drain_with_output_budget(8, Some(4096));
+    assert_eq!(drain.events.len(), 3);
+    assert!(matches!(
+        &drain.events[0],
+        SessionEvent::CwdChanged { session_id, cwd }
+            if session_id == "session-1" && cwd == "/mnt/d/Codes"
+    ));
+    assert!(matches!(
+        &drain.events[1],
+        SessionEvent::Output { data, .. } if data.as_slice() == b"prompt> "
+    ));
+    assert!(matches!(&drain.events[2], SessionEvent::Exited { .. }));
 }
 
 #[test]
