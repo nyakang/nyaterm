@@ -1,4 +1,6 @@
 const TERMINAL_ROOT_SELECTOR = '[data-terminal-root="true"]';
+const REMOTE_DESKTOP_INPUT_ROOT_SELECTOR =
+  '[data-remote-desktop-input-root="true"], [data-rdp-input-root="true"]';
 
 let installed = false;
 
@@ -6,17 +8,17 @@ function isElement(value: EventTarget | null): value is Element {
   return value instanceof Element;
 }
 
-function eventPathContainsTerminalRoot(event: KeyboardEvent) {
+function eventPathContainsRoot(event: KeyboardEvent, selector: string) {
   return event.composedPath().some((target) => {
     if (!isElement(target)) return false;
-    return target.matches(TERMINAL_ROOT_SELECTOR);
+    return target.matches(selector);
   });
 }
 
-function eventTargetIsInsideTerminalRoot(event: KeyboardEvent) {
-  if (eventPathContainsTerminalRoot(event)) return true;
+function eventTargetIsInsideRoot(event: KeyboardEvent, selector: string) {
+  if (eventPathContainsRoot(event, selector)) return true;
   const target = event.target;
-  return isElement(target) && target.closest(TERMINAL_ROOT_SELECTOR) !== null;
+  return isElement(target) && target.closest(selector) !== null;
 }
 
 function isReloadShortcut(event: KeyboardEvent) {
@@ -47,7 +49,7 @@ function isReservedWebviewShortcut(event: KeyboardEvent) {
 }
 
 function preventReservedWebviewShortcut(event: KeyboardEvent) {
-  const insideTerminal = eventTargetIsInsideTerminalRoot(event);
+  const insideTerminal = eventTargetIsInsideRoot(event, TERMINAL_ROOT_SELECTOR);
 
   if (insideTerminal) {
     if (isHardReloadShortcut(event)) {
@@ -58,7 +60,9 @@ function preventReservedWebviewShortcut(event: KeyboardEvent) {
 
   if (isReservedWebviewShortcut(event)) {
     event.preventDefault();
-    event.stopPropagation();
+    if (!eventTargetIsInsideRoot(event, REMOTE_DESKTOP_INPUT_ROOT_SELECTOR)) {
+      event.stopPropagation();
+    }
   }
 }
 

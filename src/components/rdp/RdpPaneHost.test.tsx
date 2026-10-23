@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installWebviewReloadGuard } from "@/lib/webviewReloadGuard";
 import type { RdpSessionPane } from "@/types/global";
 import RdpPaneHost from "./RdpPaneHost";
 
@@ -110,6 +111,36 @@ describe("RdpPaneHost", () => {
           repeat: false,
         },
       ],
+    });
+  });
+
+  it("forwards Ctrl+R through the WebView guard as an RDP physical key", async () => {
+    installWebviewReloadGuard();
+    render(<RdpPaneHost pane={rdpPane()} active visible />);
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    invokeMock.mockClear();
+    const inputRoot = document.querySelector('[data-rdp-input-root="true"]');
+    if (!(inputRoot instanceof HTMLElement)) throw new Error("expected RDP input root");
+
+    fireEvent.keyDown(inputRoot, { code: "ControlLeft", key: "Control", ctrlKey: true });
+    fireEvent.keyDown(inputRoot, { code: "KeyR", key: "r", ctrlKey: true });
+    fireEvent.keyUp(inputRoot, { code: "KeyR", key: "r", ctrlKey: true });
+    fireEvent.keyUp(inputRoot, { code: "ControlLeft", key: "Control" });
+
+    expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [{ type: "key-down", scanCode: 0x13, extended: false, repeat: false }],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [{ type: "key-up", scanCode: 0x13, extended: false, repeat: false }],
     });
   });
 
