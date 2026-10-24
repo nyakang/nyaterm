@@ -1212,6 +1212,16 @@ fn pad_wide_cells_leaves_attached_marks_alone() {
 }
 
 #[test]
+fn pad_wide_cells_pads_vs16_emoji_to_two_cells() {
+    // U+2139 U+FE0F renders two cells wide; without the padding the next
+    // glyph is drawn on top of it (issue #946).
+    assert_eq!(pad_wide_cells("\u{2139}\u{fe0f}x"), "\u{2139}\u{fe0f} x");
+    assert_eq!(pad_wide_cells("\u{2764}\u{fe0f}"), "\u{2764}\u{fe0f} ");
+    // Plain letters with VS16 stay one cell.
+    assert_eq!(pad_wide_cells("a\u{fe0f}x"), "a\u{fe0f}x");
+}
+
+#[test]
 fn underline_ranges_count_wide_and_attached_marks_as_terminal_cells() {
     let palette = nyaterm_ui::theme_palette("github-dark");
     let wide =

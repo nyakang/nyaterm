@@ -28,8 +28,9 @@ pub mod selection;
 mod sixel;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
-    terminal_cell_count, terminal_char_cell_width, terminal_is_zero_width_mark,
-    terminal_text_cell_slice, terminal_text_cells,
+    terminal_cell_count, terminal_char_cell_width, terminal_is_vs16_emoji_base,
+    terminal_is_zero_width_mark, terminal_text_cell_slice, terminal_text_cells,
+    terminal_vs16_widens,
 };
 pub use encoding::SessionEncoding;
 

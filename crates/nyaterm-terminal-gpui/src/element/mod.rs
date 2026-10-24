@@ -16,7 +16,7 @@ use nyaterm_terminal::selection::{
 };
 use nyaterm_terminal::{
     ShellInputLineKind, TerminalLineId, TerminalSnapshot, terminal_cell_count,
-    terminal_char_cell_width, terminal_is_zero_width_mark,
+    terminal_char_cell_width, terminal_is_zero_width_mark, terminal_vs16_widens,
 };
 
 use crate::contrast::{
@@ -959,22 +959,30 @@ fn pad_wide_cells(text: &str) -> String {
     if !text
         .chars()
         .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+        && !text.contains('\u{fe0f}')
     {
         return text.to_string();
     }
     let mut padded = String::with_capacity(text.len() + 4);
+    let mut previous: Option<char> = None;
     for ch in text.chars() {
         if ch == '\t' {
             padded.push(' ');
             continue;
         }
         padded.push(ch);
+        // VS16 turns a text-presentation emoji base into a two-cell glyph.
+        if ch == '\u{fe0f}' && previous.is_some_and(terminal_vs16_widens) {
+            padded.push(' ');
+            continue;
+        }
         if terminal_is_zero_width_mark(ch) {
             continue;
         }
         for _ in 1..terminal_char_cell_width(ch) {
             padded.push(' ');
         }
+        previous = Some(ch);
     }
     padded
 }
@@ -988,22 +996,30 @@ fn append_padded_wide_cells(output: &mut String, input: &str) -> usize {
     if !input
         .chars()
         .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+        && !input.contains('\u{fe0f}')
     {
         output.push_str(input);
         return output.len().saturating_sub(start_len);
     }
+    let mut previous: Option<char> = None;
     for ch in input.chars() {
         if ch == '\t' {
             output.push(' ');
             continue;
         }
         output.push(ch);
+        // VS16 turns a text-presentation emoji base into a two-cell glyph.
+        if ch == '\u{fe0f}' && previous.is_some_and(terminal_vs16_widens) {
+            output.push(' ');
+            continue;
+        }
         if terminal_is_zero_width_mark(ch) {
             continue;
         }
         for _ in 1..terminal_char_cell_width(ch) {
             output.push(' ');
         }
+        previous = Some(ch);
     }
     output.len().saturating_sub(start_len)
 }
