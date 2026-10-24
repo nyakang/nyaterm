@@ -10,7 +10,10 @@ pub fn resolve_ssh_execution_profile(
 ) -> AiExecutionProfile {
     if configured != AiExecutionProfile::Auto {
         configured
-    } else if network_device || looks_like_network_cli_prompt(output) {
+    } else if network_device
+        || looks_like_network_cli_prompt(output)
+        || looks_like_sql_prompt(output)
+    {
         AiExecutionProfile::SendOnly
     } else {
         AiExecutionProfile::Posix
@@ -25,6 +28,7 @@ pub fn ssh_allows_background_execution(
 ) -> bool {
     !network_device
         && !looks_like_network_cli_prompt(output)
+        && !looks_like_sql_prompt(output)
         && !matches!(
             configured,
             AiExecutionProfile::SendOnly | AiExecutionProfile::Disabled
@@ -96,6 +100,35 @@ pub(super) fn looks_like_network_cli_prompt_line(line: &str) -> bool {
                 && context.ends_with(')')
                 && is_hostname_token(&context[..context.len() - 1])
         })
+}
+
+/// Returns true when the last non-empty line of `output` looks like an
+/// interactive SQL client prompt. These clients never run the POSIX marker
+/// wrapper, so the agent must send the bare command instead of waiting for
+/// markers that never appear (issue #866).
+pub fn looks_like_sql_prompt(output: &str) -> bool {
+    let tail = tail_chars(output, 4096);
+    let mut line = PromptLine::default();
+    line.feed(tail);
+    looks_like_sql_prompt_line(line.text().trim())
+}
+
+/// Oracle SQL*Plus / RMAN, MySQL / MariaDB, PostgreSQL, SQLite.
+pub(super) fn looks_like_sql_prompt_line(line: &str) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    let lower = line.to_ascii_lowercase();
+    const PROMPTS: &[&str] = &[
+        "sqlplus>",
+        "sql>",
+        "rman>",
+        "mysql>",
+        "mariadb>",
+        "postgres=#",
+        "sqlite>",
+    ];
+    PROMPTS.iter().any(|prompt| lower.ends_with(prompt))
 }
 
 pub(super) fn looks_like_cli_input_wait(line: &str) -> bool {
@@ -228,7 +261,7 @@ fn is_device_context_token(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        looks_like_network_cli_prompt, resolve_ssh_execution_profile,
+        looks_like_network_cli_prompt, looks_like_sql_prompt, resolve_ssh_execution_profile,
         ssh_allows_background_execution,
     };
     use crate::{AiExecutionProfile, build_agent_capture_command};
@@ -290,6 +323,39 @@ mod tests {
             "progress 100%\r\u{1b}[2K<Switch>"
         ));
         assert!(!looks_like_network_cli_prompt("<Switch>\rworking"));
+    }
+
+    #[test]
+    fn recognizes_interactive_sql_prompts() {
+        for prompt in [
+            "sqlplus>",
+            "SQL>",
+            "RMAN>",
+            "mysql>",
+            "MariaDB>",
+            "postgres=#",
+            "sqlite>",
+        ] {
+            assert!(looks_like_sql_prompt(prompt), "{prompt}");
+            assert_eq!(
+                resolve_ssh_execution_profile(AiExecutionProfile::Auto, false, prompt),
+                AiExecutionProfile::SendOnly,
+                "{prompt}"
+            );
+        }
+        assert!(looks_like_sql_prompt("select 1 from dual;\nSQL>"));
+        assert!(!ssh_allows_background_execution(
+            AiExecutionProfile::Auto,
+            false,
+            "SQL>"
+        ));
+    }
+
+    #[test]
+    fn sql_prompt_detection_rejects_shell_and_network_prompts() {
+        for line in ["user@host:~$", "bash-5.2$", "<Switch>", "[H3C]", "Router#"] {
+            assert!(!looks_like_sql_prompt(line), "{line}");
+        }
     }
 
     #[test]

@@ -333,7 +333,7 @@ impl NyaTermApp {
         };
         self.settings
             .update_store_status(t!("settings.applying").to_string(), false);
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
                 let conflict = || {
@@ -535,6 +535,19 @@ impl NyaTermApp {
             },
             cx,
         );
+        // A full or disconnected store queue used to swallow the request and
+        // leave the panel stuck on "unsaved changes" with no feedback.
+        if !submitted {
+            let message = t!(
+                "settings.applyFailed",
+                error = "settings store is unavailable"
+            )
+            .to_string();
+            self.settings.update_store_status(message.clone(), false);
+            self.shell.set_status(message);
+            self.request_settings_panel_refresh(cx);
+            cx.notify();
+        }
     }
 
     pub(in crate::features) fn cancel_settings(&mut self, cx: &mut Context<Self>) {

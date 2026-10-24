@@ -27,8 +27,18 @@ pub fn builtin_keyword_matcher(id: &str) -> Option<BuiltinKeywordMatcher> {
         return None;
     }
     Some(match id {
-        "builtin-error" | "builtin-warn" | "builtin-success" | "builtin-info" | "builtin-debug"
-        | "builtin-constant" => BuiltinKeywordMatcher::LiteralWords,
+        "builtin-error"
+        | "builtin-warn"
+        | "builtin-success"
+        | "builtin-info"
+        | "builtin-debug"
+        | "builtin-constant"
+        | "builtin-net-interface-up"
+        | "builtin-net-interface-down"
+        | "builtin-net-admin-down"
+        | "builtin-net-standby"
+        | "builtin-net-acl-permit"
+        | "builtin-net-acl-deny" => BuiltinKeywordMatcher::LiteralWords,
         "builtin-command" | "builtin-path" | "builtin-permissions" | "builtin-prompt" => {
             BuiltinKeywordMatcher::Structured
         }
@@ -60,6 +70,16 @@ pub fn builtin_keyword_rule_ids() -> &'static [&'static str] {
         "builtin-number",
         "builtin-prompt",
         "builtin-operator",
+        // Network-device CLI vocabulary (H3C / Huawei / Cisco / Ruijie / Aruba).
+        "builtin-net-interface",
+        "builtin-net-vlan",
+        "builtin-net-interface-up",
+        "builtin-net-interface-down",
+        "builtin-net-admin-down",
+        "builtin-net-standby",
+        "builtin-net-acl-permit",
+        "builtin-net-acl-deny",
+        "builtin-net-wildcard-mask",
     ]
 }
 
@@ -86,6 +106,15 @@ pub fn builtin_keyword_rule_label(id: &str) -> &'static str {
         "builtin-number" => "Number",
         "builtin-prompt" => "Prompt",
         "builtin-operator" => "Operator",
+        "builtin-net-interface" => "Interface",
+        "builtin-net-vlan" => "VLAN",
+        "builtin-net-interface-up" => "Interface UP",
+        "builtin-net-interface-down" => "Interface DOWN",
+        "builtin-net-admin-down" => "Administratively down",
+        "builtin-net-standby" => "Standby",
+        "builtin-net-acl-permit" => "ACL permit",
+        "builtin-net-acl-deny" => "ACL deny",
+        "builtin-net-wildcard-mask" => "Wildcard mask",
         _ => "Builtin",
     }
 }
@@ -238,6 +267,69 @@ pub fn builtin_keyword_rule_swatch(id: &str, is_dark: bool) -> &'static str {
                 "#f92672"
             } else {
                 "#e00862"
+            }
+        }
+        "builtin-net-interface" => {
+            if dark {
+                "#7dd3fc"
+            } else {
+                "#1b7c83"
+            }
+        }
+        "builtin-net-vlan" => {
+            if dark {
+                "#c084fc"
+            } else {
+                "#8250df"
+            }
+        }
+        "builtin-net-interface-up" => {
+            if dark {
+                "#4ade80"
+            } else {
+                "#1a7f37"
+            }
+        }
+        "builtin-net-interface-down" => {
+            if dark {
+                "#f87171"
+            } else {
+                "#cf222e"
+            }
+        }
+        "builtin-net-admin-down" => {
+            if dark {
+                "#fbbf24"
+            } else {
+                "#9a6700"
+            }
+        }
+        "builtin-net-standby" => {
+            if dark {
+                "#38bdf8"
+            } else {
+                "#0969da"
+            }
+        }
+        "builtin-net-acl-permit" => {
+            if dark {
+                "#4ade80"
+            } else {
+                "#1a7f37"
+            }
+        }
+        "builtin-net-acl-deny" => {
+            if dark {
+                "#f87171"
+            } else {
+                "#cf222e"
+            }
+        }
+        "builtin-net-wildcard-mask" => {
+            if dark {
+                "#94a3b8"
+            } else {
+                "#6e7781"
             }
         }
         _ => {
@@ -395,6 +487,20 @@ fn builtin_patterns(id: &str) -> Vec<String> {
         ],
         "builtin-prompt" => Vec::new(),
         "builtin-operator" => vec![r"[-:;=+&*()$\[\]<>?|{}]+".into()],
+        // Network-device CLI vocabulary. Interface names and VLAN tags match as
+        // whole tokens so colour does not depend on how many digits a port
+        // number happens to have; status words and ACL verbs stay literal.
+        "builtin-net-interface" => vec![
+            r"(?i)\b(?:GE|XGE|M-GE|BAGG|GigabitEthernet|XGigabitEthernet|Ten-GigabitEthernet|Bridge-Aggregation|Vlan-interface|Vlanif)\d+(?:/\d+)*\b".into(),
+        ],
+        "builtin-net-vlan" => vec![r"(?i)\bVLAN\s+\d+".into()],
+        "builtin-net-interface-up" => word_patterns(&["UP"]),
+        "builtin-net-interface-down" => word_patterns(&["DOWN"]),
+        "builtin-net-admin-down" => word_patterns(&["ADM"]),
+        "builtin-net-standby" => word_patterns(&["Stby"]),
+        "builtin-net-acl-permit" => word_patterns(&["permit"]),
+        "builtin-net-acl-deny" => word_patterns(&["deny"]),
+        "builtin-net-wildcard-mask" => vec![r"\b0\.0\.0\.\d{1,3}\b".into()],
         _ => Vec::new(),
     }
 }
@@ -465,7 +571,8 @@ mod tests {
     #[test]
     fn builtin_catalog_is_stable() {
         let rules = get_builtin_keyword_rules(true);
-        assert_eq!(rules.len(), 21);
+        // 21 general rules + 9 network-device CLI rules.
+        assert_eq!(rules.len(), 30);
         assert!(rules.iter().all(|rule| rule.id.starts_with("builtin-")));
         assert!(
             rules

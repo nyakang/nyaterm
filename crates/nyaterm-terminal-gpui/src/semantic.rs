@@ -124,6 +124,9 @@ impl SemanticHighlighter {
                         "builtin-operator" => 90,
                         "builtin-option" => 40,
                         "builtin-string" => 20,
+                        // Interface names and VLAN tags must outrank the number
+                        // rule (80) so the whole token keeps one colour.
+                        "builtin-net-interface" | "builtin-net-vlan" => 85,
                         _ => 30,
                     };
                     for pattern in &rule.patterns {
