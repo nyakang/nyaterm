@@ -5,16 +5,62 @@ use super::{
 
 #[test]
 fn sync_settings_exclude_local_configuration_and_preserve_it_on_apply() {
-    let current = serde_json::json!({
-        "cloud_sync": {"enabled": true, "webdav": {"password": "encrypted"}},
-        "keybindings": {"custom": "binding"},
+    let sender = serde_json::json!({
+        "cloud_sync": {"enabled": true, "webdav": {"password": "sender-encrypted"}},
+        "keybindings": {"custom": "sender-binding"},
         "appearance": {"theme": "dark", "background_image_path": "C:/wallpaper.png"},
-        "transfer": {"duplicate_strategy": "ask", "download_path": "C:/Downloads"},
-        "ui": {"language": "zh-CN", "open_tabs": ["local"]},
-        "security": {"master_password": "encrypted-password"},
+        "transfer": {
+            "duplicate_strategy": "ask",
+            "download_path": "C:/Downloads",
+            "recording_path": "C:/Recordings"
+        },
+        "ui": {
+            "language": "zh-CN",
+            "open_tabs": ["sender-tab"],
+            "left_width": 320,
+            "right_width": 360,
+            "active_left_panel": "notes",
+            "active_right_panel": null,
+            "activity_bar_layout": {
+                "left_top": ["notes", "fileExplorer"],
+                "right_top": ["gpuMonitor", "network"],
+                "hidden_items": ["dockerManager"]
+            },
+            "panel_open_mode": "floating",
+            "panel_multi_open": true
+        },
+        "security": {"master_password": "sender-encrypted-password"},
         "future_local_field": {"keep": true}
     });
-    let mut projected = current.clone();
+    let receiver = serde_json::json!({
+        "cloud_sync": {"enabled": false, "webdav": {"password": "receiver-encrypted"}},
+        "keybindings": {"custom": "receiver-binding"},
+        "appearance": {"theme": "light", "background_image_path": "D:/other.png"},
+        "transfer": {
+            "duplicate_strategy": "overwrite",
+            "download_path": "D:/Downloads",
+            "recording_path": "D:/Recordings"
+        },
+        "ui": {
+            "language": "en-US",
+            "open_tabs": ["receiver-tab"],
+            "left_width": 210,
+            "right_width": 240,
+            "active_left_panel": "fileExplorer",
+            "active_right_panel": "gpuMonitor",
+            "activity_bar_layout": {
+                "left_top": ["network"],
+                "right_top": ["notes"],
+                "hidden_items": []
+            },
+            "panel_open_mode": "docked",
+            "panel_multi_open": false
+        },
+        "security": {"master_password": "receiver-encrypted-password"},
+        "future_local_field": {"keep": false}
+    });
+
+    let mut projected = sender.clone();
     project_sync_settings(&mut projected);
     assert!(projected.get("cloud_sync").is_none());
     assert!(projected.get("keybindings").is_none());
@@ -23,19 +69,101 @@ fn sync_settings_exclude_local_configuration_and_preserve_it_on_apply() {
             .get("background_image_path")
             .is_none()
     );
-    assert!(projected["transfer"].get("download_path").is_none());
-    assert!(projected["ui"].get("open_tabs").is_none());
+    for field in ["download_path", "recording_path"] {
+        assert!(projected["transfer"].get(field).is_none());
+    }
+    for field in ["open_tabs", "left_width", "right_width"] {
+        assert!(projected["ui"].get(field).is_none());
+    }
     assert!(projected["security"].get("master_password").is_none());
+    for field in [
+        "active_left_panel",
+        "active_right_panel",
+        "activity_bar_layout",
+        "panel_open_mode",
+        "panel_multi_open",
+    ] {
+        assert_eq!(projected["ui"][field], sender["ui"][field], "{field}");
+    }
     assert_eq!(
         projected["future_local_field"],
-        current["future_local_field"]
+        sender["future_local_field"]
     );
 
-    projected["appearance"]["theme"] = serde_json::json!("light");
-    preserve_device_local_sync_settings(&mut projected, &current);
-    assert_eq!(projected["appearance"]["theme"], "light");
-    assert_eq!(projected["cloud_sync"], current["cloud_sync"]);
-    assert_eq!(projected["ui"]["open_tabs"], current["ui"]["open_tabs"]);
+    // The receiver adopts the sender's panel state and layout, not its local paths.
+    preserve_device_local_sync_settings(&mut projected, &receiver);
+    for field in [
+        "active_left_panel",
+        "active_right_panel",
+        "activity_bar_layout",
+        "panel_open_mode",
+        "panel_multi_open",
+    ] {
+        assert_eq!(projected["ui"][field], sender["ui"][field], "{field}");
+    }
+    for field in ["open_tabs", "left_width", "right_width"] {
+        assert_eq!(projected["ui"][field], receiver["ui"][field], "{field}");
+    }
+    for field in ["download_path", "recording_path"] {
+        assert_eq!(
+            projected["transfer"][field], receiver["transfer"][field],
+            "{field}"
+        );
+    }
+    assert_eq!(
+        projected["appearance"]["theme"],
+        sender["appearance"]["theme"]
+    );
+    assert_eq!(
+        projected["appearance"]["background_image_path"],
+        receiver["appearance"]["background_image_path"]
+    );
+    assert_eq!(projected["transfer"]["duplicate_strategy"], "ask");
+    assert_eq!(projected["cloud_sync"], receiver["cloud_sync"]);
+    assert_eq!(projected["keybindings"], receiver["keybindings"]);
+    assert_eq!(
+        projected["future_local_field"],
+        sender["future_local_field"]
+    );
+
+    // The opposite direction also applies the incoming panel state.
+    let mut reverse = receiver.clone();
+    project_sync_settings(&mut reverse);
+    preserve_device_local_sync_settings(&mut reverse, &sender);
+    for field in [
+        "active_left_panel",
+        "active_right_panel",
+        "activity_bar_layout",
+        "panel_open_mode",
+        "panel_multi_open",
+    ] {
+        assert_eq!(reverse["ui"][field], receiver["ui"][field], "{field}");
+    }
+    assert_eq!(reverse["ui"]["open_tabs"], sender["ui"]["open_tabs"]);
+    assert_eq!(reverse["cloud_sync"], sender["cloud_sync"]);
+    assert_eq!(reverse["keybindings"], sender["keybindings"]);
+}
+
+#[test]
+fn sync_settings_preserve_closed_and_legacy_missing_panels() {
+    let current = serde_json::json!({
+        "ui": {"active_left_panel": "notes", "active_right_panel": "gpuMonitor"}
+    });
+    let mut closed = serde_json::json!({
+        "ui": {"active_left_panel": "", "active_right_panel": null}
+    });
+    project_sync_settings(&mut closed);
+    preserve_device_local_sync_settings(&mut closed, &current);
+    assert_eq!(closed["ui"]["active_left_panel"], "");
+    assert!(closed["ui"]["active_right_panel"].is_null());
+
+    // Missing fields in a legacy sync payload are not invented here.
+    // The storage merge fills absent keys from the receiver as before.
+    let mut legacy = serde_json::json!({"ui": {"language": "en-US"}});
+    project_sync_settings(&mut legacy);
+    preserve_device_local_sync_settings(&mut legacy, &current);
+    assert!(legacy["ui"].get("active_left_panel").is_none());
+    assert!(legacy["ui"].get("active_right_panel").is_none());
 }
 
 #[test]
@@ -162,8 +290,11 @@ fn settings_entity_preserves_activity_bar_hidden_items_and_panel_open_mode() {
         "ui": {
             "activity_bar_layout": {
                 "left_top": ["fileExplorer", "notes", "network"],
+                "right_top": ["savedConnections", "gpuMonitor"],
                 "hidden_items": ["gpuMonitor", "dockerManager"]
             },
+            "active_left_panel": "notes",
+            "active_right_panel": null,
             "panel_open_mode": "floating",
             "panel_multi_open": true,
             "show_notes_panel": true
@@ -194,6 +325,12 @@ fn settings_entity_preserves_activity_bar_hidden_items_and_panel_open_mode() {
         parsed["ui"]["activity_bar_layout"]["left_top"],
         serde_json::json!(["fileExplorer", "notes", "network"])
     );
+    assert_eq!(
+        parsed["ui"]["activity_bar_layout"]["right_top"],
+        serde_json::json!(["savedConnections", "gpuMonitor"])
+    );
+    assert_eq!(parsed["ui"]["active_left_panel"], "notes");
+    assert!(parsed["ui"]["active_right_panel"].is_null());
     assert_eq!(parsed["ui"]["panel_open_mode"], "floating");
     assert_eq!(parsed["ui"]["show_notes_panel"], true);
     assert_eq!(parsed["appearance"]["panel_multi_open"], true);
