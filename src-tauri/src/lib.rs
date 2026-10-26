@@ -129,7 +129,6 @@ pub fn run() {
         .manage(portable_update_state)
         .on_menu_event(cmd::macos_menu::handle_menu_event)
         .setup(move |a| {
-            core::mcp::install_approval_notifications(a.handle());
             app::setup(
                 a,
                 session_manager,
@@ -138,6 +137,9 @@ pub fn run() {
                 cloud_sync_manager,
                 runtime_for_setup.clone(),
             )?;
+            // Storage is opened inside setup. Registering notifications first
+            // would load settings and open nyaterm.redb a second time.
+            core::mcp::install_approval_notifications(a.handle());
             let manager = mcp_manager.clone();
             let app_handle = a.handle().clone();
             if let Err(error) = tauri::async_runtime::block_on(manager.initialize(app_handle)) {

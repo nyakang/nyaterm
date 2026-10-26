@@ -108,6 +108,9 @@ pub enum KnownHostCheck {
 }
 
 pub fn init(config_dir: &Path) -> AppResult<()> {
+    if STORAGE.get().is_some() {
+        return Ok(());
+    }
     fs::create_dir_all(config_dir)?;
     let storage = Arc::new(Storage::open(config_dir)?);
     if STORAGE.set(storage).is_err() {
