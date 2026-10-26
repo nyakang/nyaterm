@@ -225,6 +225,8 @@
     "externalMcpDisabled": "비활성화됨",
     "externalMcpEnabled": "외부 MCP 활성화",
     "externalMcpError": "오류",
+    "externalMcpNotificationBody": "NyaTerm으로 돌아가 요청을 검토하세요.",
+    "externalMcpNotificationTitle": "NyaTerm: MCP 승인 필요",
     "externalMcpRisk": "위험",
     "externalMcpRunning": "실행 중",
     "externalMcpRuntimeSummary": "창: {{window}} · 세션: {{sessions}} · 연결: {{connections}}",

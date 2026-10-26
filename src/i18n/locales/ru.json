@@ -225,6 +225,8 @@
     "externalMcpDisabled": "отключено",
     "externalMcpEnabled": "Включить внешний MCP",
     "externalMcpError": "Ошибка",
+    "externalMcpNotificationBody": "Вернитесь в NyaTerm, чтобы просмотреть запрос.",
+    "externalMcpNotificationTitle": "NyaTerm: требуется подтверждение MCP",
     "externalMcpRisk": "Риск",
     "externalMcpRunning": "Выполняется",
     "externalMcpRuntimeSummary": "Окно: {{window}} · Сеансы: {{sessions}} · Соединения: {{connections}}",

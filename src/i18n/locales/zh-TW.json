@@ -225,6 +225,8 @@
     "externalMcpDisabled": "已停用",
     "externalMcpEnabled": "啟用外部 MCP",
     "externalMcpError": "錯誤",
+    "externalMcpNotificationBody": "返回 NyaTerm 檢視並處理請求。",
+    "externalMcpNotificationTitle": "NyaTerm：MCP 核准待處理",
     "externalMcpRisk": "風險",
     "externalMcpRunning": "執行中",
     "externalMcpRuntimeSummary": "視窗：{{window}} · 工作階段：{{sessions}} · 連線：{{connections}}",

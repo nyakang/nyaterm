@@ -232,7 +232,7 @@ pub fn focused_or_first_main_window(app: &tauri::AppHandle) -> Option<tauri::Web
         .or_else(|| windows.into_iter().next())
 }
 
-fn focus_window(window: &tauri::WebviewWindow) {
+pub(crate) fn focus_window(window: &tauri::WebviewWindow) {
     if window.is_minimized().unwrap_or(false) {
         let _ = window.unminimize();
     }

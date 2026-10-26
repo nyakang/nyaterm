@@ -225,6 +225,8 @@
     "externalMcpDisabled": "Disabled",
     "externalMcpEnabled": "Enable External MCP",
     "externalMcpError": "Error",
+    "externalMcpNotificationBody": "Return to NyaTerm to review the request.",
+    "externalMcpNotificationTitle": "NyaTerm: MCP approval required",
     "externalMcpRisk": "Risk",
     "externalMcpRunning": "Running",
     "externalMcpRuntimeSummary": "Window: {{window}} · Sessions: {{sessions}} · Connections: {{connections}}",

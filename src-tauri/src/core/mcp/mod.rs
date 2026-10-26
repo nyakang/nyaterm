@@ -2,6 +2,8 @@ mod approval;
 mod discovery;
 mod host;
 #[cfg(windows)]
+mod notification;
+#[cfg(windows)]
 mod windows_acl;
 #[cfg(all(test, windows))]
 pub(crate) use windows_acl::assert_current_user_only;
