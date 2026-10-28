@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
 use nyaterm_transport::RecordingStatus;
@@ -10,11 +11,26 @@ use crate::models::{
 pub(in crate::features) struct RecordingFeatureState {
     active_count: usize,
     pipeline: RecordingWritePipeline,
+    macro_memory_limit: usize,
+    macros: HashMap<String, MacroRecording>,
     search_draft: String,
     busy_actions: HashMap<String, String>,
     rekeyed_sessions: HashMap<String, String>,
     statuses: HashMap<String, RecordingStatus>,
     prompts: HashMap<String, RecordingPrompt>,
+}
+
+/// One successful user input write. Pauses are measured before this write.
+pub(in crate::features) struct MacroInputChunk {
+    pub(in crate::features) delay_seconds: u64,
+    pub(in crate::features) bytes: Vec<u8>,
+}
+
+#[derive(Default)]
+struct MacroRecording {
+    chunks: Vec<MacroInputChunk>,
+    size_bytes: usize,
+    last_input_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -30,6 +46,8 @@ impl RecordingFeatureState {
         Self {
             active_count: 0,
             pipeline,
+            macro_memory_limit: memory_limit_bytes,
+            macros: HashMap::new(),
             search_draft: String::new(),
             busy_actions: HashMap::new(),
             rekeyed_sessions: HashMap::new(),
@@ -77,8 +95,74 @@ impl RecordingFeatureState {
         self.pipeline.writer()
     }
 
-    pub(in crate::features) fn set_memory_limit(&self, memory_limit_bytes: usize) {
+    pub(in crate::features) fn set_memory_limit(&mut self, memory_limit_bytes: usize) {
+        self.macro_memory_limit = memory_limit_bytes;
         self.pipeline.set_memory_limit(memory_limit_bytes);
+    }
+
+    pub(in crate::features) fn start_macro(&mut self, session_id: &str) -> bool {
+        if self.macros.contains_key(session_id) {
+            return false;
+        }
+        self.macros
+            .insert(session_id.to_string(), MacroRecording::default());
+        true
+    }
+
+    pub(in crate::features) fn is_macro_recording(&self, session_id: &str) -> bool {
+        self.macros.contains_key(session_id)
+    }
+
+    pub(in crate::features) fn macro_bytes(&self, session_id: &str) -> Option<usize> {
+        self.macros.get(session_id).map(|draft| draft.size_bytes)
+    }
+
+    /// Returns true if the memory limit was exceeded and the draft was discarded.
+    pub(in crate::features) fn append_macro_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        at: Instant,
+    ) -> bool {
+        let Some(draft) = self.macros.get_mut(session_id) else {
+            return false;
+        };
+        if bytes.is_empty() {
+            return false;
+        }
+        if bytes.len() > self.macro_memory_limit.saturating_sub(draft.size_bytes) {
+            self.macros.remove(session_id);
+            return true;
+        }
+        let pause = draft.last_input_at.map_or(0, |previous| {
+            at.saturating_duration_since(previous).as_secs()
+        });
+        // Quick Commands only support one-second pauses; bound long idle periods.
+        let pause = pause.min(60);
+        if pause == 0
+            && let Some(last) = draft.chunks.last_mut()
+        {
+            last.bytes.extend_from_slice(bytes);
+        } else {
+            draft.chunks.push(MacroInputChunk {
+                delay_seconds: pause,
+                bytes: bytes.to_vec(),
+            });
+        }
+        draft.size_bytes += bytes.len();
+        draft.last_input_at = Some(at);
+        false
+    }
+
+    pub(in crate::features) fn finish_macro(
+        &mut self,
+        session_id: &str,
+    ) -> Option<Vec<MacroInputChunk>> {
+        self.macros.remove(session_id).map(|draft| draft.chunks)
+    }
+
+    pub(in crate::features) fn discard_macro(&mut self, session_id: &str) {
+        self.macros.remove(session_id);
     }
 
     pub(in crate::features) fn active_count(&self) -> usize {
@@ -214,6 +298,7 @@ impl RecordingFeatureState {
     }
 
     pub(in crate::features) fn cleanup_session(&mut self, session_id: &str) {
+        self.discard_macro(session_id);
         self.prompts.remove(session_id);
         self.busy_actions.remove(session_id);
         self.statuses.remove(session_id);
@@ -229,6 +314,8 @@ impl RecordingFeatureState {
         if old_id == new_id {
             return;
         }
+        self.discard_macro(old_id);
+        self.discard_macro(new_id);
         self.prompts.remove(old_id);
         self.prompts.remove(new_id);
         if let Some(action) = self.busy_actions.remove(old_id) {
@@ -244,6 +331,7 @@ impl RecordingFeatureState {
 #[cfg(test)]
 mod tests {
     use super::RecordingFeatureState;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn recording_state_owns_runtime_and_session_cleanup_state() {
@@ -284,5 +372,50 @@ mod tests {
         recording.rekey_session("s1", "s2");
         assert_eq!(recording.busy_action("s2"), Some("record"));
         assert!(recording.busy_action("s1").is_none());
+    }
+
+    #[test]
+    fn macro_records_only_successfully_appended_session_bytes_and_whole_second_pauses() {
+        let mut recording = RecordingFeatureState::new(1024);
+        let start = Instant::now();
+        assert!(recording.start_macro("first"));
+        assert!(!recording.start_macro("first"));
+        assert!(!recording.append_macro_input("other", b"ignored", start));
+        assert!(!recording.append_macro_input("first", b"hello", start));
+        assert!(!recording.append_macro_input("first", b"\r", start + Duration::from_millis(500)));
+        assert!(!recording.append_macro_input(
+            "first",
+            b"world",
+            start + Duration::from_millis(1700)
+        ));
+        assert_eq!(recording.macro_bytes("first"), Some(11));
+        let chunks = recording.finish_macro("first").unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].bytes, b"hello\r");
+        assert_eq!(chunks[0].delay_seconds, 0);
+        assert_eq!(chunks[1].bytes, b"world");
+        assert_eq!(chunks[1].delay_seconds, 1);
+        assert!(!recording.is_macro_recording("first"));
+        assert!(recording.finish_macro("first").is_none());
+    }
+
+    #[test]
+    fn macro_discards_on_limit_disconnect_cleanup_and_rekey() {
+        let mut recording = RecordingFeatureState::new(4);
+        let now = Instant::now();
+        recording.start_macro("first");
+        recording.append_macro_input("first", b"abcd", now);
+        assert!(recording.append_macro_input("first", b"x", now));
+        assert!(recording.finish_macro("first").is_none());
+        recording.start_macro("first");
+        recording.cleanup_session("first");
+        assert!(!recording.is_macro_recording("first"));
+        recording.start_macro("first");
+        recording.start_macro("second");
+        recording.rekey_session("first", "second");
+        assert!(!recording.is_macro_recording("first"));
+        assert!(!recording.is_macro_recording("second"));
+        recording.start_macro("third");
+        assert!(recording.finish_macro("third").unwrap().is_empty());
     }
 }

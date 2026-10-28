@@ -1747,6 +1747,7 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
             app.terminal
                 .seed_session_view(info.id.clone(), String::new(), encoding);
             app.sync_input.toggle_selected_session(info.id.clone());
+            assert!(app.recording.start_macro(&info.id));
             ids.push(info.id);
         }
         app.terminal
@@ -1778,6 +1779,18 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
         // A failed primary must stop fanout before either successful peer sees text.
         app.session.select_active_session(&ids[2]);
         app.send_terminal_paste_input("😀", cx);
+        for (index, id) in ids.iter().enumerate() {
+            let chunks = app.recording.finish_macro(id).unwrap();
+            if index < 2 {
+                assert_eq!(chunks.len(), 1);
+                assert_eq!(chunks[0].bytes, "测试😀".as_bytes());
+            } else {
+                assert!(
+                    chunks.is_empty(),
+                    "failed charset encoding must not record input"
+                );
+            }
+        }
         for id in &ids {
             app.write_session_protocol_response(id, b"END").unwrap();
         }
@@ -1880,6 +1893,7 @@ fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw
                     4096,
                 )
                 .unwrap();
+            assert!(app.recording.start_macro(&info.id));
             ids.push(info.id);
         }
         app.session.select_active_session(&ids[0]);
@@ -1906,6 +1920,11 @@ fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw
         for id in &ids {
             app.write_session_sensitive_input(id, b"dedicated").unwrap();
         }
+        assert_eq!(app.recording.finish_macro(&ids[0]).unwrap()[0].bytes, b"b");
+        assert_eq!(
+            app.recording.finish_macro(&ids[1]).unwrap()[0].bytes,
+            "a测试".as_bytes()
+        );
         for (index, id) in ids.iter().enumerate() {
             let completion = app.recording.writer().stop_complete(id.clone()).unwrap();
             assert!(completion.error.is_none());

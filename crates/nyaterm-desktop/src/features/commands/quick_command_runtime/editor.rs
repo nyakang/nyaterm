@@ -164,7 +164,7 @@ impl NyaTermApp {
             icon_tag: editor.icon_tag.clone(),
             pinned: editor.pinned.then_some(true),
             execution_mode: Some(editor.execution_mode.clone()),
-            source: original.as_ref().and_then(|command| command.source.clone()),
+            source: editor.source.clone(),
             risk_level: original
                 .as_ref()
                 .and_then(|command| command.risk_level.clone()),

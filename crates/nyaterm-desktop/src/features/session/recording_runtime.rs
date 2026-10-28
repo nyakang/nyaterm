@@ -17,10 +17,56 @@ use nyaterm_transport::{
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+use crate::features::commands::encode_recorded_macro;
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
-use crate::models::SessionLaunchConfig;
+use crate::models::{QuickCommandEditorState, SessionLaunchConfig};
 
 impl NyaTermApp {
+    pub(in crate::features) fn toggle_macro_recording_for_session(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording.is_macro_recording(session_id) {
+            if self.commands.quick_editor().is_some() {
+                self.shell
+                    .set_status(t!("recording.macroEditorBusy").to_string());
+                cx.notify();
+                return;
+            }
+            let Some(chunks) = self.recording.finish_macro(session_id) else {
+                return;
+            };
+            if chunks.is_empty() {
+                self.shell
+                    .set_status(t!("recording.macroEmpty").to_string());
+            } else {
+                let script = encode_recorded_macro(&chunks);
+                self.commands
+                    .open_quick_editor(QuickCommandEditorState::from_recorded_macro(
+                        t!("recording.macroDefaultLabel").to_string(),
+                        script,
+                    ));
+                self.forget_text_inputs("quick-command.editor.");
+                self.open_quick_command_window(cx);
+                self.shell
+                    .set_status(t!("recording.macroReview").to_string());
+            }
+        } else if self.session.session_info(session_id).is_none()
+            || self.session.is_disconnected(session_id)
+            || self.remote_desktop.is_session(session_id)
+            || self.security.screen_locked()
+        {
+            self.shell
+                .set_status(t!("recording.sessionUnavailable").to_string());
+        } else {
+            self.recording.start_macro(session_id);
+            self.shell
+                .set_status(t!("recording.macroStarted").to_string());
+        }
+        cx.notify();
+    }
+
     pub(in crate::features) fn toggle_active_session_recording(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.session.active_id_owned() else {
             self.shell

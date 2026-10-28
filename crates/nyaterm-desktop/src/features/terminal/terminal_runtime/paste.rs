@@ -191,6 +191,7 @@ impl NyaTermApp {
 
         let peers = self.sync_peer_session_ids(&session_id);
         let mut ok_sessions = Vec::new();
+        let mut macro_limit_reached = false;
         let recording_bytes = text.as_bytes();
         let primary_bytes = match self.wrap_terminal_paste_bytes_for_session(&session_id, text) {
             Ok(bytes) => bytes,
@@ -206,7 +207,11 @@ impl NyaTermApp {
             &primary_bytes,
             recording_bytes,
         ) {
-            Ok(()) => ok_sessions.push(session_id),
+            Ok(()) => {
+                macro_limit_reached |=
+                    self.capture_macro_user_input(&session_id, recording_bytes, cx);
+                ok_sessions.push(session_id);
+            }
             Err(error) => {
                 if self.set_terminal_status_if_changed(format!("paste failed: {error}")) {
                     cx.notify();
@@ -228,6 +233,8 @@ impl NyaTermApp {
             match self.write_session_wire_input_recorded_as(&peer_id, &peer_bytes, recording_bytes)
             {
                 Ok(()) => {
+                    macro_limit_reached |=
+                        self.capture_macro_user_input(&peer_id, recording_bytes, cx);
                     ok_sessions.push(peer_id);
                     synced += 1;
                 }
@@ -241,9 +248,11 @@ impl NyaTermApp {
         let session_refs: Vec<&str> = ok_sessions.iter().map(String::as_str).collect();
         self.record_command_history_for_sessions(&session_refs, history_bytes);
 
-        if self.set_terminal_status_if_changed(terminal_input_fanout_status(
-            "pasted", byte_count, synced, failed,
-        )) {
+        if !macro_limit_reached
+            && self.set_terminal_status_if_changed(terminal_input_fanout_status(
+                "pasted", byte_count, synced, failed,
+            ))
+        {
             cx.notify();
         }
     }
@@ -305,7 +314,7 @@ impl NyaTermApp {
         };
         self.terminal.paste.clear();
         // Line-by-line send intentionally skips bracketed paste framing.
-        self.send_terminal_input(line_by_line_paste_bytes(&text), cx);
+        self.send_terminal_typed_input(line_by_line_paste_bytes(&text), cx);
         self.focus_active_workspace_surface(window, cx);
     }
 

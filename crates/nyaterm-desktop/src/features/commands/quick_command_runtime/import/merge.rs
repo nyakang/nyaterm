@@ -49,7 +49,9 @@ pub(super) fn merge_import(
     let now = current_time_ms();
     for command in import_config.commands {
         let label = require_text(&command.label, "command.label")?;
-        let command_text = if command.preserve_command_text {
+        let command_text = if command.preserve_command_text
+            || command.source.as_deref().map(str::trim) == Some("macro")
+        {
             require_preserved_text(&command.command, "command.command")?
         } else {
             require_text(&command.command, "command.command")?
@@ -99,7 +101,7 @@ pub(super) fn merge_import(
             "command.execution_mode",
         )?;
         if let Some(source) = command.source.as_deref().map(str::trim) {
-            validate_one_of(source, &["manual", "ai"], "command.source")?;
+            validate_one_of(source, &["manual", "ai", "macro"], "command.source")?;
         }
 
         let imported = QuickCommand {

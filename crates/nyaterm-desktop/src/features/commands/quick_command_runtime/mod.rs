@@ -1,4 +1,5 @@
 mod escapes;
+pub(in crate::features) use escapes::encode_recorded_macro;
 mod import;
 mod variables;
 

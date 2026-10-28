@@ -30,6 +30,17 @@ Available fields include:
 
 After saving, the command appears in the list and can still be edited or deleted later.
 
+## Record a terminal macro
+
+1. Start a connected SSH, local, Telnet, or Serial terminal session.
+2. In the **Recording** panel, click **Start Macro** for that session (independent of Transcript and Raw logs).
+3. Type, use IME, Enter, Tab, or paste the text you want to replay. The recorder captures input only after a successful send, including successful synchronized targets.
+4. Click **Stop Macro and Review**. The Quick Commands editor shows the recorded script. Review it, choose a label, and explicitly save it. Closing the editor discards the draft; stopping an empty macro saves nothing.
+
+Recorded macros default to **Append to prompt**, so playback submits only the Enter keys you actually pressed during recording. You can edit or delete them later in Quick Commands. Input at detected password prompts, sensitive input APIs, automated commands, and terminal protocol replies are excluded. Check the draft before saving, since password detection depends on the terminal prompt.
+
+The script stores a literal backslash as `\\` and control bytes as macro-only `\xHH` escapes; literal `{{...}}` text is replayed rather than treated as a variable placeholder. Pauses of one second or longer between input chunks are represented using `\p` (rounded down to whole seconds and capped at 60 seconds per gap). Faster timing and remote screen reactions are not reproduced. Disconnecting, reconnecting, closing a session, or exceeding the configured recording memory limit discards the unfinished macro.
+
 ## Execution modes
 
 ### Execute immediately

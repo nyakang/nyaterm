@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::features::recording::MacroInputChunk;
+
 /// One `\p` in a quick command script waits this long.
 ///
 /// The escape exists for devices whose prompts cannot keep up: send a login
@@ -39,33 +41,57 @@ pub(super) struct QuickCommandChunk {
 /// script that already ends in `\r` (escape or literal) is left alone, exactly
 /// like the pre-escape behaviour.
 pub(super) fn plan_quick_command(text: &str, execute: bool) -> Vec<QuickCommandChunk> {
+    plan_quick_command_with_source(text, execute, false)
+}
+
+/// Macro scripts may additionally decode `\xHH` into an exact control byte.
+/// Manual and AI commands keep the original escape interpretation.
+pub(super) fn plan_quick_command_with_source(
+    text: &str,
+    execute: bool,
+    macro_source: bool,
+) -> Vec<QuickCommandChunk> {
     let mut chunks = Vec::new();
-    let mut pending = String::new();
+    let mut pending = Vec::new();
     let mut delay = Duration::ZERO;
     let mut chars = text.chars();
 
     while let Some(ch) = chars.next() {
         if ch != '\\' {
-            pending.push(ch);
+            pending.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
             continue;
         }
         match chars.next() {
-            Some('r') => pending.push('\r'),
-            Some('n') => pending.push('\n'),
-            Some('t') => pending.push('\t'),
-            Some('\\') => pending.push('\\'),
+            Some('r') => pending.push(b'\r'),
+            Some('n') => pending.push(b'\n'),
+            Some('t') => pending.push(b'\t'),
+            Some('\\') => pending.push(b'\\'),
             Some('p') => {
                 // The pause belongs to the text after it, so it is banked here
                 // and handed to the next chunk that is actually flushed.
                 flush(&mut chunks, &mut pending, &mut delay);
                 delay += QUICK_COMMAND_PAUSE;
             }
+            Some('x') if macro_source => {
+                let mut peek = chars.clone();
+                match (
+                    peek.next().and_then(|c| c.to_digit(16)),
+                    peek.next().and_then(|c| c.to_digit(16)),
+                ) {
+                    (Some(hi), Some(lo)) => {
+                        chars.next();
+                        chars.next();
+                        pending.push((hi * 16 + lo) as u8);
+                    }
+                    _ => pending.extend_from_slice(b"\\x"),
+                }
+            }
             Some(other) => {
-                pending.push('\\');
-                pending.push(other);
+                pending.push(b'\\');
+                pending.extend_from_slice(other.encode_utf8(&mut [0; 4]).as_bytes());
             }
             // A lone trailing backslash stays literal.
-            None => pending.push('\\'),
+            None => pending.push(b'\\'),
         }
     }
     flush(&mut chunks, &mut pending, &mut delay);
@@ -94,15 +120,59 @@ pub(super) fn quick_command_needs_staging(chunks: &[QuickCommandChunk]) -> bool 
     chunks.len() > 1 || chunks.iter().any(|chunk| !chunk.delay.is_zero())
 }
 
-fn flush(chunks: &mut Vec<QuickCommandChunk>, pending: &mut String, delay: &mut Duration) {
+fn flush(chunks: &mut Vec<QuickCommandChunk>, pending: &mut Vec<u8>, delay: &mut Duration) {
     if pending.is_empty() {
         // Nothing to send yet, so the banked pause carries over.
         return;
     }
     chunks.push(QuickCommandChunk {
         delay: std::mem::take(delay),
-        bytes: std::mem::take(pending).into_bytes(),
+        bytes: std::mem::take(pending),
     });
+}
+
+/// Preserve the logical user bytes as a reviewable Quick Command script.
+/// Backslashes are quoted so literal `\p` or `\x41` never become instructions.
+pub(in crate::features) fn encode_recorded_macro(chunks: &[MacroInputChunk]) -> String {
+    let mut result = String::new();
+    for chunk in chunks {
+        for _ in 0..chunk.delay_seconds {
+            result.push_str("\\p");
+        }
+        let mut remaining = chunk.bytes.as_slice();
+        while !remaining.is_empty() {
+            let (valid, invalid_len) = match std::str::from_utf8(remaining) {
+                Ok(_) => (remaining.len(), 0),
+                Err(error) => (
+                    error.valid_up_to(),
+                    error
+                        .error_len()
+                        .unwrap_or(remaining.len() - error.valid_up_to()),
+                ),
+            };
+            let text = std::str::from_utf8(&remaining[..valid]).expect("valid UTF-8 prefix");
+            for ch in text.chars() {
+                match ch {
+                    '\r' => result.push_str("\\r"),
+                    '\n' => result.push_str("\\n"),
+                    '\t' => result.push_str("\\t"),
+                    '\\' => result.push_str("\\\\"),
+                    ch if ch.is_control() => {
+                        for byte in ch.to_string().bytes() {
+                            result.push_str(&format!("\\x{byte:02X}"));
+                        }
+                    }
+                    ch => result.push(ch),
+                }
+            }
+            remaining = &remaining[valid..];
+            for byte in &remaining[..invalid_len] {
+                result.push_str(&format!("\\x{byte:02X}"));
+            }
+            remaining = &remaining[invalid_len..];
+        }
+    }
+    result
 }
 
 fn append_execution_return(chunks: &mut Vec<QuickCommandChunk>) {
@@ -122,7 +192,11 @@ fn append_execution_return(chunks: &mut Vec<QuickCommandChunk>) {
 mod tests {
     use std::time::Duration;
 
-    use super::{plan_quick_command, quick_command_needs_staging};
+    use super::{
+        encode_recorded_macro, plan_quick_command, plan_quick_command_with_source,
+        quick_command_needs_staging,
+    };
+    use crate::features::recording::MacroInputChunk;
 
     fn chunks(text: &str, execute: bool) -> Vec<(Duration, Vec<u8>)> {
         plan_quick_command(text, execute)
@@ -269,5 +343,46 @@ mod tests {
             "enable\\psecret",
             false
         )));
+    }
+
+    #[test]
+    fn macro_script_round_trip_keeps_literal_placeholders_unicode_and_control_bytes() {
+        let first = "echo {{host}} C:\\temp\r\t\x1b[3~\x7f".as_bytes().to_vec();
+        let second = "한글\n\\p\\x1B".as_bytes().to_vec();
+        let script = encode_recorded_macro(&[
+            MacroInputChunk {
+                delay_seconds: 0,
+                bytes: first.clone(),
+            },
+            MacroInputChunk {
+                delay_seconds: 2,
+                bytes: second.clone(),
+            },
+        ]);
+        assert!(script.contains("{{host}}"));
+        assert!(script.contains(r"\x1B[3~\x7F"));
+        assert!(script.contains(r"\\p\\x1B"));
+        let planned = plan_quick_command_with_source(&script, false, true);
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].delay, Duration::ZERO);
+        assert_eq!(planned[0].bytes, first);
+        assert_eq!(planned[1].delay, Duration::from_secs(2));
+        assert_eq!(planned[1].bytes, second);
+    }
+
+    #[test]
+    fn macro_hex_is_source_specific_and_rejects_incomplete_sequences() {
+        assert_eq!(
+            plan_quick_command_with_source(r"\x1B\x7F", false, true)[0].bytes,
+            b"\x1b\x7f"
+        );
+        assert_eq!(
+            plan_quick_command_with_source(r"\x41", false, false)[0].bytes,
+            b"\\x41"
+        );
+        assert_eq!(
+            plan_quick_command_with_source(r"\xG1\x1", false, true)[0].bytes,
+            b"\\xG1\\x1"
+        );
     }
 }

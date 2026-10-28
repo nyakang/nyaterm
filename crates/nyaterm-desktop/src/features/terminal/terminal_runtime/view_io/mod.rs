@@ -643,7 +643,7 @@ impl NyaTermApp {
     pub(in crate::features) fn send_terminal_clear_screen(&mut self, cx: &mut Context<Self>) {
         self.terminal.menus.actions_open = false;
         self.clear_terminal_selection(cx);
-        if self.send_terminal_input(vec![0x0c], cx) {
+        if self.send_terminal_typed_input(vec![0x0c], cx) {
             self.shell
                 .set_status("clear screen command sent".to_string());
             cx.notify();

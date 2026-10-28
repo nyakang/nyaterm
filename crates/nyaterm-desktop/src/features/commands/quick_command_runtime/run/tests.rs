@@ -51,6 +51,21 @@ fn execute_and_legacy_modes_execute() {
 }
 
 #[test]
+fn macro_editor_defaults_to_append_and_preserves_the_source_on_edit() {
+    let editor = crate::models::QuickCommandEditorState::from_recorded_macro(
+        "Recorded Macro".to_string(),
+        "echo {{literal}}\\r".to_string(),
+    );
+    assert_eq!(editor.execution_mode, "append");
+    assert_eq!(editor.source.as_deref(), Some("macro"));
+    assert!(editor.original.is_none());
+    let mut command = command_with_execution_mode(Some("append"));
+    command.source = editor.source;
+    let reopened = crate::models::QuickCommandEditorState::from_command(command);
+    assert_eq!(reopened.source.as_deref(), Some("macro"));
+}
+
+#[test]
 fn staged_delivery_reports_broadcast_reach() {
     assert_eq!(
         quick_command_delivery_status("Login", true, true, 4, 0),
@@ -210,6 +225,30 @@ impl Drop for WireFixture {
             let _ = self.manager.close(id);
         }
     }
+}
+
+#[test]
+fn macro_quick_command_replays_literal_placeholders_and_hex_without_recapturing() {
+    let mut fixture = WireFixture::new(1);
+    let mut command = command_with_execution_mode(Some("append"));
+    command.source = Some("macro".to_string());
+    command.command = r"echo {{host}}\x1B\r\\p".to_string();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(app.recording.start_macro(&fixture.ids[0]));
+        app.commands
+            .replace_quick_command_catalog(vec![command], vec![]);
+        app.apply_quick_command_by_id("command-1", false, cx);
+        assert_eq!(app.recording.macro_bytes(&fixture.ids[0]), Some(0));
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"echo {{host}}\x1b\r\\p");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(app.send_terminal_typed_input(b"manual".to_vec(), cx));
+        let chunks = app.recording.finish_macro(&fixture.ids[0]).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].bytes, b"manual");
+    });
+    fixture.assert_wire(0, b"manual");
 }
 
 #[test]

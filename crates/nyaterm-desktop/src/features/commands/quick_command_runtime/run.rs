@@ -6,7 +6,10 @@ use crate::features::NyaTermApp;
 use crate::features::commands::staged::StagedCommandHistory;
 use crate::models::QuickCommandVariablePromptState;
 
-use super::escapes::{QuickCommandChunk, plan_quick_command, quick_command_needs_staging};
+use super::escapes::{
+    QuickCommandChunk, plan_quick_command, plan_quick_command_with_source,
+    quick_command_needs_staging,
+};
 use super::helpers::{
     ai_command_card_category_name, unique_quick_command_category_id, validated_quick_command_text,
 };
@@ -216,7 +219,12 @@ impl NyaTermApp {
             return;
         };
         let execute = quick_command_executes(&command);
-        let variables = parse_quick_command_variables(&command_text);
+        let is_macro = command.source.as_deref() == Some("macro");
+        let variables = if is_macro {
+            Vec::new()
+        } else {
+            parse_quick_command_variables(&command_text)
+        };
         if !variables.is_empty() {
             self.commands
                 .request_quick_variable_prompt(QuickCommandVariablePromptState {
@@ -254,7 +262,15 @@ impl NyaTermApp {
         // `\r \n \t \p \\` are interpreted here rather than at save time: the
         // stored script keeps the escapes, so what the panel shows is what the
         // user wrote.
-        let mut chunks = plan_quick_command(&command_text, execute);
+        let is_macro =
+            self.commands.quick_commands().iter().any(|command| {
+                command.id == command_id && command.source.as_deref() == Some("macro")
+            });
+        let mut chunks = if is_macro {
+            plan_quick_command_with_source(&command_text, execute, true)
+        } else {
+            plan_quick_command(&command_text, execute)
+        };
         self.queue_quick_command_use_count(command_id);
 
         if quick_command_needs_staging(&chunks) {
