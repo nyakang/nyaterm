@@ -151,9 +151,15 @@ fn zsh_preserves_explicit_history_paths_and_user_rc_overrides() {
         "HISTFILE=\"$HOME/explicit-history\"\n",
     )
     .unwrap();
+    // macOS /etc/zshrc overrides .zshenv's HISTFILE before our .zshrc wrapper runs.
+    let expected_history = if cfg!(target_os = "macos") {
+        home.join(".zsh_history")
+    } else {
+        home.join("explicit-history")
+    };
     assert_eq!(
         run_integrated_zsh(home, &["-i"]).0,
-        home.join("explicit-history").to_string_lossy()
+        expected_history.to_string_lossy()
     );
 
     std::fs::write(
