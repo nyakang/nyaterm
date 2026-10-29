@@ -108,6 +108,9 @@ if [[ $NYATERM_LOCAL_USER_ZDOTDIR_SET = x ]]; then
 else
     unset ZDOTDIR
 fi
+if [[ -n $NYATERM_LOCAL_DIR && $HISTFILE == "$NYATERM_LOCAL_DIR/.zsh_history" ]]; then
+    HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history
+fi
 [[ ! -r "${ZDOTDIR:-$HOME}/.zshrc" ]] || source "${ZDOTDIR:-$HOME}/.zshrc"
 __nyaterm_local_cwd() {
     printf '\033]7;file://localhost%s\007' "${PWD//%/%25}"
