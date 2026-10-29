@@ -3280,6 +3280,7 @@
     "pausedCount": "%{count}개 일시 중지됨",
     "pausedMembers": "일시 중지됨",
     "pruneMissing": "누락 항목 정리",
+    "receiveInput": "동기화 입력 보내기 및 받기",
     "removeFiltered": "제거",
     "resumeSelected": "재개",
     "resumeSync": "재개",

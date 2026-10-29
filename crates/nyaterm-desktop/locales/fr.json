@@ -3280,6 +3280,7 @@
     "pausedCount": "%{count} en pause",
     "pausedMembers": "En pause",
     "pruneMissing": "Nettoyer les manquantes",
+    "receiveInput": "Envoyer et recevoir la saisie synchronisée",
     "removeFiltered": "Retirer",
     "resumeSelected": "Reprendre",
     "resumeSync": "Reprendre",

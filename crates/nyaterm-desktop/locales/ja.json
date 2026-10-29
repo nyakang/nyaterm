@@ -3280,6 +3280,7 @@
     "pausedCount": "%{count} 件一時停止中",
     "pausedMembers": "一時停止中",
     "pruneMissing": "不在を整理",
+    "receiveInput": "同期入力を送受信",
     "removeFiltered": "削除",
     "resumeSelected": "再開",
     "resumeSync": "再開",

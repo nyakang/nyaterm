@@ -3273,6 +3273,7 @@
     "pausedCount": "%{count} 暂停",
     "pausedMembers": "暂停",
     "pruneMissing": "清理离线残留",
+    "receiveInput": "发送和接收同步输入",
     "removeFiltered": "移出筛选",
     "resumeSelected": "恢复",
     "resumeSync": "恢复",

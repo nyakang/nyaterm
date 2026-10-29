@@ -3280,6 +3280,7 @@
     "pausedCount": "%{count} 暫停",
     "pausedMembers": "暫停",
     "pruneMissing": "清理離線殘留",
+    "receiveInput": "傳送與接收同步輸入",
     "removeFiltered": "移出篩選",
     "resumeSelected": "恢復",
     "resumeSync": "恢復",
