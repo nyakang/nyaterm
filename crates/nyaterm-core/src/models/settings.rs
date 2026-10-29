@@ -463,6 +463,9 @@ pub struct AppSettingsSummary {
     #[serde(default = "default_search_engines")]
     pub search_custom_engines: Vec<SearchEngineConfig>,
     pub ui_remote_stats_interval: u32,
+    /// Show `who` sessions in the resource monitor and the host header reading.
+    #[serde(default)]
+    pub ui_remote_stats_show_users: bool,
     #[serde(default = "default_hardware_monitor_interval")]
     pub ui_gpu_monitor_interval: u32,
     #[serde(default = "default_hardware_monitor_interval")]
@@ -736,6 +739,7 @@ impl Default for AppSettingsSummary {
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
             ui_remote_stats_interval: 3,
+            ui_remote_stats_show_users: false,
             ui_gpu_monitor_interval: 3,
             ui_ascend_npu_monitor_interval: 3,
             ui_process_manager_interval: 5,
@@ -1163,6 +1167,7 @@ mod tests {
         assert!(summary.ui_asset_sort_key.is_none());
         assert!(summary.ui_asset_sort_direction.is_none());
         assert!(!summary.terminal_reconnect_restore_cwd);
+        assert!(!summary.ui_remote_stats_show_users);
         assert_eq!(summary.transfer_internal_editor_font_size, 13);
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.

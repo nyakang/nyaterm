@@ -14,6 +14,7 @@ use nyaterm_ui::{NyaScrollable, NyaTooltip};
 use std::sync::Arc;
 
 use super::panels::{PanelChrome, RemoteMonitorKind, RemoteMonitorPanel};
+use crate::features::formatting::format_logged_in_users;
 use crate::features::remote::StatsPresentationState;
 use crate::features::remote::{
     ACCELERATOR_PROCESS_VIEWPORT_ROWS, GpuPresentationState, NpuPresentationState, max_list_offset,
@@ -62,6 +63,7 @@ fn npu_empty_panel(
 pub(in crate::features::pages::remote) fn stats_panel(
     chrome: PanelChrome,
     has_session: bool,
+    show_users: bool,
     stats_state: StatsPresentationState,
     network_select: Entity<NyaSelectState>,
     cx: &mut Context<RemoteMonitorPanel>,
@@ -183,7 +185,21 @@ pub(in crate::features::pages::remote) fn stats_panel(
                                     format_resource_uptime(stats.system.uptime_sec),
                                 )
                                 .text_right(),
-                            ),
+                            )
+                            .when(show_users, |this| {
+                                this.child(
+                                    resource_info_cell(
+                                        palette,
+                                        t!("resourceMonitor.users").to_string(),
+                                        if stats.users.is_empty() {
+                                            "-".to_string()
+                                        } else {
+                                            format_logged_in_users(&stats.users)
+                                        },
+                                    )
+                                    .col_span(2),
+                                )
+                            }),
                     ))
                     .child(resource_section_card(
                         palette,

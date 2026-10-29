@@ -1,6 +1,6 @@
 use gpui::rgb;
 use nyaterm_core::{CloudSyncError, CloudSyncSettings, TunnelConfig};
-use nyaterm_transport::{SessionKind, SshTunnelMode, TelnetEnterMode};
+use nyaterm_transport::{LoggedInUser, SessionKind, SshTunnelMode, TelnetEnterMode};
 
 use crate::theme::ThemePalette;
 
@@ -25,6 +25,21 @@ pub(in crate::features) fn format_uptime(seconds: u64) -> String {
     } else {
         format!("{minutes}m")
     }
+}
+
+/// `alice(x3), root`: one entry per account, the count only when it has several sessions.
+pub(in crate::features) fn format_logged_in_users(users: &[LoggedInUser]) -> String {
+    users
+        .iter()
+        .map(|user| {
+            if user.sessions > 1 {
+                format!("{}(x{})", user.name, user.sessions)
+            } else {
+                user.name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(in crate::features) fn docker_state_rank(state: &str) -> u8 {
@@ -550,11 +565,29 @@ pub(in crate::features) fn format_last_used_ms(last_used_at_ms: Option<u64>) -> 
 #[cfg(test)]
 mod tests {
     use nyaterm_terminal::TerminalScreen;
+    use nyaterm_transport::LoggedInUser;
 
     use super::{
-        TerminalTimestampFormatter, format_history_timestamp_ms, terminal_gutter_labels,
-        terminal_gutter_row_count, terminal_timestamp_format_width_chars,
+        TerminalTimestampFormatter, format_history_timestamp_ms, format_logged_in_users,
+        terminal_gutter_labels, terminal_gutter_row_count, terminal_timestamp_format_width_chars,
     };
+
+    #[test]
+    fn logged_in_users_show_session_counts_only_for_repeated_accounts() {
+        let users = [
+            LoggedInUser {
+                name: "alice".to_string(),
+                sessions: 3,
+            },
+            LoggedInUser {
+                name: "root".to_string(),
+                sessions: 1,
+            },
+        ];
+
+        assert_eq!(format_logged_in_users(&users), "alice(x3), root");
+        assert_eq!(format_logged_in_users(&[]), "");
+    }
 
     #[test]
     fn gutter_omits_metadata_for_locally_cleared_rows() {

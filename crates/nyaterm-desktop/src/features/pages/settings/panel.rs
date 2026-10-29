@@ -1981,6 +1981,7 @@ forward_app_action!(
     toggle_startup_lock_enabled,
     toggle_idle_lock_enabled,
     toggle_settings_master_password,
+    toggle_remote_stats_show_users,
     toggle_startup_restore,
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,

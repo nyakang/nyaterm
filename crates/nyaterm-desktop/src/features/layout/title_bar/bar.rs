@@ -10,9 +10,10 @@ use nyaterm_ui::window_chrome::{TitleDragEvent, title_drag_region};
 use time::{OffsetDateTime, UtcOffset, Weekday, macros::format_description};
 
 use crate::features::{
-    NyaTermApp, formatting::format_rate, formatting::format_uptime, formatting::short_id,
-    icons::IconDef, icons::resolve_connection_icon, view_widgets::connection_type_icon,
-    view_widgets::logo_mark, view_widgets::window_control_button,
+    NyaTermApp, formatting::format_logged_in_users, formatting::format_rate,
+    formatting::format_uptime, formatting::short_id, icons::IconDef,
+    icons::resolve_connection_icon, view_widgets::connection_type_icon, view_widgets::logo_mark,
+    view_widgets::window_control_button,
 };
 use crate::models::HeaderStatusMode;
 
@@ -688,27 +689,35 @@ impl NyaTermApp {
             };
             let system = format!("{}/{}", stats.system.os, stats.system.arch);
             let uptime = format_uptime(stats.system.uptime_sec);
-            let label = format!("{hostname} - {system} - {uptime}");
-            return HeaderStatusContent::parts(
-                label,
-                vec![
-                    HeaderStatusPart {
-                        icon: IconDef::mono("icons/conn/server.svg", 0x38bdf8),
-                        text: hostname.to_string(),
-                        text_color: None,
-                    },
-                    HeaderStatusPart {
-                        icon: IconDef::mono("icons/workspace.svg", 0xa78bfa),
-                        text: system,
-                        text_color: None,
-                    },
-                    HeaderStatusPart {
-                        icon: IconDef::mono("icons/clock.svg", 0x34d399),
-                        text: uptime,
-                        text_color: None,
-                    },
-                ],
-            );
+            let mut label = format!("{hostname} - {system} - {uptime}");
+            let mut parts = vec![
+                HeaderStatusPart {
+                    icon: IconDef::mono("icons/conn/server.svg", 0x38bdf8),
+                    text: hostname.to_string(),
+                    text_color: None,
+                },
+                HeaderStatusPart {
+                    icon: IconDef::mono("icons/workspace.svg", 0xa78bfa),
+                    text: system,
+                    text_color: None,
+                },
+                HeaderStatusPart {
+                    icon: IconDef::mono("icons/clock.svg", 0x34d399),
+                    text: uptime,
+                    text_color: None,
+                },
+            ];
+            if self.settings.summary().ui_remote_stats_show_users && !stats.users.is_empty() {
+                let users = format_logged_in_users(&stats.users);
+                label.push_str(" - ");
+                label.push_str(&users);
+                parts.push(HeaderStatusPart {
+                    icon: IconDef::mono("icons/users.svg", 0xf59e0b),
+                    text: users,
+                    text_color: None,
+                });
+            }
+            return HeaderStatusContent::parts(label, parts);
         }
 
         let memory_total = stats.memory.used.saturating_add(stats.memory.available);

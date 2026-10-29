@@ -81,6 +81,12 @@ pub struct DiskInfo {
     pub use_percent: u32,
 }
 
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct LoggedInUser {
+    pub name: String,
+    pub sessions: u32,
+}
+
 #[derive(serde::Serialize, Debug, Default, Clone, PartialEq)]
 pub struct RemoteStats {
     pub system: SystemInfo,
@@ -90,6 +96,7 @@ pub struct RemoteStats {
     pub networks: Vec<NetworkInfo>,
     pub network_summary: NetworkSummaryInfo,
     pub disks: Vec<DiskInfo>,
+    pub users: Vec<LoggedInUser>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -335,6 +342,7 @@ cpucoref=$base.cpucores;
 diskf=$base.disk;
 diskraw=$base.diskraw;
 dfraw=$base.dfraw;
+whof=$base.who;
 
 trap "rm -f \"$base\".*" 0 HUP INT TERM;
 
@@ -502,6 +510,13 @@ if [ -r /proc/stat ]; then
 fi;
 
 printf "MEMORY\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache";
+
+if command -v who >/dev/null 2>&1 && run_limited "$whof" 1 who; then
+  awk '"'"'
+NF { n[$1]++ }
+END { for (u in n) printf "USER\t%s\t%d\n", u, n[u] }
+'"'"' "$whof" 2>/dev/null;
+fi;
 
 if [ -r /proc/net/dev ]; then
   awk '"'"'
@@ -767,6 +782,13 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
                 }
             }
 
+            "USER" if cols.len() >= 3 && !cols[1].is_empty() => {
+                stats.users.push(LoggedInUser {
+                    name: cols[1].to_string(),
+                    sessions: cols[2].parse().unwrap_or(1),
+                });
+            }
+
             "DISK" if cols.len() >= 6 && cols[1] != "-" => {
                 let mount = cols[2].trim();
 
@@ -789,6 +811,10 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
         }
     }
 
+    // awk walks its array in an unspecified order; keep the display stable.
+    stats
+        .users
+        .sort_by(|left, right| left.name.cmp(&right.name));
     update_network_summary(&mut stats);
 
     Ok(ParsedRemoteStats {
@@ -958,6 +984,27 @@ mod tests {
         assert_eq!(stats.disks[0].device, "/dev/sda1");
         assert_eq!(stats.disks[0].mount, "/");
         assert_eq!(stats.disks[1].mount, "/data");
+    }
+
+    #[test]
+    fn parse_stats_output_collects_logged_in_users_sorted_by_name() {
+        let stats = parse_stats_output(
+            "USER\troot\t1\n\
+             USER\talice\t3\n\
+             USER\t\t2\n",
+        )
+        .unwrap()
+        .stats;
+
+        assert_eq!(
+            stats
+                .users
+                .iter()
+                .map(|user| (user.name.as_str(), user.sessions))
+                .collect::<Vec<_>>(),
+            [("alice", 3), ("root", 1)]
+        );
+        assert!(SYSINFO_SCRIPT.contains("run_limited \"$whof\" 1 who"));
     }
 
     #[test]

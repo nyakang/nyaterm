@@ -250,6 +250,11 @@ impl ConnectionStore {
             search_custom_engines: load_search_engines(&value),
             ui_remote_stats_interval: json_u32(&value, &["ui", "remote_stats_interval"], 3)
                 .clamp(1, 60),
+            ui_remote_stats_show_users: json_bool(
+                &value,
+                &["ui", "remote_stats_show_users"],
+                false,
+            ),
             ui_gpu_monitor_interval: json_u32(&value, &["ui", "gpu_monitor_interval"], 3)
                 .clamp(3, 120),
             ui_ascend_npu_monitor_interval: json_u32(
@@ -1401,6 +1406,11 @@ impl ConnectionStore {
             &mut value,
             &["ui", "remote_stats_interval"],
             serde_json::Value::from(settings.ui_remote_stats_interval.clamp(1, 60)),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["ui", "remote_stats_show_users"],
+            serde_json::Value::Bool(settings.ui_remote_stats_show_users),
         );
         set_nested_json_value(
             &mut value,

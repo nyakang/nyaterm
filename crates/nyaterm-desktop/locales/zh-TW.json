@@ -2066,7 +2066,8 @@
     "totalSize": "總計大小",
     "uptime": "執行時長",
     "usagePercent": "使用佔比",
-    "used": "已使用"
+    "used": "已使用",
+    "users": "登入使用者"
   },
   "savedConnections": {
     "sessionImportTitle": "匯入工作階段",
@@ -2901,6 +2902,8 @@
     "remoteSnapshot": "遠端快照",
     "remoteStatsInterval": "資源採集間隔（秒）",
     "remoteStatsIntervalDesc": "預設 3 秒",
+    "remoteStatsShowUsers": "顯示登入使用者",
+    "remoteStatsShowUsersDesc": "在資源監控與主機概覽標題列中顯示 who 回報的帳戶及其工作階段數。",
     "removeBackgroundImage": "移除圖片",
     "resumeBrokenTransfer": "斷點續傳",
     "resumeBrokenTransferDesc": "嘗試恢復未完成的檔案傳輸而非重新開始。",

@@ -2059,7 +2059,8 @@
     "totalSize": "Total",
     "uptime": "Uptime",
     "usagePercent": "Usage",
-    "used": "Used"
+    "used": "Used",
+    "users": "Users"
   },
   "savedConnections": {
     "sessionImportTitle": "Import sessions",
@@ -2894,6 +2895,8 @@
     "remoteSnapshot": "Remote",
     "remoteStatsInterval": "Stats Interval (s)",
     "remoteStatsIntervalDesc": "Default: 3 s",
+    "remoteStatsShowUsers": "Show logged-in users",
+    "remoteStatsShowUsersDesc": "List the accounts reported by who, with their session count, in the resource monitor and the Host overview header.",
     "removeBackgroundImage": "Remove Image",
     "resumeBrokenTransfer": "Resume Transfers",
     "resumeBrokenTransferDesc": "Resume incomplete transfers instead of restarting.",

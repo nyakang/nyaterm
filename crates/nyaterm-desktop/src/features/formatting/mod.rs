@@ -4,9 +4,9 @@ pub(in crate::features) use labels::{
     configured_cloud_sync_provider, docker_compose_project_key, docker_state_color,
     docker_state_label, docker_state_rank, download_file_name_from_remote_path,
     format_cloud_provider, format_duration_ms, format_history_timestamp_ms, format_last_used_ms,
-    format_permissions_octal, format_rate, format_uptime, non_empty_string, none_if_blank,
-    normalize_startup_command, parse_telnet_enter_mode, recent_terminal_output, session_kind_label,
-    short_id, status_label, terminal_gutter_labels, terminal_gutter_row_count,
+    format_logged_in_users, format_permissions_octal, format_rate, format_uptime, non_empty_string,
+    none_if_blank, normalize_startup_command, parse_telnet_enter_mode, recent_terminal_output,
+    session_kind_label, short_id, status_label, terminal_gutter_labels, terminal_gutter_row_count,
     terminal_timestamp_format_width_chars, trim_terminal_output_to, tunnel_endpoint, tunnel_mode,
     tunnel_name,
 };
