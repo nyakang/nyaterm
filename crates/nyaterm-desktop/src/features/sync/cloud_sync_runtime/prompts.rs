@@ -7,8 +7,7 @@ use crate::features::NyaTermApp;
 impl NyaTermApp {
     pub(crate) fn cloud_sync_session_restore_blocked(&self) -> bool {
         cloud_sync_restore_is_blocked(
-            !self.session.ordered_sessions().is_empty()
-                || self.remote_desktop.has_active_sessions(),
+            self.session.has_live_remote_sessions() || self.remote_desktop.has_active_sessions(),
             self.session.start_has_pending(),
         )
     }
@@ -24,6 +23,29 @@ impl NyaTermApp {
                         .read(cx)
                         .cloud_sync_pull_blocked_excluding(self.workspace_id, cx)
                 })
+    }
+
+    /// The status to show when a restore-style cloud-sync action is refused
+    /// because a session is still alive.
+    ///
+    /// The blocking session can live in another window: every workspace shares
+    /// one store, so a pull rewrites the connections that window is using. The
+    /// message has to say where the session is — otherwise the user is told to
+    /// close "the active session" in a window that has none open.
+    pub(in crate::features) fn cloud_sync_restore_block_message(
+        &self,
+        local_key: &str,
+        cx: &gpui::App,
+    ) -> Option<String> {
+        if !self.cloud_sync_restore_blocked(cx) {
+            return None;
+        }
+        let key = if self.cloud_sync_session_restore_blocked() {
+            local_key
+        } else {
+            "settings.syncCloseActiveSessionInAnotherWindow"
+        };
+        Some(t!(key).to_string())
     }
 
     pub(crate) fn cloud_sync_job_running(&self) -> bool {
@@ -49,11 +71,11 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.shell
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+        if let Some(message) =
+            self.cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforePull", cx)
+        {
+            self.shell.set_status(message.clone());
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
@@ -88,11 +110,11 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.shell
-                .set_status(t!("settings.syncCloseActiveSessionBeforeForcePull"));
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforeForcePull"));
+        if let Some(message) = self
+            .cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforeForcePull", cx)
+        {
+            self.shell.set_status(message.clone());
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
@@ -115,11 +137,11 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.shell
-                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
+        if let Some(message) = self
+            .cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforeRecovery", cx)
+        {
+            self.shell.set_status(message.clone());
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }

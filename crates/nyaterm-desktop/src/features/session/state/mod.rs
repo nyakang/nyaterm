@@ -1864,6 +1864,24 @@ impl SessionFeatureState {
             .is_some_and(|metadata| metadata.disconnected)
     }
 
+    /// Whether a session a configuration replacement could disturb is still
+    /// running.
+    ///
+    /// Deliberately narrow, and only for configuration-replacement blockers
+    /// (cloud-sync pulls and backup imports): a tab kept for reconnect
+    /// (`disconnected`) holds no backend, and a local shell is spawned by the
+    /// local runtime rather than from the connection catalog being rewritten,
+    /// so neither one may stop the replacement.
+    pub(in crate::features) fn has_live_remote_sessions(&self) -> bool {
+        self.metadata.values().any(|metadata| {
+            !metadata.disconnected
+                && !matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Local(_)
+                )
+        })
+    }
+
     pub(in crate::features) fn tab_tooltip_lines(&self, session_id: &str) -> Vec<String> {
         let mut lines = Vec::new();
         if let Some(endpoint) = self.endpoint(session_id) {

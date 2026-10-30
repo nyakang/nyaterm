@@ -279,9 +279,10 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+        if let Some(message) =
+            self.cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforePull", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
@@ -598,9 +599,10 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+        if let Some(message) =
+            self.cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforePull", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
@@ -758,9 +760,10 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
+        if let Some(message) = self
+            .cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforeRecovery", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }

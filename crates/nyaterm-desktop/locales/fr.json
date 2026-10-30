@@ -3115,6 +3115,7 @@
     "syncStatus": "État",
     "syncTestSuccess": "Test cloud réussi.",
     "syncCloseActiveSessionBeforePull": "Fermez les sessions actives avant de récupérer la synchronisation cloud.",
+    "syncCloseActiveSessionInAnotherWindow": "Une autre fenêtre a encore une session active ; fermez-la d'abord.",
     "syncConnectionTestStarted": "Test de connexion à la synchronisation cloud démarré.",
     "syncForcePullingLocal": "Récupération forcée de l'instantané de synchronisation cloud local.",
     "syncForcePullingProvider": "Récupération forcée de l'instantané de synchronisation cloud via %{provider}.",

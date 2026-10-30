@@ -948,6 +948,23 @@ fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
     }
 }
 
+fn ssh_metadata(name: &str) -> SessionRuntimeMetadata {
+    let config = SshSessionConfig {
+        name: name.to_string(),
+        host: "example.test".to_string(),
+        username: "tester".to_string(),
+        ..SshSessionConfig::default()
+    };
+    SessionRuntimeMetadata {
+        ssh_config: Some(config.clone()),
+        ssh_multiplex_key: None,
+        source_connection_id: None,
+        ai_execution_profile: AiExecutionProfile::Posix,
+        launch_config: SessionLaunchConfig::Ssh(Box::new(config)),
+        disconnected: false,
+    }
+}
+
 struct EmptyRemoteFilePreferenceStore;
 
 impl RemoteFileBackendPreferenceStore for EmptyRemoteFilePreferenceStore {
@@ -1733,6 +1750,35 @@ fn session_disconnect_transition_is_idempotent() {
     sessions
         .mark_session_disconnected("session-b")
         .expect("shared session should transition");
+}
+
+#[test]
+fn disconnected_tabs_do_not_block_configuration_replacement() {
+    let test_dir = TestConfigDir::new("nyaterm-session-state-test");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, test_dir.path());
+
+    assert!(!sessions.has_live_remote_sessions());
+
+    // A local shell keeps a backend, but it is spawned by the local runtime,
+    // not from the connection catalog a cloud pull or backup import rewrites,
+    // so it must not block the replacement.
+    sessions.register_session_metadata("local", session_metadata("local", None));
+    assert!(!sessions.has_live_remote_sessions());
+
+    // A live remote session does block.
+    sessions.register_session_metadata("ssh", ssh_metadata("ssh"));
+    assert!(sessions.has_live_remote_sessions());
+
+    // A tab kept for reconnect holds no backend, so it must not.
+    sessions
+        .mark_session_disconnected("ssh")
+        .expect("registered session should transition");
+    sessions
+        .mark_session_disconnected("local")
+        .expect("registered session should transition");
+    assert!(!sessions.has_live_remote_sessions());
 }
 
 #[test]

@@ -3075,6 +3075,7 @@
     "syncBackup": "Cloud Sync",
     "syncBackupTitle": "Cloud Sync",
     "syncCloseActiveSessionBeforePull": "Close active sessions before pulling cloud sync.",
+    "syncCloseActiveSessionInAnotherWindow": "Another window still has an active session; close it there before continuing.",
     "syncConnectionTestStarted": "Provider cloud sync connection test started.",
     "syncConflictSection": "Conflict Handling",
     "syncConflictSectionDesc": "Resolve cases where local and cloud snapshots changed independently.",
