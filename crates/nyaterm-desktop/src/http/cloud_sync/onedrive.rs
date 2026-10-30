@@ -404,9 +404,12 @@ impl CloudSyncRemote for NativeOneDriveRemote {
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
         let parent_path = onedrive_item_path(&self.root, path);
         let mut next_url = Some(self.children_url(&parent_path));
+        let first_url = self.children_url(&parent_path);
+        let mut progress = super::listing::ListingProgress::default();
         let mut first_page = true;
         let mut names = Vec::new();
         while let Some(url) = next_url.take() {
+            super::listing::validate_next_link(&first_url, &url)?;
             let response = self.send_authorized(|client, token| {
                 let request = client
                     .get(&url)
@@ -420,7 +423,7 @@ impl CloudSyncRemote for NativeOneDriveRemote {
             let status = response.status();
             let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
             let body = response.text_counted()?;
-            if status == StatusCode::NOT_FOUND {
+            if status == StatusCode::NOT_FOUND && first_page {
                 return Ok(Vec::new());
             }
             if !status.is_success() {
@@ -432,6 +435,7 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 ));
             }
             let page = parse_onedrive_list_page(&body)?;
+            progress.observe(&page.names, page.next_link.as_deref())?;
             names.extend(page.names);
             next_url = page.next_link;
             first_page = false;
@@ -457,19 +461,20 @@ pub(super) struct OneDriveListPage {
 
 pub(super) fn parse_onedrive_list_page(body: &str) -> Result<OneDriveListPage, CloudSyncError> {
     let value: serde_json::Value = super::helpers::safe_json(body, "OneDrive")?;
-    let names = value
+    let entries = value
         .get("value")
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("file").is_some())
-        .filter_map(|item| item.get("name").and_then(serde_json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect();
-    let next_link = value
-        .get("@odata.nextLink")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned);
+        .ok_or_else(super::listing::invalid)?;
+    let mut names = Vec::new();
+    for item in entries {
+        let name = super::listing::name(item)?;
+        match (item.get("file"), item.get("folder")) {
+            (Some(file), None) if file.is_object() => names.push(name),
+            (None, Some(folder)) if folder.is_object() => {}
+            _ => return Err(super::listing::invalid()),
+        }
+    }
+    let next_link = super::listing::next(&value, "@odata.nextLink")?;
     Ok(OneDriveListPage { names, next_link })
 }
 

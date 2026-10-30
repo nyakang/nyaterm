@@ -340,6 +340,45 @@ use super::{
 };
 
 #[test]
+fn proxy_ciphertext_round_trips_and_keeps_released_backup_password_contract() {
+    let dir = TestTempDir::new("nyaterm-proxy-encryption-contract");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store
+        .save_master_password(Some("fixture-master-password"))
+        .unwrap();
+    let key = entity_key(super::PROXY_PREFIX, "proxy");
+    let txn = store.db.begin_write().unwrap();
+    write_json_in_txn(&txn, super::PROXIES_TABLE, &key, &serde_json::json!({"id":"proxy","name":"Proxy","password":"legacy-fixture-password","future":{"keep":true}})).unwrap();
+    txn.commit().unwrap();
+    let legacy = store.list_proxies().unwrap();
+    assert_eq!(
+        legacy[0].password.as_deref(),
+        Some("legacy-fixture-password")
+    );
+    store.replace_proxies(&legacy).unwrap();
+    let raw: serde_json::Value = store
+        .read_json_table(super::PROXIES_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    assert_ne!(raw["password"], "legacy-fixture-password");
+    assert_eq!(
+        store.list_proxies().unwrap()[0].password.as_deref(),
+        Some("legacy-fixture-password")
+    );
+    let backup = store
+        .build_raw_portable_snapshot(nyaterm_core::PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    let proxies: serde_json::Value = serde_json::from_str(&backup.entities["proxies"]).unwrap();
+    assert_eq!(proxies[0]["password"], "legacy-fixture-password");
+    let mut corrupted = raw;
+    corrupted["password"] = serde_json::json!(format!("{}invalid", super::PROXY_SECRET_PREFIX));
+    let txn = store.db.begin_write().unwrap();
+    write_json_in_txn(&txn, super::PROXIES_TABLE, &key, &corrupted).unwrap();
+    txn.commit().unwrap();
+    assert!(store.list_proxies().is_err());
+}
+
+#[test]
 fn accounts_preserve_masking_legacy_references_and_portable_snapshot_contracts() {
     use nyaterm_core::models::credentials::{ConnectionPasswordSource, SavedPassword};
     let source_dir = unique_temp_dir("account-portable-source");

@@ -30,6 +30,7 @@ nyaterm-otp.workspace = true
 nyaterm-plugin-host.workspace = true
 nyaterm-remote-desktop.workspace = true
 nyaterm-store.workspace = true
+nyaterm-sync.workspace = true
 nyaterm-terminal.workspace = true
 nyaterm-terminal-gpui.workspace = true
 nyaterm-transport.workspace = true

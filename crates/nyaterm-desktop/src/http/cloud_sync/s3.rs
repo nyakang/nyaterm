@@ -1,5 +1,5 @@
 use nyaterm_core::cloud_sync::io::{CloudObjectMetadata, CloudObjectRead, CloudSyncIoStats};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -160,6 +160,23 @@ impl NativeS3Remote {
 }
 
 impl CloudSyncRemote for NativeS3Remote {
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        let prefix = format!("{}/", path.trim_matches('/'));
+        let mut result = BTreeSet::new();
+        for entry in self.list_metadata(&prefix)? {
+            let name = entry.path.strip_prefix(&prefix).ok_or_else(|| {
+                CloudSyncError::Remote("S3 listing escaped its requested sync prefix".into())
+            })?;
+            if name.is_empty() {
+                continue;
+            }
+            if name.contains('/') || name.contains('\\') || name.contains('\0') {
+                return Err(CloudSyncError::Remote("Invalid S3 sync object path".into()));
+            }
+            result.insert(entry.path);
+        }
+        Ok(result.into_iter().collect())
+    }
     fn provider(&self) -> &'static str {
         "s3"
     }
@@ -265,6 +282,8 @@ impl CloudSyncRemote for NativeS3Remote {
         let provider_root = self.settings.root.trim().trim_matches('/');
         let prefix = remote_path(provider_root, path);
         let mut continuation = None;
+        let mut visited_tokens = BTreeSet::new();
+        let mut visited_paths = BTreeSet::new();
         let mut files = Vec::new();
         loop {
             let response = self.send_list(&prefix, continuation.as_deref())?;
@@ -282,6 +301,14 @@ impl CloudSyncRemote for NativeS3Remote {
             let body = String::from_utf8(body?)
                 .map_err(|_| CloudSyncError::Remote("invalid S3 LIST response".into()))?;
             let page = parse_s3_list_page(&body)?;
+            if page.objects.iter().any(|entry| {
+                !entry.path.starts_with(&prefix) || !visited_paths.insert(entry.path.clone())
+            }) {
+                return Err(CloudSyncError::Remote(
+                    "S3 listing contains duplicate objects or objects outside the requested prefix"
+                        .into(),
+                ));
+            }
             files.extend(page.objects.into_iter().map(|mut entry| {
                 if !provider_root.is_empty() {
                     entry.path = entry
@@ -293,13 +320,21 @@ impl CloudSyncRemote for NativeS3Remote {
                 }
                 entry
             }));
+            if files.len() > 20_000 || visited_tokens.len() > 20_000 {
+                return Err(CloudSyncError::Remote(
+                    "S3 listing capacity exceeded".into(),
+                ));
+            }
             if !page.truncated {
                 break;
             }
             continuation = page.next_token;
-            if continuation.is_none() {
+            if continuation
+                .as_ref()
+                .is_none_or(|token| token.is_empty() || !visited_tokens.insert(token.clone()))
+            {
                 return Err(CloudSyncError::Remote(
-                    "S3 LIST response is truncated without a continuation token".to_string(),
+                    "S3 LIST response has a missing or repeated continuation token".to_string(),
                 ));
             }
         }
@@ -318,6 +353,9 @@ pub(super) fn parse_s3_list_page(body: &str) -> Result<S3ListPage, CloudSyncErro
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
     let mut field = Vec::new();
+    let mut stack = Vec::new();
+    let mut root_seen = false;
+    let mut truncated_seen = false;
     let mut objects = Vec::new();
     let mut current: Option<CloudObjectMetadata> = None;
     let mut truncated = false;
@@ -327,6 +365,13 @@ pub(super) fn parse_s3_list_page(body: &str) -> Result<S3ListPage, CloudSyncErro
         match reader.read_event() {
             Ok(Event::Start(event)) => {
                 field = event.local_name().as_ref().to_vec();
+                if stack.is_empty() {
+                    if root_seen || field != b"ListBucketResult" {
+                        return Err(invalid());
+                    }
+                    root_seen = true;
+                }
+                stack.push(field.clone());
                 text_value.clear();
                 if field == b"Contents" {
                     current = Some(CloudObjectMetadata::default());
@@ -362,14 +407,35 @@ pub(super) fn parse_s3_list_page(body: &str) -> Result<S3ListPage, CloudSyncErro
                             objects.push(entry);
                         }
                     }
-                    b"IsTruncated" => truncated = text_value == "true",
+                    b"IsTruncated" => {
+                        if truncated_seen
+                            || stack.len() != 2
+                            || !matches!(text_value.as_str(), "true" | "false")
+                        {
+                            return Err(invalid());
+                        }
+                        truncated_seen = true;
+                        truncated = text_value == "true";
+                    }
                     b"NextContinuationToken" => next_token = Some(text_value.clone()),
                     _ => {}
+                }
+                if stack.pop().as_deref() != Some(event.local_name().as_ref()) {
+                    return Err(invalid());
                 }
                 field.clear();
                 text_value.clear();
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                if !root_seen
+                    || !stack.is_empty()
+                    || !truncated_seen
+                    || objects.iter().any(|entry| entry.path.is_empty())
+                {
+                    return Err(invalid());
+                }
+                break;
+            }
             Ok(_) => {}
             Err(_) => return Err(invalid()),
         }

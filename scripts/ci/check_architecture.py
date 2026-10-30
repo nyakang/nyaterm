@@ -80,6 +80,7 @@ def dependency_errors() -> list[str]:
         "nyaterm-transport",
         "nyaterm-terminal",
         "nyaterm-store",
+        "nyaterm-sync",
         "nyaterm-remote-desktop",
         "nyaterm-plugin-api",
         "nyaterm-plugin-host",
@@ -96,6 +97,12 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop"}),
+        ("nyaterm-sync", {
+            "nyaterm-store", "nyaterm-desktop", "nyaterm-transport", "nyaterm-ui",
+            "reqwest", "zed-reqwest", "hyper", "ureq", "isahc", "surf",
+            "redb", "rusqlite", "sqlx", "tokio",
+        }),
         ("nyaterm-plugin-api", {
             "nyaterm-core", "nyaterm-desktop", "nyaterm-store", "nyaterm-transport",
             "nyaterm-plugin-host", "nyaterm-ui", "nyaterm-terminal-gpui",
@@ -104,7 +111,12 @@ def dependency_errors() -> list[str]:
     ):
         document = tomllib.loads((ROOT / "crates" / crate / "Cargo.toml").read_text(encoding="utf-8"))
         for package in dependency_packages(document, workspace_dependencies):
-            if package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_sync_direction = (
+                crate == "nyaterm-sync"
+                and package.startswith("nyaterm-")
+                and package != "nyaterm-core"
+            )
+            if wrong_sync_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
     return errors
 
@@ -120,6 +132,34 @@ def dependency_packages(document: dict, workspace_dependencies: dict):
                 yield package.replace("_", "-")
         elif isinstance(value, dict):
             yield from dependency_packages(value, workspace_dependencies)
+
+
+def sync_classification_errors() -> list[str]:
+    """Require a deliberate sync policy when a persisted model gains a field."""
+    core = ROOT / "crates" / "nyaterm-core" / "src"
+    catalog = json.loads((core / "sync_schema" / "fields.json").read_text(encoding="utf-8"))
+    errors: list[str] = []
+    for model, entry in catalog.items():
+        source = (core / entry["source"]).read_text(encoding="utf-8")
+        declaration = re.search(r"(?:pub(?:\([^)]*\))? )?(?:struct|enum) " + re.escape(model) + r"\s*\{", source)
+        if declaration is None:
+            errors.append(f"sync_schema: classification refers to missing model {model}")
+            continue
+        start = end = declaration.end()
+        depth = 1
+        while depth and end < len(source):
+            depth += (source[end] == "{") - (source[end] == "}")
+            end += 1
+        fields = set(re.findall(r"^\s+(?:pub )?(\w+)\s*:", source[start:end - 1], re.MULTILINE))
+        policies = entry["fields"]
+        for field in fields - policies.keys():
+            errors.append(f"sync_schema: {model}.{field} needs explicit field classification")
+        for field in policies.keys() - fields:
+            errors.append(f"sync_schema: stale classification for {model}.{field}")
+        for field, policy in policies.items():
+            if policy not in {"identity", "local", "secret", "split", "unsupported"} and not re.fullmatch(r"(?:portable|conditional):[a-z_]+", policy):
+                errors.append(f"sync_schema: invalid policy for {model}.{field}")
+    return errors
 
 
 def main() -> int:
@@ -162,6 +202,7 @@ def main() -> int:
     )
     errors.extend(check_budget("raw_scroll_container", raw_scrolls, allowlist))
     errors.extend(dependency_errors())
+    errors.extend(sync_classification_errors())
 
     if errors:
         print("Architecture check failed:", file=sys.stderr)

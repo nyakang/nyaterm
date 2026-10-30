@@ -101,6 +101,10 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_sync.settings().protocol_version == 4 {
+            self.run_cloud_sync_v3_preview(cx);
+            return;
+        }
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
@@ -236,6 +240,10 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_sync.settings().protocol_version == 4 {
+            self.run_cloud_sync_v3_preview(cx);
+            return;
+        }
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
@@ -379,6 +387,10 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_sync.settings().protocol_version == 4 {
+            self.run_cloud_sync_v3_preview(cx);
+            return;
+        }
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
@@ -517,6 +529,10 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_sync.settings().protocol_version == 4 {
+            self.run_cloud_sync_v3_preview(cx);
+            return;
+        }
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
@@ -790,7 +806,14 @@ impl NyaTermApp {
         }
     }
 
-    fn begin_cloud_sync_snapshot_job(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn begin_cloud_sync_snapshot_job(&mut self, cx: &mut Context<Self>) -> bool {
+        if !matches!(self.cloud_sync.settings().protocol_version, 3 | 4) {
+            self.cloud_sync
+                .set_status("Unsupported cloud sync protocol");
+            self.request_settings_panel_refresh(cx);
+            cx.notify();
+            return false;
+        }
         if !self.cloud_sync.settings().enabled {
             self.cloud_sync.set_status(t!("settings.syncEnableFirst"));
             self.shell.set_status(self.cloud_sync.status().to_string());
@@ -800,7 +823,7 @@ impl NyaTermApp {
         self.begin_cloud_sync_job(cx)
     }
 
-    fn begin_cloud_sync_job(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn begin_cloud_sync_job(&mut self, cx: &mut Context<Self>) -> bool {
         let other_job_running = self
             .desktop_controller
             .as_ref()
@@ -983,7 +1006,7 @@ fn cloud_sync_outcome_message(outcome: CloudSyncOutcome) -> String {
 }
 
 // Called only by a blocking job, under the same operation lock as automatic sync.
-fn load_cloud_sync_options(
+pub(super) fn load_cloud_sync_options(
     store: &nyaterm_store::StoreBlockingClient,
     runtime: &nyaterm_core::AppRuntime,
     settings: &CloudSyncSettings,

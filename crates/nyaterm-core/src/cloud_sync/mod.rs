@@ -574,6 +574,15 @@ pub struct RemoteFileCapacity {
 }
 
 pub trait CloudSyncRemote {
+    /// Publish immutable V4 bytes. Implementations must expose a complete object
+    /// or no object after an interrupted write; retries use the same bytes.
+    fn write_sync_file(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        self.write(path, bytes)
+    }
+    /// Uncached listing for the V4 registry and immutable publication objects.
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.list_files(path)
+    }
     fn file_capacity(&self) -> Result<Option<RemoteFileCapacity>, CloudSyncError> {
         Ok(None)
     }
@@ -606,6 +615,37 @@ pub trait CloudSyncRemote {
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError>;
     fn delete(&self, path: &str) -> Result<(), CloudSyncError>;
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError>;
+}
+
+/// Read every causal legacy branch through the existing compatibility codec.
+/// This is a migration reader; it never resolves a branch by overwriting data.
+pub fn read_legacy_sync_branches(
+    store: &dyn CloudLocalStore,
+    remote: &dyn CloudSyncRemote,
+    options: &LocalCloudSyncOptions,
+) -> Result<Vec<RawPortableSnapshot>, CloudSyncError> {
+    let heads = heads::read(store, remote, &options.remote_root)?;
+    let mut pointers = heads.maximal();
+    if pointers.is_empty()
+        && let Some(pointer) = heads.selected
+    {
+        pointers.push(pointer);
+    }
+    let mut snapshots = Vec::new();
+    for pointer in pointers {
+        match protocol::resolve_remote_snapshot(store, remote, options, &pointer)? {
+            protocol::RemoteSnapshotResolution::Current(snapshot)
+            | protocol::RemoteSnapshotResolution::LegacyMigrated(snapshot) => {
+                snapshots.push(snapshot)
+            }
+            _ => {
+                return Err(CloudSyncError::Remote(
+                    "Legacy cloud data is incomplete; migration was stopped".into(),
+                ));
+            }
+        }
+    }
+    Ok(snapshots)
 }
 
 pub trait CloudLocalStore: Send + Sync {

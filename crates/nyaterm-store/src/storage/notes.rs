@@ -400,6 +400,20 @@ impl ConnectionStore {
         }
 
         {
+            for id in &folder_ids {
+                super::cloud_sync_v4::record_remove(
+                    &txn,
+                    NOTE_FOLDERS_TABLE,
+                    &entity_key(NOTE_FOLDER_PREFIX, id),
+                )?;
+            }
+            for id in &note_ids {
+                super::cloud_sync_v4::record_remove(
+                    &txn,
+                    NOTES_TABLE,
+                    &entity_key(NOTE_DOCUMENT_PREFIX, id),
+                )?;
+            }
             let mut table = txn.open_table(NOTE_FOLDERS_TABLE)?;
             for id in &folder_ids {
                 table.remove(entity_key(NOTE_FOLDER_PREFIX, id).as_str())?;

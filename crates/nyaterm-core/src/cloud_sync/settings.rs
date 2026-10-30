@@ -183,6 +183,10 @@ impl_redacted_sync_debug!(
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudSyncSettings {
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version: u32,
+    #[serde(default)]
+    pub v4_scope: crate::sync_schema::SyncScope,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_provider")]
@@ -218,6 +222,8 @@ pub struct CloudSyncSettings {
 impl Default for CloudSyncSettings {
     fn default() -> Self {
         Self {
+            protocol_version: 3,
+            v4_scope: crate::sync_schema::SyncScope::default(),
             enabled: false,
             provider: default_provider(),
             remote_root: default_remote_root(),
@@ -235,6 +241,10 @@ impl Default for CloudSyncSettings {
             github_gist: GithubGistSyncSettings::default(),
         }
     }
+}
+
+fn default_protocol_version() -> u32 {
+    3
 }
 
 pub fn mask_cloud_sync_settings(mut settings: CloudSyncSettings) -> CloudSyncSettings {

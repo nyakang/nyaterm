@@ -30,6 +30,7 @@ pub mod runtime;
 pub mod secret;
 pub mod session_import;
 pub mod ssh_keys;
+pub mod sync_schema;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

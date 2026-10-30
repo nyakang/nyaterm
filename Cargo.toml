@@ -21,6 +21,7 @@ members = [
     "crates/nyaterm-activex-helper",
     "crates/nyaterm-remote-desktop",
     "crates/nyaterm-store",
+    "crates/nyaterm-sync",
     "crates/nyaterm-terminal",
     "crates/nyaterm-terminal-gpui",
     "crates/nyaterm-transport",
@@ -44,6 +45,7 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+automerge = "=0.12.0"
 httpdate = "1.0"
 aes-gcm = "0.11"
 argon2 = { version = "0.5.3", features = ["zeroize"] }
@@ -90,6 +92,7 @@ nyaterm-plugin-api = { path = "crates/nyaterm-plugin-api" }
 nyaterm-plugin-host = { path = "crates/nyaterm-plugin-host" }
 nyaterm-remote-desktop = { path = "crates/nyaterm-remote-desktop" }
 nyaterm-store = { path = "crates/nyaterm-store" }
+nyaterm-sync = { path = "crates/nyaterm-sync" }
 nyaterm-terminal = { path = "crates/nyaterm-terminal" }
 nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }

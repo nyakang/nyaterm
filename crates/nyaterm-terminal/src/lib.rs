@@ -223,7 +223,10 @@ pub struct TerminalSnapshotRow {
     pub styled_spans: Box<[StyledSpan]>,
     pub signature: u64,
     pub timestamp_ms: Option<u64>,
+    /// This row continues the previous row's soft-wrapped logical line.
     pub wrapped: bool,
+    /// This row soft-wraps into the next row, even outside the snapshot window.
+    pub wraps_to_next: bool,
     pub hyperlinks: Box<[HyperlinkSpan]>,
     pub command_mark: Option<ShellCommandMark>,
     pub shell_input: Option<ShellInputLineKind>,
@@ -460,6 +463,7 @@ struct TerminalSnapshotRowCacheKey {
     signature: u64,
     timestamp_ms: Option<u64>,
     wrapped: bool,
+    wraps_to_next: bool,
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
@@ -2413,6 +2417,12 @@ fn snapshot_window_from_term(
                     .flags
                     .contains(Flags::WRAPLINE)
         });
+        let wraps_to_next = line_in_grid.is_some_and(|line| {
+            cols > 0
+                && term.grid()[line][Column(cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+        });
         let key = TerminalSnapshotRowCacheKey {
             cleared,
             display_line_number,
@@ -2421,6 +2431,7 @@ fn snapshot_window_from_term(
             signature,
             timestamp_ms,
             wrapped,
+            wraps_to_next,
             command_mark,
             line_id,
             shell_input,
@@ -2450,6 +2461,7 @@ fn snapshot_window_from_term(
                     signature,
                     timestamp_ms,
                     wrapped,
+                    wraps_to_next,
                     command_mark,
                     line_id,
                     shell_input,
@@ -2550,6 +2562,7 @@ struct SnapshotRowMetadata {
     signature: u64,
     timestamp_ms: Option<u64>,
     wrapped: bool,
+    wraps_to_next: bool,
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
@@ -2570,6 +2583,7 @@ fn snapshot_row_from_term(
         signature,
         timestamp_ms,
         wrapped,
+        wraps_to_next,
         command_mark,
         line_id,
         shell_input,
@@ -2618,6 +2632,7 @@ fn snapshot_row_from_term(
         signature,
         timestamp_ms,
         wrapped,
+        wraps_to_next,
         command_mark,
         shell_input,
         shell_input_columns,

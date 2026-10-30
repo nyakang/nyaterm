@@ -92,6 +92,9 @@ impl<'a> CachedMetadataRemote<'a> {
 }
 
 impl CloudSyncRemote for CachedMetadataRemote<'_> {
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.inner.list_sync_files(path)
+    }
     fn provider(&self) -> &'static str {
         self.inner.provider()
     }
@@ -161,6 +164,10 @@ impl CloudSyncRemote for CachedMetadataRemote<'_> {
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
         self.invalidate(path);
         self.inner.write(path, bytes)
+    }
+    fn write_sync_file(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        self.invalidate(path);
+        self.inner.write_sync_file(path, bytes)
     }
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
         self.invalidate(path);

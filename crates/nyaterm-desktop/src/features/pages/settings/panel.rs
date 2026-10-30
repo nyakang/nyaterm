@@ -318,6 +318,7 @@ impl AiSettingsPresentation {
 
 #[derive(Clone, PartialEq)]
 pub(in crate::features) struct CloudSyncPresentation {
+    pub(in crate::features) v4_preview: Option<crate::features::sync::V4PreviewSummary>,
     pub(in crate::features) settings: Arc<CloudSyncSettings>,
     pub(in crate::features) state: CloudSyncState,
     pub(in crate::features) history: Vec<CloudSyncHistoryEntry>,
@@ -333,6 +334,7 @@ pub(in crate::features) struct CloudSyncPresentation {
 impl Default for CloudSyncPresentation {
     fn default() -> Self {
         Self {
+            v4_preview: None,
             settings: Arc::new(CloudSyncSettings::default()),
             state: CloudSyncState::default(),
             history: Vec::new(),

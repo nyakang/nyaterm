@@ -7,6 +7,7 @@
 
 use nyaterm_core::models::window_decoration::WindowDecoration;
 use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
+use redb::ReadableTableMetadata;
 use std::collections::HashMap;
 
 use super::{
@@ -669,6 +670,14 @@ impl ConnectionStore {
             .map(|token| bootstrap.decrypt_settings_secret(&token))
             .transpose()?
             .map(Into::into);
+        if current_password.as_deref() != next_password {
+            let txn = self.db.begin_write()?;
+            if txn.open_table(super::cloud_sync_v4::REPLICAS)?.len()? > 0 {
+                return Err(StorageError::InvalidData(
+                    "Cloud Sync V3 requires publishing and verifying a new space before changing the master password".into(),
+                ));
+            }
+        }
         let rewrapped_master_key = self
             .load_master_key_token()?
             .map(|token| {
@@ -690,6 +699,11 @@ impl ConnectionStore {
         );
 
         let txn = self.db.begin_write()?;
+        if current_password.as_deref() != next_password
+            && txn.open_table(super::cloud_sync_v4::REPLICAS)?.len()? > 0
+        {
+            return Err(StorageError::CloudSyncLocalChanged);
+        }
         write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_DEFAULT, &value)?;
         if let Some(token) = rewrapped_master_key.as_deref() {
             txn.open_table(META_TABLE)?.insert(META_MASTER_KEY, token)?;

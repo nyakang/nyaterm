@@ -331,10 +331,29 @@ impl NyaTermApp {
         } else {
             Some(Some(master_password.draft.to_string()))
         };
+        let password_rotation = (base.cloud_sync_settings.protocol_version == 4
+            && base.settings.has_master_password)
+            .then(|| {
+                master_password_update
+                    .as_ref()
+                    .and_then(|value| value.as_ref())
+                    .cloned()
+            })
+            .flatten()
+            .map(nyaterm_core::SecretString::from);
+        if password_rotation.is_some() && cloud_changed {
+            let message = t!("settings.syncV3RotateSeparately").to_string();
+            self.settings.update_store_status(message.clone(), false);
+            self.shell.set_status(message);
+            self.request_settings_panel_refresh(cx);
+            cx.notify();
+            return;
+        }
         self.settings
             .update_store_status(t!("settings.applying").to_string(), false);
-        self.submit_store_request(
+        self.submit_store_request_with_password_rotation(
             0,
+            password_rotation,
             nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
                 let conflict = || {
                     nyaterm_store::StorageError::InvalidData(

@@ -2,6 +2,7 @@ mod aliyun;
 mod github_gist_auth;
 mod google_drive;
 mod helpers;
+mod listing;
 pub(crate) mod metrics;
 mod onedrive;
 mod s3;

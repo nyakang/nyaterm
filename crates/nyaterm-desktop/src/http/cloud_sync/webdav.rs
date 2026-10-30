@@ -129,15 +129,15 @@ impl CloudSyncRemote for NativeWebdavRemote {
 
     fn create_dir(&self, path: &str) -> Result<(), CloudSyncError> {
         let mut current = String::new();
-        for segment in trim_remote_path(path)
-            .split('/')
-            .filter(|value| !value.is_empty())
-        {
+        // The configured provider root may itself be new. MKCOL is not
+        // recursive, so create it before the protocol's relative directories.
+        let relative = [self.root.as_str(), &trim_remote_path(path)].join("/");
+        for segment in relative.split('/').filter(|value| !value.is_empty()) {
             if !current.is_empty() {
                 current.push('/');
             }
             current.push_str(segment);
-            let url = self.url_for(&current);
+            let url = format!("{}/{}", self.endpoint, current);
             let method = Method::from_bytes(b"MKCOL").map_err(|error| {
                 CloudSyncError::Remote(format!("failed to build WebDAV MKCOL method: {error}"))
             })?;
@@ -147,7 +147,6 @@ impl CloudSyncRemote for NativeWebdavRemote {
             let _ = response.bytes_counted();
             match status {
                 StatusCode::CREATED | StatusCode::OK | StatusCode::METHOD_NOT_ALLOWED => {}
-                status if status.as_u16() == 409 => {}
                 status if status.is_success() => {}
                 status => {
                     return Err(super::helpers::http_failure(
@@ -226,6 +225,16 @@ impl CloudSyncRemote for NativeWebdavRemote {
     }
 
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.list_names(path, false)
+    }
+
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.list_names(path, true)
+    }
+}
+
+impl NativeWebdavRemote {
+    fn list_names(&self, path: &str, v4: bool) -> Result<Vec<String>, CloudSyncError> {
         let method = Method::from_bytes(b"PROPFIND").map_err(|error| {
             CloudSyncError::Remote(format!("failed to build WebDAV PROPFIND method: {error}"))
         })?;
@@ -250,7 +259,12 @@ impl CloudSyncRemote for NativeWebdavRemote {
                 _retry_after_seconds,
             ));
         }
-        parse_webdav_file_names(&body).map(|names| {
+        (if v4 {
+            parse_webdav_names(&body, true)
+        } else {
+            parse_webdav_file_names(&body)
+        })
+        .map(|names| {
             let prefix = trim_remote_path(path);
             names
                 .into_iter()
@@ -261,34 +275,92 @@ impl CloudSyncRemote for NativeWebdavRemote {
 }
 
 pub(super) fn parse_webdav_file_names(body: &str) -> Result<Vec<String>, CloudSyncError> {
+    parse_webdav_names(body, false)
+}
+
+fn parse_webdav_names(body: &str, v4: bool) -> Result<Vec<String>, CloudSyncError> {
+    let invalid = || CloudSyncError::Remote("invalid WebDAV PROPFIND response".into());
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
-    let mut in_href = false;
+    let mut stack: Vec<Vec<u8>> = Vec::new();
+    let mut root_seen = false;
+    let mut text_value = String::new();
     let mut names = Vec::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(event)) if event.local_name().as_ref() == b"href" => in_href = true,
-            Ok(Event::End(event)) if event.local_name().as_ref() == b"href" => in_href = false,
-            Ok(Event::Text(text)) if in_href => {
-                let href = text.decode().map_err(|_| {
-                    CloudSyncError::Remote("invalid WebDAV PROPFIND response".into())
-                })?;
-                let href = href.trim_end_matches('/');
-                if let Some(name) = href
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| name.ends_with(".redb.enc"))
-                {
-                    names.push(percent_decode_path_segment(name)?);
+            Ok(Event::Start(event)) => {
+                let name = event.local_name().as_ref().to_vec();
+                if stack.is_empty() {
+                    if root_seen || name != b"multistatus" {
+                        return Err(invalid());
+                    }
+                    root_seen = true;
                 }
+                stack.push(name);
+                text_value.clear();
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Empty(event)) if stack.is_empty() => {
+                if root_seen || event.local_name().as_ref() != b"multistatus" {
+                    return Err(invalid());
+                }
+                root_seen = true;
+            }
+            Ok(Event::Text(text)) => {
+                let decoded = text.decode().map_err(|_| invalid())?;
+                if stack.is_empty() && !decoded.trim().is_empty() {
+                    return Err(invalid());
+                }
+                text_value.push_str(&decoded);
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                let reference = reference.decode().map_err(|_| invalid())?;
+                let reference = format!("&{reference};");
+                text_value
+                    .push_str(&quick_xml::escape::unescape(&reference).map_err(|_| invalid())?);
+            }
+            Ok(Event::End(event)) => {
+                let name = event.local_name();
+                if name.as_ref() == b"status" {
+                    let code = text_value
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|code| code.parse::<u16>().ok())
+                        .ok_or_else(invalid)?;
+                    if !(200..300).contains(&code) {
+                        // A failed child response is not an empty directory.
+                        return Err(invalid());
+                    }
+                }
+                if name.as_ref() == b"href" {
+                    let href = text_value.trim_end_matches('/');
+                    if let Some(name) = href.rsplit('/').next().filter(|name| {
+                        if v4 {
+                            name.ends_with(".bin")
+                        } else {
+                            name.ends_with(".redb.enc") || name.ends_with(".json")
+                        }
+                    }) {
+                        let name = percent_decode_path_segment(name)?;
+                        if name.contains(['/', '\\', '\0']) || name == "." || name == ".." {
+                            return Err(invalid());
+                        }
+                        names.push(name);
+                    }
+                }
+                if stack.pop().as_deref() != Some(name.as_ref()) {
+                    return Err(invalid());
+                }
+                text_value.clear();
+            }
+            Ok(Event::Eof) => {
+                if !root_seen || !stack.is_empty() {
+                    return Err(invalid());
+                }
+                break;
+            }
+            Ok(Event::DocType(_)) => return Err(invalid()),
             Ok(_) => {}
-            Err(_) => {
-                return Err(CloudSyncError::Remote(
-                    "invalid WebDAV PROPFIND response".into(),
-                ));
-            }
+            Err(_) => return Err(invalid()),
         }
     }
     Ok(names)
@@ -320,3 +392,6 @@ fn percent_decode_path_segment(value: &str) -> Result<String, CloudSyncError> {
     String::from_utf8(decoded)
         .map_err(|_| CloudSyncError::Remote("WebDAV path is not valid UTF-8".to_string()))
 }
+
+#[cfg(test)]
+mod tests;

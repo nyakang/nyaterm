@@ -1,0 +1,667 @@
+{
+  "SavedConnection": {
+    "source": "models/sessions.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "config": "split",
+      "group_id": "portable:placement",
+      "description": "portable:description",
+      "tags": "portable:tags",
+      "sort_order": "portable:placement",
+      "icon": "conditional:icon",
+      "icon_auto_detect": "conditional:icon",
+      "auth": "split",
+      "network": "portable:network",
+      "post_login": "portable:post_login",
+      "recording": "local",
+      "ssh_algorithms": "portable:ssh_algorithms",
+      "ssh_profile": "portable:terminal",
+      "terminal_type": "portable:terminal",
+      "sftp": "split",
+      "asset": "split",
+      "created_at_ms": "local",
+      "updated_at_ms": "local",
+      "last_used_at_ms": "local",
+      "extensions": "unsupported"
+    }
+  },
+  "ConnectionType": {
+    "source": "models/connection.rs",
+    "fields": {
+      "host": "portable:endpoint",
+      "port": "portable:endpoint",
+      "username": "portable:endpoint",
+      "domain": "portable:endpoint",
+      "backspace_mode": "portable:terminal",
+      "ai_execution_profile": "portable:terminal",
+      "x11_forwarding": "local",
+      "auth_agent_endpoint": "local",
+      "agent_forwarding_config": "local",
+      "legacy_agent_forwarding": "local",
+      "encoding": "portable:terminal",
+      "dynamic_tab_title": "portable:terminal",
+      "shell_path": "local",
+      "shell_args": "local",
+      "working_dir": "local",
+      "raw_tcp_cli": "portable:telnet",
+      "enter_mode": "portable:telnet",
+      "local_echo": "portable:telnet",
+      "local_line_edit": "portable:telnet",
+      "force_character_at_a_time": "portable:telnet",
+      "send_naws": "portable:telnet",
+      "send_sga": "portable:telnet",
+      "keep_alive_interval_secs": "local",
+      "auto_login": "portable:auto_login",
+      "port_name": "local",
+      "baud_rate": "portable:serial",
+      "data_bits": "portable:serial",
+      "parity": "portable:serial",
+      "flow_control": "portable:serial",
+      "stop_bits": "portable:serial",
+      "backend": "local",
+      "security": "local",
+      "display": "local",
+      "clipboard": "local",
+      "reconnect": "local",
+      "shared": "local",
+      "view_only": "local"
+    }
+  },
+  "ProxyConfig": {
+    "source": "models/network.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "protocol": "portable:endpoint",
+      "host": "portable:endpoint",
+      "port": "portable:endpoint",
+      "command": "local",
+      "username": "portable:endpoint",
+      "password": "secret",
+      "password_id": "portable:endpoint",
+      "group_id": "portable:group_id"
+    }
+  },
+  "TunnelConfig": {
+    "source": "models/network.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "tunnel_type": "portable:endpoint",
+      "connection_id": "portable:endpoint",
+      "listen_port": "portable:endpoint",
+      "target_host": "portable:endpoint",
+      "target_port": "portable:endpoint",
+      "is_open": "local",
+      "auto_open": "portable:auto_open",
+      "bind_localhost": "portable:endpoint",
+      "group_id": "portable:group_id"
+    }
+  },
+  "AssetMetadata": {
+    "source": "models/connection.rs",
+    "fields": {
+      "device_type": "local",
+      "os_name": "local",
+      "os_version": "local",
+      "architecture": "local",
+      "kernel_version": "local",
+      "hostname": "local",
+      "cpu_model": "local",
+      "cpu_sockets": "local",
+      "cpu_cores": "local",
+      "cpu_threads": "local",
+      "memory_bytes": "local",
+      "accelerators": "local",
+      "disks": "local",
+      "tags": "portable:asset",
+      "notes": "portable:asset",
+      "updated_at": "local"
+    }
+  },
+  "ConnectionAuth": {
+    "source": "models/credentials.rs",
+    "fields": {
+      "mode": "portable:authentication",
+      "password_id": "portable:authentication",
+      "account_id": "portable:authentication",
+      "password_source": "portable:authentication",
+      "username_source": "portable:authentication",
+      "password": "secret",
+      "key_id": "portable:authentication",
+      "otp_id": "portable:authentication",
+      "auto_fill_otp": "portable:authentication",
+      "has_password": "local"
+    }
+  },
+  "ConnectionNetwork": {
+    "source": "models/network.rs",
+    "fields": {
+      "proxy_id": "portable:network",
+      "proxy_jump_id": "portable:network",
+      "host_key_alias": "portable:network"
+    }
+  },
+  "SftpSettings": {
+    "source": "models/connection.rs",
+    "fields": {
+      "compatibility_mode": "portable:sftp",
+      "enabled": "portable:sftp",
+      "cwd_follow_mode": "portable:sftp",
+      "shell_detection_timeout_ms": "local",
+      "filename_encoding": "portable:sftp",
+      "pipeline_depth": "local",
+      "extra": "unsupported"
+    }
+  },
+  "SshAlgorithmPreferences": {
+    "source": "models/connection.rs",
+    "fields": {
+      "mode": "portable:ssh_algorithms",
+      "kex": "portable:ssh_algorithms",
+      "ciphers": "portable:ssh_algorithms",
+      "macs": "portable:ssh_algorithms",
+      "host_keys": "portable:ssh_algorithms"
+    }
+  },
+  "Group": {
+    "source": "models/sessions.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "parent_id": "portable:parent_id",
+      "sort_order": "portable:sort_order",
+      "created_at_ms": "local",
+      "updated_at_ms": "local"
+    }
+  },
+  "ConnectionCustomIcon": {
+    "source": "models/sessions.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "data_url": "portable:data_url",
+      "created_at_ms": "local",
+      "updated_at_ms": "local"
+    }
+  },
+  "NoteDocument": {
+    "source": "models/notes.rs",
+    "fields": {
+      "id": "identity",
+      "parent_id": "portable:parent_id",
+      "title": "portable:title",
+      "markdown": "portable:markdown",
+      "sort_order": "portable:sort_order",
+      "revision": "local",
+      "created_at_ms": "local",
+      "updated_at_ms": "local",
+      "extra": "unsupported"
+    }
+  },
+  "NoteFolder": {
+    "source": "models/notes.rs",
+    "fields": {
+      "id": "identity",
+      "parent_id": "portable:parent_id",
+      "name": "portable:name",
+      "sort_order": "portable:sort_order",
+      "created_at_ms": "local",
+      "updated_at_ms": "local",
+      "extra": "unsupported"
+    }
+  },
+  "QuickCommand": {
+    "source": "models/quick_commands.rs",
+    "fields": {
+      "id": "identity",
+      "label": "portable:label",
+      "command": "portable:command",
+      "category_id": "portable:category_id",
+      "description": "portable:description",
+      "color_tag": "portable:color_tag",
+      "icon_tag": "portable:icon_tag",
+      "pinned": "portable:pinned",
+      "execution_mode": "portable:execution_mode",
+      "source": "local",
+      "risk_level": "local",
+      "updated_at": "local",
+      "created_at": "local",
+      "use_count": "local",
+      "sort_order": "portable:sort_order"
+    }
+  },
+  "QuickCommandCategory": {
+    "source": "models/quick_commands.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "parent_id": "portable:parent_id",
+      "sort_order": "portable:sort_order"
+    }
+  },
+  "ProxyGroup": {
+    "source": "models/network.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "sort_order": "portable:sort_order"
+    }
+  },
+  "TunnelGroup": {
+    "source": "models/network.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "sort_order": "portable:sort_order"
+    }
+  },
+  "ConnectionPostLogin": {
+    "source": "models/sessions.rs",
+    "fields": {
+      "enabled": "portable:post_login",
+      "command": "portable:post_login",
+      "delay_ms": "portable:post_login"
+    }
+  },
+  "TelnetAutoLoginConfig": {
+    "source": "models/connection.rs",
+    "fields": {
+      "enabled": "portable:auto_login",
+      "send_wake_enter": "portable:auto_login",
+      "timeout_ms": "portable:auto_login",
+      "username_prompt_regex": "portable:auto_login",
+      "password_prompt_regex": "portable:auto_login",
+      "success_prompt_regex": "portable:auto_login",
+      "failure_prompt_regex": "portable:auto_login",
+      "max_retries": "portable:auto_login"
+    }
+  },
+  "AppSettingsSummary": {
+    "source": "models/settings.rs",
+    "fields": {
+      "theme": "conditional:preference",
+      "custom_themes": "local",
+      "background_image_path": "local",
+      "background_image_fit": "local",
+      "background_image_opacity": "local",
+      "window_material": "local",
+      "window_decorations": "local",
+      "window_background_opacity": "local",
+      "background_content_opacity": "local",
+      "language": "local",
+      "terminal_font_family": "conditional:preference",
+      "terminal_font_size": "conditional:preference",
+      "cursor_style": "conditional:preference",
+      "cursor_blink": "conditional:preference",
+      "terminal_theme": "conditional:preference",
+      "minimum_contrast_ratio": "conditional:preference",
+      "ui_font_family": "local",
+      "ui_font_size": "local",
+      "terminal_font_weight": "conditional:preference",
+      "terminal_font_weight_bold": "conditional:preference",
+      "bold_default_foreground": "local",
+      "x11_display": "local",
+      "terminal_scrollback_lines": "local",
+      "terminal_keep_alive_mode": "local",
+      "terminal_keep_alive_interval": "local",
+      "terminal_timestamp_format": "local",
+      "terminal_hardware_acceleration": "local",
+      "terminal_show_workspace_padding": "local",
+      "terminal_show_line_numbers": "local",
+      "terminal_show_timestamps": "local",
+      "terminal_show_multi_line_paste_dialog": "local",
+      "terminal_paste_image_as_path": "local",
+      "terminal_reconnect_restore_cwd": "local",
+      "terminal_low_latency_mode": "local",
+      "terminal_zebra_stripes_enabled": "local",
+      "terminal_action_links_enabled": "local",
+      "terminal_action_links_matchers": "local",
+      "search_custom_engines": "local",
+      "ui_remote_stats_interval": "local",
+      "ui_gpu_monitor_interval": "local",
+      "ui_ascend_npu_monitor_interval": "local",
+      "ui_process_manager_interval": "local",
+      "ui_docker_manager_interval": "local",
+      "ui_quick_cmd_view_mode": "local",
+      "ui_quick_cmd_sort_mode": "local",
+      "ui_quick_cmd_selected_category": "local",
+      "ui_saved_connections_sort_mode": "local",
+      "ui_saved_connections_expanded_group_ids": "local",
+      "ui_start_workspace_mode": "local",
+      "ui_asset_sort_key": "local",
+      "ui_asset_sort_direction": "local",
+      "ui_header_status_mode": "local",
+      "ui_header_status_visible": "local",
+      "ui_file_explorer_show_hidden_files": "local",
+      "ui_file_explorer_view_mode": "local",
+      "ui_file_explorer_auto_sync_cwd_connection_ids": "local",
+      "ui_file_explorer_favorite_dirs_by_connection_id": "local",
+      "ui_file_manager": "local",
+      "ui_left_panel_width": "local",
+      "ui_right_panel_width": "local",
+      "ui_transfer_height": "local",
+      "ui_quick_cmd_height": "local",
+      "ui_quick_cmd_visible": "local",
+      "ui_serial_send_height": "local",
+      "ui_serial_send_clear_after_send": "local",
+      "ui_serial_send_visible": "local",
+      "ui_active_left_panel": "local",
+      "ui_active_right_panel": "local",
+      "ui_left_panel_collapsed": "local",
+      "ui_right_panel_collapsed": "local",
+      "ui_activity_bar_left_top": "local",
+      "ui_activity_bar_left_bottom": "local",
+      "ui_activity_bar_right_top": "local",
+      "ui_activity_bar_right_bottom": "local",
+      "ui_activity_bar_show_labels": "local",
+      "ui_activity_bar_hidden_items": "local",
+      "ui_panel_multi_open": "local",
+      "ui_panel_open_mode": "local",
+      "ui_left_open_panels": "local",
+      "ui_right_open_panels": "local",
+      "ui_panel_stack_sizes": "local",
+      "interaction_copy_on_select": "local",
+      "interaction_allow_osc52_clipboard_write": "local",
+      "interaction_right_click_paste": "local",
+      "interaction_terminal_right_click_action": "local",
+      "interaction_mouse_events_require_alt": "local",
+      "interaction_terminal_zoom_enabled": "local",
+      "interaction_command_suggestions_enabled": "local",
+      "interaction_credential_autofill_enabled": "local",
+      "interaction_command_suggestion_min_chars": "local",
+      "interaction_command_suggestion_max_chars": "local",
+      "interaction_word_separators": "local",
+      "interaction_duplicate_session_command_delay_ms": "local",
+      "interaction_alt_as_meta": "local",
+      "interaction_mac_ime_compatibility": "local",
+      "interaction_tab_double_click_action": "local",
+      "interaction_tab_middle_click_action": "local",
+      "interaction_tab_right_click_action": "local",
+      "interaction_default_encoding": "local",
+      "host_key_policy": "local",
+      "transfer_download_path": "local",
+      "transfer_ask_save_location": "local",
+      "transfer_duplicate_strategy": "local",
+      "transfer_editor_type": "local",
+      "transfer_internal_editor_display": "local",
+      "transfer_internal_editor_font_size": "local",
+      "transfer_default_editor": "local",
+      "transfer_download_threads": "local",
+      "transfer_upload_threads": "local",
+      "transfer_max_retries": "local",
+      "transfer_buffer_size": "local",
+      "transfer_default_file_permissions": "local",
+      "transfer_preserve_timestamps": "local",
+      "transfer_resume_broken_transfer": "local",
+      "recording_path": "local",
+      "recording_auto_start": "local",
+      "recording_default_mode": "local",
+      "recording_path_template": "local",
+      "recording_include_io_labels": "local",
+      "recording_include_input": "local",
+      "recording_include_timestamps": "local",
+      "recording_include_session_metadata": "local",
+      "recording_rotation": "local",
+      "recording_existing_file_behavior": "local",
+      "recording_include_binary_transfer_payloads": "local",
+      "recording_memory_limit_bytes": "local",
+      "diagnostics_level": "local",
+      "diagnostics_retention_days": "local",
+      "startup_restore": "local",
+      "startup_restore_window_layout": "local",
+      "minimize_to_tray": "local",
+      "confirm_on_close": "local",
+      "enable_screen_lock": "local",
+      "enable_startup_lock": "local",
+      "enable_idle_lock": "local",
+      "idle_lock_minutes": "local",
+      "has_master_password": "local",
+      "keybindings": "conditional:keybinding"
+    }
+  },
+  "AiSettings": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "proxy": "local",
+      "schema_version": "local",
+      "enabled": "local",
+      "context_line_limit": "local",
+      "redaction_enabled": "local",
+      "allow_save_command": "local",
+      "record_history": "local",
+      "timeout_ms": "local",
+      "request_user_agent": "local",
+      "active_profile_id": "local",
+      "provider_profiles": "split",
+      "default_mode": "conditional:ai_preference",
+      "default_agent_kind": "local",
+      "external_agent_permission_mode": "local",
+      "default_reasoning_effort": "conditional:ai_preference",
+      "default_model_id": "conditional:ai_preference",
+      "models": "split",
+      "provider_credentials": "split",
+      "terminal_ai_actions": "split",
+      "file_ai_actions": "split",
+      "max_ai_file_size_bytes": "local",
+      "max_agent_steps": "local",
+      "agent_step_timeout_ms": "local",
+      "terminal_output_lines": "local",
+      "agent_background_execution_enabled": "local",
+      "agent_command_execution_mode": "local",
+      "agent_smart_auto_execute_max_risk": "local",
+      "codex": "local",
+      "claude_code": "local",
+      "external_mcp": "local"
+    }
+  },
+  "AiProviderCredential": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "icon_data_url": "conditional:icon_data_url",
+      "api_protocol": "conditional:transport",
+      "id": "identity",
+      "name": "conditional:name",
+      "provider_kind": "conditional:transport",
+      "api_format": "conditional:transport",
+      "base_url": "conditional:transport",
+      "api_key": "secret",
+      "extra_headers": "secret",
+      "enabled": "conditional:enabled"
+    }
+  },
+  "AiProviderProfile": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "id": "identity",
+      "name": "conditional:name",
+      "provider_kind": "conditional:transport",
+      "model": "conditional:model",
+      "base_url": "conditional:transport",
+      "api_key": "secret",
+      "enabled": "conditional:enabled"
+    }
+  },
+  "AiModelConfigItem": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "id": "identity",
+      "name": "conditional:identity",
+      "backend": "conditional:identity",
+      "provider_kind": "conditional:identity",
+      "credential_id": "conditional:identity",
+      "enabled": "conditional:enabled",
+      "source": "conditional:identity",
+      "last_seen_at": "local",
+      "supported_reasoning_efforts": "local"
+    }
+  },
+  "AiCustomActionConfig": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "id": "identity",
+      "name": "conditional:name",
+      "prompt": "conditional:prompt",
+      "enabled": "conditional:enabled"
+    }
+  },
+  "AiHttpHeader": {
+    "source": "ai/mod.rs",
+    "fields": {
+      "id": "identity",
+      "name": "secret",
+      "value": "secret"
+    }
+  },
+  "SshKey": {
+    "source": "models/credentials.rs",
+    "fields": {
+      "id": "identity",
+      "sort_order": "secret",
+      "name": "secret",
+      "key": "secret",
+      "cert": "secret",
+      "passphrase": "secret",
+      "key_file_path": "local",
+      "cert_file_path": "local",
+      "has_key_data": "local",
+      "has_cert_data": "local"
+    }
+  },
+  "SavedPassword": {
+    "source": "models/credentials.rs",
+    "fields": {
+      "id": "identity",
+      "sort_order": "secret",
+      "name": "secret",
+      "username": "secret",
+      "password": "secret",
+      "has_password": "local"
+    }
+  },
+  "SavedCredential": {
+    "source": "models/credentials.rs",
+    "fields": {
+      "id": "identity",
+      "sort_order": "secret",
+      "name": "secret",
+      "username": "secret",
+      "password": "secret",
+      "username_prompt_regex": "secret",
+      "password_prompt_regex": "secret",
+      "enabled": "secret",
+      "has_password": "local"
+    }
+  },
+  "OtpEntry": {
+    "source": "models/credentials.rs",
+    "fields": {
+      "id": "identity",
+      "otp_type": "secret",
+      "issuer": "secret",
+      "username": "secret",
+      "secret": "secret",
+      "algorithm": "secret",
+      "digits": "secret",
+      "period": "secret",
+      "counter": "secret",
+      "has_secret": "local"
+    }
+  },
+  "KnownHostRecord": {
+    "source": "../../nyaterm-store/src/storage/known_hosts.rs",
+    "fields": {
+      "marker": "conditional:identity",
+      "host_identifier": "conditional:identity",
+      "host_patterns": "conditional:identity",
+      "key_type": "conditional:identity",
+      "key_base64": "conditional:identity",
+      "comment": "conditional:identity",
+      "raw_line": "local",
+      "created_at_ms": "local",
+      "updated_at_ms": "local"
+    }
+  },
+  "VncKnownHostRecord": {
+    "source": "vnc_known_hosts.rs",
+    "fields": {
+      "host": "conditional:identity",
+      "port": "conditional:identity",
+      "sha256_fingerprint": "conditional:identity",
+      "created_at_ms": "local",
+      "updated_at_ms": "local",
+      "extensions": "local"
+    }
+  },
+  "ThemeConfig": {
+    "source": "themes/mod.rs",
+    "fields": {
+      "id": "identity",
+      "name": "portable:name",
+      "label": "portable:label",
+      "swatch": "portable:swatch",
+      "colors": "portable:colors",
+      "extra": "unsupported"
+    }
+  },
+  "ThemeColors": {
+    "source": "themes/mod.rs",
+    "fields": {
+      "bg": "portable:colors",
+      "bg_panel": "portable:colors",
+      "bg_terminal": "portable:colors",
+      "bg_hover": "portable:colors",
+      "bg_input": "portable:colors",
+      "bg_section_header": "portable:colors",
+      "border": "portable:colors",
+      "text": "portable:colors",
+      "text_muted": "portable:colors",
+      "text_dimmed": "portable:colors",
+      "primary": "portable:colors",
+      "primary_hover": "portable:colors",
+      "on_primary": "portable:colors",
+      "focus_ring": "portable:colors",
+      "danger": "portable:colors",
+      "danger_hover": "portable:colors",
+      "success": "portable:colors",
+      "warning": "portable:colors",
+      "link": "portable:colors",
+      "shadow": "portable:colors",
+      "scroll_thumb": "portable:colors",
+      "accent": "portable:colors",
+      "terminal": "portable:colors",
+      "extra": "unsupported"
+    }
+  },
+  "TerminalColors": {
+    "source": "themes/mod.rs",
+    "fields": {
+      "background": "portable:colors",
+      "foreground": "portable:colors",
+      "foreground_intense": "portable:colors",
+      "cursor": "portable:colors",
+      "selection_background": "portable:colors",
+      "line_highlight": "portable:colors",
+      "find_match_background": "portable:colors",
+      "find_match_border": "portable:colors",
+      "black": "portable:colors",
+      "red": "portable:colors",
+      "green": "portable:colors",
+      "yellow": "portable:colors",
+      "blue": "portable:colors",
+      "magenta": "portable:colors",
+      "cyan": "portable:colors",
+      "white": "portable:colors",
+      "bright_black": "portable:colors",
+      "bright_red": "portable:colors",
+      "bright_green": "portable:colors",
+      "bright_yellow": "portable:colors",
+      "bright_blue": "portable:colors",
+      "bright_magenta": "portable:colors",
+      "bright_cyan": "portable:colors",
+      "bright_white": "portable:colors",
+      "extra": "unsupported"
+    }
+  }
+}

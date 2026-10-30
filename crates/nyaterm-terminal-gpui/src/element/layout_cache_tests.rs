@@ -1995,7 +1995,7 @@ fn grid_selection_maps_forward_reverse_multiline_and_scrolled_snapshots() {
     let forward = TerminalGridSelection::new(absolute_start, 2, absolute_start + 2, 3, false);
     let reverse = TerminalGridSelection::new(absolute_start + 2, 3, absolute_start, 2, false);
 
-    let expected = [Some((2, 8)), Some((0, 8)), Some((0, 4))];
+    let expected = [Some((2, 3)), Some((0, 3)), Some((0, 4))];
     for (row, expected) in expected.into_iter().enumerate() {
         assert_eq!(
             terminal_selection_cols_for_snapshot_row(&snapshot, row, Some(forward)),
@@ -2020,7 +2020,144 @@ fn grid_selection_handles_empty_and_all_buffer_ranges() {
     );
     assert_eq!(
         terminal_selection_cols_for_snapshot_row(&snapshot, 0, Some(all)),
-        Some((0, 8))
+        Some((0, 1))
+    );
+}
+
+#[test]
+fn multiline_selection_trims_only_implicit_tails_without_changing_copy() {
+    for (source, start_col, expected, copied) in [
+        ("  a b   \r\nend", 0, (0, 5), "  a b\nen"),
+        ("  a b   \r\nend", 7, (7, 8), "\nen"),
+        ("   \r\nend", 0, (0, 1), "\nen"),
+        ("A界😀e\u{301}  \r\nend", 0, (0, 6), "A界😀e\u{301}\nen"),
+        ("A界  \r\nend", 2, (1, 3), "界\nen"),
+        ("x\u{3000}\u{a0}  \r\nend", 0, (0, 4), "x\nen"),
+        (" \u{301}  \r\nend", 0, (0, 1), " \u{301}\nen"),
+        ("a\x1b[4;44m   \x1b[0m\r\nend", 0, (0, 1), "a\nen"),
+    ] {
+        let mut screen = TerminalScreen::new(16, 3);
+        screen.advance(source.as_bytes());
+        let snapshot = screen.snapshot();
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, start_col),
+            TerminalBufferCellPos::new(1, 1),
+        );
+        let reverse = TerminalSelection {
+            anchor: selection.head,
+            head: selection.anchor,
+            ..selection
+        };
+        for selection in [selection, reverse] {
+            let grid = TerminalGridSelection::from_selection(selection);
+            assert_eq!(
+                terminal_selection_cols_for_snapshot_row(&snapshot, 0, Some(grid)),
+                Some(expected),
+                "{source:?}"
+            );
+            assert_eq!(
+                terminal_selection_cols_for_snapshot_row(&snapshot, 1, Some(grid)),
+                Some((0, 2))
+            );
+            assert_eq!(
+                screen.text_for_selection(selection).unwrap().as_deref(),
+                Some(copied)
+            );
+            for scale in [1.0, 1.25, 1.5] {
+                let geometry = TerminalPaintGeometry {
+                    bounds: Bounds::new(point(px(3.5), px(9.25)), size(px(256.), px(48.))),
+                    visual_y_offset: -2.5,
+                    cell_width: 7.5 * scale,
+                    cell_height: 16.0 * scale,
+                };
+                let mut backgrounds = Vec::new();
+                push_dynamic_selection_background(
+                    &snapshot,
+                    0,
+                    Some(grid),
+                    nyaterm_ui::theme_palette("github-dark"),
+                    geometry,
+                    &mut backgrounds,
+                );
+                assert_eq!(backgrounds.len(), 1);
+                assert_eq!(
+                    f32::from(backgrounds[0].bounds.left()),
+                    (3.5 + expected.0 as f32 * geometry.cell_width).floor()
+                );
+                assert_eq!(
+                    f32::from(backgrounds[0].bounds.right()),
+                    (3.5 + expected.1 as f32 * geometry.cell_width).ceil()
+                );
+            }
+        }
+        let single = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(0, 9),
+        );
+        assert_eq!(
+            terminal_selection_cols_for_snapshot_row(
+                &snapshot,
+                0,
+                Some(TerminalGridSelection::from_selection(single))
+            ),
+            Some((0, 10))
+        );
+        let explicit_end = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, start_col),
+            TerminalBufferCellPos::new(1, 9),
+        );
+        assert_eq!(
+            terminal_selection_cols_for_snapshot_row(
+                &snapshot,
+                1,
+                Some(TerminalGridSelection::from_selection(explicit_end))
+            ),
+            Some((0, 10))
+        );
+    }
+}
+
+#[test]
+fn all_buffer_selection_trims_hard_lines_and_preserves_soft_wraps_and_spacers() {
+    for (source, expected, copied) in [
+        ("ab  X", [(0, 4), (0, 1), (0, 1)], "abX"),
+        ("abc界", [(0, 4), (0, 2), (0, 1)], "abc界"),
+        ("ab\r\n\r\nx", [(0, 2), (0, 1), (0, 1)], "ab\n\nx"),
+    ] {
+        let mut screen = TerminalScreen::new(4, 3);
+        screen.advance(source.as_bytes());
+        let snapshot = screen.snapshot();
+        let all = TerminalSelection::all_buffer(4);
+        let grid = TerminalGridSelection::from_selection(all);
+        for (row, expected) in expected.into_iter().enumerate() {
+            assert_eq!(
+                terminal_selection_cols_for_snapshot_row(&snapshot, row, Some(grid)),
+                Some(expected),
+                "{source:?}, row {row}"
+            );
+        }
+        assert_eq!(
+            screen.text_for_selection(all).unwrap().as_deref(),
+            Some(copied)
+        );
+    }
+}
+
+#[test]
+fn selection_preserves_soft_wrap_width_without_the_continuation_in_snapshot() {
+    let mut screen = TerminalScreen::new(4, 2);
+    screen.advance(b"zero\r\nab  X\r\nlast");
+    let snapshot = screen.viewport_snapshot(2);
+    assert!(snapshot.row(1).unwrap().wraps_to_next);
+    let selection = TerminalGridSelection::from_selection(TerminalSelection::all_buffer(4));
+    assert_eq!(
+        terminal_selection_cols_for_snapshot_row(&snapshot, 1, Some(selection)),
+        Some((0, 4))
+    );
+    let full = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert_eq!(
+        terminal_selection_cols_for_snapshot_row(&full, 1, Some(selection)),
+        Some((0, 4))
     );
 }
 
@@ -2295,6 +2432,66 @@ fn contrast_selection_changes_only_the_affected_row_keys_and_off_mode_reuses_row
     assert_eq!(key(&disabled, 0), key(&disabled_selected, 0));
     assert_ne!(key(&disabled, 0), key(&plain, 0));
     assert_ne!(key(&make(4.5), 0), key(&plain, 0));
+}
+
+#[test]
+fn contrast_and_layout_cache_follow_the_trimmed_selection_background() {
+    let mut screen = TerminalScreen::new(8, 3);
+    screen.advance(b"a\x1b[4;44m   \x1b[0m\r\nx");
+    let snapshot = screen.snapshot();
+    let mut wrapped = snapshot.clone();
+    edit_snapshot_row(&mut wrapped, 0, |row| row.wraps_to_next = true);
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let make = |snapshot: TerminalSnapshot, ratio| {
+        NyaTerminalElement::new(
+            Arc::new(snapshot),
+            Arc::new(Vec::new()),
+            Vec::new(),
+            false,
+            "block",
+            8.0,
+            16.0,
+            palette,
+            "monospace".into(),
+            14.0,
+            400.0,
+            700.0,
+        )
+        .with_minimum_contrast_ratio(ratio)
+        .with_selection(Some(TerminalGridSelection::from_selection(
+            TerminalSelection::all_buffer(8),
+        )))
+    };
+    let decorations = TerminalLineDecorations::default();
+    let trimmed = make(snapshot.clone(), 7.0);
+    let overlays = trimmed.contrast_overlays(0, &decorations);
+    assert_eq!(overlays.selection, Some((0, 1)));
+    assert_eq!(
+        overlays.background(0, 0x123456, palette),
+        palette.terminal_selection
+    );
+    assert_eq!(overlays.background(1, 0x123456, palette), 0x123456);
+    let mut backgrounds = Vec::new();
+    push_dynamic_selection_background(
+        &snapshot,
+        0,
+        trimmed.selection,
+        palette,
+        TerminalPaintGeometry {
+            bounds: Bounds::new(point(px(0.), px(0.)), size(px(64.), px(48.))),
+            visual_y_offset: 0.0,
+            cell_width: 8.0,
+            cell_height: 16.0,
+        },
+        &mut backgrounds,
+    );
+    assert_eq!(backgrounds[0].bounds.size.width, px(8.));
+    let key = |element: &NyaTerminalElement| {
+        let row = element.snapshot.row(0).unwrap();
+        element.row_layout_key(0, &row.text, Some(&row.styled_spans), &decorations)
+    };
+    assert_ne!(key(&trimmed), key(&make(wrapped.clone(), 7.0)));
+    assert_eq!(key(&make(snapshot, 1.0)), key(&make(wrapped, 1.0)));
 }
 
 #[test]

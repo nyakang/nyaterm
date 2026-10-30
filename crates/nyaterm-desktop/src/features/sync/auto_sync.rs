@@ -43,6 +43,7 @@ impl AutoSyncTrigger {
 }
 
 pub(crate) enum AutoSyncResult {
+    V4(super::cloud_sync_v4::SyncReport),
     Disabled,
     Skipped,
     Debouncing(Duration),
@@ -112,6 +113,11 @@ fn run_auto_sync_inner(
     if let Some(skipped) = auto_sync_skip(&settings, trigger, change_elapsed) {
         return Ok(skipped);
     }
+    if !matches!(settings.protocol_version, 3 | 4) {
+        return Err(CloudSyncError::Remote(
+            "Unsupported cloud sync protocol".into(),
+        ));
+    }
     let password = password.ok_or(nyaterm_core::PortableSnapshotError::MissingMasterPassword)?;
     let options = LocalCloudSyncOptions {
         device_name: Some(settings.device_name.clone()),
@@ -124,6 +130,44 @@ fn run_auto_sync_inner(
         master_password: password,
         enabled: true,
     };
+    if settings.protocol_version == 4 {
+        let preview = super::cloud_sync_v4::preview(store, &settings, &options, &controls.sync)?;
+        if preview.migration
+            || !pull_safe
+            || !settings.auto_pull_remote_changes
+            || !settings.auto_push_on_change
+        {
+            return Ok(AutoSyncResult::RemoteAvailable {
+                retry_when_safe: !pull_safe,
+                revision: None,
+            });
+        }
+        let unchanged = preview
+            .apply
+            .local
+            .replica
+            .as_ref()
+            .is_some_and(|replica| replica.document == preview.apply.plan.replica.document);
+        let published = preview.apply.local.published_document.as_deref()
+            == Some(nyaterm_sync::engine::digest(&preview.apply.plan.replica.document).as_str());
+        if unchanged
+            && published
+            && preview.apply.local.pending.is_none()
+            && (preview.apply.local.deferred.is_empty()
+                || preview.apply.local.applied_generation == preview.apply.generation)
+        {
+            return Ok(AutoSyncResult::Skipped);
+        }
+        before_apply()?;
+        return super::cloud_sync_v4::apply_and_publish(
+            store,
+            &settings,
+            &options,
+            preview,
+            &controls.sync,
+        )
+        .map(AutoSyncResult::V4);
+    }
     if trigger == AutoSyncTrigger::Change {
         let caches = super::io_runtime::CloudSyncIoRuntime::shared().caches(
             store,
@@ -279,6 +323,27 @@ impl NyaTermApp {
             return;
         }
         match result {
+            Ok(AutoSyncResult::V4(report)) => {
+                let mut message = if report.verified {
+                    t!("settings.syncV3Verified", count = report.conflicts).to_string()
+                } else {
+                    t!(
+                        "settings.syncV3Pending",
+                        detail = report.publication_error.clone().unwrap_or_default()
+                    )
+                    .to_string()
+                };
+                if report.deferred > 0 {
+                    message.push_str(&format!(
+                        " · {}",
+                        t!("settings.syncV3Deferred", count = report.deferred)
+                    ));
+                }
+                self.cloud_sync
+                    .complete_job(self.cloud_sync.state().clone(), message.clone());
+                self.shell.set_status(message);
+                self.refresh_store_from_runtime_and_sync_theme(cx);
+            }
             Ok(AutoSyncResult::RemoteAvailable { .. }) => {
                 self.cloud_sync
                     .set_status(t!("settings.syncRemoteAvailable"));

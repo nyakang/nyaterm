@@ -18,6 +18,84 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
 }
 
 #[test]
+fn snapshot_distinguishes_delayed_soft_wraps_from_hard_breaks() {
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.advance(b"ab  ");
+    let pending = screen.snapshot();
+    assert!(!pending.row(0).unwrap().wraps_to_next);
+
+    screen.advance(b"X");
+    let wrapped = screen.snapshot();
+    assert!(wrapped.row(0).unwrap().wraps_to_next);
+    assert!(!wrapped.row(0).unwrap().wrapped);
+    assert!(wrapped.row(1).unwrap().wrapped);
+    assert!(!wrapped.row(1).unwrap().wraps_to_next);
+    assert_eq!(pending.row(0).unwrap().cells, wrapped.row(0).unwrap().cells);
+    assert_eq!(
+        pending.row(0).unwrap().revision,
+        wrapped.row(0).unwrap().revision
+    );
+    assert!(!Arc::ptr_eq(&pending.rows()[0], &wrapped.rows()[0]));
+
+    // Clearing only WRAPLINE must invalidate the row even though rendered cells
+    // and their signature stay unchanged.
+    screen.advance(b"\x1b[1;4H\x1b[K");
+    let hard = screen.snapshot();
+    assert!(!hard.row(0).unwrap().wraps_to_next);
+    assert_eq!(hard.row(0).unwrap().cells, wrapped.row(0).unwrap().cells);
+    assert_eq!(
+        hard.row(0).unwrap().signature,
+        wrapped.row(0).unwrap().signature
+    );
+    assert_eq!(
+        hard.row(0).unwrap().revision,
+        wrapped.row(0).unwrap().revision
+    );
+    assert!(!Arc::ptr_eq(&hard.rows()[0], &wrapped.rows()[0]));
+
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.advance(b"ab  \r\nX");
+    let hard = screen.snapshot();
+    assert!(!hard.row(0).unwrap().wraps_to_next);
+    assert!(!hard.row(1).unwrap().wrapped);
+}
+
+#[test]
+fn snapshot_keeps_outgoing_wrap_at_scrolled_window_boundary() {
+    let mut screen = TerminalScreen::new(4, 2);
+    screen.advance(b"zero\r\nab  X\r\nlast");
+    let window = screen.viewport_snapshot(2);
+    assert_eq!(window.row(1).unwrap().text, "ab");
+    assert!(window.row(1).unwrap().wraps_to_next);
+    let full = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert!(full.row(1).unwrap().wraps_to_next);
+    assert!(full.row(2).unwrap().wrapped);
+    assert!(Arc::ptr_eq(&window.rows()[1], &full.rows()[1]));
+}
+
+#[test]
+fn snapshot_recomputes_outgoing_wrap_after_reflow() {
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.advance(b"abcdef");
+    let narrow = screen.snapshot();
+    assert!(narrow.row(0).unwrap().wraps_to_next);
+    screen.resize(8, 3);
+    let wide = screen.snapshot();
+    assert_eq!(wide.row(0).unwrap().text, "abcdef");
+    assert!(!wide.row(0).unwrap().wraps_to_next);
+    screen.resize(4, 3);
+    // Shrinking can move the first segment into history to retain the cursor.
+    let narrow = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    let first = narrow
+        .rows()
+        .iter()
+        .position(|row| row.text == "abcd")
+        .unwrap();
+    assert!(narrow.row(first).unwrap().wraps_to_next);
+    assert!(narrow.row(first + 1).unwrap().wrapped);
+}
+
+#[test]
 fn reverse_snapshot_preserves_source_colors_and_sgr_reset_semantics() {
     let mut screen = TerminalScreen::new(16, 2);
     screen.advance(b"\x1b[1;4;31;44mA\x1b[7mB\x1b[27mC\x1b[7mD\x1b[0mE");
@@ -1288,6 +1366,7 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
         signature: original.signature,
         timestamp_ms: original.timestamp_ms,
         wrapped: original.wrapped,
+        wraps_to_next: original.wraps_to_next,
         command_mark: original.command_mark,
         line_id: original.line_id,
         shell_input: original.shell_input,
@@ -1324,6 +1403,7 @@ fn snapshot_row_cache_prunes_to_limit() {
                 signature,
                 timestamp_ms: None,
                 wrapped: false,
+                wraps_to_next: false,
                 command_mark: None,
                 line_id: None,
                 shell_input: None,

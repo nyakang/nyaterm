@@ -84,6 +84,7 @@ impl NyaTermApp {
                 agent_management: self.ai.agent_management_view().clone(),
             },
             cloud_sync: CloudSyncPresentation {
+                v4_preview: self.cloud_sync.v4_summary(),
                 settings: Arc::new(self.cloud_sync.settings().clone()),
                 state: self.cloud_sync.state().clone(),
                 history: self.cloud_sync.history().to_vec(),

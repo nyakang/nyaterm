@@ -1,5 +1,21 @@
 # Cloud Sync
 
+## Cloud Sync V3 preview
+
+**Cloud Sync V3** in Settings uses an independent V4 namespace, initially available for WebDAV, S3 and the local directory backend. Select V3, save settings, then prepare a preview. Confirmation rechecks local data and visible remote publications; refresh an expired preview before applying it.
+
+Connections, groups, proxies, tunnels, commands, notes, custom icons and themes merge by stable ID. Independent fields merge automatically. Conflicting fields retain their candidates and current local values; choose a candidate in the preview or apply the nonconflicting parts first. Concurrent deletion and editing produce an existence conflict. Appearance preferences are optional and restricted to themes, terminal fonts, cursors and contrast. Keyboard shortcuts are a separate optional scope, merged by action; turning it off retains existing overrides.
+
+The first confirmation creates and verifies an encrypted `cloud-sync-v3-safety-<id>.nya` backup in the configuration directory. Legacy cloud data remains intact. Later legacy-client writes pause V4 sync. Merged business data is applied atomically before publication. A failed upload shows a pending publication; retries reuse the persisted ciphertext. Successful cloud readback has its own status. Later legacy changes can be imported through a manual preview and confirmation, retaining both resources and conflict candidates.
+
+Nonsecret AI configuration is a separate optional scope for providers, manually added models, custom actions and default modes. API keys and headers use the separate sensitive-data scope; proxy settings, execution permissions, external-tool paths and automatically discovered models stay local. With sensitive sync off, endpoint changes or deletions affecting local secrets wait for a local edit. Invalid references, cycles and incomplete configurations defer the affected atomic groups. The preview lists deferred fields; other valid changes continue to apply, while complete candidates remain in the replica.
+
+A separate sensitive-data scope, off by default, supports passwords, private keys, credentials, OTP, connection/proxy passwords and AI keys. Causal documents carry version references; values have independent encryption and are re-encrypted using the receiving device’s key. The SSH/VNC trust scope is also off by default. Each received identity addition, change or deletion needs a separate local preview confirmation; automatic sync cannot grant trust. Disabling a scope retains existing data; re-enabling merges it again. V4 writes on other providers remain disabled. Authentication groups with missing credentials wait until the receiving device has usable local credentials. Existing providers retain their legacy protocol entry points; selecting V3 never automatically falls back to a legacy writer. Automatic bidirectional sync requires confirmed migration, both automatic push and pull, and no active sessions or unsaved settings.
+
+After V3 migration, changing the master password in Security first publishes and verifies a new `rotation-<id>` subspace, then atomically switches the password, remote namespace and local replicas. Failure or a local edit during upload retains the old password and space; retries reuse persisted ciphertext. The old space remains intact. Other devices must join using the new namespace and password. Save cloud account/scope changes separately from password changes. A master password cannot be disabled directly while V4 replicas exist.
+
+The sections below describe the retained legacy snapshot protocol and provider setup. `.nya` remains an independent backup and carries no V4 writer identity, publication history or replica.
+
 NyaTerm's **Cloud Sync** capability is not remote file transfer. It syncs portable application configuration through one encrypted current snapshot in remote storage.
 
 Remote storage uses immutable snapshots and independent device commits:

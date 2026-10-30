@@ -22,6 +22,7 @@ use super::super::{
 };
 
 mod providers;
+mod v3;
 impl SettingsPanel {
     fn cloud_sync_provider_select(
         &mut self,
@@ -521,6 +522,7 @@ impl SettingsPanel {
                     ))
                     .child(provider_fields),
             ))
+            .child(self.cloud_sync_v3_section(can_run_enabled_actions, form_enabled, cx))
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.autoSyncStrategy")),

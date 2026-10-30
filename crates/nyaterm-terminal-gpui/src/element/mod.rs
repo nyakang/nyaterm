@@ -1475,9 +1475,26 @@ fn terminal_selection_cols_for_snapshot_row(
     let absolute_start = absolute_end.saturating_sub(snapshot.row_count());
     let absolute_line = absolute_start.saturating_add(row);
     let (start, end) = selection?.cols_for_absolute_line(absolute_line)?;
-    let start = start.min(snapshot.cols);
-    let end = end.min(snapshot.cols);
-    expand_selection_range(&snapshot.row(row)?.cells, start, end)
+    let snapshot_row = snapshot.row(row)?;
+    let (start, expanded_end) = expand_selection_range(
+        &snapshot_row.cells,
+        start.min(snapshot.cols),
+        end.min(snapshot.cols),
+    )?;
+    if end != usize::MAX || snapshot_row.wraps_to_next {
+        return Some((start, expanded_end));
+    }
+
+    // Only implicit hard-line tails shrink. Mouse anchors and copied text retain
+    // their logical ranges; contrast correction must use this painted range too.
+    let content_end = snapshot_row
+        .cells
+        .iter()
+        .enumerate()
+        .rfind(|(_, cell)| !cell.text.is_empty())
+        .map_or(0, |(col, cell)| col + usize::from(cell.width));
+    let end = expanded_end.min(content_end.max(start + 1));
+    Some((start, end))
 }
 
 fn push_dynamic_selection_background(
