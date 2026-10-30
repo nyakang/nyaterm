@@ -145,8 +145,22 @@ fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> O
     submitted
 }
 
-fn command_suggestion_input(command: &str, execute: bool) -> (Vec<u8>, Option<String>) {
-    let mut payload = format!("\u{05}\u{15}{command}");
+/// Wire payload that replaces the tracked command line with `command`.
+///
+/// Ctrl+U is not portable across network CLIs: H3C binds it to a configurable
+/// hotkey instead of erasing the line, so a fill appended the suggestion to the
+/// existing input. Erase the tracked characters with the same byte the Backspace
+/// key sends instead; every line editor accepts that.
+fn command_suggestion_input(
+    current_input_chars: usize,
+    command: &str,
+    execute: bool,
+) -> (Vec<u8>, Option<String>) {
+    let mut payload = String::with_capacity(current_input_chars + command.len() + 2);
+    // Ctrl+E puts the cursor at the end of the line before erasing it.
+    payload.push('\u{05}');
+    payload.extend(std::iter::repeat_n('\u{7f}', current_input_chars));
+    payload.push_str(command);
     if execute {
         payload.push('\r');
     }
@@ -933,6 +947,7 @@ impl NyaTermApp {
             self.hide_command_suggestions_if_present(cx);
             return false;
         }
+        let current_input_chars = self.terminal.editing.assist_input().value.chars().count();
         let Some(state) = self.terminal.assist.command_suggestions.clone() else {
             return false;
         };
@@ -943,7 +958,8 @@ impl NyaTermApp {
         };
         let source = item.source.clone();
         let command = item.command;
-        let (payload, submission) = command_suggestion_input(&command, execute);
+        let (payload, submission) =
+            command_suggestion_input(current_input_chars, &command, execute);
         self.terminal.assist.command_suggestions = None;
         self.terminal.assist.pending_command_history_entry = submission;
         let sent = self.send_terminal_input_without_suggestion_track(payload, cx);
@@ -1804,13 +1820,19 @@ mod tests {
     }
 
     #[test]
-    fn executing_suggestion_records_plain_command_separately_from_wire_input() {
-        let (wire, submission) = command_suggestion_input("ps -ef", true);
-        assert_eq!(wire, b"\x05\x15ps -ef\r");
-        assert_eq!(submission.as_deref(), Some("ps -ef"));
+    fn suggestion_fill_erases_the_tracked_line_instead_of_relying_on_ctrl_u() {
+        // H3C treats Ctrl+U as a configurable hotkey, not line erase. The fill
+        // must erase the current input with Backspace bytes so the suggestion
+        // replaces it instead of being appended.
+        let (wire, submission) = command_suggestion_input(12, "display version", true);
+        assert_eq!(
+            wire,
+            b"\x05\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fdisplay version\r"
+        );
+        assert_eq!(submission.as_deref(), Some("display version"));
 
-        let (wire, submission) = command_suggestion_input("ps -ef", false);
-        assert_eq!(wire, b"\x05\x15ps -ef");
+        let (wire, submission) = command_suggestion_input(2, "ps -ef", false);
+        assert_eq!(wire, b"\x05\x7f\x7fps -ef");
         assert!(submission.is_none());
     }
 
