@@ -1,0 +1,58 @@
+name: Linux glibc 2.31
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - scripts/compat/linux-focal/**
+      - scripts/tests/test_linux_focal.py
+      - .github/workflows/linux-focal.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-focal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test ABI gate
+        run: python3 -m unittest scripts.tests.test_linux_focal
+      - name: Build focal toolchain image
+        run: >-
+          docker build --build-arg BUILDER_UID="$(id -u)" --build-arg BUILDER_GID="$(id -g)"
+          -t nyaterm-focal scripts/compat/linux-focal
+      - name: Build, audit and test all runtime executables
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$PWD:/src" -w /src nyaterm-focal
+      - name: Upload offline package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nyaterm-linux-x64-glibc231
+          path: |
+            dist/*_glibc231.tar.gz
+            dist/*_glibc231.tar.gz.sha256
+          if-no-files-found: error
+      - name: Verify bundled OpenGL without Vulkan or NVIDIA
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$PWD:/src" -w /src nyaterm-focal
+          bash scripts/compat/linux-focal/smoke.sh
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nyaterm-focal-smoke
+          path: target/linux-focal/smoke/
+          if-no-files-found: ignore

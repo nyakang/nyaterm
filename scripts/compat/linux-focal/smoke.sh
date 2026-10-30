@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../../.."
+[[ "$(getconf GNU_LIBC_VERSION)" == 'glibc 2.31' ]]
+output="$PWD/target/linux-focal/smoke"
+mkdir -p "$output"
+export LIBGL_ALWAYS_SOFTWARE=1
+export XDG_RUNTIME_DIR
+XDG_RUNTIME_DIR="$(mktemp -d)"
+trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp' \
+  python3 scripts/compat/linux-focal/smoke.py "$output"
