@@ -320,6 +320,7 @@
       "terminal_action_links_matchers": "local",
       "search_custom_engines": "local",
       "ui_remote_stats_interval": "local",
+      "ui_remote_stats_show_users": "local",
       "ui_gpu_monitor_interval": "local",
       "ui_ascend_npu_monitor_interval": "local",
       "ui_process_manager_interval": "local",
