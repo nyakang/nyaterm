@@ -1298,8 +1298,12 @@ impl SettingsPanel {
         let palette = snapshot.chrome.palette;
         let dirty = snapshot.draft_dirty || snapshot.settings.theme_designer.dirty();
         let validation_error = snapshot.validation_error.clone();
-        let apply_disabled = !dirty || validation_error.is_some();
-        let confirm_disabled = validation_error.is_some();
+        // A validation error must not grey out Apply/Confirm. Those two buttons are
+        // the only place that explains *why* the draft cannot be saved: the click
+        // lands in `apply_settings_draft`, which reports the blocker. Disabling them
+        // leaves the user stuck on "apply your settings first" with no way to learn
+        // what is missing, and no way to close the window except Cancel.
+        let apply_disabled = !dirty;
         let status = validation_error.clone().unwrap_or_else(|| {
             if dirty {
                 t!("settings.unappliedChanges").to_string()
@@ -1399,26 +1403,16 @@ impl SettingsPanel {
                             .items_center()
                             .justify_center()
                             .rounded_md()
-                            .bg(if confirm_disabled {
-                                rgb(palette.surface_elevated)
-                            } else {
-                                rgb(palette.link)
-                            })
+                            .bg(rgb(palette.link))
                             .text_size(px(11.))
                             .font_weight(FontWeight(600.))
-                            .text_color(if confirm_disabled {
-                                rgb(palette.text_dimmed)
-                            } else {
-                                rgb(0xffffff)
-                            })
-                            .when(!confirm_disabled, |this| {
-                                this.cursor_pointer()
-                                    .on_click(cx.listener(|panel, _, _, cx| {
-                                        panel.with_app(cx, |app, cx| {
-                                            app.confirm_settings_draft(cx);
-                                        });
-                                    }))
-                            })
+                            .text_color(rgb(0xffffff))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|panel, _, _, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    app.confirm_settings_draft(cx);
+                                });
+                            }))
                             .child(confirm_label),
                     ),
             )
