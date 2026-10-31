@@ -286,6 +286,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.recording.discard_macro(session_id);
         self.commands.cancel_staged_quick_command(session_id);
         self.terminal.invalidate_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
@@ -357,6 +358,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.recording.discard_macro(&session_id);
         self.remote_ops.clear_stats_sample(&session_id);
         self.session.begin_reconnect_action(session_id.clone());
         self.session.start.clear_active_selection();

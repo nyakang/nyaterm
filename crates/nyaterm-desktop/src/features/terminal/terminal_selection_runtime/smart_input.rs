@@ -306,6 +306,7 @@ impl NyaTermApp {
             }
             return true;
         }
+        self.capture_macro_user_input(&id, &logical, cx);
         self.terminal
             .editing
             .state_mut()
@@ -418,7 +419,7 @@ impl NyaTermApp {
         {
             return;
         }
-        self.send_terminal_input(text.as_bytes().to_vec(), cx);
+        self.send_terminal_typed_input(text.as_bytes().to_vec(), cx);
     }
 }
 

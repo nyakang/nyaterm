@@ -121,6 +121,7 @@ pub(crate) struct QuickCommandEditorState {
     pub(crate) icon_tag: Option<String>,
     pub(crate) pinned: bool,
     pub(crate) execution_mode: String,
+    pub(crate) source: Option<String>,
     pub(crate) error: Option<String>,
     /// Which field the error belongs to. `None` is a general error, which the
     /// dialog shows in its own box instead of beside a caption.
@@ -204,6 +205,7 @@ impl QuickCommandEditorState {
             icon_tag: None,
             pinned: false,
             execution_mode: "execute".to_string(),
+            source: None,
             error: None,
             error_field: None,
         }
@@ -232,6 +234,16 @@ impl QuickCommandEditorState {
         }
     }
 
+    pub(crate) fn from_recorded_macro(label: String, command: String) -> Self {
+        Self {
+            label,
+            command,
+            execution_mode: "append".to_string(),
+            source: Some("macro".to_string()),
+            ..Self::blank()
+        }
+    }
+
     pub(crate) fn from_command(command: QuickCommand) -> Self {
         Self {
             focused_field: QuickCommandEditorField::Label,
@@ -247,6 +259,7 @@ impl QuickCommandEditorState {
                 .execution_mode
                 .clone()
                 .unwrap_or_else(|| "execute".to_string()),
+            source: command.source.clone(),
             error: None,
             error_field: None,
             original: Some(command),

@@ -5,6 +5,7 @@ use nyaterm_core::{
     TerminalMouseReportEligibility, TerminalWireWriteKind, terminal_input_fanout_status,
     terminal_mouse_report_should_send, terminal_wire_write_disposition,
 };
+use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::models::recording::ExecutionRecordingEvent;
@@ -99,7 +100,15 @@ impl NyaTermApp {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.send_terminal_input_with_options(bytes, true, cx)
+        self.send_terminal_input_with_capture(bytes, true, false, cx)
+    }
+
+    pub(in crate::features) fn send_terminal_typed_input(
+        &mut self,
+        bytes: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.send_terminal_input_with_capture(bytes, true, true, cx)
     }
 
     pub(in crate::features) fn send_terminal_input_without_suggestion_track(
@@ -107,13 +116,15 @@ impl NyaTermApp {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.send_terminal_input_with_options(bytes, false, cx)
+        // Command-suggestion acceptance is still an explicit user input.
+        self.send_terminal_input_with_capture(bytes, false, true, cx)
     }
 
-    pub(in crate::features) fn send_terminal_input_with_options(
+    fn send_terminal_input_with_capture(
         &mut self,
         bytes: Vec<u8>,
         track_suggestions: bool,
+        capture_macro: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let input_started_at = Instant::now();
@@ -160,9 +171,15 @@ impl NyaTermApp {
         // command history stay consistent. Resolve history once after all writes so a
         // pending Enter submission is applied to every successful peer.
         let mut ok_sessions = Vec::new();
+        let mut macro_limit_reached = false;
         let write_started_at = Instant::now();
         match self.write_session_input_recorded(&session_id, &bytes) {
-            Ok(()) => ok_sessions.push(session_id),
+            Ok(()) => {
+                if capture_macro {
+                    macro_limit_reached |= self.capture_macro_user_input(&session_id, &bytes, cx);
+                }
+                ok_sessions.push(session_id);
+            }
             Err(error) => {
                 if self.set_terminal_status_if_changed(format!("input failed: {error}")) {
                     cx.notify();
@@ -176,6 +193,9 @@ impl NyaTermApp {
         for peer_id in peers {
             match self.write_session_input_recorded(&peer_id, &bytes) {
                 Ok(()) => {
+                    if capture_macro {
+                        macro_limit_reached |= self.capture_macro_user_input(&peer_id, &bytes, cx);
+                    }
                     ok_sessions.push(peer_id);
                     synced += 1;
                 }
@@ -212,6 +232,7 @@ impl NyaTermApp {
         let should_notify = synced > 0 || failed > 0;
         let notify_started_at = Instant::now();
         if should_notify
+            && !macro_limit_reached
             && self.set_terminal_status_if_changed(terminal_input_fanout_status(
                 "sent", byte_count, synced, failed,
             ))
@@ -296,9 +317,14 @@ impl NyaTermApp {
         let byte_count = primary_bytes.len();
         let peers = self.sync_peer_session_ids(&session_id);
         let mut ok_sessions = Vec::new();
+        let mut macro_limit_reached = false;
         let write_started_at = Instant::now();
         match self.write_session_input_recorded(&session_id, &primary_bytes) {
-            Ok(()) => ok_sessions.push(session_id),
+            Ok(()) => {
+                macro_limit_reached |=
+                    self.capture_macro_user_input(&session_id, &primary_bytes, cx);
+                ok_sessions.push(session_id);
+            }
             Err(error) => {
                 if self.set_terminal_status_if_changed(format!("input failed: {error}")) {
                     cx.notify();
@@ -333,6 +359,7 @@ impl NyaTermApp {
             }
             match self.write_session_input_recorded(&peer_id, &peer_bytes) {
                 Ok(()) => {
+                    macro_limit_reached |= self.capture_macro_user_input(&peer_id, &peer_bytes, cx);
                     ok_sessions.push(peer_id);
                     synced += 1;
                 }
@@ -382,6 +409,7 @@ impl NyaTermApp {
         let should_notify = synced > 0 || failed > 0;
         let notify_started_at = Instant::now();
         if should_notify
+            && !macro_limit_reached
             && self.set_terminal_status_if_changed(terminal_input_fanout_status(
                 "sent", byte_count, synced, failed,
             ))
@@ -450,8 +478,12 @@ impl NyaTermApp {
         let byte_count = primary_bytes.len();
         let mut synced = 0usize;
         let mut failed = 0usize;
+        let mut macro_limit_reached = false;
         match self.write_session_input_recorded(&session_id, &primary_bytes) {
-            Ok(()) => {}
+            Ok(()) => {
+                macro_limit_reached |=
+                    self.capture_macro_user_input(&session_id, &primary_bytes, cx);
+            }
             Err(error) => {
                 if self.set_terminal_status_if_changed(format!("input failed: {error}")) {
                     cx.notify();
@@ -469,11 +501,15 @@ impl NyaTermApp {
                 continue;
             }
             match self.write_session_input_recorded(&peer_id, &peer_bytes) {
-                Ok(()) => synced += 1,
+                Ok(()) => {
+                    macro_limit_reached |= self.capture_macro_user_input(&peer_id, &peer_bytes, cx);
+                    synced += 1;
+                }
                 Err(_) => failed += 1,
             }
         }
         if (synced > 0 || failed > 0)
+            && !macro_limit_reached
             && self.set_terminal_status_if_changed(terminal_input_fanout_status(
                 "sent", byte_count, synced, failed,
             ))
@@ -895,6 +931,32 @@ impl NyaTermApp {
         }
         self.commands.cancel_staged_quick_command(session_id);
         self.write_guarded_terminal_input(session_id, bytes)
+    }
+
+    /// Capture only successful, explicitly user-originated logical input.
+    /// Low-level writers also serve automation, protocol and credential paths.
+    pub(in crate::features) fn capture_macro_user_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let limit_reached = !self.security.screen_locked()
+            && !self.recording_input_is_sensitive(session_id)
+            && !self
+                .mcp
+                .capabilities
+                .terminal_executions
+                .capturing(session_id)
+            && self
+                .recording
+                .append_macro_input(session_id, bytes, Instant::now());
+        if limit_reached {
+            self.shell
+                .set_status(t!("recording.macroLimitReached").to_string());
+            cx.notify();
+        }
+        limit_reached
     }
 
     /// Only the current script owner may bypass cancellation by competing input.

@@ -205,11 +205,15 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let session_id = session.id.clone();
         let start_session_id = session.id.clone();
+        let macro_session_id = session.id.clone();
         let select_session_id = session.id.clone();
         let menu_session_id = session.id.clone();
         let is_current = active_session_id == Some(session.id.as_str());
         let status = self.recording.status(&session.id);
         let is_recording = status.is_some();
+        let is_macro_recording = self.recording.is_macro_recording(&session.id);
+        let can_record_macro = !self.session.is_disconnected(&session.id)
+            && !self.remote_desktop.is_session(&session.id);
         let is_busy = self.recording.busy_action(&session.id).is_some();
         let is_problem = status.as_ref().is_some_and(|status| {
             matches!(
@@ -236,6 +240,14 @@ impl NyaTermApp {
                 )
             },
         );
+        let summary = if is_macro_recording {
+            format!(
+                "{summary} · Macro {}",
+                format_recording_bytes(self.recording.macro_bytes(&session.id).unwrap_or(0) as u64)
+            )
+        } else {
+            summary
+        };
         let path = status
             .as_ref()
             .and_then(|status| status.file_path.as_ref())
@@ -291,7 +303,7 @@ impl NyaTermApp {
                     .flex_none()
                     .bg(rgb(if is_problem {
                         palette.warning
-                    } else if is_recording {
+                    } else if is_recording || is_macro_recording {
                         palette.danger
                     } else {
                         palette.success
@@ -386,6 +398,31 @@ impl NyaTermApp {
                         cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.toggle_recording_for_session(&start_session_id, cx);
+                        }),
+                    ))
+                    .child(recording_action_svg_button(
+                        palette,
+                        format!("recording-session-macro-{session_id}"),
+                        if is_macro_recording {
+                            "icons/session/stop.svg"
+                        } else {
+                            "icons/session/record.svg"
+                        },
+                        rgb(if is_macro_recording {
+                            palette.danger
+                        } else {
+                            palette.text_muted
+                        }),
+                        if is_macro_recording {
+                            t!("recording.macroStop")
+                        } else {
+                            t!("recording.macroStart")
+                        }
+                        .to_string(),
+                        can_record_macro || is_macro_recording,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_macro_recording_for_session(&macro_session_id, cx);
                         }),
                     ))
                     .child(

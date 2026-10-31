@@ -22,6 +22,24 @@ fn imports_config_and_array_shapes() {
 }
 
 #[test]
+fn macro_import_preserves_script_whitespace_source_and_literal_escapes() {
+    let import_config = parse_nyaterm_import(
+        r#"{"commands":[{"id":"macro-1","label":"Recorded","command":"echo {{name}} \\x1B\\r ","execution_mode":"append","source":"macro"}]}"#,
+    )
+    .unwrap();
+    let mut config = QuickCommandsConfig::default();
+    merge_import(&mut config, import_config).unwrap();
+    assert_eq!(config.commands[0].source.as_deref(), Some("macro"));
+    assert_eq!(config.commands[0].execution_mode.as_deref(), Some("append"));
+    assert_eq!(config.commands[0].command, "echo {{name}} \\x1B\\r ");
+    let invalid = parse_nyaterm_import(
+        r#"{"commands":[{"label":"Unsupported","command":"pwd","source":"unknown"}]}"#,
+    )
+    .unwrap();
+    assert!(merge_import(&mut config, invalid).is_err());
+}
+
+#[test]
 fn merge_import_updates_commands_and_creates_named_categories() {
     let mut config = QuickCommandsConfig::default();
     let import_config = parse_nyaterm_import(

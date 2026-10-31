@@ -2,4 +2,4 @@
 
 mod state;
 
-pub(in crate::features) use state::RecordingFeatureState;
+pub(in crate::features) use state::{MacroInputChunk, RecordingFeatureState};
