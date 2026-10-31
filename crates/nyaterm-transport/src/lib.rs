@@ -971,13 +971,12 @@ enum SshCommand {
         pane: String,
         data: Vec<u8>,
     },
-    /// Renderer geometry for one projected tmux pane.
+    /// Renderer geometry for one projected tmux pane. Cell dimensions only:
+    /// `resize-pane` takes cells and the pixel fields would be dead weight.
     TmuxPaneResize {
         pane: String,
         cols: u16,
         rows: u16,
-        pixel_width: u16,
-        pixel_height: u16,
     },
     /// Close one projected tmux pane (`kill-pane`).
     TmuxPaneClose {
@@ -2269,8 +2268,8 @@ impl TerminalTransport for TmuxPaneTransport {
         &mut self,
         cols: u16,
         rows: u16,
-        pixel_width: u16,
-        pixel_height: u16,
+        _pixel_width: u16,
+        _pixel_height: u16,
     ) -> anyhow::Result<()> {
         self.info.cols = cols;
         self.info.rows = rows;
@@ -2279,8 +2278,6 @@ impl TerminalTransport for TmuxPaneTransport {
                 pane: self.pane.clone(),
                 cols,
                 rows,
-                pixel_width,
-                pixel_height,
             })
             .map_err(|_| anyhow::anyhow!("tmux control channel closed for pane {}", self.pane))
     }
@@ -2689,6 +2686,7 @@ impl TelnetAutoLoginState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
@@ -2770,6 +2768,7 @@ fn run_ssh_worker(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_deferred_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
@@ -2941,6 +2940,7 @@ async fn cancel_pending_upload(pending_upload: &mut Option<PendingSshIntegration
     let _ = tokio::time::timeout(Duration::from_secs(1), &mut pending.join).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_open_ssh_shell_session(
     session_id: String,
     open_session: OpenSshShellSession,

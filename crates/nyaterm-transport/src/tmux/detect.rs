@@ -245,12 +245,6 @@ impl TmuxControlDetector {
         }
     }
 
-    /// Pre-arm detection for a configured startup/post-login command that
-    /// already matched `tmux -CC`.
-    pub(crate) fn arm(&mut self) {
-        self.armed_at = Some(Instant::now());
-    }
-
     fn is_armed(&self) -> bool {
         self.armed_at
             .is_some_and(|armed_at| armed_at.elapsed() <= ARM_WINDOW)
@@ -510,7 +504,7 @@ mod tests {
     #[test]
     fn startup_command_can_pre_arm() {
         let mut detector = TmuxControlDetector::new();
-        detector.arm();
+        detector.feed_input(b"tmux -CC new -As0\r");
         match detector.feed(&[STARTUP, b"rest"].concat()) {
             TmuxFeed::Detected { rest, .. } => assert_eq!(rest, b"rest"),
             TmuxFeed::Passthrough(_) => panic!("pre-armed detector must detect"),
@@ -630,7 +624,7 @@ mod tests {
             b"%begin 1 2 0\n%error 1 2 0\n%session-changed $0 x\n",
         ] {
             let mut detector = TmuxControlDetector::new();
-            detector.arm();
+            detector.feed_input(b"tmux -CC new -As0\r");
             assert!(matches!(detector.feed(bytes), TmuxFeed::Passthrough(data) if data == bytes));
         }
     }
@@ -638,7 +632,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn candidate_timeout_replays_raw_bytes_without_new_data() {
         let mut detector = TmuxControlDetector::new();
-        detector.arm();
+        detector.feed_input(b"tmux -CC new -As0\r");
         let bytes = b"\x1bP1000p%begin 1 2 0\r\n\xffincomplete";
         assert!(matches!(detector.feed(bytes), TmuxFeed::Passthrough(data) if data.is_empty()));
         tokio::time::sleep_until(detector.deadline().unwrap()).await;
@@ -649,7 +643,7 @@ mod tests {
     #[test]
     fn startup_buffer_is_bounded_and_preserves_overflow() {
         let mut detector = TmuxControlDetector::new();
-        detector.arm();
+        detector.feed_input(b"tmux -CC new -As0\r");
         let bytes = [
             b"%begin 1 2 0\n".as_slice(),
             &vec![b'x'; super::CONFIRM_MAX_BYTES],

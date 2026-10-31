@@ -296,7 +296,7 @@ pub(crate) fn parse_line(line: &str) -> Option<ControlMessage> {
             // equals the full layout.
             let visible_layout = parts
                 .next()
-                .and_then(|token| parse_layout(token))
+                .and_then(parse_layout)
                 .map(|(cell, _)| cell)
                 .unwrap_or_else(|| layout.clone());
             let flags = parts.next().unwrap_or_default().to_string();

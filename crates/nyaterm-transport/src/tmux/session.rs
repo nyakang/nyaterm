@@ -31,8 +31,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::time::{Duration, Sleep};
 
-/// Maximum raw output buffered per pane while `capture-pane` seeding runs.
-
 /// Input is batched over this interval so `send-keys` stays cheap even for
 /// IME composition or paste bursts.
 const INPUT_FLUSH_DELAY_MS: u64 = 4;
@@ -175,6 +173,11 @@ fn output_precedes_capture(
     matches!((produced_at, capture_at), (Some(at), Some(cap)) if at <= cap)
 }
 
+/// Timestamped `%output` chunks queued for a pane id that has no virtual
+/// session yet; the trailing `usize` caches total bytes so the bound check
+/// stays O(1).
+type UnknownPaneOutput = HashMap<String, (VecDeque<(Option<std::time::Instant>, Vec<u8>)>, usize)>;
+
 fn buffer_unknown_output(
     pending: &mut VecDeque<(Option<std::time::Instant>, Vec<u8>)>,
     total: &mut usize,
@@ -303,7 +306,7 @@ pub(crate) struct ControlSession<'a> {
     /// Buffered output for panes not yet mapped to a virtual session; the
     /// `usize` is the queue's total bytes so the bound check does not
     /// rescan it per `%output` chunk.
-    unknown_output: HashMap<String, (VecDeque<(Option<std::time::Instant>, Vec<u8>)>, usize)>,
+    unknown_output: UnknownPaneOutput,
 
     exit_mode: Option<ExitMode>,
     exit_seen: bool,
@@ -731,10 +734,11 @@ impl<'a> ControlSession<'a> {
         // client back up before `sync_pane_sizes` shrinks it).
         let has_renderer_size = self.panes.values().any(|pane| pane.desired.is_some());
         let mut grew = false;
-        if !zoomed && !has_renderer_size {
-            if let Some(layout) = active_layout.as_ref() {
-                grew = self.grow_client(channel, layout.width, layout.height).await;
-            }
+        if !zoomed
+            && !has_renderer_size
+            && let Some(layout) = active_layout.as_ref()
+        {
+            grew = self.grow_client(channel, layout.width, layout.height).await;
         }
 
         // Drop panes that vanished from every window's layout.
@@ -775,13 +779,14 @@ impl<'a> ControlSession<'a> {
             let Some(dims) = self.pane_dims(pane_id) else {
                 continue;
             };
-            if let Some(pane) = self.panes.get_mut(pane_id) {
-                if pane.dims.is_some() && pane.dims != Some(dims) {
-                    if pane.seeding {
-                        pane.reseed = true;
-                    } else {
-                        pane.seeded = false;
-                    }
+            if let Some(pane) = self.panes.get_mut(pane_id)
+                && pane.dims.is_some()
+                && pane.dims != Some(dims)
+            {
+                if pane.seeding {
+                    pane.reseed = true;
+                } else {
+                    pane.seeded = false;
                 }
             }
         }
@@ -858,28 +863,28 @@ impl<'a> ControlSession<'a> {
             .and_then(|id| self.windows.get(id))
         {
             // Resizing a zoomed window would drop the zoom.
-            if !window.zoomed {
-                if let Some(layout) = window.layout.clone() {
-                    let needed = needed_window_size(&layout, &self.panes);
-                    if needed != (layout.width, layout.height) {
-                        // Unlike grow_client this also shrinks: renderers may
-                        // be narrower than the window's current share.
-                        // `refresh-client` only emits `%layout-change` when
-                        // the resize actually takes effect, so this
-                        // self-limits against remotes ignoring it. The echo
-                        // reruns the per-pane fixup below.
-                        if self
-                            .send_line(
-                                channel,
-                                PendingKind::Ignore,
-                                &format!("refresh-client -C {}x{}", needed.0, needed.1),
-                            )
-                            .await
-                        {
-                            self.client_size = Some(needed);
-                        }
-                        return;
+            if !window.zoomed
+                && let Some(layout) = window.layout.clone()
+            {
+                let needed = needed_window_size(&layout, &self.panes);
+                if needed != (layout.width, layout.height) {
+                    // Unlike grow_client this also shrinks: renderers may
+                    // be narrower than the window's current share.
+                    // `refresh-client` only emits `%layout-change` when
+                    // the resize actually takes effect, so this
+                    // self-limits against remotes ignoring it. The echo
+                    // reruns the per-pane fixup below.
+                    if self
+                        .send_line(
+                            channel,
+                            PendingKind::Ignore,
+                            &format!("refresh-client -C {}x{}", needed.0, needed.1),
+                        )
+                        .await
+                    {
+                        self.client_size = Some(needed);
                     }
+                    return;
                 }
             }
         }
@@ -1224,22 +1229,22 @@ impl<'a> ControlSession<'a> {
                 self.emit_state();
             }
             PendingKind::CapturePane { pane } => {
-                if let Some(virtual_pane) = self.panes.get_mut(&pane) {
-                    if !failed {
-                        // Held until the SeedCursor reply arrives: the seed is
-                        // composed as a single payload there, because the
-                        // scrollback/screen split needs `history_size`.
-                        virtual_pane.pending_seed = Some(lines);
-                        // Snapshot boundary for output dedup: the capture ran
-                        // after the block opened, so output produced before
-                        // %begin is guaranteed inside it; anything later may
-                        // be genuinely new (tmux defers it past %end) and must
-                        // be replayed rather than dropped.
-                        virtual_pane.capture_at = Some(
-                            self.block_started_at
-                                .unwrap_or_else(std::time::Instant::now),
-                        );
-                    }
+                if let Some(virtual_pane) = self.panes.get_mut(&pane)
+                    && !failed
+                {
+                    // Held until the SeedCursor reply arrives: the seed is
+                    // composed as a single payload there, because the
+                    // scrollback/screen split needs `history_size`.
+                    virtual_pane.pending_seed = Some(lines);
+                    // Snapshot boundary for output dedup: the capture ran
+                    // after the block opened, so output produced before
+                    // %begin is guaranteed inside it; anything later may
+                    // be genuinely new (tmux defers it past %end) and must
+                    // be replayed rather than dropped.
+                    virtual_pane.capture_at = Some(
+                        self.block_started_at
+                            .unwrap_or_else(std::time::Instant::now),
+                    );
                 }
             }
             PendingKind::SeedCursor { pane } => {
@@ -1610,11 +1615,11 @@ pub(crate) async fn run_control_session(
                 session.resize_deadline = None;
                 // Promote the settled renderer reports into resize targets.
                 for pane in session.panes.values_mut() {
-                    if let Some(dims) = pane.pending_dims.take() {
-                        if pane.desired != Some(dims) {
-                            pane.desired = Some(dims);
-                            pane.resize_attempts = None;
-                        }
+                    if let Some(dims) = pane.pending_dims.take()
+                        && pane.desired != Some(dims)
+                    {
+                        pane.desired = Some(dims);
+                        pane.resize_attempts = None;
                     }
                 }
                 session.sync_pane_sizes(channel).await;
@@ -1883,7 +1888,10 @@ fn parse_window_snapshot(lines: Vec<String>) -> WindowSnapshot {
 
 #[cfg(test)]
 mod output_tests {
-    use super::{InputParser, PENDING_PANE_OUTPUT_MAX_BYTES, VirtualPane};
+    use super::{
+        InputParser, PENDING_PANE_OUTPUT_MAX_BYTES, VirtualPane, buffer_unknown_output,
+        output_precedes_capture,
+    };
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
 
