@@ -858,6 +858,27 @@ impl NyaTermApp {
             );
         }
         match panel {
+            NavItem::Transfers => {
+                let can_browse = self.session.active_id().is_some_and(|session_id| {
+                    self.session
+                        .file_browser_backend_support_for_session(session_id)
+                        .is_some()
+                        && !self.session.is_disconnected(session_id)
+                });
+                can_browse.then(|| {
+                    header_svg_icon_button(
+                        self.theme_palette(),
+                        "transfer-browser-open-file-manager",
+                        "icons/file-manager.svg",
+                        t!("fileManager.openWorkspace"),
+                        true,
+                        cx.listener(|this, _, _, cx| {
+                            this.open_file_manager_tab(None, cx);
+                        }),
+                    )
+                    .into_any_element()
+                })
+            }
             NavItem::AiAssistant => {
                 let palette = self.theme_palette();
                 let ai_running = self.ai.chat_or_agent_is_running();

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{App, Global, KeyBinding, KeyContext, KeyDownEvent, Keystroke, Modifiers};
+use gpui::{App, Global, KeyBinding, KeyContext, Keystroke, Modifiers};
 
 mod actions;
 pub(crate) use actions::*;
@@ -1190,8 +1190,8 @@ fn expanded_chords(
     }
 }
 
-pub(crate) fn event_to_hotkey_string(event: &KeyDownEvent) -> Option<String> {
-    ShortcutBinding::from_keystroke(event.keystroke.clone())
+pub(crate) fn keystroke_to_hotkey_string(keystroke: &Keystroke) -> Option<String> {
+    ShortcutBinding::from_keystroke(keystroke.clone())
         .ok()
         .map(|binding| binding.canonical())
 }

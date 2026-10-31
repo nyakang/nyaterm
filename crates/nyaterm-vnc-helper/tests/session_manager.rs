@@ -4,7 +4,7 @@
 //! this crate, so the round trip is exercised from here where both the manager and
 //! the helper binary are available.
 
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -149,11 +149,18 @@ fn sending_input_to_an_unknown_session_is_an_error_not_a_panic() {
     assert!(manager.drain("missing").control.is_empty());
 }
 
-#[test]
-fn auto_security_without_password_connects_to_a_no_auth_server() {
-    use std::io::{Read as _, Write as _};
+/// A minimal RFB 3.8 server that offers exactly one security type: `None`.
+///
+/// `send_first_frame` runs on the client's first `FramebufferUpdateRequest`, which
+/// is where a real server starts pushing updates. Later client traffic (further
+/// update requests, pixel format, encodings) is drained until the helper hangs up,
+/// so a mock server always ends cleanly and never races the assertion about frames.
+fn spawn_no_auth_server(
+    framebuffer: (u16, u16),
+    send_first_frame: impl FnOnce(&mut TcpStream) -> std::io::Result<()> + Send + 'static,
+) -> (u16, std::thread::JoinHandle<std::io::Result<()>>) {
+    use std::io::{ErrorKind, Read as _, Write as _};
 
-    use_built_helper();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || -> std::io::Result<()> {
@@ -163,6 +170,7 @@ fn auto_security_without_password_connects_to_a_no_auth_server() {
         let mut version = [0; 12];
         stream.read_exact(&mut version)?;
         assert_eq!(&version, b"RFB 003.008\n");
+        // One security type: None (1).
         stream.write_all(&[1, 1])?;
         let mut selected = [0; 1];
         stream.read_exact(&mut selected)?;
@@ -171,13 +179,24 @@ fn auto_security_without_password_connects_to_a_no_auth_server() {
         let mut shared = [0; 1];
         stream.read_exact(&mut shared)?;
         assert_eq!(shared, [1]);
-        // A 1x1 true-colour framebuffer with an empty desktop name.
-        stream.write_all(&[
-            0, 1, 0, 1, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0, 0, 0, 0, 0,
-        ])?;
+        // A true-colour framebuffer with an empty desktop name. The client overrides
+        // the pixel format, so these components only have to be well formed.
+        let (width, height) = framebuffer;
+        let mut server_init = Vec::new();
+        server_init.extend_from_slice(&width.to_be_bytes());
+        server_init.extend_from_slice(&height.to_be_bytes());
+        server_init.extend_from_slice(&[32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]);
+        server_init.extend_from_slice(&0_u32.to_be_bytes());
+        stream.write_all(&server_init)?;
+
+        let mut send_first_frame = Some(send_first_frame);
         loop {
             let mut message = [0; 1];
-            stream.read_exact(&mut message)?;
+            match stream.read_exact(&mut message) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+                Err(error) => return Err(error),
+            }
             match message[0] {
                 0 => stream.read_exact(&mut [0; 19])?,
                 2 => {
@@ -188,15 +207,44 @@ fn auto_security_without_password_connects_to_a_no_auth_server() {
                 }
                 3 => {
                     stream.read_exact(&mut [0; 9])?;
-                    break;
+                    if let Some(send_first_frame) = send_first_frame.take() {
+                        send_first_frame(&mut stream)?;
+                    }
                 }
                 other => panic!("unexpected client message {other}"),
             }
         }
+    });
+    (port, server)
+}
+
+/// Append one `FramebufferUpdate` carrying `rectangles` 1x1 Raw rectangles.
+fn push_update(stream: &mut TcpStream, width: u16, height: u16, rectangles: u16) {
+    use std::io::Write as _;
+
+    let mut update = Vec::new();
+    update.push(0); // FramebufferUpdate
+    update.push(0); // padding
+    update.extend_from_slice(&rectangles.to_be_bytes());
+    for index in 0..rectangles {
+        let x = index % width;
+        let y = (index / width) % height;
+        update.extend_from_slice(&x.to_be_bytes());
+        update.extend_from_slice(&y.to_be_bytes());
+        update.extend_from_slice(&1_u16.to_be_bytes());
+        update.extend_from_slice(&1_u16.to_be_bytes());
+        update.extend_from_slice(&0_i32.to_be_bytes()); // Raw encoding
+        update.extend_from_slice(&[0x40, 0x80, 0xc0, 0xff]);
+    }
+    stream.write_all(&update).unwrap();
+}
+
+#[test]
+fn auto_security_without_password_connects_to_a_no_auth_server() {
+    use_built_helper();
+    let (port, server) = spawn_no_auth_server((1, 1), |stream| {
         // Complete the initial update with one Raw rectangle and one pixel.
-        stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])?;
-        let mut buffer = [0; 1024];
-        while stream.read(&mut buffer)? != 0 {}
+        push_update(stream, 1, 1, 1);
         Ok(())
     });
     let manager = VncSessionManager::new();
@@ -225,4 +273,124 @@ fn auto_security_without_password_connects_to_a_no_auth_server() {
         "expected a connected session, got {event:?}"
     );
     server_result.unwrap();
+}
+
+/// A busy server splits one update into far more rectangles than the old 1024
+/// ceiling allowed. Even the maximum u16 rectangle count is legal RFB and
+/// must produce every frame instead of failing the session with a protocol error
+/// (NyaTerm issue #1045).
+#[test]
+fn busy_update_with_maximum_rectangle_count_keeps_the_session_alive() {
+    const RECTANGLES: u16 = u16::MAX;
+    const FRAMEBUFFER: u16 = 256;
+
+    use_built_helper();
+    let (port, server) = spawn_no_auth_server((FRAMEBUFFER, FRAMEBUFFER), |stream| {
+        push_update(stream, FRAMEBUFFER, FRAMEBUFFER, RECTANGLES);
+        Ok(())
+    });
+    let manager = VncSessionManager::new();
+    let session_id = manager
+        .create_session_with_id("busy-update".into(), config(port))
+        .unwrap();
+
+    // The frame queue is bounded, so drain while the helper is still producing.
+    let expected = usize::from(RECTANGLES);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut frames = 0;
+    let mut failure = None;
+    let mut connected = 0;
+    while Instant::now() < deadline && frames < expected && failure.is_none() {
+        let drain = manager.drain(&session_id);
+        for event in drain.control {
+            if matches!(
+                &event,
+                VncRuntimeEvent::State {
+                    state: VncSessionState::Connected,
+                    ..
+                }
+            ) {
+                connected += 1;
+            }
+            if let VncRuntimeEvent::Error {
+                error, fatal: true, ..
+            } = event
+            {
+                failure = Some(error);
+            }
+        }
+        frames += drain.frames.len();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let state = manager.state(&session_id);
+    manager.close(&session_id).unwrap();
+    let server_result = server.join().unwrap();
+
+    assert!(
+        failure.is_none(),
+        "a busy update must not fail the session: {failure:?}"
+    );
+    assert_eq!(frames, expected, "every rectangle should reach the app");
+    assert_eq!(
+        connected, 1,
+        "rectangles must not duplicate state notifications"
+    );
+    assert_eq!(state, Some(VncSessionState::Connected));
+    server_result.unwrap();
+}
+
+/// Exercise the real negotiation and IPC path: the UI hint must describe the
+/// credentials sent to this attempt, not the session's original launch config.
+#[test]
+fn password_prompt_hint_distinguishes_missing_rejected_and_unsupported_auth() {
+    use std::io::{Read as _, Write as _};
+
+    use_built_helper();
+    for (security_type, password, password_required) in [
+        (2, None, true),
+        (129, None, true),
+        (16, None, false),
+        (2, Some("wrong"), false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            stream.write_all(b"RFB 003.007\n").unwrap();
+            stream.read_exact(&mut [0; 12]).unwrap();
+            stream.write_all(&[1, security_type]).unwrap();
+            if password.is_some() {
+                let mut selected = [0];
+                stream.read_exact(&mut selected).unwrap();
+                assert_eq!(selected, [2]);
+                stream.write_all(&[0; 16]).unwrap();
+                stream.read_exact(&mut [0; 16]).unwrap();
+                stream.write_all(&1_u32.to_be_bytes()).unwrap();
+            }
+            // Keep the peer alive until the helper finishes classifying the error.
+            assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+        });
+        let manager = VncSessionManager::new();
+        let mut attempt = config(port);
+        attempt.password = password.map(|value| value.to_string().into());
+        let session_id = manager.create_session(attempt).unwrap();
+        let event = wait_for_event(&manager, &session_id, |event| {
+            matches!(event, VncRuntimeEvent::Error { fatal: true, .. })
+        });
+        manager.close(&session_id).unwrap();
+        server.join().unwrap();
+        let VncRuntimeEvent::Error { error, .. } = event else {
+            unreachable!()
+        };
+        assert_eq!(error.kind, VncErrorKind::Authentication);
+        assert_eq!(
+            error.password_required,
+            password_required,
+            "security type {security_type}, supplied credentials: {}",
+            password.is_some()
+        );
+    }
 }

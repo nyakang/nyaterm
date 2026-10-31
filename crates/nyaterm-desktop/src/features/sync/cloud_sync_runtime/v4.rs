@@ -41,6 +41,14 @@ impl NyaTermApp {
         let store = self.store_blocking_client();
         let runtime = self.runtime.clone();
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-v4", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return false;
+        };
         let worker_control = control.clone();
         let task = self
             .blocking_jobs
@@ -57,6 +65,11 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(settings) => {
                         if let Some(settings) = settings {
@@ -92,6 +105,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         self.request_settings_panel_refresh(cx);
@@ -203,6 +217,14 @@ impl NyaTermApp {
         let runtime = self.runtime.clone();
         let store = self.store_blocking_client();
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-v4", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let worker_control = control.clone();
         let task = self.blocking_jobs.submit_task("cloud-sync-v3", move |_| {
             let _operation = lock_cloud_sync_operation(&worker_control)?;
@@ -255,6 +277,11 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(JobResult::Preview(preview)) => {
                         this.cloud_sync.set_v4_preview(*preview);
@@ -289,6 +316,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         self.request_settings_panel_refresh(cx);

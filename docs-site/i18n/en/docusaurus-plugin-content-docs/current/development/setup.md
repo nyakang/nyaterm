@@ -152,6 +152,26 @@ python scripts/release/verify_native_package.py \
   --artifact-version main-snapshot --dist dist
 ```
 
+### External package manager builds
+
+Packagers that build from source (nixpkgs and similar) can declare that they own
+the update channel by setting `NYATERM_PACKAGE_MANAGER` at build time:
+
+```bash
+NYATERM_PACKAGE_MANAGER=nix cargo build -p nyaterm-app --release --locked
+```
+
+The value is baked into the binary at compile time: the application skips the
+startup silent update check, hides the in-app update entries in the title bar and
+tray, and reports the package manager name in the About dialog's support
+information. Leaving it unset keeps the ordinary build behaviour; development
+builds should not set it. Cargo rebuilds the affected crates when the variable
+changes, so no build script is required.
+
+The variable only applies to packages built from source. AUR and the Homebrew
+cask repack the published `.deb` / `.dmg` artifacts, so the application still
+owns their updates and they must not set it.
+
 After validation, a version tag publishes GitHub Release and versioned R2 assets, then triggers Gitee, AUR, and Homebrew. The website reads `downloads.json`; signed `latest.json` exists only to migrate installed Tauri releases to GPUI. Only stable releases replace the root R2 manifests, while prereleases retain versioned manifests. A manual `Main Snapshot` run overwrites the `main-snapshot` prerelease without publishing to downstream channels.
 
 The Release workflow requires `NYATERM_GITHUB_GIST_CLIENT_ID`, the Gitee/R2 repository variables, and the updater, R2, Gitee, AUR, and Homebrew secrets named in the workflows. Missing configuration fails the relevant release step instead of producing an incomplete official release.

@@ -542,16 +542,6 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                     cx.listener(|panel, _, _, cx| panel.with_app(cx, |this, cx| {
                                         this.toggle_transfer_browser_hidden_files(cx);
                                     })),
-                                ))
-                                .child(transfer_toolbar_divider(palette))
-                                .child(compact_transfer_toolbar_button(
-                                    palette,
-                                    "transfer-browser-open-file-manager",
-                                    "icons/file-manager.svg",
-                                    t!("fileManager.openWorkspace"),
-                                    cx.listener(|panel, _, _, cx| panel.with_app(cx, |this, cx| {
-                                        this.open_file_manager_tab(None, cx);
-                                    })),
                                 )),
                         )
                         .when(search_expanded && !tree_mode, |toolbar| {

@@ -16,7 +16,7 @@ class PluginDependencyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             crates = (
-                "nyaterm-core", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store",
+                "nyaterm-core", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
             )
             for crate in crates:

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use gpui::{Context, KeyDownEvent, Window};
 
 use crate::features::NyaTermApp;
-use crate::shortcuts::event_to_hotkey_string;
+use crate::shortcuts::keystroke_to_hotkey_string;
 
 impl NyaTermApp {
     /// First display chord for empty-workspace / UI labels (Tauri-style chips).
@@ -133,10 +133,21 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         cx.stop_propagation();
+        self.record_keybinding_keystroke(&event.keystroke, cx);
+    }
+
+    /// Feed one keystroke to the active shortcut recording. Repeating the same
+    /// keystroke is harmless, so the keystroke interceptor and the panel's own
+    /// key listener may both deliver it.
+    pub(in crate::features) fn record_keybinding_keystroke(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) {
         let Some(recording_id) = self.settings.keybinding_recording_id() else {
             return;
         };
-        match event.keystroke.key.as_str() {
+        match keystroke.key.as_str() {
             "escape" => {
                 self.cancel_keybinding_recording(cx);
                 return;
@@ -148,7 +159,7 @@ impl NyaTermApp {
             _ => {}
         }
 
-        let Some(keys) = event_to_hotkey_string(event) else {
+        let Some(keys) = keystroke_to_hotkey_string(keystroke) else {
             return;
         };
         let Ok(binding) = crate::shortcuts::ShortcutBinding::parse(&keys) else {
@@ -194,5 +205,93 @@ impl NyaTermApp {
     ) {
         self.settings.set_keybinding_search(text);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{
+        Context, Entity, IntoElement, KeyBinding, Render, TestAppContext, Window, actions, div,
+        prelude::*,
+    };
+    use nyaterm_core::test_support::TestTempDir;
+
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+
+    actions!(keybinding_recording_tests, [BoundToCtrlW]);
+
+    struct RecorderHost {
+        app: Entity<NyaTermApp>,
+        fired: Rc<Cell<usize>>,
+    }
+
+    impl Render for RecorderHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let fired = self.fired.clone();
+            let app = self.app.clone();
+            div()
+                .size_full()
+                .track_focus(self.app.read(cx).settings.keybinding_focus())
+                .on_action(move |_: &BoundToCtrlW, _, _| fired.set(fired.get() + 1))
+                .on_key_down(move |event, _, cx| {
+                    app.update(cx, |app, cx| app.handle_keybinding_key_down(event, cx));
+                })
+        }
+    }
+
+    /// GPUI runs keymap actions before key listeners, so recording a shortcut that
+    /// is already bound (e.g. Ctrl+W closing the settings window) used to fire the
+    /// bound action instead of being captured.
+    #[test]
+    fn recording_captures_a_shortcut_that_is_already_bound() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-keybinding-recording");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("ctrl-w", BoundToCtrlW, None)]));
+        let fired = Rc::new(Cell::new(0usize));
+        let host_fired = fired.clone();
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| RecorderHost {
+                app: host_app,
+                fired: host_fired,
+            });
+            nyaterm_ui::nya_root(host, window, cx)
+        });
+        let handle = cx.update(|window, _| window.window_handle().downcast().unwrap());
+        app.update(cx, |app, cx| {
+            app.shell.remember_main_window(handle);
+            app.ensure_shortcut_interceptor(cx);
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            app.update(cx, |app, cx| {
+                app.start_keybinding_recording("tab.close".to_string(), window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-w");
+        cx.run_until_parked();
+
+        assert_eq!(
+            fired.get(),
+            0,
+            "the bound action must not run while recording"
+        );
+        app.read_with(cx, |app, _| {
+            assert!(app.settings.keybinding_recording_id().is_some());
+            assert_eq!(
+                app.settings
+                    .pending_keybinding()
+                    .map(|binding| binding.canonical()),
+                Some("ctrl+w".to_string())
+            );
+        });
     }
 }

@@ -29,6 +29,8 @@ mod bootstrap;
 pub(crate) mod native_menu;
 mod shutdown;
 #[cfg(test)]
+mod shutdown_tests;
+#[cfg(test)]
 mod tab_drag_tests;
 mod tab_moves;
 #[cfg(test)]
@@ -200,6 +202,12 @@ impl DesktopController {
         Ok(())
     }
 
+    pub(crate) fn sync_operations(
+        &self,
+    ) -> crate::features::sync::operation::CloudSyncOperationRegistry {
+        self.auto_sync.operations.clone()
+    }
+
     pub(crate) fn update_store(&self) -> gpui::Entity<UpdateStore> {
         self.update_store.clone()
     }
@@ -216,6 +224,7 @@ impl DesktopController {
             }
         })
     }
+    #[cfg(test)]
     pub(crate) fn restart_plugins(&mut self, cx: &mut gpui::App) {
         let runtime = self.runtime.clone();
         self.plugin_process

@@ -151,6 +151,53 @@ impl RawPortableSnapshot {
             calculate_entities_hash(&self.entities)?
         ))
     }
+
+    /// Whether the snapshot holds anything user-made that a pull could
+    /// destroy: connections, credentials and similar data. `settings` is
+    /// deliberately absent — a fresh install serializes its defaults there,
+    /// and letting the remote settings win is what a sync should do anyway.
+    /// A snapshot without user content belongs to a first-connect (or
+    /// self-wiped) device, which should adopt the remote instead of being
+    /// asked which side to keep.
+    pub fn has_user_content(&self) -> bool {
+        USER_CONTENT_ENTITIES.iter().any(|key| {
+            self.entities
+                .get(*key)
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .is_some_and(|value| !json_is_content_free(&value))
+        })
+    }
+}
+
+/// Entities whose non-default content marks a snapshot as holding user data.
+///
+/// `history` (usage traces) and `master_key_token` (a device-local security
+/// setting) are deliberately excluded: a device that only ever recorded
+/// activity or set a master password still counts as "first connect", so a
+/// pull adopts the cloud instead of raising a conflict. Real configuration —
+/// connections, secrets, proxies, tunnels — always counts.
+const USER_CONTENT_ENTITIES: &[&str] = &[
+    "sessions",
+    "keys",
+    "passwords",
+    "credentials",
+    "otp",
+    "proxies",
+    "proxy_groups",
+    "tunnels",
+    "tunnel_groups",
+    "quick_commands",
+    "known_hosts",
+];
+
+fn json_is_content_free(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(value) => value.is_empty(),
+        serde_json::Value::Array(items) => items.is_empty(),
+        serde_json::Value::Object(map) => map.values().all(json_is_content_free),
+        _ => false,
+    }
 }
 
 const DEVICE_LOCAL_UI_FIELDS: &[&str] = &[

@@ -414,6 +414,17 @@ impl NyaTermApp {
                             | nyaterm_remote_desktop::VncErrorKind::HelperCrashed
                     )
                     && self.schedule_vnc_helper_reconnect(session_id);
+                // A server that asks for credentials the session does not hold is not a
+                // dead end: ask for a password instead of parking a failed session. This
+                // is what keeps an `auto` connection working when the server actually
+                // demands VNC authentication. The helper checks the effective credentials,
+                // including inherited passwords; generic authentication errors never
+                // prompt (NyaTerm issue #1046).
+                let prompt = fatal
+                    && !retry
+                    && error.kind == nyaterm_remote_desktop::VncErrorKind::Authentication
+                    && error.password_required
+                    && self.vnc_auth_failure_accepts_password_prompt(session_id);
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.keys = Default::default();
                     session.modifiers = Default::default();
@@ -421,12 +432,26 @@ impl NyaTermApp {
                     session.vnc_key_request = None;
                     if retry {
                         session.error = Some(error.into());
-                    } else {
+                    } else if !prompt {
                         set_remote_view_error(session, error.into());
                     }
                 }
+                if prompt {
+                    self.prompt_remote_desktop_password(session_id, false, cx);
+                }
             }
         }
+    }
+
+    /// Whether the session is a VNC launch that can still be authenticated by asking.
+    fn vnc_auth_failure_accepts_password_prompt(&self, session_id: &str) -> bool {
+        self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(
+                &metadata.launch_config,
+                crate::models::SessionLaunchConfig::Vnc(config)
+                    if super::lifecycle::vnc_auth_failure_accepts_password_prompt(config)
+            )
+        })
     }
 
     pub(super) fn report_rdp_metrics(&mut self) {

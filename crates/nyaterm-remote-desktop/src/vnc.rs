@@ -1140,7 +1140,7 @@ fn handle_control(
             fatal,
         } if event_session == session_id => {
             if fatal {
-                push_reader_error(session_id, queue, state, error.kind, error.message);
+                push_fatal_error(session_id, queue, state, error);
                 return Ok(());
             }
             queue.push_control(VncRuntimeEvent::Error {
@@ -1161,11 +1161,19 @@ fn push_reader_error(
     kind: VncErrorKind,
     message: String,
 ) {
+    push_fatal_error(session_id, queue, state, VncError::new(kind, message));
+}
+
+fn push_fatal_error(
+    session_id: &str,
+    queue: &Arc<EventQueue>,
+    state: &Arc<Mutex<VncSessionState>>,
+    error: VncError,
+) {
     if !queue.heartbeat.fail_once() {
         return;
     }
     queue.close();
-    let error = VncError::new(kind, message);
     set_state(state, VncSessionState::Failed);
     queue.push_control_force(VncRuntimeEvent::Error {
         session_id: session_id.to_string(),

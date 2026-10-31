@@ -2,7 +2,9 @@ use super::DesktopController;
 use crate::features::AutoSyncResult;
 use crate::features::AutoSyncTrigger;
 use crate::features::run_auto_sync;
-use crate::features::sync::operation::{AutoSyncOperationControls, await_cloud_sync_job};
+use crate::features::sync::operation::{
+    AutoSyncOperationControls, CloudSyncOperationRegistration, await_cloud_sync_job,
+};
 use futures::StreamExt as _;
 use gpui::Context;
 use nyaterm_core::WorkspaceId;
@@ -87,11 +89,20 @@ impl DesktopController {
         let expired = Arc::new(AtomicBool::new(false));
         let task_expired = expired.clone();
         let controls = AutoSyncOperationControls::default();
+        let Some(registration) = self.auto_sync.operations.register(
+            "cloud-sync-auto",
+            vec![controls.sync.clone(), controls.cleanup.clone()],
+            Some(expired.clone()),
+        ) else {
+            self.auto_sync.cancel_for_shutdown();
+            return;
+        };
         let worker_controls = controls.clone();
         let task = scheduler.submit_task("cloud-sync-auto", move |_| {
             let before_apply = || {
+                worker_controls.sync.checkpoint()?;
                 if task_expired.load(Ordering::Acquire) {
-                    return Err(nyaterm_core::CloudSyncError::AutoPullDeferred);
+                    return Err(nyaterm_core::CloudSyncError::Cancelled);
                 }
                 let (reply, receiver) = std::sync::mpsc::sync_channel(1);
                 guard_request
@@ -101,15 +112,7 @@ impl DesktopController {
                     .ok_or(nyaterm_core::CloudSyncError::AutoPullDeferred)?
                     .send(reply)
                     .map_err(|_| nyaterm_core::CloudSyncError::AutoPullDeferred)?;
-                if receiver
-                    .recv_timeout(Duration::from_secs(30))
-                    .unwrap_or(false)
-                    && !task_expired.load(Ordering::Acquire)
-                {
-                    Ok(())
-                } else {
-                    Err(nyaterm_core::CloudSyncError::AutoPullDeferred)
-                }
+                receive_auto_sync_apply_permission(receiver, &task_expired, &worker_controls.sync)
             };
             run_auto_sync(
                 &store,
@@ -157,7 +160,11 @@ impl DesktopController {
             )
             .await;
             let _ = this.update(cx, |controller, cx| {
-                controller.complete_auto_sync(trigger, result, cx);
+                if registration.shutdown_cancelled(&result) {
+                    controller.auto_sync.cancel_for_shutdown();
+                    return;
+                }
+                controller.complete_auto_sync(trigger, result, registration, cx);
             });
         })
         .detach();
@@ -171,6 +178,7 @@ impl DesktopController {
         &mut self,
         trigger: AutoSyncTrigger,
         result: Result<AutoSyncResult, nyaterm_core::CloudSyncError>,
+        registration: CloudSyncOperationRegistration,
         cx: &mut Context<Self>,
     ) {
         let generation = self
@@ -211,6 +219,7 @@ impl DesktopController {
                     controller.auto_sync.complete(trigger, &result, generation);
                     controller.notify_auto_sync_windows(&result, true, cx);
                 });
+                drop(registration);
             })
             .detach();
         } else {
@@ -288,4 +297,68 @@ fn windows_allow_auto_sync_pull(
             .and_then(|shell| shell.read(cx).app.clone())
             .is_some_and(|app| !app.read(cx).auto_cloud_sync_pull_blocked())
     })
+}
+
+// A denied UI lease can be ordinary deferral or exit cancellation. Keep the
+// distinction so V4 does not record a cancelled lease as a sync failure.
+fn receive_auto_sync_apply_permission(
+    receiver: std::sync::mpsc::Receiver<bool>,
+    expired: &AtomicBool,
+    control: &nyaterm_core::cloud_sync::control::CloudSyncOperationControl,
+) -> Result<(), nyaterm_core::CloudSyncError> {
+    let permitted = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or(false);
+    control.checkpoint()?;
+    if expired.load(Ordering::Acquire) {
+        return Err(nyaterm_core::CloudSyncError::Cancelled);
+    }
+    if permitted {
+        Ok(())
+    } else {
+        Err(nyaterm_core::CloudSyncError::AutoPullDeferred)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::receive_auto_sync_apply_permission;
+    use crate::features::sync::operation::CloudSyncOperationRegistry;
+    use nyaterm_core::CloudSyncError;
+    use nyaterm_core::cloud_sync::control::CloudSyncOperationControl;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    #[test]
+    fn exit_invalidates_an_already_granted_apply_permission_as_cancellation() {
+        let operations = CloudSyncOperationRegistry::default();
+        let control = CloudSyncOperationControl::default();
+        let expired = Arc::new(AtomicBool::new(false));
+        let registration = operations
+            .register("auto", vec![control.clone()], Some(expired.clone()))
+            .unwrap();
+        let (reply, receiver) = mpsc::channel();
+        reply.send(true).unwrap();
+        operations.pause_and_cancel();
+        let result = receive_auto_sync_apply_permission(receiver, &expired, &control);
+        assert!(registration.shutdown_cancelled(&result));
+        assert!(matches!(
+            control.begin_commit(),
+            Err(CloudSyncError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn denied_permission_without_exit_remains_retryable_deferral() {
+        let (reply, receiver) = mpsc::channel();
+        reply.send(false).unwrap();
+        let control = CloudSyncOperationControl::default();
+        let expired = AtomicBool::new(false);
+        assert!(matches!(
+            receive_auto_sync_apply_permission(receiver, &expired, &control),
+            Err(CloudSyncError::AutoPullDeferred)
+        ));
+        control.begin_commit().unwrap();
+    }
 }

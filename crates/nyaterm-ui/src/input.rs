@@ -495,6 +495,19 @@ impl NyaInputState {
         self.set_content("", cx);
     }
 
+    /// Release a closing prompt's value and editing history even if it never
+    /// renders again. `clear` queues a replacement for the next render instead.
+    pub fn discard_content(&mut self, cx: &mut Context<Self>) {
+        self.subscription = None;
+        self.state = None;
+        self.seed = SharedString::default();
+        self.pending_value = None;
+        self.silent_value = None;
+        self.focused = false;
+        self.hide_secret(cx);
+        cx.notify();
+    }
+
     pub fn select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.ensure_component(window, cx);
         state.focus(window, cx);

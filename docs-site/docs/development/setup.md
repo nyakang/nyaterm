@@ -149,6 +149,18 @@ python scripts/release/verify_native_package.py \
   --artifact-version main-snapshot --dist dist
 ```
 
+### 外部包管理器构建
+
+源码构建型打包者（例如 nixpkgs）可以在构建时设置 `NYATERM_PACKAGE_MANAGER`，声明更新由外部包管理器负责：
+
+```bash
+NYATERM_PACKAGE_MANAGER=nix cargo build -p nyaterm-app --release --locked
+```
+
+该值在编译期写入二进制：应用跳过启动静默更新检查，隐藏标题栏与托盘中的应用内更新入口，并在“关于”窗口的支持信息里显示包管理器名称。未设置时行为与普通构建完全一致，开发构建应保持未设置；Cargo 会随该变量的变化重编相关 crate，不需要额外的 build script。
+
+该变量只对源码构建的包有意义。AUR 与 Homebrew cask 由发布产物（`.deb` / `.dmg`）重打包，更新仍由应用自身负责，无需设置。
+
 正式标签在验包后发布 GitHub Release 和 R2 版本目录，再触发 Gitee、AUR 与 Homebrew。官网读取 `downloads.json`；签名的 `latest.json` 只用于让已安装的旧 Tauri 版本迁移到 GPUI。稳定版才覆盖 R2 根目录清单，预发布只保留版本化清单。手动运行 `Main Snapshot` 会覆盖 `main-snapshot` prerelease，不发布到外部分发渠道。
 
 Release workflow 需要 `NYATERM_GITHUB_GIST_CLIENT_ID`、Gitee/R2 Variables，以及 Tauri updater、R2、Gitee、AUR、Homebrew 对应的 Secrets。相关发布步骤缺少配置时会失败，不会生成缺功能或只发布一部分渠道的正式包。

@@ -49,6 +49,7 @@ impl SyncHistoryFilter {
 const HISTORY_PAGE_SIZE: usize = 20;
 
 pub(in crate::features) struct CloudSyncFeatureState {
+    pub(crate) operations: super::operation::CloudSyncOperationRegistry,
     settings: CloudSyncSettings,
     state: CloudSyncState,
     history: Vec<CloudSyncHistoryEntry>,
@@ -110,6 +111,7 @@ impl CloudSyncFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            operations: Default::default(),
             settings,
             state,
             history,
@@ -436,6 +438,11 @@ impl CloudSyncFeatureState {
         }
         self.live_state = CloudSyncLiveState::Running;
         true
+    }
+
+    pub(super) fn cancel_job_for_shutdown(&mut self) {
+        self.live_state = CloudSyncLiveState::Idle;
+        self.status.clear();
     }
 
     pub(super) fn complete_job(&mut self, state: CloudSyncState, status: String) {

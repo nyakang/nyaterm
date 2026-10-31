@@ -7,6 +7,10 @@ use crate::models::{CloudSyncInputField, SettingsTab};
 
 impl NyaTermApp {
     pub(crate) fn queue_cloud_sync_credentials_refresh(&mut self, cx: &mut Context<Self>) {
+        let registration = self
+            .cloud_sync
+            .operations
+            .followup("cloud-sync-credentials-refresh");
         let store = self.store_blocking_client();
         let task = self
             .blocking_jobs
@@ -33,6 +37,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
     }

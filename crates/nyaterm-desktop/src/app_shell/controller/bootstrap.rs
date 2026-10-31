@@ -100,10 +100,12 @@ impl DesktopController {
             }
             let shell = entry.shell.clone();
             let process_state = process_state.clone();
+            let registration = self.sync_operations().followup("cloud-sync-window-refresh");
             cx.defer(move |cx| {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.apply_shared_state(process_state, event, cx)
                 });
+                drop(registration);
             });
         }
     }

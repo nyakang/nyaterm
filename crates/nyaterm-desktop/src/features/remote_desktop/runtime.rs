@@ -59,5 +59,9 @@ use lifecycle::rdp_reconnect_delay;
 use lifecycle::remote_desktop_authentication_disabled;
 #[cfg(test)]
 use lifecycle::remote_desktop_password_id;
+#[cfg(test)]
+use lifecycle::vnc_auth_failure_accepts_password_prompt;
+#[cfg(test)]
+use lifecycle::vnc_retry_requires_password;
 #[cfg(windows)]
 pub(super) use resize::fit_window_display_metrics;

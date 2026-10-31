@@ -3,6 +3,7 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use gpui::{App, Context};
+use nyaterm_core::packaging;
 use nyaterm_ui::{NyaAppMenuBar, NyaDialogWindowExt as _, NyaMenuItem};
 
 use super::definition::{TitleMenuCommand, TitleMenuDefinition, TitleMenuKind};
@@ -398,26 +399,41 @@ impl NyaTermApp {
     }
 
     fn title_help_menu_items(&self, cx: &App) -> Vec<TitleMenuDefinition> {
-        let update = self.update.read(cx);
-        let has_update = update.has_available_update();
-        let success = self.theme_palette().success;
-        let mut update_item =
-            TitleMenuDefinition::action(t!("menu.checkForUpdates")).icon(if has_update {
-                "icons/menu/upgrade.svg"
-            } else {
-                "icons/menu/update.svg"
-            });
-        if has_update {
-            update_item = update_item
-                .icon_color(success)
-                .status(t!("updater.hasNewVersion"), success);
-        }
+        self.title_help_menu_items_for(packaging::updates_managed_externally(), cx)
+    }
 
-        vec![
+    /// Builds the Help menu for an explicit update policy so tests can assert both
+    /// the ordinary and the externally managed menu.
+    fn title_help_menu_items_for(
+        &self,
+        updates_managed_externally: bool,
+        cx: &App,
+    ) -> Vec<TitleMenuDefinition> {
+        let mut items = vec![
             TitleMenuDefinition::action(t!("menu.documentation"))
                 .icon("icons/menu/book.svg")
                 .command(TitleMenuCommand::Documentation),
-            update_item.command(TitleMenuCommand::CheckUpdates),
+        ];
+        // A build whose updates come from an external package manager must not
+        // offer an in-app check it cannot apply.
+        if !updates_managed_externally {
+            let update = self.update.read(cx);
+            let has_update = update.has_available_update();
+            let success = self.theme_palette().success;
+            let mut update_item =
+                TitleMenuDefinition::action(t!("menu.checkForUpdates")).icon(if has_update {
+                    "icons/menu/upgrade.svg"
+                } else {
+                    "icons/menu/update.svg"
+                });
+            if has_update {
+                update_item = update_item
+                    .icon_color(success)
+                    .status(t!("updater.hasNewVersion"), success);
+            }
+            items.push(update_item.command(TitleMenuCommand::CheckUpdates));
+        }
+        items.extend([
             TitleMenuDefinition::action(t!("menu.viewLogs"))
                 .icon("icons/menu/article.svg")
                 .command(TitleMenuCommand::ViewLogs),
@@ -425,7 +441,8 @@ impl NyaTermApp {
             TitleMenuDefinition::action(format!("{} NyaTerm", t!("menu.about")))
                 .icon("icons/menu/info.svg")
                 .command(TitleMenuCommand::About),
-        ]
+        ]);
+        items
     }
 
     fn title_theme_menu_items(&self, _cx: &App) -> Vec<TitleMenuDefinition> {
@@ -616,6 +633,22 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
         self.title_menu_items(menu, cx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn help_menu_has_update_command_for_test(
+        &self,
+        updates_managed_externally: bool,
+        cx: &App,
+    ) -> bool {
+        self.title_help_menu_items_for(updates_managed_externally, cx)
+            .iter()
+            .any(|item| {
+                matches!(
+                    item.kind,
+                    TitleMenuKind::Action(Some(TitleMenuCommand::CheckUpdates))
+                )
+            })
     }
 }
 
@@ -848,16 +881,33 @@ mod tests {
                 }),
             });
         });
+        let check_labels = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
+            .map(|locale| rust_i18n::t!("menu.checkForUpdates", locale = locale).to_string());
         let (item, color) = cx.update_entity(&app, |app, cx| {
             let item = app
                 .title_menu_items_for_test(TitleMenu::Help, cx)
                 .into_iter()
-                .nth(1)
-                .expect("check update item");
+                .find(|item| check_labels.iter().any(|label| label == item.test_label()));
             (item, app.theme_palette().success)
         });
-        let check_labels = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
-            .map(|locale| rust_i18n::t!("menu.checkForUpdates", locale = locale).to_string());
+        // An externally managed build has no in-app check, so the entry is
+        // legitimately absent and only its presence is worth asserting.
+        let item = match item {
+            Some(item) => {
+                assert!(
+                    !nyaterm_core::packaging::updates_managed_externally(),
+                    "externally managed builds must not offer an in-app update entry"
+                );
+                item
+            }
+            None => {
+                assert!(
+                    nyaterm_core::packaging::updates_managed_externally(),
+                    "the in-app update entry is missing from an application-managed build"
+                );
+                return;
+            }
+        };
         let statuses = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
             .map(|locale| rust_i18n::t!("updater.hasNewVersion", locale = locale).to_string());
         assert!(check_labels.iter().any(|label| label == item.test_label()));
@@ -871,6 +921,19 @@ mod tests {
                 .is_some_and(|(label, status_color)| status_color == color
                     && statuses.iter().any(|status| status == label))
         );
+    }
+
+    #[test]
+    fn help_menu_follows_the_packaging_policy_for_the_update_entry() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = menu_app(&mut cx);
+        for (updates_managed_externally, expected) in [(false, true), (true, false)] {
+            let has_update_command = cx.update_entity(&app, |app, cx| {
+                app.help_menu_has_update_command_for_test(updates_managed_externally, cx)
+            });
+            assert_eq!(has_update_command, expected);
+        }
     }
 
     #[test]

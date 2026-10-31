@@ -203,7 +203,7 @@ struct SchedulerInner {
 }
 
 impl SchedulerInner {
-    fn begin_shutdown(&self) -> impl FnOnce() + Send + 'static {
+    fn begin_shutdown(&self) -> impl FnOnce() + Send + 'static + use<> {
         let shared = Arc::clone(&self.shared);
         let started_at = Instant::now();
         let workers = self.take_shutdown_workers();
@@ -435,7 +435,7 @@ impl BlockingJobScheduler {
 
     /// Cancel queued/running jobs now, then wait on a background executor.
     #[must_use = "the returned cleanup must run before releasing workspace resources"]
-    pub(crate) fn begin_shutdown(&self) -> impl FnOnce() + Send + 'static {
+    pub(crate) fn begin_shutdown(&self) -> impl FnOnce() + Send + 'static + use<> {
         self.inner.begin_shutdown()
     }
 }

@@ -2,6 +2,8 @@ use crate::features::{AutoSyncResult, AutoSyncTrigger};
 use std::time::{Duration, Instant};
 
 pub(in crate::app_shell::controller) struct AutoSyncCoordinator {
+    pub(in crate::app_shell::controller) operations:
+        crate::features::sync::operation::CloudSyncOperationRegistry,
     running: bool,
     pending: Option<AutoSyncTrigger>,
     next_due: Instant,
@@ -27,6 +29,12 @@ pub(super) struct AutoSyncJob {
 }
 
 impl AutoSyncCoordinator {
+    pub(super) fn cancel_for_shutdown(&mut self) {
+        self.running = false;
+        self.pending = Some(AutoSyncTrigger::Retry);
+        self.next_due = Instant::now();
+    }
+
     pub(super) fn next_job(
         &mut self,
         now: Instant,
@@ -286,6 +294,7 @@ impl AutoSyncCoordinator {
     pub(in crate::app_shell::controller) fn new(mutation_generation: u64) -> Self {
         let now = Instant::now();
         Self {
+            operations: Default::default(),
             running: false,
             pending: Some(AutoSyncTrigger::Startup),
             next_due: now + Duration::from_secs(3),

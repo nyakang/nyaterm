@@ -1474,27 +1474,31 @@ fn terminal_selection_cols_for_snapshot_row(
     let absolute_end = snapshot.total_rows.saturating_sub(snapshot.display_offset);
     let absolute_start = absolute_end.saturating_sub(snapshot.row_count());
     let absolute_line = absolute_start.saturating_add(row);
-    let (start, end) = selection?.cols_for_absolute_line(absolute_line)?;
+    let selection = selection?;
+    let (start, end) = selection.cols_for_absolute_line(absolute_line)?;
     let snapshot_row = snapshot.row(row)?;
     let (start, expanded_end) = expand_selection_range(
         &snapshot_row.cells,
         start.min(snapshot.cols),
         end.min(snapshot.cols),
     )?;
-    if end != usize::MAX || snapshot_row.wraps_to_next {
+    if (!selection.all_buffer && selection.anchor_line == selection.head_line)
+        || snapshot_row.wraps_to_next
+    {
         return Some((start, expanded_end));
     }
 
-    // Only implicit hard-line tails shrink. Mouse anchors and copied text retain
-    // their logical ranges; contrast correction must use this painted range too.
+    // Multiline hard-line tails shrink, including explicit endpoints and empty
+    // rows. Mouse anchors and copied text retain their logical ranges; contrast
+    // correction must use this painted range too.
     let content_end = snapshot_row
         .cells
         .iter()
         .enumerate()
         .rfind(|(_, cell)| !cell.text.is_empty())
         .map_or(0, |(col, cell)| col + usize::from(cell.width));
-    let end = expanded_end.min(content_end.max(start + 1));
-    Some((start, end))
+    let end = expanded_end.min(content_end);
+    (start < end).then_some((start, end))
 }
 
 fn push_dynamic_selection_background(

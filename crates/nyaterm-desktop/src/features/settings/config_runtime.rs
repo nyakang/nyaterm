@@ -503,25 +503,32 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        let registration = self
+            .cloud_sync
+            .operations
+            .followup("cloud-sync-store-refresh");
         self.submit_store_request(
             0,
             LoadBootstrap,
-            |this, event, cx| match event.outcome {
-                Ok(snapshot) => {
-                    this.apply_store_refresh(snapshot.clone(), cx);
-                    this.replace_shared_snapshot(
-                        snapshot,
-                        crate::app_shell::SharedStateDomain::All,
-                        cx,
-                    );
-                    cx.notify();
+            move |this, event, cx| {
+                match event.outcome {
+                    Ok(snapshot) => {
+                        this.apply_store_refresh(snapshot.clone(), cx);
+                        this.replace_shared_snapshot(
+                            snapshot,
+                            crate::app_shell::SharedStateDomain::All,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        let message = format!("store refresh failed: {error}");
+                        this.settings.update_store_status(message.clone(), false);
+                        this.shell.set_status(message);
+                        cx.notify();
+                    }
                 }
-                Err(error) => {
-                    let message = format!("store refresh failed: {error}");
-                    this.settings.update_store_status(message.clone(), false);
-                    this.shell.set_status(message);
-                    cx.notify();
-                }
+                drop(registration);
             },
             cx,
         );

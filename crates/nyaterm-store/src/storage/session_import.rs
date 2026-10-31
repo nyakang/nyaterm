@@ -297,12 +297,114 @@ fn ensure_group_path(
 
 #[cfg(test)]
 mod tests {
+    use nyaterm_core::session_import::{SessionImportError, prepare_session_import};
     use nyaterm_core::{
         AiExecutionProfile, ConnectionAuth, ConnectionNetwork, ConnectionType,
         PreparedSessionConnection, PreparedSessionImport, SavedConnection, SavedPassword,
     };
 
     use super::{ConnectionStore, META_MASTER_KEY, META_TABLE};
+
+    fn windterm_fixture(root: &std::path::Path) -> std::path::PathBuf {
+        let terminal = root.join("profile/terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("key"), "synthetic-private-key\n").unwrap();
+        let path = terminal.join("user.sessions");
+        std::fs::write(&path, serde_json::json!([
+            {
+                "session.protocol": "SSH", "session.target": "password.example", "session.label": "Password",
+                "session.group": "Imported > WindTerm",
+                "session.autoLogin": r#"{"PasswordEnabled":true,"Password":" import-password "}"#,
+            },
+            {
+                "session.protocol": "SSH", "session.target": "key.example", "session.label": "Key",
+                "session.group": "Imported > WindTerm",
+                "session.autoLogin": r#"{"Public Key":{"windows.path":"key","windows.pass":" key-passphrase "}}"#,
+            },
+        ]).to_string()).unwrap();
+        path
+    }
+
+    #[test]
+    fn windterm_import_round_trips_password_key_and_passphrase_through_encrypted_storage() {
+        let dir = crate::storage::tests::unique_temp_dir("windterm-import-roundtrip");
+        let path = windterm_fixture(&dir);
+        let prepared = prepare_session_import(&path).unwrap();
+        assert!(prepared.warnings.is_empty());
+        let key_id = prepared.ssh_keys[0].id.clone();
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert_eq!(store.commit_session_import(prepared).unwrap(), 2);
+        drop(store);
+        let store = ConnectionStore::open(&dir).unwrap();
+        let sessions = store.load_sessions().unwrap();
+        let password_connection = sessions
+            .connections
+            .iter()
+            .find(|connection| connection.name == "Password")
+            .unwrap();
+        assert_eq!(
+            password_connection
+                .auth
+                .as_ref()
+                .unwrap()
+                .password
+                .as_deref(),
+            Some(" import-password ")
+        );
+        let record =
+            crate::storage::tests::connection_password_record(&store, &password_connection.id);
+        assert_ne!(record.password.expose_secret(), " import-password ");
+        let key = store
+            .load_decrypted_ssh_key_by_id(&key_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(key.key_data.as_deref(), Some("synthetic-private-key\n"));
+        assert_eq!(key.passphrase.as_deref(), Some(" key-passphrase "));
+        let stored_key = store.load_ssh_key_by_id(&key_id).unwrap().unwrap();
+        assert_ne!(stored_key.key.as_deref(), Some("synthetic-private-key\n"));
+        assert_ne!(stored_key.passphrase.as_deref(), Some(" key-passphrase "));
+        assert_eq!(sessions.groups.len(), 2);
+    }
+
+    #[test]
+    fn windterm_import_does_not_write_connections_groups_or_keys_when_encryption_fails() {
+        let dir = crate::storage::tests::unique_temp_dir("windterm-import-failure");
+        let path = windterm_fixture(&dir);
+        let store = ConnectionStore::open(&dir).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.open_table(META_TABLE)
+            .unwrap()
+            .insert(META_MASTER_KEY, "invalid-master-key-token")
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(
+            store
+                .commit_session_import(prepare_session_import(&path).unwrap())
+                .is_err()
+        );
+        assert!(store.list_connections().unwrap().is_empty());
+        assert!(store.list_groups().unwrap().is_empty());
+        assert!(store.list_ssh_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn windterm_master_password_challenge_leaves_storage_untouched() {
+        let dir = crate::storage::tests::unique_temp_dir("windterm-import-challenge");
+        let path = windterm_fixture(&dir);
+        std::fs::write(
+            dir.join("profile/user.config"),
+            r#"{"application.masterPassword":true,"application.fingerprint":"test"}"#,
+        )
+        .unwrap();
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert!(matches!(
+            prepare_session_import(&path),
+            Err(SessionImportError::WindTermMasterPasswordRequired)
+        ));
+        assert!(store.list_connections().unwrap().is_empty());
+        assert!(store.list_groups().unwrap().is_empty());
+        assert!(store.list_ssh_keys().unwrap().is_empty());
+    }
 
     #[test]
     fn commit_session_import_persists_all_domains_together() {
@@ -347,6 +449,7 @@ mod tests {
         let jump = prepared_saved_ssh("source-jump", "Jump", None);
         let target = prepared_saved_ssh("source-target", "Target", Some("source-jump"));
         let prepared = PreparedSessionImport {
+            warnings: Vec::new(),
             custom_icons: Vec::new(),
             groups: Vec::new(),
             passwords: Vec::new(),
@@ -390,6 +493,7 @@ mod tests {
             ..ConnectionAuth::default()
         });
         let prepared = PreparedSessionImport {
+            warnings: Vec::new(),
             custom_icons: Vec::new(),
             groups: Vec::new(),
             passwords: Vec::new(),
@@ -425,6 +529,7 @@ mod tests {
 
     fn prepared_import() -> PreparedSessionImport {
         PreparedSessionImport {
+            warnings: Vec::new(),
             custom_icons: Vec::new(),
             groups: vec![vec!["Imported".to_string()]],
             passwords: vec![SavedPassword {

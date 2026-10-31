@@ -29,6 +29,8 @@ const XSHELL_ENTRY_LIMIT: usize = 10_000;
 
 #[derive(Debug, Error)]
 pub enum SessionImportError {
+    #[error("WindTerm master password is required")]
+    WindTermMasterPasswordRequired,
     #[error("{0}")]
     Config(String),
     #[error("{0}")]
@@ -37,6 +39,26 @@ pub enum SessionImportError {
 
 type AppError = SessionImportError;
 type AppResult<T> = Result<T, SessionImportError>;
+
+#[derive(Default)]
+pub struct SessionImportOptions<'a> {
+    pub windterm_master_password: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionImportWarningKind {
+    MissingProfileConfig,
+    UnreadableProfileConfig,
+    UnreadableAutoLogin,
+    UnreadablePrivateKey,
+}
+
+/// Import diagnostics contain only a source index and a reason, never user data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionImportWarning {
+    pub session_index: usize,
+    pub kind: SessionImportWarningKind,
+}
 
 struct ImportedSession {
     name: String,
@@ -61,6 +83,7 @@ pub struct PreparedSessionConnection {
 }
 
 pub struct PreparedSessionImport {
+    pub warnings: Vec<SessionImportWarning>,
     pub custom_icons: Vec<crate::models::sessions::ConnectionCustomIcon>,
     pub groups: Vec<Vec<String>>,
     pub passwords: Vec<SavedPassword>,
@@ -79,7 +102,18 @@ impl std::fmt::Debug for PreparedSessionImport {
             .field("password_count", &self.passwords.len())
             .field("ssh_key_count", &self.ssh_keys.len())
             .field("connection_count", &self.connections.len())
+            .field("warning_count", &self.warnings.len())
             .finish()
+    }
+}
+
+impl PreparedSessionImport {
+    pub fn incomplete_credentials_count(&self) -> usize {
+        self.warnings
+            .iter()
+            .map(|warning| warning.session_index)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
     }
 }
 
@@ -210,6 +244,7 @@ fn prepare_legacy_sessions(imported: Vec<ImportedSession>) -> PreparedSessionImp
         .collect();
 
     PreparedSessionImport {
+        warnings: Vec::new(),
         custom_icons: Vec::new(),
         groups: Vec::new(),
         passwords: Vec::new(),
@@ -220,6 +255,13 @@ fn prepare_legacy_sessions(imported: Vec<ImportedSession>) -> PreparedSessionImp
 
 pub fn prepare_session_import(
     file_path: &Path,
+) -> Result<PreparedSessionImport, SessionImportError> {
+    prepare_session_import_with_options(file_path, SessionImportOptions::default())
+}
+
+pub fn prepare_session_import_with_options(
+    file_path: &Path,
+    options: SessionImportOptions<'_>,
 ) -> Result<PreparedSessionImport, SessionImportError> {
     if file_path.is_dir() {
         return Ok(prepare_legacy_sessions(finalshell::parse_finalshell(
@@ -234,7 +276,7 @@ pub fn prepare_session_import(
     } else if lower.ends_with(".mxtsessions") {
         prepare_legacy_sessions(parse_mobaxterm(&path)?)
     } else if lower.ends_with(".sessions") {
-        prepare_legacy_sessions(parse_windterm(&path)?)
+        parse_windterm(file_path, options.windterm_master_password)?
     } else if lower.ends_with(".xml") {
         prepare_legacy_sessions(securecrt::parse_securecrt(file_path)?)
     } else if lower.ends_with(".json") {

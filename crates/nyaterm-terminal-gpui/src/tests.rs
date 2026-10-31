@@ -533,3 +533,12 @@ fn snapshot_tab_spans_agree_with_cell_backgrounds() {
     );
     assert_eq!(span_ranges[0].bg, cell_ranges[0].bg);
 }
+
+#[test]
+fn ctrl_minus_and_ctrl_underscore_send_unit_separator() {
+    // nano's "go to line" (^_) is typed as Ctrl+Shift+- on most layouts.
+    assert_eq!(key_bytes("-", None, mods(true, false, true)), b"\x1f");
+    assert_eq!(key_bytes("-", None, mods(false, false, true)), b"\x1f");
+    assert_eq!(key_bytes("_", Some("_"), mods(true, false, true)), b"\x1f");
+    assert_eq!(key_bytes("/", None, mods(false, false, true)), b"\x1f");
+}

@@ -23,6 +23,7 @@ use crate::theme::ThemePalette;
 const WALLPAPER_TILE_ELEMENT_LIMIT: usize = 8192;
 const WALLPAPER_TILE_MIN_SIZE: f32 = 8.;
 const SSH_AUTH_PROMPT_PRIORITY: usize = usize::MAX;
+pub(in crate::features) const SSH_AUTH_OVERLAY_PADDING_PX: f32 = 12.;
 
 /// Which overlays the root chrome should render this frame.
 ///
@@ -1293,7 +1294,10 @@ impl NyaTermApp {
             .bg(rgba(0x00000066))
     }
 
-    fn ssh_auth_prompt_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(in crate::features) fn ssh_auth_prompt_overlay(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let host_key_prompt = self.session.prompt_active_host_key().cloned();
         let agent_prompt = self.session.prompt_active_agent().cloned();
         let credential_prompt = self.session.prompt_active_credential().cloned();
@@ -1315,7 +1319,7 @@ impl NyaTermApp {
             .flex()
             .items_center()
             .justify_center()
-            .p_3()
+            .p(px(SSH_AUTH_OVERLAY_PADDING_PX))
             .track_focus(self.session.prompt_credential_focus())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
@@ -1331,7 +1335,6 @@ impl NyaTermApp {
                 div()
                     .w(px(dialog_width))
                     .max_w_full()
-                    .max_h_full()
                     .min_h_0()
                     .when_some(host_key_prompt, |this, prompt| {
                         this.child(self.host_key_prompt_banner(prompt, cx))

@@ -1,6 +1,7 @@
 use rust_i18n::t;
 
 use gpui::{AnyElement, Context, FontWeight, IntoElement, Window, div, prelude::*, px, rgb};
+use nyaterm_core::packaging;
 use nyaterm_core::runtime::RuntimeMode;
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaDialogWindowExt as _};
 
@@ -55,33 +56,37 @@ impl NyaTermApp {
 
     fn about_dialog_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.theme_palette();
-        let support_info = format!(
-            "NyaTerm {}\nOS: {}\nArchitecture: {}\nMode: {:?}",
-            env!("CARGO_PKG_VERSION"),
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            self.runtime.mode()
-        );
-        let runtime_label = match self.runtime.mode() {
-            RuntimeMode::Portable => t!("about.portable"),
-            RuntimeMode::Installed => t!("about.installed"),
-        };
-        let support_rows = vec![
-            (t!("about.version"), env!("CARGO_PKG_VERSION").to_string()),
-            (
-                t!("about.operatingSystem"),
-                std::env::consts::OS.to_string(),
-            ),
-            (t!("about.architecture"), std::env::consts::ARCH.to_string()),
-            (t!("about.runtime"), runtime_label.to_string()),
-        ];
-        #[cfg(windows)]
         let (support_info, support_rows) = {
-            let mut support_info = support_info;
-            let mut support_rows = support_rows;
-            let display = conpty_display();
-            support_info.push_str(&format!("\nLocal Terminal ConPTY: {display}"));
-            support_rows.push((t!("about.conpty"), display));
+            let mut support_info = format!(
+                "NyaTerm {}\nOS: {}\nArchitecture: {}\nMode: {:?}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                self.runtime.mode()
+            );
+            let runtime_label = match self.runtime.mode() {
+                RuntimeMode::Portable => t!("about.portable"),
+                RuntimeMode::Installed => t!("about.installed"),
+            };
+            let mut support_rows = vec![
+                (t!("about.version"), env!("CARGO_PKG_VERSION").to_string()),
+                (
+                    t!("about.operatingSystem"),
+                    std::env::consts::OS.to_string(),
+                ),
+                (t!("about.architecture"), std::env::consts::ARCH.to_string()),
+                (t!("about.runtime"), runtime_label.to_string()),
+            ];
+            if let Some(package_manager) = packaging::external_package_manager() {
+                support_info.push_str(&format!("\nPackageManager: {package_manager}"));
+                support_rows.push((t!("about.packageManager"), package_manager.to_string()));
+            }
+            #[cfg(windows)]
+            {
+                let display = conpty_display();
+                support_info.push_str(&format!("\nLocal Terminal ConPTY: {display}"));
+                support_rows.push((t!("about.conpty"), display));
+            }
             (support_info, support_rows)
         };
         div()

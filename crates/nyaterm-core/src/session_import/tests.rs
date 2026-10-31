@@ -139,11 +139,11 @@ fn windterm_import_splits_user_at_host_targets() {
     )
     .expect("parse windterm sessions");
 
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].name, "Prod web");
-    assert_eq!(sessions[0].host, "192.168.1.10");
-    assert_eq!(sessions[0].username, "deploy");
-    assert_eq!(sessions[0].port, 2222);
+    assert_eq!(sessions.connections.len(), 1);
+    assert_eq!(sessions.connections[0].name, "Prod web");
+    assert!(
+        matches!(&sessions.connections[0].config, ConnectionType::Ssh { host, username, port: 2222, .. } if host == "192.168.1.10" && username == "deploy")
+    );
 }
 
 #[test]
@@ -160,9 +160,10 @@ fn windterm_import_defaults_username_when_target_has_no_user() {
     )
     .expect("parse windterm sessions");
 
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].host, "192.168.1.10");
-    assert_eq!(sessions[0].username, "root");
+    assert_eq!(sessions.connections.len(), 1);
+    assert!(
+        matches!(&sessions.connections[0].config, ConnectionType::Ssh { host, username, .. } if host == "192.168.1.10" && username == "root")
+    );
 }
 
 #[test]

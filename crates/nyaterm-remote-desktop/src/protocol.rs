@@ -744,6 +744,11 @@ pub enum VncErrorKind {
 pub struct VncError {
     pub kind: VncErrorKind,
     pub message: String,
+    /// Set only when the helper's effective credentials are missing. Other
+    /// authentication failures cannot be resolved by asking for a password.
+    /// Older helpers omit this hint and must never trigger an automatic prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub password_required: bool,
 }
 
 impl VncError {
@@ -751,6 +756,7 @@ impl VncError {
         Self {
             kind,
             message: message.into(),
+            password_required: false,
         }
     }
 }
@@ -1172,6 +1178,24 @@ mod tests {
         parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
         validate_committed_text,
     };
+
+    #[test]
+    fn vnc_password_hint_is_optional_and_defaults_to_no_prompt() {
+        use super::{VncError, VncErrorKind};
+
+        let old = serde_json::json!({"kind": "Authentication", "message": "failed"});
+        let decoded: VncError = serde_json::from_value(old.clone()).unwrap();
+        assert!(!decoded.password_required);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), old);
+        let missing = VncError {
+            password_required: true,
+            ..VncError::new(VncErrorKind::Authentication, "password required")
+        };
+        assert_eq!(
+            serde_json::from_value::<VncError>(serde_json::to_value(&missing).unwrap()).unwrap(),
+            missing
+        );
+    }
 
     #[test]
     fn panel_metrics_become_a_negotiable_desktop() {

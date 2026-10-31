@@ -524,6 +524,22 @@ fn decide_snapshot_check(
     let local_changed = local_content_changed(state, &local_hash);
     let remote_changed =
         state.last_applied_remote_revision.as_deref() != Some(&pointer.revision_id);
+    // Adopting the remote cannot lose anything when the local snapshot holds
+    // no user content, so a first-connect device takes it instead of being
+    // asked which side to keep.
+    if remote_changed && local_changed && !local.has_user_content() {
+        return Ok(if allow_auto_pull {
+            CloudRemoteCheckDecision::AutoPull
+        } else {
+            CloudRemoteCheckDecision::RemoteAvailable
+        });
+    }
+    // An empty remote has nothing to adopt, so the local side pushes instead
+    // of being offered a conflict whose "keep the cloud" answer would only
+    // discard local content.
+    if remote_changed && local_changed && !remote.has_user_content() {
+        return Ok(CloudRemoteCheckDecision::LocalChanged);
+    }
     Ok(match (remote_changed, local_changed, allow_auto_pull) {
         (true, true, _) => CloudRemoteCheckDecision::Conflict,
         (true, false, true) => CloudRemoteCheckDecision::AutoPull,
@@ -879,13 +895,23 @@ fn push_snapshot_prepared(
     }
 
     if remote_changed && !force {
-        let remote_pointer = latest.expect("remote changed requires remote pointer");
-        if local_changed {
+        // Overwriting an unseen remote revision that holds no user content
+        // loses nothing, so the local side pushes instead of being asked to
+        // resolve a conflict whose "keep the cloud" answer would only discard
+        // local content.
+        if local_changed
+            && remote_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.has_user_content())
+        {
+            let remote_pointer = latest.expect("remote changed requires remote pointer");
             let conflict =
                 conflict_preview(options, remote.provider(), &local_hash, &remote_pointer);
             return Err(CloudSyncError::Conflict(Box::new(conflict)));
         }
-        return Err(CloudSyncError::RemoteNewer);
+        if !local_changed {
+            return Err(CloudSyncError::RemoteNewer);
+        }
     }
 
     snapshot.meta.device_name = options.device_name.clone();
@@ -1109,7 +1135,16 @@ fn pull_snapshot_prepared(
         .as_deref()
         .is_none_or(|revision| revision != latest.revision_id);
 
-    if remote_changed && local_changed && !force {
+    // Adopting the remote cannot lose anything when the local snapshot holds
+    // no user content, so a first-connect (or self-wiped) device pulls it
+    // instead of being asked which side to keep.
+    if remote_changed && local_changed && !force && local_snapshot.has_user_content() {
+        // An empty remote holds nothing to adopt, so pulling cannot be the
+        // answer; report that there is nothing newer instead of offering a
+        // resolution that would only discard local content.
+        if !remote_snapshot.has_user_content() {
+            return Err(CloudSyncError::NoNewerRemoteSnapshot);
+        }
         let conflict = conflict_preview(
             options,
             remote.provider(),
@@ -1418,12 +1453,25 @@ fn check_snapshot_inner(
             let local_changed = local_content_changed(state, &local_hash);
             let remote_changed =
                 state.last_applied_remote_revision.as_deref() != Some(&pointer.revision_id);
-            match (remote_changed, local_changed, allow_auto_pull) {
-                (true, true, _) => CloudRemoteCheckDecision::Conflict,
-                (true, false, true) => CloudRemoteCheckDecision::AutoPull,
-                (true, false, false) => CloudRemoteCheckDecision::RemoteAvailable,
-                (false, true, _) => CloudRemoteCheckDecision::LocalChanged,
-                _ => CloudRemoteCheckDecision::UpToDate,
+            // Same rule as `decide_snapshot_check`: an empty local snapshot
+            // adopts the remote instead of raising a conflict, and an empty
+            // remote lets the local side push instead of raising one.
+            if remote_changed && local_changed && !local.has_user_content() {
+                if allow_auto_pull {
+                    CloudRemoteCheckDecision::AutoPull
+                } else {
+                    CloudRemoteCheckDecision::RemoteAvailable
+                }
+            } else if remote_changed && local_changed && !receipt.remote_has_user_content {
+                CloudRemoteCheckDecision::LocalChanged
+            } else {
+                match (remote_changed, local_changed, allow_auto_pull) {
+                    (true, true, _) => CloudRemoteCheckDecision::Conflict,
+                    (true, false, true) => CloudRemoteCheckDecision::AutoPull,
+                    (true, false, false) => CloudRemoteCheckDecision::RemoteAvailable,
+                    (false, true, _) => CloudRemoteCheckDecision::LocalChanged,
+                    _ => CloudRemoteCheckDecision::UpToDate,
+                }
             }
         };
         if decision == CloudRemoteCheckDecision::Conflict {

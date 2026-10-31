@@ -2,12 +2,21 @@ use gpui::{AnyElement, Context, FontWeight, KeyDownEvent, SharedString, div, pre
 use nyaterm_transport::SshCredentialPromptReason;
 use nyaterm_transport::ssh_authentication::SshAuthenticationMethod;
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaCheckbox, NyaScrollable, NyaSelectOption, NyaTabItem, NyaTabs,
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaButtonVariant, NyaCheckbox, NyaScrollArea,
+    NyaSelectOption, NyaTabItem, NyaTabs,
 };
 use rust_i18n::t;
 
 use super::state::{AuthMethod, SaveDestination};
+use crate::features::root::SSH_AUTH_OVERLAY_PADDING_PX;
 use crate::features::{NyaTermApp, session::CredentialPromptState, text_inputs::TextInputSetup};
+
+const CARD_PADDING_PX: f32 = 24.;
+const CARD_BORDER_PX: f32 = 1.;
+const FOOTER_GAP_PX: f32 = 16.;
+const ACTION_HEIGHT_PX: f32 = 32.;
+const MAX_BODY_HEIGHT_PX: f32 = 550.;
+const FOCUS_RING_PADDING_PX: f32 = 3.;
 
 impl NyaTermApp {
     pub(in crate::features) fn runtime_authentication_view(
@@ -20,6 +29,14 @@ impl NyaTermApp {
             .as_ref()
             .expect("structured authentication form");
         let palette = self.theme_palette();
+        // Use a pixel cap on the actual scroll viewport. Percentage heights in
+        // this content-sized card create a cycle and collapse the form to zero.
+        let reserved_height = 2. * SSH_AUTH_OVERLAY_PADDING_PX
+            + 2. * (CARD_PADDING_PX + CARD_BORDER_PX)
+            + FOOTER_GAP_PX
+            + ACTION_HEIGHT_PX;
+        let body_height =
+            (self.shell.viewport_size().1 - reserved_height).clamp(0., MAX_BODY_HEIGHT_PX);
         let reason = match state.prompt.reason {
             SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
             SshCredentialPromptReason::PublickeyRequired => t!("sshAuth.publickeyRequired"),
@@ -29,12 +46,18 @@ impl NyaTermApp {
             _ => t!("sshAuth.missingPassword"),
         };
         let mut content = div()
+            .debug_selector(|| "ssh-auth-content".to_string())
+            .w_full()
+            .min_w_0()
             .min_h_0()
+            .p(px(FOCUS_RING_PADDING_PX))
+            .flex_none()
             .flex()
             .flex_col()
             .gap_3()
             .child(
                 div()
+                    .debug_selector(|| "ssh-auth-title".to_string())
                     .text_sm()
                     .font_weight(FontWeight(700.))
                     .child(t!("sshAuth.title")),
@@ -121,7 +144,13 @@ impl NyaTermApp {
                 } else {
                     t!("dialog.password")
                 }))
-                .child(self.text_input_box(id, &state.value, setup, cx));
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+                        .debug_selector(|| "ssh-auth-secret-field".to_string())
+                        .child(self.text_input_box(id, &state.value, setup, cx)),
+                );
         } else {
             let key = form.method == AuthMethod::Key;
             let options: Vec<NyaSelectOption> = if key {
@@ -179,6 +208,7 @@ impl NyaTermApp {
         }
         if form.can_remember() {
             let mut remember = div()
+                .debug_selector(|| "ssh-auth-remember-section".to_string())
                 .flex()
                 .flex_col()
                 .gap_2()
@@ -254,6 +284,7 @@ impl NyaTermApp {
         if let Some(error) = &form.error {
             content = content.child(
                 div()
+                    .debug_selector(|| "ssh-auth-error".to_string())
                     .text_xs()
                     .text_color(rgb(palette.text))
                     .child(error.clone()),
@@ -261,11 +292,15 @@ impl NyaTermApp {
         }
         let buttons =
             div()
+                .debug_selector(|| "ssh-auth-footer".to_string())
+                .h(px(ACTION_HEIGHT_PX))
+                .flex_none()
                 .flex()
                 .justify_end()
                 .gap_2()
                 .child(
                     NyaButton::new("ssh-auth-cancel", t!("common.cancel"))
+                        .height(px(ACTION_HEIGHT_PX))
                         .variant(NyaButtonVariant::Ghost)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.cancel_credential_prompt(window, cx)
@@ -273,6 +308,7 @@ impl NyaTermApp {
                 )
                 .child(
                     NyaButton::new("ssh-auth-submit", t!("sshAuth.submit"))
+                        .height(px(ACTION_HEIGHT_PX))
                         .variant(NyaButtonVariant::Primary)
                         .disabled(!form.can_submit(&state.value))
                         .loading(form.busy)
@@ -281,30 +317,37 @@ impl NyaTermApp {
                         })),
                 );
         div()
+            .debug_selector(|| "ssh-auth-card".to_string())
             .id(SharedString::from(format!(
                 "credential-dialog-{}",
                 state.id
             )))
             .w_full()
-            .max_h_full()
             .min_h_0()
             .rounded_md()
-            .border_1()
+            .border(px(CARD_BORDER_PX))
             .border_color(rgb(palette.border))
             .bg(self.shell_surface_color(palette.bg))
             .shadow_lg()
-            .p_6()
+            .p(px(CARD_PADDING_PX))
             .flex()
             .flex_col()
-            .gap_4()
+            .gap(px(FOOTER_GAP_PX))
             .on_click(|_, _, cx| cx.stop_propagation())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.handle_credential_key_down(event, window, cx) {
                     cx.stop_propagation();
                 }
             }))
-            .child(content.max_h(px(550.)).overflow_y_scrollbar())
+            .child(
+                NyaScrollArea::new(format!("ssh-auth-body-{}", state.id))
+                    .max_h(px(body_height))
+                    .child(content),
+            )
             .child(buttons)
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

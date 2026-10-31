@@ -301,3 +301,41 @@ fn settings_entity_preserves_start_workspace_and_asset_sort_keys() {
     assert_eq!(parsed["ui"]["asset_sort_direction"], "desc");
     validate_raw_snapshot(&decoded).expect("decoded snapshot remains valid");
 }
+
+#[test]
+fn user_content_detection_ignores_defaults_and_settings() {
+    let empty = RawPortableSnapshot::sync("device", "test");
+    assert!(!empty.has_user_content());
+
+    let mut with_sessions = empty.clone();
+    with_sessions.entities.insert(
+        "sessions".to_string(),
+        r#"{"groups":[],"connections":[{"id":"c1"}]}"#.to_string(),
+    );
+    assert!(with_sessions.has_user_content());
+
+    // Settings always carry defaults, so they never count as user content.
+    let mut tweaked_settings = empty.clone();
+    tweaked_settings.entities.insert(
+        "settings".to_string(),
+        r#"{"appearance":{"theme":"light"}}"#.to_string(),
+    );
+    assert!(!tweaked_settings.has_user_content());
+
+    // A master key token or usage history alone does not make a device
+    // "configured": both accrue on a first-connect device without any real
+    // configuration, so the pull should still adopt the cloud.
+    let mut with_master_key = empty.clone();
+    with_master_key.entities.insert(
+        "master_key_token".to_string(),
+        r#"{"token":"t"}"#.to_string(),
+    );
+    assert!(!with_master_key.has_user_content());
+
+    let mut with_history = empty.clone();
+    with_history.entities.insert(
+        "history".to_string(),
+        r#"[{"host":"example.com"}]"#.to_string(),
+    );
+    assert!(!with_history.has_user_content());
+}

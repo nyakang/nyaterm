@@ -6,6 +6,9 @@ use nyaterm_remote_desktop::{
     CursorPosition, RdpError, RdpErrorKind, RdpServerCapabilities, RemoteDesktopViewState,
     VncServerCapabilities, VncSessionState,
 };
+use nyaterm_remote_desktop::{
+    VncError, VncErrorKind, VncRuntimeEvent, VncSecurityConfig, VncSecurityMode, VncSessionConfig,
+};
 
 use super::{
     MAINTENANCE_INTERVAL, POINTER_MOVE_INTERVAL, RESIZE_DEBOUNCE, cancel_rdp_reconnect_schedule,
@@ -15,7 +18,8 @@ use super::{
     remote_cursor_repaint_interval, remote_desktop_authentication_disabled,
     remote_desktop_drain_delay, remote_desktop_password_id, remote_desktop_periodic_delay,
     remote_modifier_transitions, remote_state_clears_input, secure_attention_available,
-    vnc_capabilities_for_state, vnc_input_allowed, vnc_keysym_for_key,
+    vnc_auth_failure_accepts_password_prompt, vnc_capabilities_for_state, vnc_input_allowed,
+    vnc_keysym_for_key, vnc_retry_requires_password,
 };
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
@@ -304,10 +308,9 @@ fn an_unmeasured_panel_holds_the_connect_and_the_first_measurement_sizes_it() {
 }
 
 #[test]
-fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
+fn vnc_auth_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
     use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_remote_desktop::VncSessionConfig;
     use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
 
     use crate::features::test_support::app_with_visible_local_session;
@@ -341,7 +344,9 @@ fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
                     host: "127.0.0.1".into(),
                     port: 5900,
                     password: None,
-                    security: Default::default(),
+                    security: VncSecurityConfig {
+                        mode: VncSecurityMode::VncAuth,
+                    },
                     display: Default::default(),
                     clipboard: Default::default(),
                     reconnect: Default::default(),
@@ -367,6 +372,263 @@ fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
         assert_eq!(
             app.read(cx).remote_desktop.sessions["vnc-retry"].state,
             RemoteDesktopViewState::Disconnected,
+        );
+    });
+}
+
+#[test]
+fn vnc_password_prompts_follow_the_security_policy() {
+    let config = |mode, password: Option<&str>| VncSessionConfig {
+        username: String::new(),
+        relay: None,
+        name: "VNC".into(),
+        host: "127.0.0.1".into(),
+        port: 5900,
+        password: password.map(|password| password.to_string().into()),
+        security: VncSecurityConfig { mode },
+        display: Default::default(),
+        clipboard: Default::default(),
+        reconnect: Default::default(),
+        shared: true,
+        view_only: false,
+    };
+
+    // Only an explicit `vnc-auth` connection needs a password before it starts.
+    assert!(vnc_retry_requires_password(&config(
+        VncSecurityMode::VncAuth,
+        None
+    )));
+    assert!(!vnc_retry_requires_password(&config(
+        VncSecurityMode::VncAuth,
+        Some("secret")
+    )));
+    assert!(!vnc_retry_requires_password(&config(
+        VncSecurityMode::Auto,
+        None
+    )));
+    assert!(!vnc_retry_requires_password(&config(
+        VncSecurityMode::None,
+        None
+    )));
+
+    // A server-reported authentication failure is only worth a prompt where a
+    // password could change the outcome.
+    assert!(vnc_auth_failure_accepts_password_prompt(&config(
+        VncSecurityMode::Auto,
+        None
+    )));
+    assert!(vnc_auth_failure_accepts_password_prompt(&config(
+        VncSecurityMode::VncAuth,
+        None
+    )));
+    assert!(!vnc_auth_failure_accepts_password_prompt(&config(
+        VncSecurityMode::Auto,
+        Some("secret")
+    )));
+    assert!(!vnc_auth_failure_accepts_password_prompt(&config(
+        VncSecurityMode::None,
+        None
+    )));
+}
+
+/// A passwordless `auto` connection reaches the server without a prompt. When that
+/// server turns out to demand VNC authentication, the failure must ask for a
+/// password instead of parking a dead session (NyaTerm issue #1046).
+#[test]
+fn vnc_authentication_failure_prompts_for_a_missing_password() {
+    use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+
+    struct EmptyView;
+    impl Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    let root = TestTempDir::new("nyaterm-vnc-auth-prompt");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "vnc-auth");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| EmptyView);
+        nya_root(view, window, cx)
+    });
+    cx.update(|window, cx| {
+        let handle = window.window_handle().downcast().unwrap();
+        app.update(cx, |app, cx| {
+            app.shell.remember_main_window(handle);
+            app.session.metadata_mut("vnc-auth").unwrap().launch_config =
+                SessionLaunchConfig::Vnc(VncSessionConfig {
+                    username: String::new(),
+                    relay: None,
+                    name: "VNC auth".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5900,
+                    password: None,
+                    security: VncSecurityConfig {
+                        mode: VncSecurityMode::Auto,
+                    },
+                    display: Default::default(),
+                    clipboard: Default::default(),
+                    reconnect: Default::default(),
+                    shared: true,
+                    view_only: false,
+                });
+            app.remote_desktop.insert_connecting("vnc-auth".into());
+            app.apply_vnc_control_event(
+                "vnc-auth",
+                VncRuntimeEvent::Error {
+                    session_id: "vnc-auth".into(),
+                    error: VncError {
+                        password_required: true,
+                        ..VncError::new(VncErrorKind::Authentication, "VNC password required")
+                    },
+                    fatal: true,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.has_active_nya_dialog(cx));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["vnc-auth"].state,
+            RemoteDesktopViewState::Connecting,
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["vnc-auth"].state,
+            RemoteDesktopViewState::Disconnected,
+        );
+    });
+}
+
+/// A rejected stored password must surface as an error; prompting again for the
+/// same credential would loop.
+#[test]
+fn vnc_authentication_failure_with_a_stored_password_reports_the_error() {
+    assert_vnc_authentication_failure_reports_the_error(Some("wrong"), false);
+}
+
+#[test]
+fn vnc_security_failure_without_a_password_does_not_prompt() {
+    assert_vnc_authentication_failure_reports_the_error(None, false);
+}
+
+#[test]
+fn vnc_rejected_source_connection_password_does_not_prompt() {
+    assert_vnc_authentication_failure_reports_the_error(None, true);
+}
+
+fn assert_vnc_authentication_failure_reports_the_error(password: Option<&str>, source: bool) {
+    use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+
+    struct EmptyView;
+    impl Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    let root = TestTempDir::new("nyaterm-vnc-auth-failure");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "vnc-rejected");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| EmptyView);
+        nya_root(view, window, cx)
+    });
+    cx.update(|window, cx| {
+        let handle = window.window_handle().downcast().unwrap();
+        app.update(cx, |app, cx| {
+            app.shell.remember_main_window(handle);
+            app.session
+                .metadata_mut("vnc-rejected")
+                .unwrap()
+                .launch_config = SessionLaunchConfig::Vnc(VncSessionConfig {
+                username: String::new(),
+                relay: None,
+                name: "VNC rejected".into(),
+                host: "127.0.0.1".into(),
+                port: 5900,
+                password: password.map(|value| value.to_string().into()),
+                security: VncSecurityConfig {
+                    mode: VncSecurityMode::Auto,
+                },
+                display: Default::default(),
+                clipboard: Default::default(),
+                reconnect: Default::default(),
+                shared: true,
+                view_only: false,
+            });
+            if source {
+                let connection: nyaterm_core::SavedConnection =
+                    serde_json::from_value(serde_json::json!({
+                        "id": "vnc-source", "name": "Source", "type": "vnc", "host": "127.0.0.1",
+                        "auth": { "mode": "password", "password": "wrong", "has_password": false }
+                    }))
+                    .unwrap();
+                assert!(inline_remote_desktop_password(connection.auth.as_ref()).is_some());
+                app.connection_state
+                    .replace_loaded(vec![connection], vec![]);
+                app.session
+                    .metadata_mut("vnc-rejected")
+                    .unwrap()
+                    .source_connection_id = Some("vnc-source".into());
+                let (effective, password_id) =
+                    app.resolve_vnc_restart_config("vnc-rejected").unwrap();
+                assert_eq!(
+                    effective.password.as_ref().unwrap().expose_secret(),
+                    "wrong"
+                );
+                assert!(password_id.is_none());
+                let SessionLaunchConfig::Vnc(original) =
+                    &app.session.metadata("vnc-rejected").unwrap().launch_config
+                else {
+                    panic!("VNC launch");
+                };
+                assert!(
+                    original.password.is_none(),
+                    "inherited secrets stay out of metadata"
+                );
+            }
+            app.remote_desktop.insert_connecting("vnc-rejected".into());
+            app.apply_vnc_control_event(
+                "vnc-rejected",
+                VncRuntimeEvent::Error {
+                    session_id: "vnc-rejected".into(),
+                    error: VncError::new(VncErrorKind::Authentication, "VNC authentication failed"),
+                    fatal: true,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["vnc-rejected"].state,
+            RemoteDesktopViewState::Failed,
         );
     });
 }

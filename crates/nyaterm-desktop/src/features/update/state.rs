@@ -53,6 +53,7 @@ pub(crate) struct UpdateStore {
     tx: UnboundedSender<UpdateEvent>,
     rx: Option<UnboundedReceiver<UpdateEvent>>,
     blocking_jobs: BlockingJobScheduler,
+    shutdown_started: bool,
 }
 
 impl UpdateStore {
@@ -73,6 +74,7 @@ impl UpdateStore {
             tx,
             rx: Some(rx),
             blocking_jobs: BlockingJobScheduler::new(),
+            shutdown_started: false,
         }
     }
 
@@ -103,6 +105,15 @@ impl UpdateStore {
         was_visible
     }
 
+    pub(crate) fn begin_shutdown(&mut self) -> Option<impl FnOnce() + Send + 'static + use<>> {
+        if self.shutdown_started {
+            return None;
+        }
+        self.shutdown_started = true;
+        self.download_cancel.cancel();
+        Some(self.blocking_jobs.begin_shutdown())
+    }
+
     pub(crate) fn blocking_jobs(&self) -> BlockingJobScheduler {
         self.blocking_jobs.clone()
     }
@@ -119,6 +130,9 @@ impl UpdateStore {
         &mut self,
         _kind: UpdateCheckKind,
     ) -> Option<(UnboundedSender<UpdateEvent>, u64)> {
+        if self.shutdown_started {
+            return None;
+        }
         if matches!(
             self.phase,
             UpdatePhase::Checking
@@ -145,6 +159,9 @@ impl UpdateStore {
         &mut self,
         cancel: ConnectionAttempt,
     ) -> Option<(NativeUpdateInfo, u64, UnboundedSender<UpdateEvent>)> {
+        if self.shutdown_started {
+            return None;
+        }
         if matches!(
             self.phase,
             UpdatePhase::Downloading { .. } | UpdatePhase::Applying
@@ -304,6 +321,16 @@ mod tests {
         let mut state = UpdateStore::new();
         assert!(state.mark_startup_check_started());
         assert!(!state.mark_startup_check_started());
+    }
+
+    #[test]
+    fn process_scheduler_shutdown_is_admitted_once_and_rejects_new_updates() {
+        let mut state = UpdateStore::new();
+        let cleanup = state.begin_shutdown().unwrap();
+        assert!(state.begin_shutdown().is_none());
+        assert!(state.begin_check(UpdateCheckKind::Manual).is_none());
+        assert!(state.begin_download(Default::default()).is_none());
+        cleanup();
     }
 
     #[test]

@@ -7,8 +7,8 @@ use nyaterm_mcp_protocol::{
     MCP_TOOL_REGISTRY, tool, validate_tool_arguments, validate_tool_result,
 };
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
@@ -74,7 +74,12 @@ impl ServerHandler for NyaTermMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone()))
+        // MCP 2026-07-28 requires `ttlMs` and `cacheScope` on list results, and strict
+        // clients reject `tools/list` without them. The tool set is per bridge session,
+        // so the result is private and not cached.
+        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -346,6 +351,8 @@ mod tests {
         .await;
         let listed = receive_response(&mut client_lines, 2).await;
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 16);
+        assert_eq!(listed["result"]["ttlMs"], 0);
+        assert_eq!(listed["result"]["cacheScope"], "private");
 
         send_client_message(
             &mut client_writer,

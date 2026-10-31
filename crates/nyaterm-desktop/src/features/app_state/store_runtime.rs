@@ -262,10 +262,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(controller) = self.desktop_controller.clone() {
+            let registration = self
+                .cloud_sync
+                .operations
+                .followup("cloud-sync-shared-refresh");
             cx.defer(move |cx| {
                 let _ = controller.update(cx, |controller, cx| {
                     controller.replace_shared_snapshot(snapshot, domain, cx)
                 });
+                drop(registration);
             });
         }
     }

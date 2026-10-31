@@ -36,10 +36,18 @@ impl NyaTermApp {
         let subscription = cx.intercept_keystrokes(move |event, window, cx| {
             let handled = app
                 .update(cx, |this, cx| {
-                    if this.settings.keybinding_recording_id().is_some()
-                        || this.security.screen_locked()
-                    {
+                    if this.security.screen_locked() {
                         return false;
+                    }
+                    // Interceptors run before GPUI's keymap, so this is the only place
+                    // that can keep a key being recorded (Ctrl+W, Ctrl+Shift+W, ...)
+                    // from also firing the action already bound to it.
+                    if this.settings.keybinding_recording_id().is_some() {
+                        if !this.settings.keybinding_focus().is_focused(window) {
+                            return false;
+                        }
+                        this.record_keybinding_keystroke(&event.keystroke, cx);
+                        return true;
                     }
                     let window_id = window.window_handle().window_id();
                     let editor_window = this

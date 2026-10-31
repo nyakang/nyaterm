@@ -362,44 +362,48 @@ impl NyaTermApp {
         self.begin_rdp_runtime(session_id, config, cx);
     }
 
+    pub(super) fn resolve_vnc_restart_config(
+        &self,
+        session_id: &str,
+    ) -> Option<(VncSessionConfig, Option<String>)> {
+        let metadata = self.session.metadata(session_id)?;
+        let crate::models::SessionLaunchConfig::Vnc(config) = &metadata.launch_config else {
+            return None;
+        };
+        let mut config = config.clone();
+        let mut password_id = None;
+        if config.password.is_none()
+            && let Some(connection_id) = metadata.source_connection_id.as_deref()
+            && let Some(connection) = self.connection_state.connection_by_id(connection_id)
+        {
+            config.password = inline_remote_desktop_password(connection.auth.as_ref());
+            if config.password.is_none() {
+                password_id = remote_desktop_password_id(connection.auth.as_ref());
+            }
+        }
+        Some((config, password_id))
+    }
+
     pub(super) fn restart_vnc_runtime(
         &mut self,
         session_id: &str,
         reset_attempts: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(metadata) = self.session.metadata(session_id).cloned() else {
+        let Some((config, password_id)) = self.resolve_vnc_restart_config(session_id) else {
             return;
         };
-        let mut config = match metadata.launch_config {
-            crate::models::SessionLaunchConfig::Vnc(config) => config,
-            _ => return,
-        };
-        if config.password.is_none()
-            && let Some(connection_id) = metadata.source_connection_id.as_deref()
-            && let Some(connection) = self
-                .connection_state
-                .connections()
-                .iter()
-                .find(|connection| connection.id == connection_id)
-        {
-            config.password = inline_remote_desktop_password(connection.auth.as_ref());
-            if config.password.is_none()
-                && let Some(password_id) = remote_desktop_password_id(connection.auth.as_ref())
-            {
-                self.request_remote_desktop_restart_password(
-                    session_id.to_string(),
-                    password_id,
-                    reset_attempts,
-                    true,
-                    cx,
-                );
-                return;
-            }
+        if let Some(password_id) = password_id {
+            self.request_remote_desktop_restart_password(
+                session_id.to_string(),
+                password_id,
+                reset_attempts,
+                true,
+                cx,
+            );
+            return;
         }
-        if config.password.is_none()
-            && config.security.mode != nyaterm_remote_desktop::VncSecurityMode::None
-        {
+        if vnc_retry_requires_password(&config) {
             self.prompt_remote_desktop_password(session_id, reset_attempts, cx);
             return;
         }
@@ -679,6 +683,30 @@ pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
             | RdpErrorKind::Tls
             | RdpErrorKind::Transport
     )
+}
+
+/// Whether a retry has to ask for a VNC password before it can start.
+///
+/// `auto` without a password is a working configuration, not a missing one: the
+/// helper lets the server select the `None` security type, which is exactly how a
+/// passwordless first connection succeeds. Only an explicit `vnc-auth` connection
+/// needs a password up front; an `auto` connection asks for one when the server's
+/// security selection actually demands credentials, which the helper reports as a
+/// fatal authentication error with `password_required` set (see
+/// `events::apply_vnc_control_event`).
+pub(super) fn vnc_retry_requires_password(config: &VncSessionConfig) -> bool {
+    config.password.is_none()
+        && config.security.mode == nyaterm_remote_desktop::VncSecurityMode::VncAuth
+}
+
+/// Whether prompting for a password can resolve a VNC authentication failure.
+///
+/// `none` is excluded: a password could never satisfy that policy. A session that
+/// already holds a password is also excluded, so a rejected password reports the
+/// failure instead of asking for the same credential again.
+pub(super) fn vnc_auth_failure_accepts_password_prompt(config: &VncSessionConfig) -> bool {
+    config.password.is_none()
+        && config.security.mode != nyaterm_remote_desktop::VncSecurityMode::None
 }
 
 pub(super) fn rdp_reconnect_delay(attempt: u32, jitter_ms: u64) -> Duration {

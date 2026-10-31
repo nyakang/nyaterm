@@ -77,6 +77,58 @@ fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
 }
 
 #[test]
+fn host_key_prompt_overlay_keeps_its_content_height() {
+    use crate::features::NyaTermApp;
+    use gpui::{
+        Context, Entity, IntoElement, Render, VisualTestContext, Window, div, prelude::*, px,
+    };
+
+    struct HostKeyHost(Entity<NyaTermApp>);
+
+    impl Render for HostKeyHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let overlay = self.0.update(cx, |app, cx| {
+                app.ssh_auth_prompt_overlay(cx).into_any_element()
+            });
+            div().relative().size_full().child(overlay)
+        }
+    }
+
+    let root = TestConfigDir::new("nyaterm-host-key-layout");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "terminal");
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        let (response_tx, _) = mpsc::channel();
+        app.session.prompts.active_host_key_prompt = Some(HostKeyPromptRequest {
+            id: "host-key-layout".into(),
+            host_key: SshHostKey {
+                host: "example.test".into(),
+                port: 22,
+                host_identifier: "example.test".into(),
+                key_type: "ssh-ed25519".into(),
+                key_base64: "fixture-key".into(),
+                fingerprint: "SHA256:fixture".into(),
+            },
+            issue: HostKeyPromptIssue::Unknown,
+            response_tx,
+        });
+    });
+    let (_, cx) = cx.add_window_view(|_, _| HostKeyHost(app));
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let card = cx.debug_bounds("ssh-host-key-card").unwrap();
+    let viewport = cx.update(|window, _| window.viewport_size());
+    assert!(card.size.height > px(100.));
+    assert!(card.top() >= px(12.));
+    assert!(card.bottom() <= viewport.height - px(12.));
+}
+
+#[test]
 fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_completes() {
     for prefix in [b":".as_slice(), b"*", b"::TRZ"] {
         let root = TestConfigDir::new("nyaterm-sideband-prefix-routing");

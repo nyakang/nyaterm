@@ -327,16 +327,22 @@ impl DesktopController {
         self.windows.len()
     }
 
+    pub(in crate::app_shell) fn is_process_quitting(&self) -> bool {
+        self.process_quitting
+    }
+
     pub fn begin_process_quit(&mut self) -> bool {
         if self.process_quitting || !self.closing_workspaces.is_empty() {
             return false;
         }
         self.process_quitting = true;
+        self.auto_sync.operations.pause_and_cancel();
         true
     }
 
     pub fn cancel_process_quit(&mut self) {
         self.process_quitting = false;
+        self.auto_sync.operations.resume();
     }
 
     pub fn is_most_recent_workspace(&self, workspace_id: WorkspaceId) -> bool {

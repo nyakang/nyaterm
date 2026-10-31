@@ -30,6 +30,9 @@ impl NyaTermApp {
         phase: CloudSyncCancellation,
         cx: &mut Context<Self>,
     ) {
+        if !self.cloud_sync.operations.accepting() {
+            return;
+        }
         let status = match phase {
             CloudSyncCancellation::Stopping => t!("settings.syncTimeoutStopping").to_string(),
             CloudSyncCancellation::FinishingCommit => {
@@ -56,6 +59,14 @@ impl NyaTermApp {
         self.shell
             .set_status(t!("settings.syncConnectionTestStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self.blocking_jobs.submit_task("cloud-sync-test", move |_| {
             let _operation = lock_cloud_sync_operation(&operation_control)?;
@@ -75,6 +86,11 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(checked) => {
                         let status = t!("settings.syncTestSuccess").to_string();
@@ -91,6 +107,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -127,6 +144,14 @@ impl NyaTermApp {
         });
         self.shell.set_status(t!("settings.syncPushStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self
             .blocking_jobs
@@ -171,11 +196,17 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
+                            this.cloud_sync.operations.clone(),
                             None,
                             cleanup_options,
                             result.pointer.clone(),
@@ -230,6 +261,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -272,6 +304,14 @@ impl NyaTermApp {
         });
         self.shell.set_status(t!("settings.syncPullStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self
             .blocking_jobs
@@ -317,11 +357,17 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
+                            this.cloud_sync.operations.clone(),
                             None,
                             cleanup_options,
                             result.pointer.clone(),
@@ -377,6 +423,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -417,6 +464,14 @@ impl NyaTermApp {
         self.shell
             .set_status(t!("settings.syncProviderPushStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self
             .blocking_jobs
@@ -460,11 +515,17 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
+                            this.cloud_sync.operations.clone(),
                             Some(cleanup_settings),
                             cleanup_options,
                             result.pointer.clone(),
@@ -519,6 +580,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -565,6 +627,14 @@ impl NyaTermApp {
         self.shell
             .set_status(t!("settings.syncProviderPullStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self
             .blocking_jobs
@@ -608,11 +678,17 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
+                            this.cloud_sync.operations.clone(),
                             Some(cleanup_settings),
                             cleanup_options,
                             result.pointer.clone(),
@@ -668,6 +744,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -703,6 +780,14 @@ impl NyaTermApp {
         self.cloud_sync.set_status(t!("settings.syncRecovering"));
         self.shell.set_status(t!("settings.syncRecoveryStarted"));
         let control = CloudSyncOperationControl::default();
+        let Some(registration) =
+            self.cloud_sync
+                .operations
+                .register("cloud-sync-manual", vec![control.clone()], None)
+        else {
+            self.cloud_sync.cancel_job_for_shutdown();
+            return;
+        };
         let operation_control = control.clone();
         let task = self
             .blocking_jobs
@@ -734,11 +819,17 @@ impl NyaTermApp {
             )
             .await;
             let _ = this.update(cx, |this, cx| {
+                if registration.shutdown_cancelled(&result) {
+                    this.cloud_sync.cancel_job_for_shutdown();
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
+                            this.cloud_sync.operations.clone(),
                             provider_action.then_some(cleanup_settings),
                             cleanup_options,
                             result.pointer.clone(),
@@ -786,6 +877,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -833,6 +925,9 @@ impl NyaTermApp {
                     .read(cx)
                     .cloud_sync_job_running_excluding(self.workspace_id, cx)
             });
+        if !self.cloud_sync.operations.accepting() {
+            return false;
+        }
         if other_job_running || !self.cloud_sync.begin_job() {
             self.shell
                 .set_status(t!("settings.syncOperationInProgress"));
@@ -847,6 +942,7 @@ impl NyaTermApp {
         entry: Option<CloudSyncHistoryEntry>,
         cx: &mut Context<Self>,
     ) {
+        let registration = self.cloud_sync.operations.followup("cloud-sync-history");
         let log_dir = self.runtime.log_dir().to_path_buf();
         let retention_days = self.settings.summary().diagnostics_retention_days;
         let task = self
@@ -867,6 +963,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            drop(registration);
         })
         .detach();
     }
@@ -884,6 +981,7 @@ impl NyaTermApp {
 fn schedule_cloud_sync_cleanup(
     local_store: nyaterm_store::StoreBlockingClient,
     scheduler: BlockingJobScheduler,
+    operations: crate::features::sync::operation::CloudSyncOperationRegistry,
     settings: Option<CloudSyncSettings>,
     options: LocalCloudSyncOptions,
     latest: Option<RemoteSyncPointer>,
@@ -895,6 +993,10 @@ fn schedule_cloud_sync_cleanup(
         .unwrap_or_else(|| "local_directory".to_string());
     let latest_revision = latest.as_ref().map(|pointer| pointer.revision_id.clone());
     let control = CloudSyncOperationControl::default();
+    let Some(registration) = operations.register("cloud-sync-cleanup", vec![control.clone()], None)
+    else {
+        return;
+    };
     let operation_control = control.clone();
     let task = scheduler.submit_task("cloud-sync-cleanup", move |_| {
         let _operation = lock_cloud_sync_operation(&operation_control)?;
@@ -946,21 +1048,21 @@ fn schedule_cloud_sync_cleanup(
         result
     });
     cx.spawn(async move |_, cx| {
-        if await_cloud_sync_job(
+        let result = await_cloud_sync_job(
             task,
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(300)),
             control,
             |_| {},
         )
-        .await
-        .is_err()
-        {
+        .await;
+        if result.is_err() && !registration.shutdown_cancelled(&result) {
             tracing::warn!(
                 provider = %provider,
                 "cloud sync snapshot cleanup failed after a successful sync"
             );
         }
+        drop(registration);
     })
     .detach();
 }

@@ -5330,6 +5330,15 @@ dependencies = [
 
 [[package]]
 name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "keccak"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
@@ -6450,9 +6459,11 @@ dependencies = [
 name = "nyaterm-core"
 version = "2.0.0"
 dependencies = [
+ "aes 0.8.4",
  "aes-gcm",
  "argon2 0.5.3",
  "base64 0.22.1",
+ "cbc 0.1.2",
  "crypto_secretbox",
  "csscolorparser",
  "dirs",
@@ -6465,6 +6476,7 @@ dependencies = [
  "md5",
  "nyaterm-mcp-protocol",
  "nyaterm-plugin-api",
+ "pbkdf2 0.12.2",
  "percent-encoding",
  "quick-xml 0.40.1",
  "rand 0.10.3",
@@ -6475,6 +6487,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "sha3 0.10.9",
  "ssh-key",
  "thiserror 2.0.20",
  "time",
@@ -8907,7 +8920,7 @@ dependencies = [
  "hex-literal",
  "hmac 0.13.0",
  "inout 0.2.2",
- "keccak",
+ "keccak 0.2.2",
  "log",
  "md5",
  "ml-kem",
@@ -9687,12 +9700,22 @@ dependencies = [
 
 [[package]]
 name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest 0.10.7",
+ "keccak 0.1.6",
+]
+
+[[package]]
+name = "sha3"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.3",
- "keccak",
+ "keccak 0.2.2",
 ]
 
 [[package]]
@@ -9702,7 +9725,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
 dependencies = [
  "digest 0.11.3",
- "keccak",
+ "keccak 0.2.2",
  "sponge-cursor",
 ]
 
@@ -11697,7 +11720,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.6.0"
-source = "git+https://github.com/nyakang/vnc-rs?rev=ff1f60518247362dd763bfc84e60f8478d9cc18e#ff1f60518247362dd763bfc84e60f8478d9cc18e"
+source = "git+https://github.com/nyakang/vnc-rs?rev=336ed94c9cce7cba93fa8cba33b5a5d01ef2c227#336ed94c9cce7cba93fa8cba33b5a5d01ef2c227"
 dependencies = [
  "aes 0.8.4",
  "async_io_stream",

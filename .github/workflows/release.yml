@@ -253,7 +253,7 @@ jobs:
           - { label: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
           # Keep the x64 glibc floor at 2.35 while ubuntu-22.04 is supported.
           - { label: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { label: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { label: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
           - { label: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
           - { label: windows-arm64, os: windows-2025, target: aarch64-pc-windows-msvc }
     steps:

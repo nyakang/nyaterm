@@ -48,6 +48,10 @@ repository = "https://github.com/nyakang/nyaterm"
 automerge = "=0.12.0"
 httpdate = "1.0"
 aes-gcm = "0.11"
+aes = { version = "0.8", features = ["zeroize"] }
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha3 = "0.10"
 argon2 = { version = "0.5.3", features = ["zeroize"] }
 alacritty_terminal = "0.26.1-dev"
 anyhow = "1"
@@ -134,7 +138,7 @@ url = "=2.5.8"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "ff1f60518247362dd763bfc84e60f8478d9cc18e" }
+vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "336ed94c9cce7cba93fa8cba33b5a5d01ef2c227" }
 vte = "0.14"
 zeroize = "1"
 zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "87a80216179f29d90e0b8c06ee5b4a6a0132c763" }

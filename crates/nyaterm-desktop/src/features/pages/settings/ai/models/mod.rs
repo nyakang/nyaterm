@@ -9,8 +9,9 @@ use gpui::{
 };
 use nyaterm_core::MAX_AI_CUSTOM_HEADERS;
 use nyaterm_core::ai::provider_settings::{
-    CustomHeaderError, DEFAULT_MODEL_REASONING_EFFORTS, MODEL_REASONING_EFFORTS, protocol_value,
-    provider_label, provider_name_taken, provider_requires_api_key,
+    CustomHeaderError, DEFAULT_MODEL_REASONING_EFFORTS, MODEL_REASONING_EFFORTS,
+    prioritized_provider_models, protocol_value, provider_label, provider_name_taken,
+    provider_requires_api_key,
 };
 use nyaterm_core::ai::{AiModelSource, AiProviderKind};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaSelectOption};
@@ -547,10 +548,21 @@ impl SettingsPanel {
                         })),
                 ),
         );
-        for model_id in &view.model_order {
-            let Some(model) = config.models.iter().find(|model| &model.id == model_id) else {
-                continue;
-            };
+        let models = prioritized_provider_models(&config.models, &view.model_order, &draft);
+        let draft_name = draft.trim();
+        if let Some(existing) = models
+            .iter()
+            .find(|model| !draft_name.is_empty() && model.name == draft_name)
+        {
+            rows = rows.child(
+                div()
+                    .pb_3()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("ai.manualModelExists", model = existing.name.clone())),
+            );
+        }
+        for model in models {
             let model_id = model.id.clone();
             let model_status = view
                 .model_statuses

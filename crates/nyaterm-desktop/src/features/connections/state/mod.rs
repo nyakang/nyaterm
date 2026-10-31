@@ -32,6 +32,7 @@ use nyaterm_ui::{
 };
 
 mod editor_logic;
+mod import;
 mod list_logic;
 mod network_logic;
 
@@ -51,6 +52,7 @@ use self::editor_logic::{
     set_connection_group_editor_error, toggle_connection_editor_agent_allowlist_fingerprint,
     toggle_connection_editor_flag,
 };
+use self::import::ConnectionImportState;
 use self::list_logic::{
     AppliedSearchExpansion, clear_connection_list_runtime_state, clear_selected_connection_ids,
     connection_drop_position_for_target, cycle_connection_sort_mode,
@@ -177,10 +179,6 @@ struct ConnectionListState {
     expanded_groups_revision: u64,
 }
 
-struct ConnectionImportState {
-    import_path_prompt: Option<ConnectionImportSource>,
-}
-
 struct ConnectionEditorFeatureState {
     draft: Option<ConnectionEditorState>,
     /// One editable field per text input, built when the editor opens.
@@ -284,9 +282,7 @@ impl ConnectionFeatureState {
                 expanded_groups_revision: 0,
             },
             list_model: ConnectionListModelCache::default(),
-            import: ConnectionImportState {
-                import_path_prompt: None,
-            },
+            import: ConnectionImportState::default(),
             editor: ConnectionEditorFeatureState {
                 draft: None,
                 fields: HashMap::new(),
@@ -2012,20 +2008,6 @@ impl ConnectionListModelCache {
 
 fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
-}
-
-impl ConnectionImportState {
-    pub fn path_prompt_active(&self) -> bool {
-        self.import_path_prompt.is_some()
-    }
-
-    pub fn begin_path_prompt(&mut self, source: ConnectionImportSource) {
-        self.import_path_prompt = Some(source);
-    }
-
-    pub fn finish_path_prompt(&mut self) {
-        self.import_path_prompt = None;
-    }
 }
 
 impl ConnectionEditorFeatureState {
