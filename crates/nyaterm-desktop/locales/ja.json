@@ -2067,7 +2067,8 @@
     "totalSize": "合計",
     "uptime": "稼働時間",
     "usagePercent": "使用率",
-    "used": "使用中"
+    "used": "使用中",
+    "users": "ログインユーザー"
   },
   "savedConnections": {
     "sessionImportTitle": "セッションをインポート",
@@ -2909,6 +2910,8 @@
     "remoteSnapshot": "リモート",
     "remoteStatsInterval": "統計間隔 (秒)",
     "remoteStatsIntervalDesc": "既定：3 秒",
+    "remoteStatsShowUsers": "ログイン中のユーザーを表示",
+    "remoteStatsShowUsersDesc": "who が報告するアカウントとセッション数を、リソースモニターとホスト概要ヘッダーに表示します。",
     "removeBackgroundImage": "画像を削除",
     "resumeBrokenTransfer": "転送を再開",
     "resumeBrokenTransferDesc": "未完了の転送を最初からやり直す代わりに再開します。",
@@ -3285,6 +3288,7 @@
     "pausedCount": "%{count} 件一時停止中",
     "pausedMembers": "一時停止中",
     "pruneMissing": "不在を整理",
+    "receiveInput": "同期入力を送受信",
     "removeFiltered": "削除",
     "resumeSelected": "再開",
     "resumeSync": "再開",

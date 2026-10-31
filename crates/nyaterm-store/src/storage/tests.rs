@@ -3623,6 +3623,8 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         nyaterm_core::FileManagerUiSettings::default()
     );
     assert_eq!(summary.ui_remote_stats_interval, 9);
+    // Documents written before the logged-in users reading keep it hidden.
+    assert!(!summary.ui_remote_stats_show_users);
     assert_eq!(summary.ui_gpu_monitor_interval, 7);
     assert_eq!(summary.ui_ascend_npu_monitor_interval, 8);
     assert_eq!(summary.ui_process_manager_interval, 11);
@@ -4017,6 +4019,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     terminal_update.terminal_low_latency_mode = true;
     terminal_update.terminal_zebra_stripes_enabled = false;
     terminal_update.ui_remote_stats_interval = 4;
+    terminal_update.ui_remote_stats_show_users = true;
     terminal_update.ui_gpu_monitor_interval = 10;
     terminal_update.ui_ascend_npu_monitor_interval = 12;
     let saved_terminal = store
@@ -4030,6 +4033,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(saved_terminal.terminal_low_latency_mode);
     assert!(!saved_terminal.terminal_zebra_stripes_enabled);
     assert_eq!(saved_terminal.ui_remote_stats_interval, 4);
+    assert!(saved_terminal.ui_remote_stats_show_users);
     assert_eq!(saved_terminal.ui_gpu_monitor_interval, 10);
     assert_eq!(saved_terminal.ui_ascend_npu_monitor_interval, 12);
     let stored = store
@@ -4042,6 +4046,10 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(
         json_path(&stored, &["ui", "remote_stats_interval"]).and_then(|value| value.as_u64()),
         Some(4)
+    );
+    assert_eq!(
+        json_path(&stored, &["ui", "remote_stats_show_users"]).and_then(|value| value.as_bool()),
+        Some(true)
     );
     assert_eq!(
         json_path(&stored, &["terminal", "keep_alive_mode"]).and_then(|value| value.as_str()),

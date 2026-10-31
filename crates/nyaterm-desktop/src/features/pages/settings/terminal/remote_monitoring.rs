@@ -2,7 +2,7 @@ use gpui::{Context, IntoElement, SharedString, div, prelude::*};
 use nyaterm_ui::NyaButton;
 use rust_i18n::t;
 
-use super::super::{settings_form_row, settings_form_section};
+use super::super::{settings_form_row, settings_form_section, settings_switch};
 use crate::features::pages::settings::panel::SettingsPanel;
 
 impl SettingsPanel {
@@ -46,6 +46,17 @@ impl SettingsPanel {
                 self.existing_number_input_box(input),
             ));
         }
+        rows = rows.child(settings_form_row(
+            palette,
+            t!("settings.remoteStatsShowUsers"),
+            Some(SharedString::from(t!("settings.remoteStatsShowUsersDesc"))),
+            settings_switch(
+                palette,
+                "remote-stats-show-users",
+                self.settings.summary().ui_remote_stats_show_users,
+                cx.listener(|this, _, _, cx| this.toggle_remote_stats_show_users(cx)),
+            ),
+        ));
         div()
             .flex()
             .flex_col()

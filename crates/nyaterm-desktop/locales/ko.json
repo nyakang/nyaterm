@@ -2067,7 +2067,8 @@
     "totalSize": "전체",
     "uptime": "가동 시간",
     "usagePercent": "사용률",
-    "used": "사용됨"
+    "used": "사용됨",
+    "users": "로그인 사용자"
   },
   "savedConnections": {
     "sessionImportTitle": "세션 가져오기",
@@ -2909,6 +2910,8 @@
     "remoteSnapshot": "원격",
     "remoteStatsInterval": "통계 간격(초)",
     "remoteStatsIntervalDesc": "기본값: 3초",
+    "remoteStatsShowUsers": "로그인한 사용자 표시",
+    "remoteStatsShowUsersDesc": "who가 보고한 계정과 세션 수를 리소스 모니터와 호스트 개요 헤더에 표시합니다.",
     "removeBackgroundImage": "이미지 제거",
     "resumeBrokenTransfer": "전송 재개",
     "resumeBrokenTransferDesc": "완료되지 않은 전송을 처음부터 다시 시작하는 대신 재개합니다.",
@@ -3285,6 +3288,7 @@
     "pausedCount": "%{count}개 일시 중지됨",
     "pausedMembers": "일시 중지됨",
     "pruneMissing": "누락 항목 정리",
+    "receiveInput": "동기화 입력 보내기 및 받기",
     "removeFiltered": "제거",
     "resumeSelected": "재개",
     "resumeSync": "재개",

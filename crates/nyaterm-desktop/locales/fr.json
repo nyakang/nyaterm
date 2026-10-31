@@ -2067,7 +2067,8 @@
     "totalSize": "Total",
     "uptime": "Temps de fonctionnement",
     "usagePercent": "Utilisation",
-    "used": "Utilisé"
+    "used": "Utilisé",
+    "users": "Utilisateurs"
   },
   "savedConnections": {
     "sessionImportTitle": "Importer des sessions",
@@ -2909,6 +2910,8 @@
     "remoteSnapshot": "Distant",
     "remoteStatsInterval": "Intervalle des statistiques (s)",
     "remoteStatsIntervalDesc": "Par défaut : 3 s",
+    "remoteStatsShowUsers": "Afficher les utilisateurs connectés",
+    "remoteStatsShowUsersDesc": "Liste les comptes signalés par who, avec leur nombre de sessions, dans le moniteur de ressources et l'en-tête Vue d'ensemble de l'hôte.",
     "removeBackgroundImage": "Retirer l'image",
     "resumeBrokenTransfer": "Reprendre les transferts",
     "resumeBrokenTransferDesc": "Reprendre les transferts incomplets au lieu de les redémarrer.",
@@ -3285,6 +3288,7 @@
     "pausedCount": "%{count} en pause",
     "pausedMembers": "En pause",
     "pruneMissing": "Nettoyer les manquantes",
+    "receiveInput": "Envoyer et recevoir la saisie synchronisée",
     "removeFiltered": "Retirer",
     "resumeSelected": "Reprendre",
     "resumeSync": "Reprendre",

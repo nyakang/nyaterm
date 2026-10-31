@@ -9,7 +9,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
+use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
 
 use crate::features::NyaTermApp;
 use crate::features::icons::resolve_connection_icon;
@@ -522,10 +522,27 @@ impl NyaTermApp {
         let sync_group = leaf_ids
             .iter()
             .find_map(|id| self.sync_input.active_group_for_session(id));
-        let sync_paused = leaf_ids
-            .iter()
-            .any(|id| self.sync_input.session_is_paused_in_active_group(id));
+        let sync_paused = if self.sync_input.broadcast_to_all() {
+            leaf_ids
+                .iter()
+                .any(|id| !self.sync_input.session_receives_input(id))
+        } else {
+            leaf_ids
+                .iter()
+                .any(|id| self.sync_input.session_is_paused_in_active_group(id))
+        };
         let show_sync_indicator = self.sync_input.broadcast_to_all() || sync_group.is_some();
+        let sync_checkbox = (self.sync_input.input_selection_active()
+            && !matches!(
+                session.kind,
+                nyaterm_transport::SessionKind::Rdp | nyaterm_transport::SessionKind::Vnc
+            ))
+        .then(|| {
+            let checked = leaf_ids
+                .iter()
+                .any(|id| self.sync_input.session_receives_input(id));
+            (checked, leaf_ids.clone())
+        });
         let sync_indicator_color = sync_group.map(|group| group.color).unwrap_or(palette.link);
         let sync_indicator_label = show_sync_indicator.then(|| {
             let scope = sync_group
@@ -804,6 +821,35 @@ impl NyaTermApp {
                                 .size(px(10.))
                                 .path("icons/sync.svg")
                                 .text_color(rgb(sync_indicator_color)),
+                        ),
+                )
+            })
+            .when_some(sync_checkbox, |this, (checked, session_ids)| {
+                this.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "session-tab-sync-receive-{close_session_id}"
+                        )))
+                        .flex_none()
+                        .tooltip(|window, cx| {
+                            nyaterm_ui::NyaTooltip::new(t!("syncGroup.receiveInput").to_string())
+                                .build(window, cx)
+                        })
+                        .child(
+                            NyaCheckbox::new(SharedString::from(format!(
+                                "session-tab-sync-receive-box-{close_session_id}"
+                            )))
+                            .checked(checked)
+                            .on_click(cx.listener(
+                                move |this, receive: &bool, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_sessions_receive_sync_input(
+                                        &session_ids,
+                                        *receive,
+                                        cx,
+                                    );
+                                },
+                            )),
                         ),
                 )
             })

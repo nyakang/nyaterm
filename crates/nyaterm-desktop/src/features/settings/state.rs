@@ -614,6 +614,10 @@ impl SettingsFeatureState {
         self.summary.terminal_paste_image_as_path = !self.summary.terminal_paste_image_as_path;
     }
 
+    pub(in crate::features) fn toggle_remote_stats_show_users(&mut self) {
+        self.summary.ui_remote_stats_show_users = !self.summary.ui_remote_stats_show_users;
+    }
+
     pub(in crate::features) fn set_remote_stats_interval(&mut self, value: u32) {
         self.summary.ui_remote_stats_interval = value.clamp(1, 60);
     }

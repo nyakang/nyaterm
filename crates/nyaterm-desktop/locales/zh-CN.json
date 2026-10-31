@@ -2060,7 +2060,8 @@
     "totalSize": "总计大小",
     "uptime": "运行时长",
     "usagePercent": "使用占比",
-    "used": "已使用"
+    "used": "已使用",
+    "users": "登录用户"
   },
   "savedConnections": {
     "sessionImportTitle": "导入会话",
@@ -2902,6 +2903,8 @@
     "remoteSnapshot": "远程快照",
     "remoteStatsInterval": "资源采集间隔（秒）",
     "remoteStatsIntervalDesc": "默认 3 秒",
+    "remoteStatsShowUsers": "显示登录用户",
+    "remoteStatsShowUsersDesc": "在资源监控和主机概览标题栏中显示 who 报告的账户及其会话数。",
     "removeBackgroundImage": "移除图片",
     "resumeBrokenTransfer": "断点续传",
     "resumeBrokenTransferDesc": "尝试恢复未完成的文件传输而非重新开始。",
@@ -3278,6 +3281,7 @@
     "pausedCount": "%{count} 暂停",
     "pausedMembers": "暂停",
     "pruneMissing": "清理离线残留",
+    "receiveInput": "发送和接收同步输入",
     "removeFiltered": "移出筛选",
     "resumeSelected": "恢复",
     "resumeSync": "恢复",
