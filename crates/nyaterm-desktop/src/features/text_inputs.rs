@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use gpui::{
-    AppContext, BoxShadow, Context, Entity, InteractiveElement as _, IntoElement,
+    App, AppContext, BoxShadow, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Rgba, SharedString, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px, rgb,
 };
@@ -175,6 +175,22 @@ impl NyaTermApp {
         true
     }
 
+    /// True while window focus sits inside any registry input. Click handlers
+    /// that normally refocus the terminal on container clicks must skip while
+    /// a field owns the caret, or a box in an overlay strip (e.g. the tmux
+    /// command input) can never be typed into.
+    pub(in crate::features) fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
+        let Some(focused) = window.focused(cx) else {
+            return false;
+        };
+        self.text_inputs.fields.values().any(|field| {
+            let field = field.read(cx);
+            // Once the inner gpui-kit component exists it owns the real focus
+            // handle; the outer `focus` only matters before that first mount.
+            field.focus_handle() == focused || field.component_focus_handle(cx) == focused
+        })
+    }
+
     /// An existing field, without creating one.
     ///
     /// `text_input` takes `&mut self` because it builds the entity on first use, so
@@ -260,6 +276,8 @@ impl NyaTermApp {
                         app.on_text_input_changed(subscription_id.clone(), text.clone(), cx);
                         if subscription_id.starts_with("ai.agent-answer.") {
                             app.submit_native_answer_input(subscription_id.as_ref(), cx);
+                        } else if let Some(host) = subscription_id.strip_prefix("tmux.command.") {
+                            app.submit_tmux_command_input(host, text.as_str(), cx);
                         } else if subscription_id.as_ref() == "ai.chat.prompt" {
                             if app.ai.chat_mention_is_open() {
                                 app.select_ai_mention_candidate(cx);
@@ -268,7 +286,11 @@ impl NyaTermApp {
                             }
                         }
                     }
-                    NyaInputEvent::Blurred(_) => {}
+                    NyaInputEvent::Blurred(_) => {
+                        if let Some(host) = subscription_id.strip_prefix("tmux.command.") {
+                            app.on_tmux_command_blurred(host, cx);
+                        }
+                    }
                 },
             );
         self.text_inputs.fields.insert(id.clone(), entity.clone());
@@ -474,7 +496,9 @@ impl NyaTermApp {
         // Remote panels render cached snapshots, so their input subscriptions need the
         // same deferred flush boundary as panel event handlers.
         let remote_panel_input = id.starts_with("remote.");
-        if let Some(rest) = id.strip_prefix("settings.number.") {
+        if let Some(host) = id.strip_prefix("tmux.command.") {
+            self.on_tmux_command_draft(host, text, cx);
+        } else if let Some(rest) = id.strip_prefix("settings.number.") {
             self.apply_settings_number_input(rest, &text, cx);
         } else if let Some(rest) = id.strip_prefix("ai.number.") {
             self.apply_ai_number_input(rest, &text, cx);

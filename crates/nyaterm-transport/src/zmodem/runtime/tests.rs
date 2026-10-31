@@ -34,6 +34,8 @@ fn mock_session() -> (Arc<SessionManager>, ssh_mailbox::Receiver) {
             },
             attempt: SshSessionConfig::default().attempt,
             command_tx,
+            tmux_tx: tokio::sync::mpsc::unbounded_channel().0,
+            tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             backspace_as_bs: false,
             worker_thread: None,
         }),

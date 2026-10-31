@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <clipPath id="tmux-mark-clip"><rect width="256" height="256" rx="36" ry="36"/></clipPath>
+  <g clip-path="url(#tmux-mark-clip)">
+    <rect width="256" height="256" fill="#ffffff"/>
+    <rect width="120" height="232" fill="#b0b0b0"/>
+    <rect x="134" width="122" height="105" fill="#b0b0b0"/>
+    <rect x="134" y="120" width="122" height="112" fill="#b0b0b0"/>
+    <rect y="232" width="256" height="24" fill="#1fb82a"/>
+  </g>
+</svg>

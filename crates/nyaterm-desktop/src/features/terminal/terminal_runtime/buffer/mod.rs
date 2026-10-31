@@ -1165,6 +1165,19 @@ impl NyaTermApp {
             {
                 visible.retain(|tab| root.leaf_for_tab(tab) != Some(group.as_str()));
             }
+            // A tab whose content is a projected pane tree (tmux control mode
+            // or a workspace split) renders its leaves inside the tab — those
+            // sessions are on screen too. Without them the frame worker
+            // deprioritizes pane snapshots and pane echoes only surface on
+            // lazy live-snapshot fetches.
+            let pane_roots = self.shell.workspace_pane_roots();
+            let pane_leaves: Vec<&str> = visible
+                .iter()
+                .filter_map(|tab| pane_roots.get(*tab))
+                .flat_map(workspace_pane_node_visible_session_ids)
+                .filter(|id| !self.shell.session_tab_is_hidden(id))
+                .collect();
+            visible.extend(pane_leaves);
             return visible;
         }
         if let Some(root) = self.shell.workspace_split() {

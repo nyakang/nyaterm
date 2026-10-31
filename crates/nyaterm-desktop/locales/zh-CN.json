@@ -3937,5 +3937,13 @@
   "input": {
     "showSecret": "显示内容",
     "hideSecret": "隐藏内容"
+  },
+  "tmux": {
+      "detach": "分离（远端 tmux 会话保留）",
+      "killWindow": "关闭窗口（kill-window）",
+      "newWindow": "新建窗口",
+      "splitHorizontal": "上下分屏",
+      "splitVertical": "左右分屏",
+      "commandPlaceholder": "tmux 命令，例如 resize-pane -Z"
   }
 }

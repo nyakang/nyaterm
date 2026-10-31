@@ -159,7 +159,7 @@ impl NyaTermApp {
         } else if let Some(active) = &active {
             match crate::models::WorkspaceTabId::from_layout_key(active) {
                 crate::models::WorkspaceTabId::Session(id) => {
-                    self.workspace_session_content(id, cx)
+                    self.workspace_tab_session_content(id, cx)
                 }
                 crate::models::WorkspaceTabId::Editor(id) => self.workspace_editor_content(&id, cx),
                 crate::models::WorkspaceTabId::FileManager(id) => {
@@ -278,13 +278,23 @@ impl NyaTermApp {
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !showing_request
                     && let Some(active) = &active
-                    && matches!(
-                        crate::models::WorkspaceTabId::from_layout_key(active),
-                        crate::models::WorkspaceTabId::Session(_)
-                    )
+                    && let crate::models::WorkspaceTabId::Session(tab_session) =
+                        crate::models::WorkspaceTabId::from_layout_key(active)
                 {
-                    this.activate_workspace_pane(active.clone(), cx);
-                    this.focus_terminal_session(active, window, cx);
+                    // A click that landed inside a registry input (the tmux
+                    // command box lives in this group's strip) must keep its
+                    // caret, and a pane-tree leaf the canvas just activated
+                    // keeps its session — refocusing the tab root would undo
+                    // both before they take effect.
+                    let leaf_focused = this.session.active_id().is_some_and(|id| {
+                        this.shell
+                            .workspace_pane_root(&tab_session)
+                            .is_some_and(|root| root.contains_session(id))
+                    });
+                    if !leaf_focused && !this.text_input_focused(window, cx) {
+                        this.activate_workspace_pane(active.clone(), cx);
+                        this.focus_terminal_session(active, window, cx);
+                    }
                 }
             }))
             .child(content)

@@ -3943,5 +3943,13 @@
   "input": {
     "showSecret": "Afficher la valeur",
     "hideSecret": "Masquer la valeur"
+  },
+  "tmux": {
+      "detach": "Détacher (la session tmux reste sur le serveur)",
+      "killWindow": "Fermer la fenêtre (kill-window)",
+      "newWindow": "Nouvelle fenêtre",
+      "splitHorizontal": "Diviser haut/bas",
+      "splitVertical": "Diviser gauche/droite",
+      "commandPlaceholder": "commande tmux, ex. resize-pane -Z"
   }
 }
