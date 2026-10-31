@@ -3185,6 +3185,16 @@ async fn run_open_ssh_shell_session(
                                             "tmux control mode confirmed; taking over SSH channel"
                                         );
                                         tmux_active.store(true, Ordering::Release);
+                                        // Dim banner in the host buffer (the
+                                        // Tauri port's look): after detach the
+                                        // shell screen still shows where the
+                                        // channel went while panes took over.
+                                        let stamp = tmux_local_stamp();
+                                        let banner = format!(
+                                            "\r\n\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
+                                        );
+                                        let output = shell_integration.filter_output(banner.as_bytes());
+                                        ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
                                         let exit = tmux::run_control_session(
                                             &event_queue,
                                             &sessions,
@@ -3200,10 +3210,20 @@ async fn run_open_ssh_shell_session(
                                         tmux_active.store(false, Ordering::Release);
                                         match exit {
                                             tmux::ControlExit::ReturnToShell { leftover } => {
-                                                // Shell is back; replay the
-                                                // bytes tmux left after %exit
-                                                // and reset detection for a
-                                                // possible next `tmux -CC`.
+                                                // Shell is back; the exit
+                                                // banner lands before replayed
+                                                // bytes so it reads like a log
+                                                // line ahead of the prompt.
+                                                let stamp = tmux_local_stamp();
+                                                let banner = format!(
+                                                    "\r\n\x1b[2m[{stamp}] [nyaterm] tmux detached; back to shell\x1b[0m\r\n"
+                                                );
+                                                let output = shell_integration.filter_output(banner.as_bytes());
+                                                ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                                // Replay the bytes tmux left
+                                                // after %exit and reset
+                                                // detection for a possible
+                                                // next `tmux -CC`.
                                                 if !leftover.is_empty() {
                                                     let output = shell_integration.filter_output(&leftover);
                                                     ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
@@ -3311,6 +3331,16 @@ async fn run_open_ssh_shell_session(
         x11_multiplex_registration,
     )
     .await;
+}
+
+/// `[YYYY-MM-DD HH:MM:SS]` in local time for the tmux takeover/detach banners.
+fn tmux_local_stamp() -> String {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ))
+        .unwrap_or_default()
 }
 
 fn ssh_output_future(

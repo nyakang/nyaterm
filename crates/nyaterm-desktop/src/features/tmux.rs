@@ -716,7 +716,7 @@ impl NyaTermApp {
         let target_h = target.clone();
         strip = strip.child(tmux_strip_icon_button(
             format!("tmux-split-h-{host_id}"),
-            "icons/menu/vertical.svg",
+            "icons/session/columns-2.svg",
             palette.text_muted,
             palette,
             &t!("tmux.splitVertical"),
@@ -728,7 +728,7 @@ impl NyaTermApp {
         let host = host_id.clone();
         strip = strip.child(tmux_strip_icon_button(
             format!("tmux-split-v-{host_id}"),
-            "icons/menu/horizontal.svg",
+            "icons/session/rows-2.svg",
             palette.text_muted,
             palette,
             &t!("tmux.splitHorizontal"),
