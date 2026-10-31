@@ -158,8 +158,9 @@ pub(crate) async fn verify(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{CONFIRM_MAX_BYTES, CONFIRM_TIMEOUT, Probe, Progress};
     use futures::{Stream, StreamExt};
+    use std::time::Duration;
 
     /// Feeds stream chunks into the probe the same way `verify` feeds channel
     /// reads; kept stream-shaped so tests can drive silent and busy peers.

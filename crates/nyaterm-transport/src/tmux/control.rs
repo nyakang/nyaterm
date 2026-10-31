@@ -596,7 +596,7 @@ mod tests {
 
 #[cfg(test)]
 mod framing_tests {
-    use super::*;
+    use super::{BlockId, ControlMessage, ControlParser, parse_line};
 
     #[test]
     fn response_markers_require_identity() {

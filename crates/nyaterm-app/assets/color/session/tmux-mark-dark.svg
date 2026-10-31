@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 256 256">
   <clipPath id="tmux-mark-clip"><rect width="256" height="256" rx="36" ry="36"/></clipPath>
   <g clip-path="url(#tmux-mark-clip)">
     <rect width="256" height="256" fill="#262626"/>

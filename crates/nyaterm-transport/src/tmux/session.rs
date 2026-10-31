@@ -1883,8 +1883,9 @@ fn parse_window_snapshot(lines: Vec<String>) -> WindowSnapshot {
 
 #[cfg(test)]
 mod output_tests {
-    use super::*;
-    use std::time::Instant;
+    use super::{InputParser, PENDING_PANE_OUTPUT_MAX_BYTES, VirtualPane};
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
 
     fn pane() -> VirtualPane {
         VirtualPane {
@@ -2015,7 +2016,7 @@ mod output_tests {
 
 #[cfg(test)]
 mod window_tests {
-    use super::*;
+    use super::{compose_seed_payload, parse_window_snapshot};
 
     fn row(id: u32, index: u32, active: bool, name: &str) -> String {
         format!(
