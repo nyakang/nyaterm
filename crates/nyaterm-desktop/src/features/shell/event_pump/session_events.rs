@@ -281,6 +281,14 @@ impl NyaTermApp {
                             self.request_settings_panel_refresh(cx);
                         }
                     }
+                    SessionEvent::TmuxState { session_id, state } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        root_chrome_dirty |=
+                            self.handle_session_tmux_state_event(session_id, *state, cx);
+                    }
                     SessionEvent::Exited { session_id, reason } => {
                         self.flush_pending_session_frame_outputs(
                             &mut pending_frame_outputs,

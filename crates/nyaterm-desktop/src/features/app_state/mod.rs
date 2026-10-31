@@ -115,6 +115,7 @@ pub struct NyaTermApp {
     pub(in crate::features) shell: ShellFeatureState,
     pub(in crate::features) sync_input: SyncInputFeatureState,
     pub(in crate::features) recording: RecordingFeatureState,
+    pub(in crate::features) tmux: super::tmux::TmuxFeatureState,
     pub(in crate::features) tunnel_state: TunnelFeatureState,
     /// Last field by design: test cleanup must run after storage clients and
     /// feature-owned background work have released their Windows file handles.

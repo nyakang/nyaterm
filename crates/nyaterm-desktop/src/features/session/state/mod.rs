@@ -321,6 +321,7 @@ impl SessionFeatureState {
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
+                | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id) {
@@ -961,6 +962,7 @@ impl SessionFeatureState {
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
+                | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if id == session_id {
@@ -1002,6 +1004,7 @@ impl SessionFeatureState {
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
+                | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id.clone(),
             })
             .collect();
@@ -1930,6 +1933,19 @@ impl SessionFeatureState {
         Some(SessionDisconnectUpdate {
             already_disconnected,
         })
+    }
+
+    /// Inverse for sessions revived in place: a tmux pane session adopted
+    /// again when the control client reattaches. Returns whether it had been
+    /// marked disconnected — the banner text stays in the grid until the next
+    /// capture-pane seed repaints it, which is what the caller drives next.
+    pub(in crate::features) fn clear_session_disconnected(&mut self, session_id: &str) -> bool {
+        let Some(metadata) = self.metadata.get_mut(session_id) else {
+            return false;
+        };
+        let was_disconnected = metadata.disconnected;
+        metadata.disconnected = false;
+        was_disconnected
     }
 
     pub(in crate::features) fn custom_name(&self, session_id: &str) -> Option<&str> {

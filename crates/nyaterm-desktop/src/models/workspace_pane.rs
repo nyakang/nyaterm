@@ -216,6 +216,74 @@ impl WorkspacePaneNode {
         }
     }
 
+    /// True when every leaf session id carries `prefix`. A subtree that is
+    /// entirely `{host}::paneN` leaves is a tmux control-mode projection —
+    /// virtual pane ids are minted as `{host}::pane{pane_id}`.
+    fn leaves_all_have_prefix(&self, prefix: &str) -> bool {
+        match self {
+            Self::Leaf { session_id } => session_id.starts_with(prefix),
+            Self::Split { first, second, .. } => {
+                first.leaves_all_have_prefix(prefix) && second.leaves_all_have_prefix(prefix)
+            }
+        }
+    }
+
+    /// Contain a tmux pane-tree projection inside this tree instead of
+    /// overwriting it: replace the `host_session_id` leaf on first takeover
+    /// (inside an already-split tab, preserving siblings) or the previous
+    /// all-`{host}::` projection subtree on layout refresh. Returns false
+    /// when neither anchor exists — callers then fall back to a wholesale
+    /// replace.
+    pub(crate) fn replace_tmux_subtree(&mut self, host_session_id: &str, subtree: Self) -> bool {
+        let prefix = format!("{host_session_id}::");
+        self.replace_tmux_subtree_inner(host_session_id, &prefix, subtree)
+    }
+
+    fn replace_tmux_subtree_inner(
+        &mut self,
+        host_session_id: &str,
+        prefix: &str,
+        subtree: Self,
+    ) -> bool {
+        match self {
+            Self::Leaf { session_id } if session_id == host_session_id => {
+                *self = subtree;
+                true
+            }
+            ref node if node.leaves_all_have_prefix(prefix) => {
+                *self = subtree;
+                true
+            }
+            Self::Split { first, second, .. } => {
+                first.replace_tmux_subtree_inner(host_session_id, prefix, subtree.clone())
+                    || second.replace_tmux_subtree_inner(host_session_id, prefix, subtree)
+            }
+            Self::Leaf { .. } => false,
+        }
+    }
+
+    /// Inverse of `replace_tmux_subtree`: fold the subtree whose leaves are
+    /// all `{host}::` virtual pane ids back into `Leaf(host)`, restoring the
+    /// shell leaf — and therefore any manual sibling splits — on detach/exit.
+    pub(crate) fn collapse_tmux_subtree(&mut self, host_session_id: &str) -> bool {
+        let prefix = format!("{host_session_id}::");
+        self.collapse_tmux_subtree_inner(&prefix, host_session_id)
+    }
+
+    fn collapse_tmux_subtree_inner(&mut self, prefix: &str, leaf_session_id: &str) -> bool {
+        if self.leaves_all_have_prefix(prefix) {
+            *self = Self::leaf(leaf_session_id);
+            return true;
+        }
+        match self {
+            Self::Split { first, second, .. } => {
+                first.collapse_tmux_subtree_inner(prefix, leaf_session_id)
+                    || second.collapse_tmux_subtree_inner(prefix, leaf_session_id)
+            }
+            Self::Leaf { .. } => false,
+        }
+    }
+
     /// Remove dead sessions and collapse unnecessary nodes.
     pub(crate) fn prune(self, live_ids: &HashSet<String>) -> Option<Self> {
         match self {
@@ -395,4 +463,81 @@ pub(crate) fn uuid_v4_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{nanos:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkspacePaneNode, WorkspaceSplitDirection};
+
+    fn split(id: &str, first: WorkspacePaneNode, second: WorkspacePaneNode) -> WorkspacePaneNode {
+        WorkspacePaneNode::Split {
+            id: id.to_string(),
+            direction: WorkspaceSplitDirection::Vertical,
+            ratio_percent: 50,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    fn tmux_tree() -> WorkspacePaneNode {
+        split(
+            "tmux-split-a",
+            WorkspacePaneNode::leaf("host::pane0"),
+            WorkspacePaneNode::leaf("host::pane1"),
+        )
+    }
+
+    #[test]
+    fn tmux_projection_replaces_only_the_host_leaf_inside_a_manual_split() {
+        // A tab the user had already split locally: takeover swaps the SSH
+        // leaf for the projection but must not touch the sibling pane.
+        let mut tree = split(
+            "manual",
+            WorkspacePaneNode::leaf("host"),
+            WorkspacePaneNode::leaf("other"),
+        );
+        assert!(tree.replace_tmux_subtree("host", tmux_tree()));
+        let ids = tree.session_ids();
+        assert!(ids.contains(&"host::pane0".to_string()));
+        assert!(ids.contains(&"host::pane1".to_string()));
+        assert!(ids.contains(&"other".to_string()));
+        assert!(!ids.contains(&"host".to_string()));
+    }
+
+    #[test]
+    fn tmux_refresh_replaces_the_projection_not_the_manual_topology() {
+        let mut tree = split("manual", tmux_tree(), WorkspacePaneNode::leaf("other"));
+        let refreshed = WorkspacePaneNode::leaf("host::pane2");
+        assert!(tree.replace_tmux_subtree("host", refreshed));
+        let ids = tree.session_ids();
+        assert_eq!(ids, vec!["host::pane2".to_string(), "other".to_string()]);
+    }
+
+    #[test]
+    fn tmux_detach_restores_the_shell_leaf_and_manual_siblings() {
+        let mut tree = split("manual", tmux_tree(), WorkspacePaneNode::leaf("other"));
+        assert!(tree.collapse_tmux_subtree("host"));
+        assert!(tree.contains_session("host"));
+        assert!(tree.contains_session("other"));
+        assert!(!tree.session_ids().iter().any(|id| id.contains("::")));
+    }
+
+    #[test]
+    fn tmux_collapse_of_a_pure_projection_yields_the_bare_shell_leaf() {
+        let mut tree = tmux_tree();
+        assert!(tree.collapse_tmux_subtree("host"));
+        assert_eq!(tree.session_ids(), vec!["host".to_string()]);
+    }
+
+    #[test]
+    fn tmux_surgery_leaves_foreign_trees_untouched() {
+        let mut tree = split(
+            "manual",
+            WorkspacePaneNode::leaf("a"),
+            WorkspacePaneNode::leaf("b"),
+        );
+        assert!(!tree.replace_tmux_subtree("host", tmux_tree()));
+        assert!(!tree.collapse_tmux_subtree("host"));
+        assert_eq!(tree.session_ids(), vec!["a".to_string(), "b".to_string()]);
+    }
 }

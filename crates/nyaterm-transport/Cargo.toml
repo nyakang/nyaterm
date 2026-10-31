@@ -55,3 +55,4 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 rand.workspace = true
 nyaterm-core = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
