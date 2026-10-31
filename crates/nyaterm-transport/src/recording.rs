@@ -484,6 +484,9 @@ struct SessionCaptureState {
     input_needs_terminal_resync: bool,
     input_before_tab: Option<String>,
     output_buffer: String,
+    /// Byte offset in `output_buffer` where the next character overwrites,
+    /// after a cursor-back; `None` appends at the end.
+    output_cursor: Option<usize>,
     output_scan_from: usize,
     provisional_raw_output: VecDeque<u8>,
     live_echo_buffer: String,
@@ -513,13 +516,14 @@ impl SessionCaptureState {
             input_needs_terminal_resync: false,
             input_before_tab: None,
             output_buffer: String::new(),
+            output_cursor: None,
             output_scan_from: 0,
             provisional_raw_output: VecDeque::new(),
             live_echo_buffer: String::new(),
             submitted_line_echo: None,
             suppress_next_newline: false,
             next_line_id: 1,
-            sanitizer: RecordingSanitizer::default(),
+            sanitizer: RecordingSanitizer::with_cursor_back(),
             execution_sanitizer: RecordingSanitizer::default(),
             history_truncated: false,
             history_include_input: false,
@@ -730,6 +734,7 @@ impl SessionCaptureState {
             self.input_buffer = recovered.value;
             self.live_echo_buffer.clear();
             self.output_buffer.clear();
+            self.output_cursor = None;
             self.output_scan_from = 0;
             self.input_needs_terminal_resync = false;
             self.input_before_tab = None;
@@ -801,7 +806,7 @@ impl SessionCaptureState {
 
     fn append_output(&mut self, text: &str) {
         for chunk in utf8_fragments(text, self.fragment_limit()) {
-            self.output_buffer.push_str(chunk);
+            self.push_output(chunk);
             self.flush_output_lines(false);
             self.trim_records();
         }
@@ -1047,6 +1052,48 @@ impl SessionCaptureState {
         (remaining, true)
     }
 
+    /// Append output, applying `\x08` (cursor back) to the line still in the
+    /// buffer so redrawn text overwrites what it erased on screen.
+    fn push_output(&mut self, text: &str) {
+        for ch in text.chars() {
+            match ch {
+                '\x08' => {
+                    let line_start = self.output_buffer.rfind('\n').map_or(0, |index| index + 1);
+                    let cursor = self.output_cursor.unwrap_or(self.output_buffer.len());
+                    if cursor > line_start {
+                        let previous = self.output_buffer[line_start..cursor]
+                            .char_indices()
+                            .next_back()
+                            .map_or(line_start, |(index, _)| line_start + index);
+                        self.output_cursor = Some(previous);
+                    }
+                }
+                '\n' => {
+                    self.output_cursor = None;
+                    self.output_buffer.push('\n');
+                }
+                ch => match self.output_cursor {
+                    Some(cursor) if cursor < self.output_buffer.len() => {
+                        let end = self.output_buffer[cursor..]
+                            .chars()
+                            .next()
+                            .map_or(cursor, |current| cursor + current.len_utf8());
+                        self.output_buffer
+                            .replace_range(cursor..end, ch.encode_utf8(&mut [0; 4]));
+                        let next = cursor + ch.len_utf8();
+                        self.output_cursor = (next < self.output_buffer.len()).then_some(next);
+                        // An overwrite may shorten the buffer below the scan mark.
+                        self.output_scan_from = self.output_scan_from.min(cursor);
+                    }
+                    _ => {
+                        self.output_cursor = None;
+                        self.output_buffer.push(ch);
+                    }
+                },
+            }
+        }
+    }
+
     fn flush_output_lines(&mut self, flush_partial: bool) {
         let limit = self.fragment_limit();
         if !flush_partial && self.output_buffer.len() < limit {
@@ -1058,6 +1105,7 @@ impl SessionCaptureState {
             }
         }
         let buffer = mem::take(&mut self.output_buffer);
+        let cursor = self.output_cursor.take();
         self.output_scan_from = 0;
         let mut start = 0;
         while start < buffer.len() {
@@ -1074,6 +1122,9 @@ impl SessionCaptureState {
                 break;
             } else {
                 self.output_buffer.push_str(tail);
+                self.output_cursor = cursor
+                    .and_then(|cursor| cursor.checked_sub(start))
+                    .filter(|cursor| *cursor < tail.len());
                 self.output_scan_from = tail.len();
                 break;
             }
@@ -2917,5 +2968,40 @@ mod tests {
         let _ = fs::remove_file(&initial_path);
         let _ = fs::remove_file(blocked_base_path);
         let _ = fs::remove_dir(super::append_numbered_suffix(initial_path, 1));
+    }
+
+    #[test]
+    fn transcript_applies_cursor_back_so_pager_prompts_are_erased() {
+        let manager = input_enabled_manager();
+        let path = unique_path("pager-cursor-back");
+        manager.start("s1", &path, true, true).unwrap();
+        // Huawei VRP: "  ---- More ----", then on space ESC[16D, 16 spaces, ESC[16D.
+        manager.write_output("s1", "device board 1 board-type LSW\n#\n  ---- More ----");
+        manager.write_output(
+            "s1",
+            "\x1b[16D                \x1b[16Dauthentication-profile name\n",
+        );
+        // Backspace and CSI D in one chunk, with output after the newline.
+        manager.write_output("s1", "tpyo\x08\x08\x08ypo\nnext\x1b[2Dxt\n");
+        manager.stop("s1").unwrap();
+
+        let recorded = fs::read_to_string(&path).unwrap();
+        let lines: Vec<_> = recorded
+            .lines()
+            .filter_map(|line| line.split_once("[OUTPUT] ").map(|(_, text)| text))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "device board 1 board-type LSW",
+                "#",
+                "authentication-profile name",
+                "typo",
+                "next",
+            ],
+            "{recorded}"
+        );
+
+        let _ = fs::remove_file(path);
     }
 }
