@@ -160,8 +160,6 @@ const DEVICE_LOCAL_UI_FIELDS: &[&str] = &[
     "quick_cmd_height",
     "quick_cmd_category_width",
     "quick_cmd_selected_category",
-    "active_left_panel",
-    "active_right_panel",
     "show_quick_cmd_bar",
     "show_serial_send_panel",
     "serial_send_height",
