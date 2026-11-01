@@ -87,7 +87,7 @@ pub(super) fn parse_windterm_quickbar(raw: &str) -> Result<ImportConfig, String>
         commands.push(ImportCommand {
             id,
             label: label.to_string(),
-            command: command.to_string(),
+            command: escape_windterm_bare_returns(command),
             preserve_command_text: true,
             category_id: None,
             category,
@@ -119,6 +119,24 @@ fn split_windterm_command(raw: &str) -> (&str, bool) {
     }
 
     (raw, false)
+}
+
+/// WindTerm separates the lines of a multi-line Send Text with bare carriage
+/// returns. The script box cannot show a lone `\r`, so the command looked empty
+/// and could not be edited (#1083). Writing it as the `\r` script escape keeps
+/// the bytes that get sent identical and leaves the text visible. `\r\n` and
+/// `\n` are ordinary line breaks in the editor and stay as they are.
+fn escape_windterm_bare_returns(command: &str) -> String {
+    let mut escaped = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' && chars.peek() != Some(&'\n') {
+            escaped.push_str("\\r");
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped
 }
 
 pub(super) fn parse_xshell_xts_quick_buttons(
