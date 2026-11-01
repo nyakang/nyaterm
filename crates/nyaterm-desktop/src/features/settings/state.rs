@@ -147,6 +147,8 @@ struct KeywordHighlightSettingsState {
     edit_id: Option<String>,
     edit_field: KeywordHighlightEditorField,
     focus: FocusHandle,
+    /// Reveal the rules that only feed the line-role parser.
+    show_specialized: bool,
 }
 
 struct AppearanceSettingsState {
@@ -177,6 +179,8 @@ pub(in crate::features) struct KeywordHighlightPresentationState {
     pub expanded_id: Option<String>,
     pub edit_id: Option<String>,
     pub edit_field: KeywordHighlightEditorField,
+    /// Reveal the rules that only feed the line-role parser.
+    pub show_specialized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +234,7 @@ impl SettingsFeatureState {
                 edit_id: None,
                 edit_field: KeywordHighlightEditorField::Name,
                 focus: focus.keyword_highlight,
+                show_specialized: false,
             },
             appearance: AppearanceSettingsState {
                 palette,
@@ -1151,6 +1156,12 @@ impl SettingsFeatureState {
         true
     }
 
+    /// Toggle field-level highlighting for recognised command output.
+    pub(in crate::features) fn toggle_line_role_highlights(&mut self) -> bool {
+        self.summary.ui_highlight_line_roles = !self.summary.ui_highlight_line_roles;
+        self.summary.ui_highlight_line_roles
+    }
+
     pub(in crate::features) fn toggle_file_explorer_auto_sync_cwd(
         &mut self,
         connection_id: String,
@@ -1361,7 +1372,13 @@ impl SettingsFeatureState {
             expanded_id: self.keyword_highlights.expanded_id.clone(),
             edit_id: self.keyword_highlights.edit_id.clone(),
             edit_field: self.keyword_highlights.edit_field,
+            show_specialized: self.keyword_highlights.show_specialized,
         }
+    }
+
+    /// Visibility of the line-role-only rules in the settings list.
+    pub(in crate::features) fn set_keyword_show_specialized(&mut self, enabled: bool) {
+        self.keyword_highlights.show_specialized = enabled;
     }
 
     pub(in crate::features) fn keyword_highlight_focus(&self) -> &FocusHandle {

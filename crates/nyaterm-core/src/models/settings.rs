@@ -506,6 +506,10 @@ pub struct AppSettingsSummary {
     pub ui_file_explorer_view_mode: TransferBrowserViewMode,
     #[serde(default)]
     pub ui_file_explorer_auto_sync_cwd_connection_ids: Vec<String>,
+    /// Highlight recognised command output (ip addr / ls -l / ps aux / git status /
+    /// docker ps / systemctl) by parsing fields instead of running generic rules.
+    #[serde(default = "default_true")]
+    pub ui_highlight_line_roles: bool,
     #[serde(default)]
     pub ui_file_explorer_favorite_dirs_by_connection_id: HashMap<String, Vec<String>>,
     /// Dual-pane file manager layout. Independent of the sidebar explorer.
@@ -756,6 +760,7 @@ impl Default for AppSettingsSummary {
             ui_file_explorer_show_hidden_files: true,
             ui_file_explorer_view_mode: TransferBrowserViewMode::List,
             ui_file_explorer_auto_sync_cwd_connection_ids: Vec::new(),
+            ui_highlight_line_roles: true,
             ui_file_explorer_favorite_dirs_by_connection_id: HashMap::new(),
             ui_file_manager: FileManagerUiSettings::default(),
             ui_left_panel_width: 256,

@@ -453,6 +453,18 @@ fn terminal_keyword_highlight_updates_allowed(is_active: bool, input_latency_act
     is_active && !input_latency_active
 }
 
+/// Rules to hand the surface for this frame.
+///
+/// While the user is typing, the rules must stay in place: dropping them erased
+/// every colour for a frame and painted it back once input went idle, which read
+/// as "everything flashes on each keystroke". Only the recompute is skipped —
+/// see the `schedule_keyword_highlights` guard.
+fn terminal_frame_keyword_rules(
+    configured: &std::sync::Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+) -> std::sync::Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+    configured.clone()
+}
+
 fn terminal_live_action_link_enrichment_allowed(
     display_offset: usize,
     action_links_enabled: bool,
@@ -672,7 +684,8 @@ impl NyaTermApp {
         let surface = cx.new(|_| {
             let mut surface = TerminalSurface::new(session_id_owned);
             surface.set_layout_cache(layout_cache);
-            surface.set_app(app);
+            let line_roles = self.settings.summary().ui_highlight_line_roles;
+            surface.set_app(app, line_roles);
             surface
         });
         self.terminal
@@ -815,19 +828,8 @@ impl NyaTermApp {
                 &frame_action_links,
             );
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
-        let input_rules_key = self
-            .terminal
-            .keyword_highlight_rules_key(&configured_keyword_rules);
-        let input_highlights = is_active
-            .then(|| view.frame_input_highlights.clone())
-            .flatten();
         let clear_keyword_highlights = configured_keyword_rules.is_empty();
-        let keyword_rules =
-            if terminal_keyword_highlight_updates_allowed(is_active, input_latency_active) {
-                configured_keyword_rules.clone()
-            } else {
-                std::sync::Arc::new(Vec::new())
-            };
+        let keyword_rules = terminal_frame_keyword_rules(&configured_keyword_rules);
         let keyword_output_pressure = self.runtime_output_pressure_active();
         if needs_scroll_enrichment {
             let _ = self.request_terminal_frame_snapshot_for_scroll_enrichment(
@@ -900,7 +902,6 @@ impl NyaTermApp {
                     true,
                 )
             };
-            changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
@@ -1100,19 +1101,8 @@ impl NyaTermApp {
             || input_latency_active;
         let render_degraded = render_degraded_view || render_pressure;
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
-        let input_rules_key = self
-            .terminal
-            .keyword_highlight_rules_key(&configured_keyword_rules);
-        let input_highlights = view
-            .filter(|_| is_active)
-            .and_then(|view| view.frame_input_highlights.clone());
         let clear_keyword_highlights = configured_keyword_rules.is_empty();
-        let keyword_rules =
-            if !terminal_keyword_highlight_updates_allowed(is_active, input_latency_active) {
-                std::sync::Arc::new(Vec::new())
-            } else {
-                configured_keyword_rules.clone()
-            };
+        let keyword_rules = terminal_frame_keyword_rules(&configured_keyword_rules);
         let retained_lookup_started_at = Instant::now();
         let retained_surface_snapshot = if display_offset > 0 {
             surface
@@ -1558,7 +1548,6 @@ impl NyaTermApp {
                     true,
                 )
             };
-            changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(

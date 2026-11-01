@@ -318,6 +318,11 @@ impl ConnectionStore {
                 &["ui", "file_explorer_auto_sync_cwd_connection_ids"],
                 256,
             ),
+            ui_highlight_line_roles: json_bool(
+                &value,
+                &["ui", "highlight_line_roles"],
+                true,
+            ),
             ui_file_explorer_favorite_dirs_by_connection_id: json_string_vec_map(
                 &value,
                 &["ui", "file_explorer_favorite_dirs_by_connection_id"],
@@ -895,6 +900,11 @@ impl ConnectionStore {
             &mut value,
             &["ui", "file_explorer_auto_sync_cwd_connection_ids"],
             string_vec_json_value(&settings.ui_file_explorer_auto_sync_cwd_connection_ids, 256),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["ui", "highlight_line_roles"],
+            serde_json::Value::Bool(settings.ui_highlight_line_roles),
         );
         set_nested_json_value(
             &mut value,

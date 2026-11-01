@@ -240,6 +240,21 @@ pub(in crate::features) struct TerminalOverlayVisibility {
 }
 
 impl TerminalFeatureState {
+    /// Push the line-role highlight setting to every open terminal surface.
+    ///
+    /// Each surface compiles the flag into its highlighter, so a settings
+    /// change has to reach them instead of waiting for a new session.
+    pub(in crate::features) fn apply_line_role_highlighting(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<crate::features::NyaTermApp>,
+    ) {
+        let surfaces: Vec<_> = self.view.surfaces.values().cloned().collect();
+        for surface in surfaces {
+            surface.update(cx, |surface, cx| surface.set_line_roles(enabled, cx));
+        }
+    }
+
     pub(in crate::features) fn submit_execution_recording(
         &self,
         session_id: &str,

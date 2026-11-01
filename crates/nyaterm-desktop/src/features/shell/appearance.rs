@@ -8,7 +8,8 @@ use gpui::{
     SharedString, font, px,
 };
 use nyaterm_core::{
-    AppSettingsSummary, ResolvedKeywordHighlightRule, merge_keyword_highlight_rules_for_paint,
+    AppSettingsSummary, ResolvedKeywordHighlightRule,
+    merge_keyword_highlight_rules_for_paint_with_ansi,
 };
 
 use crate::features::terminal::{ResolvedAppearanceFont, measure_terminal_font};
@@ -372,10 +373,11 @@ impl NyaTermApp {
         if !self.settings.keyword_config().enabled {
             return Arc::new(Vec::new());
         }
-        Arc::new(merge_keyword_highlight_rules_for_paint(
+        Arc::new(merge_keyword_highlight_rules_for_paint_with_ansi(
             &self.settings.keyword_config().rules,
             &self.settings.keyword_config().builtin_rules,
             self.terminal_theme_is_dark(),
+            self.theme_palette().terminal_ansi,
         ))
     }
 
@@ -391,10 +393,11 @@ impl NyaTermApp {
         let rules = if !self.settings.keyword_config().enabled {
             Arc::new(Vec::new())
         } else {
-            Arc::new(merge_keyword_highlight_rules_for_paint(
+            Arc::new(merge_keyword_highlight_rules_for_paint_with_ansi(
                 &self.settings.keyword_config().rules,
                 &self.settings.keyword_config().builtin_rules,
                 self.terminal_theme_is_dark(),
+                self.theme_palette().terminal_ansi,
             ))
         };
         self.terminal.cache_keyword_highlight_rules(rules);

@@ -931,7 +931,7 @@ impl NyaTermApp {
             session_id,
             visible_text,
             recording_text_bytes,
-            input_highlights,
+            input_highlights: _,
             snapshot,
             action_links,
             protocol_state,
@@ -1052,7 +1052,6 @@ impl NyaTermApp {
                     revision,
                 );
             }
-            view.frame_input_highlights = view.frame_snapshot.as_ref().and(input_highlights);
             (unread_changed, view.scroll_offset)
         };
         if shell_edit_snapshot_available {
@@ -1240,7 +1239,6 @@ impl NyaTermApp {
                 frame.action_links,
                 frame.revision,
             );
-            view.frame_input_highlights = frame.input_highlights;
         } else {
             if !view
                 .history_state()
