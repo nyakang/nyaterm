@@ -164,6 +164,7 @@ impl SettingsPresentation {
                 expanded_id: None,
                 edit_id: None,
                 edit_field: KeywordHighlightEditorField::Name,
+                show_specialized: false,
             },
             keybinding_presentation: KeybindingPresentationState {
                 recording_id: None,
@@ -495,6 +496,33 @@ pub(in crate::features) struct SettingsPanel {
 }
 
 impl SettingsPanel {
+    /// Show or hide the rules that only feed the line-role parser.
+    pub(in crate::features) fn toggle_keyword_show_specialized(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self
+            .settings
+            .keyword_highlight_presentation
+            .show_specialized;
+        // The panel renders from a cloned snapshot, so update it here as well;
+        // changing only the app state leaves the switch showing its old value.
+        self.settings
+            .keyword_highlight_presentation
+            .show_specialized = enabled;
+        if let Some(app) = self.app.upgrade() {
+            app.update(cx, |app, _| {
+                app.settings.set_keyword_show_specialized(enabled);
+            });
+        }
+        cx.notify();
+    }
+
+    /// Forward the line-role highlight toggle to the app so it can persist it.
+    pub(in crate::features) fn toggle_line_role_highlights(&mut self, cx: &mut Context<Self>) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        app.update(cx, |app, cx| app.toggle_line_role_highlights(cx));
+    }
+
     pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>, cx: &mut Context<Self>) -> Self {
         let image_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(100.));
         let content_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(82.));

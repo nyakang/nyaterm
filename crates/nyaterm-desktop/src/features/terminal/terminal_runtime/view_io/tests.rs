@@ -17,12 +17,12 @@ use super::{
     lost_mouse_report_release_button, mouse_report_allowed_by_alt,
     terminal_cursor_position_changed, terminal_cursor_visible_for_display_offset,
     terminal_input_latency_active, terminal_key_bytes_for_mode_and_settings,
-    terminal_keyword_highlight_updates_allowed, terminal_live_action_link_enrichment_allowed,
-    terminal_mouse_report_button, terminal_paint_snapshot_for_view,
-    terminal_paint_window_snapshot_for_view, terminal_retained_snapshot_matches_view,
-    terminal_scroll_retained_window_extra_rows, terminal_scroll_snapshot_request_offset,
-    terminal_scroll_text_first_decorations, terminal_selection_for_session,
-    terminal_session_write_failure_log, terminal_should_defer_key_text_to_input_handler_for_state,
+    terminal_live_action_link_enrichment_allowed, terminal_mouse_report_button,
+    terminal_paint_snapshot_for_view, terminal_paint_window_snapshot_for_view,
+    terminal_retained_snapshot_matches_view, terminal_scroll_retained_window_extra_rows,
+    terminal_scroll_snapshot_request_offset, terminal_scroll_text_first_decorations,
+    terminal_selection_for_session, terminal_session_write_failure_log,
+    terminal_should_defer_key_text_to_input_handler_for_state,
     terminal_should_track_command_suggestion_input, terminal_snapshot_covers_display_offset,
     terminal_snapshot_with_newer_edge_row, terminal_snapshot_with_retained_scroll_window,
     terminal_status_changed, terminal_user_scroll_active, terminal_visual_display_offset,
@@ -936,17 +936,6 @@ fn terminal_scroll_text_first_decorations_keep_partially_covered_bottom_links() 
         decorations[snapshot.row_count() - 1].link_ranges,
         vec![(3, 8)]
     );
-}
-
-#[test]
-fn terminal_keyword_highlight_updates_stay_enabled_for_active_surface() {
-    assert!(terminal_keyword_highlight_updates_allowed(true, false));
-    assert!(!terminal_keyword_highlight_updates_allowed(true, true));
-}
-
-#[test]
-fn terminal_keyword_highlight_updates_pause_for_inactive_surface() {
-    assert!(!terminal_keyword_highlight_updates_allowed(false, false));
 }
 
 #[test]

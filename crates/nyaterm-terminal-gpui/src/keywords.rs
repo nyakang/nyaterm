@@ -87,76 +87,37 @@ impl std::fmt::Debug for TerminalKeywordHighlightSnapshot {
     }
 }
 
-/// Prepare the live input logical line before its frame is published. Call this
-/// on the frame worker, never from rendering or a GPUI update callback. Output,
-/// completion pages and pathological input retain the ordinary batch path;
-/// the adjacent input line is also prepared when the cursor leaves it.
-pub fn precompute_terminal_input_highlights(
-    snapshot: &TerminalSnapshot,
-    highlighter: &TerminalKeywordHighlighter,
-) -> Option<TerminalKeywordHighlightSnapshot> {
-    precompute_terminal_input_highlights_reusing(snapshot, highlighter, None)
-}
-
-/// Retain unchanged input rows across frames, including viewport scrolling, and
-/// prepare the just-submitted line before publishing its first output frame.
-pub fn precompute_terminal_input_highlights_reusing(
-    snapshot: &TerminalSnapshot,
-    highlighter: &TerminalKeywordHighlighter,
-    previous: Option<&TerminalKeywordHighlightSnapshot>,
-) -> Option<TerminalKeywordHighlightSnapshot> {
-    const MAX_INPUT_ROWS: usize = 16;
-    const MAX_INPUT_BYTES: usize = 16 * 1024;
-
-    if snapshot.display_offset != 0 {
-        return None;
+fn terminal_keyword_group_is_input(
+    rows: &[Arc<TerminalSnapshotRow>],
+    snapshot_publishes_anchors: bool,
+) -> bool {
+    if rows.iter().any(|row| {
+        matches!(
+            row.shell_input,
+            Some(nyaterm_terminal::ShellInputLineKind::Active)
+        )
+    }) {
+        return true;
     }
-    snapshot.row(snapshot.cursor.row)?;
-    let current = terminal_keyword_wrapped_group_bounds(snapshot, snapshot.cursor.row);
-    let mut requested = current.start..current.start;
-    let mut input_rows = 0;
-    let mut input_bytes = 0;
-    // CR/LF and the next prompt may arrive in separate packets. The previous
-    // logical line must keep its colors even while the cursor is on a blank row.
-    for group in [
-        Some(current),
-        (current.start > 0)
-            .then(|| terminal_keyword_wrapped_group_bounds(snapshot, current.start - 1)),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let rows = &snapshot.rows()[group.start..group.end];
-        let bytes = rows
-            .iter()
-            .map(|row| terminal_keyword_row_bytes(row))
-            .sum::<usize>();
-        if group.oversized
-            || input_rows + rows.len() > MAX_INPUT_ROWS
-            || input_bytes + bytes > MAX_INPUT_BYTES
-            || !terminal_keyword_group_is_input(rows)
-        {
-            continue;
-        }
-        input_rows += rows.len();
-        input_bytes += bytes;
-        requested.start = requested.start.min(group.start);
-        requested.end = requested.end.max(group.end);
-    }
-    let previous = previous.filter(|previous| previous.rules_key == highlighter.rules_key);
-    if requested.is_empty() && previous.is_none() {
-        return None;
-    }
-    let (highlights, _) =
-        precompute_keyword_rows(snapshot, highlighter, previous, requested, || false)?;
-    (highlights.known_row_count() > 0).then_some(highlights)
-}
-
-fn terminal_keyword_group_is_input(rows: &[Arc<TerminalSnapshotRow>]) -> bool {
     if rows.iter().any(|row| row.shell_input_columns.is_some()) {
         return true;
     }
-    !rows.iter().any(|row| row.shell_integration) && !rows[0].wrapped && {
+    // `133;C` has been seen: the row is output that merely looks like a prompt.
+    if rows.iter().any(|row| {
+        matches!(
+            row.shell_input,
+            Some(nyaterm_terminal::ShellInputLineKind::Submitted)
+        )
+    }) {
+        return false;
+    }
+    // No anchor on this row: either the shell never publishes them, or the row
+    // simply has none. A prompt shape is then the only usable signal — without
+    // it the row being typed stays plain white while its submitted copy above is
+    // coloured. `Submitted` above already excluded finished output, so accepting
+    // the prompt shape here cannot resurrect a stale command colour.
+    let _ = snapshot_publishes_anchors;
+    !rows[0].wrapped && {
         // Row text trims trailing blanks. Preserve the actual cells so an
         // empty "$ " prompt still publishes a known-empty input result.
         let line = rows[0]
@@ -226,8 +187,23 @@ impl TerminalKeywordHighlightSnapshot {
     pub fn matches_snapshot_rows(
         &self,
         snapshot: &TerminalSnapshot,
+        palette: nyaterm_ui::ThemePalette,
+        rows: Range<usize>,
+    ) -> bool {
+        self.matches_snapshot_rows_skipping(snapshot, palette, rows, None)
+    }
+
+    /// Like [`Self::matches_snapshot_rows`], but ignores one row.
+    ///
+    /// The live input row is painted from `input_keyword_highlights`, so this
+    /// snapshot legitimately has no entry for it; counting it as a mismatch made
+    /// the surface rebuild every visible row on each keystroke.
+    pub fn matches_snapshot_rows_skipping(
+        &self,
+        snapshot: &TerminalSnapshot,
         _palette: nyaterm_ui::ThemePalette,
         rows: Range<usize>,
+        skip: Option<usize>,
     ) -> bool {
         if self.display_offset != snapshot.display_offset {
             return false;
@@ -243,6 +219,9 @@ impl TerminalKeywordHighlightSnapshot {
         }
         let reuse_keys = terminal_keyword_row_reuse_keys(snapshot);
         (start..end).all(|row| {
+            if skip == Some(row) {
+                return true;
+            }
             self.has_row_at_with_reuse_key(row, snapshot, reuse_keys.get(row).copied().flatten())
         })
     }
@@ -343,6 +322,12 @@ impl TerminalKeywordHighlightSnapshot {
             .count();
         let retained = ranges.partition_point(|range| range.end_col <= unchanged_cols);
         (retained > 0).then(|| TerminalKeywordHighlightLookup::Stale(&ranges[..retained]))
+    }
+
+    /// Whether this snapshot already carries highlights for `row`.
+    pub fn has_row(&self, row: usize, snapshot: &TerminalSnapshot) -> bool {
+        let reuse_key = terminal_keyword_row_reuse_key(snapshot, row);
+        self.has_row_at_with_reuse_key(row, snapshot, reuse_key)
     }
 
     fn has_row_at_with_reuse_key(
@@ -455,7 +440,14 @@ pub fn precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel(
     TerminalKeywordHighlightPrecomputeStats,
 )> {
     let _ = palette;
-    precompute_keyword_rows(snapshot, highlighter, previous, requested_rows, cancelled)
+    precompute_keyword_rows(
+        snapshot,
+        highlighter,
+        previous,
+        requested_rows,
+        false,
+        cancelled,
+    )
 }
 
 fn precompute_keyword_rows(
@@ -463,12 +455,14 @@ fn precompute_keyword_rows(
     highlighter: &TerminalKeywordHighlighter,
     previous: Option<&TerminalKeywordHighlightSnapshot>,
     requested_rows: Range<usize>,
+    assume_input: bool,
     mut cancelled: impl FnMut() -> bool,
 ) -> Option<(
     TerminalKeywordHighlightSnapshot,
     TerminalKeywordHighlightPrecomputeStats,
 )> {
     let previous = previous.filter(|previous| previous.rules_key == highlighter.rules_key);
+    let publishes_anchors = snapshot_publishes_input_anchors(snapshot);
     let requested_rows = terminal_keyword_highlight_expanded_rows(snapshot, requested_rows);
     let mut stats = TerminalKeywordHighlightPrecomputeStats {
         requested_rows: requested_rows.len(),
@@ -487,6 +481,13 @@ fn precompute_keyword_rows(
         // join unrelated commands or log records. Only pathological lines degrade.
         let group = terminal_keyword_wrapped_group_bounds(snapshot, row);
         let group_range = group.start..group.end;
+        // One snapshot holds every row; the live input row is simply parsed with
+        // the input context instead of a separate overlay snapshot.
+        let group_is_input = group_range.contains(&snapshot.cursor.row)
+            && terminal_keyword_group_is_input(
+                &snapshot.rows()[group_range.clone()],
+                publishes_anchors,
+            );
         let requested = group.start < requested_rows.end && group.end > requested_rows.start;
         let group_keys = row_reuse_keys
             .get(group_range.clone())
@@ -521,6 +522,7 @@ fn precompute_keyword_rows(
                         row..row.saturating_add(1),
                         highlighter,
                         Some(&mut stats),
+                        assume_input || group_is_input,
                     )
                     .into_iter()
                     .next()
@@ -533,6 +535,7 @@ fn precompute_keyword_rows(
                 group_range.clone(),
                 highlighter,
                 Some(&mut stats),
+                assume_input || group_is_input,
             )
         };
         for (idx, ranges) in group_range.zip(group_rows) {
@@ -658,6 +661,17 @@ fn terminal_keyword_row_bytes(row: &nyaterm_terminal::TerminalSnapshotRow) -> us
         .sum()
 }
 
+/// Whether any row on screen carries a shell input anchor.
+///
+/// A shell that advertises integration but never publishes an anchor is not
+/// usable for input detection, so the prompt fallback has to take over.
+fn snapshot_publishes_input_anchors(snapshot: &TerminalSnapshot) -> bool {
+    snapshot
+        .rows()
+        .iter()
+        .any(|row| row.shell_input.is_some() || row.shell_input_columns.is_some())
+}
+
 pub(super) fn terminal_keyword_row_reuse_key(
     snapshot: &TerminalSnapshot,
     row: usize,
@@ -743,6 +757,7 @@ fn terminal_keyword_ranges_for_wrapped_group(
     rows: Range<usize>,
     highlighter: &TerminalKeywordHighlighter,
     mut stats: Option<&mut TerminalKeywordHighlightPrecomputeStats>,
+    assume_input: bool,
 ) -> Vec<Vec<TerminalKeywordRange>> {
     let range_build_started = Instant::now();
     let row_count = rows.end.saturating_sub(rows.start);
@@ -802,6 +817,12 @@ fn terminal_keyword_ranges_for_wrapped_group(
                 end_byte,
             });
         }
+    }
+    // A group known to be the live input line, but with no input columns from
+    // the shell, still has to colour its prompt and command: ask for the prompt
+    // fallback explicitly instead of trusting the integration flag.
+    if assume_input && context.input.is_empty() {
+        context.input_anchor_missing = true;
     }
     let line_build_duration = range_build_started.elapsed();
     if let Some(stats) = stats.as_mut() {
@@ -1074,6 +1095,7 @@ fn next_char_boundary(line: &str, start: usize) -> Option<usize> {
 
 pub fn compile_terminal_keyword_highlighter(
     rules: &[ResolvedKeywordHighlightRule],
+    line_roles: bool,
 ) -> TerminalKeywordHighlighter {
     let (regex_rules, literal_rules, literal_automaton) = compile_keyword_rule_sets(rules);
     TerminalKeywordHighlighter {
@@ -1081,7 +1103,7 @@ pub fn compile_terminal_keyword_highlighter(
         regex_rules,
         literal_rules,
         literal_automaton,
-        semantic: SemanticHighlighter::compile(rules),
+        semantic: SemanticHighlighter::compile(rules, line_roles),
     }
 }
 
@@ -1746,7 +1768,7 @@ mod tests {
                 enabled: true,
             },
         ];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
 
         assert_eq!(
             keyword_matches_highlighter("error WARN42 ERR", &highlighter),
@@ -1891,7 +1913,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let highlights =
             precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
@@ -1970,7 +1992,7 @@ mod tests {
         }];
         precompute_terminal_keyword_highlights(
             snapshot,
-            &compile_terminal_keyword_highlighter(&rules),
+            &compile_terminal_keyword_highlighter(&rules, true),
             nyaterm_ui::theme_palette("github-dark"),
             None,
         )
@@ -2115,7 +2137,7 @@ mod tests {
             color: "#ff0000".to_string(),
             enabled: true,
         }];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
 
         let (highlights, stats) = precompute_terminal_keyword_highlights_for_rows_with_stats(
             &snapshot,
@@ -2149,7 +2171,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let highlights =
             precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
@@ -2189,7 +2211,7 @@ mod tests {
         );
         let rules = nyaterm_core::get_builtin_keyword_rules(true);
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let highlights =
             precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
@@ -2227,7 +2249,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let highlights = precompute_terminal_keyword_highlights(
             &snapshot,
             &highlighter,
@@ -2253,7 +2275,7 @@ mod tests {
             color: "#ff2244".to_string(),
             enabled: true,
         }];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
 
         let first = precompute_terminal_keyword_highlights_for_rows(
@@ -2293,7 +2315,7 @@ mod tests {
             color: "#ff2244".to_string(),
             enabled: true,
         }];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
 
         let (first, first_stats) = precompute_terminal_keyword_highlights_for_rows_with_stats(
@@ -2333,7 +2355,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let highlights = precompute_terminal_keyword_highlights(
             &snapshot,
             &highlighter,
@@ -2371,7 +2393,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let first_highlights =
             precompute_terminal_keyword_highlights(&first_snapshot, &highlighter, palette, None);
@@ -2397,7 +2419,7 @@ mod tests {
             color: "#ff2244".into(),
             enabled: true,
         }];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         for (input, expected_cells) in [("ERROR", 5), ("ERR\r\nOR", 0)] {
             let mut screen = TerminalScreen::new(3, 4);
@@ -2425,7 +2447,7 @@ mod tests {
             color: "#ff2244".into(),
             enabled: true,
         }];
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let mut screen = TerminalScreen::new(12, 4);
         screen.advance(b"ERROR");
@@ -2475,7 +2497,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let highlights = precompute_terminal_keyword_highlights(
             &snapshot,
             &highlighter,
@@ -2558,7 +2580,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let highlights = precompute_terminal_keyword_highlights(
             &snapshot,
             &highlighter,
@@ -2603,7 +2625,7 @@ mod tests {
             enabled: true,
         }];
 
-        let highlighter = compile_terminal_keyword_highlighter(&rules);
+        let highlighter = compile_terminal_keyword_highlighter(&rules, true);
         let palette = nyaterm_ui::theme_palette("github-dark");
         let wrapped_highlights =
             precompute_terminal_keyword_highlights(&wrapped, &highlighter, palette, None);

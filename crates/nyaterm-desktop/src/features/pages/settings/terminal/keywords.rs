@@ -25,8 +25,20 @@ impl SettingsPanel {
         let is_dark = self.terminal_theme_is_dark();
         let rules = self.settings.keyword_config().rules.clone();
         let keyword_highlighting_enabled = self.settings.keyword_config().enabled;
+        let line_role_highlights = self.settings.summary().ui_highlight_line_roles;
         let expanded = self.settings.keyword_highlight_presentation().expanded_id;
         let builtin_ids = nyaterm_core::builtin_keyword_rule_ids();
+        let show_specialized = self
+            .settings
+            .keyword_highlight_presentation
+            .show_specialized;
+        // Specialized rules only feed the line-role parser; keeping them hidden
+        // by default leaves the common list short enough to scan.
+        let visible_ids: Vec<&'static str> = builtin_ids
+            .iter()
+            .copied()
+            .filter(|id| show_specialized || !nyaterm_core::builtin_keyword_rule_is_specialized(id))
+            .collect();
         let untitled_rule_label = t!("settings.keywordHighlightNewRule");
 
         settings_form_section(
@@ -47,6 +59,21 @@ impl SettingsPanel {
                         keyword_highlighting_enabled,
                         cx.listener(|this, _, _, cx| {
                             this.toggle_keyword_highlights(cx);
+                        }),
+                    ),
+                ))
+                .child(settings_form_row(
+                    palette,
+                    t!("settings.lineRoleHighlighting"),
+                    Some(SharedString::from(
+                        t!("settings.lineRoleHighlightingHint").to_string(),
+                    )),
+                    settings_switch(
+                        palette,
+                        "settings-line-role-highlights",
+                        line_role_highlights,
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_line_role_highlights(cx);
                         }),
                     ),
                 ))
@@ -77,18 +104,36 @@ impl SettingsPanel {
                                                 "settings.keywordHighlightBuiltinNote",
                                             )),
                                     )
+                                    .child(settings_form_row(
+                                        palette,
+                                        t!("settings.keywordHighlightShowSpecialized"),
+                                        Some(SharedString::from(
+                                            t!("settings.keywordHighlightShowSpecializedHint")
+                                                .to_string(),
+                                        )),
+                                        settings_switch(
+                                            palette,
+                                            "settings-keyword-show-specialized",
+                                            show_specialized,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_keyword_show_specialized(cx);
+                                            }),
+                                        ),
+                                    ))
                                     .child(
                                         div()
                                             .grid()
                                             .grid_cols(2)
                                             .gap_2()
-                                            .children(builtin_ids.iter().map(|id| {
+                                            .children(visible_ids.iter().map(|id| {
                                                 let id = (*id).to_string();
                                                 let label =
                                                     nyaterm_core::builtin_keyword_rule_label(&id);
                                                 let swatch =
-                                                    nyaterm_core::builtin_keyword_rule_swatch(
-                                                        &id, is_dark,
+                                                    nyaterm_core::builtin_keyword_rule_swatch_ansi(
+                                                        &id,
+                                                        palette.terminal_ansi,
+                                                        is_dark,
                                                     );
                                                 let enabled = self
                                                     .settings.keyword_config()
@@ -97,7 +142,7 @@ impl SettingsPanel {
                                                     .copied()
                                                     .unwrap_or(true);
                                                 let color =
-                                                    parse_keyword_swatch(swatch).unwrap_or(0x79c0ff);
+                                                    parse_keyword_swatch(&swatch).unwrap_or(0x79c0ff);
                                                 let rid = id.clone();
                                                 div()
                                                     .rounded_md()

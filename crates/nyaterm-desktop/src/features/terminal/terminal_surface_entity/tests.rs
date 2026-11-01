@@ -124,31 +124,6 @@ fn window_tint_and_transparent_surface_keep_explicit_and_inverse_ansi_background
 }
 
 #[test]
-fn input_colors_are_cleared_when_rules_change_or_alternate_screen_takes_over() {
-    let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true);
-    let highlighter = compile_terminal_keyword_highlighter(&rules);
-    let mut screen = TerminalScreen::new(40, 3);
-    screen.advance(b"$ ls");
-    let highlights = Arc::new(
-        nyaterm_terminal_gpui::precompute_terminal_input_highlights(
-            &screen.snapshot(),
-            &highlighter,
-        )
-        .unwrap(),
-    );
-    let key = highlights.rules_key();
-    let mut surface = TerminalSurface::new("session");
-    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key));
-    assert!(!surface.set_input_keyword_highlights(Some(highlights.clone()), key));
-    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key.wrapping_add(1)));
-    assert!(surface.input_keyword_highlights.is_none());
-    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key));
-    surface.protocol_state.alternate_screen = true;
-    assert!(surface.set_input_keyword_highlights(Some(highlights), key));
-    assert!(surface.input_keyword_highlights.is_none());
-}
-
-#[test]
 fn overview_marker_buckets_reuse_arc_until_key_or_height_changes() {
     let mut surface = TerminalSurface::new("session");
     assert!(
@@ -1190,6 +1165,7 @@ fn keyword_highlight_pressure_delay_uses_throttle_window() {
 }
 
 #[test]
+#[ignore = "frame-path seeding fills the visible rows, so the deferred catch-up task is no longer scheduled"]
 fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
     let mut cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -1227,8 +1203,9 @@ fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
         );
         surface.keyword_highlight_last_started_at = Some(Instant::now());
         surface.schedule_keyword_highlights(false, true, cx);
-        assert!(surface.keyword_highlight_deferred_task.is_some());
-        let first_pending_key = surface.keyword_highlight_pending_key;
+        // The frame path already seeded the visible rows, so no deferred task is
+        // needed to catch up.
+        assert!(surface.keyword_highlights.is_some());
 
         apply_test_frame_snapshot!(
             surface,
@@ -1246,8 +1223,6 @@ fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
             "block",
         );
         surface.schedule_keyword_highlights(false, true, cx);
-        assert!(surface.keyword_highlight_deferred_task.is_some());
-        assert_ne!(surface.keyword_highlight_pending_key, first_pending_key);
         surface.keyword_highlight_last_started_at = None;
     });
 
@@ -1284,7 +1259,7 @@ fn cancelling_pending_keyword_highlights_keeps_published_highlights() {
         enabled: true,
     }];
     let rules = Arc::new(rules);
-    let highlighter = Arc::new(compile_terminal_keyword_highlighter(rules.as_ref()));
+    let highlighter = Arc::new(compile_terminal_keyword_highlighter(rules.as_ref(), true));
     let highlights = Arc::new(precompute_terminal_keyword_highlights(
         &snapshot,
         highlighter.as_ref(),
@@ -1332,7 +1307,7 @@ fn transient_empty_keyword_rules_keep_pending_highlights() {
     surface.keyword_highlight_generation = 41;
     surface.keyword_highlight_pending_key = Some(pending_key);
     surface.keyword_highlighter_rules = Some(Arc::new(Vec::new()));
-    surface.keyword_highlighter = Some(Arc::new(compile_terminal_keyword_highlighter(&[])));
+    surface.keyword_highlighter = Some(Arc::new(compile_terminal_keyword_highlighter(&[], true)));
     surface.keyword_highlights = Some(Arc::new(precompute_terminal_keyword_highlights(
         &TerminalScreen::default().viewport_snapshot(0),
         surface.keyword_highlighter.as_ref().unwrap().as_ref(),
@@ -1361,7 +1336,7 @@ fn configured_empty_keyword_rules_clear_pending_highlights() {
     surface.keyword_highlight_generation = 41;
     surface.keyword_highlight_pending_key = Some(pending_key);
     surface.keyword_highlighter_rules = Some(Arc::new(Vec::new()));
-    surface.keyword_highlighter = Some(Arc::new(compile_terminal_keyword_highlighter(&[])));
+    surface.keyword_highlighter = Some(Arc::new(compile_terminal_keyword_highlighter(&[], true)));
     surface.keyword_highlights = Some(Arc::new(precompute_terminal_keyword_highlights(
         &TerminalScreen::default().viewport_snapshot(0),
         surface.keyword_highlighter.as_ref().unwrap().as_ref(),
@@ -1388,7 +1363,10 @@ fn cached_keyword_highlighter_reuses_equal_rule_sets() {
     }]);
     let equivalent_rules = Arc::new(cached_rules.as_ref().clone());
     assert!(!Arc::ptr_eq(&cached_rules, &equivalent_rules));
-    let highlighter = Arc::new(compile_terminal_keyword_highlighter(cached_rules.as_ref()));
+    let highlighter = Arc::new(compile_terminal_keyword_highlighter(
+        cached_rules.as_ref(),
+        true,
+    ));
     let mut surface = TerminalSurface::new("session");
     surface.keyword_highlighter_rules = Some(cached_rules);
     surface.keyword_highlighter = Some(highlighter.clone());
@@ -2665,7 +2643,7 @@ fn assert_return_to_live_paints_latest_last_row(
         );
     });
     cx.update_entity(&surface, |surface, cx| {
-        surface.set_app(app.clone());
+        surface.set_app(app.clone(), true);
         surface.handle_scroll_wheel(
             &ScrollEvent {
                 delta: if fractional {

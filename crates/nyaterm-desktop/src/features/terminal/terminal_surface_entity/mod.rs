@@ -32,7 +32,7 @@ use crate::models::{
 use crate::terminal::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalGridSelection,
     TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter, TerminalLineDecorations,
-    compile_terminal_keyword_highlighter,
+    compile_terminal_keyword_highlighter, precompute_terminal_keyword_highlights_for_rows,
     precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel, terminal_font_features,
     terminal_keyword_highlight_expanded_rows, terminal_keyword_rules_key,
 };
@@ -328,8 +328,15 @@ pub(in crate::features) struct TerminalSurface {
     retained_rows: BTreeMap<usize, Arc<nyaterm_terminal::TerminalSnapshotRow>>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    /// Cached `ui_highlight_line_roles`; the highlight path runs inside
+    /// `app.update`, where reading the app entity would borrow it twice.
+    line_roles: bool,
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
-    input_keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+    /// A new frame arrived, so the visible rows may need highlighting.
+    ///
+    /// Keystrokes reuse the same snapshot (the input line is highlighted
+    /// separately), so this stays false and typing never rebuilds the snapshot.
+    keyword_highlights_pending_seed: bool,
     keyword_highlight_generation: u64,
     keyword_highlight_cancel_epoch: Arc<AtomicU64>,
     keyword_highlight_task: Option<gpui::Task<()>>,
@@ -414,8 +421,9 @@ impl TerminalSurface {
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
+            line_roles: true,
             keyword_highlights: None,
-            input_keyword_highlights: None,
+            keyword_highlights_pending_seed: false,
             keyword_highlight_generation: 0,
             keyword_highlight_cancel_epoch: Arc::new(AtomicU64::new(0)),
             keyword_highlight_task: None,
@@ -685,8 +693,23 @@ impl TerminalSurface {
         true
     }
 
-    pub(in crate::features) fn set_app(&mut self, app: Entity<NyaTermApp>) {
+    /// Re-apply the line-role setting without recreating the surface.
+    pub(in crate::features) fn set_line_roles(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.line_roles == enabled {
+            return;
+        }
+        self.line_roles = enabled;
+        // The compiled highlighter bakes the flag in, so drop it.
+        self.keyword_highlighter = None;
+        self.keyword_highlighter_rules = None;
+        cx.notify();
+    }
+
+    pub(in crate::features) fn set_app(&mut self, app: Entity<NyaTermApp>, line_roles: bool) {
         self.app = Some(app.downgrade());
+        // Cached here because the highlight path runs inside `app.update`, where
+        // reading the app entity again would trip `RefCell already borrowed`.
+        self.line_roles = line_roles;
     }
 
     pub(in crate::features) fn apply_frame_snapshot(
@@ -781,6 +804,12 @@ impl TerminalSurface {
         self.cursor_style = cursor_style;
         self.prune_pending_scroll_snapshot_offsets();
         self.revision = self.revision.saturating_add(1);
+        // A fresh frame may carry rows that have no cached highlight yet. Seed them
+        // here, on the frame path, so the very next paint already has colours:
+        // doing it inside `render` rebuilt the snapshot every frame, and leaving it
+        // to the background task painted one frame of uncoloured text.
+        self.keyword_highlights_pending_seed = true;
+        self.ensure_visible_keyword_highlights();
         true
     }
 
@@ -1674,26 +1703,6 @@ impl TerminalSurface {
         true
     }
 
-    pub(in crate::features) fn set_input_keyword_highlights(
-        &mut self,
-        highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
-        rules_key: u64,
-    ) -> bool {
-        let highlights = highlights.filter(|highlights| {
-            !self.protocol_state.alternate_screen && highlights.rules_key() == rules_key
-        });
-        let unchanged = match (&self.input_keyword_highlights, &highlights) {
-            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
-            (None, None) => true,
-            _ => false,
-        };
-        if unchanged {
-            return false;
-        }
-        self.input_keyword_highlights = highlights;
-        true
-    }
-
     pub(in crate::features) fn schedule_keyword_highlights(
         &mut self,
         clear_if_empty: bool,
@@ -1718,6 +1727,7 @@ impl TerminalSurface {
         );
         let visible_rows =
             terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), visible_rows);
+
         let rules = self.keyword_rules.clone();
         let rules_key = terminal_keyword_rules_key(rules.as_slice());
         if self.keyword_highlights.as_ref().is_some_and(|highlights| {
@@ -1780,13 +1790,17 @@ impl TerminalSurface {
         // Keep the last published snapshot drawable while the replacement is parsed in the
         // background, matching the editor's stale-until-reparsed behavior.
         let highlighter = self.cached_keyword_highlighter_for_rules(&rules);
+        let line_roles = self.line_roles;
         let palette = self.palette;
         let previous_highlights = self.keyword_highlights.clone();
         self.keyword_highlight_task = Some(cx.spawn(async move |this, cx| {
             let (rules, highlighter, result, highlight_duration) = cx
                 .background_spawn(async move {
                     let highlighter = highlighter.unwrap_or_else(|| {
-                        Arc::new(compile_terminal_keyword_highlighter(rules.as_ref()))
+                        Arc::new(compile_terminal_keyword_highlighter(
+                            rules.as_ref(),
+                            line_roles,
+                        ))
                     });
                     let highlight_started_at = Instant::now();
                     let result =
@@ -1899,6 +1913,70 @@ impl TerminalSurface {
             .as_ref()
             .filter(|cached_rules| terminal_keyword_rule_sets_equal(cached_rules, rules))
             .and(self.keyword_highlighter.clone())
+    }
+
+    /// Highlight the visible rows synchronously when the cache is missing or stale.
+    ///
+    /// The background precompute owns scrollback and prefetch; this keeps the
+    /// first paint of new output coloured, so text never appears plain and then
+    /// repaints (the "flash" users notice on fast output).
+    fn ensure_visible_keyword_highlights(&mut self) {
+        let Some(snapshot) = self.snapshot.clone() else {
+            return;
+        };
+        // Only a new frame can introduce rows without highlights. Keystrokes
+        // keep the same snapshot, so this returns before any per-row scan.
+        if !self.keyword_highlights_pending_seed && self.keyword_highlights.is_some() {
+            return;
+        }
+        self.keyword_highlights_pending_seed = false;
+        let rules = self.keyword_rules.clone();
+        let rules_key = terminal_keyword_rules_key(rules.as_slice());
+        let rows = terminal_keyword_highlight_prefetch_rows(
+            snapshot.as_ref(),
+            self.display_offset,
+            self.viewport_rows,
+            self.scrollback_len,
+            1,
+        );
+        let rows = terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), rows);
+        // Only rows without cached highlights trigger a rebuild. Everything else
+        // is reused by `precompute`, so typing repaints the input row instead of
+        // the whole viewport (which showed up as "everything flashes").
+        let previous = self
+            .keyword_highlights
+            .as_ref()
+            .filter(|highlights| highlights.rules_key() == rules_key);
+        // Every row, including the live input row, lives in this one snapshot.
+        let missing: Vec<usize> = rows
+            .clone()
+            .filter(|row| {
+                !previous.is_some_and(|highlights| highlights.has_row(*row, snapshot.as_ref()))
+            })
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let Some(first) = missing.first().copied() else {
+            return;
+        };
+        let last = missing.last().copied().unwrap_or(first);
+        let highlighter = self
+            .cached_keyword_highlighter_for_rules(&rules)
+            .unwrap_or_else(|| {
+                Arc::new(compile_terminal_keyword_highlighter(
+                    rules.as_ref(),
+                    self.line_roles,
+                ))
+            });
+        let highlights = precompute_terminal_keyword_highlights_for_rows(
+            snapshot.as_ref(),
+            highlighter.as_ref(),
+            self.palette,
+            previous.map(Arc::as_ref),
+            first..last + 1,
+        );
+        self.keyword_highlights = Some(Arc::new(highlights));
     }
 
     fn cancel_pending_keyword_highlights(&mut self) {
@@ -2999,9 +3077,6 @@ impl Render for TerminalSurface {
             .with_zebra_stripes(zebra_stripes_visible, target_line);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
-        }
-        if let Some(highlights) = self.input_keyword_highlights.clone() {
-            grid = grid.with_input_keyword_highlights(highlights);
         }
 
         let gutter = if gutter_enabled {
