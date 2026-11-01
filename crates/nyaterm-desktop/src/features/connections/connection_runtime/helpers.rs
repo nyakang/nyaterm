@@ -735,12 +735,13 @@ pub(super) fn build_saved_connection_from_editor(
 
     let name = if editor.name.trim().is_empty() {
         match &config {
-            ConnectionType::Ssh { host, port, .. }
-            | ConnectionType::Telnet { host, port, .. }
-            | ConnectionType::Rdp { host, port, .. }
-            | ConnectionType::Vnc { host, port, .. } => {
-                format!("{host}:{port}")
-            }
+            // Name it after the host alone: the port is visible in the editor
+            // and repeating `:22` on every row is noise (issue: sidebar rows
+            // should read like OxideTerm's).
+            ConnectionType::Ssh { host, .. }
+            | ConnectionType::Telnet { host, .. }
+            | ConnectionType::Rdp { host, .. }
+            | ConnectionType::Vnc { host, .. } => host.clone(),
             ConnectionType::LocalTerminal { .. } => "Local Terminal".to_string(),
             ConnectionType::Serial { port_name, .. } => port_name.clone(),
         }

@@ -324,7 +324,8 @@ impl NyaTermApp {
                     .map(|root| root.session_ids())
                     .unwrap_or_else(|| vec![session_id.clone()]);
                 let is_disconnected = leaf_ids.iter().any(|id| self.session.is_disconnected(id));
-                let title = self.session.display_name_by_info(&session);
+                let title =
+                    nyaterm_core::strip_display_port(&self.session.display_name_by_info(&session));
                 let is_locked = self.tab_tree_is_locked(&session_id);
                 let active_pane = self.active_pane_for_tab_root(&session_id);
                 let connection = self

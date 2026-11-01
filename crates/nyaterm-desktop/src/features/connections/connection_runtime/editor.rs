@@ -230,7 +230,10 @@ impl NyaTermApp {
                 pending_group_parent_id: None,
                 host: String::new(),
                 port: "22".to_string(),
-                username: "root".to_string(),
+                // Left blank on purpose: the username is required, and defaulting
+                // to `root` made it too easy to save a connection as root by
+                // accident (most hosts want a named account).
+                username: String::new(),
                 domain: String::new(),
                 auth_mode: "password".to_string(),
                 rdp_backend: "builtin".to_string(),

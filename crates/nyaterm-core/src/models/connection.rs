@@ -300,6 +300,25 @@ pub struct SshAgentForwardingConfig {
 }
 
 /// Returns a normalized comparison key without exposing secret values.
+/// Drop a trailing `:port` from a connection name for display.
+///
+/// Connections saved before the name fallback changed carry `host:port` as
+/// their name; rows show the host only so the port is not repeated on every
+/// line. IPv6 names keep their brackets (`[fe80::1]:22` becomes `[fe80::1]`),
+/// and anything that does not end in a numeric port is returned unchanged.
+pub fn strip_display_port(name: &str) -> String {
+    let Some(colon) = name.rfind(':') else {
+        return name.to_string();
+    };
+    let (head, tail) = name.split_at(colon);
+    let port = &tail[1..];
+    if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) {
+        head.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 pub fn ssh_agent_endpoint_key(endpoint: &SshAgentEndpoint) -> String {
     match endpoint {
         SshAgentEndpoint::Auto if cfg!(unix) => "environment:SSH_AUTH_SOCK".to_string(),
