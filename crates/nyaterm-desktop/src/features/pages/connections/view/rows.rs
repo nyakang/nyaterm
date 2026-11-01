@@ -565,7 +565,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
             ConnectionDragPayload {
                 kind: ConnectionDragKind::Connection,
                 id: connection.id.clone(),
-                label: connection.name.clone(),
+                label: nyaterm_core::strip_display_port(&connection.name),
             },
             |payload, position, _, cx| {
                 cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
@@ -706,7 +706,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                             })
                             // Full name, never clipped — the list scrolls to reach it.
                             .whitespace_nowrap()
-                            .child(connection.name.clone()),
+                            .child(nyaterm_core::strip_display_port(&connection.name)),
                     ),
                 ConnectionDetailsHoverCard::new(connection.id.clone(), details_rows, palette),
             )

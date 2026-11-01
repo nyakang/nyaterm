@@ -516,7 +516,9 @@ impl NyaTermApp {
         let kind = session_kind_label(session.kind).to_ascii_uppercase();
         let full_id = session.id.clone();
         let id_preview = truncate_preview(&full_id, 42);
-        let title = truncate_preview(&display_name, 32);
+        // The row already shows the endpoint type badge; a trailing `:port` only
+        // adds noise (OxideTerm-style rows show host, not host:port).
+        let title = truncate_preview(&nyaterm_core::strip_display_port(&display_name), 32);
 
         div()
             .id(SharedString::from(format!(
@@ -538,7 +540,6 @@ impl NyaTermApp {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().size(px(8.)).rounded_full().bg(accent).flex_none())
                     .child(
                         div()
                             .min_w_0()
@@ -580,6 +581,14 @@ impl NyaTermApp {
                                     .overflow_hidden()
                                     .child(id_preview),
                             ),
+                    )
+                    .child(
+                        div()
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(accent)
+                            .flex_none()
+                            .mr_1(),
                     )
                     .child(
                         div()
