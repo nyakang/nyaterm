@@ -1,5 +1,14 @@
 # Release version
 
+Linux packages stage the original 32/64/128/256/512 pixel icons with 0644
+permissions and traversable 0755 directories, independent of checkout modes or
+the builder's umask. Debian packages use `dpkg-deb --root-owner-group`; their
+`postinst configure` repairs only the installed package's regular icon files.
+`StartupWMClass` matches the X11 class (`NyaTerm` or `NyaTerm Preview`), while
+Wayland retains the lowercase desktop ID. See the separate
+[focal compatibility builder](../compat/linux-focal/README.md) for glibc 2.31 and
+private software OpenGL artifacts.
+
 Use Python 3.11 or newer to preview and apply a release version from the repository root:
 
 ```sh

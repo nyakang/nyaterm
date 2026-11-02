@@ -2,7 +2,30 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, Raw
 use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::xproto::{ConnectionExt, EventMask, UNMAP_NOTIFY_EVENT, UnmapNotifyEvent};
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
+
+pub(crate) fn set_window_class(
+    window: &(impl HasDisplayHandle + HasWindowHandle),
+    instance: &str,
+    class: &str,
+) {
+    // Wayland keeps the lowercase desktop ID. X11's class matches the desktop
+    // entry's StartupWMClass while its instance retains that same desktop ID.
+    with_x11_window(window, |connection, window, _| {
+        let value = format!("{instance}\0{class}\0");
+        connection
+            .change_property8(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                window,
+                x11rb::protocol::xproto::AtomEnum::WM_CLASS,
+                x11rb::protocol::xproto::AtomEnum::STRING,
+                value.as_bytes(),
+            )?
+            .ignore_error();
+        connection.flush()
+    });
+}
 
 pub(crate) fn hide_to_tray(window: &(impl HasDisplayHandle + HasWindowHandle)) -> bool {
     with_x11_window(window, withdraw_window)

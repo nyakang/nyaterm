@@ -234,7 +234,7 @@ def verify_linux_desktop(
         "Type": "Application",
         "Name": identity.display_name,
         "Icon": identity.desktop_id,
-        "StartupWMClass": identity.desktop_id,
+        "StartupWMClass": identity.display_name,
         "Exec": f"{expected_executable} %U",
         "MimeType": "".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes),
     }
@@ -728,10 +728,12 @@ def verify_appimage(path: Path, target: str, version: str) -> None:
         packaged_version = version_file.read_text(encoding="utf-8").strip()
         desktop_content = desktop_file.read_text(encoding="utf-8")
         verify_linux_desktop((root / identity.linux_desktop_file).read_text(encoding="utf-8"), package_native.APP_BIN, path.name, identity)
-        for size in ("32x32", "64x64", "128x128", "256x256"):
+        for size in package_native.linux_icons.ICON_SIZES:
             icon = root / "usr" / "share" / "icons" / "hicolor" / size / "apps" / f"{identity.desktop_id}.png"
             if not icon.is_file():
                 raise RuntimeError(f"{path.name} is missing {icon.name}")
+            if icon.stat().st_mode & 0o777 != 0o644:
+                raise RuntimeError(f"{path.name} has unreadable or executable icons")
         machines = {}
         for executable in executables:
             with executable.open("rb") as handle:
@@ -762,6 +764,8 @@ def verify_deb(path: Path, target: str, version: str) -> None:
     if metadata.get("Architecture") != expected_arch:
         raise RuntimeError(f"{path.name} has the wrong Debian architecture")
     contents = subprocess.check_output(["dpkg-deb", "--contents", str(path)], text=True)
+    if any(line.split()[1] != "root/root" for line in contents.splitlines() if line.strip()):
+        raise RuntimeError(f"{path.name} contains files not owned by root/root")
     for required in (
         f"./opt/{identity.desktop_id}/nyaterm",
         f"./opt/{identity.desktop_id}/VERSION",
@@ -785,9 +789,12 @@ def verify_deb(path: Path, target: str, version: str) -> None:
         for name in (package_native.APP_BIN, *helper_filenames(target)):
             if not (root / "opt" / identity.desktop_id / name).is_file():
                 raise RuntimeError(f"{path.name} is missing {name}")
-        for size in ("32x32", "64x64", "128x128", "256x256"):
-            if not (root / "usr" / "share" / "icons" / "hicolor" / size / "apps" / f"{identity.desktop_id}.png").is_file():
+        for size in package_native.linux_icons.ICON_SIZES:
+            icon = root / "usr/share/icons/hicolor" / size / "apps" / f"{identity.desktop_id}.png"
+            if not icon.is_file():
                 raise RuntimeError(f"{path.name} is missing its {size} icon")
+            if icon.stat().st_mode & 0o777 != 0o644:
+                raise RuntimeError(f"{path.name} has unreadable or executable icons")
     verify_linux_desktop(desktop_content, f"/opt/{identity.desktop_id}/nyaterm", path.name, identity)
 
 
@@ -808,7 +815,7 @@ def verify_rpm(path: Path, target: str, version: str) -> None:
         f"/usr/share/applications/{identity.linux_desktop_file}",
         *(f"/opt/{identity.desktop_id}/{name}" for name in helper_filenames(target)),
         *(f"/usr/share/icons/hicolor/{size}/apps/{identity.desktop_id}.png"
-          for size in ("32x32", "64x64", "128x128", "256x256")),
+          for size in package_native.linux_icons.ICON_SIZES),
     ):
         if required not in contents.splitlines():
             raise RuntimeError(f"{path.name} is missing {required}")

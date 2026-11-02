@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import prepare_conpty
+import linux_icons
 import windows_msi
 import windows_portable
 
@@ -648,7 +649,7 @@ def write_desktop_file(
             Comment=Native GPUI terminal and SSH client
             Exec={executable} %U
             Icon={identity.desktop_id}
-            StartupWMClass={identity.desktop_id}
+            StartupWMClass={identity.display_name}
             Terminal=false
             Categories=Development;TerminalEmulator;Network;
             MimeType={"".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes)}
@@ -657,19 +658,11 @@ def write_desktop_file(
         ).lstrip(),
         encoding="utf-8",
     )
+    path.chmod(0o644)
 
 
 def copy_linux_icons(root: Path, identity: PackageIdentity = STABLE_IDENTITY) -> None:
-    icons = {
-        "32x32": "32x32.png",
-        "64x64": "64x64.png",
-        "128x128": "128x128.png",
-        "256x256": "256x256.png",
-    }
-    for size, source in icons.items():
-        destination = root / "usr" / "share" / "icons" / "hicolor" / size / "apps"
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ICON_DIR / source, destination / f"{identity.desktop_id}.png")
+    linux_icons.copy_icons(root, ICON_DIR, identity.desktop_id)
 
 
 def parse_dpkg_dependencies(output: str) -> str:
@@ -714,6 +707,7 @@ def create_linux_appimage(
     write_desktop_file(applications / identity.linux_desktop_file, APP_BIN, identity)
     shutil.copy2(applications / identity.linux_desktop_file, appdir / identity.linux_desktop_file)
     shutil.copy2(ICON_DIR / "128x128.png", appdir / f"{identity.desktop_id}.png")
+    (appdir / f"{identity.desktop_id}.png").chmod(0o644)
     copy_linux_icons(appdir, identity)
 
     apprun = appdir / "AppRun"
@@ -723,6 +717,7 @@ def create_linux_appimage(
         encoding="utf-8",
     )
     make_executable(apprun)
+    linux_icons.normalize_permissions(appdir)
 
     output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}.AppImage"
     env = os.environ.copy()
@@ -752,6 +747,7 @@ def create_linux_deb(
 
     control_dir = root / "DEBIAN"
     control_dir.mkdir()
+    linux_icons.write_postinst(control_dir / "postinst", identity.desktop_id)
     dependencies = linux_deb_dependencies([app_binary, *helper_binaries])
     (control_dir / "control").write_text(
         textwrap.dedent(
@@ -771,6 +767,7 @@ def create_linux_deb(
         encoding="utf-8",
     )
     output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}.deb"
+    linux_icons.normalize_permissions(root)
     run([require_tool("dpkg-deb"), "--build", "--root-owner-group", str(root), str(output)])
 
 
@@ -796,6 +793,7 @@ def create_linux_rpm(
     applications.mkdir(parents=True)
     write_desktop_file(applications / identity.linux_desktop_file, f"/opt/{identity.desktop_id}/nyaterm", identity)
     copy_linux_icons(payload, identity)
+    linux_icons.normalize_permissions(payload)
 
     rpm_version, rpm_release = linux_rpm_version(version)
     payload_path = str(payload.resolve()).replace("%", "%%")
