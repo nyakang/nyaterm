@@ -171,6 +171,18 @@ Release workflow 需要 `NYATERM_GITHUB_GIST_CLIENT_ID`、Gitee/R2 Variables，�
 
 自动验证会检查产物集合、归档路径、应用与 helper 是否齐全、二进制架构、版本及包元数据。它不会证明 GUI 能实际启动，也不会覆盖真实安装/升级/卸载、快捷方式或 `nyaterm:` URL handler 调用、签名/notarization 与 Gatekeeper/SmartScreen 信任、真实 RDP/VNC 会话，以及 GPU、IME、PTY、剪贴板和窗口生命周期。发布候选必须在对应目标操作系统上手工验收这些行为，并如实记录实际执行的平台与结果。
 
+## CI 按需执行
+
+Rust 工作流先运行轻量的 `orchestrate`，验证筛选规则并比较 PR 事件中的 base SHA 与实际测试的合并提交。它按全部变更路径的并集选择任务，并在 Actions 的 Job Summary 中列出原因。普通 Rust 改动仍执行现有 lint 和 Linux、macOS、Windows workspace 测试；应用翻译 JSON 也保留这些验证。
+
+四组 tmux 兼容性任务仅在 transport、terminal、core、插件 API、MCP 协议及共享构建/CI 配置变化时运行。插件 SDK 根据插件示例、脚本及相关 crate 变化运行；Python 和工作流检查也有各自的路径规则。纯文档站或根目录 Markdown 改动跳过 Rust 重型任务，`Docs` 工作流仍照常构建全部 locale。
+
+给 PR 添加 `run-tmux` 标签可以强制执行完整 tmux 矩阵；标签保留时，后续提交也会继续运行。标签事件同时重新执行该 PR 按路径应运行的其他检查，不会只报告 tmux 结果。Push 到 `main` 或 `migration/gpui`、Merge Queue 和手动运行 `Rust` 工作流都会执行完整任务集。
+
+筛选无法识别的路径、新 crate、Cargo 清单/锁文件及共享构建配置改动会启用全部任务；比较版本缺失或 Git diff 失败也回退到全量。筛选脚本异常或其回归测试失败则使 `Rust gate` 失败。新增 workspace crate 或调整相关 crate 的依赖时，需要同步更新 `scripts/ci/select_rust_jobs.py` 的登记与依赖集合，清单检查会防止漏测。
+
+`Rust gate` 和 `Docs gate` 保持为统一 Required Check，并支持 Merge Queue。Gate 始终汇总依赖结果：成功和按条件跳过可以通过，失败或取消不能通过。
+
 ## 文档站开发
 
 编辑 `docs-site` 时另外安装 Node.js 22.13+ 和 [pnpm](https://pnpm.io/)。Docusaurus 本身只要求 Node 18+，但本仓库固定的 pnpm 版本用到了 `node:sqlite`，在更低版本上会直接崩溃。`docs-site/package.json` 的 `packageManager` 字段固定了 pnpm 版本，启用 corepack 时会自动对齐。

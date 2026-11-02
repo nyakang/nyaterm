@@ -2,15 +2,18 @@ name: Rust
 
 on:
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main, migration/gpui]
   pull_request:
     branches: [main, migration/gpui]
+    types: [opened, synchronize, reopened, labeled]
 
 # No paths filter on purpose. A workflow filtered out by `paths` never runs, so its
 # gate job never reports either, which leaves a pull request waiting forever on a
-# required status check that will never arrive. The repository is public, so the
-# cost of building on a docs-only change is queue time, not billed minutes.
+# required status check that will never arrive. Select jobs inside the workflow
+# instead, so Rust gate still reports on documentation-only changes.
 
 permissions:
   contents: read
@@ -25,8 +28,39 @@ env:
   RUST_BACKTRACE: '1'
 
 jobs:
+  orchestrate:
+    name: Select CI jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      run_rust: ${{ steps.select.outputs.run_rust }}
+      run_tmux: ${{ steps.select.outputs.run_tmux }}
+      run_plugin_sdk: ${{ steps.select.outputs.run_plugin_sdk }}
+      run_python: ${{ steps.select.outputs.run_python }}
+      run_workflows: ${{ steps.select.outputs.run_workflows }}
+    steps:
+      - name: Checkout tested revision and comparison history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test selection rules and workflow gates
+        run: python -m unittest scripts.tests.test_select_rust_jobs -v
+
+      - name: Select jobs for this event
+        id: select
+        run: python scripts/ci/select_rust_jobs.py
+
   lint:
     name: Lint
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -55,6 +89,8 @@ jobs:
 
   test:
     name: Test (${{ matrix.label }})
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_rust == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -121,6 +157,8 @@ jobs:
 
   tmux-compatibility:
     name: tmux (${{ matrix.tmux }}, ${{ matrix.os }})
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_tmux == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -177,6 +215,8 @@ jobs:
 
   plugin-sdk:
     name: Plugin SDK
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_plugin_sdk == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -206,6 +246,8 @@ jobs:
 
   python:
     name: Release helpers
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_python == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -236,6 +278,8 @@ jobs:
 
   workflows:
     name: Workflow syntax
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_workflows == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -256,7 +300,7 @@ jobs:
   gate:
     name: Rust gate
     runs-on: ubuntu-24.04
-    needs: [lint, test, tmux-compatibility, plugin-sdk, python, workflows]
+    needs: [orchestrate, lint, test, tmux-compatibility, plugin-sdk, python, workflows]
     if: always()
     timeout-minutes: 5
     steps:

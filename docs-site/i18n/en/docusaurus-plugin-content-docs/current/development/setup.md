@@ -182,6 +182,18 @@ Native packaging depends on target-platform tools: Windows uses NSIS and package
 
 Automated verification checks the artifact set, archive paths, application and helper presence, binary architecture, version, and package metadata. It does not prove that the GUI launches, and does not cover real install/upgrade/uninstall flows, shortcuts or `nyaterm:` URL-handler invocation, signing/notarization and Gatekeeper/SmartScreen trust, real RDP/VNC sessions, or GPU, IME, PTY, clipboard, and window lifecycle behavior. Release candidates must be accepted manually on the corresponding target OS, with the actual platform and results recorded truthfully.
 
+## Selective CI jobs
+
+The Rust workflow starts with a lightweight `orchestrate` job that tests the selection rules and compares the PR event's base SHA with the merge commit being tested. It selects the union of jobs required by all changed paths and explains its choices in the Actions Job Summary. Ordinary Rust changes still run the existing lint and Linux, macOS, and Windows workspace tests; application translation JSON keeps those checks too.
+
+The four tmux compatibility jobs run when transport, terminal, core, the plugin API, the MCP protocol, or shared build/CI configuration changes. The Plugin SDK job follows plugin examples, scripts, and related crates; Python and workflow checks have their own path rules. Documentation-site or root Markdown changes skip heavy Rust jobs, while the `Docs` workflow continues to build every locale.
+
+Add the `run-tmux` label to a PR to force the full tmux matrix; later commits continue to run it while the label remains. Label events also rerun the other checks selected for that PR's paths, rather than reporting only tmux results. Pushes to `main` or `migration/gpui`, Merge Queue events, and manual runs of the `Rust` workflow execute the full job set.
+
+Unclassified paths, new crates, Cargo manifests/lockfiles, and shared build configuration enable all jobs. Missing comparison revisions or a failed Git diff also fall back to the full suite. A selection-script exception or failing regression test fails `Rust gate`. When adding a workspace crate or changing a related crate's dependencies, update the registration and dependency sets in `scripts/ci/select_rust_jobs.py`; manifest checks guard against missing coverage.
+
+`Rust gate` and `Docs gate` remain the unified Required Checks and support Merge Queue. Gates always aggregate dependency results: success and conditional skips pass, while failure or cancellation fails.
+
 ## Documentation development
 
 When editing `docs-site`, also install Node.js 22.13+ and [pnpm](https://pnpm.io/). Docusaurus itself only needs Node 18+, but the pnpm version this repository pins imports `node:sqlite` and crashes outright on anything older. The `packageManager` field in `docs-site/package.json` pins that pnpm version, and corepack picks it up automatically.

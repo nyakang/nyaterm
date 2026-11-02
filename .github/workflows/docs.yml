@@ -2,6 +2,8 @@ name: Docs
 
 on:
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main, migration/gpui]
   pull_request:
