@@ -96,7 +96,7 @@ machine's actual desktop shell, its Linux 5.4 kernel/custom security patches,
 real driver or internal services. The target-machine acceptance requirements
 above still apply.
 
-### 全量 Rust 检查终态与限制（2026-11-02）
+### release 测试配置试跑记录（后续已完成标准调试复核）
 
 - `cargo check --release --workspace --locked` 通过。
 - 严格 `cargo clippy --release --workspace --all-targets --locked -- -D warnings`
@@ -106,16 +106,62 @@ above still apply.
 - 后续采用 `-j1`，并仅将测试构建中 `nyaterm-desktop` 的优化级别设为 0；
   全量断言执行终态为 **4833 通过、154 失败、28 忽略**。失败集中在
   `nyaterm-desktop --lib`（128 项）和 `nyaterm-ui --lib`（26 项），不能将
-  本次全量工作区回归标记为通过。
+  该次 release 配置试跑标记为通过。
 - 已核对锁定的 GPUI 源码：`VisualTestContext::debug_bounds()` 明确说明，
   未启用 `debug_assertions` 的构建不会记录调试选择器，因而返回 `None`。
   失败日志中的界面测试依赖这些边界；本次使用 release 测试配置不满足该
-  测试前提。标准调试配置下的完整回归仍需运行，不能据此声称全部界面测试已验收。
+  测试前提；下节给出代表性对照和完整标准调试复核的实测闭环。
 - 从现有完整工作区测试二进制直接在 Xvfb 下运行新增的原生 X11 类名测试，
   **1 项通过**，没有重新编译依赖。应用优化构建、实际 tar/deb 软件 OpenGL
   窗口、普通用户 GTK 图标读取、22 项助手生命周期测试及 ABI 审计均已独立通过。
 
 终态证据：`clippy.log`、`workspace-tests.log`、`workspace-tests-retry.log`、
 `rust-workspace-summary.json`、`memory-events-after-test-kill.txt` 和
-`x11-cached-binary.log`。GitHub PR 的工作流仍须上游维护者批准，完整标准
-调试测试应在该审批后按仓库 CI 配置执行；未自动批准或手动重复重跑工作流。
+`x11-cached-binary.log`。本地标准调试测试已在下节另行完整复核；GitHub PR
+工作流仍须上游维护者批准，未自动批准或手动重复重跑工作流。
+
+
+### 标准调试配置复核与归因闭环（2026-11-02）
+
+正式 Linux CI 在 `.github/workflows/rust.yml` 中执行
+`cargo test --workspace --locked --no-fail-fast`，没有 `--release`。
+本轮在同一 Ubuntu 20.04／Rust 1.99.1 环境，以该命令复核；复用下载缓存，
+一次构建完整测试二进制后运行代表用例和汇总。仅通过
+`CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_PROFILE_TEST_DEBUG=0` 关闭调试符号，
+以控制磁盘占用，没有关闭调试断言或改变仓库的优化级别设置。
+Cargo 编译元数据确认 GPUI 为 `opt_level=1`、`debug_assertions=true`、
+`overflow_checks=true`、`test-support` 启用；UI／桌面测试同样保留调试断言。
+
+| 复核内容 | 实际结果 |
+| --- | --- |
+| 弹窗层、密码输入、原生审批交互、资产菜单四项同名代表用例 | 原 release 二进制全部以 101 失败；标准调试二进制全部以 0 通过 |
+| `nyaterm-desktop --lib` 完整套件 | **2485 通过、0 失败、13 忽略** |
+| `nyaterm-ui --lib` 完整套件 | **145 通过、0 失败** |
+| 此前失败名称逐项对照 | 原先 **154／154** 项均在标准调试汇总日志中找到同名通过记录 |
+| 完整工作区标准调试汇总 | **4987 通过、0 失败、28 忽略**，退出码 0 |
+| 新增原生 X11 类名测试 | 从现有调试测试二进制直接在 Xvfb 下执行，**1 通过**，退出码 0 |
+
+这使此前 154 项界面失败的归因同时有源码前提、编译配置、代表用例前后
+对照及全部同名用例的实际通过记录支撑；没有通过改动断言、增加忽略项或
+修改无关生产代码取得通过。
+
+完整标准调试汇总的首轮还发现一项额外的 Fish 测试失败（4986 通过、1 失败、
+28 忽略），堆栈明确显示 `fish: Unknown command: less`。本地最小镜像安装
+zsh／fish 时省略了推荐包，缺少 Fish history 使用的 pager。已验证：
+
+- 对比合入的上游 `4671cc964de45063a5c5541178cf284c7e251d12`，该测试文件、
+  transport 的全部本地依赖闭包（core、mcp-protocol、plugin-api、terminal、
+  transport）、根 Cargo 清单与锁文件均零差异。
+- 同一个已编译的 transport 测试二进制，缺少 `less` 时该项失败；仅安装
+  `less` 后该项通过，二进制 SHA-256 保持不变，没有重新编译或修改测试。
+- 补齐 `zsh fish less` 后，再执行完整标准命令；构建直接复用缓存（2.36 秒），
+  最终得到上述 **4987／0／28** 结果。最小 focal 镜像进行完整测试时应包含
+  这三个系统工具；官方 CI 的完整 runner 环境与只用于打包的最小镜像不同。
+
+新增证据位于 `target/validation-debug-20261102/`：
+`release-representatives.json`、`debug-representatives.json`、
+`ui-compiler-profiles.json`、`workspace-tests-with-less.log`、`final-summary.json`、
+`transport-dependency-closure.json`、`fish-without-less.log`、`fish-with-less.log`、
+`fish-binary-unchanged.txt` 和 `x11-test-with-less.log`。
+功能源码在本轮复核期间未改变；本次补充只更新验证记录。内网目标机的
+真实桌面壳层、Linux 5.4／安全补丁、驱动和服务仍按前述要求验收。
