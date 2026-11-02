@@ -245,6 +245,18 @@ impl NyaTermApp {
         close_after_apply: bool,
         cx: &mut Context<Self>,
     ) {
+        // Theme saves commit independently before resuming this intent. Reject an
+        // invalid ordinary draft before starting that flow, but allow theme-only saves.
+        if self.settings_draft_dirty()
+            && let Some(error) = self.pending_settings_validation_error()
+        {
+            self.settings.update_store_status(error.clone(), false);
+            self.shell
+                .set_status(t!("settings.applyBlocked", detail = error));
+            cx.notify();
+            self.request_settings_panel_refresh(cx);
+            return;
+        }
         if self.settings.theme_designer().dirty() {
             self.theme_designer_action(
                 crate::features::settings::theme_designer::ThemeIntent::Apply(close_after_apply),
@@ -259,15 +271,6 @@ impl NyaTermApp {
             self.request_settings_panel_refresh(cx);
             return;
         }
-        if let Some(error) = self.pending_settings_validation_error() {
-            self.settings.update_store_status(error.clone(), false);
-            self.shell
-                .set_status(t!("settings.applyBlocked", detail = error));
-            cx.notify();
-            self.request_settings_panel_refresh(cx);
-            return;
-        }
-
         self.hide_ai_provider_secret(cx);
         self.ai.invalidate_provider_jobs();
         let settings = self.settings.summary().clone();
@@ -1570,6 +1573,267 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         cx.run_until_parked();
+    }
+
+    fn stage_invalid_cloud_draft(app: &mut NyaTermApp, cx: &mut gpui::Context<NyaTermApp>) {
+        app.settings
+            .toggle_master_password(false)
+            .expect("stage master password");
+        assert!(
+            app.settings
+                .edit_master_password_draft("fixture password".into())
+        );
+        app.cloud_sync.toggle_enabled();
+        app.apply_cloud_sync_input(
+            crate::models::CloudSyncInputField::WebdavEndpoint,
+            "   ".into(),
+            cx,
+        );
+        assert!(app.settings_draft_dirty());
+        assert!(app.pending_settings_validation_error().is_some());
+    }
+
+    fn stored_settings_and_cloud(
+        app: &gpui::Entity<NyaTermApp>,
+        cx: &mut TestAppContext,
+    ) -> (
+        nyaterm_core::AppSettingsSummary,
+        nyaterm_core::CloudSyncSettings,
+    ) {
+        app.update(cx, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    Ok((
+                        store.load_app_settings_summary()?,
+                        store.load_cloud_sync_settings()?,
+                    ))
+                })
+                .expect("load saved settings and cloud configuration")
+        })
+    }
+
+    fn finish_settings_apply(app: &gpui::Entity<NyaTermApp>, cx: &mut TestAppContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if app.read_with(cx, |app, _| {
+                app.settings.store_status().message == rust_i18n::t!("settings.applied")
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "settings apply did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn invalid_settings_actions_preserve_both_drafts_without_starting_a_theme_save() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+
+        for close in [false, true] {
+            for edit_theme in [false, true] {
+                let mut cx = TestAppContext::single();
+                let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+                let app = app(&mut cx);
+                app.update(&mut cx, |app, cx| {
+                    app.open_page(crate::models::NavItem::Settings, cx);
+                    if edit_theme {
+                        app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+                        assert!(app.save_theme_designer(None, cx));
+                    }
+                });
+                finish_theme_jobs(&app, &mut cx);
+                let (original_settings, original_cloud) = stored_settings_and_cloud(&app, &mut cx);
+                let (theme_draft, error) = app.update(&mut cx, |app, cx| {
+                    if edit_theme {
+                        app.edit_theme_designer("primary", "#123456".into(), cx);
+                    }
+                    stage_invalid_cloud_draft(app, cx);
+                    let theme_draft = app.settings.theme_designer().draft.clone();
+                    let error = app.pending_settings_validation_error().unwrap();
+                    if close {
+                        app.confirm_settings_draft(cx);
+                    } else {
+                        app.apply_settings_draft(false, cx);
+                    }
+                    assert_eq!(app.settings.store_status().message, error);
+                    assert!(app.shell.status().contains(&error));
+                    assert!(app.settings.theme_designer().pending.is_none());
+                    assert!(!app.settings.theme_designer().submitting);
+                    (theme_draft, error)
+                });
+                cx.run_until_parked();
+                let (saved_settings, saved_cloud) = stored_settings_and_cloud(&app, &mut cx);
+                assert_eq!(saved_settings, original_settings);
+                assert!(
+                    saved_cloud == original_cloud,
+                    "cloud configuration must not be saved"
+                );
+                app.read_with(&cx, |app, _| {
+                    assert!(app.settings_tab_is_open());
+                    assert!(app.shell.has_settings_draft());
+                    assert!(app.settings_draft_dirty());
+                    assert_eq!(app.cloud_sync.settings().webdav.endpoint, "   ");
+                    assert!(app.settings.master_password().enabled);
+                    assert!(!app.settings.master_password().draft.is_empty());
+                    assert!(app.settings.theme_designer().draft == theme_draft);
+                    assert_eq!(app.settings.theme_designer().dirty(), edit_theme);
+                    assert_eq!(app.pending_settings_validation_error(), Some(error));
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn corrected_cloud_drafts_apply_and_confirm_successfully() {
+        for close in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            app.update(&mut cx, |app, cx| {
+                app.open_page(crate::models::NavItem::Settings, cx);
+                stage_invalid_cloud_draft(app, cx);
+                app.confirm_settings_draft(cx);
+                assert!(app.settings_tab_is_open());
+                app.apply_cloud_sync_input(
+                    crate::models::CloudSyncInputField::WebdavEndpoint,
+                    "https://dav.example.com".into(),
+                    cx,
+                );
+                assert!(app.pending_settings_validation_error().is_none());
+                if close {
+                    app.confirm_settings_draft(cx);
+                } else {
+                    app.apply_settings_draft(false, cx);
+                }
+            });
+            finish_settings_apply(&app, &mut cx);
+            let (saved, cloud) = stored_settings_and_cloud(&app, &mut cx);
+            assert!(saved.has_master_password);
+            assert!(cloud.enabled);
+            assert_eq!(cloud.webdav.endpoint, "https://dav.example.com");
+            app.read_with(&cx, |app, _| {
+                assert_eq!(app.settings_tab_is_open(), !close);
+                assert_eq!(app.shell.has_settings_draft(), !close);
+                assert!(!app.settings_draft_dirty());
+            });
+        }
+    }
+
+    #[test]
+    fn theme_save_resumes_valid_apply_and_confirm_intents() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+
+        for close in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            app.update(&mut cx, |app, cx| {
+                app.open_page(crate::models::NavItem::Settings, cx);
+                app.set_header_status_mode(HeaderStatusMode::Host, cx);
+                app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+                app.edit_theme_designer("primary", "#123456".into(), cx);
+                if close {
+                    app.confirm_settings_draft(cx);
+                } else {
+                    app.apply_settings_draft(false, cx);
+                }
+                assert_eq!(
+                    app.settings.theme_designer().pending,
+                    Some(ThemeIntent::Apply(close))
+                );
+                app.resolve_theme_designer_pending(Some(true), cx);
+            });
+            finish_theme_jobs(&app, &mut cx);
+            finish_settings_apply(&app, &mut cx);
+            let (saved, _) = stored_settings_and_cloud(&app, &mut cx);
+            assert_eq!(saved.ui_header_status_mode, "host");
+            assert_eq!(saved.custom_themes.available()[0].colors.primary, "#123456");
+            app.read_with(&cx, |app, _| {
+                assert_eq!(app.settings_tab_is_open(), !close);
+                assert!(!app.settings_draft_dirty());
+                assert!(!app.settings.theme_designer().dirty());
+                assert!(app.settings.theme_designer().pending.is_none());
+                assert!(!app.settings.theme_designer().submitting);
+            });
+        }
+    }
+
+    #[test]
+    fn theme_only_actions_do_not_validate_unchanged_ordinary_settings() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+
+        for invalid_baseline in [false, true] {
+            for close in [false, true] {
+                let mut cx = TestAppContext::single();
+                let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+                let app = app(&mut cx);
+                app.update(&mut cx, |app, cx| {
+                    if invalid_baseline {
+                        app.cloud_sync.toggle_enabled();
+                    }
+                    app.open_page(crate::models::NavItem::Settings, cx);
+                    assert!(!app.settings_draft_dirty());
+                    assert_eq!(
+                        app.pending_settings_validation_error().is_some(),
+                        invalid_baseline
+                    );
+                    app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+                    if close {
+                        app.confirm_settings_draft(cx);
+                    } else {
+                        app.apply_settings_draft(false, cx);
+                    }
+                    assert_eq!(
+                        app.settings.theme_designer().pending,
+                        Some(ThemeIntent::Apply(close))
+                    );
+                    app.resolve_theme_designer_pending(Some(true), cx);
+                });
+                finish_theme_jobs(&app, &mut cx);
+                finish_settings_apply(&app, &mut cx);
+                let (saved, cloud) = stored_settings_and_cloud(&app, &mut cx);
+                assert_eq!(saved.custom_themes.available().len(), 1);
+                assert!(
+                    !cloud.enabled,
+                    "unchanged cloud configuration must not be persisted"
+                );
+                app.read_with(&cx, |app, _| {
+                    assert_eq!(app.settings_tab_is_open(), !close);
+                    assert!(!app.settings.theme_designer().dirty());
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_theme_save_still_succeeds_with_an_invalid_ordinary_draft() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let (original, original_cloud) = stored_settings_and_cloud(&app, &mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.open_page(crate::models::NavItem::Settings, cx);
+            stage_invalid_cloud_draft(app, cx);
+            app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+            assert!(app.save_theme_designer(None, cx));
+        });
+        finish_theme_jobs(&app, &mut cx);
+        let (saved, cloud) = stored_settings_and_cloud(&app, &mut cx);
+        assert_eq!(saved.custom_themes.available().len(), 1);
+        assert_eq!(saved.has_master_password, original.has_master_password);
+        assert!(cloud == original_cloud);
+        app.read_with(&cx, |app, _| {
+            assert!(app.settings_tab_is_open());
+            assert!(app.settings_draft_dirty());
+            assert!(app.pending_settings_validation_error().is_some());
+            assert!(!app.settings.theme_designer().dirty());
+        });
     }
 
     #[test]
