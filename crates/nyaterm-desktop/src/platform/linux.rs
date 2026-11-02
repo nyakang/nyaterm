@@ -100,7 +100,7 @@ fn withdraw_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{hide_to_tray, restore_from_tray};
+    use super::{hide_to_tray, restore_from_tray, set_window_class};
     use raw_window_handle::{
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
         XcbDisplayHandle, XcbWindowHandle,
@@ -155,6 +155,44 @@ mod tests {
         while !condition() {
             assert!(Instant::now() < deadline, "window manager did not settle");
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an X11 display"]
+    fn startup_class_matches_desktop_entry_without_changing_the_instance() {
+        let (connection, screen_index) = XCBConnection::connect(None).unwrap();
+        let screen = &connection.setup().roots[screen_index];
+        let window = NativeWindow {
+            connection: &connection,
+            screen: screen_index,
+            id: connection.generate_id().unwrap(),
+        };
+        connection
+            .create_window(
+                screen.root_depth,
+                window.id,
+                screen.root,
+                0,
+                0,
+                32,
+                32,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                screen.root_visual,
+                &CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        for (instance, class) in [("nyaterm", "NyaTerm"), ("nyaterm-preview", "NyaTerm Preview")] {
+            set_window_class(&window, instance, class);
+            let property = connection
+                .get_property(false, window.id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+                .unwrap()
+                .reply()
+                .unwrap();
+            assert_eq!(property.value, format!("{instance}\0{class}\0").as_bytes());
         }
     }
 
