@@ -3598,7 +3598,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
+source = "git+https://github.com/nyakang/gpui-kit?rev=355061fbf8446076283931bee2c46e8dfdd949e2#355061fbf8446076283931bee2c46e8dfdd949e2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3638,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
+source = "git+https://github.com/nyakang/gpui-kit?rev=355061fbf8446076283931bee2c46e8dfdd949e2#355061fbf8446076283931bee2c46e8dfdd949e2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3714,7 +3714,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
+source = "git+https://github.com/nyakang/gpui-kit?rev=355061fbf8446076283931bee2c46e8dfdd949e2#355061fbf8446076283931bee2c46e8dfdd949e2"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3725,7 +3725,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
+source = "git+https://github.com/nyakang/gpui-kit?rev=355061fbf8446076283931bee2c46e8dfdd949e2#355061fbf8446076283931bee2c46e8dfdd949e2"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -3739,7 +3739,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
+source = "git+https://github.com/nyakang/gpui-kit?rev=355061fbf8446076283931bee2c46e8dfdd949e2#355061fbf8446076283931bee2c46e8dfdd949e2"
 dependencies = [
  "anyhow",
  "gpui",
