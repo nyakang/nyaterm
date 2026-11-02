@@ -18,7 +18,7 @@ OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflow
 KNOWN_CRATES = frozenset({
     "nyaterm-app", "nyaterm-core", "nyaterm-desktop", "nyaterm-mcp",
     "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
-    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-activex-helper",
+    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-windows-rdp",
     "nyaterm-remote-desktop", "nyaterm-store", "nyaterm-sync", "nyaterm-terminal",
     "nyaterm-terminal-gpui", "nyaterm-transport", "nyaterm-ui", "nyaterm-vnc-helper",
 })

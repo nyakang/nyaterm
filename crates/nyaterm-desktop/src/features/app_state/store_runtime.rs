@@ -162,27 +162,54 @@ impl NyaTermApp {
         let frame_worker = self.terminal.take_frame_shutdown();
         let recording_shutdown = self.recording.take_shutdown();
         let stop_editor_watchers = self.transfer.begin_external_editor_shutdown();
-        cx.background_spawn(async move {
+        cx.spawn(async move |_, cx| {
             #[cfg(windows)]
-            for host in native_hosts {
-                host.shutdown();
-            }
-            stop_editor_watchers.await;
-            session_shutdown();
-            if let Some(shutdown) = frame_worker {
-                shutdown();
-            }
-            if let Some(shutdown) = recording_shutdown {
-                for error in shutdown() {
-                    tracing::warn!(%error, "recording shutdown failed");
+            {
+                let mut hosts = native_hosts;
+                for host in &mut hosts {
+                    host.request_shutdown();
+                }
+                loop {
+                    for host in &mut hosts {
+                        if let Some(operation) = host.take_operation() {
+                            host.commit(operation.run());
+                        }
+                    }
+                    hosts.retain(|host| !host.is_closed());
+                    let retained = nyaterm_windows_rdp::maintain_retired(std::time::Instant::now());
+                    if retained != 0 {
+                        tracing::warn!(
+                            count = retained,
+                            "retained native RDP resources at shutdown deadline"
+                        );
+                    }
+                    if hosts.is_empty() && nyaterm_windows_rdp::retired_count() == 0 {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
                 }
             }
-            if let Some(worker) = agent_worker {
-                let _ = worker.join();
-            }
-            stop_jobs();
-            stop_transfers();
-            ssh_connections.finish_disconnects();
+            cx.background_spawn(async move {
+                stop_editor_watchers.await;
+                session_shutdown();
+                if let Some(shutdown) = frame_worker {
+                    shutdown();
+                }
+                if let Some(shutdown) = recording_shutdown {
+                    for error in shutdown() {
+                        tracing::warn!(%error, "recording shutdown failed");
+                    }
+                }
+                if let Some(worker) = agent_worker {
+                    let _ = worker.join();
+                }
+                stop_jobs();
+                stop_transfers();
+                ssh_connections.finish_disconnects();
+            })
+            .await;
         })
     }
 

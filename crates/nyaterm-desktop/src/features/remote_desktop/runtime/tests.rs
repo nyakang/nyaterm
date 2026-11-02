@@ -1283,3 +1283,75 @@ fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_ret
         }
     });
 }
+
+#[cfg(windows)]
+#[test]
+fn native_shutdown_cancels_pending_initialization_and_rejects_late_launches() {
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RdpBackend;
+
+    let root = TestTempDir::new("nyaterm-native-shutdown-pending");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = crate::features::test_support::app_with_visible_local_session(
+        &mut cx,
+        root.path(),
+        "pending-native",
+    );
+    let mut config = fit_window_rdp_config("pending-native");
+    config.backend = RdpBackend::Windows;
+    config.windows_authentication = Some("system".into());
+    config.clipboard.mode = nyaterm_remote_desktop::RdpClipboardMode::Disabled;
+    config.backend.validate_config(&config).unwrap();
+    cx.update_entity(&app, |app, cx| {
+        app.remote_desktop
+            .insert_connecting("pending-native".into());
+        app.begin_rdp_runtime("pending-native", config.clone(), cx);
+        assert!(
+            app.remote_desktop.sessions["pending-native"]
+                .deferred_start
+                .is_some()
+        );
+        app.remote_desktop.insert_connecting("queued-native".into());
+        app.launch_rdp_runtime("queued-native", config.clone());
+        assert!(
+            app.remote_desktop.sessions["queued-native"]
+                .native_rdp_config
+                .is_some()
+        );
+        assert!(
+            app.remote_desktop
+                .take_native_hosts_for_shutdown()
+                .is_empty()
+        );
+        assert!(app.remote_desktop.native_shutting_down);
+        assert!(
+            app.remote_desktop.sessions["pending-native"]
+                .deferred_start
+                .is_none()
+        );
+        assert!(
+            app.remote_desktop.sessions["queued-native"]
+                .native_rdp_config
+                .is_none()
+        );
+        app.begin_rdp_runtime("pending-native", config.clone(), cx);
+        app.launch_rdp_runtime("queued-native", config);
+        assert!(
+            app.remote_desktop.sessions["pending-native"]
+                .deferred_start
+                .is_none()
+        );
+        assert!(
+            app.remote_desktop.sessions["queued-native"]
+                .native_rdp_config
+                .is_none()
+        );
+        assert!(
+            app.remote_desktop
+                .take_native_hosts_for_shutdown()
+                .is_empty()
+        );
+    });
+}

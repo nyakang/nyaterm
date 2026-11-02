@@ -70,7 +70,7 @@ mod tests {
                 assert!(!name.starts_with(&format!("{}/", layout.data_directory())));
                 assert!(found.insert(name.to_ascii_lowercase()), "duplicate {name}");
             }
-            assert!(found.contains("nyaterm-activex-helper.exe"));
+            assert!(!found.contains("nyaterm-activex-helper.exe"));
             assert!(found.contains("conpty/license.txt"));
         }
     }

@@ -378,7 +378,10 @@ pub(in crate::features) fn full_window_overlay_layer(
     id: impl Into<String>,
     content: impl IntoElement,
 ) -> gpui::Deferred {
-    deferred(full_window_input_layer(id).child(content)).with_priority(APP_OVERLAY_PRIORITY)
+    deferred(nyaterm_ui::nya_modal_overlay(
+        full_window_input_layer(id).child(content),
+    ))
+    .with_priority(APP_OVERLAY_PRIORITY)
 }
 
 /// Overlay layer that keeps the window's text-selection listeners alive.
@@ -391,7 +394,7 @@ pub(in crate::features) fn selectable_overlay_layer(
     id: impl Into<String>,
     content: impl IntoElement,
 ) -> gpui::Deferred {
-    deferred(
+    deferred(nyaterm_ui::nya_modal_overlay(
         div()
             .id(SharedString::from(id.into()))
             .key_context(crate::shortcuts::MODAL_KEY_CONTEXT)
@@ -399,14 +402,28 @@ pub(in crate::features) fn selectable_overlay_layer(
             .inset_0()
             .occlude()
             .child(content),
-    )
+    ))
     .with_priority(APP_OVERLAY_PRIORITY)
+}
+
+/// Positioning shells do not own input; only menu controls contribute regions.
+pub(in crate::features) fn regional_overlay_layer(
+    _id: impl Into<String>,
+    content: impl IntoElement,
+) -> gpui::Deferred {
+    deferred(nyaterm_ui::nya_region_overlay(content)).with_priority(APP_OVERLAY_PRIORITY)
+}
+
+/// Lifts a modal that already supplies its own input boundary. In particular,
+/// the lock screen must let Windows caption presses reach the window procedure.
+pub(in crate::features) fn modal_overlay_layer(content: impl IntoElement) -> gpui::Deferred {
+    deferred(nyaterm_ui::nya_modal_overlay(content)).with_priority(APP_OVERLAY_PRIORITY)
 }
 
 /// Lifts an overlay that deliberately owns no input layer above the resize
 /// handles. Hover-driven surfaces must not block the pointer underneath them.
 pub(in crate::features) fn passive_overlay_layer(content: impl IntoElement) -> gpui::Deferred {
-    deferred(content).with_priority(APP_OVERLAY_PRIORITY)
+    deferred(nyaterm_ui::nya_passive_overlay(content)).with_priority(APP_OVERLAY_PRIORITY)
 }
 
 /// Dimmed full-area modal shell (Tauri Dialog backdrop + centered card).
