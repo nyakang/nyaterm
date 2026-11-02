@@ -762,7 +762,7 @@
     "rdpActiveXRelayUnsupported": "ActiveX ne prend pas en charge Relay. Retirez le proxy ou le serveur de rebond, ou sélectionnez le moteur intégré.",
     "rdpActiveXClipboardUnsupported": "La redirection du presse-papiers ActiveX est actuellement désactivée.",
     "rdpWindowsAuthenticationRequired": "Mode d’authentification Windows non pris en charge. Ce moteur utilise la validation des certificats du système Windows.",
-    "rdpWindowsAuthentication": "Utilise la validation des certificats du système Windows et refuse la connexion en cas d’échec.",
+    "rdpWindowsAuthentication": "Utilise la validation des certificats du système Windows et vous demande de continuer ou d’annuler en cas d’échec.",
     "rdpWindowsClipboardDisabled": "Le presse-papiers ActiveX est actuellement désactivé et ne peut pas être activé.",
     "rdpBackendUnsupported": "Implémentation non prise en charge",
     "rdpDomain": "Domaine",

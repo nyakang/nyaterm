@@ -762,7 +762,7 @@
     "rdpActiveXRelayUnsupported": "ActiveX does not support Relay. Remove the proxy or jump host, or select the built-in backend.",
     "rdpActiveXClipboardUnsupported": "ActiveX clipboard redirection is currently disabled.",
     "rdpWindowsAuthenticationRequired": "Unsupported Windows authentication mode. This backend uses Windows system certificate validation.",
-    "rdpWindowsAuthentication": "Uses Windows system certificate validation; rejects the connection if validation fails.",
+    "rdpWindowsAuthentication": "Uses Windows system certificate validation; prompts you to continue or cancel if validation fails.",
     "rdpWindowsClipboardDisabled": "Clipboard is currently disabled for ActiveX and cannot be enabled.",
     "rdpBackendUnsupported": "Unsupported backend",
     "rdpDomain": "Domain",
