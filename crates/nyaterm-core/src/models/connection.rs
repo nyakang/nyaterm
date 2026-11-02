@@ -644,8 +644,9 @@ pub struct RdpSecuritySettings {
     pub use_nla: bool,
     #[serde(default = "default_rdp_certificate_policy")]
     pub certificate_policy: String,
-    /// Explicit opt-in to Windows system authentication for the ActiveX backend.
-    /// Absent in older data; never inferred from a NyaTerm fingerprint policy.
+    /// System authentication marker for the explicitly selected Windows backend.
+    /// Older data may omit it; runtime policy supplies it without changing stored data.
+    /// Unknown modes are preserved and rejected, never inferred from fingerprint policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_authentication: Option<String>,
     /// Request an administrative session. The server determines the actual

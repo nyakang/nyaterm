@@ -76,6 +76,7 @@ impl NyaTermApp {
         if config.backend == RdpBackend::Windows && self.remote_desktop.native_shutting_down {
             return;
         }
+        config.normalize_backend_settings();
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),
@@ -123,12 +124,13 @@ impl NyaTermApp {
     pub(in crate::features) fn launch_rdp_runtime(
         &mut self,
         session_id: &str,
-        config: RdpSessionConfig,
+        mut config: RdpSessionConfig,
     ) {
         #[cfg(windows)]
         if config.backend == RdpBackend::Windows && self.remote_desktop.native_shutting_down {
             return;
         }
+        config.normalize_backend_settings();
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),

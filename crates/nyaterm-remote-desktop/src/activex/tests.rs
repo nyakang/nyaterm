@@ -1,6 +1,5 @@
 use crate::{RdpBackend, RdpErrorKind, RdpSessionConfig, RdpSessionManager};
 
-#[cfg(windows)]
 use crate::RdpClipboardMode;
 
 use super::NativeRdpRect;
@@ -44,7 +43,7 @@ fn builtin_manager_never_silently_runs_an_activex_configuration() {
 
 #[cfg(windows)]
 #[test]
-fn activex_requires_explicit_system_authentication_and_clipboard_permission() {
+fn activex_requires_normalized_system_authentication_and_disabled_clipboard() {
     let mut config = config();
     assert!(config.backend.validate_config(&config).is_ok());
     config.windows_authentication = None;
@@ -59,9 +58,71 @@ fn activex_requires_explicit_system_authentication_and_clipboard_permission() {
         RdpErrorKind::Unsupported
     );
     config.clipboard.mode = RdpClipboardMode::TextAndFiles;
+    assert!(config.backend.validate_config(&config).is_err());
+    config.normalize_backend_settings();
     assert!(config.backend.validate_config(&config).is_ok());
     config.reconnect.max_attempts = 201;
     assert!(config.backend.validate_config(&config).is_err());
+}
+
+#[test]
+fn windows_launch_policy_normalizes_legacy_settings_without_rewriting_the_source() {
+    for backend in ["windows", "active-x"] {
+        for authentication in [None, Some("system"), Some("future-auth")] {
+            for clipboard in ["text_only", "text_and_files", "disabled"] {
+                let mut stored = serde_json::to_value(config()).unwrap();
+                stored["backend"] = backend.into();
+                stored["clipboard"]["mode"] = clipboard.into();
+                if let Some(authentication) = authentication {
+                    stored["windows_authentication"] = authentication.into();
+                } else {
+                    stored
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("windows_authentication");
+                }
+                let source: RdpSessionConfig = serde_json::from_value(stored).unwrap();
+                let original = source.clone();
+                let mut launch = source.clone();
+                launch.normalize_backend_settings();
+                assert_eq!(launch.clipboard.mode, RdpClipboardMode::Disabled);
+                assert_eq!(
+                    launch.windows_authentication.as_deref(),
+                    Some(authentication.unwrap_or("system"))
+                );
+                let normalized = launch.clone();
+                launch.normalize_backend_settings();
+                assert_eq!(launch, normalized);
+                assert_eq!(source, original);
+                let round_trip: RdpSessionConfig =
+                    serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+                assert_eq!(round_trip, source);
+                #[cfg(windows)]
+                assert_eq!(
+                    launch.backend.validate_config(&launch).is_ok(),
+                    authentication != Some("future-auth")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn builtin_launch_policy_preserves_authentication_certificate_and_clipboard_settings() {
+    for mode in [
+        RdpClipboardMode::Disabled,
+        RdpClipboardMode::TextOnly,
+        RdpClipboardMode::TextAndFiles,
+    ] {
+        let mut launch = config();
+        launch.backend = RdpBackend::Builtin;
+        launch.windows_authentication = Some("future-auth".into());
+        launch.clipboard.mode = mode;
+        let original = launch.clone();
+        launch.normalize_backend_settings();
+        assert_eq!(launch, original);
+        assert!(launch.backend.validate_config(&launch).is_ok());
+    }
 }
 
 #[cfg(not(windows))]

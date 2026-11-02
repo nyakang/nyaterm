@@ -157,6 +157,11 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if let Some(metadata) = self.session.metadata_mut(session_id)
+            && let crate::models::SessionLaunchConfig::Rdp(config) = &mut metadata.launch_config
+        {
+            config.normalize_backend_settings();
+        }
         if let Some(crate::models::SessionLaunchConfig::Rdp(config)) = self
             .session
             .metadata(session_id)
@@ -280,6 +285,7 @@ impl NyaTermApp {
             crate::models::SessionLaunchConfig::Rdp(config) => config,
             _ => return,
         };
+        config.normalize_backend_settings();
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),

@@ -1251,6 +1251,7 @@ fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_ret
     app.update(&mut cx, |app, cx| {
         let mut config = fit_window_rdp_config("unsupported");
         config.backend = RdpBackend::Windows;
+        config.windows_authentication = Some("future-auth".into());
         for relay in [
             None,
             Some(nyaterm_core::connection_route::RelayEndpoint {
@@ -1353,5 +1354,61 @@ fn native_shutdown_cancels_pending_initialization_and_rejects_late_launches() {
                 .take_native_hosts_for_shutdown()
                 .is_empty()
         );
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_native_settings_are_normalized_before_start_launch_and_retry() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use gpui::TestAppContext;
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::{RdpBackend, RdpClipboardMode};
+
+    let root = TestTempDir::new("nyaterm-native-policy");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "legacy-native");
+    app.update(&mut cx, |app, cx| {
+        for mode in [RdpClipboardMode::TextOnly, RdpClipboardMode::TextAndFiles] {
+            let mut config = fit_window_rdp_config("legacy-native");
+            config.backend = RdpBackend::Windows;
+            config.clipboard.mode = mode;
+            config.password = Some("offline-fixture".into());
+            app.session
+                .metadata_mut("legacy-native")
+                .unwrap()
+                .launch_config = SessionLaunchConfig::Rdp(config.clone());
+            app.remote_desktop.insert_connecting("legacy-native".into());
+            app.begin_rdp_runtime("legacy-native", config.clone(), cx);
+            let deferred = &app.remote_desktop.sessions["legacy-native"]
+                .deferred_start
+                .as_ref()
+                .unwrap()
+                .0;
+            assert_eq!(deferred.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(deferred.windows_authentication.as_deref(), Some("system"));
+            app.launch_rdp_runtime("legacy-native", config);
+            let native = app.remote_desktop.sessions["legacy-native"]
+                .native_rdp_config
+                .as_ref()
+                .unwrap();
+            assert_eq!(native.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(native.windows_authentication.as_deref(), Some("system"));
+            app.retry_rdp_runtime("legacy-native", cx);
+            let SessionLaunchConfig::Rdp(launch) =
+                &app.session.metadata("legacy-native").unwrap().launch_config
+            else {
+                panic!("RDP metadata");
+            };
+            assert_eq!(launch.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(launch.windows_authentication.as_deref(), Some("system"));
+            let session = &app.remote_desktop.sessions["legacy-native"];
+            assert_eq!(session.state, RemoteDesktopViewState::Connecting);
+            assert!(session.error.is_none());
+            assert!(session.deferred_start.is_some());
+            assert!(app.remote_desktop.manager.state("legacy-native").is_none());
+        }
     });
 }

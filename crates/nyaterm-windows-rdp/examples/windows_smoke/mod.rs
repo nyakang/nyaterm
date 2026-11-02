@@ -223,7 +223,7 @@ fn saved_config(name: &str) -> Result<RdpSessionConfig> {
         }
         _ => None,
     };
-    let config = RdpSessionConfig {
+    let mut config = RdpSessionConfig {
         relay: None,
         backend: RdpBackend::Windows,
         windows_authentication: security.windows_authentication,
@@ -245,6 +245,7 @@ fn saved_config(name: &str) -> Result<RdpSessionConfig> {
             max_attempts: reconnect.max_attempts,
         },
     };
+    config.normalize_backend_settings();
     config.backend.validate_config(&config)?;
     Ok(config)
 }

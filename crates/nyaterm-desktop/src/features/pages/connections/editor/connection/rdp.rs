@@ -199,20 +199,26 @@ fn rdp_security(
                 )
             }),
         ))
-        .child(connection_editor_select(
-            ConnectionEditorRenderContext {
-                palette,
-                fields,
-                cx,
-            },
-            "connection-editor-rdp-certificate-policy",
-            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
-                t!("dialog.rdpWindowsAuthentication")
-            } else {
-                t!("dialog.rdpCertificatePolicy")
-            },
-            ConnectionEditorSelect::RdpCertificatePolicy,
-        ))
+        .when(editor.uses_windows_rdp(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("dialog.rdpWindowsAuthentication")),
+            )
+        })
+        .when(!editor.uses_windows_rdp(), |this| {
+            this.child(connection_editor_select(
+                ConnectionEditorRenderContext {
+                    palette,
+                    fields,
+                    cx,
+                },
+                "connection-editor-rdp-certificate-policy",
+                t!("dialog.rdpCertificatePolicy"),
+                ConnectionEditorSelect::RdpCertificatePolicy,
+            ))
+        })
 }
 
 fn rdp_network(
@@ -430,6 +436,14 @@ fn rdp_session(
             t!("dialog.rdpClipboard"),
             ConnectionEditorSelect::RdpClipboardMode,
         ))
+        .when(editor.uses_windows_rdp(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("dialog.rdpWindowsClipboardDisabled")),
+            )
+        })
         .flex()
         .flex_col()
         .gap_3()

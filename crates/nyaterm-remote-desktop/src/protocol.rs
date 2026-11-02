@@ -98,6 +98,18 @@ pub struct RdpSessionConfig {
     pub reconnect: RdpReconnectConfig,
 }
 
+impl RdpSessionConfig {
+    /// Apply backend policy to an ephemeral launch configuration, never stored data.
+    /// Selecting Windows uses system authentication; unknown modes remain errors.
+    pub fn normalize_backend_settings(&mut self) {
+        if self.backend == RdpBackend::Windows {
+            self.windows_authentication
+                .get_or_insert_with(|| "system".into());
+            self.clipboard.mode = RdpClipboardMode::Disabled;
+        }
+    }
+}
+
 impl fmt::Debug for RdpSessionConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1126,13 +1138,13 @@ impl RdpBackend {
         if config.windows_authentication.as_deref() != Some("system") {
             return Err(RdpError::new(
                 RdpErrorKind::Unsupported,
-                "Select Windows system authentication explicitly for ActiveX RDP",
+                "Unsupported Windows system authentication mode for ActiveX RDP",
             ));
         }
-        if config.clipboard.mode == RdpClipboardMode::TextOnly {
+        if config.clipboard.mode != RdpClipboardMode::Disabled {
             return Err(RdpError::new(
                 RdpErrorKind::Unsupported,
-                "ActiveX RDP does not support text-only clipboard; select disabled or full clipboard redirection",
+                "ActiveX RDP clipboard redirection is currently disabled",
             ));
         }
         if config.reconnect.max_attempts > 200 {

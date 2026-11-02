@@ -600,7 +600,7 @@ impl NyaTermApp {
             } = &connection.config
             {
                 let session_id = nyaterm_core::uuid();
-                let config = RdpSessionConfig {
+                let mut config = RdpSessionConfig {
                     relay: None,
                     backend: match parse_rdp_backend(backend) {
                         Ok(backend) => backend,
@@ -628,6 +628,7 @@ impl NyaTermApp {
                         max_attempts: reconnect.max_attempts,
                     },
                 };
+                config.normalize_backend_settings();
                 self.remote_desktop.insert_disconnected(session_id.clone());
                 self.register_session(
                     &session_id,
