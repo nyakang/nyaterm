@@ -96,7 +96,9 @@ fn main() -> anyhow::Result<()> {
 
 fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("nyaterm=info,nyaterm_core=info,nyaterm_transport=info,warn")
+        EnvFilter::new(
+            "nyaterm=info,nyaterm_core=info,nyaterm_transport=info,nyaterm_windows_rdp=info,warn",
+        )
     });
     let file_appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)

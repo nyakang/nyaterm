@@ -41,6 +41,7 @@ pub struct NativeRdpEvent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeRdpEventKind {
+    Connecting,
     Connected,
     LoginComplete,
     Disconnected { basic: u32, extended: u32 },
@@ -49,4 +50,7 @@ pub enum NativeRdpEventKind {
     CloseConfirmed,
     FocusReleased,
     Reconnected,
+    AuthenticationWarningDisplayed,
+    AuthenticationWarningDismissed,
+    LogonError { code: i32 },
 }

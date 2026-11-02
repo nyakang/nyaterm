@@ -60,7 +60,7 @@ pub struct Viewport {
     pub scale: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct HostStatus {
     size: u32,
@@ -71,6 +71,9 @@ pub struct HostStatus {
     pub height: u32,
     pub color_depth: u32,
     pub cipher_strength: u32,
+    pub surface_width: u32,
+    pub surface_height: u32,
+    pub surface_visible: u32,
 }
 
 #[derive(Default)]
@@ -231,6 +234,9 @@ impl NativeRdpHost {
             5 => "attach system control",
             6 => "subscribe system events",
             7 => "apply authentication and resource policy",
+            8 => "require IPersistStreamInit",
+            9 => "IPersistStreamInit::InitNew",
+            10 => "enable parent child clipping",
             100 => "Server",
             101 => "UserName",
             102 => "Domain",
@@ -262,6 +268,7 @@ impl NativeRdpHost {
             132 => "AudioRedirectionMode",
             133 => "IMsTscNonScriptable",
             134 => "ClearTextPassword",
+            135 => "UIParentWindowHandle",
             _ => "validate native configuration",
         };
         if let Err(error) = result(operation, status) {
@@ -335,6 +342,10 @@ impl NativeRdpHost {
             6 => NativeRdpEventKind::CloseConfirmed,
             7 => NativeRdpEventKind::FocusReleased,
             8 => NativeRdpEventKind::Reconnected,
+            9 => NativeRdpEventKind::Connecting,
+            10 => NativeRdpEventKind::AuthenticationWarningDisplayed,
+            11 => NativeRdpEventKind::AuthenticationWarningDismissed,
+            12 => NativeRdpEventKind::LogonError { code: event.code },
             _ => {
                 return Err(NativeRdpError {
                     operation: "unknown event",
@@ -508,34 +519,40 @@ fn performance_flags(display: &RdpDisplayConfig) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
 
     use nyaterm_remote_desktop::RdpSessionConfig;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GWL_STYLE, GetWindowLongPtrW, MSG,
+        PM_REMOVE, PeekMessageW, TranslateMessage, WINDOW_EX_STYLE, WS_CLIPCHILDREN,
+        WS_OVERLAPPEDWINDOW,
     };
     use windows::core::w;
 
-    use crate::native::{NativeRdpHost, maintain_retired};
+    use crate::NativeRdpEventKind;
+    use crate::native::{NativeRdpHost, Viewport, maintain_retired};
 
     unsafe extern "C" {
-        fn nya_rdp_verify_disabled_resources(owner: *mut std::ffi::c_void) -> i32;
+        fn nya_rdp_verify_connection_policy(owner: *mut std::ffi::c_void) -> i32;
+    }
+
+    struct Parent(HWND);
+
+    impl Drop for Parent {
+        fn drop(&mut self) {
+            for _ in 0..3 {
+                maintain_retired(Instant::now());
+            }
+            unsafe { DestroyWindow(self.0).unwrap() };
+        }
     }
 
     #[test]
-    fn system_control_initializes_offline_with_disabled_clipboard_and_resources() {
+    fn system_control_initializes_offline_with_dialog_parent_and_disabled_resources() {
         // A dedicated thread supplies a fresh apartment; no GPUI or remote server.
         std::thread::spawn(|| unsafe {
-            struct Parent(HWND);
-            impl Drop for Parent {
-                fn drop(&mut self) {
-                    for _ in 0..3 {
-                        maintain_retired(Instant::now());
-                    }
-                    unsafe { DestroyWindow(self.0).unwrap() };
-                }
-            }
             let parent = Parent(
                 CreateWindowExW(
                     WINDOW_EX_STYLE::default(),
@@ -564,12 +581,126 @@ mod tests {
                     "reconnect":{"enabled":nla,"max_attempts":5}
                 }))
                 .unwrap();
-                let host = NativeRdpHost::create(parent.0.0 as usize, 1, &config).unwrap();
-                assert_eq!(nya_rdp_verify_disabled_resources(host.owner.as_ptr()), 0);
+                let mut host = NativeRdpHost::create(parent.0.0 as usize, 1, &config).unwrap();
+                assert_ne!(
+                    GetWindowLongPtrW(parent.0, GWL_STYLE) & WS_CLIPCHILDREN.0 as isize,
+                    0
+                );
+                assert_eq!(nya_rdp_verify_connection_policy(host.owner.as_ptr()), 0);
+                host.viewport(
+                    Viewport {
+                        x: 0,
+                        y: 0,
+                        width: 800,
+                        height: 600,
+                        scale: 100,
+                    },
+                    false,
+                )
+                .unwrap();
+                let status = host.status().unwrap();
+                assert_ne!(status.drawing_ready, 0);
+                assert_eq!((status.surface_width, status.surface_height), (800, 600));
+                assert_eq!(status.surface_visible, 0);
                 assert_eq!(host.try_destroy().err().map(|(_, error)| error), None);
             }
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn system_control_delivers_connecting_and_disconnect_events_for_loopback_peer() {
+        // The peer only accepts and closes TCP: no credentials, certificate, or
+        // remote server. This exercises the actual COM connection point and STA pump.
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        drop(stream);
+                        return true;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("loopback accept failed: {error}"),
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let events = std::thread::spawn(move || unsafe {
+            let parent = Parent(
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("NyaTerm event test"),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    800,
+                    600,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap(),
+            );
+            let config: RdpSessionConfig = serde_json::from_value(serde_json::json!({
+                "backend":"windows", "windows_authentication":"system",
+                "name":"loopback", "host":"127.0.0.1", "port":port,
+                "username":"", "domain":"", "password":null,
+                "use_nla":false, "certificate_policy":"strict",
+                "display":{"mode":"fixed","width":800,"height":600,"color_depth":32},
+                "clipboard":{"mode":"disabled"},
+                "reconnect":{"enabled":false,"max_attempts":0}
+            }))
+            .unwrap();
+            let mut host = NativeRdpHost::create(parent.0.0 as usize, 1, &config).unwrap();
+            host.start().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut events = Vec::new();
+            while Instant::now() < deadline {
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                while let Some(event) = host.poll().unwrap() {
+                    events.push(event.kind);
+                }
+                if events
+                    .iter()
+                    .any(|event| matches!(event, NativeRdpEventKind::Disconnected { .. }))
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(host.try_destroy().err().map(|(_, error)| error), None);
+            events
+        })
+        .join()
+        .unwrap();
+        assert!(
+            peer.join().unwrap(),
+            "Connect never reached the loopback peer"
+        );
+        assert!(
+            events.contains(&NativeRdpEventKind::Connecting),
+            "events: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, NativeRdpEventKind::Disconnected { .. })),
+            "events: {events:?}"
+        );
+        assert!(!events.contains(&NativeRdpEventKind::LoginComplete));
     }
 }

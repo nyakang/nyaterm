@@ -79,7 +79,7 @@ BOOL CALLBACK subclass_child(HWND window, LPARAM data) {
 class Events final : public IDispatch {
     LONG references_ = 1;
     NyaRdpHost* host_;
-    std::array<DISPID, 9> ids_{};
+    std::array<DISPID, 13> ids_{};
 public:
     explicit Events(NyaRdpHost* host) : host_(host) {}
     HRESULT initialize() {
@@ -95,7 +95,8 @@ public:
         if (FAILED(hr)) return hr;
         const wchar_t* names[] = { L"OnConnected", L"OnLoginComplete", L"OnDisconnected",
             L"OnFatalError", L"OnConfirmClose", L"OnAutoReconnecting", L"OnAutoReconnecting2",
-            L"OnFocusReleased", L"OnAutoReconnected" };
+            L"OnFocusReleased", L"OnAutoReconnected", L"OnConnecting",
+            L"OnAuthenticationWarningDisplayed", L"OnAuthenticationWarningDismissed", L"OnLogonError" };
         for (size_t i = 0; i < ids_.size(); ++i) {
             LPOLESTR name = const_cast<LPOLESTR>(names[i]);
             ids_[i] = DISPID_UNKNOWN;
@@ -151,6 +152,10 @@ public:
         case 5: case 6: host_->emit(5); break;
         case 7: host_->emit(7); break;
         case 8: host_->emit(8); break;
+        case 9: host_->emit(9); break;
+        case 10: host_->emit(10); break;
+        case 11: host_->emit(11); break;
+        case 12: if (has_code) host_->emit(12, code); break;
         }
         return S_OK;
     }
@@ -178,7 +183,9 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     *stage = 108; // EnableCredSspSupport
     if (FAILED(hr = host.advanced->put_EnableCredSspSupport(config.nla ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     *stage = 109; // AuthenticationLevel
-    if (FAILED(hr = host.advanced->put_AuthenticationLevel(1))) return hr;
+    // Let the system control ask the user before continuing with an untrusted
+    // server certificate, as mstsc does. Never silently skip server validation.
+    if (FAILED(hr = host.advanced->put_AuthenticationLevel(2))) return hr;
     *stage = 110; // ConnectToAdministerServer
     if (FAILED(hr = host.advanced->put_ConnectToAdministerServer(config.admin ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     *stage = 111; // RedirectClipboard
@@ -197,6 +204,10 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     if (FAILED(hr = host.advanced->put_RedirectPOSDevices(VARIANT_FALSE))) return hr;
     *stage = 118; // IMsRdpClientNonScriptable3
     if (FAILED(hr = host.control->QueryInterface(__uuidof(IMsRdpClientNonScriptable3), reinterpret_cast<void**>(&resources)))) return hr;
+    // Authentication dialogs must be modal to the visible application window,
+    // not the initially hidden ActiveX child. The typelib uses pointer-sized wireHWND.
+    *stage = 135; // UIParentWindowHandle
+    if (FAILED(hr = resources->put_UIParentWindowHandle(reinterpret_cast<wireHWND>(host.parent)))) return hr;
     *stage = 119; // RedirectDynamicDrives
     if (FAILED(hr = resources->put_RedirectDynamicDrives(VARIANT_FALSE))) return hr;
     *stage = 120; // RedirectDynamicDevices
@@ -279,6 +290,18 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
     try {
         host->parent = parent; host->generation = config->generation;
         auto create = [&]() -> HRESULT {
+            // DirectComposition applies the parent's child-clipping rules.
+            // Keep this window-lifetime style once native children are hosted:
+            // other hosts on the same parent can outlive this one.
+            *stage = 10;
+            const LONG_PTR parent_style = GetWindowLongPtrW(parent, GWL_STYLE);
+            if (!(parent_style & WS_CLIPCHILDREN)) {
+                SetLastError(ERROR_SUCCESS);
+                if (!SetWindowLongPtrW(parent, GWL_STYLE, parent_style | WS_CLIPCHILDREN)) {
+                    const DWORD error = GetLastError();
+                    if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+                }
+            }
             *stage = 1;
             HRESULT result = OleInitialize(nullptr);
             if (FAILED(result)) return result;
@@ -294,8 +317,14 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
             *stage = 4;
             result = host->control.QueryInterface(&host->client);
             if (FAILED(result)) return result;
-            *stage = 5;
-            result = AtlAxAttachControl(host->control, host->window, &host->container);
+            // AttachControl calls ActivateAx with bInited=true, so ATL skips
+            // InitNew for caller-created controls. Initialize exactly once,
+            // before subscribing and in-place activation, like an OLE container.
+            *stage = 8;
+            CComQIPtr<IPersistStreamInit> initialization(host->control);
+            if (!initialization) return E_NOINTERFACE;
+            *stage = 9;
+            result = initialization->InitNew();
             if (FAILED(result)) return result;
             *stage = 6;
             CComQIPtr<IConnectionPointContainer> points(host->control);
@@ -307,6 +336,9 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
             result = sink->initialize();
             if (FAILED(result)) return result;
             result = host->point->Advise(host->sink, &host->cookie);
+            if (FAILED(result)) return result;
+            *stage = 5;
+            result = AtlAxAttachControl(host->control, host->window, &host->container);
             if (FAILED(result)) return result;
             *stage = 7;
             return configure(*host, *config, stage);
@@ -388,14 +420,23 @@ extern "C" int32_t nya_rdp_status(NyaRdpHost* host, NyaRdpStatus* status) noexce
     if (!status || status->size != sizeof(NyaRdpStatus)) return E_INVALIDARG;
     short connected = 0; LONG width = 0, height = 0, depth = 0, cipher = 0;
     if (host->client) {
-        host->client->get_Connected(&connected); host->client->get_DesktopWidth(&width);
+        const HRESULT result = host->client->get_Connected(&connected);
+        if (FAILED(result)) return result;
+        host->client->get_DesktopWidth(&width);
         host->client->get_DesktopHeight(&height); host->client->get_ColorDepth(&depth);
         host->client->get_CipherStrength(&cipher);
     }
-    *status = {sizeof(NyaRdpStatus), static_cast<uint32_t>(connected),
-        IsWindow(host->window) && GetWindow(host->window, GW_CHILD) ? 1u : 0u,
+    CComQIPtr<IOleInPlaceObject> object(host->control);
+    HWND surface = nullptr;
+    RECT surface_rect{};
+    const bool ready = object && SUCCEEDED(object->GetWindow(&surface)) &&
+        IsWindow(surface) && IsChild(host->window, surface) && GetClientRect(surface, &surface_rect) &&
+        surface_rect.right > 0 && surface_rect.bottom > 0;
+    *status = {sizeof(NyaRdpStatus), static_cast<uint32_t>(connected), ready ? 1u : 0u,
         host->callbacks, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-        static_cast<uint32_t>(depth), static_cast<uint32_t>(cipher)};
+        static_cast<uint32_t>(depth), static_cast<uint32_t>(cipher),
+        static_cast<uint32_t>(surface_rect.right), static_cast<uint32_t>(surface_rect.bottom),
+        ready && IsWindowVisible(surface) ? 1u : 0u};
     return S_OK;
 } catch (...) { return E_FAIL; }
 
@@ -438,16 +479,19 @@ extern "C" int32_t nya_rdp_destroy(NyaRdpHost** owner) noexcept try {
 } catch (...) { return E_FAIL; }
 
 // Read the actual system control in the offline Windows initialization regression test.
-extern "C" int32_t nya_rdp_verify_disabled_resources(NyaRdpHost* host) noexcept try {
+extern "C" int32_t nya_rdp_verify_connection_policy(NyaRdpHost* host) noexcept try {
     HRESULT hr = admit(host); if (FAILED(hr)) return hr;
     VARIANT_BOOL enabled = VARIANT_TRUE;
     unsigned int authentication = 0;
     if (FAILED(hr = host->advanced->get_AuthenticationLevel(&authentication))) return hr;
-    if (authentication != 1) return E_FAIL;
+    if (authentication != 2) return E_FAIL;
     if (FAILED(hr = host->advanced->get_RedirectClipboard(&enabled))) return hr;
     if (enabled != VARIANT_FALSE) return E_FAIL;
     CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);
     if (!resources) return E_NOINTERFACE;
+    wireHWND ui_parent = nullptr;
+    if (FAILED(hr = resources->get_UIParentWindowHandle(&ui_parent))) return hr;
+    if (reinterpret_cast<HWND>(ui_parent) != host->parent) return E_FAIL;
     if (FAILED(hr = resources->get_RedirectDynamicDrives(&enabled))) return hr;
     if (enabled != VARIANT_FALSE) return E_FAIL;
     if (FAILED(hr = resources->get_RedirectDynamicDevices(&enabled))) return hr;
