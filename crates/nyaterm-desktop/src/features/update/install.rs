@@ -432,9 +432,7 @@ fn run_windows_installed_helper(
     let target_dir = target
         .parent()
         .ok_or("installed application directory is unavailable")?;
-    if !is_valid_installed_executable(&target)
-        || !target_dir.join("Uninstall.exe").is_file()
-    {
+    if !is_valid_installed_executable(&target) || !target_dir.join("Uninstall.exe").is_file() {
         return Err("installed update target failed validation".into());
     }
     report(progress::Stage::Waiting);
@@ -668,12 +666,7 @@ mod tests {
         use super::is_valid_installed_executable;
         use std::path::Path;
 
-        for name in [
-            "NyaTerm.exe",
-            "nyaterm.exe",
-            "NYATERM.EXE",
-            "NyAtErM.ExE",
-        ] {
+        for name in ["NyaTerm.exe", "nyaterm.exe", "NYATERM.EXE", "NyAtErM.ExE"] {
             assert!(is_valid_installed_executable(Path::new(name)));
         }
 
