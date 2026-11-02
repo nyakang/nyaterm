@@ -13,6 +13,8 @@ If you just want a quick theme switch, you can also use **View → Theme** from 
 
 The built-in **WindTerm Dark** (`windterm-dark`) and **WindTerm Light** (`windterm-light`) themes are based on [WindTerm](https://github.com/kingToolbox/WindTerm)'s `dige-black` and `dige-white` palettes. They retain the 16 ANSI colors and adapt UI state colors for NyaTerm. Select either independently for the UI or terminal, or let the terminal follow the UI. To see the original terminal colors, turn off minimum contrast enhancement below; some ANSI colors in the light theme have low contrast on white.
 
+The built-in **Dracula** (`dracula`) and **Dracula Light** (`dracula-light`) follow the [official Dracula specification](https://draculatheme.com/spec): the dark theme uses the Dracula Classic palette and the light theme uses the official Alucard Classic (cream background). The specification defines a palette but no light ANSI mapping, so the light theme keeps ANSI black dark so that black text stays visible on the light background. The dark theme's bright black (`#6272a4`) is fairly dim; turn on minimum contrast if you need it more legible.
+
 The theme list includes two high-contrast themes, suited for accessibility, bright environments, or screen sharing:
 
 - **Nya HC** — high contrast on a dark base
