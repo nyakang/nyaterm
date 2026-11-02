@@ -296,7 +296,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.settings.set_interaction_word_separators(text);
-        cx.notify();
+        // Without this, a draft never marks the Interaction domain dirty: applying it
+        // writes nothing and cancelling it silently restores the old separators.
+        self.save_interaction_settings(cx);
     }
 
     pub(in crate::features) fn save_interaction_settings(&mut self, cx: &mut Context<Self>) {
