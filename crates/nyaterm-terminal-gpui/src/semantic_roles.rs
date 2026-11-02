@@ -240,7 +240,8 @@ fn looks_like_file_listing(line: &str) -> bool {
     };
     // RHEL/CentOS mark an SELinux label with `.` and an ACL with `+` directly
     // after the mode, so `-rw-r--r--. 1 root root ...` is the common shape there.
-    let rest = rest.strip_prefix(['.', '+']).unwrap_or(rest);
+    // `.` = SELinux context, `+` = ACL, `@` = macOS extended attributes.
+    let rest = rest.strip_prefix(['.', '+', '@']).unwrap_or(rest);
     let trimmed = rest.trim_start();
     rest.len() > trimmed.len() && trimmed.bytes().take_while(u8::is_ascii_digit).count() > 0
 }
@@ -492,7 +493,7 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
     // numeric columns: links, size, month, day, time
     let mut cursor = 10;
     // Skip the SELinux `.` / ACL `+` marker so the columns stay aligned.
-    if matches!(line.as_bytes().get(cursor), Some(b'.' | b'+')) {
+    if matches!(line.as_bytes().get(cursor), Some(b'.' | b'+' | b'@')) {
         cursor += 1;
     }
     let mut column = 0;
@@ -2064,6 +2065,21 @@ mod tests {
         ] {
             assert_eq!(detect(line), LineRole::FileListingOutput, "{line}");
         }
+    }
+
+    #[test]
+    fn detects_ls_long_listing_with_macos_extended_attribute_marker() {
+        // macOS appends `@` when a file carries extended attributes (quarantine,
+        // com.apple.*). Most of a home directory looks like this, so an unhandled
+        // marker leaves the whole listing uncoloured.
+        let line = "-rw-r--r--@ 1 user  staff  13980 Mar 26  2026 capture.pcap";
+        assert_eq!(detect(line), LineRole::FileListingOutput, "{line}");
+        let fields = file_listing_fields(line);
+        let texts: Vec<&str> = fields.iter().map(|f| &line[f.range.clone()]).collect();
+        assert!(texts.contains(&"1"), "{texts:?}");
+        assert!(texts.contains(&"13980"), "{texts:?}");
+        // A plain file keeps the terminal foreground, so its name is not a field.
+        assert!(!texts.contains(&"capture.pcap"), "{texts:?}");
     }
 
     #[test]

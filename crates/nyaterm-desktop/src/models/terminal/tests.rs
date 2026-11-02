@@ -63,6 +63,7 @@ fn frame_worker_wrap_preference_applies_to_created_seeded_and_transferred_sessio
     }
 }
 
+#[test]
 fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
     let mut view = TerminalViewState::new();
     let mut snapshot = TerminalScreen::default().viewport_snapshot(0);
