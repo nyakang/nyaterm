@@ -1405,7 +1405,7 @@ impl SettingsPanel {
                             .bg(rgb(palette.link))
                             .text_size(px(11.))
                             .font_weight(FontWeight(600.))
-                            .text_color(rgb(0xffffff))
+                            .text_color(rgb(palette.text_on_fill(palette.link)))
                             .cursor_pointer()
                             .on_click(cx.listener(|panel, _, _, cx| {
                                 panel.with_app(cx, |app, cx| {

@@ -46,6 +46,24 @@ impl ThemePalette {
         self.terminal_ansi[usize::from(index.min(15))]
     }
 
+    /// Text color for a solid accent fill such as a confirm button.
+    ///
+    /// White stays the default, so existing themes keep their look. It is only
+    /// replaced (by the darker of the theme's background and text color) when it
+    /// would be close to unreadable, as with the pale cyan and green of Dracula.
+    pub fn text_on_fill(self, fill: u32) -> u32 {
+        const WHITE: u32 = 0x00ff_ffff;
+        const MIN_WHITE_CONTRAST: f32 = 2.0;
+        if contrast_ratio(WHITE, fill) >= MIN_WHITE_CONTRAST {
+            return WHITE;
+        }
+        if relative_luminance(self.bg) <= relative_luminance(self.text) {
+            self.bg
+        } else {
+            self.text
+        }
+    }
+
     /// Keep the cursor visible without changing terminal foreground/background colors.
     pub fn apply_cursor_contrast_ratio(&mut self, ratio: f32) {
         if ratio <= 1.01 {
@@ -980,6 +998,24 @@ mod tests {
             assert_eq!(palette.terminal_fg, fg, "{id} foreground");
             assert_eq!(palette.terminal_selection, selection, "{id} selection");
             assert_eq!(palette.terminal_ansi, ansi, "{id} ANSI colors");
+        }
+    }
+
+    #[test]
+    fn confirm_buttons_stay_readable_on_pale_accent_fills() {
+        // Dracula's link and success colors are pale: white text is ~1.4:1 there.
+        let dracula = theme_palette("dracula");
+        for fill in [dracula.link, dracula.success] {
+            let text = dracula.text_on_fill(fill);
+            assert_ne!(text, 0xffffff, "{fill:#08x} must not get white text");
+            assert!(super::contrast_ratio(text, fill) >= 4.5, "{fill:#08x}");
+        }
+        // Themes whose accents already take white keep it, so their look is unchanged.
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = theme_palette(id);
+            if super::contrast_ratio(0xffffff, palette.link) >= 2.0 {
+                assert_eq!(palette.text_on_fill(palette.link), 0xffffff, "{id}");
+            }
         }
     }
 

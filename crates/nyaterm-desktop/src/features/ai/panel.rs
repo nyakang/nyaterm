@@ -1347,7 +1347,7 @@ impl AiPanel {
                         .gap_1()
                         .text_size(px(12.))
                         .font_weight(FontWeight(600.))
-                        .text_color(rgb(0xffffff))
+                        .text_color(rgb(palette.text_on_fill(palette.success)))
                         .cursor_pointer()
                         .hover(|this| this.bg(rgb(0x2ea043)))
                         .on_click(cx.listener(|panel, _, _, cx| {
