@@ -35,7 +35,7 @@ impl NativeWebdavRemote {
         let client = zed_reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("NyaTerm")
-            // Redirects are followed in `send_following` instead. The default
+            // Redirects are followed in `send_with_headers` instead. The default
             // policy rewrites any redirected non-GET/HEAD request into a GET and
             // drops its body, which would silently turn a `PROPFIND` on a
             // slashless collection URL into a `GET` of an HTML index page.
@@ -83,68 +83,69 @@ impl NativeWebdavRemote {
         body: Option<Vec<u8>>,
         headers: &[(&str, &str)],
     ) -> Result<zed_reqwest::blocking::Response, CloudSyncError> {
-        let (response, url) =
-            self.send_following(method.clone(), url, body.clone(), None, headers)?;
-        if response.status() != StatusCode::UNAUTHORIZED {
-            return Ok(response);
-        }
-        let Some(challenge) = digest_challenge(&response) else {
-            return Ok(response);
-        };
-        if self.username.is_empty() || self.password.as_deref().unwrap_or_default().is_empty() {
-            return Ok(response);
-        }
-        // The digest URI must describe the request the server will actually
-        // authorize, so a followed redirect changes it.
-        let auth = build_digest_authorization(
-            &challenge,
-            &self.username,
-            self.password.as_deref().unwrap_or_default(),
-            method.as_str(),
-            path_and_query(&url),
-            &webdav_cnonce(),
-            "00000001",
-        )?;
-        let _ = response.bytes_counted();
-        self.send_following(method, &url, body, Some(auth), headers)
-            .map(|(response, _)| response)
-    }
-
-    /// Sends one request, following same-host redirects with the original method
-    /// and body preserved.
-    ///
-    /// WebDAV servers routinely answer a collection URL without a trailing slash
-    /// with a redirect to the slashed form. `PROPFIND`, `MKCOL` and `PUT` must
-    /// survive that hop verbatim: a `GET` in their place either reads an HTML
-    /// index page or reports a method error, and a bodyless `PUT` silently
-    /// uploads nothing.
-    fn send_following(
-        &self,
-        method: Method,
-        url: &str,
-        body: Option<Vec<u8>>,
-        authorization: Option<String>,
-        headers: &[(&str, &str)],
-    ) -> Result<(zed_reqwest::blocking::Response, String), CloudSyncError> {
         let mut current = url.to_string();
-        for _ in 0..MAX_REDIRECTS {
+        let mut redirects = 0;
+        let mut challenge: Option<String> = None;
+        let cnonce = webdav_cnonce();
+        let mut nonce_count = 0;
+        loop {
+            // Digest signs the actual path and query, including redirects after
+            // authentication. Never replay a signature for an earlier URI.
+            let authorization = if let Some(challenge) = &challenge {
+                nonce_count += 1;
+                Some(build_digest_authorization(
+                    challenge,
+                    &self.username,
+                    self.password.as_deref().unwrap_or_default(),
+                    method.as_str(),
+                    path_and_query(&current),
+                    &cnonce,
+                    &format!("{nonce_count:08x}"),
+                )?)
+            } else {
+                None
+            };
             let response = self.send_once(
                 method.clone(),
                 &current,
                 body.clone(),
-                authorization.clone(),
+                authorization,
                 headers,
             )?;
-            let Some(next) = redirect_target(&response, &current)? else {
-                return Ok((response, current));
+            // Allow one Digest challenge per logical request. Authentication
+            // retries do not consume or reset the redirect budget.
+            if response.status() == StatusCode::UNAUTHORIZED
+                && challenge.is_none()
+                && !self.username.is_empty()
+                && !self.password.as_deref().unwrap_or_default().is_empty()
+                && let Some(next_challenge) = digest_challenge(&response)
+            {
+                challenge = Some(next_challenge);
+                let _ = response.bytes_counted();
+                continue;
+            }
+            let Some(next) = redirect_target(
+                response.status(),
+                response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|v| v.to_str().ok()),
+                &current,
+                &method,
+            )?
+            else {
+                return Ok(response);
             };
             let _ = response.bytes_counted();
+            if redirects == MAX_REDIRECTS {
+                return Err(CloudSyncError::Remote(format!(
+                    "WebDAV {} redirect chain is too long",
+                    method.as_str()
+                )));
+            }
+            redirects += 1;
             current = next;
         }
-        Err(CloudSyncError::Remote(format!(
-            "WebDAV {} redirect chain is too long",
-            method.as_str()
-        )))
     }
 
     fn send_once(
@@ -338,27 +339,37 @@ pub(super) fn parse_webdav_file_names(body: &str) -> Result<Vec<String>, CloudSy
 
 /// Whether a redirect target may receive this request.
 ///
-/// Only a byte-identical host is trusted (scheme upgrades included), and the
-/// target must not smuggle credentials, a fragment, or another host into the
-/// request that already carries this account's credentials.
+/// Credentials and bodies stay within one origin, except for a same-host
+/// upgrade from HTTP's default port to HTTPS's default port. A 303 describes
+/// an indirect response, so it must never replay a WebDAV mutation there.
 fn redirect_target(
-    response: &zed_reqwest::blocking::Response,
+    status: StatusCode,
+    location: Option<&str>,
     current: &str,
+    method: &Method,
 ) -> Result<Option<String>, CloudSyncError> {
-    if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+    if !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
         return Ok(None);
     }
+    if status == StatusCode::SEE_OTHER && method != Method::GET && method != Method::HEAD {
+        return Err(CloudSyncError::Remote(format!(
+            "WebDAV {} cannot be replayed after HTTP 303 See Other",
+            method.as_str()
+        )));
+    }
     let invalid = || CloudSyncError::Remote("invalid WebDAV redirect".into());
-    let Some(location) = response
-        .headers()
-        .get(LOCATION)
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(location) = location else {
         return Ok(None);
     };
     let base = url::Url::parse(current).map_err(|_| invalid())?;
     let next = base.join(location).map_err(|_| invalid())?;
+    let same_origin = base.origin() == next.origin();
+    let default_port_upgrade = base.scheme() == "http"
+        && next.scheme() == "https"
+        && base.port_or_known_default() == Some(80)
+        && next.port_or_known_default() == Some(443);
     if next.host_str() != base.host_str()
+        || !(same_origin || default_port_upgrade)
         || !next.username().is_empty()
         || next.password().is_some()
         || next.fragment().is_some()
@@ -368,7 +379,7 @@ fn redirect_target(
         )
     {
         // Leave the redirect as the response: the caller reports the status and
-        // no credentials or bodies travel to a host this account never used.
+        // no credentials or bodies travel to an untrusted origin.
         return Ok(None);
     }
     Ok(Some(next.to_string()))

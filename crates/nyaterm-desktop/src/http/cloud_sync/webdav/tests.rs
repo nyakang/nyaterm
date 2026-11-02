@@ -3,8 +3,24 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 use nyaterm_core::{CloudSyncError, CloudSyncRemote, WebdavSyncSettings};
+use zed_reqwest::{Method, StatusCode};
 
-use super::NativeWebdavRemote;
+use super::{NativeWebdavRemote, redirect_target};
+use crate::http::cloud_sync::helpers::{build_digest_authorization, parse_digest_challenge};
+
+struct Request {
+    head: String,
+    body: Vec<u8>,
+}
+
+impl Request {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.head.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    }
+}
 
 /// One request the fixture answers, and the reply it sends.
 struct Reply {
@@ -40,7 +56,7 @@ fn redirect(location: &str) -> Reply {
 impl Reply {
     /// Reads the fixture's request to completion, so the client is never blocked
     /// writing a body the fixture did not consume.
-    fn answer(&self, stream: &mut std::net::TcpStream) -> (String, String) {
+    fn answer(&self, stream: &mut std::net::TcpStream) -> Request {
         stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -65,7 +81,6 @@ impl Reply {
         if length > 0 {
             stream.read_exact(&mut body).unwrap();
         }
-        let line = head.lines().next().unwrap_or_default().to_string();
         let mut response = format!("HTTP/1.1 {} Fixture\r\n", self.status);
         for (name, value) in &self.headers {
             response.push_str(&format!("{name}: {value}\r\n"));
@@ -75,13 +90,13 @@ impl Reply {
         response.push_str(self.body);
         stream.write_all(response.as_bytes()).unwrap();
         stream.flush().unwrap();
-        (line, String::from_utf8_lossy(&body).to_string())
+        Request { head, body }
     }
 }
 
 fn scripted_server(
     requests: Vec<(&'static str, Reply)>,
-) -> (NativeWebdavRemote, std::thread::JoinHandle<()>) {
+) -> (NativeWebdavRemote, std::thread::JoinHandle<Vec<Request>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let remote = NativeWebdavRemote::new(&WebdavSyncSettings {
@@ -91,6 +106,7 @@ fn scripted_server(
     })
     .unwrap();
     let handle = std::thread::spawn(move || {
+        let mut received = Vec::new();
         for (expected, reply) in requests {
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut stream = loop {
@@ -103,9 +119,11 @@ fn scripted_server(
                     Err(error) => panic!("fixture accept failed: {error}"),
                 }
             };
-            let (line, _body) = reply.answer(&mut stream);
-            assert_eq!(line, expected);
+            let request = reply.answer(&mut stream);
+            assert_eq!(request.head.lines().next().unwrap(), expected);
+            received.push(request);
         }
+        received
     });
     (remote, handle)
 }
@@ -188,12 +206,17 @@ fn a_collection_redirect_is_retried_with_the_original_method_and_body() {
         ),
     ]);
     let url = format!("{}/apps/nyaterm/sync", remote.endpoint);
-    let result = remote.send(
+    let result = remote.send_with_headers(
         zed_reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
         &url,
         Some(b"<propfind/>".to_vec()),
+        &[("Depth", "1"), ("Content-Type", "application/xml")],
     );
-    server.join().unwrap();
+    for request in server.join().unwrap() {
+        assert_eq!(request.body, b"<propfind/>");
+        assert_eq!(request.header("Depth"), Some("1"));
+        assert_eq!(request.header("Content-Type"), Some("application/xml"));
+    }
     assert_eq!(result.unwrap().status().as_u16(), 207);
 }
 
@@ -209,4 +232,287 @@ fn a_redirect_to_another_host_is_not_followed_with_credentials() {
         result,
         Err(CloudSyncError::Http { status: 301, .. })
     ));
+}
+
+#[test]
+fn redirects_require_the_same_origin_or_a_default_port_tls_upgrade() {
+    for (current, location, allowed) in [
+        ("https://dav.example/sync", "/other", true),
+        (
+            "https://dav.example:443/sync",
+            "https://dav.example/other",
+            true,
+        ),
+        ("https://dav.example:8443/sync", "/other", true),
+        (
+            "https://dav.example/sync",
+            "https://dav.example:8443/other",
+            false,
+        ),
+        (
+            "http://dav.example/sync",
+            "http://dav.example:8080/other",
+            false,
+        ),
+        ("http://dav.example/sync", "https://dav.example/other", true),
+        (
+            "http://dav.example:80/sync",
+            "https://dav.example:443/other",
+            true,
+        ),
+        (
+            "http://dav.example:8080/sync",
+            "https://dav.example/other",
+            false,
+        ),
+        (
+            "http://dav.example/sync",
+            "https://dav.example:8443/other",
+            false,
+        ),
+        (
+            "http://dav.example:8080/sync",
+            "https://dav.example:8080/other",
+            false,
+        ),
+        (
+            "https://dav.example/sync",
+            "http://dav.example/other",
+            false,
+        ),
+        (
+            "https://dav.example/sync",
+            "https://other.example/other",
+            false,
+        ),
+        (
+            "https://dav.example/sync",
+            "https://user@dav.example/other",
+            false,
+        ),
+        ("https://dav.example/sync", "/other#fragment", false),
+        ("https://dav.example/sync", "ftp://dav.example/other", false),
+    ] {
+        let target =
+            redirect_target(StatusCode::FOUND, Some(location), current, &Method::PUT).unwrap();
+        assert_eq!(target.is_some(), allowed, "{current} -> {location}");
+    }
+}
+
+const DIGEST_CHALLENGE: &str = r#"Digest realm="fixture", nonce="fixture", qop="auth""#;
+
+fn unauthorized() -> Reply {
+    Reply {
+        headers: vec![("WWW-Authenticate", DIGEST_CHALLENGE.into())],
+        ..reply(401)
+    }
+}
+
+fn with_credentials(mut remote: NativeWebdavRemote) -> NativeWebdavRemote {
+    remote.username = "fixture".into();
+    remote.password = Some("fixture".into());
+    remote
+}
+
+#[test]
+fn cross_port_redirects_never_forward_basic_or_digest_credentials_or_uploads() {
+    for digest in [false, true] {
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let mut moved = redirect(&format!("http://{}/other", target.local_addr().unwrap()));
+        moved.status = 302;
+        let mut script = Vec::new();
+        if digest {
+            script.push(("PUT /dav/object HTTP/1.1", unauthorized()));
+        }
+        script.push(("PUT /dav/object HTTP/1.1", moved));
+        let (remote, server) = scripted_server(script);
+        let remote = with_credentials(remote);
+        let result = remote.send(
+            Method::PUT,
+            &format!("{}/object", remote.endpoint),
+            Some(b"upload".to_vec()),
+        );
+        let requests = server.join().unwrap();
+        let last = requests.last().unwrap();
+        let authorization = last.header("Authorization").unwrap();
+        assert!(authorization.starts_with(if digest { "Digest " } else { "Basic " }));
+        assert_eq!(last.body, b"upload");
+        assert_eq!(result.unwrap().status(), StatusCode::FOUND);
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+}
+
+#[test]
+fn see_other_never_replays_webdav_mutations() {
+    for name in ["PUT", "MKCOL", "PROPFIND", "DELETE"] {
+        let method = Method::from_bytes(name.as_bytes()).unwrap();
+        let error = redirect_target(
+            StatusCode::SEE_OTHER,
+            Some("/upload-result"),
+            "https://dav.example/object",
+            &method,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, CloudSyncError::Remote(detail) if detail.contains("303") && detail.contains(name))
+        );
+    }
+
+    let mut moved = redirect("/upload-result");
+    moved.status = 303;
+    let (remote, server) = scripted_server(vec![("PUT /dav/apps/nyaterm/object HTTP/1.1", moved)]);
+    let result = remote.write("object", b"upload");
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body, b"upload");
+    assert!(matches!(result, Err(CloudSyncError::Remote(detail)) if detail.contains("303")));
+}
+
+#[test]
+fn see_other_can_follow_get_and_head() {
+    for method in [Method::GET, Method::HEAD] {
+        assert_eq!(
+            redirect_target(
+                StatusCode::SEE_OTHER,
+                Some("/result"),
+                "https://dav.example/object",
+                &method
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://dav.example/result")
+        );
+    }
+    let mut moved = redirect("/result");
+    moved.status = 303;
+    let (remote, server) = scripted_server(vec![
+        ("GET /dav/apps/nyaterm/object HTTP/1.1", moved),
+        ("GET /result HTTP/1.1", reply(200)),
+    ]);
+    let result = remote.read_if_exists("object");
+    server.join().unwrap();
+    assert_eq!(result.unwrap(), Some(Vec::new()));
+}
+
+#[test]
+fn digest_redirects_resign_the_final_path_and_query_and_increment_nonce_count() {
+    let mut moved = redirect("/final/object?revision=2");
+    moved.status = 302;
+    let (remote, server) = scripted_server(vec![
+        (
+            "PUT /dav/object HTTP/1.1",
+            redirect("/authenticated/object?revision=1"),
+        ),
+        (
+            "PUT /authenticated/object?revision=1 HTTP/1.1",
+            unauthorized(),
+        ),
+        ("PUT /authenticated/object?revision=1 HTTP/1.1", moved),
+        ("PUT /final/object?revision=2 HTTP/1.1", reply(201)),
+    ]);
+    let remote = with_credentials(remote);
+    let result = remote.send(
+        Method::PUT,
+        &format!("{}/object", remote.endpoint),
+        Some(b"upload".to_vec()),
+    );
+    let requests = server.join().unwrap();
+    assert_eq!(result.unwrap().status(), StatusCode::CREATED);
+    for request in &requests {
+        assert_eq!(request.body, b"upload");
+    }
+    let mut cnonce = None;
+    for (request, uri, nc) in [
+        (&requests[2], "/authenticated/object?revision=1", "00000001"),
+        (&requests[3], "/final/object?revision=2", "00000002"),
+    ] {
+        let auth = request.header("Authorization").unwrap();
+        let params = parse_digest_challenge(auth.strip_prefix("Digest ").unwrap());
+        let current_cnonce = params.get("cnonce").unwrap();
+        assert_eq!(
+            cnonce.get_or_insert_with(|| current_cnonce.clone()),
+            current_cnonce
+        );
+        let expected = build_digest_authorization(
+            DIGEST_CHALLENGE.strip_prefix("Digest ").unwrap(),
+            "fixture",
+            "fixture",
+            "PUT",
+            uri,
+            current_cnonce,
+            nc,
+        )
+        .unwrap();
+        assert_eq!(auth, expected);
+    }
+}
+
+#[test]
+fn invalid_digest_credentials_stop_after_one_authentication_retry() {
+    let (remote, server) = scripted_server(vec![
+        ("PUT /dav/object HTTP/1.1", unauthorized()),
+        ("PUT /dav/object HTTP/1.1", unauthorized()),
+    ]);
+    let remote = with_credentials(remote);
+    let result = remote.send(
+        Method::PUT,
+        &format!("{}/object", remote.endpoint),
+        Some(b"upload".to_vec()),
+    );
+    assert_eq!(server.join().unwrap().len(), 2);
+    assert_eq!(result.unwrap().status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn four_redirect_hops_allow_the_final_request_with_method_and_body_intact() {
+    for status in [301, 302, 307, 308] {
+        let mut moved = redirect("/dav/object");
+        moved.status = status;
+        let (remote, server) = scripted_server(vec![
+            ("PUT /dav/object HTTP/1.1", redirect("/one")),
+            ("PUT /one HTTP/1.1", redirect("/two")),
+            ("PUT /two HTTP/1.1", redirect("/three")),
+            ("PUT /three HTTP/1.1", moved),
+            ("PUT /dav/object HTTP/1.1", reply(201)),
+        ]);
+        let result = remote.send(
+            Method::PUT,
+            &format!("{}/object", remote.endpoint),
+            Some(b"upload".to_vec()),
+        );
+        for request in server.join().unwrap() {
+            assert_eq!(request.body, b"upload");
+        }
+        assert_eq!(result.unwrap().status(), StatusCode::CREATED);
+    }
+}
+
+#[test]
+fn a_fifth_redirect_is_rejected_without_resetting_the_budget_after_digest() {
+    for digest in [false, true] {
+        let mut script = vec![("PUT /dav/object HTTP/1.1", redirect("/one"))];
+        if digest {
+            script.push(("PUT /one HTTP/1.1", unauthorized()));
+        }
+        script.extend([
+            ("PUT /one HTTP/1.1", redirect("/two")),
+            ("PUT /two HTTP/1.1", redirect("/three")),
+            ("PUT /three HTTP/1.1", redirect("/four")),
+            ("PUT /four HTTP/1.1", redirect("/five")),
+        ]);
+        let (remote, server) = scripted_server(script);
+        let remote = with_credentials(remote);
+        let result = remote.send(
+            Method::PUT,
+            &format!("{}/object", remote.endpoint),
+            Some(b"upload".to_vec()),
+        );
+        assert_eq!(server.join().unwrap().len(), if digest { 6 } else { 5 });
+        assert!(
+            matches!(result, Err(CloudSyncError::Remote(detail)) if detail.contains("redirect chain is too long"))
+        );
+    }
 }
