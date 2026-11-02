@@ -95,3 +95,27 @@ containers. They do not certify icon presentation in the unavailable internal
 machine's actual desktop shell, its Linux 5.4 kernel/custom security patches,
 real driver or internal services. The target-machine acceptance requirements
 above still apply.
+
+### 全量 Rust 检查终态与限制（2026-11-02）
+
+- `cargo check --release --workspace --locked` 通过。
+- 严格 `cargo clippy --release --workspace --all-targets --locked -- -D warnings`
+  通过（7 分 19 秒）。
+- 首轮全优化工作区测试在编译 `nyaterm-desktop` 测试目标时触及容器的
+  16 GiB 内存上限；cgroup 记录 `oom_kill=1`，编译器收到 SIGKILL。
+- 后续采用 `-j1`，并仅将测试构建中 `nyaterm-desktop` 的优化级别设为 0；
+  全量断言执行终态为 **4833 通过、154 失败、28 忽略**。失败集中在
+  `nyaterm-desktop --lib`（128 项）和 `nyaterm-ui --lib`（26 项），不能将
+  本次全量工作区回归标记为通过。
+- 已核对锁定的 GPUI 源码：`VisualTestContext::debug_bounds()` 明确说明，
+  未启用 `debug_assertions` 的构建不会记录调试选择器，因而返回 `None`。
+  失败日志中的界面测试依赖这些边界；本次使用 release 测试配置不满足该
+  测试前提。标准调试配置下的完整回归仍需运行，不能据此声称全部界面测试已验收。
+- 从现有完整工作区测试二进制直接在 Xvfb 下运行新增的原生 X11 类名测试，
+  **1 项通过**，没有重新编译依赖。应用优化构建、实际 tar/deb 软件 OpenGL
+  窗口、普通用户 GTK 图标读取、22 项助手生命周期测试及 ABI 审计均已独立通过。
+
+终态证据：`clippy.log`、`workspace-tests.log`、`workspace-tests-retry.log`、
+`rust-workspace-summary.json`、`memory-events-after-test-kill.txt` 和
+`x11-cached-binary.log`。GitHub PR 的工作流仍须上游维护者批准，完整标准
+调试测试应在该审批后按仓库 CI 配置执行；未自动批准或手动重复重跑工作流。
