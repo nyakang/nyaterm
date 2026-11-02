@@ -189,18 +189,18 @@ impl ControlParser {
         self.bytes.extend_from_slice(data);
     }
 
-    pub(crate) fn next_line(&mut self) -> Option<String> {
+    pub(crate) fn next_line(&mut self) -> Option<Vec<u8>> {
         let start = self.consumed;
         let end = start + self.bytes[start..].iter().position(|b| *b == b'\n')?;
         self.consumed = end + 1;
         let line = self.bytes[start..end]
             .strip_suffix(b"\r")
             .unwrap_or(&self.bytes[start..end]);
-        Some(String::from_utf8_lossy(line).into_owned())
+        Some(line.to_vec())
     }
 
     #[cfg(test)]
-    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<String> {
+    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         self.push(data);
         std::iter::from_fn(|| self.next_line()).collect()
     }
@@ -215,21 +215,22 @@ impl ControlParser {
 
 /// Decode tmux's octal escaping: any byte `b` outside the printable range is
 /// emitted as a literal `\` followed by three octal digits.
-pub(crate) fn unescape_octal(data: &str) -> Vec<u8> {
-    let bytes = data.as_bytes();
+pub(crate) fn unescape_octal(data: impl AsRef<[u8]>) -> Vec<u8> {
+    let bytes = data.as_ref();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'\\'
             && i + 3 < bytes.len()
-            && bytes[i + 1..=i + 3].iter().all(u8::is_ascii_digit)
+            && matches!(bytes[i + 1], b'0'..=b'3')
+            && bytes[i + 2..=i + 3]
+                .iter()
+                .all(|b| matches!(b, b'0'..=b'7'))
         {
             let value = (bytes[i + 1] - b'0') as u32 * 64
                 + (bytes[i + 2] - b'0') as u32 * 8
                 + (bytes[i + 3] - b'0') as u32;
-            // Octal escapes encode one byte; values > 0o377 are not emitted by
-            // tmux, but clamp defensively rather than corrupting the stream.
-            out.push(value.min(0xFF) as u8);
+            out.push(value as u8);
             i += 4;
         } else {
             out.push(bytes[i]);
@@ -252,7 +253,31 @@ fn rest_after_keyword<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 }
 
 /// Parse one complete control line (no trailing newline or `\r`).
-pub(crate) fn parse_line(line: &str) -> Option<ControlMessage> {
+pub(crate) fn parse_line(line: impl AsRef<[u8]>) -> Option<ControlMessage> {
+    let bytes = line.as_ref();
+    // Terminal payload is arbitrary bytes. Decode only protocol metadata as
+    // text; never feed output through a lossy UTF-8 conversion.
+    if let Some(args) = bytes.strip_prefix(b"%output ") {
+        let split = args.iter().position(|b| *b == b' ')?;
+        let pane = std::str::from_utf8(&args[..split]).ok()?.to_string();
+        return Some(ControlMessage::Output {
+            pane,
+            data: unescape_octal(&args[split + 1..]),
+        });
+    }
+    if let Some(args) = bytes.strip_prefix(b"%extended-output ") {
+        let split = args.windows(3).position(|part| part == b" : ")?;
+        let mut meta = std::str::from_utf8(&args[..split]).ok()?.split_whitespace();
+        let pane = meta.next()?.to_string();
+        let age = meta.next()?.parse().ok()?;
+        return Some(ControlMessage::ExtendedOutput {
+            pane,
+            age,
+            data: unescape_octal(&args[split + 3..]),
+        });
+    }
+    let line = String::from_utf8_lossy(bytes);
+    let line = line.as_ref();
     let rest = line.strip_prefix('%')?;
     let keyword_end = rest
         .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
@@ -265,27 +290,6 @@ pub(crate) fn parse_line(line: &str) -> Option<ControlMessage> {
             "end" => ControlMessage::End(parse_block_id(line)?),
             _ => ControlMessage::Error(parse_block_id(line)?),
         }),
-        "output" => {
-            let args = rest_after_keyword(line, "%output")?;
-            let (pane, data) = args.split_once(' ')?;
-            Some(ControlMessage::Output {
-                pane: pane.to_string(),
-                data: unescape_octal(data),
-            })
-        }
-        "extended-output" => {
-            // `%extended-output %<id> <age> <flags...> : <data>`
-            let args = rest_after_keyword(line, "%extended-output")?;
-            let (meta, data) = args.split_once(" : ")?;
-            let mut meta_parts = meta.split_whitespace();
-            let pane = meta_parts.next()?;
-            let age = meta_parts.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-            Some(ControlMessage::ExtendedOutput {
-                pane: pane.to_string(),
-                age,
-                data: unescape_octal(data),
-            })
-        }
         "layout-change" => {
             let args = rest_after_keyword(line, "%layout-change")?;
             let mut parts = args.split_whitespace();
@@ -518,7 +522,7 @@ mod tests {
         assert!(parser.feed(b"%window-add @1\r\n%la").len() == 1);
         let lines = parser.feed(b"yout-change @1 xx,1x1,0,0,0\nrest");
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("%layout-change"));
+        assert!(lines[0].starts_with(b"%layout-change"));
         // "rest" has no newline yet, stays pending.
         assert_eq!(parser.take_pending(), b"rest");
     }
@@ -626,7 +630,52 @@ mod framing_tests {
         parser.push(b"%exit\r");
         assert!(parser.next_line().is_none());
         parser.push(b"\n\x1b\\\r\nshell\xff\r\nprompt> ");
-        assert_eq!(parser.next_line().as_deref(), Some("%exit"));
+        assert_eq!(parser.next_line().as_deref(), Some(b"%exit".as_slice()));
         assert_eq!(parser.take_pending(), b"\x1b\\\r\nshell\xff\r\nprompt> ");
+    }
+}
+
+#[cfg(test)]
+mod byte_tests {
+    use super::{ControlMessage, ControlParser, parse_line, unescape_octal};
+
+    #[test]
+    fn output_bytes_survive_every_ssh_fragment_boundary() {
+        let payloads: &[&[u8]] = &[
+            b"ASCII",
+            "中文".as_bytes(),
+            b"\xd6\xd0\xce\xc4",
+            b"\xa4\xa4\xa4\xe5",
+            b"\xff\xfe\x80\x00",
+            b"\\000\\377\\033\\134",
+            b"  leading : spaces  ",
+        ];
+        for prefix in [b"%output %5 ".as_slice(), b"%extended-output %5 123 - : "] {
+            for payload in payloads {
+                let wire = [prefix, payload, b"\r\n"].concat();
+                for split in 0..=wire.len() {
+                    let mut parser = ControlParser::new();
+                    parser.push(&wire[..split]);
+                    parser.push(&wire[split..]);
+                    let line = parser.next_line().unwrap();
+                    let data = match parse_line(line).unwrap() {
+                        ControlMessage::Output { data, .. }
+                        | ControlMessage::ExtendedOutput { data, .. } => data,
+                        _ => panic!("expected output"),
+                    };
+                    assert_eq!(data, unescape_octal(payload));
+                    assert!(parser.next_line().is_none());
+                }
+                let mut parser = ControlParser::new();
+                for byte in &wire[..wire.len() - 1] {
+                    parser.push(&[*byte]);
+                    assert!(parser.next_line().is_none());
+                }
+                parser.push(b"\n");
+                assert!(parse_line(parser.next_line().unwrap()).is_some());
+            }
+        }
+        assert_eq!(unescape_octal(b"\\000\\377\\033\\134"), [0, 255, 27, 92]);
+        assert_eq!(unescape_octal(b"\\888\\400\\078"), b"\\888\\400\\078");
     }
 }

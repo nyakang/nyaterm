@@ -97,7 +97,7 @@ impl NyaTermApp {
         });
         // Tauri: closing a strip tab closes the whole tab tree; closing a secondary leaf
         // only removes that pane. Strip close uses the tab-root id.
-        let close_ids = if !self.is_secondary_pane_session(&session_id) {
+        let mut close_ids = if !self.is_secondary_pane_session(&session_id) {
             if let Some(root) = self.shell.workspace_pane_root(&session_id) {
                 root.session_ids()
             } else {
@@ -106,6 +106,11 @@ impl NyaTermApp {
         } else {
             vec![session_id.clone()]
         };
+        // A tmux tab projects pane leaves, but the host SSH worker still owns
+        // the control client. Closing the tab releases that host as well.
+        if self.tmux.has_host(&session_id) && !close_ids.contains(&session_id) {
+            close_ids.insert(0, session_id.clone());
+        }
         let was_active = self
             .session
             .active_id()
@@ -197,6 +202,15 @@ impl NyaTermApp {
             return;
         }
         let pane_id = self.active_pane_for_tab_root(tab_root_id);
+        if self.tmux.pane_for_session(&pane_id).is_some() {
+            // Pane-close is destructive; tab-close, detach and teardown are not.
+            // Let the confirmed remote layout remove the local terminal state.
+            if let Err(error) = self.session.manager().tmux_close_pane(&pane_id) {
+                self.shell.set_status(format!("close failed: {error}"));
+            }
+            cx.notify();
+            return;
+        }
         if self.tab_tree_session_ids(tab_root_id).len() <= 1 {
             self.close_session(tab_root_id.to_string(), cx);
             return;

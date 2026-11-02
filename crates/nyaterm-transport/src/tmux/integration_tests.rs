@@ -238,6 +238,47 @@ async fn closing_a_host_without_command_responses_reaps_panes_and_releases_input
     );
 }
 
+#[tokio::test]
+async fn ssh_eof_reaps_virtual_panes_and_discards_old_attachment_commands() {
+    use crate::session_event_queue::SessionEventQueue;
+    use crate::ssh_mailbox;
+    use crate::tmux::session::{ControlExit, run_control_session};
+    let mut connection = connect().await;
+    let queue = SessionEventQueue::new();
+    let sessions = Arc::new(Mutex::new(HashMap::new()));
+    let (tx, mut rx) = super::mailbox::channel();
+    let (_host, mut host_rx) = ssh_mailbox::channel();
+    let channel = connection.tx.clone();
+    let output = connection.peer_tx.clone();
+    let driver = run_control_session(
+        &queue,
+        &sessions,
+        "host",
+        &channel,
+        &mut connection.rx,
+        &mut host_rx,
+        &mut rx,
+        tx.clone(),
+        b"%layout-change @0 b25f,80x24,0,0,0 b25f,80x24,0,0,0 *\n",
+    );
+    let disconnect = async {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        output.eof().await.unwrap();
+    };
+    let (exit, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(driver, disconnect)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(exit, ControlExit::Closed));
+    assert!(sessions.lock().unwrap().is_empty());
+    assert!(queue.session_cancelled("host::pane0"));
+    assert!(tx.write("%0", b"stale input").is_err());
+    assert!(queue.drain(100).events.iter().any(
+        |event| matches!(event, crate::SessionEvent::TmuxState { state, .. } if state.exited)
+    ));
+}
+
 // Opt-in because a real tmux binary is required. CI runs this group explicitly
 // on Linux and macOS. Windows can exercise the same SSH path against WSL tmux.
 mod real {
@@ -569,7 +610,18 @@ mod real {
             .map(|row| row.text.trim_end())
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(actual_history.trim_end(), expected_history.trim_end());
+        // Local live output can retain more history than tmux's default
+        // history-limit (5000 locally versus 2000 remotely). Whether pause
+        // recovery ran before or after that live output depends on scheduling.
+        // Compare every row still retained by the server, without rejecting
+        // valid extra local history from before the capture boundary.
+        let expected_rows: Vec<_> = expected_history.trim_end().lines().collect();
+        let actual_rows: Vec<_> = actual_history.trim_end().lines().collect();
+        assert!(actual_rows.len() >= expected_rows.len());
+        assert_eq!(
+            &actual_rows[actual_rows.len() - expected_rows.len()..],
+            expected_rows.as_slice()
+        );
         run.tx.send(SshCommand::TmuxDetach).unwrap();
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(10), &mut run.driver)
@@ -622,5 +674,170 @@ mod real {
         assert!(run.sessions.lock().unwrap().is_empty());
         run.drain();
         assert!(run.state.as_ref().unwrap().exited);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real tmux; run explicitly in compatibility CI"]
+    async fn real_tmux_compound_commands_errors_and_queries_stay_correlated() {
+        let mut run = Running::start().await;
+        run.wait(|run| run.terminals.contains_key("host::pane0"))
+            .await;
+        for line in [
+            "new-window -n compound-a ; new-window -n compound-b",
+            "new-window ; invalid-nyaterm-command ; new-window",
+            "select-window -t @999999 ; new-window -n skipped",
+            "display-message -p ordinary-response",
+            "new-window -n rapid-a",
+            "new-window -n rapid-b",
+        ] {
+            run.tx
+                .send(SshCommand::TmuxCommand { line: line.into() })
+                .unwrap();
+        }
+        run.wait(|run| {
+            run.state
+                .as_ref()
+                .is_some_and(|state| state.windows.len() == 5 && state.panes.len() == 5)
+        })
+        .await;
+        assert!(!run.driver.is_finished());
+        // Internal capture queries after all user responses must still seed
+        // the right pane, including after both parse and execution failures.
+        run.tx.write("%4", b"printf 'CORRELATED\\n'\r").unwrap();
+        run.wait(|run| run.screen("%4").contains("CORRELATED\n"))
+            .await;
+        run.tx
+            .send(SshCommand::TmuxCommand {
+                line: "display-message -p pending-at-detach ; display-message -p next".into(),
+            })
+            .unwrap();
+        run.tx.send(SshCommand::TmuxDetach).unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(10), &mut run.driver)
+                .await
+                .unwrap()
+                .unwrap(),
+            ControlExit::ReturnToShell { .. }
+        ));
+        assert!(run.sessions.lock().unwrap().is_empty());
+        assert_eq!(
+            run.remote(&["list-panes", "-s", "-F", "#{pane_id}"])
+                .await
+                .lines()
+                .count(),
+            5
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real tmux; run explicitly in compatibility CI"]
+    async fn real_tmux_zoom_moves_detach_and_host_close_preserve_remote_processes() {
+        let mut run = Running::start().await;
+        run.wait(|run| run.terminals.contains_key("host::pane0"))
+            .await;
+        run.remote(&["split-window", "-h", "-t", "%0", "sh"]).await;
+        run.remote(&["split-window", "-v", "-t", "%1", "sh"]).await;
+        run.remote(&["new-window", "-n", "background", "sh"]).await;
+        run.remote(&["select-window", "-t", "@0"]).await;
+        run.wait(|run| {
+            run.state
+                .as_ref()
+                .is_some_and(|state| state.panes.len() == 4)
+        })
+        .await;
+        let before = run
+            .remote(&["list-panes", "-s", "-F", "#{pane_id}:#{pane_pid}"])
+            .await;
+        run.remote(&["resize-pane", "-Z", "-t", "%0"]).await;
+        run.wait(|run| {
+            run.state.as_ref().is_some_and(|state| {
+                state
+                    .windows
+                    .iter()
+                    .find(|w| w.id == "@0")
+                    .is_some_and(|w| matches!(w.tree, Some(crate::tmux::TmuxUiNode::Pane { .. })))
+            })
+        })
+        .await;
+        assert_eq!(run.sessions.lock().unwrap().len(), 4);
+        assert_eq!(
+            before,
+            run.remote(&["list-panes", "-s", "-F", "#{pane_id}:#{pane_pid}"])
+                .await
+        );
+        run.remote(&["select-window", "-t", "@1"]).await;
+        run.wait(|run| {
+            run.state
+                .as_ref()
+                .and_then(|s| s.active_window_id.as_deref())
+                == Some("@1")
+        })
+        .await;
+        assert_eq!(run.sessions.lock().unwrap().len(), 4);
+        run.remote(&["select-window", "-t", "@0"]).await;
+        run.remote(&["resize-pane", "-Z", "-t", "%0"]).await;
+        run.wait(|run| {
+            run.state.as_ref().is_some_and(|state| {
+                state
+                    .windows
+                    .iter()
+                    .find(|w| w.id == "@0")
+                    .is_some_and(|w| matches!(w.tree, Some(crate::tmux::TmuxUiNode::Split { .. })))
+            })
+        })
+        .await;
+        // A move produces separate source/destination layout notifications.
+        run.remote(&["join-pane", "-s", "%2", "-t", "%3", "-h"])
+            .await;
+        run.wait(|run| {
+            run.state
+                .as_ref()
+                .is_some_and(|state| state.panes.len() == 4)
+                && run.sessions.lock().unwrap().len() == 4
+        })
+        .await;
+        run.tx
+            .send(SshCommand::TmuxPaneClose { pane: "%1".into() })
+            .unwrap();
+        run.wait(|run| run.sessions.lock().unwrap().len() == 3)
+            .await;
+        assert!(
+            !run.remote(&["list-panes", "-s", "-F", "#{pane_id}"])
+                .await
+                .lines()
+                .any(|pane| pane == "%1")
+        );
+        run.remote(&["resize-pane", "-Z", "-t", "%0"]).await;
+        run.tx.send(SshCommand::TmuxDetach).unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(10), &mut run.driver)
+                .await
+                .unwrap()
+                .unwrap(),
+            ControlExit::ReturnToShell { .. }
+        ));
+        let survivors = run
+            .remote(&["list-panes", "-s", "-F", "#{pane_id}:#{pane_pid}"])
+            .await;
+        assert_eq!(survivors.lines().count(), 3);
+        let mut reattached = Running::start_with(Some(run.tmux.socket.clone())).await;
+        reattached
+            .wait(|run| run.sessions.lock().unwrap().len() == 3)
+            .await;
+        reattached._host.close();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(10), &mut reattached.driver)
+                .await
+                .unwrap()
+                .unwrap(),
+            ControlExit::Closed
+        ));
+        assert!(reattached.sessions.lock().unwrap().is_empty());
+        assert_eq!(
+            survivors,
+            reattached
+                .remote(&["list-panes", "-s", "-F", "#{pane_id}:#{pane_pid}"])
+                .await
+        );
     }
 }

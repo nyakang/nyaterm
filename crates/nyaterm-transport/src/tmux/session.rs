@@ -110,6 +110,9 @@ pub struct TmuxStatePayload {
     pub control_session_id: String,
     pub exited: bool,
     pub windows: Vec<TmuxWindowInfo>,
+    /// All locally mapped remote panes, including zoom-hidden/background panes.
+    /// The window trees describe visibility only and cannot prove pane death.
+    pub panes: Vec<TmuxUiNode>,
     pub active_window_id: Option<String>,
     pub active_pane_session_id: Option<String>,
 }
@@ -142,7 +145,7 @@ struct VirtualPane {
     /// `capture-pane` rows held until the cursor reply lands. The seed is
     /// composed in a single payload then, because the scrollback/screen
     /// split needs `history_size` from that reply.
-    pending_seed: Option<Vec<String>>,
+    pending_seed: Option<Vec<Vec<u8>>>,
     /// Terminal size reported by the local renderer (`resize_session`). The
     /// tmux layout owns pane dimensions, and a mismatch wraps full-width
     /// output — e.g. zsh's `#`/`%` partial-line markers, erased by `\r \r`
@@ -251,7 +254,12 @@ enum PendingKind {
         pane: String,
     },
     /// User-typed command from the tmux bar; failures are surfaced.
-    UserCommand,
+    UserCommand {
+        barrier: String,
+    },
+    ClosePane {
+        pane: String,
+    },
     Ignore,
 }
 
@@ -284,17 +292,16 @@ pub(crate) struct ControlSession<'a> {
 
     parser: ControlParser,
     /// Lines collected inside a `%begin`..`%end` block.
-    block_lines: Option<Vec<String>>,
+    block_lines: Option<Vec<Vec<u8>>>,
     block_id: Option<BlockId>,
     /// When the current response block opened. Used as the capture snapshot
     /// boundary: output produced before this instant is guaranteed inside a
     /// capture executed within the block, while output produced after may
     /// still be new — the boundary must err toward replaying, not dropping.
     block_started_at: Option<std::time::Instant>,
-    /// Every command line written to the control channel produces exactly one
-    /// `%begin`/`%end` (or `%error`) block, in send order. The FIFO therefore
-    /// must be pushed for *every* line — internal queries push their kind so
-    /// the response can be interpreted, everything else pushes `Ignore`.
+    /// Internal commands have one response each. A free-form command may
+    /// produce several blocks (or just one parse error), so its entry remains
+    /// at the front until an independently queued nonce barrier completes.
     pending_responses: VecDeque<PendingKind>,
     outgoing: VecDeque<Outgoing>,
     fatal: bool,
@@ -434,6 +441,36 @@ impl<'a> ControlSession<'a> {
                 Ok(Ok(()))
             )
         }))
+    }
+
+    fn queue_user_command(&mut self, line: &str) -> bool {
+        // Also enforced at the mailbox boundary for public API callers.
+        if super::mailbox::validate_command(line).is_err() || line.trim().is_empty() {
+            return false;
+        }
+        let barrier = format!("nyaterm_response_{}", uuid::Uuid::new_v4().simple());
+        let wire = format!("{line}\ndisplay-message -p '{barrier}'");
+        self.queue_batch(&wire, vec![PendingKind::UserCommand { barrier }])
+    }
+
+    fn response_kind(&mut self, id: BlockId, lines: &[Vec<u8>], failed: bool) -> PendingKind {
+        // Commands run by hooks / asynchronous tmux jobs are not replies to
+        // client input and must not consume an internal query's FIFO entry.
+        if id.flags & 1 == 0 {
+            return PendingKind::Ignore;
+        }
+        if let Some(PendingKind::UserCommand { barrier }) = self.pending_responses.front() {
+            if !failed && lines.len() == 1 && lines[0] == barrier.as_bytes() {
+                self.pending_responses.pop_front();
+                return PendingKind::Ignore;
+            }
+            return PendingKind::UserCommand {
+                barrier: barrier.clone(),
+            };
+        }
+        self.pending_responses
+            .pop_front()
+            .unwrap_or(PendingKind::Ignore)
     }
 
     /// Queue an internal query whose block output should be parsed.
@@ -744,6 +781,17 @@ impl<'a> ControlSession<'a> {
             control_session_id: self.control_session_id.to_string(),
             exited: false,
             windows,
+            panes: {
+                let mut ids: Vec<_> = self.panes.keys().collect();
+                ids.sort();
+                ids.into_iter()
+                    .map(|id| TmuxUiNode::Pane {
+                        pane_id: id.clone(),
+                        session_id: self.panes[id].session_id.clone(),
+                        name: self.pane_name(id),
+                    })
+                    .collect()
+            },
             active_window_id: self.active_window.clone(),
             active_pane_session_id: self
                 .active_pane
@@ -773,6 +821,7 @@ impl<'a> ControlSession<'a> {
             control_session_id: self.control_session_id.to_string(),
             exited: true,
             windows: Vec::new(),
+            panes: Vec::new(),
             active_window_id: None,
             active_pane_session_id: None,
         };
@@ -785,7 +834,11 @@ impl<'a> ControlSession<'a> {
     /// Reconcile virtual panes with every known window's layout — each tmux
     /// window maps to a native tab, so background windows' panes stay alive
     /// and keep receiving their `%output` instead of being torn down.
-    async fn reconcile_panes(&mut self, channel: &Arc<ChannelWriteHalf<client::Msg>>) {
+    async fn reconcile_panes(
+        &mut self,
+        channel: &Arc<ChannelWriteHalf<client::Msg>>,
+        remove_missing: bool,
+    ) {
         let (active_layout, zoomed) = self
             .active_window
             .as_ref()
@@ -817,11 +870,14 @@ impl<'a> ControlSession<'a> {
             grew = self.grow_client(channel, layout.width, layout.height).await;
         }
 
-        // Drop panes that vanished from every window's layout.
-        let existing: Vec<String> = self.panes.keys().cloned().collect();
-        for pane_id in existing {
-            if !wanted.contains(&pane_id) {
-                self.drop_pane(&pane_id).await;
+        // Only an atomic list-windows snapshot can prove absence. Layout
+        // notifications arrive separately when a pane moves between windows.
+        if remove_missing && self.windows.values().all(|window| window.layout.is_some()) {
+            let existing: Vec<String> = self.panes.keys().cloned().collect();
+            for pane_id in existing {
+                if !wanted.contains(&pane_id) {
+                    self.drop_pane(&pane_id).await;
+                }
             }
         }
         // Spawn panes we don't know yet.
@@ -1013,7 +1069,11 @@ impl<'a> ControlSession<'a> {
         }
     }
 
-    async fn handle_message(&mut self, channel: &Arc<ChannelWriteHalf<client::Msg>>, line: String) {
+    async fn handle_message(
+        &mut self,
+        channel: &Arc<ChannelWriteHalf<client::Msg>>,
+        line: Vec<u8>,
+    ) {
         // Control lines carry remote terminal content — never log them raw.
         tracing::trace!(
             session_id = %self.control_session_id,
@@ -1031,16 +1091,14 @@ impl<'a> ControlSession<'a> {
                     let failed = matches!(message, Some(ControlMessage::Error(_)));
                     self.block_lines = None;
                     self.block_id = None;
-                    let kind = self
-                        .pending_responses
-                        .pop_front()
-                        .unwrap_or(PendingKind::Ignore);
+                    let kind = self.response_kind(id, &collected, failed);
                     self.handle_block(channel, kind, collected, failed).await;
                 }
                 Some(
                     ControlMessage::Begin(_) | ControlMessage::End(_) | ControlMessage::Error(_),
                 ) => {
                     tracing::warn!("tmux control: mismatched response marker");
+                    self.fatal = true;
                 }
                 Some(ControlMessage::Exit { .. }) => {
                     self.mark_exit();
@@ -1068,7 +1126,8 @@ impl<'a> ControlSession<'a> {
                 self.block_started_at = Some(std::time::Instant::now());
             }
             ControlMessage::End(_) | ControlMessage::Error(_) => {
-                // Unsolicited end without a begin: ignore.
+                // Correlation is no longer trustworthy. Close this channel.
+                self.fatal = true;
             }
             ControlMessage::Output { pane, data } => {
                 self.route_output(&pane, None, data);
@@ -1104,7 +1163,8 @@ impl<'a> ControlSession<'a> {
                 // windows' panes are live too (each maps to a native tab).
                 // reconcile_panes also grows the client when the active
                 // layout outgrows it — that is what removes `#` clipping.
-                self.reconcile_panes(channel).await;
+                self.reconcile_panes(channel, false).await;
+                self.arm_refresh();
             }
             ControlMessage::WindowAdd { window } => {
                 self.windows.entry(window).or_insert(WindowState {
@@ -1167,7 +1227,7 @@ impl<'a> ControlSession<'a> {
                     .and_then(|window| window.layout.as_ref())
                     .is_some()
                 {
-                    self.reconcile_panes(channel).await;
+                    self.reconcile_panes(channel, false).await;
                 }
             }
             ControlMessage::PaneModeChanged { .. }
@@ -1284,9 +1344,28 @@ impl<'a> ControlSession<'a> {
         &mut self,
         channel: &Arc<ChannelWriteHalf<client::Msg>>,
         kind: PendingKind,
-        lines: Vec<String>,
+        lines: Vec<Vec<u8>>,
         failed: bool,
     ) {
+        // capture-pane is terminal content as well: preserve its original
+        // bytes through seeding. The remaining responses contain metadata.
+        if let PendingKind::CapturePane { pane, generation } = &kind {
+            if let Some(virtual_pane) = self.panes.get_mut(pane)
+                && virtual_pane.seed_generation == *generation
+                && !failed
+            {
+                virtual_pane.pending_seed = Some(lines);
+                virtual_pane.capture_at = (!virtual_pane.seed_barrier).then(|| {
+                    self.block_started_at
+                        .unwrap_or_else(std::time::Instant::now)
+                });
+            }
+            return;
+        }
+        let lines: Vec<String> = lines
+            .iter()
+            .map(|line| String::from_utf8_lossy(line).into_owned())
+            .collect();
         match kind {
             PendingKind::FlowControl => {
                 if failed {
@@ -1301,7 +1380,7 @@ impl<'a> ControlSession<'a> {
                     return;
                 }
                 self.apply_window_list(lines);
-                self.reconcile_panes(channel).await;
+                self.reconcile_panes(channel, true).await;
             }
             PendingKind::PanesRefresh => {
                 for line in lines {
@@ -1317,26 +1396,7 @@ impl<'a> ControlSession<'a> {
                 }
                 self.emit_state();
             }
-            PendingKind::CapturePane { pane, generation } => {
-                if let Some(virtual_pane) = self.panes.get_mut(&pane)
-                    && virtual_pane.seed_generation == generation
-                    && !failed
-                {
-                    // Held until the SeedCursor reply arrives: the seed is
-                    // composed as a single payload there, because the
-                    // scrollback/screen split needs `history_size`.
-                    virtual_pane.pending_seed = Some(lines);
-                    // Snapshot boundary for output dedup: the capture ran
-                    // after the block opened, so output produced before
-                    // %begin is guaranteed inside it; anything later may
-                    // be genuinely new (tmux defers it past %end) and must
-                    // be replayed rather than dropped.
-                    virtual_pane.capture_at = (!virtual_pane.seed_barrier).then(|| {
-                        self.block_started_at
-                            .unwrap_or_else(std::time::Instant::now)
-                    });
-                }
-            }
+            PendingKind::CapturePane { .. } => unreachable!(),
             PendingKind::SeedCursor { pane, generation } => {
                 let mut reseed = false;
                 if let Some(virtual_pane) = self.panes.get_mut(&pane)
@@ -1370,7 +1430,7 @@ impl<'a> ControlSession<'a> {
                             Self::push_pane_output(
                                 self.event_queue,
                                 &virtual_pane.session_id,
-                                text.into_bytes(),
+                                text,
                             );
                             true
                         } else {
@@ -1409,7 +1469,22 @@ impl<'a> ControlSession<'a> {
                     }
                 }
             }
-            PendingKind::UserCommand => {
+            PendingKind::ClosePane { pane } => {
+                if failed {
+                    // Failed remote closes are retryable; successful ones stay
+                    // coalesced until an authoritative layout removes them.
+                    if let Some(virtual_pane) = self.panes.get(&pane)
+                        && let Ok(mut sessions) = self.sessions.lock()
+                        && let Some(ManagedSession::TmuxPane(transport)) =
+                            sessions.get_mut(&virtual_pane.session_id)
+                    {
+                        transport.close_requested = false;
+                    }
+                    self.emit_visible_text("\r\n[tmux] Could not close pane.\r\n");
+                }
+                self.arm_refresh();
+            }
+            PendingKind::UserCommand { .. } => {
                 if failed && !lines.is_empty() {
                     // Surface the tmux error on the host terminal so a failed
                     // `select-window`/`new-window` is not silently lost.
@@ -1426,7 +1501,8 @@ impl<'a> ControlSession<'a> {
         self.windows = snapshot.windows;
         self.active_window = snapshot.active_window;
         self.active_pane = snapshot.active_pane;
-        self.emit_state();
+        // Publish only after reconcile_panes has updated the authoritative pane
+        // set; an intermediate empty registry on reattach is not pane death.
     }
 
     async fn flush_input(&mut self, channel: &Arc<ChannelWriteHalf<client::Msg>>) {
@@ -1661,7 +1737,7 @@ pub(crate) async fn run_control_session(
     session.parser.push(initial);
     while let Some(line) = session.parser.next_line() {
         session.handle_message(channel, line).await;
-        if session.exit_seen {
+        if session.exit_seen || session.fatal {
             break;
         }
     }
@@ -1689,11 +1765,11 @@ pub(crate) async fn run_control_session(
             command = control.recv() => {
                 match command {
                     SshCommand::TmuxDetach => session.request_detach(channel, ExitMode::Detach).await,
-                    SshCommand::TmuxPaneClose { pane } => {
-                        session.send_line(channel, PendingKind::Ignore, &format!("kill-pane -t '{pane}'")).await;
-                        session.drop_pane(&pane).await;
-                        session.emit_state();
+                    SshCommand::TmuxPaneClose { pane } if session.exit_mode.is_none() => {
+                        session.send_line(channel, PendingKind::ClosePane { pane: pane.clone() }, &format!("kill-pane -t '{pane}'")).await;
+                        session.arm_refresh();
                     }
+                    SshCommand::TmuxPaneClose { .. } => {},
                     _ => unreachable!(),
                 }
             }
@@ -1799,14 +1875,10 @@ pub(crate) async fn run_control_session(
                 let Some(PendingCommand { command, permit }) = command else { break ControlExit::Closed; };
                 match Some(command) {
                     Some(SshCommand::TmuxCommand { line }) => {
-                        let clean = line.trim_matches(['\r', '\n']);
-                        if !clean.is_empty() {
-                            session
-                                .send_line(channel, PendingKind::UserCommand, clean)
-                                .await;
-                            if let Some(last) = session.outgoing.back_mut() {
-                                last._guards.push(InputGuard { _tmux: Some(permit), _ssh: None });
-                            }
+                        if session.queue_user_command(&line)
+                            && let Some(last) = session.outgoing.back_mut()
+                        {
+                            last._guards.push(InputGuard { _tmux: Some(permit), _ssh: None });
                         }
                     }
                     Some(SshCommand::TmuxDetach) => {
@@ -1831,12 +1903,11 @@ pub(crate) async fn run_control_session(
                         session
                             .send_line(
                                 channel,
-                                PendingKind::Ignore,
+                                PendingKind::ClosePane { pane: pane.clone() },
                                 &format!("kill-pane -t '{pane}'"),
                             )
                             .await;
-                        session.drop_pane(&pane).await;
-                        session.emit_state();
+                        session.arm_refresh();
                     }
                     Some(SshCommand::Write(_) | SshCommand::Resize { .. }) => {
                         // Host-session commands belong on the mailbox channel
@@ -1885,7 +1956,7 @@ pub(crate) async fn run_control_session(
                         session.parser.push(&data);
                         while let Some(line) = session.parser.next_line() {
                             session.handle_message(channel, line).await;
-                            if session.exit_seen { break; }
+                            if session.exit_seen || session.fatal { break; }
                         }
                     }
                     None | Some(ChannelMsg::Eof | ChannelMsg::Close) => {
@@ -1920,31 +1991,31 @@ pub(crate) async fn run_control_session(
 ///    `hist.min(screen_rows)` newlines are emitted at the bottom row to push
 ///    the visible tail into xterm's scrollback without injecting blank lines.
 fn compose_seed_payload(
-    seed_lines: &[String],
+    seed_lines: &[Vec<u8>],
     x: u32,
     y: u32,
     history: usize,
     screen_rows: Option<usize>,
-) -> String {
+) -> Vec<u8> {
     let hist = history.min(seed_lines.len());
     // Reset + clear first: this makes the seed idempotent for remounted
     // terminals and for re-captures after a client grow (which must overwrite
     // '#' clipping marks already on screen).
-    let mut text = String::from("\x1b[H\x1b[2J\x1b[3J");
+    let mut text = b"\x1b[H\x1b[2J\x1b[3J".to_vec();
     if hist > 0 {
         let rows = screen_rows
             .unwrap_or_else(|| seed_lines.len().saturating_sub(hist))
             .max(1);
-        text.push_str(&seed_lines[..hist].join("\r\n"));
-        text.push_str("\x1b[r\x1b[9999B");
-        text.push_str(&"\n".repeat(hist.min(rows)));
-        text.push_str("\x1b[H");
+        text.extend_from_slice(&seed_lines[..hist].join(b"\r\n".as_slice()));
+        text.extend_from_slice(b"\x1b[r\x1b[9999B");
+        text.extend(std::iter::repeat_n(b'\n', hist.min(rows)));
+        text.extend_from_slice(b"\x1b[H");
     }
     let screen = &seed_lines[hist..];
     if let Some(last) = screen.iter().rposition(|line| !line.is_empty()) {
-        text.push_str(&screen[..=last].join("\r\n"));
+        text.extend_from_slice(&screen[..=last].join(b"\r\n".as_slice()));
     }
-    text.push_str(&format!("\x1b[{};{}H", y + 1, x + 1));
+    text.extend_from_slice(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
     text
 }
 
@@ -2321,21 +2392,181 @@ mod window_tests {
     #[test]
     fn seed_payload_trims_trailing_blank_screen_rows_so_hidden_xterm_does_not_scroll_prompt() {
         // 29-row tmux capture: row 0 empty, row 1 has the prompt, rows 2..28 empty.
-        let mut lines = vec![String::new(), "root@dev ~ » ".to_string()];
-        lines.resize(29, String::new());
+        let mut lines = vec![Vec::new(), "root@dev ~ » ".as_bytes().to_vec()];
+        lines.resize(29, Vec::new());
         let payload = compose_seed_payload(&lines, 13, 1, 0, Some(29));
-        assert_eq!(payload, "\x1b[H\x1b[2J\x1b[3J\r\nroot@dev ~ » \x1b[2;14H");
+        assert_eq!(
+            payload,
+            "\x1b[H\x1b[2J\x1b[3J\r\nroot@dev ~ » \x1b[2;14H".as_bytes()
+        );
     }
 
     #[test]
     fn seed_payload_scrolls_history_by_at_most_screen_rows() {
-        let mut lines: Vec<String> = (0..50).map(|i| format!("hist-{i}")).collect();
-        lines.push("prompt$ ".to_string());
-        lines.resize(50 + 24, String::new());
+        let mut lines: Vec<Vec<u8>> = (0..50).map(|i| format!("hist-{i}").into_bytes()).collect();
+        lines.push(b"prompt$ ".to_vec());
+        lines.resize(50 + 24, Vec::new());
         let payload = compose_seed_payload(&lines, 8, 0, 50, Some(24));
-        assert!(payload.contains(&format!(
+        assert!(String::from_utf8(payload).unwrap().contains(&format!(
             "\x1b[r\x1b[9999B{}\x1b[Hprompt$ \x1b[1;9H",
             "\n".repeat(24)
         )));
+    }
+}
+
+#[cfg(test)]
+mod stability_tests {
+    use super::{ControlSession, PendingKind, compose_seed_payload};
+    use crate::session_event_queue::SessionEventQueue;
+    use crate::tmux::control::BlockId;
+    use crate::tmux::{mailbox, test_peer::connect};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn user_blocks_remain_correlated_until_independent_barrier_even_after_errors() {
+        let queue = SessionEventQueue::new();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = mailbox::channel();
+        let mut session = ControlSession::new(&queue, "host", &sessions, tx);
+        assert!(session.queue_user_command("new-window ; new-window"));
+        let outgoing = session.outgoing.pop_front().unwrap();
+        assert_eq!(
+            outgoing.data.iter().filter(|byte| **byte == b'\n').count(),
+            2
+        );
+        let PendingKind::UserCommand { barrier } = &outgoing.responses[0] else {
+            panic!()
+        };
+        let barrier = barrier.as_bytes().to_vec();
+        session.pending_responses.extend(outgoing.responses);
+        session
+            .pending_responses
+            .push_back(PendingKind::WindowsRefresh);
+        let id = BlockId {
+            time: 1,
+            number: 2,
+            flags: 1,
+        };
+        for failed in [false, false, true] {
+            assert!(matches!(
+                session.response_kind(id, &[], failed),
+                PendingKind::UserCommand { .. }
+            ));
+            assert_eq!(session.pending_responses.len(), 2);
+        }
+        // An async hook block must not steal either the barrier or next query.
+        assert!(matches!(
+            session.response_kind(
+                BlockId { flags: 0, ..id },
+                std::slice::from_ref(&barrier),
+                false
+            ),
+            PendingKind::Ignore
+        ));
+        assert_eq!(session.pending_responses.len(), 2);
+        assert!(matches!(
+            session.response_kind(id, &[barrier], false),
+            PendingKind::Ignore
+        ));
+        assert!(matches!(
+            session.response_kind(id, &[], false),
+            PendingKind::WindowsRefresh
+        ));
+        assert!(session.pending_responses.is_empty());
+        assert!(!session.queue_user_command("new-window\nkill-server"));
+    }
+
+    #[tokio::test]
+    async fn raw_output_notifications_reach_existing_session_event_bytes_unchanged() {
+        let connection = connect().await;
+        let queue = SessionEventQueue::new();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = mailbox::channel();
+        let mut session = ControlSession::new(&queue, "host", &sessions, tx);
+        session.spawn_pane("%0").await;
+        session.panes.get_mut("%0").unwrap().seeded = true;
+        for prefix in [b"%output %0 ".as_slice(), b"%extended-output %0 0 - : "] {
+            session
+                .handle_message(&connection.tx, [prefix, b"\xd6\xd0\xff\\000\\377"].concat())
+                .await;
+        }
+        let output: Vec<u8> = queue
+            .drain(100)
+            .events
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::SessionEvent::Output { session_id, data } => {
+                    assert_eq!(session_id, "host::pane0");
+                    Some(data)
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(output, [0xd6, 0xd0, 0xff, 0, 0xff].repeat(2));
+    }
+
+    #[tokio::test]
+    async fn mismatched_response_markers_fail_closed() {
+        let connection = connect().await;
+        let queue = SessionEventQueue::new();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = mailbox::channel();
+        let mut session = ControlSession::new(&queue, "host", &sessions, tx);
+        session
+            .pending_responses
+            .push_back(PendingKind::WindowsRefresh);
+        session
+            .handle_message(&connection.tx, b"%begin 1 2 1".to_vec())
+            .await;
+        session
+            .handle_message(&connection.tx, b"%end 1 3 1".to_vec())
+            .await;
+        assert!(session.fatal);
+        assert_eq!(session.pending_responses.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn partial_layouts_and_pane_moves_preserve_transports_until_snapshot() {
+        let connection = connect().await;
+        let queue = SessionEventQueue::new();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = mailbox::channel();
+        let mut session = ControlSession::new(&queue, "host", &sessions, tx);
+        session.spawn_pane("%0").await;
+        session.spawn_pane("%1").await;
+        session
+            .handle_message(&connection.tx, b"%window-add @1".to_vec())
+            .await;
+        session
+            .handle_message(
+                &connection.tx,
+                b"%layout-change @0 aaaa,80x24,0,0,0".to_vec(),
+            )
+            .await;
+        assert_eq!(sessions.lock().unwrap().len(), 2);
+        assert!(session.panes.contains_key("%1"));
+        // Complete, authoritative snapshot confirms the pane was really killed.
+        session.apply_window_list(vec![
+            "@0 0 1 aaaa,80x24,0,0,0 aaaa,80x24,0,0,0  %0 test".into(),
+        ]);
+        session.reconcile_panes(&connection.tx, true).await;
+        assert_eq!(sessions.lock().unwrap().len(), 1);
+        assert!(!session.panes.contains_key("%1"));
+    }
+
+    #[test]
+    fn captured_screen_keeps_non_utf8_bytes() {
+        let payload = compose_seed_payload(&[vec![0xd6, 0xd0, 0xff, 0]], 0, 0, 0, None);
+        assert_eq!(
+            payload,
+            [
+                b"\x1b[H\x1b[2J\x1b[3J".as_slice(),
+                &[0xd6, 0xd0, 0xff, 0],
+                b"\x1b[1;1H"
+            ]
+            .concat()
+        );
     }
 }

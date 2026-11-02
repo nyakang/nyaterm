@@ -669,6 +669,7 @@ pub struct SshChannelTransport {
 /// A tmux pane projected as an independent session. All operations are
 /// forwarded onto the parent SSH channel's ordered tmux command channel.
 pub struct TmuxPaneTransport {
+    close_requested: bool,
     info: SessionInfo,
     /// tmux pane id this session projects (e.g. `%12`).
     pane: String,
@@ -1071,7 +1072,20 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Release local resources on the reaper. Virtual tmux sessions have no
+    /// blocking destructor and never imply a remote kill.
     pub fn close_detached(&self, session_id: &str) -> Result<(), SessionError> {
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| SessionError::LockPoisoned)?;
+            if matches!(sessions.get(session_id), Some(ManagedSession::TmuxPane(_))) {
+                sessions.remove(session_id);
+                self.event_queue.cancel_session(session_id);
+                return Ok(());
+            }
+        }
         self.ensure_reaper()?;
         let mut sessions = self
             .sessions
@@ -1094,11 +1108,7 @@ impl SessionManager {
                     ManagedSession::Tcp(tcp) => tcp.writer.command_tx.stop(),
                     ManagedSession::Serial(serial) => serial.writer.command_tx.stop(),
                     ManagedSession::Ssh(ssh) => ssh.command_tx.close(),
-                    ManagedSession::TmuxPane(pane) => {
-                        let _ = pane.tmux_tx.send(SshCommand::TmuxPaneClose {
-                            pane: pane.pane.clone(),
-                        });
-                    }
+                    ManagedSession::TmuxPane(_) => {}
                 }
                 if let ManagedSession::Local(local) = &mut session {
                     local.cleanup_consumer = self.event_queue.consumer_for(session_id);
@@ -1907,6 +1917,30 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Explicitly terminate a remote tmux pane. Keep the projection until the
+    /// server confirms its removal, and coalesce repeated close gestures.
+    pub fn tmux_close_pane(&self, session_id: &str) -> Result<(), SessionError> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let Some(ManagedSession::TmuxPane(pane)) = sessions.get_mut(session_id) else {
+            return Err(SessionError::NotFound(session_id.into()));
+        };
+        if !pane.close_requested {
+            pane.tmux_tx
+                .send(SshCommand::TmuxPaneClose {
+                    pane: pane.pane.clone(),
+                })
+                .map_err(|source| SessionError::Write {
+                    session_id: session_id.into(),
+                    source: source.into(),
+                })?;
+            pane.close_requested = true;
+        }
+        Ok(())
+    }
+
     /// Queue one tmux control-channel command line (`select-window`,
     /// `new-window`, `kill-pane`, ...). Refuses while the session is a plain
     /// SSH shell so commands can never be typed into it.
@@ -1987,6 +2021,7 @@ impl SessionManager {
         sessions.insert(
             info.id.clone(),
             ManagedSession::TmuxPane(TmuxPaneTransport {
+                close_requested: false,
                 info,
                 pane,
                 tmux_tx,
@@ -2377,14 +2412,10 @@ impl TerminalTransport for TmuxPaneTransport {
             .map_err(|_| anyhow::anyhow!("tmux control channel closed for pane {}", self.pane))
     }
 
-    /// Closing the pane surface kills the tmux pane; the resulting
-    /// `%layout-change` removes the leaf from the projected tree.
+    /// A virtual transport owns only a local projection. Remote deletion must
+    /// go through SessionManager::tmux_close_pane after an explicit user action.
     fn close(&mut self) -> anyhow::Result<()> {
-        self.tmux_tx
-            .send(SshCommand::TmuxPaneClose {
-                pane: self.pane.clone(),
-            })
-            .map_err(|_| anyhow::anyhow!("tmux control channel closed for pane {}", self.pane))
+        Ok(())
     }
 }
 
@@ -2428,11 +2459,17 @@ impl TerminalTransport for SerialTransport {
 impl Drop for SessionManager {
     fn drop(&mut self) {
         self.event_queue.close();
-        let mut sessions = match self.sessions.lock() {
-            Ok(sessions) => sessions,
-            Err(poisoned) => poisoned.into_inner(),
+        let sessions = {
+            let mut sessions = match self.sessions.lock() {
+                Ok(sessions) => sessions,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            std::mem::take(&mut *sessions)
         };
-        for (_, mut session) in std::mem::take(&mut *sessions) {
+        // SSH teardown removes its projections from this same registry. Never
+        // retain the registry guard while joining a worker. Closing the queue
+        // above first wakes producers blocked on any pane's output budget.
+        for (_, mut session) in sessions {
             session.close();
         }
     }

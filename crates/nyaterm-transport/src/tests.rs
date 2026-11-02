@@ -3753,3 +3753,137 @@ fn async_output_wait_and_producer_turn_are_released_by_cancellation() {
             assert!(queue.drain(100).events.is_empty());
         });
 }
+
+#[tokio::test]
+async fn local_tmux_cleanup_never_sends_kill_and_explicit_close_is_coalesced() {
+    for mode in ["close", "detached", "drop", "remote", "explicit"] {
+        let manager = Arc::new(SessionManager::new());
+        let (tx, receiver) = crate::tmux::mailbox::channel();
+        let control = receiver.control_receiver();
+        SessionManager::register_tmux_pane(
+            &manager.sessions,
+            &manager.event_queue,
+            "host",
+            crate::SessionInfo {
+                id: "pane".into(),
+                name: "pane".into(),
+                kind: crate::SessionKind::Ssh,
+                working_dir: None,
+                cols: 80,
+                rows: 24,
+            },
+            "%0".into(),
+            tx,
+        )
+        .unwrap();
+        if mode == "explicit" {
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    let manager = manager.clone();
+                    std::thread::spawn(move || manager.tmux_close_pane("pane").unwrap())
+                })
+                .collect();
+            for thread in threads {
+                thread.join().unwrap();
+            }
+            assert!(
+                matches!(control.recv().await, crate::SshCommand::TmuxPaneClose { pane } if pane == "%0")
+            );
+            // Keep the mapping until the server confirms its disappearance.
+            assert!(manager.sessions.lock().unwrap().contains_key("pane"));
+        }
+        match mode {
+            "close" | "explicit" => manager.close("pane").unwrap(),
+            "detached" => manager.close_detached("pane").unwrap(),
+            "remote" => {
+                SessionManager::remove_tmux_pane(&manager.sessions, &manager.event_queue, "pane")
+            }
+            "drop" => {}
+            _ => unreachable!(),
+        }
+        drop(manager);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), control.recv())
+                .await
+                .is_err(),
+            "{mode} must not send an implicit or duplicate kill-pane"
+        );
+    }
+}
+
+#[test]
+fn manager_drop_wakes_pane_output_and_unlocks_registry_before_joining_ssh() {
+    let manager = SessionManager::new();
+    let queue = manager.event_queue.clone();
+    let registry = manager.sessions.clone();
+    let (command_tx, _commands) = crate::ssh_mailbox::channel();
+    let (tmux_tx, _tmux_commands) = crate::tmux::mailbox::channel();
+    let info = crate::SessionInfo {
+        id: "host".into(),
+        name: "host".into(),
+        kind: crate::SessionKind::Ssh,
+        working_dir: None,
+        cols: 80,
+        rows: 24,
+    };
+    let mut pane_info = info.clone();
+    pane_info.id = "projection".into();
+    SessionManager::register_tmux_pane(
+        &registry,
+        &queue,
+        "host",
+        pane_info,
+        "%0".into(),
+        tmux_tx.clone(),
+    )
+    .unwrap();
+    queue.push(SessionEvent::Output {
+        session_id: "projection".into(),
+        data: vec![b'x'; SESSION_EVENT_QUEUE_OUTPUT_LIMIT],
+    });
+    let (finished, result) = mpsc::channel();
+    let worker_queue = queue.clone();
+    let worker = std::thread::spawn(move || {
+        worker_queue.push(SessionEvent::Output {
+            session_id: "projection".into(),
+            data: vec![b'y'; 1024],
+        });
+        // A timed probe lets a regressed Drop finish instead of hanging the suite.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(guard) = registry.try_lock() {
+                drop(guard);
+                SessionManager::remove_tmux_pane(&registry, &worker_queue, "projection");
+                finished.send(true).unwrap();
+                return;
+            }
+            if Instant::now() >= deadline {
+                finished.send(false).unwrap();
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+    wait_for_queue_state(
+        || queue.waiting_output_producers() == 1,
+        "pane backpressure",
+    );
+    manager.sessions.lock().unwrap().insert(
+        "host".into(),
+        crate::ManagedSession::Ssh(crate::SshChannelTransport {
+            info,
+            shell_enabled: true,
+            attempt: SshSessionConfig::default().attempt,
+            command_tx,
+            tmux_tx,
+            tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            backspace_as_bs: false,
+            worker_thread: Some(worker),
+        }),
+    );
+    drop(manager);
+    assert!(
+        result.recv_timeout(Duration::from_secs(3)).unwrap(),
+        "Drop held sessions while joining the tmux worker"
+    );
+}

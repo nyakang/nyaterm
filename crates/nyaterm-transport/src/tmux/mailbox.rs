@@ -73,6 +73,16 @@ pub(crate) fn channel() -> (Sender, Receiver) {
     )
 }
 
+pub(crate) fn validate_command(line: &str) -> io::Result<()> {
+    if line.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "tmux command must be a single line",
+        ));
+    }
+    Ok(())
+}
+
 impl Sender {
     pub(crate) fn same_channel(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
@@ -135,6 +145,9 @@ impl Sender {
     }
 
     pub(crate) fn send(&self, command: SshCommand) -> io::Result<()> {
+        if let SshCommand::TmuxCommand { line } = &command {
+            validate_command(line)?;
+        }
         match command {
             SshCommand::TmuxDetach | SshCommand::TmuxPaneClose { .. } => {
                 let mut state = self
@@ -246,6 +259,30 @@ mod tests {
     use crate::SshCommand;
     use crate::writer_mailbox::{BYTE_LIMIT, ITEM_LIMIT};
     use std::io::ErrorKind;
+
+    #[tokio::test]
+    async fn command_line_injection_is_rejected_before_accounting_or_enqueue() {
+        let (tx, mut rx) = channel();
+        for line in [
+            "new-window\nkill-server",
+            "new-window\rkill-server",
+            "new-window\0",
+        ] {
+            assert_eq!(
+                tx.send(SshCommand::TmuxCommand { line: line.into() })
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::InvalidInput
+            );
+            assert!(rx.rx.try_recv().is_err());
+            assert_eq!(tx.peak_bytes(), 0);
+        }
+        tx.send(SshCommand::TmuxCommand {
+            line: "new-window ; new-window".into(),
+        })
+        .unwrap();
+        assert!(rx.rx.try_recv().is_ok());
+    }
 
     #[tokio::test]
     async fn panes_share_a_byte_budget_until_the_send_completes() {

@@ -48,6 +48,10 @@ pub(in crate::features) struct TmuxFeatureState {
 }
 
 impl TmuxFeatureState {
+    pub(in crate::features) fn has_host(&self, session_id: &str) -> bool {
+        self.hosts.contains_key(session_id)
+    }
+
     pub(in crate::features) fn is_control_session(&self, session_id: &str) -> bool {
         self.hosts.get(session_id).is_some_and(|host| !host.exited)
     }
@@ -263,10 +267,8 @@ impl NyaTermApp {
 
         let current_panes: Vec<(String, String, String)> = {
             let mut panes = Vec::new();
-            for window in &state.windows {
-                if let Some(tree) = &window.tree {
-                    Self::collect_tmux_panes(tree, &mut panes);
-                }
+            for pane in &state.panes {
+                Self::collect_tmux_panes(pane, &mut panes);
             }
             panes
         };
@@ -324,12 +326,9 @@ impl NyaTermApp {
             }
         }
 
-        // A pane absent from every known tree is dead (kill-pane, moved
-        // window). Only reap when every window reported a tree — a window
-        // whose layout has not arrived yet cannot prove its panes are gone.
-        if state.windows.iter().all(|w| w.tree.is_some())
-            && let Some(host) = self.tmux.hosts.get(&session_id)
-        {
+        // Transport owns remote existence. Visible trees omit zoomed-away
+        // panes and cannot be used to destroy sessions or terminal state.
+        if let Some(host) = self.tmux.hosts.get(&session_id) {
             let live: std::collections::HashSet<&str> = current_panes
                 .iter()
                 .map(|(_, pane_session_id, _)| pane_session_id.as_str())

@@ -20,6 +20,11 @@ fn state(host: &str, pane: u32) -> TmuxStatePayload {
                 name: "pane".into(),
             }),
         }],
+        panes: vec![TmuxUiNode::Pane {
+            pane_id: format!("%{pane}"),
+            session_id: format!("{host}::pane{pane}"),
+            name: "pane".into(),
+        }],
         active_window_id: Some("@0".into()),
         active_pane_session_id: Some(format!("{host}::pane{pane}")),
     }
@@ -84,5 +89,75 @@ fn detaching_one_tmux_host_does_not_steal_another_hosts_active_pane() {
     cx.run_until_parked();
     app.read_with(&cx, |app, _| {
         assert_eq!(app.session.active_id(), Some("other::pane1"))
+    });
+}
+
+#[test]
+fn zoom_window_switch_and_unzoom_keep_hidden_pane_state_until_remote_removal() {
+    let root = TestTempDir::new("nyaterm-tmux-zoom");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "host");
+    app.update(&mut cx, |app, cx| {
+        let panes: Vec<_> = (0..4)
+            .map(|pane| state("host", pane).panes.remove(0))
+            .collect();
+        let split = |first, second| TmuxUiNode::Split {
+            direction: "horizontal",
+            ratio: 0.5,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        let tree = split(panes[0].clone(), split(panes[1].clone(), panes[2].clone()));
+        let mut full = state("host", 0);
+        full.panes = panes.clone();
+        full.windows[0].tree = Some(tree.clone());
+        let mut background = state("host", 3).windows.remove(0);
+        background.id = "@1".into();
+        background.active = false;
+        full.windows.push(background);
+        app.handle_session_tmux_state_event("host".into(), full.clone(), cx);
+        for pane in 0..4 {
+            app.terminal.seed_session_view(
+                format!("host::pane{pane}"),
+                format!("retained-{pane}"),
+                "UTF-8",
+            );
+        }
+        let mut zoom = full.clone();
+        zoom.windows[0].tree = Some(panes[0].clone());
+        app.handle_session_tmux_state_event("host".into(), zoom.clone(), cx);
+        assert_eq!(
+            app.shell.workspace_pane_root("host").unwrap().session_ids(),
+            vec!["host::pane0"]
+        );
+        for pane in 0..4 {
+            let id = format!("host::pane{pane}");
+            assert!(app.session.has_session(&id));
+            assert_eq!(
+                app.terminal.session_output(&id),
+                Some(format!("retained-{pane}").as_str())
+            );
+        }
+        zoom.active_window_id = Some("@1".into());
+        zoom.active_pane_session_id = Some("host::pane3".into());
+        app.handle_session_tmux_state_event("host".into(), zoom, cx);
+        assert!(app.session.has_session("host::pane1"));
+        app.handle_session_tmux_state_event("host".into(), full.clone(), cx);
+        assert_eq!(
+            app.shell
+                .workspace_pane_root("host")
+                .unwrap()
+                .session_ids()
+                .len(),
+            3
+        );
+        let mut killed = full;
+        killed.panes.remove(1);
+        killed.windows[0].tree = Some(split(panes[0].clone(), panes[2].clone()));
+        app.handle_session_tmux_state_event("host".into(), killed, cx);
+        assert!(!app.session.has_session("host::pane1"));
+        assert!(app.terminal.session_output("host::pane1").is_none());
+        assert!(app.session.has_session("host::pane3"));
     });
 }
