@@ -4,11 +4,10 @@ use gpui::{
     Bounds, Context, IntoElement, ParentElement as _, Pixels, Styled as _, canvas, div, rgb,
 };
 use nyaterm_remote_desktop::activex::{
-    NativeRdpConnectionEvent, NativeRdpControl, NativeRdpDisconnectInfo, NativeRdpRect,
-    NativeRdpSessionDetails,
+    NativeRdpConnectionEvent, NativeRdpDisconnectInfo, NativeRdpRect, NativeRdpSessionDetails,
 };
 use nyaterm_remote_desktop::{RdpError, RdpErrorKind, RemoteDesktopViewState};
-use nyaterm_ui::NyaDialogWindowExt as _;
+use nyaterm_windows_rdp::NativeRdpControl;
 use raw_window_handle::RawWindowHandle;
 
 use crate::features::NyaTermApp;
@@ -34,32 +33,21 @@ impl NyaTermApp {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(0x999999))
-                    .child(rust_i18n::t!("dialog.rdpActiveXHidden").to_string()),
+                    .child(rust_i18n::t!("remoteDesktop.connecting").to_string()),
             )
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window)
-                        else {
-                            return bounds;
-                        };
-                        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-                            return bounds;
-                        };
-                        let parent = handle.hwnd.get();
-                        let rect = native_phys_rect(bounds, window.scale_factor());
-                        let dialog_open = window.has_active_nya_dialog(cx)
-                            || nyaterm_ui::nya_popup_is_active(window, cx);
+                        let clipped = bounds.intersect(&Bounds::new(
+                            gpui::Point::default(),
+                            window.viewport_size(),
+                        ));
                         let app = app.clone();
                         let session_id = session_id.clone();
-                        window.defer(cx, move |window, cx| {
+                        let scale = window.scale_factor();
+                        window.defer(cx, move |_, cx| {
                             app.update(cx, |this, cx| {
-                                let mut overlay = this.native_rdp_overlay_state(dialog_open, cx);
-                                overlay.obscured |= !window.is_visible()
-                                    || !this
-                                        .native_rdp_visible_tab_roots()
-                                        .contains(&this.tab_root_for_session(&session_id));
-                                this.ensure_native_rdp(&session_id, rect, parent, overlay, cx);
+                                this.update_rdp_viewport(&session_id, clipped, scale, cx);
                             });
                         });
                         bounds
@@ -79,17 +67,16 @@ impl NyaTermApp {
         overlay: NativeRdpOverlayState,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_desktop.native_shutting_down {
+            return;
+        }
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
         if let Some(native) = session.native_rdp.as_mut() {
             native.set_bounds(rect);
-            native.set_visible(native_rdp_surface_visible(
-                true,
-                true,
-                overlay.obscured,
-                session.state,
-            ));
+            native.set_local_input(overlay.obscured, overlay.restore_focus);
+            native.set_visible(native_rdp_surface_visible(true, true, session.state));
             return;
         }
         let Some(mut config) = session.native_rdp_config.take() else {
@@ -103,7 +90,8 @@ impl NyaTermApp {
         }
         match NativeRdpControl::create(parent, rect, &config) {
             Ok(mut native) => {
-                native.set_visible(!overlay.obscured);
+                native.set_visible(true);
+                native.set_local_input(overlay.obscured, overlay.restore_focus);
                 session.native_rdp = Some(native);
                 session.state = RemoteDesktopViewState::Connecting;
                 session.error = None;
@@ -124,6 +112,7 @@ impl NyaTermApp {
     ) -> NativeRdpOverlayState {
         NativeRdpOverlayState {
             obscured: dialog_open || self.root_overlay_visibility(cx).obscures_native_surface(),
+            restore_focus: false,
         }
     }
 
@@ -162,6 +151,28 @@ impl NyaTermApp {
         obscured: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.remote_desktop.native_shutting_down {
+            return false;
+        }
+        let needs_native = self
+            .remote_desktop
+            .sessions
+            .values()
+            .any(|session| session.native_rdp_config.is_some() || session.native_rdp.is_some());
+        if needs_native && let Err(error) = nyaterm_ui::enable_native_child_overlays(window) {
+            for session in self.remote_desktop.sessions.values_mut() {
+                if session.native_rdp_config.take().is_some() || session.native_rdp.is_some() {
+                    session.native_rdp = None;
+                    session.state = RemoteDesktopViewState::Failed;
+                    session.error = Some(RdpError::new(RdpErrorKind::Unsupported,
+                        format!("Windows Native presentation unavailable: {error}. Switch to Builtin manually.")).into());
+                }
+            }
+            // Builtin and ordinary GPUI presentation remain usable after a
+            // composition failure. Native owners are retired outside this borrow.
+            let _ = window.set_native_child_surface_mode(false);
+            return true;
+        }
         let visible: HashSet<String> = self
             .remote_desktop
             .sessions
@@ -204,7 +215,8 @@ impl NyaTermApp {
                     rect,
                     handle.hwnd.get(),
                     NativeRdpOverlayState {
-                        obscured: obscured || !window.is_visible() || !visible.contains(&id),
+                        obscured,
+                        restore_focus: true,
                     },
                     cx,
                 );
@@ -212,25 +224,35 @@ impl NyaTermApp {
         }
         let mut dirty = false;
         let details_open = self.session.dialog_session_info_is_open();
+        let active_session = self.session.active_id().map(str::to_string);
+        let mut display_warning = None;
         for (id, session) in &mut self.remote_desktop.sessions {
             let Some(native) = session.native_rdp.as_mut() else {
                 continue;
             };
-            dirty |= native.take_details_changed() && details_open;
+            let details_changed = native.take_details_changed();
+            dirty |= details_changed && details_open;
+            if details_changed && let Some(message) = native.session_details().status_text {
+                display_warning = Some(message);
+            }
+            if let Some(bounds) = session.viewport {
+                native.set_bounds(native_phys_rect(bounds, window.scale_factor()));
+            }
             native.set_visible(native_rdp_surface_visible(
                 window.is_visible(),
                 visible.contains(id),
-                obscured,
                 session.state,
             ));
-            if window.is_window_active() && native.cursor_is_inside() {
-                dirty |= self.shell.clear_resize_handle_hover();
-            }
+            native.set_local_input(obscured, active_session.as_deref() == Some(id.as_str()));
             let events: Vec<_> = std::iter::from_fn(|| native.poll_connection()).collect();
             for event in events {
                 apply_native_connection_event(session, event);
                 dirty = true;
             }
+        }
+        if let Some(message) = display_warning {
+            self.shell.set_status(message);
+            dirty = true;
         }
         dirty
     }
@@ -262,13 +284,14 @@ pub(super) fn apply_native_connection_event(
     if !native_rdp_state_is_displayable(session.state)
         && let Some(native) = session.native_rdp.as_mut()
     {
-        native.set_visible(false);
+        native.request_shutdown();
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::features) struct NativeRdpOverlayState {
     pub obscured: bool,
+    pub restore_focus: bool,
 }
 
 fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
@@ -283,10 +306,9 @@ fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
 fn native_rdp_surface_visible(
     window_visible: bool,
     tab_visible: bool,
-    obscured: bool,
     state: RemoteDesktopViewState,
 ) -> bool {
-    window_visible && tab_visible && !obscured && native_rdp_state_is_displayable(state)
+    window_visible && tab_visible && native_rdp_state_is_displayable(state)
 }
 
 fn native_disconnect_message(info: &NativeRdpDisconnectInfo) -> String {
@@ -321,8 +343,12 @@ fn native_phys_rect(bounds: Bounds<Pixels>, scale: f32) -> NativeRdpRect {
     NativeRdpRect {
         x: (f32::from(bounds.origin.x) * scale).round() as i32,
         y: (f32::from(bounds.origin.y) * scale).round() as i32,
-        width: metrics.width as i32,
-        height: metrics.height as i32,
+        width: (f32::from(bounds.size.width) * scale)
+            .round()
+            .clamp(1., 16384.) as i32,
+        height: (f32::from(bounds.size.height) * scale)
+            .round()
+            .clamp(1., 16384.) as i32,
         scale_percent: metrics.desktop_scale_factor,
     }
 }
@@ -354,11 +380,10 @@ mod tests {
     fn dismissing_an_overlay_never_resurrects_a_hidden_or_failed_tab() {
         use super::native_rdp_surface_visible;
         use RemoteDesktopViewState::{Connected, Failed};
-        assert!(!native_rdp_surface_visible(true, true, true, Connected));
-        assert!(native_rdp_surface_visible(true, true, false, Connected));
-        assert!(!native_rdp_surface_visible(true, false, false, Connected));
-        assert!(!native_rdp_surface_visible(false, true, false, Connected));
-        assert!(!native_rdp_surface_visible(true, true, false, Failed));
+        assert!(native_rdp_surface_visible(true, true, Connected));
+        assert!(!native_rdp_surface_visible(true, false, Connected));
+        assert!(!native_rdp_surface_visible(false, true, Connected));
+        assert!(!native_rdp_surface_visible(true, true, Failed));
     }
 
     #[test]

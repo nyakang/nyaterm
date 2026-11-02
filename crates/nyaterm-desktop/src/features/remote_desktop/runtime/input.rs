@@ -147,7 +147,7 @@ impl NyaTermApp {
                         // capture hook would swallow those keys and send them to a
                         // helper session that does not exist.
                         #[cfg(windows)]
-                        if session.native_rdp.is_some() {
+                        if session.native_rdp.is_some() || session.native_rdp_config.is_some() {
                             return false;
                         }
                         matches!(session.state, RemoteDesktopViewState::Connected)

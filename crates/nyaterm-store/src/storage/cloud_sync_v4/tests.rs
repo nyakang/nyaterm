@@ -14,6 +14,62 @@ fn connection() -> SavedConnection {
 }
 
 #[test]
+fn rdp_backend_aliases_authentication_and_clipboard_survive_backup_and_sync() {
+    for (backend, canonical) in [
+        ("auto", "builtin"),
+        ("windows", "windows"),
+        ("active-x", "windows"),
+        ("future-engine", "future-engine"),
+    ] {
+        let dir = TestTempDir::new("nyaterm-rdp-backup-sync");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        enable(&store);
+        let saved: SavedConnection = serde_json::from_value(json!({
+            "id":"rdp-fixture", "name":"RDP", "type":"rdp", "host":"example.invalid",
+            "port":3389, "username":"fixture", "backend":backend,
+            "security":{"windows_authentication":"system", "use_nla":true,
+                "certificate_policy":"strict", "administrative_session":true},
+            "clipboard":{"mode":"disabled"}
+        }))
+        .unwrap();
+        store.save_connection(&saved).unwrap();
+        let expected = store.get_connection("rdp-fixture").unwrap().unwrap();
+        let serialized = serde_json::to_value(&expected).unwrap();
+        assert_eq!(serialized["backend"], canonical);
+        assert_eq!(serialized["security"]["windows_authentication"], "system");
+        assert_eq!(serialized["security"]["certificate_policy"], "strict");
+        assert_eq!(serialized["clipboard"]["mode"], "disabled");
+
+        let mut snapshot = store
+            .build_raw_portable_snapshot(
+                nyaterm_core::PortableSnapshotKind::Backup,
+                "source",
+                "fixture",
+            )
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let destination_dir = TestTempDir::new("nyaterm-rdp-backup-restore");
+        let destination = ConnectionStore::open(destination_dir.path()).unwrap();
+        destination.apply_raw_portable_snapshot(&snapshot).unwrap();
+        let restored = destination.get_connection("rdp-fixture").unwrap().unwrap();
+        // Restoring records a fresh local modification timestamp. The RDP and
+        // credential contracts must survive that ordinary metadata update.
+        assert_eq!(restored.config, expected.config);
+        assert_eq!(restored.auth, expected.auth);
+
+        store.apply_v4_plan(prepared(&store), "password").unwrap();
+        let reopened = store
+            .load_v4_view("destination", "password", &SyncScope::default())
+            .unwrap();
+        assert!(reopened.projection.edited.is_empty());
+        assert_eq!(reopened.record.effective, reopened.projection.values);
+        let synced = store.get_connection("rdp-fixture").unwrap().unwrap();
+        assert_eq!(synced.config, expected.config);
+        assert_eq!(synced.auth, expected.auth);
+    }
+}
+
+#[test]
 fn batch_index_cleanup_preserves_legacy_suffix_matching_and_unaffected_rows() {
     let dir = TestTempDir::new("nyaterm-v4-batch-index-cleanup");
     let store = ConnectionStore::open(dir.path()).unwrap();

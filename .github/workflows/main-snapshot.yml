@@ -154,6 +154,11 @@ jobs:
           --target "${TARGET}" --version "${VERSION}"
           --artifact-version main-snapshot --dist dist
       # Run host tests even when the package contains ARM64 executables.
+      - name: Configure MSVC for host tests
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
       - name: Test portable updater against packaged ZIP
         if: runner.os == 'Windows'
         shell: pwsh

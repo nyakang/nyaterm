@@ -356,11 +356,6 @@ impl ShellFeatureState {
         self.resize_handle_hover.leave(id)
     }
 
-    #[cfg(windows)]
-    pub(in crate::features) fn clear_resize_handle_hover(&mut self) -> bool {
-        self.resize_handle_hover.clear()
-    }
-
     pub(in crate::features) fn resize_handle_is_highlighted(&self, id: &SharedString) -> bool {
         self.resize_handle_hover.is_highlighted(id)
     }
@@ -933,18 +928,6 @@ impl ResizeHandleHoverState {
         active
     }
 
-    /// Native child windows consume pointer-leave events, so clear stale dwell state.
-    #[cfg(windows)]
-    fn clear(&mut self) -> bool {
-        let highlighted = self.active_id.is_some();
-        if self.pending_id.is_some() || highlighted {
-            self.generation = self.generation.wrapping_add(1);
-            self.pending_id = None;
-            self.active_id = None;
-        }
-        highlighted
-    }
-
     pub(in crate::features) fn is_highlighted(&self, id: &SharedString) -> bool {
         self.active_id.as_ref() == Some(id)
     }
@@ -1414,30 +1397,6 @@ mod tests {
         assert!(shell.activate_resize_handle_hover(&second, second_generation));
         assert!(shell.leave_resize_handle_hover(&second));
         assert!(!shell.resize_handle_is_highlighted(&second));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn clearing_resize_hover_drops_highlight_and_invalidates_dwell() {
-        let mut shell = shell(BottomPanelMode::Hidden);
-        let id = SharedString::from("resize-handle");
-        let pending_generation = shell
-            .begin_resize_handle_hover(id.clone())
-            .expect("enter should arm dwell");
-        assert!(!shell.clear_resize_handle_hover());
-        assert!(
-            !shell.activate_resize_handle_hover(&id, pending_generation),
-            "clearing the pending dwell must make its timer stale"
-        );
-
-        let generation = shell
-            .begin_resize_handle_hover(id.clone())
-            .expect("re-enter should arm a new dwell");
-        assert!(shell.activate_resize_handle_hover(&id, generation));
-        assert!(shell.resize_handle_is_highlighted(&id));
-        assert!(shell.clear_resize_handle_hover());
-        assert!(!shell.resize_handle_is_highlighted(&id));
-        assert!(!shell.clear_resize_handle_hover());
     }
 
     #[test]

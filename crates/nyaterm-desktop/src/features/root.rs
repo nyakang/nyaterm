@@ -13,8 +13,8 @@ use super::ai::AiFullAccessSetting;
 use super::mcp::{McpApprovalDecision, McpApprovalRequest};
 use super::terminal::{FULL_SHELL_PAINT_COUNT, terminal_surface_paint_count};
 use super::view_widgets::{
-    full_window_input_layer, full_window_overlay_layer, modal_scrim_is_drawn,
-    passive_overlay_layer, selectable_overlay_layer,
+    full_window_input_layer, full_window_overlay_layer, modal_overlay_layer, modal_scrim_is_drawn,
+    passive_overlay_layer, regional_overlay_layer, selectable_overlay_layer,
 };
 use crate::features::perf::{GpuiPerfContext, record_gpui_perf_sample};
 use crate::features::runtime_jobs::ActivitySide;
@@ -75,7 +75,7 @@ impl OverlayFlags {
             multi_line_paste_open,
             terminal_actions_open,
             action_link_menu_open,
-            action_link_tooltip_open,
+            action_link_tooltip_open: _,
             command_suggestions_open,
             credential_suggestions_open,
             locked,
@@ -108,7 +108,6 @@ impl OverlayFlags {
             multi_line_paste_open,
             terminal_actions_open,
             action_link_menu_open,
-            action_link_tooltip_open,
             command_suggestions_open,
             credential_suggestions_open,
             locked,
@@ -838,19 +837,34 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let app = cx.weak_entity();
+        window.on_native_overlay_outside_mouse_down(move |_, _, cx| {
+            let _ = app.update(cx, |this, cx| {
+                this.shell.close_root_menus();
+                this.session.dialog_close_tab_actions();
+                this.close_tab_color_picker(cx);
+                this.close_action_link_menu(cx);
+                this.close_activity_bar_context_menu(cx);
+                this.close_transfer_job_menu(cx);
+                this.close_transfer_browser_favorites_menu(cx);
+                this.close_transfer_browser_path_menu(cx);
+                this.close_transfer_browser_upload_menu(cx);
+                cx.notify();
+            });
+        });
         let overlay = self.root_overlay_visibility(cx);
         let full_access_confirmation = self.pending_ai_full_access();
         let mcp_approval = self.mcp_pending_approval_requests().into_iter().next();
 
         content
             .when(overlay.tab_actions_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "tab-actions-input-layer",
                     self.tab_actions_overlay(cx),
                 ))
             })
             .when(overlay.color_picker_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "tab-color-input-layer",
                     self.tab_color_picker_overlay(cx),
                 ))
@@ -862,7 +876,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.job_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "transfer-job-menu-input-layer",
                     self.transfer_job_menu_overlay(cx),
                 ))
@@ -874,19 +888,19 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.favorites_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "transfer-favorites-menu-input-layer",
                     self.transfer_browser_favorites_menu_overlay(cx),
                 ))
             })
             .when(overlay.path_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "transfer-path-menu-input-layer",
                     self.transfer_browser_path_menu_overlay(cx),
                 ))
             })
             .when(overlay.upload_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "transfer-upload-menu-input-layer",
                     self.transfer_browser_upload_menu_overlay(cx),
                 ))
@@ -904,7 +918,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.action_link_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "action-link-menu-input-layer",
                     self.action_link_menu_overlay(cx),
                 ))
@@ -916,10 +930,14 @@ impl NyaTermApp {
                 |this| this.child(passive_overlay_layer(self.action_link_tooltip_overlay(cx))),
             )
             .when(overlay.command_suggestions_open, |this| {
-                this.child(passive_overlay_layer(self.command_suggestions_overlay(cx)))
+                this.child(regional_overlay_layer(
+                    "command-suggestions",
+                    self.command_suggestions_overlay(cx),
+                ))
             })
             .when(overlay.credential_suggestions_open, |this| {
-                this.child(passive_overlay_layer(
+                this.child(regional_overlay_layer(
+                    "credential-suggestions",
                     self.credential_suggestions_overlay(cx),
                 ))
             })
@@ -967,7 +985,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.activity_menu_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(regional_overlay_layer(
                     "activity-context-input-layer",
                     self.activity_bar_context_menu_overlay(cx),
                 ))
@@ -998,12 +1016,15 @@ impl NyaTermApp {
             // painted above the lock screen would swallow the pointer input the
             // lock screen needs.
             .when(modal_scrim_is_drawn() && overlay.modal_child_open, |this| {
-                this.child(passive_overlay_layer(self.modal_owner_scrim()))
+                this.child(full_window_overlay_layer(
+                    "modal-owner",
+                    self.modal_owner_scrim(),
+                ))
             })
             .when(overlay.locked, |this| {
                 // The lock screen owns its input boundary so Windows caption
                 // presses can reach the native window procedure and start a drag.
-                this.child(passive_overlay_layer(self.lock_screen_overlay(window, cx)))
+                this.child(modal_overlay_layer(self.lock_screen_overlay(window, cx)))
             })
             // Background SSH operations can request credentials while another
             // overlay is open, so authentication must be the topmost overlay.

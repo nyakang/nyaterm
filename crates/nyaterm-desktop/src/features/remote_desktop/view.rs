@@ -132,6 +132,11 @@ impl NyaTermApp {
         if let Some(error) = session.error.clone()
             && matches!(session.state, RemoteDesktopViewState::Failed)
         {
+            let builtin_id = session_id.clone();
+            let native_backend = self.session.metadata(&session_id).is_some_and(|metadata| {
+                matches!(&metadata.launch_config, crate::models::SessionLaunchConfig::Rdp(config)
+                    if config.backend == nyaterm_remote_desktop::RdpBackend::Windows)
+            });
             let retry_id = session_id.clone();
             let close_id = session_id.clone();
             return div()
@@ -177,6 +182,28 @@ impl NyaTermApp {
                                 cx.notify();
                             }),
                         ))
+                        .when(native_backend, |row| {
+                            row.child(small_button(
+                                palette,
+                                format!("rdp-builtin-{session_id}"),
+                                "Switch to Builtin",
+                                cx.listener(move |this, _, _, cx| {
+                                    if let Some(metadata) = this.session.metadata_mut(&builtin_id)
+                                        && let crate::models::SessionLaunchConfig::Rdp(config) =
+                                            &mut metadata.launch_config
+                                    {
+                                        config.backend =
+                                            nyaterm_remote_desktop::RdpBackend::Builtin;
+                                    }
+                                    // This explicit action changes this session only. Saved
+                                    // connection/authentication and resource grants are preserved.
+                                    this.remote_desktop.sessions.remove(&builtin_id);
+                                    this.remote_desktop.insert_connecting(builtin_id.clone());
+                                    this.retry_rdp_runtime(&builtin_id, cx);
+                                    cx.notify();
+                                }),
+                            ))
+                        })
                         .child(small_button(
                             palette,
                             format!("rdp-close-{session_id}"),

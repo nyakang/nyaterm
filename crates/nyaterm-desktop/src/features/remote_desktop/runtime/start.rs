@@ -72,6 +72,10 @@ impl NyaTermApp {
         mut config: RdpSessionConfig,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if config.backend == RdpBackend::Windows && self.remote_desktop.native_shutting_down {
+            return;
+        }
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),
@@ -121,6 +125,10 @@ impl NyaTermApp {
         session_id: &str,
         config: RdpSessionConfig,
     ) {
+        #[cfg(windows)]
+        if config.backend == RdpBackend::Windows && self.remote_desktop.native_shutting_down {
+            return;
+        }
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),

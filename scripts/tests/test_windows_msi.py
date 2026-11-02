@@ -86,6 +86,10 @@ class WindowsMsiTests(unittest.TestCase):
                 files = xml.findall(".//w:File", ns)
                 self.assertEqual(len(files), sum(path.is_file() for path in staging.rglob("*")))
                 self.assertTrue(all(Path(node.attrib["Source"]).is_file() for node in files))
+                removed = xml.find(".//w:RemoveFile[@Id='RemoveLegacyActiveXHelper']", ns)
+                self.assertIsNotNone(removed)
+                self.assertEqual(removed.attrib["Name"], "nyaterm-activex-helper.exe")
+                self.assertEqual(removed.attrib["On"], "install")
             self.assertEqual(components[0], components[1])
 
 

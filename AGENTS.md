@@ -46,6 +46,10 @@ must include explicit conversion logic and tests.
   protocol. It owns the forked `vnc-rs` decoders, the VNC reconnect ladder, and
   the server-facing policy gates (`view_only`, `shared`, clipboard enablement).
   Those gates must stay enforced here, not only in the application.
+* `crates/nyaterm-windows-rdp`: explicitly selected Windows Native RDP system
+  component exception. Thread-bound ActiveX/ATL host and staged controller;
+  COM runs on the creating UI/STA thread outside all GPUI borrows. No GPUI
+  production dependency, no protocol decoder or exposed COM interfaces.
 * `crates/nyaterm-otp`: bundled HOTP/TOTP implementation.
 * `crates/nyaterm-app/assets`: bundled icons and images. Assets under
   `icons/**` are normally tintable and rendered through `svg()` or
@@ -106,7 +110,9 @@ For new or substantially changed features:
   `nyaterm-remote-desktop`; keep GPUI presentation in `nyaterm-desktop`.
 * Keep protocol decoders that parse server-controlled bytes in the helper
   crates, never in a crate the application links. Both helpers must translate a
-  decoder panic into a fatal IPC error rather than dying silently.
+  decoder panic into a fatal IPC error rather than dying silently. Windows Native,
+  selected explicitly by the user, hosts the installed Windows system component
+  in process; the IronRDP/VNC decoder isolation requirement continues to apply.
 * Keep persistence logic out of GPUI views.
 
 Use normal Rust module trees with `mod.rs` files or sibling module
@@ -227,10 +233,12 @@ Use package-specific checks while iterating:
 * `cargo test -p <crate-name>`
 * `cargo run -p nyaterm-app --bin nyaterm`
 
-RDP and VNC each run in a helper process that the application resolves beside its
-own executable. `cargo run -p nyaterm-app --bin nyaterm` builds only the
-application, so build the helpers into the same target directory first or both
-protocols fail with `HelperMissing`:
+Builtin/IronRDP and VNC run in helper processes that the application resolves
+beside its own executable. Windows Native RDP is the explicitly selected
+in-process system-component exception and requires MSVC with ATL when building.
+`cargo run -p nyaterm-app --bin nyaterm` builds only the application, so build the
+helpers into the same target directory first or the helper backends fail with
+`HelperMissing`:
 
 * `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper`
 
