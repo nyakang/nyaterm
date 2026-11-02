@@ -984,6 +984,17 @@ mod tests {
     }
 
     #[test]
+    fn dracula_dark_interface_roles_follow_the_vscode_extension() {
+        // Source: dracula/visual-studio-code, src/dracula.yml.
+        let palette = theme_palette("dracula");
+        assert_eq!(palette.input, 0x282a36, "input.background");
+        assert_eq!(palette.section_header, 0x282a36, "sideBarSectionHeader");
+        assert_eq!(palette.hover, 0x343746, "list.hoverBackground over #282a36");
+        assert_eq!(palette.focus_ring, 0x6272a4, "focusBorder");
+        assert_eq!(palette.text_dimmed, 0x6272a4, "tab.inactiveForeground");
+    }
+
+    #[test]
     fn windterm_runtime_palettes_match_json_previews_and_original_ansi_colors() {
         let catalog = nyaterm_core::themes::ThemeCatalog::default();
         for (id, bg, fg, shadow, find_bg, ansi) in [
@@ -1053,7 +1064,7 @@ mod tests {
                 0x6d28d9,
             ),
             (
-                "dracula", 0xbd93f9, 0xa77bfa, 0x282a36, 0xbd93f9, 0x8be9fd, 0xff79c6,
+                "dracula", 0xbd93f9, 0xa77bfa, 0x282a36, 0x6272a4, 0x8be9fd, 0xff79c6,
             ),
             (
                 "nord", 0x88c0d0, 0x7bb8c9, 0x2e3440, 0x88c0d0, 0x81a1c1, 0x5e81ac,
