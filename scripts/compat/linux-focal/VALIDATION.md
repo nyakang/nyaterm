@@ -60,3 +60,38 @@ online updates cannot work on an isolated network without reachable internal
 services. Use the same offline compatibility build to upgrade, retaining `data/`.
 Hardware-accelerated system-driver mode is optional and remains unverified on
 the target GT 1010; the default software OpenGL mode avoids that dependency.
+
+## Upstream sync and icon packaging revalidation (2026-11-02)
+
+Merged upstream `main` through `4671cc964de45063a5c5541178cf284c7e251d12`
+without rewriting the compatibility branch. The merged 2.0.1 code built in the
+pinned focal/Rust 1.99.1 image. New validation artifacts were written under
+`target/validation-20261102/artifacts`; the existing 2.0.0 tarball, deb and their
+checksum files in `dist` were checked against their original SHA-256 values and
+were unchanged. No Release, tag or attachment was published or modified.
+
+| Check | Result |
+| --- | --- |
+| Merged-source frozen optimized build | Passed on Ubuntu 20.04 / glibc 2.31, x86-64 |
+| Application, MCP, RDP and VNC executables | Highest required GLIBC **2.30** for each; focal ABI/SONAME/interpreter/RPATH and `ldd -r` gates passed |
+| Private OpenGL runtime | **83 ELF libraries** audited, highest required GLIBC **2.17**; used the existing checksum-pinned runtime cache |
+| Portable archive | Extracted into a new directory; rendered a 1280×800 workbench under Xvfb using llvmpipe, `backend=Gl`, `type=Cpu`; Vulkan ICDs disabled |
+| Real compatibility deb install | `dpkg -i` succeeded in a separate disposable focal container; `/usr/bin/nyaterm-compat` rendered a workbench as ordinary UID 1000 |
+| Installed icon lookup and decoding | Ordinary-user GTK icon-theme lookup and GdkPixbuf decoding passed at **128, 256 and 512 pixels**; root:root / 0644 |
+| Install repair | Intentionally changed an installed icon to 0600; repeated `postinst configure` restored 0644 successfully |
+| X11 identity | Real application window reported `("nyaterm" "NyaTerm")`; native adapter regression tested stable and preview class/instance pairs against an Xvfb server |
+| Helper lifecycle regression | **22 passed**, release-profile RDP/VNC helpers on focal |
+| Python scripts | **122 tests**, 114 passed and 8 platform/tool skips; focal Python 3.8 ABI/package suite **9 passed** |
+| Packaging regressions | Real dpkg archives checked for root ownership and readable icons, including restrictive source permissions, repeated configure, missing sizes, symlinks and unrelated-file preservation |
+| Source checks | Formatting, architecture boundaries, shell syntax, diff whitespace and actionlint 1.7.7 passed |
+
+Evidence remains in `target/validation-20261102/`: `build-final.log`,
+`abi-summary.json`, `package.log`, `native-x11-test.log`, `lifecycle.log`,
+`deb-install.log`, `smoke/` and `deb-smoke/`. Each new artifact also has a SHA-256
+file and embeds the full ABI report and third-party notices.
+
+These checks validate the packaged files and X11/OpenGL behavior in focal
+containers. They do not certify icon presentation in the unavailable internal
+machine's actual desktop shell, its Linux 5.4 kernel/custom security patches,
+real driver or internal services. The target-machine acceptance requirements
+above still apply.

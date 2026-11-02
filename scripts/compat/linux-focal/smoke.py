@@ -29,7 +29,8 @@ def main():
         with (output / "application.log").open("w") as log:
             launcher = application.with_name("start-nyaterm.sh")
             process = subprocess.Popen(["dbus-run-session", "--", str(launcher)],
-                                       stdout=log, stderr=log, start_new_session=True)
+                                       stdout=log, stderr=log, start_new_session=True,
+                                       env=dict(os.environ, RUST_LOG="info"))
             try:
                 deadline = time.monotonic() + 60
                 while time.monotonic() < deadline:
@@ -40,7 +41,10 @@ def main():
                     if window:
                         wm_class = re.search(r'\("(nyaterm(?:-preview)?)" "(NyaTerm(?: Preview)?)"\)', window[0])
                         if not wm_class:
-                            raise RuntimeError("window WM_CLASS does not match StartupWMClass")
+                            # GPUI maps the native window before constructing the
+                            # root view, where the X11 class is installed.
+                            time.sleep(0.1)
+                            continue
                         (output / "wm-class.txt").write_text(wm_class[0] + "\n", encoding="utf-8")
                         time.sleep(3)
                         if shutil.which("xwd"):
