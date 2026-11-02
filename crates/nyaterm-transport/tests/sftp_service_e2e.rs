@@ -36,6 +36,7 @@ fn required_env(name: &str) -> String {
 
 fn test_config() -> SshSessionConfig {
     SshSessionConfig {
+        runtime_mode: Default::default(),
         attempt: Default::default(),
         post_login: None,
         name: "SFTP E2E".to_string(),

@@ -13,6 +13,7 @@ dirs.workspace = true
 futures.workspace = true
 hmac.workspace = true
 nyaterm-core.workspace = true
+nyaterm-sync.workspace = true
 rand.workspace = true
 redb.workspace = true
 semver.workspace = true

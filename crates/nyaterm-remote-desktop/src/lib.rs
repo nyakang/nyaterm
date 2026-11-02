@@ -1,3 +1,4 @@
+pub mod activex;
 mod certificate;
 mod clipboard;
 mod frame;
@@ -34,7 +35,7 @@ pub use ipc::{
 pub use protocol::{
     CommittedTextError, CursorPosition, CursorShape, CursorVisibility, MAX_COMMITTED_TEXT_BYTES,
     MAX_VNC_CLIPBOARD_TEXT_BYTES, MAX_VNC_FRAMEBUFFER_HEIGHT, MAX_VNC_FRAMEBUFFER_WIDTH,
-    MAX_VNC_INPUT_BATCH, PROTOCOL_VERSION, PixelFormat, QueueWaker, RdpCapability,
+    MAX_VNC_INPUT_BATCH, PROTOCOL_VERSION, PixelFormat, QueueWaker, RdpBackend, RdpCapability,
     RdpCertificatePolicy, RdpCertificateRequest, RdpCertificateResponse, RdpClipboardConfig,
     RdpClipboardMode, RdpClipboardTransferProgress, RdpClipboardTransferStatus, RdpControlMessage,
     RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode, RdpError, RdpErrorKind, RdpFrameEvent,
@@ -44,7 +45,7 @@ pub use protocol::{
     RemotePointerButton, RemotePointerEvent, RemoteWheelAxis, VncClipboardConfig,
     VncControlMessage, VncDisplayConfig, VncError, VncErrorKind, VncInputEvent, VncReconnectConfig,
     VncRuntimeEvent, VncScaleMode, VncSecurityConfig, VncSecurityMode, VncServerCapabilities,
-    VncServerKeyRequest, VncSessionConfig, VncSessionDrain, VncSessionState,
+    VncServerKeyRequest, VncSessionConfig, VncSessionDrain, VncSessionState, parse_rdp_backend,
     parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
     parse_vnc_scale_mode, parse_vnc_security_mode, validate_committed_text,
 };

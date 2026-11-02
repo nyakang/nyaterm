@@ -13,6 +13,7 @@ pub(super) struct ValidatedSnapshot {
     pub content_hash: String,
     pub validated_at_ms: u64,
     local_content_hash: String,
+    pub remote_has_user_content: bool,
     pub branch: CloudConflictBranch,
 }
 
@@ -119,6 +120,7 @@ impl CloudSyncCheckCache {
             content_hash: snapshot.sync_content_hash()?,
             validated_at_ms: self.now(),
             local_content_hash: local.sync_content_hash()?,
+            remote_has_user_content: snapshot.has_user_content(),
             branch: CloudConflictBranch {
                 revision: pointer.revision_id.clone(),
                 device_id: pointer.device_id.clone(),

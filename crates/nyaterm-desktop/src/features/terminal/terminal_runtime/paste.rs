@@ -85,10 +85,11 @@ impl NyaTermApp {
         {
             let text = normalize_paste_newlines(&text);
             let editor = cx.new(|cx| {
-                NyaDocumentEditorState::new_with_placeholder(
+                NyaDocumentEditorState::new_source_with_placeholder(
                     window,
                     cx,
                     text,
+                    "bash",
                     t!("terminal.multiLinePasteTextPlaceholder").to_string(),
                 )
             });
@@ -486,6 +487,13 @@ mod tests {
                     assert!(app.terminal.overlay_visibility().paste_review);
                     let editor = app.terminal.paste_review_editor().unwrap();
                     assert_eq!(editor.read(cx).selected_range(cx), 12..12);
+                    editor.update(cx, |editor, cx| {
+                        editor.apply_edit(" # 编辑".into(), 21..21, window, cx);
+                    });
+                    assert_eq!(
+                        app.multi_line_paste_text(cx).as_deref(),
+                        Some("first\nsecond # 编辑")
+                    );
                     match action {
                         "cancel" => app.close_multi_line_paste(window, cx),
                         "direct" => app.direct_multi_line_paste(window, cx),
@@ -500,5 +508,28 @@ mod tests {
                 assert!(!app.read(cx).terminal.overlay_visibility().paste_review);
             });
         }
+    }
+
+    #[test]
+    fn empty_paste_review_keeps_the_editor_open_for_both_send_actions() {
+        let dir = TestConfigDir::new("nyaterm-empty-paste-review");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "session-a");
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| FocusHost { app: host_app });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.paste_terminal_text("first\nsecond".into(), window, cx);
+                let editor = app.terminal.paste_review_editor().unwrap();
+                editor.update(cx, |editor, cx| editor.replace_content("", window, cx));
+                assert_eq!(app.multi_line_paste_text(cx).as_deref(), Some(""));
+                app.direct_multi_line_paste(window, cx);
+                assert!(app.terminal.overlay_visibility().paste_review);
+                app.send_multi_line_paste_by_line(window, cx);
+                assert!(app.terminal.overlay_visibility().paste_review);
+                app.close_multi_line_paste(window, cx);
+            });
+        });
     }
 }

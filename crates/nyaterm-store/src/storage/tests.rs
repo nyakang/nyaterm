@@ -340,6 +340,45 @@ use super::{
 };
 
 #[test]
+fn proxy_ciphertext_round_trips_and_keeps_released_backup_password_contract() {
+    let dir = TestTempDir::new("nyaterm-proxy-encryption-contract");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store
+        .save_master_password(Some("fixture-master-password"))
+        .unwrap();
+    let key = entity_key(super::PROXY_PREFIX, "proxy");
+    let txn = store.db.begin_write().unwrap();
+    write_json_in_txn(&txn, super::PROXIES_TABLE, &key, &serde_json::json!({"id":"proxy","name":"Proxy","password":"legacy-fixture-password","future":{"keep":true}})).unwrap();
+    txn.commit().unwrap();
+    let legacy = store.list_proxies().unwrap();
+    assert_eq!(
+        legacy[0].password.as_deref(),
+        Some("legacy-fixture-password")
+    );
+    store.replace_proxies(&legacy).unwrap();
+    let raw: serde_json::Value = store
+        .read_json_table(super::PROXIES_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    assert_ne!(raw["password"], "legacy-fixture-password");
+    assert_eq!(
+        store.list_proxies().unwrap()[0].password.as_deref(),
+        Some("legacy-fixture-password")
+    );
+    let backup = store
+        .build_raw_portable_snapshot(nyaterm_core::PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    let proxies: serde_json::Value = serde_json::from_str(&backup.entities["proxies"]).unwrap();
+    assert_eq!(proxies[0]["password"], "legacy-fixture-password");
+    let mut corrupted = raw;
+    corrupted["password"] = serde_json::json!(format!("{}invalid", super::PROXY_SECRET_PREFIX));
+    let txn = store.db.begin_write().unwrap();
+    write_json_in_txn(&txn, super::PROXIES_TABLE, &key, &corrupted).unwrap();
+    txn.commit().unwrap();
+    assert!(store.list_proxies().is_err());
+}
+
+#[test]
 fn accounts_preserve_masking_legacy_references_and_portable_snapshot_contracts() {
     use nyaterm_core::models::credentials::{ConnectionPasswordSource, SavedPassword};
     let source_dir = unique_temp_dir("account-portable-source");
@@ -3170,6 +3209,47 @@ fn command_send_preferences_load_legacy_defaults_and_preserve_unknown_settings()
 }
 
 #[test]
+fn mac_matcher_loads_legacy_defaults_and_round_trips_without_losing_unknown_options() {
+    let dir = unique_temp_dir("mac-matcher-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    for terminal in [
+        serde_json::json!({}),
+        serde_json::json!({"action_links_matchers": {"ipv4": false, "archive": false, "host_port": false}}),
+    ] {
+        store
+            .save_settings_value(&serde_json::json!({"terminal": terminal}))
+            .unwrap();
+        let summary = store.load_app_settings_summary().unwrap();
+        assert!(summary.terminal_action_links_matchers.mac);
+        assert!(!summary.terminal_action_links_enabled);
+    }
+    store.save_settings_value(&serde_json::json!({"terminal": {
+        "future_terminal_option": "keep",
+        "action_links_enabled": true,
+        "action_links_matchers": {"ipv4": false, "mac": false, "future_matcher": {"enabled": true}}
+    }})).unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    assert!(!summary.terminal_action_links_matchers.mac);
+    assert!(!summary.terminal_action_links_matchers.ipv4);
+    for mac in [true, false] {
+        summary.terminal_action_links_matchers.mac = mac;
+        let loaded = store.save_terminal_settings(&summary).unwrap();
+        assert_eq!(loaded.terminal_action_links_matchers.mac, mac);
+        assert!(loaded.terminal_action_links_enabled);
+        assert!(!loaded.terminal_action_links_matchers.ipv4);
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["terminal"]["action_links_matchers"]["mac"], mac);
+        assert_eq!(
+            raw["terminal"]["action_links_matchers"]["future_matcher"],
+            serde_json::json!({"enabled": true})
+        );
+        assert_eq!(raw["terminal"]["future_terminal_option"], "keep");
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn save_ui_layout_preserves_explicit_empty_activity_zone() {
     let dir = unique_temp_dir("settings-empty-activity-zone");
     let store = ConnectionStore::open(&dir).expect("store");
@@ -3584,6 +3664,8 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         nyaterm_core::FileManagerUiSettings::default()
     );
     assert_eq!(summary.ui_remote_stats_interval, 9);
+    // Documents written before the logged-in users reading keep it hidden.
+    assert!(!summary.ui_remote_stats_show_users);
     assert_eq!(summary.ui_gpu_monitor_interval, 7);
     assert_eq!(summary.ui_ascend_npu_monitor_interval, 8);
     assert_eq!(summary.ui_process_manager_interval, 11);
@@ -3978,6 +4060,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     terminal_update.terminal_low_latency_mode = true;
     terminal_update.terminal_zebra_stripes_enabled = false;
     terminal_update.ui_remote_stats_interval = 4;
+    terminal_update.ui_remote_stats_show_users = true;
     terminal_update.ui_gpu_monitor_interval = 10;
     terminal_update.ui_ascend_npu_monitor_interval = 12;
     let saved_terminal = store
@@ -3991,6 +4074,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(saved_terminal.terminal_low_latency_mode);
     assert!(!saved_terminal.terminal_zebra_stripes_enabled);
     assert_eq!(saved_terminal.ui_remote_stats_interval, 4);
+    assert!(saved_terminal.ui_remote_stats_show_users);
     assert_eq!(saved_terminal.ui_gpu_monitor_interval, 10);
     assert_eq!(saved_terminal.ui_ascend_npu_monitor_interval, 12);
     let stored = store
@@ -4003,6 +4087,10 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(
         json_path(&stored, &["ui", "remote_stats_interval"]).and_then(|value| value.as_u64()),
         Some(4)
+    );
+    assert_eq!(
+        json_path(&stored, &["ui", "remote_stats_show_users"]).and_then(|value| value.as_bool()),
+        Some(true)
     );
     assert_eq!(
         json_path(&stored, &["terminal", "keep_alive_mode"]).and_then(|value| value.as_str()),
@@ -4231,6 +4319,7 @@ fn workspace_pane_layout_roundtrip() {
 #[test]
 fn open_tab_pane_root_expands_and_maps_layout() {
     let tab = nyaterm_core::models::RestorableOpenTab {
+        ssh_runtime_mode: None,
         title: "split".to_string(),
         session_type: "SSH".to_string(),
         connection_id: Some("c1".to_string()),
@@ -4294,6 +4383,7 @@ fn open_tabs_roundtrip() {
             Some("#22c55e".to_string()),
         ),
         nyaterm_core::models::RestorableOpenTab {
+            ssh_runtime_mode: None,
             title: "prod".to_string(),
             session_type: "SSH".to_string(),
             connection_id: Some("conn-1".to_string()),
@@ -4323,6 +4413,36 @@ fn open_tabs_roundtrip() {
     assert_eq!(loaded, tabs);
     store.save_open_tabs(&[]).expect("clear");
     assert!(store.load_open_tabs().expect("load empty").is_empty());
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn open_tabs_preserve_legacy_and_tauri_ssh_modes_in_the_existing_document() {
+    let dir = unique_temp_dir("open-tabs-ssh-modes");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let tabs: Vec<nyaterm_core::models::RestorableOpenTab> = serde_json::from_value(serde_json::json!([
+        {"title":"legacy", "session_type":"SSH", "connection_id":"saved"},
+        {"title":"Tauri split", "session_type":"SSH", "ssh_runtime_mode":"standard", "root":{
+            "kind":"split", "id":"split", "direction":"vertical", "ratio":0.5,
+            "first":{"kind":"leaf", "id":"a", "session_type":"SSH", "connection_id":"a", "ssh_runtime_mode":"sftp"},
+            "second":{"kind":"leaf", "id":"b", "session_type":"SSH", "connection_id":"b", "ssh_runtime_mode":"future-mode"}
+        }}
+    ])).unwrap();
+    store.save_open_tabs(&tabs).unwrap();
+    let restored = store.load_open_tabs().unwrap();
+    assert_eq!(restored, tabs);
+    assert!(restored[0].ssh_runtime_modes_supported());
+    assert!(!restored[1].ssh_runtime_modes_supported());
+    assert_eq!(
+        restored[1].expanded_sessions()[1]
+            .ssh_runtime_mode
+            .as_deref(),
+        Some("future-mode")
+    );
+    drop(store);
+    let reopened = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(reopened.load_open_tabs().unwrap(), tabs);
+    drop(reopened);
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -5758,6 +5878,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(false),
                 execution_mode: Some("append".to_string()),
+                raw_send: None,
                 source: Some("ai".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Low),
                 updated_at: None,
@@ -5790,6 +5911,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(true),
                 execution_mode: Some("append".to_string()),
+                raw_send: None,
                 source: Some("manual".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Medium),
                 updated_at: None,
@@ -5833,6 +5955,54 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
 }
 
 #[test]
+fn quick_command_literal_mode_survives_storage_backup_and_sync_with_legacy_commands() {
+    let dir = unique_temp_dir("quick-command-literal");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let config: QuickCommandsConfig = serde_json::from_value(serde_json::json!({
+        "commands": [
+            {"id":"legacy", "label":"Legacy", "command":"pwd"},
+            {"id":"null", "label":"Null", "command":"pwd", "raw_send":null},
+            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true}
+        ]
+    })).unwrap();
+    // Seed the legacy document as written by older versions, before a typed save.
+    store
+        .save_settings_doc_value(
+            SETTINGS_QUICK_COMMANDS,
+            &serde_json::json!({
+                "commands": [{"id":"old", "label":"Old", "command":"pwd"}]
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        store.load_quick_commands().unwrap().commands[0].raw_send,
+        None
+    );
+    store.save_quick_commands(config.clone()).unwrap();
+    drop(store);
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(store.load_quick_commands().unwrap(), config);
+    for kind in [
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Backup,
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Sync,
+    ] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "quick-test", "2.0.1")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let encoded = crate::portable_codec::encode_raw_portable_snapshot(&snapshot).unwrap();
+        let decoded = crate::portable_codec::decode_raw_portable_snapshot(&encoded).unwrap();
+        store
+            .save_quick_commands(QuickCommandsConfig::default())
+            .unwrap();
+        store.apply_raw_portable_snapshot(&decoded).unwrap();
+        assert_eq!(store.load_quick_commands().unwrap(), config);
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn quick_commands_export_matches_tauri_json_shape() {
     let raw = export_quick_commands_json(QuickCommandsConfig {
         categories: vec![QuickCommandCategory {
@@ -5851,6 +6021,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             icon_tag: Some("terminal".to_string()),
             pinned: Some(true),
             execution_mode: Some("append".to_string()),
+            raw_send: None,
             source: Some("manual".to_string()),
             risk_level: Some(nyaterm_core::RiskLevel::Low),
             updated_at: Some(222),
@@ -8021,5 +8192,28 @@ fn cloud_sync_rotated_credentials_survive_restart_and_reject_stale_accounts() {
             reopened.update_cloud_credentials(&update).unwrap(),
             CredentialUpdateResult::Superseded
         );
+    }
+}
+
+#[test]
+fn login_monitoring_setting_roundtrips_without_losing_unknown_fields() {
+    let dir = unique_temp_dir("login-monitoring-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store.save_settings_value(&serde_json::json!({"ui":{"future_monitor_option":{"keep":true}},"future":{"version":99}})).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert!(!settings.ui_remote_stats_show_users);
+    for enabled in [true, false] {
+        settings.ui_remote_stats_show_users = enabled;
+        store.save_terminal_settings(&settings).unwrap();
+        assert_eq!(
+            store
+                .load_app_settings_summary()
+                .unwrap()
+                .ui_remote_stats_show_users,
+            enabled
+        );
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["ui"]["future_monitor_option"]["keep"], true);
+        assert_eq!(raw["future"]["version"], 99);
     }
 }

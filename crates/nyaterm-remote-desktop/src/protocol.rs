@@ -4,13 +4,21 @@ use std::sync::Arc;
 use nyaterm_core::SecretString;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// Maximum UTF-8 payload accepted for a single committed-text event.
 ///
 /// This intentionally leaves ample room below the control-packet envelope for
 /// JSON framing and other events in the same input batch.
 pub const MAX_COMMITTED_TEXT_BYTES: usize = 64 * 1024;
+
+/// Desktop extent the protocol will negotiate, in pixels. Shared by
+/// `RdpDisplayMetrics::clamped` and the connect/resize validation so a request
+/// the application is allowed to make is never rejected at the session layer.
+pub(crate) const MIN_WIDTH: u32 = 200;
+pub(crate) const MIN_HEIGHT: u32 = 200;
+pub(crate) const MAX_WIDTH: u32 = 8192;
+pub(crate) const MAX_HEIGHT: u32 = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CommittedTextError {
@@ -56,10 +64,24 @@ pub struct VncServerCapabilities {
     pub committed_unicode_keysyms: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpBackend {
+    #[default]
+    #[serde(alias = "auto", alias = "internal")]
+    Builtin,
+    #[serde(alias = "active-x")]
+    Windows,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RdpSessionConfig {
     #[serde(default)]
     pub relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
+    #[serde(default)]
+    pub backend: RdpBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_authentication: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -80,6 +102,7 @@ impl fmt::Debug for RdpSessionConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RdpSessionConfig")
+            .field("backend", &self.backend)
             .field("name", &self.name)
             .field("host", &self.host)
             .field("port", &self.port)
@@ -114,6 +137,16 @@ pub struct RdpDisplayConfig {
     pub mode: RdpDisplayMode,
     pub width: u32,
     pub height: u32,
+    /// Desktop scale factor in percent (100..=500) negotiated with the initial
+    /// desktop size, or 0 to leave the choice to the server.
+    ///
+    /// This is ephemeral client display information, like
+    /// [`RdpDisplayMetrics`]: it is filled in from the panel that hosts the
+    /// session and is never taken from a saved connection. Asking for the scale
+    /// in the same handshake as the size is what keeps a fit-window session
+    /// from changing resolution again right after it connects.
+    #[serde(default)]
+    pub desktop_scale_factor: u32,
     pub color_depth: u8,
     /// RDPEGFX surface updates. See `nyaterm_core::RdpDisplaySettings`.
     #[serde(default)]
@@ -147,6 +180,22 @@ pub struct RdpDisplayMetrics {
     pub physical_size_mm: Option<(u32, u32)>,
 }
 
+impl RdpDisplayMetrics {
+    /// Bring a panel-derived request into the range the protocol accepts.
+    ///
+    /// Even boundaries because the legacy desktop size fields are `u16` pixels
+    /// and the server rounds the framebuffer to them; a request that is not
+    /// even comes back as a different size, which looks like a resize stutter.
+    pub fn clamped(self) -> Self {
+        Self {
+            width: self.width.clamp(MIN_WIDTH, MAX_WIDTH) & !1,
+            height: self.height.clamp(MIN_HEIGHT, MAX_HEIGHT) & !1,
+            desktop_scale_factor: self.desktop_scale_factor.clamp(100, 500),
+            physical_size_mm: self.physical_size_mm,
+        }
+    }
+}
+
 fn rdp_default_true() -> bool {
     true
 }
@@ -157,6 +206,7 @@ impl Default for RdpDisplayConfig {
             mode: RdpDisplayMode::FitWindow,
             width: 1920,
             height: 1080,
+            desktop_scale_factor: 0,
             color_depth: 32,
             graphics_pipeline: false,
             display_wallpaper: true,
@@ -182,6 +232,7 @@ impl From<&nyaterm_core::RdpDisplaySettings> for RdpDisplayConfig {
             mode: parse_rdp_display_mode(&settings.mode),
             width: settings.width,
             height: settings.height,
+            desktop_scale_factor: 0,
             color_depth: settings.color_depth,
             graphics_pipeline: settings.graphics_pipeline,
             display_wallpaper: settings.display_wallpaper,
@@ -202,6 +253,21 @@ pub enum RdpDisplayMode {
     #[default]
     FitWindow,
     Fixed,
+}
+
+impl RdpDisplayConfig {
+    /// Ask the server for exactly the desktop the hosting panel will draw into.
+    ///
+    /// A fit-window session that connects at the saved size and is resized to
+    /// the panel afterwards shows the desktop twice at two different scales in
+    /// the time it takes to connect; the panel is measurable before the connect
+    /// is issued, so the first negotiation should already use it.
+    pub fn fit_to_panel(&mut self, metrics: RdpDisplayMetrics) {
+        let metrics = metrics.clamped();
+        self.width = metrics.width;
+        self.height = metrics.height;
+        self.desktop_scale_factor = metrics.desktop_scale_factor;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -426,6 +492,12 @@ pub enum RdpErrorKind {
     ConnectionRefused,
     Tls,
     Transport,
+    /// The live session ended: the server stated a reason, or the session broke in a way
+    /// the helper could not attribute to the transport.
+    ///
+    /// Deliberately not auto-reconnectable. A server that ended a session for a reason --
+    /// most often a takeover by another connection -- ends the replacement the same way,
+    /// so two NyaTerm clients chasing each other leaves neither usable.
     Session,
     Clipboard,
     Negotiation,
@@ -672,6 +744,11 @@ pub enum VncErrorKind {
 pub struct VncError {
     pub kind: VncErrorKind,
     pub message: String,
+    /// Set only when the helper's effective credentials are missing. Other
+    /// authentication failures cannot be resolved by asking for a password.
+    /// Older helpers omit this hint and must never trigger an automatic prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub password_required: bool,
 }
 
 impl VncError {
@@ -679,6 +756,7 @@ impl VncError {
         Self {
             kind,
             message: message.into(),
+            password_required: false,
         }
     }
 }
@@ -1008,6 +1086,65 @@ pub fn parse_rdp_display_mode(value: &str) -> RdpDisplayMode {
     }
 }
 
+pub fn parse_rdp_backend(value: &str) -> Result<RdpBackend, RdpError> {
+    match value {
+        "builtin" | "internal" | "auto" => Ok(RdpBackend::Builtin),
+        "windows" | "active-x" => Ok(RdpBackend::Windows),
+        _ => Err(RdpError::new(
+            RdpErrorKind::Unsupported,
+            "Unsupported RDP backend",
+        )),
+    }
+}
+
+impl RdpBackend {
+    /// Check before resolving a saved proxy or jump host into a live Relay.
+    pub fn validate_route(self, has_relay: bool) -> Result<(), RdpError> {
+        if self == Self::Builtin {
+            return Ok(());
+        }
+        if !cfg!(windows) {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP is only available on Windows",
+            ));
+        }
+        if has_relay {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP does not support Relay",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_config(self, config: &RdpSessionConfig) -> Result<(), RdpError> {
+        self.validate_route(config.relay.is_some())?;
+        if self == Self::Builtin {
+            return Ok(());
+        }
+        if config.windows_authentication.as_deref() != Some("system") {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "Select Windows system authentication explicitly for ActiveX RDP",
+            ));
+        }
+        if config.clipboard.mode == RdpClipboardMode::TextOnly {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP does not support text-only clipboard; select disabled or full clipboard redirection",
+            ));
+        }
+        if config.reconnect.max_attempts > 200 {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX reconnect attempts must be between 0 and 200",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub fn parse_rdp_clipboard_mode(value: &str) -> RdpClipboardMode {
     match value.trim() {
         "disabled" | "off" => RdpClipboardMode::Disabled,
@@ -1035,11 +1172,54 @@ pub fn parse_vnc_scale_mode(value: &str) -> VncScaleMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, RdpCertificatePolicy, RdpClipboardConfig,
-        RdpClipboardMode, RdpDisplayConfig, RdpDisplayMode, RdpSessionConfig,
+        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RdpBackend,
+        RdpCertificatePolicy, RdpClipboardConfig, RdpClipboardMode, RdpDisplayConfig,
+        RdpDisplayMetrics, RdpDisplayMode, RdpSessionConfig, parse_rdp_backend,
         parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
         validate_committed_text,
     };
+
+    #[test]
+    fn vnc_password_hint_is_optional_and_defaults_to_no_prompt() {
+        use super::{VncError, VncErrorKind};
+
+        let old = serde_json::json!({"kind": "Authentication", "message": "failed"});
+        let decoded: VncError = serde_json::from_value(old.clone()).unwrap();
+        assert!(!decoded.password_required);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), old);
+        let missing = VncError {
+            password_required: true,
+            ..VncError::new(VncErrorKind::Authentication, "password required")
+        };
+        assert_eq!(
+            serde_json::from_value::<VncError>(serde_json::to_value(&missing).unwrap()).unwrap(),
+            missing
+        );
+    }
+
+    #[test]
+    fn panel_metrics_become_a_negotiable_desktop() {
+        let metrics = RdpDisplayMetrics {
+            width: 9_000,
+            height: 7,
+            desktop_scale_factor: 40,
+            physical_size_mm: Some((310, 170)),
+        }
+        .clamped();
+        assert_eq!((metrics.width, metrics.height), (MAX_WIDTH, MIN_HEIGHT));
+        assert_eq!(metrics.desktop_scale_factor, 100);
+        assert_eq!(metrics.physical_size_mm, Some((310, 170)));
+
+        let mut display = RdpDisplayConfig::default();
+        display.fit_to_panel(RdpDisplayMetrics {
+            width: 1_281,
+            height: 719,
+            desktop_scale_factor: 125,
+            physical_size_mm: None,
+        });
+        assert_eq!((display.width, display.height), (1_280, 718));
+        assert_eq!(display.desktop_scale_factor, 125);
+    }
 
     #[test]
     fn legacy_display_ipc_and_saved_defaults_agree() {
@@ -1061,6 +1241,7 @@ mod tests {
         });
         let session: RdpSessionConfig = serde_json::from_value(document).unwrap();
         assert!(!session.administrative_session);
+        assert_eq!(session.backend, RdpBackend::Builtin);
         assert_eq!(session.display, display);
         let encoded = serde_json::to_value(&session).unwrap();
         assert_eq!(
@@ -1092,6 +1273,18 @@ mod tests {
     #[test]
     fn legacy_native_display_mode_is_fixed() {
         assert_eq!(parse_rdp_display_mode("native"), RdpDisplayMode::Fixed);
+    }
+
+    #[test]
+    fn rdp_backend_accepts_public_and_legacy_names() {
+        for name in ["auto", "builtin", "internal"] {
+            assert_eq!(parse_rdp_backend(name).unwrap(), RdpBackend::Builtin);
+        }
+        for name in ["windows", "active-x"] {
+            assert_eq!(parse_rdp_backend(name).unwrap(), RdpBackend::Windows);
+        }
+        assert!(parse_rdp_backend("unknown").is_err());
+        assert_eq!(RdpBackend::default(), RdpBackend::Builtin);
     }
 
     #[test]

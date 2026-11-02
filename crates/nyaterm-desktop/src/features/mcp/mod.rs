@@ -283,8 +283,8 @@ impl NyaTermApp {
         .detach();
     }
 
-    pub(in crate::features) fn mcp_pending_approval_requests(&mut self) -> Vec<McpApprovalRequest> {
-        self.mcp.capabilities.pending_approval_requests()
+    pub(in crate::features) fn mcp_pending_approval_requests(&self) -> Vec<McpApprovalRequest> {
+        self.mcp.capabilities.external_approval_requests()
     }
 
     pub(in crate::features) fn respond_to_mcp_approval(
@@ -317,6 +317,7 @@ impl NyaTermApp {
             }
             None => {}
         }
+        self.defer_ai_panel_snapshot_flush(cx);
         cx.notify();
     }
 
@@ -504,6 +505,7 @@ mod tests {
                 port: 3389,
                 username: String::new(),
                 domain: String::new(),
+                backend: Default::default(),
                 security: Default::default(),
                 display: Default::default(),
                 clipboard: Default::default(),

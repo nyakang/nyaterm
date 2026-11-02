@@ -18,6 +18,7 @@ pub(in crate::features) struct FileManagerSidebarRestore {
 #[derive(Default)]
 pub(in crate::features) struct FileManagerFeatureState {
     workspaces: HashMap<String, Entity<FileManagerWorkspace>>,
+    pub(super) sftp_workspaces: HashMap<String, Entity<FileManagerWorkspace>>,
     next_id: u64,
     sidebar_restore: Option<FileManagerSidebarRestore>,
     sidebar_restore_suppressed: bool,
@@ -25,13 +26,29 @@ pub(in crate::features) struct FileManagerFeatureState {
 
 impl FileManagerFeatureState {
     pub(in crate::features) fn workspace(&self, id: &str) -> Option<Entity<FileManagerWorkspace>> {
-        self.workspaces.get(id).cloned()
+        self.workspaces
+            .get(id)
+            .or_else(|| self.sftp_workspaces.get(id.strip_prefix("sftp-")?))
+            .cloned()
     }
 
     pub(in crate::features) fn workspaces(
         &self,
     ) -> impl Iterator<Item = (&String, &Entity<FileManagerWorkspace>)> {
         self.workspaces.iter()
+    }
+
+    pub(in crate::features) fn all_workspaces(
+        &self,
+    ) -> impl Iterator<Item = Entity<FileManagerWorkspace>> + '_ {
+        self.workspaces
+            .values()
+            .chain(self.sftp_workspaces.values())
+            .cloned()
+    }
+
+    pub(in crate::features) fn remove_sftp_session(&mut self, id: &str) {
+        self.sftp_workspaces.remove(id);
     }
 
     pub(in crate::features) fn active_id(&self) -> Option<&str> {
@@ -71,9 +88,19 @@ impl FileManagerFeatureState {
         new_id: &str,
         cx: &mut AppContext,
     ) {
-        for workspace in self.workspaces.values() {
+        if let Some(workspace) = self.sftp_workspaces.remove(old_id) {
+            self.sftp_workspaces.insert(new_id.to_string(), workspace);
+        }
+        for workspace in self
+            .workspaces
+            .values()
+            .chain(self.sftp_workspaces.values())
+        {
             workspace.update(cx, |workspace, cx| {
                 workspace.replace_session_id(old_id, new_id);
+                if workspace.id == format!("sftp-{old_id}") {
+                    workspace.id = format!("sftp-{new_id}");
+                }
                 cx.notify();
             });
         }

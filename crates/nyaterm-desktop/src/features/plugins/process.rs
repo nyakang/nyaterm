@@ -58,6 +58,7 @@ impl PluginProcess {
     pub(crate) fn service(&self) -> Option<Arc<PluginService>> {
         self.service.clone()
     }
+    #[cfg(test)]
     pub(crate) fn restart(&mut self, runtime: AppRuntime, cx: &mut Context<Self>) {
         *self = Self::new(runtime, cx);
         cx.notify();
@@ -216,8 +217,7 @@ mod tests {
         );
         one.shutdown();
         assert!(two.snapshot().stopped);
-        // The same controller path restores the service after an application
-        // update aborts shutdown. Existing windows keep observing the same Entity.
+        // An explicit service restart keeps existing windows observing the same Entity.
         cx.update_entity(&controller, |controller, cx| controller.restart_plugins(cx));
         let restarted = cx.read(|cx| process.read(cx).service().unwrap());
         assert!(!Arc::ptr_eq(&one, &restarted));

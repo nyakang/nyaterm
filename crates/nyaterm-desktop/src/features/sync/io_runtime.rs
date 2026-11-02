@@ -159,6 +159,12 @@ pub(super) struct ObservedRemote<'a> {
 }
 
 impl CloudSyncRemote for ObservedRemote<'_> {
+    fn write_sync_file(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        self.inner.write_sync_file(path, bytes)
+    }
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.inner.list_sync_files(path)
+    }
     fn provider(&self) -> &'static str {
         self.inner.provider()
     }

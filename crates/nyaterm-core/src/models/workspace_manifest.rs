@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::{
     MainWindowState, RestorableOpenTab, RestorableTerminalWindowNode, RestorableWorkspacePaneNode,
 };
-use crate::ActivationRequest;
+use crate::activation::ParsedActivationRequest;
 
 pub const WORKSPACE_RESTORE_MANIFEST_VERSION: u8 = 1;
 pub const DEVICE_WINDOW_MANIFEST_VERSION: u8 = 2;
@@ -43,7 +43,7 @@ pub enum ActivationOpenBehavior {
 
 #[derive(Debug, Clone)]
 pub struct OpenWorkspaceRequest {
-    pub activation: Option<ActivationRequest>,
+    pub activation: Option<ParsedActivationRequest>,
     pub activate: bool,
     pub layout_source_workspace_id: Option<WorkspaceId>,
 }

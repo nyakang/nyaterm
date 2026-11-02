@@ -214,6 +214,7 @@ pub(super) struct TerminalMenuState {
     pub(super) actions_open: bool,
     pub(super) actions_focus: FocusHandle,
     pub(super) action_link_menu: Option<ActionLinkMenuState>,
+    pub(super) action_link_menu_generation: u64,
     pub(super) action_link_tooltip: Option<ActionLinkTooltipState>,
     /// Pending action-link hover, with the generation of the timer that owns it. The
     /// timer is the delay; the generation is how a superseded one recognises itself.
@@ -346,6 +347,7 @@ impl TerminalFeatureState {
                 actions_open: false,
                 actions_focus: focus.actions,
                 action_link_menu: None,
+                action_link_menu_generation: 0,
                 action_link_tooltip: None,
                 action_link_hover_pending: None,
                 action_link_hover_generation: 0,

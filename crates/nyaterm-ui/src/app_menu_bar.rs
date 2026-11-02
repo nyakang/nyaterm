@@ -356,7 +356,7 @@ impl NyaAppMenuEntry {
         let index = self.index;
         let min_width = self.menu.min_width;
         let popup = PopupMenu::build(window, cx, |menu, window, cx| {
-            let menu = style_nya_popup_menu(menu, min_width, None);
+            let menu = style_nya_popup_menu(menu, min_width, None, window, cx);
             items
                 .iter()
                 .fold(menu, |menu, item| item.append_to(menu, window, cx))
@@ -569,6 +569,7 @@ mod tests {
         let second = bar.read_with(cx, |bar, _| bar.menus[1].clone());
 
         first.update_in(cx, |entry, window, cx| entry.toggle(window, cx));
+        cx.update(|window, cx| assert!(crate::nya_popup_menu_is_active(window, cx)));
         assert_eq!(bar.read_with(cx, |bar, _| bar.selected_index), Some(0));
         assert_eq!(first_builds.get(), 1);
         assert_eq!(second_builds.get(), 0);
@@ -583,6 +584,7 @@ mod tests {
 
         second.update_in(cx, |entry, window, cx| entry.toggle(window, cx));
         assert_eq!(bar.read_with(cx, |bar, _| bar.selected_index), None);
+        cx.update(|window, cx| assert!(!crate::nya_popup_menu_is_active(window, cx)));
         second.update_in(cx, |entry, window, cx| entry.toggle(window, cx));
         assert_eq!(second_builds.get(), 2);
     }

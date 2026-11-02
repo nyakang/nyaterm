@@ -6,6 +6,7 @@ use super::save_editor_connection;
 use crate::features::connections::connection_runtime::helpers::{
     build_saved_connection_from_editor, connection_editor_from_saved,
 };
+use crate::models::ConnectionPasswordEdit;
 
 fn connection(id: &str, group_id: Option<&str>, sort_order: i32) -> SavedConnection {
     // The older saved format omits timestamps and optional editor metadata.
@@ -33,7 +34,9 @@ fn editing_middle_connection_preserves_custom_order_after_reloading() {
                 .unwrap();
         }
         let built = edited(store.get_connection("b").unwrap().unwrap());
-        let sessions = save_editor_connection(&store, built, None).unwrap();
+        let sessions =
+            save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep))
+                .unwrap();
         assert_eq!(
             sessions
                 .connections
@@ -79,7 +82,7 @@ fn editor_save_preserves_latest_usage_order_and_unexposed_metadata() {
     let previous = store.get_connection("b").unwrap().unwrap();
     assert!(previous.last_used_at_ms.is_some());
 
-    save_editor_connection(&store, built, None).unwrap();
+    save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
     let saved = store.get_connection("b").unwrap().unwrap();
     assert_eq!(saved.sort_order, previous.sort_order);
     assert_eq!(saved.last_used_at_ms, previous.last_used_at_ms);
@@ -116,7 +119,9 @@ fn changing_group_appends_after_destination_siblings_and_preserves_usage() {
         let mut editor = connection_editor_from_saved(previous.clone(), false);
         editor.group_id = target.map(str::to_owned);
         let built = build_saved_connection_from_editor(&editor).unwrap();
-        let loaded = save_editor_connection(&store, built, None).unwrap();
+        let loaded =
+            save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep))
+                .unwrap();
         let destination = loaded
             .connections
             .iter()
@@ -157,7 +162,7 @@ fn new_connection_appends_to_its_group_without_inheriting_usage() {
         editor.id = None;
         let built = build_saved_connection_from_editor(&editor).unwrap();
         let new_id = built.id.clone();
-        save_editor_connection(&store, built, None).unwrap();
+        save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
         let saved = store.get_connection(&new_id).unwrap().unwrap();
         assert_eq!(saved.sort_order, 9);
         assert_eq!(saved.last_used_at_ms, None);
@@ -183,11 +188,116 @@ fn editor_save_into_new_group_starts_at_zero_and_saves_group() {
             editor.id = None;
         }
         let built = build_saved_connection_from_editor(&editor).unwrap();
-        let loaded = save_editor_connection(&store, built, Some(&group)).unwrap();
+        let loaded = save_editor_connection(
+            &store,
+            built,
+            Some(&group),
+            Some(ConnectionPasswordEdit::Keep),
+        )
+        .unwrap();
         assert_eq!(loaded.groups.len(), 1);
         assert_eq!(loaded.groups[0].id, group.id);
         assert_eq!(loaded.connections.len(), 1);
         assert_eq!(loaded.connections[0].group_id.as_deref(), Some("new-group"));
         assert_eq!(loaded.connections[0].sort_order, 0);
+    }
+}
+
+#[test]
+fn password_save_preserves_latest_secret_after_lock_and_round_trips_replace_and_clear() {
+    for kind in ["ssh", "telnet", "rdp", "vnc"] {
+        let root = TestTempDir::new("nyaterm-single-password-save");
+        let store = ConnectionStore::open(&root).unwrap();
+        let original: SavedConnection = serde_json::from_value(json!({
+            "id": "password", "name": "Password", "type": kind,
+            "host": "example.test", "username": "user",
+            "auth": {"mode": "password", "password_source": "connection", "password": "old"}
+        }))
+        .unwrap();
+        store.save_connection(&original).unwrap();
+        let mut editor =
+            connection_editor_from_saved(store.get_connection("password").unwrap().unwrap(), false);
+        // A lock releases all plaintext; Keep must fetch the latest database value.
+        editor.password = Default::default();
+        editor.existing_password = None;
+        let mut latest = store.get_connection("password").unwrap().unwrap();
+        latest.auth.as_mut().unwrap().password = Some("latest".into());
+        store.save_connection(&latest).unwrap();
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
+        assert_eq!(
+            store
+                .get_connection("password")
+                .unwrap()
+                .unwrap()
+                .auth
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("latest")
+        );
+
+        editor.password = " new ".into();
+        editor.password_edit = ConnectionPasswordEdit::Replace;
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(&store, built, None, Some(editor.password_edit)).unwrap();
+        assert_eq!(
+            store
+                .get_connection("password")
+                .unwrap()
+                .unwrap()
+                .auth
+                .unwrap()
+                .password
+                .as_deref(),
+            Some(" new ")
+        );
+        editor.password = Default::default();
+        editor.password_edit = ConnectionPasswordEdit::Remove;
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(&store, built, None, Some(editor.password_edit)).unwrap();
+        drop(store);
+        let reopened = ConnectionStore::open(&root).unwrap();
+        assert!(
+            reopened
+                .get_connection("password")
+                .unwrap()
+                .unwrap()
+                .auth
+                .unwrap()
+                .password
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn keeping_unreadable_ciphertext_survives_saving_and_reopening() {
+    for kind in ["ssh", "telnet", "rdp", "vnc"] {
+        let root = TestTempDir::new("nyaterm-editor-unreadable-password");
+        let store = ConnectionStore::open(&root).unwrap();
+        let original: SavedConnection = serde_json::from_value(json!({
+            "id":"locked", "name":"Locked", "type":kind, "host":"example.test", "username":"user",
+            "auth":{"mode":"password", "password":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "has_password":true}
+        }))
+        .unwrap();
+        store.save_connection(&original).unwrap();
+        let mut editor =
+            connection_editor_from_saved(store.get_connection("locked").unwrap().unwrap(), false);
+        assert!(editor.password.is_empty());
+        editor.name = "Renamed".into();
+        editor.existing_password = None;
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
+        drop(store);
+        let reopened = ConnectionStore::open(&root).unwrap();
+        let saved = reopened.get_connection("locked").unwrap().unwrap();
+        assert_eq!(saved.name, "Renamed");
+        let auth = saved.auth.unwrap();
+        assert!(auth.has_password);
+        assert_eq!(
+            auth.password.as_deref(),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
     }
 }

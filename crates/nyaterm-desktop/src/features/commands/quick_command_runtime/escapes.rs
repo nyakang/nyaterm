@@ -94,6 +94,19 @@ pub(super) fn quick_command_needs_staging(chunks: &[QuickCommandChunk]) -> bool 
     chunks.len() > 1 || chunks.iter().any(|chunk| !chunk.delay.is_zero())
 }
 
+/// Literal mode bypasses both variable substitution and script escapes. Only
+/// the independently selected execution mode may add a final carriage return.
+pub(super) fn plan_literal_quick_command(text: &str, execute: bool) -> Vec<QuickCommandChunk> {
+    let mut chunks = vec![QuickCommandChunk {
+        delay: Duration::ZERO,
+        bytes: text.as_bytes().to_vec(),
+    }];
+    if execute {
+        append_execution_return(&mut chunks);
+    }
+    chunks
+}
+
 fn flush(chunks: &mut Vec<QuickCommandChunk>, pending: &mut String, delay: &mut Duration) {
     if pending.is_empty() {
         // Nothing to send yet, so the banked pause carries over.
@@ -122,7 +135,35 @@ fn append_execution_return(chunks: &mut Vec<QuickCommandChunk>) {
 mod tests {
     use std::time::Duration;
 
-    use super::{plan_quick_command, quick_command_needs_staging};
+    use super::{plan_literal_quick_command, plan_quick_command, quick_command_needs_staging};
+
+    #[test]
+    fn literal_commands_preserve_variables_escapes_whitespace_and_unicode_without_pausing() {
+        let text = "  {{变量}} \\r\\n\\t\\p\\\\ C:\\temp\n下一行\t ";
+        let plan = plan_literal_quick_command(text, false);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].bytes, text.as_bytes());
+        assert!(!quick_command_needs_staging(&plan));
+        assert_eq!(
+            plan_literal_quick_command(text, true)[0].bytes,
+            format!("{text}\r").as_bytes()
+        );
+    }
+
+    #[test]
+    fn literal_execution_only_adds_a_missing_actual_line_ending() {
+        for ending in ["\r", "\n", "\r\n"] {
+            let text = format!("echo ready{ending}");
+            assert_eq!(
+                plan_literal_quick_command(&text, true)[0].bytes,
+                text.as_bytes()
+            );
+        }
+        assert_eq!(
+            plan_literal_quick_command(r"echo ready\r", true)[0].bytes,
+            b"echo ready\\r\r"
+        );
+    }
 
     fn chunks(text: &str, execute: bool) -> Vec<(Duration, Vec<u8>)> {
         plan_quick_command(text, execute)

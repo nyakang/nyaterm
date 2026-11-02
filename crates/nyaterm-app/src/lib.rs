@@ -1,10 +1,11 @@
-//! Bundled assets for the NyaTerm shell.
+//! Bundled assets and process diagnostics for the NyaTerm shell.
 //!
-//! The binary is the real entry point; this library exists so the asset registry
-//! is reachable from tests and from the `icon_gallery` example, which is how a
-//! newly added icon gets proven to actually render.
+//! The binary is the real entry point. This library exposes the asset registry
+//! for tests and the `icon_gallery` example, and the panic reporter for isolated
+//! process tests.
 
 pub mod assets;
+pub mod crash_report;
 
 #[cfg(test)]
 mod tests {

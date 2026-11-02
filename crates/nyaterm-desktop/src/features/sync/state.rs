@@ -49,6 +49,7 @@ impl SyncHistoryFilter {
 const HISTORY_PAGE_SIZE: usize = 20;
 
 pub(in crate::features) struct CloudSyncFeatureState {
+    pub(crate) operations: super::operation::CloudSyncOperationRegistry,
     settings: CloudSyncSettings,
     state: CloudSyncState,
     history: Vec<CloudSyncHistoryEntry>,
@@ -63,6 +64,7 @@ pub(in crate::features) struct CloudSyncFeatureState {
     live_state: CloudSyncLiveState,
     focused_field: CloudSyncInputField,
     github: GithubGistAuthFeatureState,
+    v4_preview: Option<super::cloud_sync_v4::Preview>,
 }
 
 struct GithubGistAuthFeatureState {
@@ -109,6 +111,7 @@ impl CloudSyncFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            operations: Default::default(),
             settings,
             state,
             history,
@@ -121,6 +124,7 @@ impl CloudSyncFeatureState {
             status: String::new(),
             live_state: CloudSyncLiveState::Idle,
             focused_field: CloudSyncInputField::RemoteRoot,
+            v4_preview: None,
             github: GithubGistAuthFeatureState {
                 auth: GithubGistAuthState::default(),
                 tx,
@@ -347,6 +351,44 @@ impl CloudSyncFeatureState {
         self.status = status.into();
     }
 
+    pub(in crate::features) fn v4_summary(&self) -> Option<super::cloud_sync_v4::PreviewSummary> {
+        self.v4_preview
+            .as_ref()
+            .map(super::cloud_sync_v4::Preview::summary)
+    }
+
+    pub(super) fn set_v4_preview(&mut self, preview: super::cloud_sync_v4::Preview) {
+        self.v4_preview = Some(preview);
+    }
+    pub(super) fn take_v4_preview(&mut self) -> Option<super::cloud_sync_v4::Preview> {
+        self.v4_preview.take()
+    }
+
+    pub(in crate::features) fn select_v4(&mut self) {
+        self.settings.protocol_version = 4;
+        self.v4_preview = None;
+    }
+    pub(in crate::features) fn toggle_v4_preferences(&mut self) {
+        self.settings.v4_scope.preferences = !self.settings.v4_scope.preferences;
+        self.v4_preview = None;
+    }
+    pub(in crate::features) fn toggle_v4_keybindings(&mut self) {
+        self.settings.v4_scope.keybindings = !self.settings.v4_scope.keybindings;
+        self.v4_preview = None;
+    }
+    pub(in crate::features) fn toggle_v4_ai(&mut self) {
+        self.settings.v4_scope.ai = !self.settings.v4_scope.ai;
+        self.v4_preview = None;
+    }
+    pub(in crate::features) fn toggle_v4_secrets(&mut self) {
+        self.settings.v4_scope.secrets = !self.settings.v4_scope.secrets;
+        self.v4_preview = None;
+    }
+    pub(in crate::features) fn toggle_v4_trust(&mut self) {
+        self.settings.v4_scope.trusted_hosts = !self.settings.v4_scope.trusted_hosts;
+        self.v4_preview = None;
+    }
+
     pub(in crate::features) fn select_provider(&mut self, provider: &str) {
         self.settings.provider = provider.to_string();
         self.status = t!("settings.syncProviderSetTo", provider = provider).to_string();
@@ -396,6 +438,11 @@ impl CloudSyncFeatureState {
         }
         self.live_state = CloudSyncLiveState::Running;
         true
+    }
+
+    pub(super) fn cancel_job_for_shutdown(&mut self) {
+        self.live_state = CloudSyncLiveState::Idle;
+        self.status.clear();
     }
 
     pub(super) fn complete_job(&mut self, state: CloudSyncState, status: String) {

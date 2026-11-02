@@ -20,6 +20,7 @@ use nyaterm_core::AppSettingsSummary;
 use nyaterm_core::OpenWorkspaceRequest;
 use nyaterm_core::WorkspaceId;
 use nyaterm_core::WorkspaceUiState;
+use nyaterm_core::activation::ParsedActivationRequest;
 use nyaterm_ui::nya_root;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -119,7 +120,7 @@ impl DesktopController {
     pub(super) fn open_workspace_with_startup(
         &mut self,
         startup: AppShellStartup,
-        initial_activation: Option<ActivationRequest>,
+        initial_activation: Option<ParsedActivationRequest>,
         activate: bool,
         placement_override: Option<MainWindowPlacement>,
         cx: &mut Context<Self>,
@@ -210,10 +211,28 @@ impl DesktopController {
         if !self.recent_activations.remember(request.request_id) {
             return;
         }
-        if request.open_behavior() == ActivationOpenBehavior::ReuseMostRecent
-            && self.activate_and_deliver(self.most_recent_workspace_id, request.clone(), cx)
-        {
+        let mut request = request.parse();
+        self.deduplicate_connections(&mut request);
+        if request.actions.is_empty() {
             return;
+        }
+        if request.open_behavior == ActivationOpenBehavior::ReuseMostRecent {
+            let target = self
+                .most_recent_workspace_id
+                .filter(|id| self.windows.contains_key(id) && !self.closing_workspaces.contains(id))
+                .or_else(|| {
+                    self.device_windows
+                        .window_order
+                        .iter()
+                        .rev()
+                        .find(|id| {
+                            self.windows.contains_key(id) && !self.closing_workspaces.contains(id)
+                        })
+                        .copied()
+                });
+            if self.activate_and_deliver(target, request.clone(), cx) {
+                return;
+            }
         }
         if let Err(error) = self.open_workspace(
             OpenWorkspaceRequest {
@@ -226,22 +245,36 @@ impl DesktopController {
         }
     }
 
+    pub(super) fn deduplicate_connections(&mut self, request: &mut ParsedActivationRequest) {
+        let now = std::time::Instant::now();
+        request.actions.retain(|action| match action {
+            Ok(nyaterm_core::activation::ActivationAction::Connect(connection)) => {
+                self.recent_connections.remember(connection, now)
+            }
+            _ => true,
+        });
+    }
+
     pub(super) fn activate_and_deliver(
         &mut self,
         workspace_id: Option<WorkspaceId>,
-        request: ActivationRequest,
+        request: ParsedActivationRequest,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(workspace_id) = workspace_id else {
             return false;
         };
+        if self.closing_workspaces.contains(&workspace_id) {
+            return false;
+        }
         let Some(entry) = self.windows.get(&workspace_id) else {
             return false;
         };
         if entry
             .shell
             .update(cx, |shell, cx| shell.receive_activation_direct(request, cx))
-            .is_err()
+            .ok()
+            != Some(true)
         {
             return false;
         }
@@ -299,45 +332,26 @@ impl DesktopController {
         self.broadcast_shared_state_except(event, exclude_source.then_some(source), cx);
     }
 
+    /// Point the process-wide settings preview at the workspace that opened a
+    /// settings tab.
+    ///
+    /// Settings is now a per-window tab, so two windows can each hold a draft.
+    /// The window-decorations/material preview has to resolve to one of them;
+    /// the most recently opened settings tab owns it until it closes.
     pub fn activate_or_claim_settings(
         &mut self,
         requester: WorkspaceId,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> bool {
-        let Some(owner) = self.settings_owner_workspace_id else {
-            self.settings_owner_workspace_id = Some(requester);
-            return false;
-        };
-        if owner == requester {
-            return false;
-        }
-        let Some(entry) = self.windows.get(&owner) else {
-            self.settings_owner_workspace_id = Some(requester);
-            return false;
-        };
-        let app = entry
-            .shell
-            .update(cx, |shell, _| shell.app.clone())
-            .ok()
-            .flatten();
-        if let Some(app) = app {
-            app.update(cx, |app, cx| {
-                app.activate_settings_window(cx);
-            });
-            let _ = entry.handle.update(cx, |_, window, cx| {
-                show_window(window, cx);
-            });
-            self.mark_active(owner);
-            true
-        } else {
-            self.settings_owner_workspace_id = Some(requester);
-            false
-        }
+        self.settings_owners.retain(|id| *id != requester);
+        self.settings_owners.push(requester);
+        false
     }
 
     pub fn release_settings_owner(&mut self, workspace_id: WorkspaceId, cx: &mut Context<Self>) {
-        if self.settings_owner_workspace_id == Some(workspace_id) {
-            self.settings_owner_workspace_id = None;
+        let previous_len = self.settings_owners.len();
+        self.settings_owners.retain(|id| *id != workspace_id);
+        if self.settings_owners.len() != previous_len {
             crate::window_chrome::request_window_decoration_refresh(cx);
         }
     }
@@ -346,16 +360,22 @@ impl DesktopController {
         self.windows.len()
     }
 
+    pub(in crate::app_shell) fn is_process_quitting(&self) -> bool {
+        self.process_quitting
+    }
+
     pub fn begin_process_quit(&mut self) -> bool {
         if self.process_quitting || !self.closing_workspaces.is_empty() {
             return false;
         }
         self.process_quitting = true;
+        self.auto_sync.operations.pause_and_cancel();
         true
     }
 
     pub fn cancel_process_quit(&mut self) {
         self.process_quitting = false;
+        self.auto_sync.operations.resume();
     }
 
     pub fn is_most_recent_workspace(&self, workspace_id: WorkspaceId) -> bool {

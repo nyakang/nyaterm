@@ -97,12 +97,6 @@ impl DockerTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MainMode {
-    Workspace,
-    Page,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     General,
     Appearance,

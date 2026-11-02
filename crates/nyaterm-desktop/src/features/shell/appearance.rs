@@ -28,6 +28,8 @@ impl NyaTermApp {
         settings: AppSettingsSummary,
         cx: &mut Context<Self>,
     ) {
+        let users_changed = self.settings.summary().ui_remote_stats_show_users
+            != settings.ui_remote_stats_show_users;
         let terminal_font_changed = {
             let current = self.settings.summary();
             current.terminal_font_family != settings.terminal_font_family
@@ -38,6 +40,9 @@ impl NyaTermApp {
         };
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
         self.settings.replace_summary(settings);
+        if users_changed {
+            self.remote_stats_users_setting_changed(cx);
+        }
         crate::window_chrome::request_window_decoration_refresh(cx);
         self.sync_remote_monitoring_inputs(cx);
         self.sync_transfer_internal_editor_font_input(cx);

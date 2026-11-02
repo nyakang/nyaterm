@@ -266,6 +266,20 @@ enum OpenSftpConnection {
     Multiplex,
 }
 
+/// Verify a file-only runtime before reporting the session ready.
+pub(crate) async fn probe_sftp_session(
+    config: &SshSessionConfig,
+    multiplex: &SshMultiplexHandle,
+) -> anyhow::Result<()> {
+    let session = config
+        .attempt
+        .until_cancelled(open_sftp_session(config, Some(multiplex)))
+        .await
+        .map_err(anyhow::Error::msg)??;
+    close_sftp_session(session).await;
+    Ok(())
+}
+
 async fn open_sftp_session(
     config: &SshSessionConfig,
     multiplex: Option<&SshMultiplexHandle>,

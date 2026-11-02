@@ -183,6 +183,7 @@ impl NyaTermApp {
             return;
         };
         let mut pending = PendingSessionStart {
+            requested_ssh_runtime_mode: source.requested_ssh_runtime_mode,
             attempt: Default::default(),
             connection_name: source.connection_name.clone(),
             launch_config: source.launch_config.clone(),
@@ -210,6 +211,7 @@ impl NyaTermApp {
         }
         let request_id = uuid();
         let options = SavedConnectionStartOptions {
+            ssh_runtime_mode: pending.ssh_runtime_mode(),
             custom_name: pending.custom_name.clone(),
             tab_color: pending.tab_color,
             insert_index: Some(index),

@@ -2,6 +2,8 @@ use crate::features::{AutoSyncResult, AutoSyncTrigger};
 use std::time::{Duration, Instant};
 
 pub(in crate::app_shell::controller) struct AutoSyncCoordinator {
+    pub(in crate::app_shell::controller) operations:
+        crate::features::sync::operation::CloudSyncOperationRegistry,
     running: bool,
     pending: Option<AutoSyncTrigger>,
     next_due: Instant,
@@ -27,6 +29,12 @@ pub(super) struct AutoSyncJob {
 }
 
 impl AutoSyncCoordinator {
+    pub(super) fn cancel_for_shutdown(&mut self) {
+        self.running = false;
+        self.pending = Some(AutoSyncTrigger::Retry);
+        self.next_due = Instant::now();
+    }
+
     pub(super) fn next_job(
         &mut self,
         now: Instant,
@@ -96,7 +104,8 @@ impl AutoSyncCoordinator {
             result,
             Ok(AutoSyncResult::RemoteAvailable { .. }
                 | AutoSyncResult::Synced(_)
-                | AutoSyncResult::UpToDate(_))
+                | AutoSyncResult::UpToDate(_)
+                | AutoSyncResult::V4(_))
         ) || (trigger != AutoSyncTrigger::Change
             && matches!(result, Ok(AutoSyncResult::Debouncing(_))))
             || matches!(result, Err(nyaterm_core::CloudSyncError::Conflict(_)))
@@ -104,6 +113,12 @@ impl AutoSyncCoordinator {
             self.observed_remote_check(now);
         }
         match result {
+            Ok(AutoSyncResult::V4(report)) if !report.verified => {
+                self.pending = Some(AutoSyncTrigger::Retry);
+                self.next_due = now + auto_sync_backoff(self.failures);
+                self.failures = self.failures.saturating_add(1);
+                self.retry_not_before = Some(self.next_due);
+            }
             Ok(AutoSyncResult::Debouncing(remaining)) => {
                 if matches!(
                     self.pending,
@@ -132,7 +147,9 @@ impl AutoSyncCoordinator {
                 self.failures = 0;
                 self.retry_not_before = None;
             }
-            Ok(AutoSyncResult::Synced(_)) | Ok(AutoSyncResult::UpToDate(_)) => {
+            Ok(AutoSyncResult::Synced(_))
+            | Ok(AutoSyncResult::UpToDate(_))
+            | Ok(AutoSyncResult::V4(_)) => {
                 self.remote_available = false;
                 self.failures = 0;
                 self.retry_not_before = None;
@@ -277,6 +294,7 @@ impl AutoSyncCoordinator {
     pub(in crate::app_shell::controller) fn new(mutation_generation: u64) -> Self {
         let now = Instant::now();
         Self {
+            operations: Default::default(),
             running: false,
             pending: Some(AutoSyncTrigger::Startup),
             next_due: now + Duration::from_secs(3),

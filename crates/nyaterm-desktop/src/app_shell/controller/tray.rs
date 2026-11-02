@@ -30,11 +30,17 @@ impl DesktopController {
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_spawn(async {
-                    image::load_from_memory(include_bytes!(concat!(
+                    #[cfg(target_os = "macos")]
+                    let icon_bytes = include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../nyaterm-app/resources/icons/tray-template.png"
+                    ));
+                    #[cfg(not(target_os = "macos"))]
+                    let icon_bytes = include_bytes!(concat!(
                         env!("CARGO_MANIFEST_DIR"),
                         "/../nyaterm-app/resources/icons/32x32.png"
-                    )))
-                    .map(|image| {
+                    ));
+                    image::load_from_memory(icon_bytes).map(|image| {
                         let image = image.to_rgba8();
                         (image.width(), image.height(), image.into_raw())
                     })

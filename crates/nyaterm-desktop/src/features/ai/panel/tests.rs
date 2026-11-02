@@ -1,3 +1,4 @@
+mod approvals;
 mod history_and_streaming;
 mod pickers;
 use std::path::Path;

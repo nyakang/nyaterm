@@ -5,6 +5,37 @@ use super::{
     AiProviderCredential, AiProviderKind, AiReasoningEffort, MAX_AI_CUSTOM_HEADER_NAME_LEN,
     MAX_AI_CUSTOM_HEADER_VALUE_LEN, MAX_AI_CUSTOM_HEADERS,
 };
+use std::collections::HashMap;
+
+/// Resolves a provider's display order and stably prioritizes matching model names.
+/// Only the returned view is reordered; the provider order and configuration stay intact.
+pub fn prioritized_provider_models<'a>(
+    models: &'a [AiModelConfigItem],
+    model_order: &[String],
+    query: &str,
+) -> Vec<&'a AiModelConfigItem> {
+    let models_by_id: HashMap<_, _> = models.iter().map(|model| (&model.id, model)).collect();
+    let mut ordered: Vec<_> = model_order
+        .iter()
+        .filter_map(|id| models_by_id.get(id).copied())
+        .collect();
+    let query = query.trim().to_lowercase();
+    if !query.is_empty() {
+        ordered.sort_by_cached_key(|model| {
+            let name = model.name.trim().to_lowercase();
+            if name == query {
+                0
+            } else if name.starts_with(&query) {
+                1
+            } else if name.contains(&query) {
+                2
+            } else {
+                3
+            }
+        });
+    }
+    ordered
+}
 
 pub const MODEL_REASONING_EFFORTS: [AiModelReasoningEffort; 8] = [
     AiModelReasoningEffort::None,
@@ -472,13 +503,93 @@ mod tests {
     use super::{
         available_provider_name, custom_header_pairs, effective_protocol,
         is_valid_custom_header_name, model_belongs_to_provider, model_reasoning_options,
-        new_custom_header, normalize_custom_headers, provider_name_taken, set_provider_protocol,
+        new_custom_header, normalize_custom_headers, prioritized_provider_models,
+        provider_name_taken, set_provider_protocol,
     };
     use crate::ai::{
         AiApiFormat, AiHttpHeader, AiModelConfigItem, AiProviderApiProtocol, AiProviderCredential,
         AiProviderKind, AiReasoningEffort, AiSettings, normalize_ai_settings,
     };
     use serde_json::json;
+
+    fn model(id: &str, name: &str) -> AiModelConfigItem {
+        serde_json::from_value(json!({"id": id, "name": name})).unwrap()
+    }
+
+    fn ordered_ids(models: &[AiModelConfigItem], order: &[String], query: &str) -> Vec<String> {
+        prioritized_provider_models(models, order, query)
+            .into_iter()
+            .map(|model| model.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn model_matches_prioritize_exact_prefix_contains_then_nonmatches_stably() {
+        let models = vec![
+            model("exact", " GPT-4o "),
+            model("prefix-a", "gpt-4o-mini"),
+            model("prefix-b", "GPT-4O-latest"),
+            model("contains-a", "my-gpt-4o"),
+            model("contains-b", "other-GPT-4O"),
+            model("other-a", "claude"),
+            model("other-b", "gemini"),
+        ];
+        let order: Vec<String> = [
+            "other-b",
+            "contains-b",
+            "prefix-b",
+            "other-a",
+            "exact",
+            "prefix-a",
+            "contains-a",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert_eq!(
+            ordered_ids(&models, &order, "  gPt-4O  "),
+            [
+                "exact",
+                "prefix-b",
+                "prefix-a",
+                "contains-b",
+                "contains-a",
+                "other-b",
+                "other-a"
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_or_unmatched_model_queries_preserve_provider_order() {
+        let models = vec![model("a", "gpt-4o"), model("b", "claude")];
+        let order = vec!["b".to_string(), "a".to_string()];
+        for query in ["", " \t\n ", "unknown"] {
+            assert_eq!(ordered_ids(&models, &order, query), order);
+        }
+    }
+
+    #[test]
+    fn clearing_model_query_restores_order_without_mutating_configuration() {
+        let models = vec![model("a", "gpt-4o"), model("b", "claude")];
+        let original_models = models.clone();
+        let order = vec!["b".to_string(), "a".to_string()];
+        assert_eq!(ordered_ids(&models, &order, "gpt"), ["a", "b"]);
+        assert_eq!(ordered_ids(&models, &order, ""), ["b", "a"]);
+        assert_eq!(order, ["b", "a"]);
+        assert_eq!(models, original_models);
+    }
+
+    #[test]
+    fn model_matches_only_include_provider_order_and_skip_stale_ids() {
+        let models = vec![
+            model("other-provider", "gpt-4o"),
+            model("current-provider", "gpt-4o-mini"),
+        ];
+        let order = vec!["missing".to_string(), "current-provider".to_string()];
+        assert_eq!(ordered_ids(&models, &order, "gpt-4o"), ["current-provider"]);
+        assert!(prioritized_provider_models(&models, &[], "gpt").is_empty());
+    }
 
     fn credential(id: &str, kind: &str) -> AiProviderCredential {
         serde_json::from_value(

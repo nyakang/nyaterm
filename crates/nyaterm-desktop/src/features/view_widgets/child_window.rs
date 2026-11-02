@@ -28,8 +28,8 @@ pub(in crate::features) const CHILD_WINDOW_KEY_CONTEXT: &str = "ChildWindow";
 /// `escape`.
 ///
 /// Opt-in rather than universal: losing a long edit to one stray `escape` is a
-/// worse trade than reaching for `ctrl-w`, so the settings window does not take
-/// it while the short prompts and single-form editors do.
+/// worse trade than reaching for `ctrl-w`, so long-edit surfaces do not take it
+/// while the short prompts and single-form editors do.
 const CHILD_WINDOW_ESCAPE_KEY_CONTEXT: &str = "ChildWindowEscape";
 
 actions!(child_window, [CloseChildWindow]);
@@ -178,21 +178,6 @@ impl ChildWindowSpec {
             kind: WindowKind::Dialog,
             resizable: true,
             minimizable: false,
-        }
-    }
-
-    /// Settings: a modal dialog everywhere except macOS.
-    ///
-    /// macOS turns a `Dialog` into a sheet attached under the owner's title bar,
-    /// and Apple's convention is that Settings is a window of its own -- a panel
-    /// this size hanging off the main window reads wrong, and a sheet is meant for
-    /// a short scoped task rather than a long one. So macOS gets a plain window
-    /// and every other platform gets the OS-level modality.
-    pub(in crate::features) fn settings(title: String, width: f32, height: f32) -> Self {
-        if cfg!(target_os = "macos") {
-            Self::document(title, width, height)
-        } else {
-            Self::modal_editor(title, width, height)
         }
     }
 
@@ -355,7 +340,7 @@ mod tests {
 
     use super::{
         ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, WindowKind,
-        child_window_placement, modal_scrim_is_drawn,
+        child_window_placement,
     };
 
     fn display() -> Bounds<gpui::Pixels> {
@@ -479,23 +464,6 @@ mod tests {
         assert_eq!(prompt.chrome(), ChildWindowChrome::Window);
     }
 
-    /// macOS turns a `Dialog` into a sheet under the owner's title bar, which is
-    /// not what Settings should look like on that platform.
-    #[test]
-    fn settings_is_modal_everywhere_except_macos() {
-        let settings = ChildWindowSpec::settings("Settings".to_string(), 800., 560.);
-        if cfg!(target_os = "macos") {
-            assert!(matches!(settings.kind, WindowKind::Normal));
-            assert!(!modal_scrim_is_drawn(), "the sheet dims its own parent");
-        } else {
-            assert!(matches!(settings.kind, WindowKind::Dialog));
-            assert!(
-                modal_scrim_is_drawn(),
-                "nothing else greys the owner on these platforms"
-            );
-        }
-    }
-
     struct CloseKeyFixture {
         focus: gpui::FocusHandle,
         escape_closes: bool,
@@ -548,7 +516,7 @@ mod tests {
     }
 
     /// `escape` is opt-in per window, because one stray press should not be able
-    /// to discard a long edit. The settings window opts out.
+    /// to discard a long edit. Long-edit surfaces opt out.
     #[gpui::test]
     fn escape_closes_only_the_windows_that_opt_in(cx: &mut gpui::TestAppContext) {
         let (closes, cx) = close_key_window(cx, false);

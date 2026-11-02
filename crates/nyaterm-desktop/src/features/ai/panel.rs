@@ -17,6 +17,7 @@ use nyaterm_ui::{
 };
 
 use crate::features::NyaTermApp;
+use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
 use crate::features::formatting::{group_ai_sessions_by_date, short_id};
 use crate::features::text_inputs::TextInputSetup;
 use crate::features::view_widgets::{
@@ -30,6 +31,7 @@ use super::presentation::AiResponsePhase;
 use crate::features::runtime_jobs::AiAgentStepView;
 
 mod actions;
+mod approvals;
 mod command_syntax;
 mod components;
 mod content;
@@ -85,6 +87,7 @@ pub(in crate::features) struct AiAgentStepPresentation {
 pub(in crate::features) struct AiPanelSnapshot {
     index: Arc<index::AiSnapshotIndex>,
     pub native_run: Option<super::state::harness::NativeRunView>,
+    pub native_approvals: Arc<[NativeCapabilityApproval]>,
     pub native_answer_inputs: Vec<Entity<nyaterm_ui::NyaInputState>>,
     pub chrome: AiPanelChrome,
     pub ui_font_family: SharedString,

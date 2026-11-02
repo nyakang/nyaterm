@@ -54,6 +54,7 @@ pub mod ssh_authentication;
 mod ssh_mailbox;
 mod telnet_codec;
 mod telnet_input;
+pub mod tmux;
 mod writer_mailbox;
 use nyaterm_core::runtime::reaper::Reaper;
 use writer_mailbox::WriterMailbox;
@@ -220,9 +221,10 @@ use ssh_shell_integration::{
     detect_ssh_shell_type,
 };
 pub use stats::{
-    CpuCoreUsage, CpuInfo, CpuUsageSource, DiskInfo, LoadInfo, MemoryInfo, NetworkInfo,
-    NetworkSummaryInfo, ParsedRemoteStats, RemoteStats, RemoteStatsSampler, RemoteStatsService,
-    SYSINFO_SCRIPT, SystemInfo, parse_stats_output,
+    CpuCoreUsage, CpuInfo, CpuUsageSource, DiskInfo, LoadInfo, LoggedInSession, LoggedInUser,
+    LoggedInUsersStatus, MemoryInfo, NetworkInfo, NetworkSummaryInfo, ParsedRemoteStats,
+    RemoteStats, RemoteStatsOptions, RemoteStatsSampler, RemoteStatsService, SYSINFO_SCRIPT,
+    SystemInfo, parse_stats_output,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,7 +524,10 @@ fn forwarded_tcpip_sender_for(
         .cloned()
 }
 
-pub fn open_ssh_multiplex_handle(config: SshSessionConfig) -> anyhow::Result<SshMultiplexHandle> {
+pub fn open_ssh_multiplex_handle(
+    mut config: SshSessionConfig,
+) -> anyhow::Result<SshMultiplexHandle> {
+    config.apply_runtime_policy().map_err(anyhow::Error::msg)?;
     let agent_forwarding_config = effective_agent_forwarding_config(&config);
     let agent_stored_key_revision = current_agent_stored_key_revision(&config);
     let runtime = Arc::new(
@@ -602,7 +607,9 @@ const MIT_MAGIC_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
 const XAUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct SessionManager {
-    sessions: Mutex<HashMap<String, ManagedSession>>,
+    /// Arc-shared so the SSH worker can register tmux pane sessions while
+    /// control mode is active, without owning the whole manager.
+    sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
     event_queue: SessionEventQueue,
     next_event_consumer_id: AtomicU64,
     shell_environment: Arc<ShellEnvironmentCache>,
@@ -614,6 +621,8 @@ enum ManagedSession {
     Ssh(SshChannelTransport),
     Tcp(Box<TelnetTransport>),
     Serial(SerialTransport),
+    /// Virtual session projecting one tmux pane of a control-mode SSH channel.
+    TmuxPane(TmuxPaneTransport),
 }
 
 pub struct LocalPtyTransport {
@@ -643,10 +652,28 @@ pub struct TelnetTransport {
 
 pub struct SshChannelTransport {
     info: SessionInfo,
+    shell_enabled: bool,
     attempt: connection_attempt::ConnectionAttempt,
     command_tx: ssh_mailbox::Sender,
+    /// Ordered tmux control-channel commands; buffered until the channel
+    /// enters control mode so early UI calls cannot reach the user's shell.
+    tmux_tx: TmuxCommandSender,
+    /// Set only while the worker runs the tmux control session; gates
+    /// `tmux_send_command`/`tmux_detach` so commands cannot be written into
+    /// a plain shell.
+    tmux_active: Arc<AtomicBool>,
     backspace_as_bs: bool,
     worker_thread: Option<JoinHandle<()>>,
+}
+
+/// A tmux pane projected as an independent session. All operations are
+/// forwarded onto the parent SSH channel's ordered tmux command channel.
+pub struct TmuxPaneTransport {
+    close_requested: bool,
+    info: SessionInfo,
+    /// tmux pane id this session projects (e.g. `%12`).
+    pane: String,
+    tmux_tx: TmuxCommandSender,
 }
 
 pub struct SerialTransport {
@@ -938,8 +965,37 @@ enum SshCommand {
         pixel_width: u16,
         pixel_height: u16,
     },
+    /// tmux control-channel command line from the UI (`select-window -t @2`,
+    /// `new-window`, ...). Only meaningful once the channel runs control mode.
+    TmuxCommand {
+        line: String,
+    },
+    /// Leave tmux control mode and return the channel to the shell.
+    TmuxDetach,
+    /// Input bytes for one projected tmux pane (routed via `send-keys`).
+    TmuxPaneInput {
+        pane: String,
+        data: Vec<u8>,
+    },
+    /// Renderer geometry for one projected tmux pane. Cell dimensions only:
+    /// `resize-pane` takes cells and the pixel fields would be dead weight.
+    TmuxPaneResize {
+        pane: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Close one projected tmux pane (`kill-pane`).
+    TmuxPaneClose {
+        pane: String,
+    },
     Close,
 }
+
+/// One channel carrying every tmux control-mode command — UI commands,
+/// detach, and projected-pane input/resize/close — so the FIFO that pairs
+/// `%begin`/`%end` responses stays strictly ordered.
+type TmuxCommandSender = tmux::mailbox::Sender;
+type TmuxCommandReceiver = tmux::mailbox::Receiver;
 
 struct OpenSshShellSession {
     handle: SshShellHandle,
@@ -995,7 +1051,7 @@ fn local_pty_size(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             event_queue: SessionEventQueue::new(),
             next_event_consumer_id: AtomicU64::new(1),
             shell_environment: ShellEnvironmentCache::global(),
@@ -1016,7 +1072,20 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Release local resources on the reaper. Virtual tmux sessions have no
+    /// blocking destructor and never imply a remote kill.
     pub fn close_detached(&self, session_id: &str) -> Result<(), SessionError> {
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| SessionError::LockPoisoned)?;
+            if matches!(sessions.get(session_id), Some(ManagedSession::TmuxPane(_))) {
+                sessions.remove(session_id);
+                self.event_queue.cancel_session(session_id);
+                return Ok(());
+            }
+        }
         self.ensure_reaper()?;
         let mut sessions = self
             .sessions
@@ -1028,6 +1097,10 @@ impl SessionManager {
             .ok_or_else(|| SessionError::Worker(std::io::Error::other("reaper unavailable")))?
             .try_submit_with(|| {
                 let mut session = sessions.remove(session_id)?;
+                if let ManagedSession::Ssh(ssh) = &session {
+                    self.event_queue.cancel_session(session_id);
+                    cancel_tmux_pane_output(&self.event_queue, &sessions, &ssh.tmux_tx);
+                }
                 // Clear pending input before waiting behind other cleanup jobs.
                 // Native cancellation and joins remain on the reaper worker.
                 match &session {
@@ -1035,6 +1108,7 @@ impl SessionManager {
                     ManagedSession::Tcp(tcp) => tcp.writer.command_tx.stop(),
                     ManagedSession::Serial(serial) => serial.writer.command_tx.stop(),
                     ManagedSession::Ssh(ssh) => ssh.command_tx.close(),
+                    ManagedSession::TmuxPane(_) => {}
                 }
                 if let ManagedSession::Local(local) = &mut session {
                     local.cleanup_consumer = self.event_queue.consumer_for(session_id);
@@ -1114,6 +1188,9 @@ impl SessionManager {
         config: LocalSessionConfig,
         shell: local_shell::ResolvedLocalShell,
     ) -> Result<SessionInfo, SessionError> {
+        shell
+            .validate_working_directory(config.working_dir.as_deref())
+            .map_err(|error| SessionError::Spawn(error.into()))?;
         self.ensure_reaper()?;
         let mut sessions = self
             .sessions
@@ -1383,14 +1460,31 @@ impl SessionManager {
         &self,
         config: SshSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
-        self.create_ssh_session_inner(config, None)
+        let multiplex =
+            if config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+                Some(open_ssh_multiplex_handle(config.clone()).map_err(|source| {
+                    SessionError::CreateSsh {
+                        addr: format!("{}:{}", config.host, config.port),
+                        source,
+                    }
+                })?)
+            } else {
+                None
+            };
+        self.create_ssh_session_inner(config, multiplex)
     }
 
     pub fn create_ssh_session_with_multiplex(
         &self,
-        config: SshSessionConfig,
+        mut config: SshSessionConfig,
         multiplex: SshMultiplexHandle,
     ) -> Result<SessionInfo, SessionError> {
+        config
+            .apply_runtime_policy()
+            .map_err(|message| SessionError::CreateSsh {
+                addr: format!("{}:{}", config.host, config.port),
+                source: anyhow::Error::msg(message),
+            })?;
         multiplex
             .ensure_matches_config(&config)
             .map_err(|source| SessionError::CreateSsh {
@@ -1402,9 +1496,15 @@ impl SessionManager {
 
     fn create_ssh_session_inner(
         &self,
-        config: SshSessionConfig,
+        mut config: SshSessionConfig,
         multiplex: Option<SshMultiplexHandle>,
     ) -> Result<SessionInfo, SessionError> {
+        config
+            .apply_runtime_policy()
+            .map_err(|message| SessionError::CreateSsh {
+                addr: format!("{}:{}", config.host, config.port),
+                source: anyhow::Error::msg(message),
+            })?;
         self.ensure_reaper()?;
         let mut sessions = self
             .sessions
@@ -1419,6 +1519,12 @@ impl SessionManager {
             }
         })?;
         let (command_tx, command_rx) = ssh_mailbox::channel();
+        let (tmux_tx, tmux_cmd_rx) = tmux::mailbox::channel();
+        let tmux_active = Arc::new(AtomicBool::new(false));
+        let worker_tmux_active = tmux_active.clone();
+        // The control session builds pane transports sharing this sender so
+        // every command lands on one ordered control channel.
+        let worker_tmux_tx = tmux_tx.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
         let event_queue = self.event_queue.clone();
         let attempt = multiplex
@@ -1428,6 +1534,7 @@ impl SessionManager {
         let worker_config = config.clone();
         let worker_session_id = session_id.clone();
         let shell_environment = self.shell_environment();
+        let worker_sessions = self.sessions.clone();
         let worker_thread =
             nyaterm_core::runtime::worker::spawn(format!("ssh-worker-{session_id}"), move || {
                 run_ssh_worker(
@@ -1438,6 +1545,10 @@ impl SessionManager {
                     event_queue,
                     multiplex,
                     shell_environment,
+                    tmux_cmd_rx,
+                    worker_tmux_tx,
+                    worker_tmux_active,
+                    worker_sessions,
                 );
             })
             .map_err(SessionError::Worker)?;
@@ -1470,8 +1581,12 @@ impl SessionManager {
         };
         let session = SshChannelTransport {
             info: info.clone(),
+            shell_enabled: config.runtime_mode
+                != nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
             attempt,
             command_tx,
+            tmux_tx,
+            tmux_active,
             backspace_as_bs: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
                 &config.backspace_mode,
             )
@@ -1592,8 +1707,15 @@ impl SessionManager {
         self.sessions.lock().is_ok_and(|sessions| {
             // Output already queued by an exited session still needs protocol filtering.
             // Session existence is checked by the eventual writer, not this policy gate.
-            !matches!(sessions.get(session_id), Some(ManagedSession::Serial(serial))
-                if serial.flow_control == nyaterm_core::models::connection::SerialFlowControl::Software)
+            match sessions.get(session_id) {
+                Some(ManagedSession::TmuxPane(_)) => false,
+                Some(ManagedSession::Ssh(ssh)) if ssh.tmux_active.load(Ordering::Acquire) => false,
+                Some(ManagedSession::Serial(serial)) => {
+                    serial.flow_control
+                        != nyaterm_core::models::connection::SerialFlowControl::Software
+                }
+                _ => true,
+            }
         })
     }
 
@@ -1606,6 +1728,7 @@ impl SessionManager {
             Some(ManagedSession::Tcp(s)) => s.writer.command_tx.peak_bytes(),
             Some(ManagedSession::Serial(s)) => s.writer.command_tx.peak_bytes(),
             Some(ManagedSession::Ssh(s)) => s.command_tx.peak_bytes(),
+            Some(ManagedSession::TmuxPane(pane)) => pane.tmux_tx.peak_bytes(),
             None => 0,
         }
     }
@@ -1649,6 +1772,18 @@ impl SessionManager {
                 .lock()
                 .map_err(|_| SessionError::LockPoisoned)?;
             match sessions.get(session_id) {
+                Some(ManagedSession::TmuxPane(_)) => {
+                    return Err(SessionError::Write {
+                        session_id: session_id.into(),
+                        source: tmux_modem_unsupported().into(),
+                    });
+                }
+                Some(ManagedSession::Ssh(ssh)) if ssh.tmux_active.load(Ordering::Acquire) => {
+                    return Err(SessionError::Write {
+                        session_id: session_id.into(),
+                        source: tmux_modem_unsupported().into(),
+                    });
+                }
                 Some(ManagedSession::Tcp(session)) => {
                     telnet_wire_size(data, session.config.raw_tcp)
                 }
@@ -1692,6 +1827,12 @@ impl SessionManager {
                             }
                             Some(ManagedSession::Ssh(s)) => {
                                 WriteCapacity::Ssh(s.command_tx.clone())
+                            }
+                            Some(ManagedSession::TmuxPane(_)) => {
+                                return Err(SessionError::Write {
+                                    session_id: session_id.into(),
+                                    source: tmux_modem_unsupported().into(),
+                                });
                             }
                             None => return Err(SessionError::NotFound(session_id.into())),
                         }
@@ -1756,18 +1897,148 @@ impl SessionManager {
     }
 
     pub fn close(&self, session_id: &str) -> Result<(), SessionError> {
-        let mut session = self
+        let mut sessions = self
             .sessions
             .lock()
-            .map_err(|_| SessionError::LockPoisoned)?
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let mut session = sessions
             .remove(session_id)
             .ok_or_else(|| SessionError::NotFound(session_id.to_string()))?;
+        if let ManagedSession::Ssh(ssh) = &session {
+            self.event_queue.cancel_session(session_id);
+            cancel_tmux_pane_output(&self.event_queue, &sessions, &ssh.tmux_tx);
+        }
+        drop(sessions);
         if let ManagedSession::Local(local) = &mut session {
             local.cleanup_consumer = self.event_queue.consumer_for(session_id);
         }
         self.event_queue.cancel_session(session_id);
         session.close();
         Ok(())
+    }
+
+    /// Explicitly terminate a remote tmux pane. Keep the projection until the
+    /// server confirms its removal, and coalesce repeated close gestures.
+    pub fn tmux_close_pane(&self, session_id: &str) -> Result<(), SessionError> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let Some(ManagedSession::TmuxPane(pane)) = sessions.get_mut(session_id) else {
+            return Err(SessionError::NotFound(session_id.into()));
+        };
+        if !pane.close_requested {
+            pane.tmux_tx
+                .send(SshCommand::TmuxPaneClose {
+                    pane: pane.pane.clone(),
+                })
+                .map_err(|source| SessionError::Write {
+                    session_id: session_id.into(),
+                    source: source.into(),
+                })?;
+            pane.close_requested = true;
+        }
+        Ok(())
+    }
+
+    /// Queue one tmux control-channel command line (`select-window`,
+    /// `new-window`, `kill-pane`, ...). Refuses while the session is a plain
+    /// SSH shell so commands can never be typed into it.
+    pub fn tmux_send_command(&self, session_id: &str, line: &str) -> Result<(), SessionError> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let Some(ManagedSession::Ssh(session)) = sessions.get(session_id) else {
+            return Err(SessionError::Write {
+                session_id: session_id.into(),
+                source: anyhow::anyhow!("session is not an SSH session in tmux control mode"),
+            });
+        };
+        if !session.tmux_active.load(Ordering::Acquire) {
+            return Err(SessionError::Write {
+                session_id: session_id.into(),
+                source: anyhow::anyhow!("session is not in tmux control mode"),
+            });
+        }
+        session
+            .tmux_tx
+            .send(SshCommand::TmuxCommand {
+                line: line.to_string(),
+            })
+            .map_err(|source| SessionError::Write {
+                session_id: session_id.into(),
+                source: source.into(),
+            })
+    }
+
+    /// Leave tmux control mode; the remote tmux session keeps running and the
+    /// channel returns to the interactive shell.
+    pub fn tmux_detach(&self, session_id: &str) -> Result<(), SessionError> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let Some(ManagedSession::Ssh(session)) = sessions.get(session_id) else {
+            return Err(SessionError::Write {
+                session_id: session_id.into(),
+                source: anyhow::anyhow!("session is not an SSH session in tmux control mode"),
+            });
+        };
+        if !session.tmux_active.load(Ordering::Acquire) {
+            return Err(SessionError::Write {
+                session_id: session_id.into(),
+                source: anyhow::anyhow!("session is not in tmux control mode"),
+            });
+        }
+        session
+            .tmux_tx
+            .send(SshCommand::TmuxDetach)
+            .map_err(|source| SessionError::Write {
+                session_id: session_id.into(),
+                source: source.into(),
+            })
+    }
+
+    /// Register a projected tmux pane as a virtual session so `write`,
+    /// `resize` and `close` route through the control channel.
+    pub(crate) fn register_tmux_pane(
+        sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+        event_queue: &SessionEventQueue,
+        host_id: &str,
+        info: SessionInfo,
+        pane: String,
+        tmux_tx: TmuxCommandSender,
+    ) -> Result<(), SessionError> {
+        let mut sessions = sessions.lock().map_err(|_| SessionError::LockPoisoned)?;
+        // Host cancellation, pane registration and reopening its output must
+        // share the registry lock. Otherwise a late layout response could
+        // reopen a cancelled pane queue while close is joining its producer.
+        if event_queue.session_cancelled(host_id) {
+            return Err(SessionError::NotFound(host_id.into()));
+        }
+        event_queue.resume_session(&info.id);
+        sessions.insert(
+            info.id.clone(),
+            ManagedSession::TmuxPane(TmuxPaneTransport {
+                close_requested: false,
+                info,
+                pane,
+                tmux_tx,
+            }),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn remove_tmux_pane(
+        sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+        event_queue: &SessionEventQueue,
+        session_id: &str,
+    ) {
+        if let Ok(mut sessions) = sessions.lock() {
+            sessions.remove(session_id);
+        }
+        event_queue.cancel_session(session_id);
     }
 
     pub fn try_recv_event(&self) -> Result<Option<SessionEvent>, SessionError> {
@@ -1843,6 +2114,7 @@ impl ManagedSession {
             Self::Ssh(session) => session.info.clone(),
             Self::Tcp(session) => session.info.clone(),
             Self::Serial(session) => session.info.clone(),
+            Self::TmuxPane(pane) => pane.info.clone(),
         }
     }
 
@@ -1852,6 +2124,7 @@ impl ManagedSession {
             Self::Tcp(session) => session.write(data),
             Self::Ssh(session) => session.write(data),
             Self::Serial(session) => session.write(data),
+            Self::TmuxPane(pane) => pane.write(data),
         }
     }
 
@@ -1861,6 +2134,7 @@ impl ManagedSession {
             Self::Tcp(session) => session.write_raw(data),
             Self::Ssh(session) => session.write_raw(data),
             Self::Serial(session) => session.write_raw(data),
+            Self::TmuxPane(pane) => pane.write_raw(data),
         }
     }
 
@@ -1876,6 +2150,7 @@ impl ManagedSession {
             Self::Tcp(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Ssh(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Serial(session) => session.resize(cols, rows, pixel_width, pixel_height),
+            Self::TmuxPane(pane) => pane.resize(cols, rows, pixel_width, pixel_height),
         }
     }
 
@@ -1892,6 +2167,9 @@ impl ManagedSession {
             }
             Self::Serial(session) => {
                 let _ = session.close();
+            }
+            Self::TmuxPane(pane) => {
+                let _ = pane.close();
             }
         }
     }
@@ -2031,6 +2309,9 @@ impl TerminalTransport for TelnetTransport {
 
 impl TerminalTransport for SshChannelTransport {
     fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        if !self.shell_enabled {
+            return Err(connection_attempt::ShellUnavailable.into());
+        }
         self.attempt.ensure_shell_available()?;
         let data = if self.backspace_as_bs {
             remap_del_to_bs(data)
@@ -2042,6 +2323,12 @@ impl TerminalTransport for SshChannelTransport {
     }
 
     fn write_raw(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        if self.tmux_active.load(Ordering::Acquire) {
+            return Err(tmux_modem_unsupported().into());
+        }
+        if !self.shell_enabled {
+            return Err(connection_attempt::ShellUnavailable.into());
+        }
         self.attempt.ensure_shell_available()?;
         self.command_tx
             .write(data.to_vec())
@@ -2067,6 +2354,67 @@ impl TerminalTransport for SshChannelTransport {
         if let Some(worker_thread) = self.worker_thread.take() {
             let _ = worker_thread.join();
         }
+        Ok(())
+    }
+}
+
+/// A host worker may be parked publishing a virtual pane's output. Cancel its
+/// projections before joining it; cancelling only the host's queue cannot wake
+/// that producer. Identify ownership by the shared mailbox, not an id prefix.
+fn cancel_tmux_pane_output(
+    queue: &SessionEventQueue,
+    sessions: &HashMap<String, ManagedSession>,
+    sender: &TmuxCommandSender,
+) {
+    for (id, session) in sessions {
+        if let ManagedSession::TmuxPane(pane) = session
+            && pane.tmux_tx.same_channel(sender)
+        {
+            queue.cancel_session(id);
+        }
+    }
+}
+
+fn tmux_modem_unsupported() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "file-transfer protocols are not supported in tmux control mode",
+    )
+}
+
+impl TerminalTransport for TmuxPaneTransport {
+    fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        self.tmux_tx.write(&self.pane, data).map_err(Into::into)
+    }
+
+    fn write_raw(&mut self, _data: &[u8]) -> anyhow::Result<()> {
+        Err(tmux_modem_unsupported().into())
+    }
+
+    fn resize(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        _pixel_width: u16,
+        _pixel_height: u16,
+    ) -> anyhow::Result<()> {
+        self.info.cols = cols;
+        self.info.rows = rows;
+        self.tmux_tx
+            .send(SshCommand::TmuxPaneResize {
+                pane: self.pane.clone(),
+                cols,
+                rows,
+            })
+            .map_err(|_| anyhow::anyhow!("tmux control channel closed for pane {}", self.pane))
+    }
+
+    /// A virtual transport owns only a local projection. Remote deletion must
+    /// go through SessionManager::tmux_close_pane after an explicit user action.
+    fn close(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -2111,10 +2459,16 @@ impl TerminalTransport for SerialTransport {
 impl Drop for SessionManager {
     fn drop(&mut self) {
         self.event_queue.close();
-        let sessions = match self.sessions.get_mut() {
-            Ok(sessions) => std::mem::take(sessions),
-            Err(poisoned) => std::mem::take(poisoned.into_inner()),
+        let sessions = {
+            let mut sessions = match self.sessions.lock() {
+                Ok(sessions) => sessions,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            std::mem::take(&mut *sessions)
         };
+        // SSH teardown removes its projections from this same registry. Never
+        // retain the registry guard while joining a worker. Closing the queue
+        // above first wakes producers blocked on any pane's output budget.
         for (_, mut session) in sessions {
             session.close();
         }
@@ -2464,6 +2818,7 @@ impl TelnetAutoLoginState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
@@ -2472,6 +2827,10 @@ fn run_ssh_worker(
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
     shell_environment: Arc<ShellEnvironmentCache>,
+    tmux_cmd_rx: TmuxCommandReceiver,
+    tmux_tx: TmuxCommandSender,
+    tmux_active: Arc<AtomicBool>,
+    sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
 ) {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2486,6 +2845,32 @@ fn run_ssh_worker(
     };
 
     runtime.block_on(async move {
+        if config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+            let result = async {
+                let handle = multiplex.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("SFTP-only sessions require a shared SSH connection")
+                })?;
+                sftp::probe_sftp_session(&config, handle).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    let _ = ready_tx.send(Ok(()));
+                    run_sftp_only_session(
+                        &session_id,
+                        command_rx,
+                        &event_queue,
+                        multiplex.as_ref(),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error.to_string()));
+                }
+            }
+            return;
+        }
         if config.deferred_pty {
             run_deferred_ssh_worker(
                 session_id,
@@ -2495,6 +2880,10 @@ fn run_ssh_worker(
                 event_queue,
                 multiplex,
                 shell_environment,
+                tmux_cmd_rx,
+                tmux_tx,
+                tmux_active,
+                sessions.clone(),
             )
             .await;
             return;
@@ -2508,13 +2897,32 @@ fn run_ssh_worker(
                     session
                 }
                 Err(_)
-                    if multiplex.as_ref().is_some_and(|handle| {
-                        handle.shell_availability()
-                            == connection_attempt::ShellAvailability::Unavailable
-                    }) =>
+                    if config.runtime_mode
+                        == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
+                        && config.remote_file_browser_enabled()
+                        && multiplex.as_ref().is_some_and(|handle| {
+                            handle.shell_availability()
+                                == connection_attempt::ShellAvailability::Unavailable
+                        }) =>
                 {
+                    if let Err(error) = sftp::probe_sftp_session(
+                        &config,
+                        multiplex.as_ref().expect("fallback has shared connection"),
+                    )
+                    .await
+                    {
+                        let _ = ready_tx.send(Err(error.to_string()));
+                        return;
+                    }
+                    config.attempt.record_shell_reply(false);
                     let _ = ready_tx.send(Ok(()));
-                    run_sftp_only_session(&session_id, command_rx, &event_queue).await;
+                    run_sftp_only_session(
+                        &session_id,
+                        command_rx,
+                        &event_queue,
+                        multiplex.as_ref(),
+                    )
+                    .await;
                     return;
                 }
                 Err(error) => {
@@ -2528,11 +2936,16 @@ fn run_ssh_worker(
             command_rx,
             event_queue,
             VecDeque::new(),
+            tmux_cmd_rx,
+            tmux_tx,
+            tmux_active,
+            sessions,
         )
         .await;
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_deferred_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
@@ -2541,6 +2954,10 @@ async fn run_deferred_ssh_worker(
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
     shell_environment: Arc<ShellEnvironmentCache>,
+    tmux_cmd_rx: TmuxCommandReceiver,
+    tmux_tx: TmuxCommandSender,
+    tmux_active: Arc<AtomicBool>,
+    sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
 ) {
     let pending_session =
         match open_pending_ssh_shell(&config, multiplex.as_ref(), shell_environment).await {
@@ -2574,6 +2991,13 @@ async fn run_deferred_ssh_worker(
                         dimensions = SshPtyDimensions::new(cols, rows, pixel_width, pixel_height);
                         break;
                     }
+                    Some(
+                        SshCommand::TmuxCommand { .. }
+                        | SshCommand::TmuxDetach
+                        | SshCommand::TmuxPaneInput { .. }
+                        | SshCommand::TmuxPaneResize { .. }
+                        | SshCommand::TmuxPaneClose { .. },
+                    ) => {}
                     Some(SshCommand::Close) | None => {
                         if let Some(session) = pending_session.take() {
                             disconnect_pending_ssh_shell(session).await;
@@ -2603,15 +3027,33 @@ async fn run_deferred_ssh_worker(
                 command_rx,
                 event_queue,
                 pending_writes,
+                tmux_cmd_rx,
+                tmux_tx,
+                tmux_active,
+                sessions,
             )
             .await;
         }
         Err(_)
-            if multiplex.as_ref().is_some_and(|handle| {
-                handle.shell_availability() == connection_attempt::ShellAvailability::Unavailable
-            }) =>
+            if config.runtime_mode
+                == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
+                && config.remote_file_browser_enabled()
+                && multiplex.as_ref().is_some_and(|handle| {
+                    handle.shell_availability()
+                        == connection_attempt::ShellAvailability::Unavailable
+                }) =>
         {
-            run_sftp_only_session(&session_id, command_rx, &event_queue).await;
+            if let Err(error) = sftp::probe_sftp_session(
+                &config,
+                multiplex.as_ref().expect("fallback has shared connection"),
+            )
+            .await
+            {
+                send_session_error(&event_queue, &session_id, error);
+                return;
+            }
+            config.attempt.record_shell_reply(false);
+            run_sftp_only_session(&session_id, command_rx, &event_queue, multiplex.as_ref()).await;
         }
         Err(error) => {
             send_session_error(&event_queue, &session_id, error);
@@ -2623,18 +3065,26 @@ async fn run_sftp_only_session(
     session_id: &str,
     mut commands: ssh_mailbox::Receiver,
     events: &SessionEventQueue,
+    multiplex: Option<&SshMultiplexHandle>,
 ) {
     events.push(SessionEvent::Output {
         session_id: session_id.to_owned(),
-        data:
-            b"\r\nThis server does not provide a shell. SFTP file operations remain available.\r\n"
-                .to_vec(),
+        data: b"\r\nSFTP file session ready.\r\n".to_vec(),
     });
     // The caller retains the multiplexed SSH connection. Writes queued before
     // capability detection are discarded, never replayed as shell commands.
-    while let Some(command) = commands.recv().await {
-        if matches!(command, SshCommand::Close) {
-            break;
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                if command.is_none() || matches!(command, Some(SshCommand::Close)) { break; }
+            },
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                if let Some(handle) = multiplex
+                    && (handle.is_closed() || handle.inner.target.lock().await.is_closed()) {
+                    events.push(SessionEvent::Exited { session_id: session_id.to_owned(), reason: "SSH connection closed".into() });
+                    break;
+                }
+            }
         }
     }
 }
@@ -2658,6 +3108,13 @@ fn drain_deferred_ssh_open_commands(
                 *dimensions = SshPtyDimensions::new(cols, rows, pixel_width, pixel_height);
             }
             Ok(SshCommand::Close) => return true,
+            Ok(
+                SshCommand::TmuxCommand { .. }
+                | SshCommand::TmuxDetach
+                | SshCommand::TmuxPaneInput { .. }
+                | SshCommand::TmuxPaneResize { .. }
+                | SshCommand::TmuxPaneClose { .. },
+            ) => {}
             Err(tokio_mpsc::error::TryRecvError::Empty) => return false,
             Err(tokio_mpsc::error::TryRecvError::Disconnected) => return true,
         }
@@ -2682,12 +3139,17 @@ async fn cancel_pending_upload(pending_upload: &mut Option<PendingSshIntegration
     let _ = tokio::time::timeout(Duration::from_secs(1), &mut pending.join).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_open_ssh_shell_session(
     session_id: String,
     open_session: OpenSshShellSession,
     mut command_rx: ssh_mailbox::Receiver,
     event_queue: SessionEventQueue,
     mut pending_writes: VecDeque<ssh_mailbox::PendingWrite>,
+    mut tmux_cmd_rx: TmuxCommandReceiver,
+    tmux_tx: TmuxCommandSender,
+    tmux_active: Arc<AtomicBool>,
+    sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
 ) {
     let OpenSshShellSession {
         attempt,
@@ -2735,6 +3197,10 @@ async fn run_open_ssh_shell_session(
 
     let mut pending_upload: Option<PendingSshIntegrationUpload> = None;
 
+    // Passive tmux control-mode detector: input-side arming happens on
+    // `SshCommand::Write`, output-side startup framing on channel data.
+    let mut tmux_detector = tmux::TmuxControlDetector::new();
+
     post_login = post_login.filter(|command| command.enabled && !command.command.trim().is_empty());
     let post_login_timer = tokio::time::sleep(Duration::ZERO);
     tokio::pin!(post_login_timer);
@@ -2778,6 +3244,9 @@ async fn run_open_ssh_shell_session(
                 if let Some(command) = post_login.take() {
                     let mut text = command.command.replace("\r\n", "\r").replace('\n', "\r");
                     if !text.ends_with('\r') { text.push('\r'); }
+                    // A configured post-login `tmux -CC` arm detection exactly
+                    // like a user-typed command line.
+                    tmux_detector.feed_input(text.as_bytes());
                     let channel = channel.clone();
                     pending_send = Some(Box::pin(async move { channel.data_bytes(text.into_bytes()).await }));
                 }
@@ -2836,9 +3305,53 @@ async fn run_open_ssh_shell_session(
                 let output = shell_integration.force_normal_after_timeout();
                 pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
             }
+            () = async {
+                if let Some(deadline) = tmux_detector.deadline() {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if tmux_detector.deadline().is_some() => {
+                // The candidate line outlived its confirm window without a
+                // decision: release the withheld bytes into the shell stream.
+                let was_armed = tmux_detector.expiry_is_attempt();
+                let bytes = tmux_detector.expire_candidate();
+                if !bytes.is_empty() {
+                    // The candidate expired while a `tmux -CC` submission was
+                    // still armed — control-ish bytes arrived but the handshake
+                    // never confirmed. Old tmux speaks a partial protocol and
+                    // leaves its client owning the tty; say how to get out.
+                    // Replay and hint go out as one write so the hint cannot
+                    // cancel the in-flight replay.
+                    let mut display = bytes;
+                    if was_armed {
+                        if !display.ends_with(b"\n") {
+                            display.extend_from_slice(b"\r\n");
+                        }
+                        display.extend_from_slice(&tmux_unsupported_hint());
+                    }
+                    let output = shell_integration.filter_output(&display);
+                    pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
+                }
+            }
+            () = async {
+                if let Some(deadline) = tmux_detector.silence_deadline() {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if tmux_detector.silence_deadline().is_some() => {
+                // A submitted `tmux -CC` produced no channel output at all —
+                // typically a pre-2.x tmux that cannot speak the protocol.
+                // Advisory only: detection stays armed so a slow attach can
+                // still take over afterwards.
+                if tmux_detector.expire_silence() {
+                    let output = shell_integration.filter_output(&tmux_unsupported_hint());
+                    pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
+                }
+            }
             command = command_rx.recv() => {
                 match command {
                     Some(SshCommand::Write(data)) => {
+                        // Track user-typed lines so a `tmux -CC` command arms
+                        // output-side detection before the write lands.
+                        tmux_detector.feed_input(&data.bytes);
                         pending_writes.push_back(data);
                     }
                     Some(SshCommand::Resize {
@@ -2852,6 +3365,13 @@ async fn run_open_ssh_shell_session(
                             channel.window_change(cols.into(), rows.into(), pixel_width.into(), pixel_height.into()).await
                         }));
                     }
+                    Some(
+                        SshCommand::TmuxCommand { .. }
+                        | SshCommand::TmuxDetach
+                        | SshCommand::TmuxPaneInput { .. }
+                        | SshCommand::TmuxPaneResize { .. }
+                        | SshCommand::TmuxPaneClose { .. },
+                    ) => {}
                     Some(SshCommand::Close) | None => {
                         break;
                     }
@@ -2860,6 +3380,129 @@ async fn run_open_ssh_shell_session(
             message = channel_rx.wait(), if pending_output.is_none() => {
                 match message {
                     Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        let data = match tmux_detector.feed(&data) {
+                            tmux::TmuxFeed::Passthrough(data) => data,
+                            tmux::TmuxFeed::Detected {
+                                passthrough,
+                                startup,
+                                rest,
+                            } => {
+                                // Disable binary transfers before any awaited
+                                // output flush, upload cancellation or input drain.
+                                tmux_active.store(true, Ordering::Release);
+                                // The confirmed startup frame and everything
+                                // after it belong to the control channel, not
+                                // the terminal. Bytes before it (the echoed
+                                // command line) still go through normally.
+                                if !passthrough.is_empty() {
+                                    let output = shell_integration.filter_output(&passthrough);
+                                    ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                }
+                                // An in-flight integration upload would keep
+                                // writing its script into the control stream;
+                                // cancel it before the takeover.
+                                cancel_pending_upload(&mut pending_upload).await;
+                                let settled = tokio::time::timeout(tmux::handshake::CONFIRM_TIMEOUT, async {
+                                    if let Some(send) = pending_send.take() { send.await?; }
+                                    if let Some(resize) = pending_resize.take() { resize.await?; }
+                                    Ok::<(), russh::Error>(())
+                                }).await;
+                                if !matches!(settled, Ok(Ok(()))) {
+                                    event_queue.push_async(SessionEvent::Exited {
+                                        session_id: session_id.clone(),
+                                        reason: "SSH input did not settle before tmux takeover; reconnect to restore the terminal".into(),
+                                    }).await;
+                                    break;
+                                }
+                                match tmux::handshake::verify(&channel, &mut channel_rx, &startup, &rest).await {
+                                    tmux::handshake::Verification::Confirmed(initial) => {
+                                        tracing::info!(
+                                            session_id = %session_id,
+                                            "tmux control mode confirmed; taking over SSH channel"
+                                        );
+                                        tmux_active.store(true, Ordering::Release);
+                                        // Dim banner in the host buffer (the
+                                        // Tauri port's look): after detach the
+                                        // shell screen still shows where the
+                                        // channel went while panes took over.
+                                        let stamp = tmux_local_stamp();
+                                        let banner = format!(
+                                            "\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
+                                        );
+                                        let output = shell_integration.filter_output(banner.as_bytes());
+                                        ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                        let exit = tmux::run_control_session(
+                                            &event_queue,
+                                            &sessions,
+                                            &session_id,
+                                            &channel,
+                                            &mut channel_rx,
+                                            &mut command_rx,
+                                            &mut tmux_cmd_rx,
+                                            tmux_tx.clone(),
+                                            &initial,
+                                        )
+                                        .await;
+                                        tmux_active.store(false, Ordering::Release);
+                                        match exit {
+                                            tmux::ControlExit::ReturnToShell { leftover } => {
+                                                // Shell is back; the exit
+                                                // banner lands before replayed
+                                                // bytes so it reads like a log
+                                                // line ahead of the prompt.
+                                                let stamp = tmux_local_stamp();
+                                                let banner = format!(
+                                                    "\x1b[2m[{stamp}] [nyaterm] tmux detached; back to shell\x1b[0m\r\n"
+                                                );
+                                                let output = shell_integration.filter_output(banner.as_bytes());
+                                                ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                                // Replay the bytes tmux left
+                                                // after %exit and reset
+                                                // detection for a possible
+                                                // next `tmux -CC`.
+                                                if !leftover.is_empty() {
+                                                    let output = shell_integration.filter_output(&leftover);
+                                                    ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                                }
+                                                tmux_detector = tmux::TmuxControlDetector::new();
+                                            }
+                                            tmux::ControlExit::Closed => {
+                                                // The control channel died on
+                                                // its own (idle drop, network
+                                                // loss, server close). Mirror
+                                                // the plain-SSH EOF path so the
+                                                // session renders disconnected
+                                                // instead of swallowing input
+                                                // into a dead channel.
+                                                event_queue.push_async(SessionEvent::Exited {
+                                                    session_id: session_id.clone(),
+                                                    reason: "tmux control channel closed".to_string(),
+                                                }).await;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    tmux::handshake::Verification::Exited(leftover) => {
+                                        tmux_active.store(false, Ordering::Release);
+                                        let output = shell_integration.filter_output(&leftover);
+                                        ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
+                                        tmux_detector = tmux::TmuxControlDetector::new();
+                                    }
+                                    tmux::handshake::Verification::Failed(reason) => {
+                                        // Without nonce confirmation neither shell nor tmux
+                                        // commands are safe. Close only this terminal channel.
+                                        tracing::warn!(session_id = %session_id, ?reason,
+                                            "tmux verification failed; closing terminal channel");
+                                        event_queue.push_async(SessionEvent::Exited {
+                                            session_id: session_id.clone(),
+                                            reason: format!("tmux control-mode verification failed ({reason:?}); reconnect to restore the terminal"),
+                                        }).await;
+                                        break;
+                                    }
+                                }
+                                continue;
+                            }
+                        };
                         let was_waiting_initial = shell_integration.is_waiting_initial();
                         let output = shell_integration.filter_output(&data);
                         pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
@@ -2942,6 +3585,26 @@ async fn run_open_ssh_shell_session(
         x11_multiplex_registration,
     )
     .await;
+}
+
+/// An advisory is not evidence that the remote process accepts control commands.
+/// Never send a speculative detach/interrupt into a potentially ordinary shell.
+fn tmux_unsupported_hint() -> Vec<u8> {
+    let stamp = tmux_local_stamp();
+    format!(
+        "\x1b[2m[{stamp}] [nyaterm] tmux control mode could not be confirmed; no recovery command was sent because the remote protocol is unknown. Reconnect if terminal input is unavailable.\x1b[0m\r\n"
+    )
+    .into_bytes()
+}
+
+/// `[YYYY-MM-DD HH:MM:SS]` in local time for the tmux takeover/detach banners.
+fn tmux_local_stamp() -> String {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ))
+        .unwrap_or_default()
 }
 
 fn ssh_output_future(
@@ -3201,6 +3864,7 @@ async fn open_ssh_shell_from_pending(
     if let Err(error) = shell_reply {
         if matches!(error, russh::Error::RequestDenied) {
             attempt.record_shell_reply(false);
+            config.attempt.record_shell_reply(false);
         }
         if let Some(multiplex) = x11_multiplex_registration.as_ref() {
             multiplex.unregister_x11_sender(session_id).await;
@@ -3209,6 +3873,7 @@ async fn open_ssh_shell_from_pending(
         return Err(error.into());
     }
     attempt.record_shell_reply(true);
+    config.attempt.record_shell_reply(true);
     if !early_output.is_empty() {
         local_notice
             .get_or_insert_with(Vec::new)
@@ -4021,6 +4686,9 @@ impl client::Handler for SshClientHandler {
 fn effective_agent_forwarding_config(
     config: &SshSessionConfig,
 ) -> Option<SshAgentForwardingConfig> {
+    if config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+        return None;
+    }
     config.agent_forwarding_config.clone().or_else(|| {
         config.agent_forwarding.then(|| SshAgentForwardingConfig {
             enabled: true,

@@ -29,7 +29,7 @@ def staged_package(target: str):
         binary.parent.mkdir()
         binary.write_bytes(b"application")
         suffix = ".exe" if "windows" in target else ""
-        helpers = [binary.parent / f"{name}{suffix}" for name in package_native.HELPER_BINS]
+        helpers = [binary.parent / f"{name}{suffix}" for name in package_native.helper_bins(target)]
         for helper in helpers:
             helper.write_bytes(b"helper")
         if "windows" in target:
@@ -61,6 +61,16 @@ def staged_package(target: str):
 
 
 class PackageNativeTests(unittest.TestCase):
+    def test_portable_packages_match_shared_contract_for_both_architectures(self) -> None:
+        for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+            with self.subTest(target=target), staged_package(target) as (root, binary, info):
+                package_native.create_windows_packages(binary, info, "2.0.1", "2.0.1")
+                path = root / f"dist/NyaTerm_2.0.1_{info.label}_portable.zip"
+                with zipfile.ZipFile(path) as archive:
+                    actual = {entry.filename for entry in archive.infolist()
+                              if not entry.is_dir()}
+                self.assertEqual(actual, package_native.windows_portable.archive_files(target))
+
     @unittest.skipUnless(shutil.which("makensis"), "NSIS is not installed")
     def test_windows_installer_with_conpty_compiles_with_nsis(self) -> None:
         with staged_package("x86_64-pc-windows-msvc") as (root, binary, info):
@@ -128,7 +138,7 @@ class PackageNativeTests(unittest.TestCase):
                 self.assertEqual(plist["CFBundleDisplayName"], identity.display_name)
                 self.assertEqual(plist["CFBundleName"], identity.display_name)
                 self.assertEqual(plist["CFBundleIdentifier"], identity.macos_identifier)
-                self.assertEqual(plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"], [identity.desktop_id])
+                self.assertEqual(plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"], list(identity.url_schemes))
                 self.assertTrue((root / "work" / "dmg" / identity.macos_bundle_name).is_dir())
                 self.assertEqual((root / "work" / "dmg" / "Applications").readlink().as_posix(), "/Applications")
                 archive = next((root / "dist").glob("*.tar.gz"))
@@ -163,7 +173,7 @@ class PackageNativeTests(unittest.TestCase):
                     verify_native_package.verify_linux_desktop(desktop.read_text(), executable, str(desktop), identity)
                     self.assertTrue((payload / "usr" / "share" / "icons" / "hicolor" / "128x128" / "apps" / f"{identity.desktop_id}.png").is_file())
                     app_root = payload / "usr" / "bin" if payload.name == "NyaTerm.AppDir" else payload / "opt" / identity.desktop_id
-                    for name in ("nyaterm", *package_native.HELPER_BINS):
+                    for name in ("nyaterm", *package_native.helper_bins("x86_64-unknown-linux-gnu")):
                         self.assertTrue((app_root / name).is_file())
 
     def test_release_tag_is_normalized(self) -> None:
@@ -253,11 +263,11 @@ class PackageNativeTests(unittest.TestCase):
             linux = package_native.helper_binary_paths("x86_64-unknown-linux-gnu")
             windows = package_native.helper_binary_paths("aarch64-pc-windows-msvc")
         self.assertEqual(
-            [path.name for path in linux], list(package_native.HELPER_BINS)
+            [path.name for path in linux], list(package_native.helper_bins("x86_64-unknown-linux-gnu"))
         )
         self.assertEqual(
             [path.name for path in windows],
-            [f"{name}.exe" for name in package_native.HELPER_BINS],
+            [f"{name}.exe" for name in package_native.helper_bins("aarch64-pc-windows-msvc")],
         )
         application = package_native.release_binary_path("x86_64-unknown-linux-gnu")
         for path in linux:
@@ -282,7 +292,7 @@ class PackageNativeTests(unittest.TestCase):
                 copied = package_native.copy_helpers(destination, target)
             self.assertEqual(
                 sorted(path.name for path in copied),
-                sorted(package_native.HELPER_BINS),
+                sorted(package_native.helper_bins(target)),
             )
             for path in copied:
                 self.assertTrue(path.is_file())
@@ -298,7 +308,7 @@ class PackageNativeTests(unittest.TestCase):
                 mock.patch.object(package_native, "DIST_DIR", root / "dist"),
                 mock.patch.object(package_native.prepare_conpty, "STAGING", root / "staging"),
                 mock.patch.object(package_native, "run"),
-                mock.patch.object(package_native, "helper_binary_paths", return_value=[root / "build" / f"{name}.exe" for name in package_native.HELPER_BINS]),
+                mock.patch.object(package_native, "helper_binary_paths", return_value=[root / "build" / f"{name}.exe" for name in package_native.helper_bins(target)]),
                 mock.patch.object(
                     package_native, "find_makensis", return_value="makensis"
                 ),
@@ -353,18 +363,18 @@ class PackageNativeTests(unittest.TestCase):
             r'DeleteRegKey HKCU "Software\Classes\nyaterm"',
             script,
         )
-        self.assertNotIn(r"Software\Classes\ssh", script)
-        self.assertNotIn(r"Software\Classes\telnet", script)
+        for scheme in ("nyaterm", "ssh", "telnet"):
+            self.assertIn(f'ReadRegStr $0 HKCU "Software\\Classes\\{scheme}\\shell\\open\\command" ""', script)
+            self.assertIn(f'DeleteRegKey HKCU "Software\\Classes\\{scheme}"', script)
+        self.assertIn('StrCmp $0', script)
 
-    def test_linux_desktop_registers_only_nyaterm_url_scheme(self) -> None:
+    def test_linux_desktop_registers_stable_protocols(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nyaterm.desktop"
             package_native.write_desktop_file(path, "/opt/nyaterm/nyaterm")
             desktop = path.read_text(encoding="utf-8")
         self.assertIn("Exec=/opt/nyaterm/nyaterm %U\n", desktop)
-        self.assertIn("MimeType=x-scheme-handler/nyaterm;\n", desktop)
-        self.assertNotIn("x-scheme-handler/ssh", desktop)
-        self.assertNotIn("x-scheme-handler/telnet", desktop)
+        self.assertIn("MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;\n", desktop)
 
     def test_deb_dependencies_cover_helper_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

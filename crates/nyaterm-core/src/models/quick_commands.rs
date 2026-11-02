@@ -29,6 +29,9 @@ pub struct QuickCommand {
     pub pinned: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_mode: Option<String>,
+    /// Missing, null and false retain the legacy script interpretation.
+    #[serde(default, skip_serializing_if = "raw_send_disabled")]
+    pub raw_send: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,6 +52,10 @@ pub struct QuickCommandsConfig {
     pub commands: Vec<QuickCommand>,
     #[serde(default)]
     pub categories: Vec<QuickCommandCategory>,
+}
+
+fn raw_send_disabled(value: &Option<bool>) -> bool {
+    !value.unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,6 +416,8 @@ pub struct QuickCommandExport {
     pub icon_tag: Option<String>,
     pub pinned: bool,
     pub execution_mode: String,
+    #[serde(skip_serializing_if = "raw_send_disabled")]
+    pub raw_send: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,6 +454,7 @@ impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
                     execution_mode: command
                         .execution_mode
                         .unwrap_or_else(|| "execute".to_string()),
+                    raw_send: command.raw_send,
                     source: command.source,
                     risk_level: command
                         .risk_level
@@ -484,4 +494,61 @@ pub struct FuzzyResult {
     pub indices: Vec<u32>,
     pub source: String,
     pub display: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::models::quick_commands::{
+        QuickCommand, QuickCommandsConfig, export_quick_commands_json,
+    };
+
+    #[test]
+    fn legacy_null_and_disabled_literal_modes_keep_the_old_serialized_shape() {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"raw_send": null}),
+            serde_json::json!({"raw_send": false}),
+        ] {
+            let mut value = serde_json::json!({"id": "old", "label": "Legacy", "command": "pwd"});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let command: QuickCommand = serde_json::from_value(value).unwrap();
+            assert!(!command.raw_send.unwrap_or_default());
+            assert!(
+                serde_json::to_value(&command)
+                    .unwrap()
+                    .get("raw_send")
+                    .is_none()
+            );
+            let exported = export_quick_commands_json(QuickCommandsConfig {
+                commands: vec![command],
+                categories: Vec::new(),
+            })
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+            assert!(value["commands"][0].get("raw_send").is_none());
+        }
+    }
+
+    #[test]
+    fn literal_mode_survives_serialization_and_export_without_changing_text() {
+        let command: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "literal", "label": "Literal", "command": "  {{变量}} C:\\temp\\p\n下一行  ", "raw_send": true,
+        })).unwrap();
+        let serialized = serde_json::to_string(&command).unwrap();
+        assert_eq!(
+            serde_json::from_str::<QuickCommand>(&serialized).unwrap(),
+            command
+        );
+        let exported = export_quick_commands_json(QuickCommandsConfig {
+            commands: vec![command.clone()],
+            categories: Vec::new(),
+        })
+        .unwrap();
+        let loaded: QuickCommandsConfig = serde_json::from_str(&exported).unwrap();
+        assert_eq!(loaded.commands[0].raw_send, Some(true));
+        assert_eq!(loaded.commands[0].command, command.command);
+    }
 }

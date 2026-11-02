@@ -391,6 +391,7 @@ impl NativeGoogleDriveRemote {
             google_drive_query_literal(parent_id)
         );
         let mut page_token: Option<String> = None;
+        let mut progress = super::listing::ListingProgress::default();
         let mut names = Vec::new();
         loop {
             let response = self.send_authorized(|client, token| {
@@ -400,7 +401,10 @@ impl NativeGoogleDriveRemote {
                     .query(&[
                         ("q", query.as_str()),
                         ("pageSize", "1000"),
-                        ("fields", "nextPageToken,files(id,name,mimeType)"),
+                        (
+                            "fields",
+                            "nextPageToken,incompleteSearch,files(id,name,mimeType)",
+                        ),
                     ]);
                 if let Some(token) = page_token.as_deref() {
                     request = request.query(&[("pageToken", token)]);
@@ -419,6 +423,7 @@ impl NativeGoogleDriveRemote {
                 ));
             }
             let page = parse_google_drive_list_page(&body)?;
+            progress.observe(&page.names, page.next_page_token.as_deref())?;
             names.extend(page.names);
             page_token = page.next_page_token;
             if page_token.is_none() {
@@ -474,22 +479,29 @@ pub(super) fn parse_google_drive_list_page(
     body: &str,
 ) -> Result<GoogleDriveListPage, CloudSyncError> {
     let value: serde_json::Value = super::helpers::safe_json(body, "Google Drive")?;
-    let names = value
+    if value
+        .get("incompleteSearch")
+        .is_some_and(|value| value != &serde_json::Value::Bool(false))
+    {
+        return Err(super::listing::invalid());
+    }
+    let entries = value
         .get("files")
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|file| {
-            file.get("mimeType").and_then(serde_json::Value::as_str)
-                != Some(GOOGLE_DRIVE_FOLDER_MIME)
-        })
-        .filter_map(|file| file.get("name").and_then(serde_json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect();
-    let next_page_token = value
-        .get("nextPageToken")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned);
+        .ok_or_else(super::listing::invalid)?;
+    let mut names = Vec::new();
+    for file in entries {
+        let name = super::listing::name(file)?;
+        let mime = file
+            .get("mimeType")
+            .and_then(serde_json::Value::as_str)
+            .filter(|mime| !mime.is_empty())
+            .ok_or_else(super::listing::invalid)?;
+        if mime != GOOGLE_DRIVE_FOLDER_MIME {
+            names.push(name);
+        }
+    }
+    let next_page_token = super::listing::next(&value, "nextPageToken")?;
     Ok(GoogleDriveListPage {
         names,
         next_page_token,

@@ -105,6 +105,8 @@ fn closed_port() -> u16 {
 fn test_config() -> RdpSessionConfig {
     RdpSessionConfig {
         relay: None,
+        backend: Default::default(),
+        windows_authentication: None,
         name: "test".to_string(),
         host: "127.0.0.1".to_string(),
         port: closed_port(),
@@ -421,7 +423,7 @@ fn heartbeat_responds_on_a_static_session_and_preserves_sequence() {
 
 #[test]
 fn older_and_newer_helpers_are_explicitly_incompatible_with_version_eleven() {
-    assert_eq!(PROTOCOL_VERSION, 11);
+    assert_eq!(PROTOCOL_VERSION, 12);
     for version in [9, 10, PROTOCOL_VERSION + 1] {
         assert_helper_rejects(vec![RdpControlMessage::ClientHello { version }]);
     }

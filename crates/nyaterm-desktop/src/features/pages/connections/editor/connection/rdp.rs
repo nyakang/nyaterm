@@ -206,7 +206,11 @@ fn rdp_security(
                 cx,
             },
             "connection-editor-rdp-certificate-policy",
-            t!("dialog.rdpCertificatePolicy"),
+            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+                t!("dialog.rdpWindowsAuthentication")
+            } else {
+                t!("dialog.rdpCertificatePolicy")
+            },
             ConnectionEditorSelect::RdpCertificatePolicy,
         ))
 }
@@ -400,6 +404,22 @@ fn rdp_session(
         .flex()
         .flex_col()
         .gap_3()
+        .child(connection_editor_select(
+            ConnectionEditorRenderContext {
+                palette,
+                fields,
+                cx,
+            },
+            "connection-editor-rdp-backend",
+            t!("dialog.rdpBackend"),
+            ConnectionEditorSelect::RdpBackend,
+        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("dialog.rdpBackendDesc")),
+        )
         .child(connection_editor_select(
             ConnectionEditorRenderContext {
                 palette,

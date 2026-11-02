@@ -105,6 +105,10 @@ impl ThemeDesignerState {
     }
     fn recompute(&mut self) {
         let Some(theme) = self.draft.as_ref() else {
+            self.preview = None;
+            self.ui_contrast = None;
+            self.terminal_contrast = None;
+            self.errors.clear();
             return;
         };
         self.errors = theme.validate();
@@ -124,6 +128,15 @@ impl ThemeDesignerState {
 }
 
 impl NyaTermApp {
+    /// Whether quitting would silently drop a theme draft in this window.
+    ///
+    /// Settings is a per-window tab now, so more than one workspace can hold a
+    /// theme draft; the process quit gate must visit each of them.
+    pub(crate) fn has_unconfirmed_theme_changes(&self) -> bool {
+        let state = self.settings.theme_designer();
+        state.dirty() || state.submitting
+    }
+
     pub(in crate::features) fn theme_designer_action(
         &mut self,
         intent: ThemeIntent,
@@ -219,10 +232,12 @@ impl NyaTermApp {
                 }
             }
             ThemeIntent::Quit(count) => {
-                if let Some(handle) = self.shell.settings_window().or(self.shell.main_window()) {
+                if let Some(handle) = self.shell.main_window() {
                     let app = cx.entity();
                     cx.defer(move |cx| {
-                        let _ = handle.update(cx, |_, window, cx| {
+                        // The next gate may open an ordinary-settings dialog,
+                        // which updates NyaRoot itself. Do not lease the root.
+                        let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
                             app.update(cx, |app, cx| {
                                 app.handle_window_close_request_with_count(count, window, cx)
                             });

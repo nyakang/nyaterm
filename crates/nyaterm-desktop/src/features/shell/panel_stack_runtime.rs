@@ -13,8 +13,8 @@ use nyaterm_core::{AgentCommandExecutionMode, truncate_preview};
 
 use crate::features::{NyaTermApp, view_widgets::panel_header_with_actions};
 use crate::models::{
-    ActivityBarZone, MainMode, NavItem, NetworkTab, PanelOpenMode, PanelSide, RightFocus,
-    SecurityAuthTab, SettingsTab,
+    ActivityBarZone, NavItem, NetworkTab, PanelOpenMode, PanelSide, RightFocus, SecurityAuthTab,
+    SettingsTab,
 };
 use crate::theme::ThemePalette;
 use nyaterm_ui::NyaTooltip;
@@ -36,9 +36,6 @@ fn side_panel_stack_render_mode(overlay: Option<NavItem>) -> SidePanelStackRende
 
 impl NyaTermApp {
     pub(in crate::features) fn transfer_browser_is_visible(&self) -> bool {
-        if self.shell.main_mode() != MainMode::Workspace {
-            return false;
-        }
         [PanelSide::Left, PanelSide::Right].into_iter().any(|side| {
             if self.shell.panel_is_floating() {
                 return self.shell.panels.floating_panel(side) == Some(NavItem::Transfers);
@@ -253,11 +250,6 @@ impl NyaTermApp {
     /// multi-open stack shows all of them.
     ///
     pub(in crate::features) fn panel_is_rendered(&self, item: NavItem) -> bool {
-        if self.shell.main_mode() == MainMode::Page
-            && self.shell.selected_nav() == NavItem::Settings
-        {
-            return false;
-        }
         let Some(side) = self.panel_side_for_item(item) else {
             return false;
         };
@@ -365,7 +357,6 @@ impl NyaTermApp {
             return;
         };
 
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.navigation.selected_nav = item;
         if item == NavItem::Recording {
             self.shell.panels.right_focus = RightFocus::Recording;
@@ -501,7 +492,6 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let browser_was_visible = self.transfer_browser_is_visible();
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.navigation.selected_nav = item;
         if !self.shell.panels.multi_open {
             self.ensure_panel_open(item, cx);
@@ -868,6 +858,27 @@ impl NyaTermApp {
             );
         }
         match panel {
+            NavItem::Transfers => {
+                let can_browse = self.session.active_id().is_some_and(|session_id| {
+                    self.session
+                        .file_browser_backend_support_for_session(session_id)
+                        .is_some()
+                        && !self.session.is_disconnected(session_id)
+                });
+                can_browse.then(|| {
+                    header_svg_icon_button(
+                        self.theme_palette(),
+                        "transfer-browser-open-file-manager",
+                        "icons/file-manager.svg",
+                        t!("fileManager.openWorkspace"),
+                        true,
+                        cx.listener(|this, _, _, cx| {
+                            this.open_file_manager_tab(None, cx);
+                        }),
+                    )
+                    .into_any_element()
+                })
+            }
             NavItem::AiAssistant => {
                 let palette = self.theme_palette();
                 let ai_running = self.ai.chat_or_agent_is_running();

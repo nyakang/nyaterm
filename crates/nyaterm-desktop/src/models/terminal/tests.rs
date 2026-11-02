@@ -342,6 +342,7 @@ fn apply_output_frame_to_view(view: &mut TerminalViewState, frame: TerminalFrame
     } = frame;
     let Some(snapshot) = snapshot else {
         view.apply_terminal_background_frame_parts(
+            &visible_text,
             None,
             None,
             protocol_state,
@@ -996,12 +997,23 @@ fn terminal_frame_large_accepted_output_does_not_show_protection_overlay() {
 }
 
 #[test]
-fn terminal_background_frame_apply_skips_render_work() {
+fn terminal_degraded_frame_apply_keeps_output_tail() {
+    let mut view = TerminalViewState::new();
+    view.render_degraded = true;
+
+    apply_output_frame_to_view(&mut view, output_frame_with_sizes(1, 0));
+
+    assert_eq!(view.output, "x");
+}
+
+#[test]
+fn terminal_background_frame_apply_skips_render_work_but_keeps_output_tail() {
     let mut view = TerminalViewState::new();
     view.render_degraded = false;
     let frame = output_frame_with_sizes((32 * 1024) + 1, 0);
 
     view.apply_terminal_background_frame_parts(
+        &frame.visible_text,
         frame.snapshot.clone(),
         frame.action_links.clone(),
         frame.protocol_state,
@@ -1009,7 +1021,8 @@ fn terminal_background_frame_apply_skips_render_work() {
         frame.revision,
     );
 
-    assert_eq!(view.output, "");
+    // AI context and MCP read this tail for sessions that are not on screen.
+    assert_eq!(view.output, "x");
     assert_eq!(view.screen_revision, frame.revision);
     assert!(view.frame_snapshot.is_some());
     assert_eq!(view.output_burst_bytes, 0);
@@ -2323,6 +2336,33 @@ fn terminal_frame_action_links_align_with_snapshot_lines() {
     assert!(disabled.matches_by_line.iter().all(Vec::is_empty));
     assert!(disabled.cell_ranges_by_line.iter().all(Vec::is_empty));
     assert_ne!(links.matcher_key, disabled.matcher_key);
+}
+
+#[test]
+fn mac_ranges_map_wide_text_and_invalidate_only_when_the_matcher_changes() {
+    let mut screen = TerminalScreen::new(80, 3);
+    screen.advance_decoded_text("设备 [905d.7c16.b6d9]");
+    let snapshot = screen.viewport_snapshot(0);
+    let mut matchers = ActionLinksMatcherSettings::default();
+    let links = prepare_terminal_frame_action_links(&snapshot, true, &matchers).unwrap();
+    assert_eq!(
+        links.matches_by_line[0][0].kind,
+        crate::action_links::ActionLinkKind::Mac
+    );
+    assert_eq!(links.cell_ranges_by_line[0], [(6, 20)]);
+    let (_, stats) =
+        prepare_terminal_frame_action_links_reusing(&snapshot, true, &matchers, Some(&links));
+    assert_eq!(stats.reused_rows, snapshot.row_count());
+    assert_eq!(stats.rebuilt_rows, 0);
+    matchers.mac = false;
+    let (disabled, stats) =
+        prepare_terminal_frame_action_links_reusing(&snapshot, true, &matchers, Some(&links));
+    let disabled = disabled.unwrap();
+    assert_ne!(links.matcher_key, disabled.matcher_key);
+    assert_eq!(stats.reused_rows, 0);
+    assert_eq!(stats.rebuilt_rows, snapshot.row_count());
+    assert!(disabled.matches_by_line.iter().all(Vec::is_empty));
+    assert!(disabled.cell_ranges_by_line.iter().all(Vec::is_empty));
 }
 
 #[test]
@@ -3992,7 +4032,14 @@ fn hidden_session_keeps_history_anchor_when_releasing_its_snapshot() {
     view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, 1);
     view.scroll_offset = 3;
     let baseline = view.history_state();
-    view.apply_terminal_background_frame_parts(None, None, TerminalProtocolState::default(), 0, 2);
+    view.apply_terminal_background_frame_parts(
+        "",
+        None,
+        None,
+        TerminalProtocolState::default(),
+        0,
+        2,
+    );
     assert!(view.frame_snapshot.is_none());
     assert_eq!(view.history_state(), baseline);
     worker.advance(b"12\r\n13\r\n");

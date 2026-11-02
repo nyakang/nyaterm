@@ -8,21 +8,28 @@ use gpui::{
     Bounds, Context, FontWeight, IntoElement, KeyDownEvent, Pixels, SharedString, div, prelude::*,
     px, rgb, rgba, svg,
 };
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
 use nyaterm_core::{
-    CommandHistoryEntry, QuickCommand, TerminalInputState, apply_terminal_input_data,
-    can_suggest_from_tracked_command, get_tracked_command, manual_empty_command_suggestions,
-    search_command_sources, terminal_input_tracker_below_min_chars,
+    CommandHistoryEntry, QuickCommand, TerminalInputState, can_suggest_from_tracked_command,
+    get_tracked_command, manual_empty_command_suggestions, search_command_sources,
+    terminal_input_tracker_below_min_chars,
 };
 use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_terminal::editing::resolve_input;
 
 use crate::features::NyaTermApp;
+use crate::features::terminal::editing_state::SuggestionFillRequest;
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 use crate::models::{CommandSuggestionItem, CommandSuggestionState};
 use crate::terminal::terminal_byte_index_for_cell_col;
 
+mod fill;
+#[cfg(test)]
+mod fill_tests;
 mod helpers;
 
+use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
 use self::helpers::command_suggestion_highlight_parts;
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
@@ -83,6 +90,8 @@ struct CommandSuggestionRefreshTiming {
 struct CommandSuggestionSearchRequest {
     request_id: u64,
     session_id: String,
+    input_version: u64,
+    sync_revision: u64,
     pattern: String,
     pattern_chars: usize,
     min_chars: usize,
@@ -143,14 +152,6 @@ fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> O
     };
     nyaterm_core::terminal::input_tracker::apply_terminal_input_data_in_place(state, text);
     submitted
-}
-
-fn command_suggestion_input(command: &str, execute: bool) -> (Vec<u8>, Option<String>) {
-    let mut payload = format!("\u{05}\u{15}{command}");
-    if execute {
-        payload.push('\r');
-    }
-    (payload.into_bytes(), execute.then(|| command.to_string()))
 }
 
 impl NyaTermApp {
@@ -510,6 +511,12 @@ impl NyaTermApp {
         let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
         self.terminal.assist.command_suggestions = Some(CommandSuggestionState {
             session_id,
+            input_version: self
+                .terminal
+                .editing
+                .state()
+                .map_or(0, |state| state.model.version),
+            sync_revision: self.sync_input.revision(),
             draft: pattern,
             items: results
                 .into_iter()
@@ -626,6 +633,8 @@ impl NyaTermApp {
         Some(CommandSuggestionSearchRequest {
             request_id,
             session_id,
+            input_version: self.terminal.editing.state()?.model.version,
+            sync_revision: self.sync_input.revision(),
             pattern,
             pattern_chars,
             min_chars,
@@ -647,6 +656,13 @@ impl NyaTermApp {
     ) {
         if self.terminal.assist.command_suggestion_search_gen != request.request_id
             || self.session.active_id() != Some(request.session_id.as_str())
+            || self
+                .terminal
+                .editing
+                .state()
+                .map(|state| state.model.version)
+                != Some(request.input_version)
+            || self.sync_input.revision() != request.sync_revision
             || self.terminal.assist.credential_suggestions.is_some()
             || self.is_credential_prompt_input_mode()
             || self.terminal.assist.command_suggestions_suppressed
@@ -666,6 +682,8 @@ impl NyaTermApp {
         }
         let CommandSuggestionSearchRequest {
             session_id,
+            input_version,
+            sync_revision,
             pattern,
             pattern_chars,
             started_at,
@@ -695,6 +713,8 @@ impl NyaTermApp {
         let update_started_at = Instant::now();
         let next_state = CommandSuggestionState {
             session_id,
+            input_version,
+            sync_revision,
             draft: pattern,
             items: results
                 .into_iter()
@@ -871,18 +891,38 @@ impl NyaTermApp {
             return false;
         }
         let session_id = state.session_id.clone();
+        let accepting = command_suggestion_item_for_selection(&state.items, state.selected_index)
+            .is_some()
+            && matches!(event.keystroke.key.as_str(), "tab" | "enter")
+            && !event.keystroke.modifiers.modified();
         if self.session.active_id() != Some(session_id.as_str())
             || self
                 .terminal_surface_bounds_for_session(Some(&session_id))
                 .is_none()
         {
+            if accepting {
+                return self
+                    .reject_command_suggestion(
+                        "Suggestion session or terminal surface changed; select it again",
+                        cx,
+                    )
+                    .handled();
+            }
             self.terminal.assist.command_suggestions = None;
             cx.notify();
             return false;
         }
         if self.active_terminal_uses_alternate_screen() {
-            // The popup describes the shell line a full-screen program replaced.
-            // Drop it and let the program own every keystroke, including Escape.
+            // A stale shell suggestion must not submit to the TUI. Other keys,
+            // including Escape, still belong to the foreground program.
+            if accepting {
+                return self
+                    .reject_command_suggestion(
+                        "Cannot fill a shell suggestion in the alternate screen",
+                        cx,
+                    )
+                    .handled();
+            }
             self.terminal.assist.command_suggestions = None;
             cx.notify();
             return false;
@@ -890,6 +930,16 @@ impl NyaTermApp {
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
             return false;
+        }
+        if accepting {
+            // A consumed suggestion key has no remote press owner. Its repeats
+            // and Kitty release must not turn into a later command submission.
+            if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
+                view.pressed_keys.remove(&keystroke.key);
+            }
+            if event.is_held {
+                return true;
+            }
         }
         match keystroke.key.as_str() {
             "escape" => {
@@ -929,49 +979,123 @@ impl NyaTermApp {
         execute: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.terminal.editing.assist_input().desynced {
-            self.hide_command_suggestions_if_present(cx);
-            return false;
-        }
-        let Some(state) = self.terminal.assist.command_suggestions.clone() else {
-            return false;
+        self.submit_selected_command_suggestion(execute, cx)
+            .handled()
+    }
+
+    fn reject_command_suggestion(
+        &mut self,
+        message: &'static str,
+        cx: &mut Context<Self>,
+    ) -> SuggestionSubmitResult {
+        self.dismiss_command_suggestions(cx);
+        self.shell.set_status(message);
+        cx.notify();
+        SuggestionSubmitResult::Rejected
+    }
+
+    fn submit_selected_command_suggestion(
+        &mut self,
+        execute_requested: bool,
+        cx: &mut Context<Self>,
+    ) -> SuggestionSubmitResult {
+        let Some(popup) = self.terminal.assist.command_suggestions.clone() else {
+            return SuggestionSubmitResult::NotHandled;
         };
-        let Some(item) =
-            command_suggestion_item_for_selection(&state.items, state.selected_index).cloned()
+        let Some(item) = command_suggestion_item_for_selection(&popup.items, popup.selected_index)
         else {
-            return false;
+            return SuggestionSubmitResult::NotHandled;
         };
-        let source = item.source.clone();
-        let command = item.command;
-        let (payload, submission) = command_suggestion_input(&command, execute);
-        self.terminal.assist.command_suggestions = None;
-        self.terminal.assist.pending_command_history_entry = submission;
-        let sent = self.send_terminal_input_without_suggestion_track(payload, cx);
-        // A successful write consumes this in record_command_history_for_sessions.
-        // A failed primary write must not attach it to the next Enter.
-        self.terminal.assist.pending_command_history_entry = None;
-        if !sent {
-            return true;
+        if self.session.active_id() != Some(popup.session_id.as_str())
+            || self.session.is_disconnected(&popup.session_id)
+            || self.active_terminal_input_blocked()
+            || self.security.screen_locked()
+            || self.active_terminal_uses_alternate_screen()
+            || self.is_credential_prompt_input_mode()
+            || self.terminal.assist.credential_suggestions.is_some()
+            || self.terminal.assist.command_suggestions_suppressed
+            || self
+                .terminal_protocol_state_for_session(&popup.session_id)
+                .mouse_reporting
+            || self.active_terminal_display_offset() != 0
+            || !self
+                .settings
+                .summary()
+                .interaction_command_suggestions_enabled
+            || self.sync_input.may_fan_out_from(&popup.session_id)
+            || self.sync_input.revision() != popup.sync_revision
+        {
+            return self.reject_command_suggestion(
+                "Cannot safely fill this suggestion in the current terminal state",
+                cx,
+            );
         }
-        if !execute {
-            // After fill, tracker becomes the filled command for continued typing.
-            let evidence = self.terminal.editing.state_mut().pending_evidence.take();
-            *self.terminal.editing.input_mut() =
-                apply_terminal_input_data(&TerminalInputState::new(), &command);
-            self.terminal.editing.state_mut().pending_evidence = evidence;
-            self.terminal.editing.state_mut().model.phase =
-                nyaterm_core::terminal::editing::EditPhase::Pending;
-            self.terminal.editing.state_mut().model.last_input_at = Some(Instant::now());
-            self.schedule_shell_edit_confirmation_timeout(cx);
-            self.refresh_command_suggestions(cx);
+        // Reconcile against the latest live frame; a typing prediction or an old
+        // matching search pattern is never sufficient evidence for a write.
+        self.reconcile_shell_editing(&popup.session_id, cx);
+        let snapshot = self.terminal_snapshot_for_session(Some(&popup.session_id), 0);
+        let Some(state) = self.terminal.editing.state() else {
+            return self
+                .reject_command_suggestion("Wait for the terminal to confirm the input", cx);
+        };
+        if state.awaiting_snapshot
+            || state.model.phase != EditPhase::Ready
+            || state.model.version != popup.input_version
+            || state.mapping.is_none()
+            || resolve_input(
+                &snapshot,
+                &state.model.input.value,
+                state.model.input.cursor,
+            )
+            .as_ref()
+                != state.mapping.as_ref()
+        {
+            return self.reject_command_suggestion(
+                "Input changed or is not confirmed; select the suggestion again",
+                cx,
+            );
         }
-        self.shell.set_status(if execute {
-            format!("executed suggestion from {source}")
+        let suffix = match plan_suggestion_fill(&state.model.input, &item.command) {
+            SuggestionFill::Rejected(message) => {
+                return self.reject_command_suggestion(message, cx);
+            }
+            SuggestionFill::NoChange => {
+                self.dismiss_command_suggestions(cx);
+                self.shell.set_status(if execute_requested {
+                    "Command already filled; press Enter again to execute"
+                } else {
+                    "Command already filled"
+                });
+                cx.notify();
+                return SuggestionSubmitResult::NoChange;
+            }
+            SuggestionFill::Append(suffix) => suffix,
+        };
+        // Logical input performs charset conversion and advances the shell model
+        // exactly once, after the primary write succeeds. The fan-out gate above
+        // is checked in the same GPUI update, without an asynchronous gap.
+        self.dismiss_command_suggestions(cx);
+        self.terminal.editing.state_mut().suggestion_fill = None;
+        if !self.send_terminal_input_without_suggestion_track(suffix.as_bytes().to_vec(), cx) {
+            self.terminal.editing.state_mut().invalidate();
+            return SuggestionSubmitResult::WriteFailed;
+        }
+        let state = self.terminal.editing.state_mut();
+        state.suggestion_fill = Some(SuggestionFillRequest {
+            request_id: state.confirmation_id,
+            input_version: state.model.version,
+            target: item.command.clone(),
+            execute_requested,
+            deadline: Instant::now() + EDIT_CONFIRMATION_TIMEOUT,
+            sync_revision: popup.sync_revision,
+        });
+        self.shell.set_status(if execute_requested {
+            "Suggestion filled; waiting for echo. Press Enter again to execute"
         } else {
-            format!("filled suggestion from {source}")
+            "Suggestion filled; waiting for echo"
         });
         cx.notify();
-        true
+        SuggestionSubmitResult::Submitted
     }
 
     pub(in crate::features) fn delete_command_suggestion_history(
@@ -1049,9 +1173,8 @@ impl NyaTermApp {
             "suggestions.matches"
         });
         let footer = format!(
-            "↑↓ {} · Enter {} · Tab {} · Esc {}",
+            "↑↓ {} · Tab / Enter {} · Esc {}",
             t!("suggestions.select"),
-            t!("suggestions.execute"),
             t!("suggestions.fill"),
             t!("suggestions.dismiss")
         );
@@ -1574,18 +1697,15 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui::{AppContext as _, KeyDownEvent, TestAppContext};
-    use nyaterm_core::{
-        AppRuntime, RuntimeMode, TerminalInputState, apply_terminal_input_data, uuid,
-    };
+    use nyaterm_core::{TerminalInputState, apply_terminal_input_data};
 
-    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
     use crate::models::{CommandSuggestionItem, CommandSuggestionState};
     use crate::test_support::TestConfigDir;
 
     use super::{
-        command_history_input_update, command_suggestion_clamp_selection, command_suggestion_input,
+        command_history_input_update, command_suggestion_clamp_selection,
         command_suggestion_input_can_defer_refresh, command_suggestion_input_candidate_chars,
         command_suggestion_input_obvious_pager_prefix, command_suggestion_item_for_selection,
         command_suggestion_refresh_input_delay, command_suggestion_state_changed,
@@ -1653,7 +1773,7 @@ mod tests {
             );
             assert!(app.terminal.assist.command_suggestions.is_none());
             app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
-            assert!(!app.apply_selected_command_suggestion(true, cx));
+            assert!(app.apply_selected_command_suggestion(true, cx));
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
         });
     }
@@ -1730,6 +1850,8 @@ mod tests {
     fn command_suggestion_state_change_skips_identical_overlay() {
         let state = CommandSuggestionState {
             session_id: "session".to_string(),
+            input_version: 0,
+            sync_revision: 0,
             draft: "git".to_string(),
             items: vec![CommandSuggestionItem {
                 command: "git status".to_string(),
@@ -1803,68 +1925,6 @@ mod tests {
         assert!(state.value.is_empty());
     }
 
-    #[test]
-    fn executing_suggestion_records_plain_command_separately_from_wire_input() {
-        let (wire, submission) = command_suggestion_input("ps -ef", true);
-        assert_eq!(wire, b"\x05\x15ps -ef\r");
-        assert_eq!(submission.as_deref(), Some("ps -ef"));
-
-        let (wire, submission) = command_suggestion_input("ps -ef", false);
-        assert_eq!(wire, b"\x05\x15ps -ef");
-        assert!(submission.is_none());
-    }
-
-    #[test]
-    fn failed_suggestion_write_does_not_leave_a_pending_history_command() {
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let root = std::env::temp_dir().join(format!(
-            "nyaterm-suggestion-write-{}-{}",
-            std::process::id(),
-            uuid()
-        ));
-        let runtime = AppRuntime::from_parts_for_test(
-            RuntimeMode::Portable,
-            root.clone(),
-            root.join("config"),
-            root.join("logs"),
-            root.join("cache"),
-            None,
-        );
-        let stores = UiStoreHandles {
-            startup_restore: cx.new(|_| StartupRestoreStore::default()),
-            overlays: cx.new(|_| OverlayStore::default()),
-        };
-        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
-
-        cx.update_entity(&app, |app, cx| {
-            // Exercise write failure with an eligible typing prediction. A stale
-            // popup is now rejected before any write is attempted.
-            app.terminal
-                .editing
-                .state_mut()
-                .model
-                .note_input("ps", Instant::now());
-            app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
-                session_id: "missing".to_string(),
-                draft: "ps".to_string(),
-                items: vec![CommandSuggestionItem {
-                    command: "ps -ef".to_string(),
-                    display: "ps -ef".to_string(),
-                    source: "history".to_string(),
-                    score: 1,
-                    indices: Vec::new(),
-                }],
-                selected_index: Some(0),
-                cursor_row: 0,
-                cursor_col: 0,
-            });
-
-            assert!(app.apply_selected_command_suggestion(true, cx));
-            assert!(app.terminal.assist.pending_command_history_entry.is_none());
-        });
-    }
-
     fn escape_key_event() -> KeyDownEvent {
         KeyDownEvent {
             keystroke: gpui::Keystroke {
@@ -1879,7 +1939,7 @@ mod tests {
 
     /// A visible surface makes the popup authoritative for the session, so the
     /// key handler can only bail out for the reason under test.
-    fn show_surface_for_session(app: &mut NyaTermApp, session_id: &str) {
+    pub(super) fn show_surface_for_session(app: &mut NyaTermApp, session_id: &str) {
         app.terminal.layout.session_surface_bounds.insert(
             session_id.to_string(),
             gpui::Bounds::new(
@@ -1892,6 +1952,8 @@ mod tests {
     fn open_suggestions_popup(session_id: &str) -> CommandSuggestionState {
         CommandSuggestionState {
             session_id: session_id.to_string(),
+            input_version: 0,
+            sync_revision: 0,
             draft: "1".to_string(),
             items: vec![CommandSuggestionItem {
                 command: "1111".to_string(),

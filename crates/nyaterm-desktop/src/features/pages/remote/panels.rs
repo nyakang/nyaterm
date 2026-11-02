@@ -141,6 +141,8 @@ struct RemoteMonitorKey {
     /// Right-panel width, which decides the process table's columns and row heights.
     /// Zero for the panes that do not depend on it.
     panel_width: f32,
+    /// Whether the Stats pane lists logged-in users. Always false for the other panes.
+    show_users: bool,
 }
 
 pub(in crate::features) enum RemoteMonitorData {
@@ -439,6 +441,7 @@ impl Render for RemoteMonitorPanel {
                 } => stats_panel(
                     chrome,
                     has_session,
+                    snapshot.key.show_users,
                     state.clone(),
                     network_select.clone(),
                     cx,
@@ -635,6 +638,8 @@ impl NyaTermApp {
                 | RemoteMonitorKind::Npu => self.shell.right_panel_width(),
                 _ => 0.,
             },
+            show_users: kind == RemoteMonitorKind::Stats
+                && self.settings.summary().ui_remote_stats_show_users,
         }
     }
 
@@ -991,6 +996,7 @@ mod tests {
                     .begin_stats_job("remote-panel-test".to_string(), false);
                 app.remote_ops.apply_stats_event(
                     StatsJobResult {
+                        users_revision: 0,
                         job_id: ticket.job_id,
                         session_id: "remote-panel-test".to_string(),
                         result: Ok(stats(true)),
@@ -1043,6 +1049,7 @@ mod tests {
                     .begin_stats_job("remote-panel-test".to_string(), false);
                 app.remote_ops.apply_stats_event(
                     StatsJobResult {
+                        users_revision: 0,
                         job_id: ticket.job_id,
                         session_id: "remote-panel-test".to_string(),
                         result: Ok(stats(false)),
@@ -1279,9 +1286,11 @@ mod tests {
             app.toggle_left_sidebar(cx);
             app.ensure_panel_in_stack(NavItem::GpuMonitor, cx);
             assert!(app.panel_is_rendered(NavItem::GpuMonitor));
-            app.shell.show_page(NavItem::Settings);
-            assert!(!app.panel_is_rendered(NavItem::GpuMonitor));
-            app.shell.show_workspace();
+            app.open_page(NavItem::Settings, cx);
+            assert!(
+                app.panel_is_rendered(NavItem::GpuMonitor),
+                "settings is a tab now and must not hide the side panels"
+            );
             if !cfg!(target_os = "macos") {
                 app.shell.set_viewport_size_for_test((600., 800.));
                 app.shell.close_mobile_panels();

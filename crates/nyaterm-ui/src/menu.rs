@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, ClickEvent, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, Styled, Window, div, prelude::FluentBuilder as _, px, rgb,
+    Anchor, AnyElement, App, ClickEvent, Context, FocusHandle, Focusable as _, Global,
+    InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString, Styled,
+    WeakEntity, Window, WindowId, div, prelude::FluentBuilder as _, px, rgb,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{Cancel, Confirm};
@@ -14,6 +16,7 @@ use gpui_kit::component::{
 };
 
 type MenuClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type MenuOpenChangeHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type ContextMenuItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<NyaMenuItem>>;
 
 const NYA_MENU_WIDTH: f32 = 220.;
@@ -21,6 +24,37 @@ const NYA_MENU_ICON_SLOT_WIDTH: f32 = 24.;
 const NYA_MENU_ITEM_GAP: f32 = 8.;
 const NYA_SUBMENU_OVERLAP: f32 = 8.;
 const NYA_MENU_ICON_OPTICAL_OFFSET_Y: f32 = 1.;
+
+#[derive(Default)]
+struct PopupFocusRegistry(HashMap<WindowId, Vec<(WeakEntity<PopupMenu>, FocusHandle)>>);
+
+impl Global for PopupFocusRegistry {}
+
+/// Whether a NyaTerm popup currently owns focus in this window. Entries only
+/// retain weak entities; dismissing/rebuilding controls needs no paired flags.
+pub fn nya_popup_is_active(window: &Window, cx: &mut App) -> bool {
+    nya_popup_menu_is_active(window, cx) || crate::selection::select_popup_is_active(window, cx)
+}
+
+/// Native child surfaces must yield to menus painted by GPUI. Read the menu's
+/// actual focus ownership instead of mirroring open/closed state in desktop.
+pub fn nya_popup_menu_is_active(window: &Window, cx: &mut App) -> bool {
+    let registry = cx.default_global::<PopupFocusRegistry>();
+    registry.0.retain(|_, entries| {
+        entries.retain(|(menu, _)| menu.upgrade().is_some());
+        !entries.is_empty()
+    });
+    let handles: Vec<_> = registry
+        .0
+        .get(&window.window_handle().window_id())
+        .into_iter()
+        .flatten()
+        .map(|(_, focus)| focus.clone())
+        .collect();
+    handles
+        .iter()
+        .any(|focus| focus.contains_focused(window, cx))
+}
 
 /// `PopupMenu` chooses a submenu's side from the parent menu's `max_width` and
 /// origin. Its probe does not include the parent menu's own width, so an exact
@@ -77,7 +111,21 @@ pub(crate) fn style_nya_popup_menu(
     menu: PopupMenu,
     min_width: Option<Pixels>,
     max_width: Option<Pixels>,
+    window: &Window,
+    cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let entry = (cx.entity().downgrade(), menu.focus_handle(cx));
+    cx.default_global::<PopupFocusRegistry>()
+        .0
+        .retain(|_, entries| {
+            entries.retain(|(menu, _)| menu.upgrade().is_some());
+            !entries.is_empty()
+        });
+    cx.default_global::<PopupFocusRegistry>()
+        .0
+        .entry(window.window_handle().window_id())
+        .or_default()
+        .push(entry);
     let (min_width, max_width) = resolved_menu_widths(min_width, max_width);
     menu.appearance(nya_popup_menu_appearance())
         .when_some(min_width, |menu, width| menu.min_w(width))
@@ -409,7 +457,7 @@ impl NyaMenuItem {
                     window,
                     cx,
                     move |menu, window, cx| {
-                        let menu = style_nya_popup_menu(menu, min_width, None)
+                        let menu = style_nya_popup_menu(menu, min_width, None, window, cx)
                             .when_some(max_height, |menu, height| menu.max_h(height))
                             .scrollable(popup_menu_should_scroll(&items, scrollable));
                         items
@@ -524,6 +572,7 @@ pub struct NyaDropdownMenu {
     scrollable: Option<bool>,
     items: DropdownItemsBuilder,
     on_trigger: Option<MenuClickHandler>,
+    on_open_change: Option<MenuOpenChangeHandler>,
 }
 
 /// Built when the menu opens, not when the trigger renders.
@@ -551,6 +600,7 @@ impl NyaDropdownMenu {
             scrollable: None,
             items: Rc::new(|_, _| Vec::new()),
             on_trigger: None,
+            on_open_change: None,
         }
     }
 
@@ -641,6 +691,15 @@ impl NyaDropdownMenu {
         self.on_trigger = Some(Rc::new(handler));
         self
     }
+
+    /// Called when the menu opens or closes, with the new open state.
+    pub fn on_open_change(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open_change = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for NyaDropdownMenu {
@@ -671,18 +730,25 @@ impl RenderOnce for NyaDropdownMenu {
         let max_width = self.max_width;
         let max_height = self.max_height;
         let scrollable = self.scrollable;
-        trigger.disabled(self.disabled).dropdown_menu_with_anchor(
+        let on_open_change = self.on_open_change;
+        let popover = trigger.disabled(self.disabled).dropdown_menu_with_anchor(
             self.anchor.component_anchor(),
             move |menu, window, cx| {
                 let items = items_builder(window, cx);
-                let menu = style_nya_popup_menu(menu, min_width, max_width)
+                let menu = style_nya_popup_menu(menu, min_width, max_width, window, cx)
                     .when_some(max_height, |menu, height| menu.max_h(height))
                     .scrollable(popup_menu_should_scroll(&items, scrollable));
                 items
                     .iter()
                     .fold(menu, |menu, item| item.append_to(menu, window, cx))
             },
-        )
+        );
+        match on_open_change {
+            Some(handler) => {
+                popover.on_open_change(move |open, window, cx| handler(open, window, cx))
+            }
+            None => popover,
+        }
     }
 }
 
@@ -795,7 +861,7 @@ where
                     window.mouse_position().x,
                     window.bounds().size.width,
                 );
-                let menu = style_nya_popup_menu(menu, min_width, None)
+                let menu = style_nya_popup_menu(menu, min_width, None, window, cx)
                     .when_some(direction_probe_width, |menu, width| menu.max_w(width));
                 // PopupMenu paints a vertical scrollbar whenever `scrollable` is
                 // true, even when every item fits. Keep short context menus clean;
@@ -823,6 +889,40 @@ mod tests {
         NyaContextMenu, NyaMenuItem, NyaMenuItemKind, popup_menu_should_scroll,
         resolved_menu_widths, submenu_direction_probe_width,
     };
+
+    #[gpui::test]
+    fn popup_query_releases_dismissed_and_destroyed_menus(cx: &mut TestAppContext) {
+        use super::{nya_popup_is_active, style_nya_popup_menu};
+        use gpui::Focusable as _;
+        use gpui_kit::component::menu::PopupMenu;
+        cx.update(gpui_kit::init);
+        let cx = cx.add_empty_window();
+        let weak = cx.update(|window, cx| {
+            let menu = PopupMenu::build(window, cx, |menu, window, cx| {
+                style_nya_popup_menu(menu, None, None, window, cx)
+            });
+            let focus = menu.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            assert!(nya_popup_is_active(window, cx));
+            window.blur(cx);
+            assert!(!nya_popup_is_active(window, cx));
+            window.focus(&focus, cx);
+            assert!(nya_popup_is_active(window, cx));
+            let weak = menu.downgrade();
+            drop(menu);
+            weak
+        });
+        // GPUI releases entities at the end of the update, after callbacks and
+        // subscriptions finish. Query again after that actual destruction.
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(weak.upgrade().is_none());
+            assert!(
+                !nya_popup_is_active(window, cx),
+                "dead menu must not retain occlusion"
+            );
+        });
+    }
 
     struct DynamicContextMenuFixture {
         target: Rc<Cell<u8>>,

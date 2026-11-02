@@ -1,10 +1,49 @@
 use nyaterm_core::QuickCommandsConfig;
 
+use super::super::escapes::plan_quick_command;
 use super::merge::merge_import;
 use super::sources::{
     MAX_QUICK_COMMAND_IMPORT_BYTES, decode_text, ensure_quick_command_import_size,
     parse_nyaterm_import, parse_windterm_quickbar, parse_xshell_quick_buttons_content,
 };
+
+#[test]
+fn literal_json_export_import_preserves_mode_and_exact_command_text() {
+    let mut config = QuickCommandsConfig::default();
+    let text = "  {{变量}} C:\\temp\\r\\n\\t\\p\\\\\n下一行  ";
+    let raw = serde_json::json!({"commands": [
+        {"id":"literal", "label":"Literal", "command":text, "raw_send":true, "execution_mode":"append"},
+        {"id":"legacy", "label":"Legacy", "command":"pwd"},
+        {"id":"null", "label":"Null", "command":"pwd", "raw_send":null},
+        {"id":"off", "label":"Off", "command":"pwd", "raw_send":false}
+    ]}).to_string();
+    merge_import(&mut config, parse_nyaterm_import(&raw).unwrap()).unwrap();
+    assert_eq!(config.commands[0].command, text);
+    assert_eq!(config.commands[0].raw_send, Some(true));
+    assert_eq!(config.commands[0].execution_mode.as_deref(), Some("append"));
+    assert!(
+        config.commands[1..]
+            .iter()
+            .all(|command| !command.raw_send.unwrap_or_default())
+    );
+
+    let exported =
+        nyaterm_core::models::quick_commands::export_quick_commands_json(config).unwrap();
+    let mut restored = QuickCommandsConfig::default();
+    merge_import(&mut restored, parse_nyaterm_import(&exported).unwrap()).unwrap();
+    assert_eq!(restored.commands[0].command, text);
+    assert_eq!(restored.commands[0].raw_send, Some(true));
+}
+
+#[test]
+fn literal_json_import_rejects_invalid_switch_types_and_blank_commands() {
+    assert!(
+        parse_nyaterm_import(r#"[{"label":"Bad","command":"pwd","raw_send":"true"}]"#).is_err()
+    );
+    let import =
+        parse_nyaterm_import(r#"[{"label":"Blank","command":" \n ","raw_send":true}]"#).unwrap();
+    assert!(merge_import(&mut QuickCommandsConfig::default(), import).is_err());
+}
 
 #[test]
 fn imports_config_and_array_shapes() {
@@ -141,6 +180,92 @@ fn windterm_strips_real_and_escaped_terminal_newlines_and_executes() {
         import_config.commands[1].execution_mode.as_deref(),
         Some("execute")
     );
+}
+
+#[test]
+fn windterm_bare_carriage_returns_become_visible_script_escapes() {
+    // #1083: WindTerm keeps every line of a multi-line Send Text in one string
+    // separated by bare carriage returns. Stored as-is they leave the script
+    // box showing nothing to edit, so they are imported as `\r` escapes,
+    // which send exactly the same bytes.
+    let import_config = parse_windterm_quickbar(
+        r#"[{
+            "quick.group": "快速",
+            "quick.label": "NTP-HW",
+            "quick.text": "clock timezone Asia/Chongqing add 8\rsys\rntp-service unicast-server 192.168.254.100\rqui\rsa\ry\r",
+            "quick.type": "Send Text"
+        }]"#,
+    )
+    .expect("windterm quickbar parses");
+    let mut config = QuickCommandsConfig::default();
+    merge_import(&mut config, import_config).expect("merge succeeds");
+
+    let command = &config.commands[0];
+    assert!(!command.command.contains('\r'));
+    assert_eq!(
+        command.command,
+        r"clock timezone Asia/Chongqing add 8\rsys\rntp-service unicast-server 192.168.254.100\rqui\rsa\ry"
+    );
+    assert_eq!(command.execution_mode.as_deref(), Some("execute"));
+
+    let sent: Vec<u8> = plan_quick_command(&command.command, true)
+        .into_iter()
+        .flat_map(|chunk| chunk.bytes)
+        .collect();
+    assert_eq!(
+        sent,
+        b"clock timezone Asia/Chongqing add 8\rsys\rntp-service unicast-server 192.168.254.100\rqui\rsa\ry\r"
+    );
+}
+
+#[test]
+fn windterm_keeps_crlf_and_lf_line_breaks_as_lines() {
+    let import_config = parse_windterm_quickbar(
+        r#"[{"quick.label":"Lines","quick.text":"echo one\r\necho two\necho three","quick.type":"Send Text"}]"#,
+    )
+    .expect("windterm quickbar parses");
+
+    assert_eq!(
+        import_config.commands[0].command,
+        "echo one\r\necho two\necho three"
+    );
+}
+
+#[test]
+fn windterm_bare_returns_preserve_execution_after_backslash_runs() {
+    for backslashes in 0..=3 {
+        for line_ending in ["\r", "\r\n", "\n"] {
+            for execute in [false, true] {
+                let original = format!(
+                    "echo {}\rnext{line_ending}echo {}{line_ending}last\\pdone",
+                    "\\".repeat(backslashes),
+                    "\\".repeat(backslashes),
+                );
+                let raw = serde_json::json!([{
+                    "quick.label": "Backslashes",
+                    "quick.text": if execute {
+                        format!("{original}\r")
+                    } else {
+                        original.clone()
+                    },
+                    "quick.type": "Send Text",
+                }])
+                .to_string();
+                let mut config = QuickCommandsConfig::default();
+                merge_import(&mut config, parse_windterm_quickbar(&raw).unwrap()).unwrap();
+                let command = &config.commands[0];
+                assert_eq!(
+                    command.execution_mode.as_deref(),
+                    Some(if execute { "execute" } else { "append" })
+                );
+                assert_eq!(
+                    plan_quick_command(&command.command, execute),
+                    plan_quick_command(&original, execute),
+                    "backslashes={backslashes}, line_ending={line_ending:?}, execute={execute}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

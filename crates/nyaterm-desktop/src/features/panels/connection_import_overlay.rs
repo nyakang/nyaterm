@@ -1,17 +1,88 @@
 use rust_i18n::t;
 
 use gpui::{
-    App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
-    rgb, rgba, svg,
+    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
+    Window, div, prelude::*, px, rgb, rgba, svg,
 };
+use nyaterm_ui::{NyaDialogWindowExt as _, NyaInputShell};
 
 use crate::features::{
-    NyaTermApp, view_widgets::color_icon, view_widgets::mono_icon, view_widgets::nyaterm_app_icon,
+    NyaTermApp, text_inputs::TextInputSetup, view_widgets::color_icon, view_widgets::mono_icon,
+    view_widgets::nyaterm_app_icon,
 };
 use crate::models::ConnectionImportSource;
 use crate::theme::ThemePalette;
 
 impl NyaTermApp {
+    pub(in crate::features) fn open_windterm_password_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.forget_text_inputs("windterm-password.");
+        let field = self.text_input("windterm-password.value", "", TextInputSetup::secret(), cx);
+        self.open_form_dialog(
+            (
+                t!("savedConnections.windtermMasterPasswordTitle").to_string(),
+                448.,
+                t!("savedConnections.windtermMasterPasswordConfirm").to_string(),
+                |app, _, cx| app.windterm_password_dialog_content(cx),
+                |app, window, cx| app.submit_windterm_password(window, cx),
+                |app, cx| app.cancel_windterm_password(cx),
+            ),
+            window,
+            cx,
+        );
+        window.focus(&field.read(cx).focus_handle(), cx);
+        cx.notify();
+    }
+
+    fn windterm_password_dialog_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(field) = self.existing_text_input("windterm-password.value") else {
+            return div().into_any_element();
+        };
+        let palette = self.theme_palette();
+        div()
+            .id("windterm-password-dialog-content")
+            .debug_selector(|| "windterm-password-dialog-content".to_owned())
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("savedConnections.windtermMasterPasswordDesc")),
+            )
+            .child(
+                NyaInputShell::new("windterm-password.value", &field)
+                    .height(px(36.))
+                    .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.modifiers.platform
+                            || event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.alt
+                        {
+                            return;
+                        }
+                        match event.keystroke.key.as_str() {
+                            "enter" => {
+                                if app.submit_windterm_password(window, cx) {
+                                    window.close_nya_dialog(cx);
+                                }
+                            }
+                            "escape" => {
+                                app.cancel_windterm_password(cx);
+                                window.close_nya_dialog(cx);
+                            }
+                            _ => return,
+                        }
+                        cx.stop_propagation();
+                    })),
+            )
+            .into_any_element()
+    }
+
     pub(in crate::features) fn connection_import_dialog_content(
         &mut self,
         cx: &mut Context<Self>,
@@ -277,6 +348,9 @@ impl NyaTermApp {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// One vendor tile in an import dialog. Shared with the quick command importer:
 /// both are Tauri's `min-h-32` card with a 40px logo, a name, and an extension hint.

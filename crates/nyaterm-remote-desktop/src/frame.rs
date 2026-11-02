@@ -229,21 +229,30 @@ impl Framebuffer {
             return Err(FramebufferError::InvalidPayload);
         }
         let destination_stride = usize::try_from(self.width).unwrap() * 4;
-        for row in 0..usize::try_from(*height).unwrap() {
-            let source = &pixels[row * source_stride..row * source_stride + row_bytes];
-            let destination_offset = (usize::try_from(*y).unwrap() + row) * destination_stride
-                + usize::try_from(*x).unwrap() * 4;
-            let destination = &mut self.bgra[destination_offset..destination_offset + row_bytes];
-            match format {
-                PixelFormat::Bgra8 => destination.copy_from_slice(source),
-                PixelFormat::Rgba8 => {
-                    for (src, dst) in source
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
-                    {
-                        dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+        if matches!(format, PixelFormat::Bgra8)
+            && source_stride == destination_stride
+            && row_bytes == destination_stride
+        {
+            let start = usize::try_from(*y).unwrap() * destination_stride;
+            self.bgra[start..start + required].copy_from_slice(&pixels[..required]);
+        } else {
+            for row in 0..usize::try_from(*height).unwrap() {
+                let source = &pixels[row * source_stride..row * source_stride + row_bytes];
+                let destination_offset = (usize::try_from(*y).unwrap() + row) * destination_stride
+                    + usize::try_from(*x).unwrap() * 4;
+                let destination =
+                    &mut self.bgra[destination_offset..destination_offset + row_bytes];
+                match format {
+                    PixelFormat::Bgra8 => destination.copy_from_slice(source),
+                    PixelFormat::Rgba8 => {
+                        for (src, dst) in source
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+                        {
+                            dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+                        }
                     }
                 }
             }
@@ -319,6 +328,31 @@ mod tests {
             framebuffer.apply(&bitmap(4, 0, 0, vec![0; 15])),
             Err(FramebufferError::InvalidPayload)
         );
+    }
+
+    #[test]
+    fn applies_a_full_width_update_as_one_contiguous_copy() {
+        let mut framebuffer = Framebuffer::new(1, 4, 4, RDP_FRAMEBUFFER_LIMITS).unwrap();
+        let frame = RdpFrameEvent::Bitmap {
+            epoch: 1,
+            full: false,
+            x: 0,
+            y: 1,
+            width: 4,
+            height: 2,
+            stride: 16,
+            format: PixelFormat::Bgra8,
+            pixels: (1..=32).collect::<Vec<u8>>().into(),
+        };
+
+        framebuffer.apply(&frame).unwrap();
+
+        assert_eq!(
+            &framebuffer.pixels()[16..48],
+            &(1..=32).collect::<Vec<u8>>()
+        );
+        assert!(framebuffer.pixels()[..16].iter().all(|byte| *byte == 0));
+        assert!(framebuffer.pixels()[48..].iter().all(|byte| *byte == 0));
     }
 
     #[test]

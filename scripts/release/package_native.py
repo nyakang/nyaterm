@@ -19,6 +19,7 @@ from pathlib import Path
 
 import prepare_conpty
 import windows_msi
+import windows_portable
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -31,17 +32,25 @@ APP_NAME = "NyaTerm"
 APP_BIN = "nyaterm"
 # Helper processes the application spawns at runtime. `resolve_helper_path()`
 # in nyaterm-remote-desktop only looks beside the running executable, so each
-# of these must be packaged next to the application binary in every format.
-HELPER_BINS = ("nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-mcp")
+# supported helper must be packaged next to the application binary.
+HELPER_BINS = tuple(Path(name).stem for name in windows_portable.LAYOUT["helper_files"])
 CONPTY_LICENSE = Path(__file__).with_name("conpty-license.txt")
 
 
+def helper_bins(target: str) -> tuple[str, ...]:
+    return tuple(
+        name for name in HELPER_BINS
+        if name != "nyaterm-activex-helper" or "windows" in target
+    )
+
+
 def conpty_files(target: str) -> tuple[Path, ...]:
-    if target == "x86_64-pc-windows-msvc":
-        return (Path("x64/conpty.dll"), Path("x64/x64/OpenConsole.exe"), Path("x64/arm64/OpenConsole.exe"))
-    if target == "aarch64-pc-windows-msvc":
-        return (Path("arm64/conpty.dll"), Path("arm64/arm64/OpenConsole.exe"))
-    raise ValueError(f"ConPTY is only packaged for Windows targets: {target}")
+    if target not in windows_portable.LAYOUT["conpty_files"]:
+        raise ValueError(f"ConPTY is only packaged for Windows targets: {target}")
+    return tuple(
+        Path(name).relative_to("conpty")
+        for name in windows_portable.LAYOUT["conpty_files"][target]
+    )
 
 
 def copy_conpty(destination: Path, target: str) -> list[Path]:
@@ -61,7 +70,7 @@ def copy_conpty(destination: Path, target: str) -> list[Path]:
     return copied
 
 
-PORTABLE_MARKER = "nyaterm-portable"
+PORTABLE_MARKER = windows_portable.LAYOUT["marker"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +79,10 @@ class PackageIdentity:
     macos_identifier: str
     windows_registry_name: str
     desktop_id: str
+
+    @property
+    def url_schemes(self) -> tuple[str, ...]:
+        return (self.desktop_id, "ssh", "telnet") if self.desktop_id == "nyaterm" else (self.desktop_id,)
 
     @property
     def macos_bundle_name(self) -> str:
@@ -248,7 +261,7 @@ def release_binary_path(target: str, name: str = APP_BIN) -> Path:
 
 
 def helper_binary_paths(target: str) -> list[Path]:
-    return [release_binary_path(target, name) for name in HELPER_BINS]
+    return [release_binary_path(target, name) for name in helper_bins(target)]
 
 
 def build_binary(package: str, name: str, target: str) -> Path:
@@ -274,7 +287,7 @@ def build_binary(package: str, name: str, target: str) -> Path:
 
 def build_application(target: str) -> Path:
     binary = build_binary("nyaterm-app", APP_BIN, target)
-    for name in HELPER_BINS:
+    for name in helper_bins(target):
         build_binary(name, name, target)
     return binary
 
@@ -352,15 +365,23 @@ def create_windows_packages(
     identity = release_identity(version)
     if includes_windows_msi(artifact_version):
         windows_msi_version(version)
-    portable_root = WORK_DIR / "NyaTerm-portable"
+    portable_root = WORK_DIR / windows_portable.LAYOUT["root"]
     portable_root.mkdir()
     shutil.copy2(binary, portable_root / "NyaTerm.exe")
     copy_helpers(portable_root, info.target)
     copy_conpty(portable_root, info.target)
     (portable_root / PORTABLE_MARKER).touch()
-    (portable_root / "data").mkdir()
-    (portable_root / "data" / ".keep").touch()
+    placeholder = portable_root / windows_portable.LAYOUT["data_placeholder"]
+    placeholder.parent.mkdir()
+    placeholder.touch()
     copy_release_documents(portable_root, version)
+    expected = set(windows_portable.payload_files(info.target)) | {
+        windows_portable.LAYOUT["data_placeholder"]
+    }
+    actual = {path.relative_to(portable_root).as_posix()
+              for path in portable_root.rglob("*") if path.is_file()}
+    if actual != expected:
+        raise RuntimeError(f"portable payload differs from contract: {actual ^ expected}")
     portable_output = (
         DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}_portable.zip"
     )
@@ -402,6 +423,23 @@ def create_windows_packages(
 
     output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}-setup.exe"
     script = WORK_DIR / "nyaterm-installer.nsi"
+    protocol_command = r'$\"$INSTDIR\NyaTerm.exe$\" $\"%1$\"'
+    protocol_install = "\n".join(
+        f'WriteRegStr HKCU "Software\\Classes\\{scheme}{suffix}" "{name}" "{value}"'
+        for scheme in identity.url_schemes
+        for suffix, name, value in (
+            ("", "", f"URL:{identity.display_name} Protocol"), ("", "URL Protocol", ""),
+            (r"\DefaultIcon", "", r"$INSTDIR\NyaTerm.exe,0"),
+            (r"\shell\open\command", "", protocol_command),
+        )
+    )
+    protocol_uninstall = "\n".join(
+        f'ReadRegStr $0 HKCU "Software\\Classes\\{scheme}\\shell\\open\\command" ""\n'
+        f'StrCmp $0 "{protocol_command}" 0 protocol_skip_{scheme}\n'
+        f'DeleteRegKey HKCU "Software\\Classes\\{scheme}"\nprotocol_skip_{scheme}:'
+        for scheme in identity.url_schemes
+    )
+
     script.write_text(
         textwrap.dedent(
             rf"""
@@ -445,10 +483,7 @@ def create_windows_packages(
               {conpty_install}
               WriteUninstaller "$INSTDIR\Uninstall.exe"
               WriteRegStr HKCU "{identity.windows_registry_key}" "InstallDir" "$INSTDIR"
-              WriteRegStr HKCU "Software\Classes\{identity.desktop_id}" "" "URL:{identity.display_name} Protocol"
-              WriteRegStr HKCU "Software\Classes\{identity.desktop_id}" "URL Protocol" ""
-              WriteRegStr HKCU "Software\Classes\{identity.desktop_id}\DefaultIcon" "" "$INSTDIR\NyaTerm.exe,0"
-              WriteRegStr HKCU "Software\Classes\{identity.desktop_id}\shell\open\command" "" "$\"$INSTDIR\NyaTerm.exe$\" $\"%1$\""
+              {protocol_install}
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayName" "{identity.display_name}"
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayVersion" "{version}"
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayIcon" "$INSTDIR\NyaTerm.exe"
@@ -471,7 +506,7 @@ def create_windows_packages(
               Delete "$INSTDIR\icon.ico"
               Delete "$INSTDIR\Uninstall.exe"
               RMDir "$INSTDIR"
-              DeleteRegKey HKCU "Software\Classes\{identity.desktop_id}"
+              {protocol_uninstall}
               DeleteRegKey HKCU "{identity.windows_uninstall_key}"
               DeleteRegKey HKCU "{identity.windows_registry_key}"
             SectionEnd
@@ -526,7 +561,7 @@ def create_macos_packages(
             {
                 "CFBundleTypeRole": "Viewer",
                 "CFBundleURLName": identity.macos_identifier,
-                "CFBundleURLSchemes": [identity.desktop_id],
+                "CFBundleURLSchemes": list(identity.url_schemes),
             }
         ],
         "CFBundleVersion": version,
@@ -616,7 +651,7 @@ def write_desktop_file(
             StartupWMClass={identity.desktop_id}
             Terminal=false
             Categories=Development;TerminalEmulator;Network;
-            MimeType=x-scheme-handler/{identity.desktop_id};
+            MimeType={"".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes)}
             StartupNotify=true
             """
         ).lstrip(),

@@ -44,8 +44,8 @@ pub(in crate::remote_file) fn shell_file_properties(
 ) -> anyhow::Result<SftpFileProperties> {
     let mut properties = shell_properties(shell, path)?;
     if shell.kind() == RemoteFileBackendKind::ScpNormal {
-        // The normal backend has no stat dependency. Use numeric ls output
-        // for saving while retaining owner/group names in property views.
+        // The normal backend has no stat dependency. Read numeric IDs for
+        // ownership-preserving saves; property views also use numeric identities.
         let output = shell.exec_ok(
             format!("LC_ALL=C ls -ldn {}", shell_quote_path(&path.display_path)),
             None,

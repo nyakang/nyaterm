@@ -157,6 +157,7 @@ impl NyaTermApp {
         };
 
         div()
+            .debug_selector(|| "ssh-host-key-card".to_string())
             .w_full()
             .max_w(px(384.))
             .mx_auto()
@@ -330,6 +331,7 @@ impl NyaTermApp {
         }
 
         div()
+            .debug_selector(|| "ssh-credential-card".to_string())
             .id(SharedString::from(format!(
                 "credential-dialog-{}",
                 prompt.id
@@ -587,6 +589,7 @@ impl NyaTermApp {
         }
 
         div()
+            .debug_selector(|| "ssh-keyboard-card".to_string())
             .id(SharedString::from(format!(
                 "keyboard-interactive-dialog-{}",
                 prompt.id

@@ -2403,10 +2403,21 @@ impl TerminalSurface {
                             let Some(app) = app.clone() else {
                                 return;
                             };
-                            let repaint_session_id = app.update(cx, |this, cx| {
-                                if !session_id.is_empty() {
-                                    this.activate_workspace_pane(session_id.clone(), cx);
-                                }
+                            // Pane activation walks into
+                            // `notify_terminal_surface_only`, which reads this
+                            // surface — defer until this entity update drops
+                            // its lease, the same escape hatch
+                            // `flush_local_scroll_app_sync` uses above.
+                            if !session_id.is_empty() {
+                                let activate_id = session_id.clone();
+                                let activate_app = app.clone();
+                                cx.defer(move |cx| {
+                                    activate_app.update(cx, |this, cx| {
+                                        this.activate_workspace_pane(activate_id, cx);
+                                    });
+                                });
+                            }
+                            let repaint_session_id = app.update(cx, |this, _cx| {
                                 let drag_session_id =
                                     (!session_id.is_empty()).then_some(session_id.clone());
                                 let bounds = this.terminal_scrollbar_track_bounds_for_session(

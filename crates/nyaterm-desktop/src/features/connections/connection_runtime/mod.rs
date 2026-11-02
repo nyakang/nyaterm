@@ -8,3 +8,4 @@ mod auto_icon;
 mod catalog_sync;
 mod editor;
 mod groups;
+mod password;

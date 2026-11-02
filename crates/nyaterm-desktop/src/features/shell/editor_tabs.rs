@@ -9,7 +9,7 @@ use nyaterm_ui::{NyaButton, NyaDialogWindowExt};
 use rust_i18n::t;
 
 use crate::features::{AppLifecycleEvent, NyaTermApp};
-use crate::models::{MainMode, NavItem, WorkspaceTabId};
+use crate::models::{NavItem, WorkspaceTabId};
 
 pub(in crate::features) struct PendingWorkspaceClose {
     targets: Vec<String>,
@@ -45,6 +45,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn cancel_editor_exit_approval(&mut self) {
+        self.settings.take_quit_confirmation();
         self.shell.workspace.editor_exit_approvals.clear();
     }
 
@@ -98,7 +99,7 @@ impl NyaTermApp {
         match WorkspaceTabId::from_layout_key(key) {
             WorkspaceTabId::Session(id) => Some(id),
             WorkspaceTabId::Editor(id) => self.transfer.editor_tab_snapshot(&id)?.session_id,
-            WorkspaceTabId::FileManager(_) => None,
+            WorkspaceTabId::FileManager(_) | WorkspaceTabId::Settings => None,
         }
     }
 
@@ -137,7 +138,6 @@ impl NyaTermApp {
                     self.shell.sync_terminal_windows_active_tab(key);
                 self.shell.set_pane_focus_mode(false);
                 self.shell.navigation.selected_nav = NavItem::Workspace;
-                self.shell.navigation.main_mode = MainMode::Workspace;
                 self.shell.request_session_tab_scroll_into_view();
                 self.close_action_link_menu(cx);
                 let view = self.transfer.workspace_editor_view(&id);
@@ -147,6 +147,7 @@ impl NyaTermApp {
                 cx.notify();
             }
             WorkspaceTabId::FileManager(id) => self.activate_file_manager_tab(&id, cx),
+            WorkspaceTabId::Settings => self.activate_settings_workspace_tab(cx),
         }
     }
 
@@ -207,6 +208,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.shell.workspace.editor_close.is_some() {
+            return;
+        }
+        // Settings owns a draft shared with the whole app and has its own
+        // confirmed close path; a mass-close must never discard it silently.
+        let targets = targets
+            .into_iter()
+            .filter(|key| !WorkspaceTabId::from_layout_key(key).is_settings())
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
             return;
         }
         self.shell.workspace.editor_close = Some(PendingWorkspaceClose {
@@ -341,6 +351,8 @@ impl NyaTermApp {
                         self.remove_workspace_file_manager_tab(&id, cx);
                     }
                     WorkspaceTabId::Session(id) => self.close_session(id, cx),
+                    // Filtered out in `request_workspace_tabs_close`.
+                    WorkspaceTabId::Settings => {}
                 }
             }
             self.release_unreferenced_editor_sessions(cx);

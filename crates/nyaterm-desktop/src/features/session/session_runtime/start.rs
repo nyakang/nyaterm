@@ -10,7 +10,7 @@ use nyaterm_core::{
 };
 use nyaterm_remote_desktop::{
     RdpClipboardConfig, RdpDisplayConfig, RdpReconnectConfig, RdpSessionConfig, VncClipboardConfig,
-    VncDisplayConfig, VncReconnectConfig, VncSecurityConfig, VncSessionConfig,
+    VncDisplayConfig, VncReconnectConfig, VncSecurityConfig, VncSessionConfig, parse_rdp_backend,
     parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_vnc_scale_mode,
     parse_vnc_security_mode,
 };
@@ -200,6 +200,26 @@ impl NyaTermApp {
             return;
         }
         let options = self.prepare_session_start_options(options);
+        if let ConnectionType::Rdp { backend, .. } = &connection.config {
+            let has_relay = connection.network.as_ref().is_some_and(|network| {
+                network.proxy_id.is_some() || network.proxy_jump_id.is_some()
+            });
+            if let Err(error) =
+                parse_rdp_backend(backend).and_then(|backend| backend.validate_route(has_relay))
+            {
+                let message = error.to_string();
+                self.fail_retry_preparation(&options, message.clone(), cx);
+                self.complete_mcp_session_open_failure(&connection.id, &message);
+                self.shell.set_status(message.clone());
+                self.notify_operation(
+                    "rdp-backend",
+                    nyaterm_ui::notification::NyaNotificationKind::Error,
+                    message,
+                    cx,
+                );
+                return;
+            }
+        }
         let Some(placement) = options.tab_placement else {
             self.complete_mcp_session_open_failure(
                 &connection.id,
@@ -577,17 +597,35 @@ impl NyaTermApp {
                 port,
                 username,
                 domain,
+                backend,
                 security,
                 display,
                 clipboard,
                 reconnect,
             } => {
+                let backend = match parse_rdp_backend(&backend) {
+                    Ok(backend) => backend,
+                    Err(error) => {
+                        self.fail_retry_preparation(&options, error.to_string(), cx);
+                        self.complete_mcp_session_open_failure(&connection.id, &error.to_string());
+                        self.session.start_release_saved_connection(&connection.id);
+                        self.notify_operation(
+                            "rdp-backend",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            error.to_string(),
+                            cx,
+                        );
+                        return;
+                    }
+                };
                 let config = RdpSessionConfig {
                     relay: self
                         .remote_desktop
                         .prepared_routes
                         .get(&connection.id)
                         .map(|route| route.endpoint.clone()),
+                    backend,
+                    windows_authentication: security.windows_authentication.clone(),
                     name: connection.name.clone(),
                     host,
                     port,
@@ -606,84 +644,45 @@ impl NyaTermApp {
                         max_attempts: reconnect.max_attempts,
                     },
                 };
-                match self.create_rdp_runtime(config.clone()) {
-                    Ok(session_id) => {
-                        if let Some(route) =
-                            self.remote_desktop.prepared_routes.remove(&connection.id)
-                        {
-                            self.remote_desktop.routes.insert(session_id.clone(), route);
-                        }
-                        let source_connection_id = Some(connection.id.clone());
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: source_connection_id.clone(),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Rdp(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        if tab_placement.is_none()
-                            && fallback_insert_index.is_none()
-                            && let Some(after_session_id) = options.after_session_id
-                        {
-                            self.session
-                                .move_session_after(&session_id, &after_session_id);
-                        }
-                        self.persist_connection_used(connection.id.clone(), cx);
-                        self.activate_session_id(&session_id, cx);
-                        self.apply_workspace_split_for_duplicate(
-                            cx,
-                            workspace_split.clone(),
-                            &session_id,
-                        );
-                        self.shell
-                            .set_status(format!("connecting RDP {}", connection.name));
-                    }
-                    Err(error) => {
-                        let message = format!("RDP connection failed: {error}");
-                        let session_id = self.create_failed_rdp_runtime(error);
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: Some(connection.id.clone()),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Rdp(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        self.activate_session_id(&session_id, cx);
-                        self.shell.set_status(message);
-                    }
+                let session_id = self.schedule_rdp_runtime(config.clone(), cx);
+                if let Some(route) = self.remote_desktop.prepared_routes.remove(&connection.id) {
+                    self.remote_desktop.routes.insert(session_id.clone(), route);
                 }
+                self.register_session_for_start(
+                    &session_id,
+                    crate::models::SessionRuntimeMetadata {
+                        ssh_config: None,
+                        ssh_multiplex_key: None,
+                        source_connection_id: Some(connection.id.clone()),
+                        ai_execution_profile: AiExecutionProfile::Disabled,
+                        launch_config: SessionLaunchConfig::Rdp(config),
+                        disconnected: false,
+                    },
+                    tab_placement,
+                    fallback_insert_index,
+                );
+                if let Some(custom_name) = options.custom_name {
+                    self.session
+                        .set_custom_name(session_id.clone(), custom_name);
+                }
+                if let Some(color) = options.tab_color {
+                    self.session.set_tab_color(&session_id, Some(color));
+                }
+                if options.locked {
+                    self.session.set_tab_locked(&session_id, true);
+                }
+                if tab_placement.is_none()
+                    && fallback_insert_index.is_none()
+                    && let Some(after_session_id) = options.after_session_id
+                {
+                    self.session
+                        .move_session_after(&session_id, &after_session_id);
+                }
+                self.persist_connection_used(connection.id.clone(), cx);
+                self.activate_session_id(&session_id, cx);
+                self.apply_workspace_split_for_duplicate(cx, workspace_split.clone(), &session_id);
+                self.shell
+                    .set_status(format!("connecting RDP {}", connection.name));
                 self.shell.show_workspace();
                 cx.notify();
             }
@@ -864,6 +863,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let SavedConnectionStartOptions {
+            ssh_runtime_mode,
             custom_name,
             tab_color,
             locked,
@@ -887,6 +887,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                requested_ssh_runtime_mode: ssh_runtime_mode,
                 connection_name: connection_name.clone(),
                 launch_config: None,
                 kind: SessionKind::Ssh,
@@ -937,7 +938,11 @@ impl NyaTermApp {
                     &mut Vec::new(),
                     &build_context,
                 )?;
+                if let Some(mode) = ssh_runtime_mode {
+                    config.runtime_mode = mode;
+                }
                 config.deferred_pty = true;
+                config.apply_runtime_policy()?;
                 if let Some(geometry) = desired_geometry {
                     config.cols = geometry.cols;
                     config.rows = geometry.rows;
@@ -1132,6 +1137,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
     });
 
     Ok(SshSessionConfig {
+        runtime_mode: Default::default(),
         attempt: context.attempt.clone(),
         name: connection.name.clone(),
         host,

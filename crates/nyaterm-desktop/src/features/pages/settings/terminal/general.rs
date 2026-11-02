@@ -272,6 +272,24 @@ impl SettingsPanel {
                             .child(terminal_action_matcher_row(
                                 palette,
                                 TerminalActionMatcherPresentation {
+                                    id: "terminal-action-links-mac",
+                                    label: t!("settings.actionLinksMatcherMac"),
+                                    example: Cow::Borrowed("AA:BB:CC:DD:EE:FF"),
+                                    description: t!("settings.actionLinksMatcherMacDesc"),
+                                    checked: self
+                                        .settings
+                                        .summary()
+                                        .terminal_action_links_matchers
+                                        .mac,
+                                    enabled: action_links_enabled,
+                                },
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_terminal_action_links_matcher("mac", cx);
+                                }),
+                            ))
+                            .child(terminal_action_matcher_row(
+                                palette,
+                                TerminalActionMatcherPresentation {
                                     id: "terminal-action-links-ipv4",
                                     label: t!("settings.actionLinksMatcherIpv4"),
                                     example: Cow::Borrowed("192.168.1.1"),

@@ -16,6 +16,8 @@ pub(crate) mod copy_progress;
 mod copy_tests;
 #[cfg(test)]
 mod editor_save_tests;
+#[cfg(test)]
+mod normal_listing_tests;
 mod revision;
 mod shell;
 #[cfg(test)]
@@ -2059,7 +2061,8 @@ fn list_shell_dir(
         RemoteFileBackendKind::ScpNormal => parse_normal_listing(
             path,
             &shell.exec_ok(
-                format!("LC_ALL=C ls -la {}", shell_quote_path(&path.display_path)),
+                // Numeric identities keep whitespace in account names out of the columns.
+                format!("LC_ALL=C ls -la -n {}", shell_quote_path(&path.display_path)),
                 None,
             )?,
         ),
@@ -2218,7 +2221,10 @@ fn normal_shell_properties(
     path: &RemoteFilePath,
 ) -> anyhow::Result<SftpFileProperties> {
     let output = shell.exec_ok(
-        format!("LC_ALL=C ls -ld {}", shell_quote_path(&path.display_path)),
+        format!(
+            "LC_ALL=C ls -ld -n {}",
+            shell_quote_path(&path.display_path)
+        ),
         None,
     )?;
     let line = String::from_utf8_lossy(&output)
@@ -2619,6 +2625,34 @@ mod tests {
         let entries = parse_normal_listing(&RemoteFilePath::new("/tmp"), output).unwrap();
         assert_eq!(entries[0].name, "a file.txt");
         assert_eq!(entries[1].name, "link name");
+    }
+
+    #[test]
+    fn normal_listing_parses_numeric_ownership_and_names_with_spaces() {
+        let output = concat!(
+            "total 12\n",
+            "drwxr-xr-x 2 1000 1001 4096 Jan 1 00:00 .\n",
+            "drwxr-xr-x 2 1000 1001 4096 Jan 1 00:00 ..\n",
+            "-rw-r--r-- 1 1000 1001 12 Jan 1 00:00 a file.txt\n",
+            "drwxr-x--- 2 1000 1001 4096 Jan 1 2025 a directory\n",
+            "lrwxrwxrwx 1 1000 1001 11 Jan 1 00:00 link name -> a directory\n",
+        );
+        let entries =
+            parse_normal_listing(&RemoteFilePath::new("/tmp"), output.as_bytes()).unwrap();
+        assert_eq!(entries.len(), 3);
+        for (entry, (name, file_type, size, permissions)) in entries.iter().zip([
+            ("a directory", SftpFileType::Directory, 4096, 0o750),
+            ("a file.txt", SftpFileType::File, 12, 0o644),
+            ("link name", SftpFileType::Symlink, 11, 0o777),
+        ]) {
+            assert_eq!(entry.name, name);
+            assert_eq!(entry.path, format!("/tmp/{name}"));
+            assert_eq!(entry.file_type, file_type);
+            assert_eq!(entry.size, Some(size));
+            assert_eq!(entry.permissions, Some(permissions));
+            assert_eq!(entry.owner, "1000");
+            assert_eq!(entry.group, "1001");
+        }
     }
 
     #[test]

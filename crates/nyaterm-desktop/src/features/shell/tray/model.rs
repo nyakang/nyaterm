@@ -1,3 +1,4 @@
+use nyaterm_core::packaging;
 use nyaterm_transport::SessionKind;
 use rust_i18n::t;
 
@@ -202,11 +203,31 @@ impl TraySnapshot {
     }
 
     pub(crate) fn new(
+        sessions: Vec<TraySession>,
+        sync: TraySyncState,
+        minimize_to_tray: bool,
+        lock_available: bool,
+        locked: bool,
+    ) -> Self {
+        Self::new_with_update_policy(
+            sessions,
+            sync,
+            minimize_to_tray,
+            lock_available,
+            locked,
+            packaging::updates_managed_externally(),
+        )
+    }
+
+    /// Builds the snapshot for an explicit update policy so tests can assert both
+    /// the ordinary and the externally managed menu.
+    pub(crate) fn new_with_update_policy(
         mut sessions: Vec<TraySession>,
         sync: TraySyncState,
         minimize_to_tray: bool,
         lock_available: bool,
         locked: bool,
+        updates_managed_externally: bool,
     ) -> Self {
         sessions.sort_by(|left, right| {
             left.name
@@ -324,11 +345,19 @@ impl TraySnapshot {
                 locked,
             ));
         }
-        entries.extend([
-            TrayEntry::action(TrayAction::Update, t!("tray.update").to_string(), locked),
-            TrayEntry::Separator,
-            TrayEntry::action(TrayAction::Quit, t!("tray.quit").to_string(), locked),
-        ]);
+        // An externally managed build has no in-app update action to offer.
+        if updates_managed_externally {
+            entries.extend([
+                TrayEntry::Separator,
+                TrayEntry::action(TrayAction::Quit, t!("tray.quit").to_string(), locked),
+            ]);
+        } else {
+            entries.extend([
+                TrayEntry::action(TrayAction::Update, t!("tray.update").to_string(), locked),
+                TrayEntry::Separator,
+                TrayEntry::action(TrayAction::Quit, t!("tray.quit").to_string(), locked),
+            ]);
+        }
         Self { entries }
     }
 
@@ -540,22 +569,28 @@ mod tests {
 
     #[test]
     fn root_menu_groups_actions_and_uses_a_conditional_lock_and_typed_check() {
-        let snapshot = TraySnapshot::new(vec![], TraySyncState::Idle, true, true, false);
-        let structure: Vec<_> = snapshot
-            .entries
-            .iter()
-            .map(|entry| match entry {
-                TrayEntry::Action { action, .. } | TrayEntry::Check { action, .. } => {
-                    action.menu_id()
-                }
-                TrayEntry::Separator => "separator".into(),
-                TrayEntry::Submenu { id, .. } => (*id).into(),
-                TrayEntry::Info { .. } => "info".into(),
-            })
-            .collect();
-        assert_eq!(
-            structure,
-            [
+        for updates_managed_externally in [false, true] {
+            let snapshot = TraySnapshot::new_with_update_policy(
+                vec![],
+                TraySyncState::Idle,
+                true,
+                true,
+                false,
+                updates_managed_externally,
+            );
+            let structure: Vec<_> = snapshot
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    TrayEntry::Action { action, .. } | TrayEntry::Check { action, .. } => {
+                        action.menu_id()
+                    }
+                    TrayEntry::Separator => "separator".into(),
+                    TrayEntry::Submenu { id, .. } => (*id).into(),
+                    TrayEntry::Info { .. } => "info".into(),
+                })
+                .collect();
+            let mut expected = [
                 "nyaterm::tray::show",
                 "nyaterm::tray::hide",
                 "separator",
@@ -569,13 +604,19 @@ mod tests {
                 "nyaterm::tray::lock",
                 "nyaterm::tray::update",
                 "separator",
-                "nyaterm::tray::quit"
+                "nyaterm::tray::quit",
             ]
-        );
-        assert!(matches!(
-            &snapshot.entries[9],
-            TrayEntry::Check { checked: true, .. }
-        ));
+            .map(str::to_string)
+            .to_vec();
+            if updates_managed_externally {
+                expected.retain(|id| id != "nyaterm::tray::update");
+            }
+            assert_eq!(structure, expected);
+            assert!(matches!(
+                &snapshot.entries[9],
+                TrayEntry::Check { checked: true, .. }
+            ));
+        }
         let snapshot = TraySnapshot::new(vec![], TraySyncState::Idle, false, false, false);
         assert!(!snapshot.action_enabled(&TrayAction::Lock));
         assert!(matches!(

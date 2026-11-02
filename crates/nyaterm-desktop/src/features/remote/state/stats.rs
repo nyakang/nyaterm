@@ -33,6 +33,8 @@ pub(super) struct StatsPaneState {
     warmup_retry_attempted: bool,
     /// Bumped by every mutation that changes what `stats_presentation` returns.
     revision: u64,
+    users_revision: u64,
+    users_refresh_pending: bool,
     active_session_id: Option<String>,
     network_history: HashMap<String, VecDeque<NetworkHistorySample>>,
     selected_network_interfaces: HashMap<String, String>,
@@ -103,6 +105,29 @@ impl StatsPaneState {
     /// Record that the presentation changed.
     fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(super) fn users_revision(&self) -> u64 {
+        self.users_revision
+    }
+
+    pub(super) fn invalidate_users(&mut self, enabled: bool) {
+        self.users_revision = self.users_revision.wrapping_add(1);
+        self.users_refresh_pending = enabled;
+        for stats in self.snapshots.values_mut() {
+            stats.users.clear();
+            stats.login_sessions.clear();
+            stats.users_status = nyaterm_transport::LoggedInUsersStatus::NotCollected;
+        }
+        self.touch();
+    }
+
+    pub(super) fn users_refresh_pending(&self) -> bool {
+        self.users_refresh_pending
+    }
+
+    pub(super) fn take_users_refresh_due(&mut self) -> bool {
+        std::mem::take(&mut self.users_refresh_pending)
     }
 
     pub(super) fn revision(&self) -> u64 {
@@ -245,6 +270,7 @@ impl StatsPaneState {
         manual: bool,
     ) -> RemoteJobTicket<StatsJobResult> {
         self.touch();
+        self.users_refresh_pending = false;
         let ticket = self.job.begin(session_id);
         if manual {
             self.manual_job_id = Some(ticket.job_id);
@@ -328,6 +354,8 @@ impl StatsPaneState {
             warmup_retry_pending: false,
             warmup_retry_attempted: false,
             revision: 0,
+            users_revision: 0,
+            users_refresh_pending: false,
             active_session_id: None,
             network_history: HashMap::new(),
             selected_network_interfaces: HashMap::new(),
@@ -396,9 +424,16 @@ impl StatsPaneState {
 
     pub(super) fn apply_stats_event(
         &mut self,
-        event: StatsJobResult,
+        mut event: StatsJobResult,
         active_session_id: Option<&str>,
     ) -> StatsApplyOutcome {
+        if event.users_revision != self.users_revision
+            && let Ok(stats) = &mut event.result
+        {
+            stats.users.clear();
+            stats.login_sessions.clear();
+            stats.users_status = nyaterm_transport::LoggedInUsersStatus::NotCollected;
+        }
         // A tab switch invalidates the presentation job, but a bounded icon
         // probe still belongs to its original connection. Reconnect/close removes
         // its token, so a reply from an older connection cannot satisfy a new one.
@@ -526,6 +561,7 @@ mod tests {
             assert!(!state.icon_probe_due("a"));
             state.apply_stats_event(
                 StatsJobResult {
+                    users_revision: 0,
                     job_id: ticket.job_id,
                     session_id: "a".into(),
                     result: Err("probe failed".into()),
@@ -566,6 +602,7 @@ mod tests {
         let current = state.begin_job("b".into(), false);
         let outcome = state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: old.job_id,
                 session_id: "a".into(),
                 result: Ok(stats(&[])),
@@ -591,6 +628,7 @@ mod tests {
         assert!(matches!(
             state.apply_stats_event(
                 StatsJobResult {
+                    users_revision: 0,
                     job_id: old.job_id,
                     session_id: "a".into(),
                     result: Ok(stats(&[]))
@@ -604,6 +642,7 @@ mod tests {
         assert!(state.is_pending_for("a"));
         state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: current.job_id,
                 session_id: "a".into(),
                 result: Ok(stats(&[])),
@@ -611,6 +650,55 @@ mod tests {
             Some("a"),
         );
         assert!(!state.icon_probe_needed("a"));
+    }
+
+    #[test]
+    fn toggling_users_clears_cache_and_discards_only_user_data_from_old_jobs() {
+        use nyaterm_transport::{LoggedInSession, LoggedInUser, LoggedInUsersStatus};
+        let mut state = StatsPaneState::new();
+        let mut snapshot = stats(&[("eth0", 10., 20.)]);
+        snapshot.users = vec![LoggedInUser {
+            name: "alice".into(),
+            sessions: 2,
+        }];
+        snapshot.users_status = LoggedInUsersStatus::Available;
+        snapshot.login_sessions = vec![LoggedInSession {
+            name: "alice".into(),
+            terminal: "pts/0".into(),
+            login_time: "2026-11-01 23:37".into(),
+            source: Some("host.example".into()),
+        }];
+        state.apply_data("a", snapshot.clone());
+        let ticket = state.begin_job("a".into(), false);
+        state.invalidate_users(false);
+        assert!(state.stats_presentation().data.unwrap().users.is_empty());
+        assert!(
+            state
+                .stats_presentation()
+                .data
+                .unwrap()
+                .login_sessions
+                .is_empty()
+        );
+        assert!(!state.take_users_refresh_due());
+        state.apply_stats_event(
+            StatsJobResult {
+                users_revision: 0,
+                job_id: ticket.job_id,
+                session_id: "a".into(),
+                result: Ok(snapshot),
+            },
+            Some("a"),
+        );
+        let current = state.stats_presentation().data.unwrap();
+        assert!(current.users.is_empty());
+        assert!(current.login_sessions.is_empty());
+        assert_eq!(current.users_status, LoggedInUsersStatus::NotCollected);
+        assert_eq!(current.networks.len(), 1);
+        state.invalidate_users(true);
+        state.invalidate_users(true);
+        assert!(state.take_users_refresh_due());
+        assert!(!state.take_users_refresh_due());
     }
 
     fn stats(interfaces: &[(&str, f64, f64)]) -> RemoteStats {
@@ -782,6 +870,7 @@ mod tests {
         assert!(matches!(
             state.apply_stats_event(
                 StatsJobResult {
+                    users_revision: 0,
                     job_id: ticket.job_id,
                     session_id: "a".to_string(),
                     result: Ok(stats(&[("eth0", 30., 40.)])),

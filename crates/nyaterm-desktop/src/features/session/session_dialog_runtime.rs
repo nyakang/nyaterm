@@ -323,6 +323,17 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        // A tmux host closing takes its virtual pane sessions with it —
+        // detached or not, they only exist as projections of this session.
+        // The converse (a pane leaf being removed) drops its host-side index
+        // entry so `pane_for_session` cannot resurrect it.
+        if let Some(pane_sessions) = self.tmux.remove_host(session_id) {
+            for pane_session_id in pane_sessions {
+                self.remove_session_state(&pane_session_id, cx);
+            }
+        } else {
+            self.tmux.drop_pane_session(session_id);
+        }
         self.clear_terminal_composition_for_session(session_id, cx);
         self.transfer.cancel_bulk_jobs_for_session(session_id);
         self.reconcile_bulk_transfer_jobs();
@@ -336,6 +347,7 @@ impl NyaTermApp {
         self.session.start.clear_reconnect_failure(session_id);
         // If this leaf was a tab root, drop its pane tree (prune will rekey survivors).
         self.shell.remove_workspace_session(session_id);
+        self.file_manager.remove_sftp_session(session_id);
         self.session.remove_session_catalog(session_id);
         self.session.clear_event_bridge_session(session_id);
         self.terminal.remove_frame_session(session_id);

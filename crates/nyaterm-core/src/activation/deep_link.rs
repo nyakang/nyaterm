@@ -6,6 +6,9 @@ use thiserror::Error;
 use url::{Host, Url};
 
 use super::{ActivationRequest, RawActivationArg};
+use crate::models::ssh_runtime::SshRuntimeMode;
+use crate::secret::SecretString;
+use zeroize::Zeroizing;
 
 pub const MAX_DEEP_LINK_BYTES: usize = 4 * 1024;
 pub const MAX_ACTIVATION_ACTIONS: usize = 16;
@@ -18,10 +21,15 @@ pub enum ActivationAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExternalConnectionRequest {
+    Local {
+        cwd: Option<String>,
+    },
     Ssh {
         host: String,
         port: u16,
         username: Option<String>,
+        password: Option<SecretString>,
+        runtime_mode: Option<SshRuntimeMode>,
     },
     Telnet {
         host: String,
@@ -61,21 +69,101 @@ pub enum ActivationParseError {
     DuplicateParameter,
     #[error("activation link contains an unknown query parameter")]
     UnknownParameter,
+    #[error("invalid external invocation option")]
+    InvalidOption,
+    #[error("invalid SSH runtime mode")]
+    InvalidMode,
 }
 
 pub fn parse_activation_request(
     request: &ActivationRequest,
 ) -> Result<Vec<ActivationAction>, ActivationParseError> {
-    if request.args.is_empty() {
-        return Ok(vec![ActivationAction::Activate]);
-    }
-    if request.args.len() > MAX_ACTIVATION_ACTIONS {
-        return Err(ActivationParseError::TooManyActions);
-    }
-    request.args.iter().map(parse_activation_arg).collect()
+    parse_activation_batch(request).into_iter().collect()
 }
 
-fn parse_activation_arg(arg: &RawActivationArg) -> Result<ActivationAction, ActivationParseError> {
+/// Parse independently so one rejected link cannot suppress other valid requests.
+pub fn parse_activation_batch(
+    request: &ActivationRequest,
+) -> Vec<Result<ActivationAction, ActivationParseError>> {
+    if request.args.len() > super::MAX_ACTIVATION_ARGS {
+        return vec![Err(ActivationParseError::TooManyActions)];
+    }
+    let mut actions = Vec::new();
+    let mut local = false;
+    let mut reuse = false;
+    let mut cwd = None;
+    let mut local_error = None;
+    let mut args = request.args.iter().peekable();
+    while let Some(arg) = args.next() {
+        let text = match activation_text(arg) {
+            Ok(text) => text,
+            Err(error) => {
+                actions.push(Err(error));
+                continue;
+            }
+        };
+        match text.as_str() {
+            "--reuse-window" => {
+                if reuse {
+                    actions.push(Err(ActivationParseError::DuplicateParameter));
+                }
+                reuse = true;
+            }
+            "--local" => {
+                if local {
+                    local_error = Some(ActivationParseError::DuplicateParameter);
+                }
+                local = true;
+            }
+            "--cwd" => {
+                let value = if args.peek().is_some_and(|arg| {
+                    activation_text(arg).is_ok_and(|text| text.starts_with("--"))
+                }) {
+                    Err(ActivationParseError::InvalidOption)
+                } else {
+                    args.next()
+                        .ok_or(ActivationParseError::InvalidOption)
+                        .and_then(activation_text)
+                };
+                match value {
+                    Ok(value) if !value.starts_with("--") => {
+                        if let Err(error) = set_once(&mut cwd, value.to_string()) {
+                            local_error = Some(error);
+                        }
+                    }
+                    _ => local_error = Some(ActivationParseError::InvalidOption),
+                }
+            }
+            value if value.starts_with("--cwd=") => {
+                if let Err(error) = set_once(&mut cwd, value[6..].to_string()) {
+                    local_error = Some(error);
+                }
+            }
+            _ => actions.push(parse_deep_link(&text)),
+        }
+    }
+    if cwd.is_some() && !local {
+        local_error = Some(ActivationParseError::InvalidOption);
+    }
+    if let Some(error) = local_error {
+        actions.push(Err(error));
+    } else if local {
+        actions.push(
+            validate_cwd(cwd)
+                .map(|cwd| ActivationAction::Connect(ExternalConnectionRequest::Local { cwd })),
+        );
+    }
+    if actions.len() > MAX_ACTIVATION_ACTIONS {
+        actions.truncate(MAX_ACTIVATION_ACTIONS);
+        actions.insert(0, Err(ActivationParseError::TooManyActions));
+    }
+    if actions.is_empty() {
+        actions.push(Ok(ActivationAction::Activate));
+    }
+    actions
+}
+
+fn activation_text(arg: &RawActivationArg) -> Result<Zeroizing<String>, ActivationParseError> {
     let text = match arg {
         RawActivationArg::Bytes(bytes) => String::from_utf8(bytes.clone())
             .map_err(|_| ActivationParseError::InvalidTextEncoding)?,
@@ -86,10 +174,20 @@ fn parse_activation_arg(arg: &RawActivationArg) -> Result<ActivationAction, Acti
     if text.len() > MAX_DEEP_LINK_BYTES {
         return Err(ActivationParseError::LinkTooLong);
     }
-    if text.is_empty() || text.trim() != text || text.chars().any(char::is_control) {
+    if text.is_empty() || text.chars().any(char::is_control) {
         return Err(ActivationParseError::InvalidText);
     }
-    parse_deep_link(&text)
+    Ok(Zeroizing::new(text))
+}
+
+fn validate_cwd(cwd: Option<String>) -> Result<Option<String>, ActivationParseError> {
+    if cwd
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty() || value.chars().any(char::is_control))
+    {
+        return Err(ActivationParseError::InvalidText);
+    }
+    Ok(cwd)
 }
 
 pub fn parse_deep_link(text: &str) -> Result<ActivationAction, ActivationParseError> {
@@ -100,26 +198,47 @@ pub fn parse_deep_link(text: &str) -> Result<ActivationAction, ActivationParseEr
         return Err(ActivationParseError::InvalidText);
     }
     let url = Url::parse(text).map_err(|_| ActivationParseError::InvalidUrl)?;
+    if !text
+        .split_once(':')
+        .is_some_and(|(_, rest)| rest.starts_with("//"))
+    {
+        return Err(ActivationParseError::UnsupportedScheme);
+    }
     match url.scheme() {
-        "ssh" if text.starts_with("ssh://") => parse_ssh_url(text, &url),
-        "telnet" if text.starts_with("telnet://") => parse_telnet_url(text, &url),
-        "nyaterm" if text.starts_with("nyaterm://") => parse_nyaterm_url(&url),
-        "nyaterm-preview" if text.starts_with("nyaterm-preview://") => parse_nyaterm_url(&url),
+        "ssh" => parse_ssh_url(text, &url),
+        "telnet" => parse_telnet_url(text, &url),
+        "nyaterm" => parse_nyaterm_url(&url),
+        "nyaterm-preview" => parse_nyaterm_url(&url),
         _ => Err(ActivationParseError::UnsupportedScheme),
     }
 }
 
 fn parse_ssh_url(text: &str, url: &Url) -> Result<ActivationAction, ActivationParseError> {
     reject_common_suffix(url)?;
-    if !url.path().is_empty() || url.query().is_some() {
+    if !url.path().is_empty() {
         return Err(ActivationParseError::UnsupportedComponent);
     }
     let authority = authority(text, "ssh://")?;
     if authority.ends_with(':') {
         return Err(ActivationParseError::InvalidPort);
     }
-    if url.password().is_some() {
-        return Err(ActivationParseError::CredentialsNotAllowed);
+    let password = authority
+        .rsplit_once('@')
+        .and_then(|(userinfo, _)| userinfo.split_once(':'))
+        .map(|(_, password)| strict_percent_decode(password))
+        .transpose()?
+        .map(SecretString::new);
+    let mut runtime_mode = None;
+    if url.query().is_some() {
+        for (key, value) in strict_query_pairs(url.query())? {
+            if key != "mode" {
+                return Err(ActivationParseError::UnknownParameter);
+            }
+            set_once(
+                &mut runtime_mode,
+                SshRuntimeMode::parse(&value).ok_or(ActivationParseError::InvalidMode)?,
+            )?;
+        }
     }
     let username = if authority.contains('@') {
         Some(validate_url_username(url.username())?)
@@ -132,6 +251,8 @@ fn parse_ssh_url(text: &str, url: &Url) -> Result<ActivationAction, ActivationPa
         host,
         port,
         username,
+        password,
+        runtime_mode,
     }))
 }
 
@@ -159,12 +280,31 @@ fn parse_nyaterm_url(url: &Url) -> Result<ActivationAction, ActivationParseError
     if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
         return Err(ActivationParseError::CredentialsNotAllowed);
     }
-    if url.host_str() != Some("connect") {
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("connect"))
+    {
         return Err(ActivationParseError::UnsupportedAction);
     }
-    match url.path() {
+    match url.path().to_ascii_lowercase().as_str() {
         "/ssh" => parse_nyaterm_ssh_query(url.query()),
         "/telnet" => parse_nyaterm_telnet_query(url.query()),
+        "/local" => {
+            let mut cwd = None;
+            if url.query().is_some() {
+                for (key, value) in strict_query_pairs(url.query())? {
+                    if key != "cwd" {
+                        return Err(ActivationParseError::UnknownParameter);
+                    }
+                    set_once(&mut cwd, value)?;
+                }
+            }
+            Ok(ActivationAction::Connect(
+                ExternalConnectionRequest::Local {
+                    cwd: validate_cwd(cwd)?,
+                },
+            ))
+        }
         _ => Err(ActivationParseError::UnsupportedAction),
     }
 }
@@ -173,11 +313,16 @@ fn parse_nyaterm_ssh_query(query: Option<&str>) -> Result<ActivationAction, Acti
     let mut host = None;
     let mut port = None;
     let mut username = None;
+    let mut runtime_mode = None;
     for (key, value) in strict_query_pairs(query)? {
         match key.as_str() {
-            "host" => set_once(&mut host, normalize_query_host(&value)?)?,
+            "host" => set_once(&mut host, normalize_external_host(&value)?)?,
             "port" => set_once(&mut port, parse_port(&value)?)?,
             "username" => set_once(&mut username, validate_query_username(value)?)?,
+            "mode" => set_once(
+                &mut runtime_mode,
+                SshRuntimeMode::parse(&value).ok_or(ActivationParseError::InvalidMode)?,
+            )?,
             _ => return Err(ActivationParseError::UnknownParameter),
         }
     }
@@ -185,6 +330,8 @@ fn parse_nyaterm_ssh_query(query: Option<&str>) -> Result<ActivationAction, Acti
         host: host.ok_or(ActivationParseError::InvalidHost)?,
         port: port.unwrap_or(22),
         username,
+        password: None,
+        runtime_mode,
     }))
 }
 
@@ -195,7 +342,7 @@ fn parse_nyaterm_telnet_query(
     let mut port = None;
     for (key, value) in strict_query_pairs(query)? {
         match key.as_str() {
-            "host" => set_once(&mut host, normalize_query_host(&value)?)?,
+            "host" => set_once(&mut host, normalize_external_host(&value)?)?,
             "port" => set_once(&mut port, parse_port(&value)?)?,
             _ => return Err(ActivationParseError::UnknownParameter),
         }
@@ -216,9 +363,12 @@ fn reject_common_suffix(url: &Url) -> Result<(), ActivationParseError> {
 }
 
 fn authority<'a>(text: &'a str, prefix: &str) -> Result<&'a str, ActivationParseError> {
-    let rest = text
-        .strip_prefix(prefix)
+    let (scheme, rest) = text
+        .split_once("://")
         .ok_or(ActivationParseError::UnsupportedScheme)?;
+    if !scheme.eq_ignore_ascii_case(prefix.trim_end_matches("://")) {
+        return Err(ActivationParseError::UnsupportedScheme);
+    }
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     if authority.is_empty() {
@@ -232,11 +382,15 @@ fn normalize_url_host(url: &Url) -> Result<String, ActivationParseError> {
     normalize_host(host)
 }
 
-fn normalize_query_host(value: &str) -> Result<String, ActivationParseError> {
+pub fn normalize_external_host(value: &str) -> Result<String, ActivationParseError> {
     validate_plain_text(value, 253).map_err(|_| ActivationParseError::InvalidHost)?;
     if value.contains(['/', '\\', '@', '?', '#']) {
         return Err(ActivationParseError::InvalidHost);
     }
+    let value = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(value);
     if let Ok(address) = IpAddr::from_str(value) {
         return Ok(address.to_string());
     }
@@ -245,7 +399,7 @@ fn normalize_query_host(value: &str) -> Result<String, ActivationParseError> {
 
 fn normalize_host<S: AsRef<str>>(host: Host<S>) -> Result<String, ActivationParseError> {
     let value = match host {
-        Host::Domain(domain) => domain.as_ref().to_string(),
+        Host::Domain(domain) => domain.as_ref().to_lowercase(),
         Host::Ipv4(address) => address.to_string(),
         Host::Ipv6(address) => address.to_string(),
     };
@@ -254,17 +408,11 @@ fn normalize_host<S: AsRef<str>>(host: Host<S>) -> Result<String, ActivationPars
 }
 
 fn validate_url_username(value: &str) -> Result<String, ActivationParseError> {
-    if value.contains('%') {
-        return Err(ActivationParseError::InvalidUsername);
-    }
-    validate_query_username(value.to_string())
+    validate_query_username(strict_percent_decode(value)?)
 }
 
 fn validate_query_username(value: String) -> Result<String, ActivationParseError> {
     validate_plain_text(&value, 128).map_err(|_| ActivationParseError::InvalidUsername)?;
-    if value.contains(['@', ':', '/', '\\', '?', '#']) {
-        return Err(ActivationParseError::InvalidUsername);
-    }
     Ok(value)
 }
 
@@ -353,7 +501,149 @@ mod tests {
         ActivationAction, ActivationParseError, ExternalConnectionRequest, MAX_ACTIVATION_ACTIONS,
         parse_activation_request, parse_deep_link,
     };
+    use crate::ActivationOpenBehavior;
+    use crate::models::ssh_runtime::SshRuntimeMode;
     use crate::{ActivationRequest, RawActivationArg};
+
+    fn invocation(args: &[&str]) -> ActivationRequest {
+        ActivationRequest::from_os_args([9; 16], args.iter().map(std::ffi::OsString::from))
+    }
+
+    #[test]
+    fn encoded_userinfo_is_decoded_once_and_never_debugged() {
+        let action =
+            parse_deep_link("SSH://domain%5Cuser%40realm:p%40ss%2521@[2001:db8::1]:2222?mode=sftp")
+                .unwrap();
+        assert!(!format!("{action:?}").contains("p@ss%21"));
+        let ActivationAction::Connect(ExternalConnectionRequest::Ssh {
+            host,
+            port,
+            username,
+            password,
+            runtime_mode,
+        }) = action
+        else {
+            panic!("expected SSH");
+        };
+        assert_eq!(host, "2001:db8::1");
+        assert_eq!(port, 2222);
+        assert_eq!(username.as_deref(), Some("domain\\user@realm"));
+        assert_eq!(password.unwrap().expose_secret(), "p@ss%21");
+        assert_eq!(runtime_mode, Some(SshRuntimeMode::Sftp));
+        let raw = invocation(&["ssh://user:do-not-log@example.com"]);
+        assert!(!format!("{raw:?}").contains("do-not-log"));
+        assert!(!format!("{:?}", raw.parse()).contains("do-not-log"));
+        assert!(matches!(
+            parse_deep_link("ssh://user:@host"),
+            Ok(ActivationAction::Connect(ExternalConnectionRequest::Ssh {
+                password: Some(_),
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn routing_and_execution_share_options_and_keep_valid_batch_items() {
+        let parsed = invocation(&[
+            "--reuse-window",
+            "ssh://host",
+            "ssh://host?command=id",
+            "telnet://host",
+        ])
+        .parse();
+        assert_eq!(
+            parsed.open_behavior,
+            ActivationOpenBehavior::ReuseMostRecent
+        );
+        assert_eq!(parsed.actions.len(), 3);
+        assert!(parsed.actions[0].is_ok());
+        assert!(parsed.actions[1].is_err());
+        assert!(parsed.actions[2].is_ok());
+        assert_eq!(
+            invocation(&[]).parse().open_behavior,
+            ActivationOpenBehavior::NewWindow
+        );
+        assert_eq!(
+            invocation(&["ssh://host"]).parse().open_behavior,
+            ActivationOpenBehavior::ReuseMostRecent
+        );
+        assert_eq!(
+            invocation(&["--reuse-window"]).parse().actions,
+            vec![Ok(ActivationAction::Activate)]
+        );
+    }
+
+    #[test]
+    fn local_invocation_preserves_spaces_unicode_and_literal_directory() {
+        let expected = ActivationAction::Connect(ExternalConnectionRequest::Local {
+            cwd: Some("C:\\中文 目录".into()),
+        });
+        assert_eq!(
+            parse_activation_request(&invocation(&["--local", "--cwd", "C:\\中文 目录"])),
+            Ok(vec![expected.clone()])
+        );
+        assert_eq!(
+            parse_activation_request(&invocation(&[
+                "--cwd=C:\\中文 目录",
+                "--local",
+                "--reuse-window"
+            ])),
+            Ok(vec![expected.clone()])
+        );
+        assert_eq!(
+            parse_deep_link(
+                "NYATERM://CONNECT/LOCAL?cwd=C%3A%5C%E4%B8%AD%E6%96%87%20%E7%9B%AE%E5%BD%95"
+            ),
+            Ok(expected)
+        );
+        for args in [
+            vec!["--cwd", "x"],
+            vec!["--local", "--cwd="],
+            vec!["--local", "--cwd"],
+            vec!["--cwd", "--local"],
+            vec!["--local", "--local"],
+            vec!["--local", "--cwd=x", "--cwd=y"],
+            vec!["--reuse-window", "--reuse-window"],
+        ] {
+            assert!(parse_activation_request(&invocation(&args)).is_err());
+        }
+    }
+
+    #[test]
+    fn all_modes_and_strict_rejections_apply_to_both_ssh_url_forms() {
+        for mode in ["standard", "terminal", "sftp"] {
+            for link in [
+                format!("ssh://host?mode={mode}"),
+                format!("nyaterm-preview://connect/ssh?host=host&mode={mode}"),
+            ] {
+                assert!(matches!(
+                    parse_deep_link(&link),
+                    Ok(ActivationAction::Connect(ExternalConnectionRequest::Ssh {
+                        runtime_mode: Some(_),
+                        ..
+                    }))
+                ));
+            }
+        }
+        for link in [
+            "ssh://a:%FF@host",
+            "ssh://a:%GG@host",
+            "ssh://a%00@host",
+            "ssh://host?mode=bad",
+            "ssh://host?mode=sftp&mode=terminal",
+            "ssh://host?proxy=x",
+            "ssh://host?private_key=x",
+            "ssh://host?forward=x",
+            "nyaterm://connect/local?cwd=",
+            "nyaterm://connect/local?command=id",
+        ] {
+            assert!(parse_deep_link(link).is_err());
+        }
+        assert!(matches!(
+            parse_deep_link(&format!("ssh://{}", "x".repeat(super::MAX_DEEP_LINK_BYTES))),
+            Err(ActivationParseError::LinkTooLong)
+        ));
+    }
 
     #[test]
     fn empty_request_activates_without_connecting() {
@@ -375,6 +665,8 @@ mod tests {
                 host: "example.com".to_string(),
                 port: 2200,
                 username: Some("alice".to_string()),
+                password: None,
+                runtime_mode: None,
             }))
         );
         assert_eq!(
@@ -392,6 +684,8 @@ mod tests {
                 host: "example.com".to_string(),
                 port: 22,
                 username: Some("deploy".to_string()),
+                password: None,
+                runtime_mode: None,
             }))
         );
         assert_eq!(
@@ -438,7 +732,7 @@ mod tests {
                 stable
             );
         }
-        assert!(parse_deep_link("NYATERM-PREVIEW://connect/ssh?host=a").is_err());
+        assert!(parse_deep_link("NYATERM-PREVIEW://connect/ssh?host=a").is_ok());
     }
 
     #[test]
@@ -447,6 +741,8 @@ mod tests {
             host: "example.com".to_string(),
             port: 22,
             username: None,
+            password: None,
+            runtime_mode: None,
         });
         for arg in [
             RawActivationArg::Bytes(b"ssh://example.com".to_vec()),
@@ -466,7 +762,6 @@ mod tests {
     #[test]
     fn rejects_credentials_suffixes_and_noncanonical_schemes() {
         for link in [
-            "ssh://alice:secret@example.com",
             "telnet://alice@example.com",
             "ssh://example.com/command",
             "ssh://example.com?command=id",
@@ -474,7 +769,6 @@ mod tests {
             "ssh://example.com:",
             "telnet://example.com:0",
             "telnet://example.com#fragment",
-            "SSH://example.com",
             "https://example.com",
             "nyaterm://user@connect/ssh?host=example.com",
         ] {

@@ -216,6 +216,7 @@ impl ConnectionStore {
             ));
         }
         let txn = self.db.begin_write()?;
+        super::cloud_sync_v4::record_remove(&txn, KNOWN_HOSTS_TABLE, id)?;
         {
             let mut table = txn.open_table(KNOWN_HOSTS_TABLE)?;
             let manageable = table
@@ -465,6 +466,9 @@ fn remove_known_hosts_for_host_in_txn(
     }
     drop(table);
 
+    for key in &keys {
+        super::cloud_sync_v4::record_remove(txn, KNOWN_HOSTS_TABLE, key)?;
+    }
     let mut table = txn.open_table(KNOWN_HOSTS_TABLE)?;
     for key in keys {
         table.remove(key.as_str())?;
@@ -578,6 +582,51 @@ fn known_host_key(record: &KnownHostRecord) -> String {
         record.key_type
     );
     format!("{KNOWN_HOST_PREFIX}{}", stable_id(&digest_input))
+}
+
+pub(super) fn validate_v4_record(
+    id: &str,
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, StorageError> {
+    let mut value = value.clone();
+    if value.get("created_at_ms").is_none() {
+        value["created_at_ms"] = serde_json::json!(current_time_ms());
+    }
+    value["updated_at_ms"] = serde_json::json!(current_time_ms());
+    value["raw_line"] = serde_json::Value::Null;
+    let record: KnownHostRecord = serde_json::from_value(value.clone())?;
+    if known_host_key(&record) != id
+        || known_host_fingerprint(&record).is_none()
+        || record
+            .marker
+            .as_deref()
+            .is_some_and(|marker| !matches!(marker, "@revoked" | "@cert-authority"))
+        || record.host_patterns.is_empty()
+        || record.host_identifier != record.host_patterns[0]
+        || record
+            .host_patterns
+            .iter()
+            .any(|pattern| pattern.is_empty() || pattern.contains(char::is_whitespace))
+    {
+        return Err(StorageError::InvalidData(
+            "Invalid synchronized SSH host identity".into(),
+        ));
+    }
+    Ok(value)
+}
+
+pub(super) fn parse_v4_export(content: &str) -> Vec<(String, serde_json::Value)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let record = parse_known_host_line(line.trim(), current_time_ms())?;
+            let id = known_host_key(&record);
+            let value = serde_json::to_value(record).ok()?;
+            validate_v4_record(&id, &value)
+                .ok()
+                .map(|value| (id, value))
+        })
+        .collect()
 }
 
 fn rdp_known_host_key(host: &str, port: u16) -> String {

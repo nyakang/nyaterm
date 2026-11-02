@@ -116,6 +116,24 @@ impl NyaTermApp {
         track_suggestions: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.send_terminal_input_with_delivery(bytes, track_suggestions, false, cx)
+    }
+
+    pub(in crate::features) fn send_terminal_literal_input(
+        &mut self,
+        bytes: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.send_terminal_input_with_delivery(bytes, true, true, cx)
+    }
+
+    fn send_terminal_input_with_delivery(
+        &mut self,
+        bytes: Vec<u8>,
+        track_suggestions: bool,
+        literal: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let input_started_at = Instant::now();
         if bytes.is_empty() || self.active_terminal_input_blocked() {
             return false;
@@ -161,7 +179,12 @@ impl NyaTermApp {
         // pending Enter submission is applied to every successful peer.
         let mut ok_sessions = Vec::new();
         let write_started_at = Instant::now();
-        match self.write_session_input_recorded(&session_id, &bytes) {
+        let result = if literal {
+            self.write_session_literal_input_recorded(&session_id, &bytes)
+        } else {
+            self.write_session_input_recorded(&session_id, &bytes)
+        };
+        match result {
             Ok(()) => ok_sessions.push(session_id),
             Err(error) => {
                 if self.set_terminal_status_if_changed(format!("input failed: {error}")) {
@@ -174,7 +197,12 @@ impl NyaTermApp {
         let mut synced = 0usize;
         let mut failed = 0usize;
         for peer_id in peers {
-            match self.write_session_input_recorded(&peer_id, &bytes) {
+            let result = if literal {
+                self.write_session_literal_input_recorded(&peer_id, &bytes)
+            } else {
+                self.write_session_input_recorded(&peer_id, &bytes)
+            };
+            match result {
                 Ok(()) => {
                     ok_sessions.push(peer_id);
                     synced += 1;
@@ -354,7 +382,15 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
-        self.note_shell_editing_input(&primary_bytes, cx);
+        // Kitty can encode Enter as CSI-u. Tracking/history still consume its
+        // logical submission, while each session keeps its own wire encoding.
+        let logical_bytes: &[u8] =
+            if event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() {
+                b"\r"
+            } else {
+                &primary_bytes
+            };
+        self.note_shell_editing_input(logical_bytes, cx);
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
@@ -362,13 +398,13 @@ impl NyaTermApp {
                 .summary()
                 .interaction_command_suggestions_enabled,
         ) {
-            self.note_command_suggestion_input(&primary_bytes, cx);
+            self.note_command_suggestion_input(logical_bytes, cx);
         }
         let suggestion_duration = suggestion_started_at.elapsed();
 
         let session_refs: Vec<&str> = ok_sessions.iter().map(String::as_str).collect();
         let history_started_at = Instant::now();
-        self.record_command_history_for_sessions(&session_refs, &primary_bytes);
+        self.record_command_history_for_sessions(&session_refs, logical_bytes);
         let history_duration = history_started_at.elapsed();
 
         let should_notify = synced > 0 || failed > 0;
@@ -553,10 +589,14 @@ impl NyaTermApp {
             motion,
             modifiers,
         } = report;
+        let allowed_peers = self.sync_peer_session_ids(session_id);
         let result = self.write_mouse_report_to_session(report, cx);
         if !press && self.terminal.selection.mouse_report_button.is_some() {
             let peers = std::mem::take(&mut self.terminal.selection.mouse_report_peer_session_ids);
             for peer_id in peers {
+                if !allowed_peers.contains(&peer_id) {
+                    continue;
+                }
                 let _ = self.write_mouse_report_to_session(
                     TerminalMouseReportRequest {
                         session_id: &peer_id,
@@ -587,6 +627,9 @@ impl NyaTermApp {
                 .mouse_report_peer_session_ids
                 .clone();
             for peer_id in peers {
+                if !allowed_peers.contains(&peer_id) {
+                    continue;
+                }
                 let _ = self.write_mouse_report_to_session(
                     TerminalMouseReportRequest {
                         session_id: &peer_id,
@@ -882,8 +925,25 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
         self.commands.cancel_staged_quick_command(session_id);
         self.write_guarded_terminal_input(session_id, bytes)
+    }
+
+    /// Literal text still uses the session charset, but bypasses transport text
+    /// rewriting (notably Telnet Enter-mode newline normalization).
+    pub(in crate::features) fn write_session_literal_input_recorded(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
+        let encoded = self.encode_session_outgoing(session_id, bytes)?;
+        self.write_session_raw_input_recorded(session_id, &encoded)
     }
 
     /// Only the current script owner may bypass cancellation by competing input.
@@ -1144,6 +1204,9 @@ impl NyaTermApp {
         wire_bytes: &[u8],
         recording_bytes: &[u8],
     ) -> Result<(), String> {
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
         self.commands.cancel_staged_quick_command(session_id);
         if self.security.screen_locked() {
             return Err("screen locked".to_string());

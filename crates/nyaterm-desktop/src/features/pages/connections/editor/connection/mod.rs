@@ -124,7 +124,8 @@ impl NyaTermApp {
                         .clone()
                         .unwrap_or_else(|| NO_SELECTION_VALUE.to_string()),
                     choice.label.clone(),
-                );
+                )
+                .disabled(choice.disabled);
                 if let Some(search_text) = choice.search_text.as_ref() {
                     option = option.search_text(search_text.clone());
                 }
@@ -217,15 +218,15 @@ impl NyaTermApp {
     ) -> AnyElement {
         self.connection_state
             .ensure_editor_forwarding_endpoint_fields(cx);
+        self.connection_state.sync_editor_password_input(cx);
         let password_disabled =
             editor.kind == ConnectionKindTab::Vnc && editor.vnc_security.mode == "none";
-        if let Some(field) = self
+        if let Some(input) = self
             .connection_state
             .editor_fields()
             .get(&ConnectionEditorField::Password)
-            .cloned()
         {
-            field.update(cx, |field, cx| field.set_disabled(password_disabled, cx));
+            input.update(cx, |state, cx| state.set_disabled(password_disabled, cx));
         }
         for (field, disabled) in [
             (
@@ -751,7 +752,29 @@ impl NyaTermApp {
                 })
                 .collect::<Vec<_>>(),
         );
-        let rdp_certificate_options = [
+        let mut rdp_backend_options = vec![ConnectionEditorChoice::new(
+            Some("builtin".into()),
+            t!("dialog.rdpBackendBuiltin"),
+            matches!(editor.rdp_backend.as_str(), "builtin" | "internal" | "auto"),
+        )];
+        let mut windows_backend = ConnectionEditorChoice::new(
+            Some("windows".into()),
+            t!("dialog.rdpBackendWindows"),
+            matches!(editor.rdp_backend.as_str(), "windows" | "active-x"),
+        );
+        windows_backend.disabled = !cfg!(windows);
+        rdp_backend_options.push(windows_backend);
+        if !matches!(
+            editor.rdp_backend.as_str(),
+            "auto" | "builtin" | "internal" | "windows" | "active-x"
+        ) {
+            rdp_backend_options.push(ConnectionEditorChoice::new(
+                Some(editor.rdp_backend.clone()),
+                t!("dialog.rdpBackendUnsupported"),
+                true,
+            ));
+        }
+        let mut rdp_certificate_options = [
             ("prompt", t!("dialog.rdpCertificatePrompt")),
             ("strict", t!("dialog.rdpCertificateStrict")),
             ("accept-temporarily", t!("dialog.rdpCertificateTemporary")),
@@ -766,6 +789,20 @@ impl NyaTermApp {
             ConnectionEditorChoice::new(Some(value.to_string()), label, selected)
         })
         .collect::<Vec<_>>();
+        if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+            rdp_certificate_options = vec![
+                ConnectionEditorChoice::new(
+                    None,
+                    t!("dialog.rdpWindowsAuthenticationRequired"),
+                    editor.rdp_security.windows_authentication.is_none(),
+                ),
+                ConnectionEditorChoice::new(
+                    Some("system".into()),
+                    t!("dialog.rdpWindowsAuthentication"),
+                    editor.rdp_security.windows_authentication.as_deref() == Some("system"),
+                ),
+            ];
+        }
         let rdp_display_options = [
             ("fit-window", t!("dialog.rdpDisplayFitWindow")),
             ("fixed", t!("dialog.rdpDisplayFixed")),
@@ -1111,6 +1148,11 @@ impl NyaTermApp {
             (
                 ConnectionEditorSelect::SshTerminalType,
                 ssh_terminal_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::RdpBackend,
+                rdp_backend_options.as_slice(),
                 String::new(),
             ),
             (
@@ -2275,7 +2317,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 32] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -2294,6 +2336,7 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
         ConnectionEditorSelect::SshAgentForwardingPolicy,
         ConnectionEditorSelect::SshProfile,
         ConnectionEditorSelect::SshTerminalType,
+        ConnectionEditorSelect::RdpBackend,
         ConnectionEditorSelect::RdpCertificatePolicy,
         ConnectionEditorSelect::RdpDisplayMode,
         ConnectionEditorSelect::RdpClipboardMode,
@@ -2333,6 +2376,7 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::SshAlgorithmMode => "connection-editor-ssh-algorithm-mode",
         ConnectionEditorSelect::SshProfile => "connection-editor-ssh-profile",
         ConnectionEditorSelect::SshTerminalType => "connection-editor-ssh-terminal-type",
+        ConnectionEditorSelect::RdpBackend => "connection-editor-rdp-backend",
         ConnectionEditorSelect::RdpCertificatePolicy => "connection-editor-rdp-certificate-policy",
         ConnectionEditorSelect::RdpDisplayMode => "connection-editor-rdp-display-mode",
         ConnectionEditorSelect::RdpClipboardMode => "connection-editor-rdp-clipboard-mode",
@@ -3199,6 +3243,7 @@ mod tests {
             username: String::new(),
             domain: String::new(),
             auth_mode: "password".to_string(),
+            rdp_backend: "builtin".to_string(),
             rdp_security: Default::default(),
             rdp_display: Default::default(),
             rdp_clipboard: Default::default(),
@@ -3371,6 +3416,445 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec![Some("child".to_string())]);
+    }
+
+    fn visible_password_eye(
+        app: &Entity<NyaTermApp>,
+        vcx: &mut VisualTestContext,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        app.read_with(vcx, |app, _| app.connection_state.editor_scroll())
+            .set_offset(point(px(0.), px(-10000.)));
+        draw_editor(app, vcx);
+        draw_editor(app, vcx);
+        vcx.debug_bounds("nya-input-mask-toggle").unwrap()
+    }
+
+    #[gpui::test]
+    fn saved_connection_password_supports_typing_paste_clear_and_locked_delete(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::models::ConnectionPasswordEdit;
+        let test_dir = TestConfigDir::new("nyaterm-single-password-input");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 900., 12.);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut draft = editor(None, None);
+                draft.id = Some("saved".into());
+                draft.password_source = ConnectionEditorPasswordSource::Direct;
+                draft.password_edit = ConnectionPasswordEdit::Keep;
+                draft.password = "old".into();
+                draft.existing_password = Some("old".into());
+                app.connection_state.begin_editor(draft);
+                app.connection_state.build_editor_fields(cx);
+            })
+        });
+        draw_editor(&app, vcx);
+        assert!(
+            vcx.debug_bounds("connection-editor-field-Password")
+                .is_some()
+        );
+        vcx.update(|window, cx| {
+            let input =
+                &app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Password];
+            assert_eq!(input.read(cx).value(cx), "old");
+            assert!(input.read(cx).is_masked());
+            window.focus(&input.read(cx).component_focus_handle(cx), cx);
+        });
+        draw_editor(&app, vcx);
+        let eye = visible_password_eye(&app, vcx);
+        vcx.simulate_click(eye.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert!(app.read_with(vcx, |app, cx| {
+            !app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .is_masked()
+                && !app.security.unlock_prompt_open()
+        }));
+        let eye = visible_password_eye(&app, vcx);
+        vcx.simulate_click(eye.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        vcx.simulate_keystrokes("secondary-a n e w");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|_, cx| {
+            let draft = app.read(cx).connection_state.active_editor_draft().unwrap();
+            draft.password_edit == ConnectionPasswordEdit::Replace
+                && draft.password.expose_secret() == "new"
+        }));
+        vcx.simulate_keystrokes("tab");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            let input =
+                &app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Password];
+            !input.read(cx).component_focus_handle(cx).is_focused(window)
+        }));
+        vcx.simulate_keystrokes("shift-tab");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            let input =
+                &app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Password];
+            input.read(cx).component_focus_handle(cx).is_focused(window)
+        }));
+        vcx.update(|_, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(" pasted ".into()))
+        });
+        vcx.simulate_keystrokes("secondary-a secondary-v");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|_, cx| {
+            app.read(cx)
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password
+                .expose_secret()
+                == " pasted "
+        }));
+        vcx.simulate_keystrokes("secondary-a backspace");
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.update(|_, cx| app
+                .read(cx)
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password_edit),
+            ConnectionPasswordEdit::Remove
+        );
+
+        for key in ["backspace", "delete"] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| app.connection_state.clear_editor_secrets(cx))
+            });
+            draw_editor(&app, vcx);
+            vcx.update(|window, cx| {
+                let input = &app.read(cx).connection_state.editor_fields()
+                    [&ConnectionEditorField::Password];
+                assert!(input.read(cx).value(cx).is_empty());
+                assert!(
+                    app.read(cx)
+                        .connection_state
+                        .editor_password_can_delete_stored()
+                );
+                window.focus(&input.read(cx).component_focus_handle(cx), cx);
+            });
+            draw_editor(&app, vcx);
+            let keystroke = gpui::Keystroke::parse(key).unwrap();
+            vcx.simulate_event(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            vcx.simulate_event(gpui::KeyUpEvent { keystroke });
+            draw_editor(&app, vcx);
+            assert_eq!(
+                vcx.update(|_, cx| app
+                    .read(cx)
+                    .connection_state
+                    .active_editor_draft()
+                    .unwrap()
+                    .password_edit),
+                ConnectionPasswordEdit::Remove
+            );
+        }
+        vcx.simulate_keystrokes("n e w");
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.update(|_, cx| app
+                .read(cx)
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password_edit),
+            ConnectionPasswordEdit::Replace
+        );
+    }
+
+    #[gpui::test]
+    fn password_eye_unlock_failure_cancel_and_success_preserve_the_new_draft(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::models::ConnectionPasswordEdit;
+        let test_dir = TestConfigDir::new("nyaterm-password-eye-unlock");
+        let app = test_app(cx, test_dir.path());
+        app.update(cx, |app, cx| {
+            app.sync_component_theme(cx);
+            let mut summary = app.settings.summary().clone();
+            summary.has_master_password = true;
+            app.settings.replace_summary(summary);
+            app.security.lock_secrets();
+            let mut draft = editor(None, None);
+            draft.password_edit = ConnectionPasswordEdit::Replace;
+            draft.password = " new draft ".into();
+            draft.existing_password = Some("old".into());
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+        });
+        let host_app = app.clone();
+        let (_, vcx) = cx.add_window_view(move |window, cx| {
+            let content = cx.new(|_| EditorHost {
+                app: host_app,
+                width: 640.,
+                height: 900.,
+                font_size: 12.,
+                native_window: false,
+            });
+            nyaterm_ui::nya_root(content, window, cx)
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        draw_editor(&app, vcx);
+        app.update(vcx, |app, _| {
+            let mut summary = app.settings.summary().clone();
+            summary.has_master_password = true;
+            app.settings.replace_summary(summary);
+            app.security.lock_secrets();
+        });
+        let eye = visible_password_eye(&app, vcx);
+        vcx.simulate_click(eye.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert!(app.read_with(vcx, |app, _| app.security.unlock_prompt_open()));
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let request = app.security.begin_unlock_request().unwrap().0;
+                let generation = app.security.unlock_dialog_generation();
+                app.finish_security_unlock(
+                    request,
+                    generation,
+                    window.window_handle(),
+                    Ok(false),
+                    window,
+                    cx,
+                );
+                assert!(app.security.unlock_error().is_some());
+                assert_eq!(
+                    app.connection_state
+                        .active_editor_draft()
+                        .unwrap()
+                        .password
+                        .expose_secret(),
+                    " new draft "
+                );
+            })
+        });
+        draw_editor(&app, vcx);
+        vcx.simulate_keystrokes("escape");
+        draw_editor(&app, vcx);
+        assert!(!app.read_with(vcx, |app, _| app.security.unlock_prompt_open()));
+        assert_eq!(
+            app.read_with(vcx, |app, _| app
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password_edit),
+            ConnectionPasswordEdit::Replace
+        );
+
+        let eye = visible_password_eye(&app, vcx);
+        vcx.simulate_click(eye.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let request = app.security.begin_unlock_request().unwrap().0;
+                let generation = app.security.unlock_dialog_generation();
+                app.finish_security_unlock(
+                    request,
+                    generation,
+                    window.window_handle(),
+                    Ok(true),
+                    window,
+                    cx,
+                );
+            })
+        });
+        draw_editor(&app, vcx);
+        vcx.update(|_, cx| {
+            let input =
+                &app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Password];
+            assert!(!input.read(cx).is_masked());
+            assert_eq!(input.read(cx).value(cx), " new draft ");
+        });
+        // Hiding must work even if the security owner has become locked.
+        vcx.update(|_, cx| app.update(cx, |app, _| app.security.lock_secrets()));
+        let eye = visible_password_eye(&app, vcx);
+        vcx.simulate_click(eye.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert!(!app.read_with(vcx, |app, _| app.security.unlock_prompt_open()));
+        assert!(app.read_with(vcx, |app, cx| {
+            app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .is_masked()
+        }));
+    }
+
+    #[gpui::test]
+    fn account_password_input_rejects_typing_and_paste_and_unlink_restores_editing(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::models::{ConnectionEditorSelect, ConnectionPasswordEdit};
+        let test_dir = TestConfigDir::new("nyaterm-account-readonly-password");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 900., 12.);
+        for kind in [
+            ConnectionKindTab::Ssh,
+            ConnectionKindTab::Telnet,
+            ConnectionKindTab::Rdp,
+            ConnectionKindTab::Vnc,
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    let mut draft = editor(None, None);
+                    draft.kind = kind;
+                    draft.password_edit = ConnectionPasswordEdit::Keep;
+                    if matches!(kind, ConnectionKindTab::Ssh | ConnectionKindTab::Telnet) {
+                        draft.account_id = Some("account".into());
+                    } else {
+                        draft.password_id = Some("account".into());
+                    }
+                    draft.password_source = ConnectionEditorPasswordSource::Saved;
+                    app.connection_state.begin_editor(draft);
+                    app.connection_state.build_editor_fields(cx);
+                    let token = app.connection_state.begin_editor_password_reveal().unwrap();
+                    app.connection_state.complete_editor_password_reveal(
+                        token,
+                        Ok(Some("account secret".into())),
+                        cx,
+                    );
+                })
+            });
+            draw_editor(&app, vcx);
+            vcx.update(|window, cx| {
+                let input = &app.read(cx).connection_state.editor_fields()
+                    [&ConnectionEditorField::Password];
+                window.focus(&input.read(cx).component_focus_handle(cx), cx);
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste".into()));
+            });
+            draw_editor(&app, vcx);
+            vcx.simulate_keystrokes("secondary-a x secondary-v backspace delete");
+            draw_editor(&app, vcx);
+            assert_eq!(
+                app.read_with(vcx, |app, cx| app.connection_state.editor_fields()
+                    [&ConnectionEditorField::Password]
+                    .read(cx)
+                    .value(cx)),
+                "account secret"
+            );
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    let select =
+                        if matches!(kind, ConnectionKindTab::Ssh | ConnectionKindTab::Telnet) {
+                            ConnectionEditorSelect::Account
+                        } else {
+                            ConnectionEditorSelect::SavedPassword
+                        };
+                    app.set_connection_editor_select_value(select, None, cx);
+                })
+            });
+            draw_editor(&app, vcx);
+            vcx.update(|window, cx| {
+                let input = &app.read(cx).connection_state.editor_fields()
+                    [&ConnectionEditorField::Password];
+                assert!(input.read(cx).value(cx).is_empty());
+                window.focus(&input.read(cx).component_focus_handle(cx), cx);
+            });
+            draw_editor(&app, vcx);
+            vcx.simulate_keystrokes("n e w");
+            draw_editor(&app, vcx);
+            assert_eq!(
+                app.read_with(vcx, |app, _| app
+                    .connection_state
+                    .active_editor_draft()
+                    .unwrap()
+                    .password
+                    .expose_secret()
+                    .to_owned()),
+                "new"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn post_login_editor_preserves_edits_across_navigation_and_saves_only_with_shortcut(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::features::connections::ConnectionEditorToggle;
+        use crate::models::ConnectionEditorSection;
+
+        let test_dir = TestConfigDir::new("nyaterm-post-login-editor");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut draft = editor(None, None);
+                draft.post_login_enabled = true;
+                draft.post_login_command = "echo hello".into();
+                app.connection_state.begin_editor(draft);
+                app.connection_state.build_editor_fields(cx);
+                app.set_connection_editor_section(ConnectionEditorSection::PostLogin, cx);
+            });
+        });
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.debug_bounds("connection-editor-post-login-command")
+                .unwrap()
+                .size
+                .height,
+            px(168.)
+        );
+        let input = vcx.update(|window, cx| {
+            let input = app.read(cx).connection_state.editor_fields()
+                [&ConnectionEditorField::PostLoginCommand]
+                .clone();
+            input.update(cx, |input, cx| input.focus_with_cursor_at_end(window, cx));
+            input
+        });
+        vcx.simulate_keystrokes("enter shift-enter");
+        draw_editor(&app, vcx);
+        vcx.update(|_, cx| {
+            let draft = app.read(cx).connection_state.active_editor_draft().unwrap();
+            assert_eq!(draft.section, ConnectionEditorSection::PostLogin);
+            assert!(draft.field_errors.is_empty());
+            assert_eq!(draft.post_login_command, "echo hello\n\n");
+        });
+        for section in [
+            ConnectionEditorSection::Basic,
+            ConnectionEditorSection::PostLogin,
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| app.set_connection_editor_section(section, cx))
+            });
+            draw_editor(&app, vcx);
+        }
+        for _ in 0..2 {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.toggle_connection_editor_flag(ConnectionEditorToggle::PostLogin, cx)
+                })
+            });
+            draw_editor(&app, vcx);
+        }
+        vcx.update(|window, cx| {
+            assert_eq!(
+                input.entity_id(),
+                app.read(cx).connection_state.editor_fields()
+                    [&ConnectionEditorField::PostLoginCommand]
+                    .entity_id()
+            );
+            assert_eq!(input.read(cx).value(cx), "echo hello\n\n");
+            input.update(cx, |input, cx| input.focus_with_cursor_at_end(window, cx));
+        });
+        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-enter"
+        } else {
+            "ctrl-enter"
+        });
+        draw_editor(&app, vcx);
+        vcx.update(|_, cx| {
+            let draft = app.read(cx).connection_state.active_editor_draft().unwrap();
+            assert_eq!(draft.post_login_command, "echo hello\n\n");
+            assert!(
+                draft
+                    .field_errors
+                    .contains_key(&ConnectionEditorField::Host),
+                "save must validate the connection"
+            );
+            assert_eq!(draft.section, ConnectionEditorSection::Basic);
+        });
     }
 
     #[gpui::test]
@@ -3627,10 +4111,8 @@ mod tests {
                     crate::models::ConnectionEditorSection::Basic,
                     cx,
                 );
-                app.set_connection_editor_password_source(
-                    ConnectionEditorPasswordSource::Saved,
-                    cx,
-                );
+                app.connection_state
+                    .set_editor_password_source(ConnectionEditorPasswordSource::Saved);
                 app.set_connection_editor_credential_overlay(
                     Some(ConnectionEditorCredentialOverlay::Passwords),
                     cx,
@@ -3742,10 +4224,8 @@ mod tests {
                     crate::models::ConnectionEditorSection::Basic,
                     cx,
                 );
-                app.set_connection_editor_password_source(
-                    ConnectionEditorPasswordSource::Direct,
-                    cx,
-                );
+                app.connection_state
+                    .set_editor_password_source(ConnectionEditorPasswordSource::Direct);
                 app.connection_state.set_editor_field_text(
                     ConnectionEditorField::Password,
                     "retained fixture".into(),

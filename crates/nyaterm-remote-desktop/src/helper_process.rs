@@ -282,6 +282,7 @@ struct StderrSummary {
 struct SessionOptions {
     width: u32,
     height: u32,
+    desktop_scale_factor: Option<u32>,
     color_depth: u32,
     graphics_requested: bool,
     graphics_effective: bool,
@@ -291,53 +292,74 @@ struct SessionOptions {
 }
 
 fn session_options(line: &[u8]) -> Option<SessionOptions> {
-    let text = std::str::from_utf8(line).ok()?.trim_end_matches('\r');
-    let mut fields = text.strip_prefix("RDP session options ")?.split(' ');
-    let mut values = [0; 8];
-    for (i, key) in [
-        "width",
-        "height",
-        "depth",
-        "gfx_requested",
-        "gfx_effective",
-        "perf",
-        "nla",
-        "console",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let (name, value) = fields.next()?.split_once('=')?;
-        if name != *key {
-            return None;
-        }
-        values[i] = if i == 5 {
-            u32::from_str_radix(value.strip_prefix("0x")?, 16).ok()?
-        } else {
-            if !value.bytes().all(|byte| byte.is_ascii_digit()) {
-                return None;
-            }
-            value.parse().ok()?
-        };
+    fn decimal(value: &str) -> Option<u32> {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse().ok())
+            .flatten()
     }
-    if fields.next().is_some()
-        || values[0] > 65535
-        || values[1] > 65535
-        || ![16, 24, 32].contains(&values[2])
-        || values[5] & !0x1ff != 0
-        || [3, 4, 6, 7].iter().any(|i| values[*i] > 1)
+
+    let text = std::str::from_utf8(line).ok()?.trim_end_matches('\r');
+    let fields = text.strip_prefix("RDP session options ")?.split(' ');
+    let mut width = None;
+    let mut height = None;
+    let mut desktop_scale_factor = None;
+    let mut color_depth = None;
+    let mut graphics_requested = None;
+    let mut graphics_effective = None;
+    let mut performance_flags = None;
+    let mut credssp_enabled = None;
+    let mut administrative_session_requested = None;
+    for field in fields {
+        let (name, value) = field.split_once('=')?;
+        match name {
+            "width" => width = decimal(value),
+            "height" => height = decimal(value),
+            "scale" => desktop_scale_factor = decimal(value),
+            "depth" => color_depth = decimal(value),
+            "gfx_requested" => graphics_requested = decimal(value),
+            "gfx_effective" => graphics_effective = decimal(value),
+            "perf" => performance_flags = u32::from_str_radix(value.strip_prefix("0x")?, 16).ok(),
+            "nla" => credssp_enabled = decimal(value),
+            "console" => administrative_session_requested = decimal(value),
+            _ => return None,
+        }
+    }
+    let width = width?;
+    let height = height?;
+    let color_depth = color_depth?;
+    let graphics_requested = graphics_requested?;
+    let graphics_effective = graphics_effective?;
+    let performance_flags = performance_flags?;
+    let credssp_enabled = credssp_enabled?;
+    let administrative_session_requested = administrative_session_requested?;
+    if width > 65535
+        || height > 65535
+        || desktop_scale_factor.is_some_and(|scale| scale > 500)
+        || ![16, 24, 32].contains(&color_depth)
+        || performance_flags & !0x1ff != 0
+        || [
+            graphics_requested,
+            graphics_effective,
+            credssp_enabled,
+            administrative_session_requested,
+        ]
+        .iter()
+        .any(|value| *value > 1)
     {
         return None;
     }
     Some(SessionOptions {
-        width: values[0],
-        height: values[1],
-        color_depth: values[2],
-        graphics_requested: values[3] != 0,
-        graphics_effective: values[4] != 0,
-        performance_flags: values[5],
-        credssp_enabled: values[6] != 0,
-        administrative_session_requested: values[7] != 0,
+        width,
+        height,
+        desktop_scale_factor,
+        color_depth,
+        graphics_requested: graphics_requested != 0,
+        graphics_effective: graphics_effective != 0,
+        performance_flags,
+        credssp_enabled: credssp_enabled != 0,
+        administrative_session_requested: administrative_session_requested != 0,
     })
 }
 
@@ -541,17 +563,39 @@ mod tests {
 
     #[test]
     fn stderr_keeps_only_validated_options_and_discards_private_text() {
-        let options = b"RDP session options width=1920 height=1080 depth=32 gfx_requested=1 gfx_effective=0 perf=0x86 nla=1 console=0";
+        let options = b"RDP session options width=1920 height=1080 scale=100 depth=32 gfx_requested=1 gfx_effective=0 perf=0x86 nla=1 console=0";
         let mut input = b"password=secret username=private token=hidden\n\xff\n\r\n".to_vec();
         input.extend_from_slice(options);
         input.extend_from_slice(b"\r\n");
         input.extend_from_slice(options);
         input.extend_from_slice(b" password=secret\nlast private line");
         let summary = collect_stderr(input.as_slice());
-        assert_eq!(summary.options, session_options(options));
+        let options = session_options(options).unwrap();
+        assert_eq!(options.desktop_scale_factor, Some(100));
+        assert_eq!(summary.options, Some(options));
         assert_eq!(summary.discarded_lines, 4);
         assert!(!format!("{summary:?}").contains("secret"));
         assert!(session_options(b"RDP session options console=1").is_none());
+
+        let legacy = b"RDP session options width=1920 height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0";
+        assert_eq!(session_options(legacy).unwrap().desktop_scale_factor, None);
+
+        let malformed: [&[u8]; 7] = [
+            b"RDP session options width=70000 height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0",
+            b"RDP session options width=1920 height=1080 scale=501 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0",
+            b"RDP session options width=1920 height=1080 depth=8 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0",
+            b"RDP session options width=1920 height=1080 depth=32 gfx_requested=2 gfx_effective=0 perf=0x86 nla=1 console=0",
+            b"RDP session options width=1920 height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x200 nla=1 console=0",
+            b"RDP session options width=1920 height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0 extra=1",
+            b"RDP session options width=abc height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0",
+        ];
+        for line in malformed {
+            assert!(
+                session_options(line).is_none(),
+                "out-of-range or malformed options must be rejected: {}",
+                String::from_utf8_lossy(line)
+            );
+        }
     }
 
     #[test]

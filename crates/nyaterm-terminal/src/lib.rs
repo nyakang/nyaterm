@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,6 +25,7 @@ pub mod navigation;
 pub mod recording_sanitizer;
 mod reflow_timestamps;
 pub mod selection;
+mod signature;
 mod sixel;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
@@ -223,7 +224,10 @@ pub struct TerminalSnapshotRow {
     pub styled_spans: Box<[StyledSpan]>,
     pub signature: u64,
     pub timestamp_ms: Option<u64>,
+    /// This row continues the previous row's soft-wrapped logical line.
     pub wrapped: bool,
+    /// This row soft-wraps into the next row, even outside the snapshot window.
+    pub wraps_to_next: bool,
     pub hyperlinks: Box<[HyperlinkSpan]>,
     pub command_mark: Option<ShellCommandMark>,
     pub shell_input: Option<ShellInputLineKind>,
@@ -460,6 +464,7 @@ struct TerminalSnapshotRowCacheKey {
     signature: u64,
     timestamp_ms: Option<u64>,
     wrapped: bool,
+    wraps_to_next: bool,
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
@@ -2413,6 +2418,12 @@ fn snapshot_window_from_term(
                     .flags
                     .contains(Flags::WRAPLINE)
         });
+        let wraps_to_next = line_in_grid.is_some_and(|line| {
+            cols > 0
+                && term.grid()[line][Column(cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+        });
         let key = TerminalSnapshotRowCacheKey {
             cleared,
             display_line_number,
@@ -2421,6 +2432,7 @@ fn snapshot_window_from_term(
             signature,
             timestamp_ms,
             wrapped,
+            wraps_to_next,
             command_mark,
             line_id,
             shell_input,
@@ -2450,6 +2462,7 @@ fn snapshot_window_from_term(
                     signature,
                     timestamp_ms,
                     wrapped,
+                    wraps_to_next,
                     command_mark,
                     line_id,
                     shell_input,
@@ -2550,6 +2563,7 @@ struct SnapshotRowMetadata {
     signature: u64,
     timestamp_ms: Option<u64>,
     wrapped: bool,
+    wraps_to_next: bool,
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
@@ -2570,6 +2584,7 @@ fn snapshot_row_from_term(
         signature,
         timestamp_ms,
         wrapped,
+        wraps_to_next,
         command_mark,
         line_id,
         shell_input,
@@ -2578,9 +2593,11 @@ fn snapshot_row_from_term(
     } = metadata;
     let mut hyperlink_intern = HashMap::new();
     let cells = if let Some(line) = line {
+        // Index the grid once per row, not once per cell.
+        let grid_row = &term.grid()[line];
         (0..cols)
             .map(|col| {
-                let cell = &term.grid()[line][Column(col)];
+                let cell = &grid_row[Column(col)];
                 RenderCell {
                     text: cell_text(cell),
                     style: cell_style(cell),
@@ -2618,6 +2635,7 @@ fn snapshot_row_from_term(
         signature,
         timestamp_ms,
         wrapped,
+        wraps_to_next,
         command_mark,
         shell_input,
         shell_input_columns,
@@ -2626,17 +2644,35 @@ fn snapshot_row_from_term(
 }
 
 fn line_signature(term: &Term<NyaTermEventProxy>, line: Line, cols: usize) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for col in 0..cols {
-        let cell = &term.grid()[line][Column(col)];
-        hash_cell_text(cell, &mut hasher);
-        cell_style(cell).hash(&mut hasher);
-        render_cell_width(cell).hash(&mut hasher);
-        if let Some(link) = cell.hyperlink() {
-            Some(link.uri()).hash(&mut hasher);
-        } else {
-            Option::<&str>::None.hash(&mut hasher);
+    let row = &term.grid()[line];
+    let mut significant = cols;
+    while significant > 0 {
+        let cell = &row[Column(significant - 1)];
+        // `c == ' '` rejects almost every non-blank cell before any styling work.
+        if cell.c != ' '
+            || !signature::is_trivial_blank(
+                cell_text_is_blank(cell),
+                &cell_style(cell),
+                render_cell_width(cell),
+                cell.hyperlink().as_ref().map(|link| link.uri()),
+            )
+        {
+            break;
         }
+        significant -= 1;
+    }
+    let mut hasher = signature::RowHasher::new(significant);
+    for col in 0..significant {
+        let cell = &row[Column(col)];
+        let blank = cell_text_is_blank(cell);
+        let extra = cell.zerowidth().unwrap_or(&[]).iter().copied();
+        hasher.cell(
+            (!blank).then_some(cell.c),
+            extra,
+            &cell_style(cell),
+            render_cell_width(cell),
+            cell.hyperlink().as_ref().map(|link| link.uri()),
+        );
     }
     hasher.finish()
 }
@@ -2741,12 +2777,24 @@ fn terminal_search_is_word_char(ch: char) -> bool {
 
 #[cfg(test)]
 fn render_row_signature(row: &[RenderCell]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for cell in row {
-        cell.text.hash(&mut hasher);
-        cell.style.hash(&mut hasher);
-        cell.width.hash(&mut hasher);
-        cell.hyperlink.hash(&mut hasher);
+    let mut significant = row.len();
+    while significant > 0 {
+        let cell = &row[significant - 1];
+        if !signature::is_trivial_blank(
+            cell.text.is_empty(),
+            &cell.style,
+            cell.width,
+            cell.hyperlink_uri(),
+        ) {
+            break;
+        }
+        significant -= 1;
+    }
+    let mut hasher = signature::RowHasher::new(significant);
+    for cell in &row[..significant] {
+        let mut chars = cell.text.chars();
+        let base = chars.next();
+        hasher.cell(base, chars, &cell.style, cell.width, cell.hyperlink_uri());
     }
     hasher.finish()
 }
@@ -2761,6 +2809,11 @@ fn unix_time_ms() -> u64 {
 fn cell_text(cell: &Cell) -> Arc<str> {
     if cell_text_is_blank(cell) {
         return empty_render_cell_text();
+    }
+    if cell.c.is_ascii() && cell.zerowidth().is_none_or(|chars| chars.is_empty()) {
+        // Nearly every cell is plain ASCII; share one `Arc` per character
+        // instead of allocating a `String` and an `Arc<str>` for each cell.
+        return ascii_cell_text(cell.c as u8);
     }
     let mut text = cell.c.to_string();
     if let Some(zerowidth) = cell.zerowidth() {
@@ -2787,17 +2840,6 @@ fn render_cell_width(cell: &Cell) -> u8 {
     }
 }
 
-fn hash_cell_text<H: Hasher>(cell: &Cell, hasher: &mut H) {
-    if cell_text_is_blank(cell) {
-        "".hash(hasher);
-    } else if cell.zerowidth().is_none_or(|chars| chars.is_empty()) {
-        let mut encoded = [0; 4];
-        cell.c.encode_utf8(&mut encoded).hash(hasher);
-    } else {
-        cell_text(cell).hash(hasher);
-    }
-}
-
 fn push_render_cell_text(output: &mut String, cell: &RenderCell) {
     if cell.text.is_empty() {
         if cell.width != 0 {
@@ -2806,6 +2848,17 @@ fn push_render_cell_text(output: &mut String, cell: &RenderCell) {
     } else {
         output.push_str(cell.text());
     }
+}
+
+fn ascii_cell_text(byte: u8) -> Arc<str> {
+    static TABLE: OnceLock<[Arc<str>; 128]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        std::array::from_fn(|index| {
+            let mut encoded = [0; 4];
+            Arc::from((index as u8 as char).encode_utf8(&mut encoded) as &str)
+        })
+    });
+    Arc::clone(&table[usize::from(byte)])
 }
 
 fn empty_render_cell_text() -> Arc<str> {
@@ -2824,8 +2877,14 @@ fn intern_render_cell_hyperlink(intern: &mut HashMap<Arc<str>, Arc<str>>, uri: &
 
 fn cell_style(cell: &Cell) -> CellStyle {
     let flags = cell.flags;
-    let fg = color_to_style_fg(cell.fg);
-    let bg = color_to_style_bg(cell.bg);
+    // Default colors map to `(None, None)`; skip the match for the common case.
+    let (fg, bg) = if cell.fg == Color::Named(NamedColor::Foreground)
+        && cell.bg == Color::Named(NamedColor::Background)
+    {
+        ((None, None), (None, None))
+    } else {
+        (color_to_style_fg(cell.fg), color_to_style_bg(cell.bg))
+    };
     CellStyle {
         fg: fg.0,
         fg_rgb: fg.1,

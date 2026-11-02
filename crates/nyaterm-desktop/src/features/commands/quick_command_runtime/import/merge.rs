@@ -112,6 +112,7 @@ pub(super) fn merge_import(
             icon_tag: trim_optional(command.icon_tag),
             pinned: command.pinned,
             execution_mode: Some(execution_mode),
+            raw_send: command.raw_send,
             source: trim_optional(command.source),
             risk_level: command.risk_level,
             updated_at: Some(now),

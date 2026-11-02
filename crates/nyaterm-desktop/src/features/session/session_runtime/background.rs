@@ -158,6 +158,7 @@ impl NyaTermApp {
             .map(str::to_string)
             .unwrap_or_else(uuid);
         let PendingSessionStartRegistration {
+            requested_ssh_runtime_mode,
             connection_name,
             launch_config,
             kind,
@@ -190,6 +191,7 @@ impl NyaTermApp {
         let reconnecting = self.session.start.register_pending(
             request_id.clone(),
             PendingSessionStart {
+                requested_ssh_runtime_mode,
                 attempt: Default::default(),
                 connection_name: connection_name.clone(),
                 launch_config,
@@ -249,6 +251,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            ssh_runtime_mode: _,
             custom_name,
             tab_color,
             locked,
@@ -266,6 +269,7 @@ impl NyaTermApp {
             .then(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(launch_config.clone()),
                 kind,
@@ -345,13 +349,24 @@ impl NyaTermApp {
         if !self.session.start.retry_is_pending(&options) {
             return;
         }
+        config.runtime_mode = config.effective_runtime_mode();
+        if let Some(mode) = options.ssh_runtime_mode {
+            config.runtime_mode = mode;
+        }
         let reload_saved = options
             .reconnect_session_id
             .as_ref()
             .and(source_connection_id.clone());
         let mut build_context = self.ssh_session_config_build_context();
+        let mut options = options;
+        if options.ssh_runtime_mode == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+            || config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp
+        {
+            options.startup_command = None;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            ssh_runtime_mode,
             custom_name,
             tab_color,
             locked,
@@ -379,6 +394,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config.clone()))),
                 kind: SessionKind::Ssh,
@@ -424,6 +440,7 @@ impl NyaTermApp {
                         .map_err(|error| error.to_string())?
                         .ok_or_else(|| "saved SSH connection was deleted".to_string())?;
                     let mut fresh = build_context.build_config(&saved)?;
+                    fresh.runtime_mode = config.runtime_mode;
                     fresh.cols = config.cols;
                     fresh.rows = config.rows;
                     fresh.pixel_width = config.pixel_width;
@@ -431,6 +448,10 @@ impl NyaTermApp {
                     fresh.bind_attempt(config.attempt.clone());
                     config = fresh;
                 }
+                if let Some(mode) = ssh_runtime_mode {
+                    config.runtime_mode = mode;
+                }
+                config.apply_runtime_policy()?;
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
                 let connection = ssh_connections.register(multiplex_key, multiplex);
@@ -464,8 +485,17 @@ impl NyaTermApp {
         if !self.session.start.retry_is_pending(&options) {
             return;
         }
+        config.runtime_mode = config.effective_runtime_mode();
+        let mut options = options;
+        if let Some(mode) = options.ssh_runtime_mode {
+            config.runtime_mode = mode;
+        }
+        if config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+            options.startup_command = None;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            ssh_runtime_mode: _,
             custom_name,
             tab_color,
             locked,
@@ -495,6 +525,7 @@ impl NyaTermApp {
             .unwrap_or_else(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config.clone()))),
                 kind: SessionKind::Ssh,
@@ -530,8 +561,14 @@ impl NyaTermApp {
             SessionKind::Ssh,
             session_start_tx,
             move || {
+                config.apply_runtime_policy()?;
                 let connection = match existing_multiplex {
-                    Some(connection) if !connection.is_closed() => connection,
+                    Some(connection)
+                        if !connection.is_closed()
+                            && connection.handle().matches_config(&config) =>
+                    {
+                        connection
+                    }
                     _ => {
                         let handle = open_ssh_multiplex_handle(config.clone())
                             .map_err(|error| error.to_string())?;
@@ -623,7 +660,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let request_id = event.request_id.clone();
-        let (pending, was_active_pending) =
+        let (mut pending, was_active_pending) =
             match self.session.start.take_event_request(&event.request_id) {
                 SessionStartEventRequest::Cancelled => {
                     if let Ok(success) = event.result {
@@ -723,6 +760,21 @@ impl NyaTermApp {
                     .as_ref()
                     .map(|pending| pending.ai_execution_profile)
                     .unwrap_or(AiExecutionProfile::SendOnly);
+                let ai_execution_profile = if ssh_config.as_ref().is_some_and(|config| {
+                    config.effective_runtime_mode()
+                        == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp
+                }) {
+                    AiExecutionProfile::Disabled
+                } else {
+                    ai_execution_profile
+                };
+                if ssh_config.as_ref().is_some_and(|config| {
+                    config.effective_runtime_mode()
+                        == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp
+                }) && let Some(pending) = pending.as_mut()
+                {
+                    pending.startup_command = None;
+                }
                 let metadata = SessionRuntimeMetadata {
                     ssh_config,
                     ssh_multiplex_key,
@@ -1177,6 +1229,7 @@ mod focus_tests {
                     );
                     let request_id = app.register_pending_session_start(
                         PendingSessionStartRegistration {
+                            requested_ssh_runtime_mode: None,
                             connection_name: "SSH".into(),
                             launch_config: Some(SessionLaunchConfig::Ssh(Box::default())),
                             kind: SessionKind::Ssh,

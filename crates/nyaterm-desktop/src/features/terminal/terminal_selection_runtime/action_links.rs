@@ -1,8 +1,12 @@
 use std::time::{Duration, Instant};
 
-use gpui::{App, Bounds, ClickEvent, Context, MouseMoveEvent, Pixels, Point};
+use gpui::{
+    App, Bounds, ClickEvent, ClipboardItem, Context, MouseMoveEvent, Pixels, Point, Window,
+};
 
-use crate::action_links::{ActionLinkAction, ActionLinkMatch, actions_for_match, match_at_offset};
+use crate::action_links::{
+    ActionLinkAction, ActionLinkMatch, ActionLinkTarget, actions_for_match, match_at_offset,
+};
 use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_runtime::{
     TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
@@ -160,11 +164,12 @@ impl NyaTermApp {
             item.start,
             item.end
         );
-        let preview = default
-            .command
-            .clone()
-            .or_else(|| default.open_url.clone())
-            .unwrap_or_else(|| default.label.clone());
+        let preview = match &default.target {
+            ActionLinkTarget::CopyText(text) | ActionLinkTarget::PasteText(text) => {
+                format!("{} {text}", default.label)
+            }
+            target => target.text().to_owned(),
+        };
         let next = ActionLinkTooltipState {
             session_id,
             x: event.position.x,
@@ -324,6 +329,22 @@ impl NyaTermApp {
         None
     }
 
+    pub(in crate::features) fn dismiss_action_link_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(menu) = self.terminal.menus.action_link_menu.as_ref() else {
+            return false;
+        };
+        let restore_focus = self.action_link_source_is_active(&menu.session_id);
+        self.close_action_link_menu(cx);
+        if restore_focus {
+            window.focus(&self.terminal.input.focus, cx);
+        }
+        true
+    }
+
     pub(in crate::features) fn close_action_link_menu(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         if self.terminal.menus.action_link_menu.take().is_some() {
@@ -352,15 +373,25 @@ impl NyaTermApp {
             .map(|action| ActionLinkMenuAction {
                 id: action.id,
                 label: action.label,
-                command: action.command,
-                open_url: action.open_url,
+                target: action.target,
+                mac_format: action.mac_format,
                 is_default: action.is_default,
             })
             .collect::<Vec<_>>();
         self.terminal.menus.action_link_tooltip = None;
         self.terminal.assist.command_suggestions = None;
         self.terminal.assist.credential_suggestions = None;
+        let Some(session_id) = self.terminal_session_at_point(event.position()).flatten() else {
+            return false;
+        };
+        self.terminal.menus.action_link_menu_generation = self
+            .terminal
+            .menus
+            .action_link_menu_generation
+            .wrapping_add(1);
         self.terminal.menus.action_link_menu = Some(ActionLinkMenuState {
+            generation: self.terminal.menus.action_link_menu_generation,
+            session_id,
             x: event.position().x,
             y: event.position().y,
             kind_label: item.kind.label().to_string(),
@@ -436,6 +467,7 @@ impl NyaTermApp {
     pub(in crate::features) fn try_activate_action_link_at_click(
         &mut self,
         event: &ClickEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.try_activate_osc8_hyperlink_at_click(event, cx) {
@@ -453,15 +485,63 @@ impl NyaTermApp {
         else {
             return false;
         };
-        if let Some(url) = default.open_url {
-            self.open_external_url_for_ui(&url, cx);
-            return true;
+        let Some(session_id) = self.terminal_session_at_point(event.position()).flatten() else {
+            return false;
+        };
+        self.execute_action_link_target(default.target, &session_id, window, cx);
+        true
+    }
+
+    pub(in crate::features) fn execute_action_link_menu_action(
+        &mut self,
+        menu: &ActionLinkMenuState,
+        target: ActionLinkTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.terminal.menus.action_link_menu.as_ref() != Some(menu) {
+            return;
         }
-        if let Some(command) = default.command {
-            self.execute_action_link_command(command, cx);
-            return true;
+        self.close_action_link_menu(cx);
+        self.execute_action_link_target(target, &menu.session_id, window, cx);
+    }
+
+    pub(in crate::features) fn action_link_source_is_active(&self, session_id: &str) -> bool {
+        !self.security.screen_locked()
+            && self.shell.selected_nav() == crate::models::NavItem::Workspace
+            && self.session.active_id() == Some(session_id)
+            && self.active_workspace_tab().is_some_and(|key| {
+                crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
+            })
+            && self.visible_terminal_session_ids().contains(&session_id)
+    }
+
+    /// The menu and modifier click share this dispatch. Pasting never becomes a
+    /// shell command, and stale menu callbacks cannot send to another session.
+    pub(in crate::features) fn execute_action_link_target(
+        &mut self,
+        target: ActionLinkTarget,
+        session_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.action_link_source_is_active(session_id) {
+            return;
         }
-        false
+        match target {
+            ActionLinkTarget::ExecuteCommand(command) => {
+                self.execute_action_link_command(command, cx)
+            }
+            ActionLinkTarget::OpenUrl(url) => self.open_external_url_for_ui(&url, cx),
+            ActionLinkTarget::CopyText(text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.shell
+                    .set_status(rust_i18n::t!("terminal.macCopied").to_string());
+                cx.notify();
+            }
+            ActionLinkTarget::PasteText(text) => self.paste_terminal_text(text, window, cx),
+        }
+        window.focus(&self.terminal.input.focus, cx);
     }
 
     fn terminal_expensive_interactions_enabled_for_session(
@@ -516,6 +596,9 @@ fn terminal_bounds_contains(bounds: Bounds<Pixels>, position: Point<Pixels>) -> 
 }
 
 #[cfg(test)]
+mod mac_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
@@ -529,7 +612,7 @@ mod tests {
         TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
     };
     use crate::features::test_support::{app_with_visible_local_session, editor_document};
-    use crate::models::{NavItem, SmartSplitMode, TerminalWindowNode, WorkspaceTabId};
+    use crate::models::{SmartSplitMode, TerminalWindowNode, WorkspaceTabId};
     use crate::test_support::TestAppCleanup;
 
     use super::{
@@ -669,8 +752,11 @@ mod tests {
                         .is_none()
                 );
             }
-            app.shell.restore_terminal_window_tree(None);
-            app.shell.show_page(NavItem::Settings);
+            app.shell
+                .restore_terminal_window_tree(Some(TerminalWindowNode::leaf(
+                    vec!["local".into(), WorkspaceTabId::Settings.layout_key()],
+                    Some(WorkspaceTabId::Settings.layout_key()),
+                )));
             assert!(app.terminal_session_at_point(position).is_none());
             assert!(
                 app.suggestion_overlay_position_for_session(Some("local"), 0, 0, 340., 100.)

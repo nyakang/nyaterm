@@ -36,12 +36,6 @@ use crate::models::{
 };
 use crate::theme::ThemePalette;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features) enum SettingsSurface {
-    MainPage,
-    NativeWindow,
-}
-
 #[derive(Clone, PartialEq)]
 pub(in crate::features) struct SettingsChrome {
     pub palette: ThemePalette,
@@ -69,7 +63,6 @@ pub(in crate::features) enum SettingsSectionPresentation {
 #[derive(Clone)]
 pub(in crate::features) struct SettingsSnapshot {
     pub chrome: SettingsChrome,
-    pub surface: SettingsSurface,
     pub active_tab: SettingsTab,
     pub settings: SettingsPresentation,
     pub ai: AiSettingsPresentation,
@@ -89,7 +82,6 @@ pub(in crate::features) struct SettingsSnapshot {
 impl PartialEq for SettingsSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.chrome == other.chrome
-            && self.surface == other.surface
             && self.active_tab == other.active_tab
             && self.draft_open == other.draft_open
             && self.draft_dirty == other.draft_dirty
@@ -326,6 +318,7 @@ impl AiSettingsPresentation {
 
 #[derive(Clone, PartialEq)]
 pub(in crate::features) struct CloudSyncPresentation {
+    pub(in crate::features) v4_preview: Option<crate::features::sync::V4PreviewSummary>,
     pub(in crate::features) settings: Arc<CloudSyncSettings>,
     pub(in crate::features) state: CloudSyncState,
     pub(in crate::features) history: Vec<CloudSyncHistoryEntry>,
@@ -341,6 +334,7 @@ pub(in crate::features) struct CloudSyncPresentation {
 impl Default for CloudSyncPresentation {
     fn default() -> Self {
         Self {
+            v4_preview: None,
             settings: Arc::new(CloudSyncSettings::default()),
             state: CloudSyncState::default(),
             history: Vec::new(),
@@ -470,7 +464,6 @@ pub(in crate::features) struct SettingsPanel {
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
     pub(in crate::features::pages::settings) viewport_width: f32,
     app: WeakEntity<NyaTermApp>,
-    surface: SettingsSurface,
     snapshot: Option<SettingsSnapshot>,
     pub(in crate::features) settings: SettingsPresentation,
     pub(in crate::features) ai: AiSettingsPresentation,
@@ -503,14 +496,6 @@ pub(in crate::features) struct SettingsPanel {
 
 impl SettingsPanel {
     pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>, cx: &mut Context<Self>) -> Self {
-        Self::new_for_surface(app, SettingsSurface::MainPage, cx)
-    }
-
-    pub(in crate::features) fn new_for_surface(
-        app: WeakEntity<NyaTermApp>,
-        surface: SettingsSurface,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let image_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(100.));
         let content_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(82.));
         let window_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(20.));
@@ -548,7 +533,6 @@ impl SettingsPanel {
             content_scroll_handles: HashMap::new(),
             viewport_width: 800.,
             app,
-            surface,
             snapshot: None,
             settings: SettingsPresentation::empty(cx),
             ai: AiSettingsPresentation::empty(cx),
@@ -581,11 +565,6 @@ impl SettingsPanel {
             #[cfg(test)]
             rebuild_count: 0,
         }
-    }
-
-    #[cfg(test)]
-    pub(in crate::features) fn surface(&self) -> SettingsSurface {
-        self.surface
     }
 
     #[cfg(test)]
@@ -644,7 +623,6 @@ impl SettingsPanel {
                     }
                 });
         }
-        self.surface = snapshot.surface;
         let window_opacity = snapshot.settings.summary.window_background_opacity;
         self.last_window_opacity = window_opacity;
         if self.window_opacity_slider.read(cx).value()
@@ -1092,90 +1070,90 @@ impl Render for SettingsPanel {
         let active_group = t!(snapshot.active_tab.group_i18n_key());
         let active_label = t!(snapshot.active_tab.i18n_key());
         let back_label = t!("common.close");
-        let native_window = snapshot.surface == SettingsSurface::NativeWindow;
 
         div()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(palette.bg))
-            .when(!native_window, |this| {
-                this.child(
-                    div()
-                        .h(px(36.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px_3()
-                        .border_b_1()
-                        .border_color(rgb(palette.border))
-                        .bg(rgb(palette.section_header))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight(700.))
-                                        .text_color(rgb(palette.text))
-                                        .child(settings_title),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(palette.text_dimmed))
-                                        .child("·"),
-                                )
-                                .when(
-                                    snapshot.active_tab.expandable_group_id().is_some(),
-                                    |this| {
-                                        this.child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .text_color(rgb(palette.text_muted))
-                                                .child(active_group),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .text_color(rgb(palette.text_dimmed))
-                                                .child("/"),
-                                        )
-                                    },
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight(600.))
-                                        .text_color(rgb(palette.text))
-                                        .child(active_label.clone()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from("settings-close"))
-                                .h(px(26.))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .rounded_md()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette.text_muted))
-                                .cursor_pointer()
-                                .hover(move |this| {
-                                    this.bg(rgb(palette.surface_elevated))
-                                        .text_color(rgb(palette.text))
-                                })
-                                .child(back_label)
-                                .on_click(cx.listener(|panel, _, _, cx| {
-                                    panel.with_app(cx, |app, cx| app.close_settings(cx));
-                                })),
-                        ),
-                )
-            })
+            .child(
+                div()
+                    .h(px(36.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_3()
+                    .border_b_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.section_header))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight(700.))
+                                    .text_color(rgb(palette.text))
+                                    .child(settings_title),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette.text_dimmed))
+                                    .child("·"),
+                            )
+                            .when(
+                                snapshot.active_tab.expandable_group_id().is_some(),
+                                |this| {
+                                    this.child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(palette.text_muted))
+                                            .child(active_group),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(palette.text_dimmed))
+                                            .child("/"),
+                                    )
+                                },
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight(600.))
+                                    .text_color(rgb(palette.text))
+                                    .child(active_label.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from("settings-close"))
+                            .debug_selector(|| "settings-close".into())
+                            .h(px(26.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .rounded_md()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette.text_muted))
+                            .cursor_pointer()
+                            .hover(move |this| {
+                                this.bg(rgb(palette.surface_elevated))
+                                    .text_color(rgb(palette.text))
+                            })
+                            .child(back_label)
+                            .on_click(cx.listener(|panel, _, window, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    app.request_settings_tab_close(window, cx)
+                                });
+                            })),
+                    ),
+            )
             .child(self.settings_layout(&snapshot, window, cx))
             .child(self.settings_action_footer(&snapshot, cx))
             .into_any_element()
@@ -1320,8 +1298,12 @@ impl SettingsPanel {
         let palette = snapshot.chrome.palette;
         let dirty = snapshot.draft_dirty || snapshot.settings.theme_designer.dirty();
         let validation_error = snapshot.validation_error.clone();
-        let apply_disabled = !dirty || validation_error.is_some();
-        let confirm_disabled = validation_error.is_some();
+        // A validation error must not grey out Apply/Confirm. Those two buttons are
+        // the only place that explains *why* the draft cannot be saved: the click
+        // lands in `apply_settings_draft`, which reports the blocker. Disabling them
+        // leaves the user stuck on "apply your settings first" with no way to learn
+        // what is missing, and no way to close the window except Cancel.
+        let apply_disabled = !dirty;
         let status = validation_error.clone().unwrap_or_else(|| {
             if dirty {
                 t!("settings.unappliedChanges").to_string()
@@ -1421,26 +1403,16 @@ impl SettingsPanel {
                             .items_center()
                             .justify_center()
                             .rounded_md()
-                            .bg(if confirm_disabled {
-                                rgb(palette.surface_elevated)
-                            } else {
-                                rgb(palette.link)
-                            })
+                            .bg(rgb(palette.link))
                             .text_size(px(11.))
                             .font_weight(FontWeight(600.))
-                            .text_color(if confirm_disabled {
-                                rgb(palette.text_dimmed)
-                            } else {
-                                rgb(0xffffff)
-                            })
-                            .when(!confirm_disabled, |this| {
-                                this.cursor_pointer()
-                                    .on_click(cx.listener(|panel, _, _, cx| {
-                                        panel.with_app(cx, |app, cx| {
-                                            app.confirm_settings_draft(cx);
-                                        });
-                                    }))
-                            })
+                            .text_color(rgb(0xffffff))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|panel, _, _, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    app.confirm_settings_draft(cx);
+                                });
+                            }))
                             .child(confirm_label),
                     ),
             )
@@ -2003,6 +1975,7 @@ forward_app_action!(
     toggle_startup_lock_enabled,
     toggle_idle_lock_enabled,
     toggle_settings_master_password,
+    toggle_remote_stats_show_users,
     toggle_startup_restore,
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,
@@ -2034,7 +2007,7 @@ mod tests {
     use crate::models::{AiActionEditorField, AiActionListKind, NavItem, SettingsTab};
     use crate::test_support::TestConfigDir;
 
-    use super::{FontSelectOptionCache, SettingsPanel, SettingsSurface};
+    use super::{FontSelectOptionCache, SettingsPanel};
 
     #[test]
     fn font_select_option_cache_rebuilds_after_catalog_load() {
@@ -2087,39 +2060,6 @@ mod tests {
                         self.app
                             .read(cx)
                             .settings_panel
-                            .clone()
-                            .cached(crate::features::layout::cached_panel_style()),
-                    ),
-                )
-        }
-    }
-
-    struct DualHost {
-        main: Entity<SettingsPanel>,
-        native: Entity<SettingsPanel>,
-    }
-
-    impl Render for DualHost {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            _cx: &mut gpui::Context<Self>,
-        ) -> impl IntoElement {
-            div()
-                .w(px(760.))
-                .h(px(720.))
-                .flex()
-                .gap_2()
-                .child(
-                    div().flex_1().min_w_0().child(
-                        self.main
-                            .clone()
-                            .cached(crate::features::layout::cached_panel_style()),
-                    ),
-                )
-                .child(
-                    div().flex_1().min_w_0().child(
-                        self.native
                             .clone()
                             .cached(crate::features::layout::cached_panel_style()),
                     ),
@@ -2191,9 +2131,6 @@ mod tests {
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, dir.path());
-        // Paint one surface: open_page also opens a native settings window.
-        // Painting the same input entities in both hosts makes their geometry
-        // notifications alternate forever between the two window sizes.
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);
             app.begin_settings_draft(cx);
@@ -2447,77 +2384,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn main_and_native_surfaces_receive_updates_independently() {
-        let test_dir = TestConfigDir::new("nyaterm-settings-panel");
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = app(&mut cx, test_dir.path());
-        let native = cx.new(|cx| {
-            SettingsPanel::new_for_surface(app.downgrade(), SettingsSurface::NativeWindow, cx)
-        });
-        cx.update_entity(&app, |app, cx| {
-            app.sync_component_theme(cx);
-            app.open_page(NavItem::Settings, cx);
-            app.register_native_settings_panel(&native, cx);
-            app.flush_settings_panel_snapshots(cx);
-        });
-        let main = cx.update_entity(&app, |app, _| app.settings_panel.clone());
-        let host_main = main.clone();
-        let host_native = native.clone();
-        let (_, vcx) = cx.add_window_view(move |_, _| DualHost {
-            main: host_main.clone(),
-            native: host_native.clone(),
-        });
-        let vcx: &mut VisualTestContext = vcx;
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            _ = window.draw(cx);
-        });
-        vcx.run_until_parked();
-        vcx.update(|_, cx| {
-            app.update(cx, |app, cx| {
-                app.register_native_settings_panel(&native, cx);
-                app.flush_settings_panel_snapshots(cx);
-            });
-        });
-        vcx.run_until_parked();
-
-        let (main_before, native_before) =
-            vcx.update(|_, cx| (rebuilds(&main, cx), rebuilds(&native, cx)));
-        vcx.update(|_, cx| {
-            app.update(cx, |app, cx| {
-                app.toggle_startup_restore(cx);
-                app.request_settings_panel_refresh(cx);
-            });
-        });
-        vcx.run_until_parked();
-
-        vcx.update(|_, cx| {
-            let main_panel = main.read(cx);
-            let native_panel = native.read(cx);
-            assert_eq!(main_panel.surface(), SettingsSurface::MainPage);
-            assert_eq!(native_panel.surface(), SettingsSurface::NativeWindow);
-            assert_eq!(main_panel.rebuild_count, main_before + 1);
-            assert_eq!(native_panel.rebuild_count, native_before + 1);
-            assert_eq!(
-                main_panel
-                    .snapshot()
-                    .expect("main snapshot")
-                    .settings
-                    .summary()
-                    .startup_restore,
-                native_panel
-                    .snapshot()
-                    .expect("native snapshot")
-                    .settings
-                    .summary()
-                    .startup_restore,
-                "both surfaces must receive the same authoritative state through separate panels"
-            );
-        });
-    }
-
     fn activate(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, tab: SettingsTab) {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| app.focus_settings_tab(tab, cx));
@@ -2565,13 +2431,12 @@ mod tests {
     /// window's effect flush. It reproduces with the snapshot's input-map comparison
     /// reverted, so it is not that; the cause has not been identified. Note that those
     /// same sections do render without spinning in
-    /// `inputs::tests::reveal_boundaries_build_the_inputs_their_rows_draw`, because
-    /// `open_page` opens the native settings window and that surface paints them -- so
-    /// the problem is something about this host, not the inputs themselves.
+    /// `inputs::tests::reveal_boundaries_build_the_inputs_their_rows_draw`, so the
+    /// problem is something about this host, not the inputs themselves.
     ///
     /// The boundary coverage this was written for lives in that `inputs.rs` test
     /// instead: it asserts the published snapshot carries every id a revealed row looks
-    /// up, and the native settings window renders those rows, so a miss still trips the
+    /// up, and the settings tab renders those rows, so a miss still trips the
     /// `debug_assert!` in `existing_text_input_box`.
     #[test]
     #[ignore = "this fixture never parks once a tab with a registry input is active; cause unknown"]

@@ -8,6 +8,7 @@ use gpui::{
 
 use super::terminal_action_prompt_text;
 use crate::features::NyaTermApp;
+use crate::features::formatting::recent_terminal_output;
 use crate::features::view_widgets::tab_action_button;
 use crate::models::{BottomPanelMode, RightFocus, TerminalSearchMode};
 use crate::widgets::small_button;
@@ -20,7 +21,7 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let (viewport_w, viewport_h) = self.shell.viewport_size();
         let visible_text = self.active_terminal_visible_text();
-        let buffer_tail = self.active_terminal_buffer_tail();
+        let buffer_tail = recent_terminal_output(self.active_terminal_buffer_tail(), usize::MAX);
         let visible_lines = visible_text.lines().count();
         let buffer_chars = buffer_tail.chars().count();
         let summary = t!(
@@ -30,7 +31,7 @@ impl NyaTermApp {
         );
         let visible_for_translate = visible_text.clone();
         let visible_for_ai = terminal_action_prompt_text(&visible_text, 2_800);
-        let buffer_for_ai = terminal_action_prompt_text(buffer_tail, 4_000);
+        let buffer_for_ai = terminal_action_prompt_text(&buffer_tail, 4_000);
         let has_visible_text = !visible_text.trim().is_empty();
         let has_buffer_text = !buffer_tail.trim().is_empty();
         let _has_selection = self.selected_terminal_text().is_some();

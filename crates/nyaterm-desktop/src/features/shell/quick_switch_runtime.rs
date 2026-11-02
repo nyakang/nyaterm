@@ -112,6 +112,8 @@ impl NyaTermApp {
                         return;
                     }
                 }
+                // The settings surface owns its own focus targets.
+                crate::models::WorkspaceTabId::Settings => return,
                 crate::models::WorkspaceTabId::Session(_) => {}
             }
         }
@@ -169,6 +171,14 @@ impl NyaTermApp {
                         id: key,
                         title: t!("fileManager.tabTitle").to_string(),
                         subtitle: id,
+                    });
+                }
+                crate::models::WorkspaceTabId::Settings => {
+                    session_items.push(QuickSwitchItem::Session {
+                        active: active_tab.as_deref() == Some(&key),
+                        id: key,
+                        title: t!("settings.title").to_string(),
+                        subtitle: t!("settings.title").to_string(),
                     });
                 }
                 crate::models::WorkspaceTabId::Session(_) => {}

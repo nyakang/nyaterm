@@ -10,14 +10,14 @@ use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{AnyView, Entity, Pixels, RenderImage, ScrollHandle, SharedString};
-use nyaterm_ui::{ChildWindowSlot, NyaAppMenuBar, NyaWindowHandle};
+use nyaterm_ui::{NyaAppMenuBar, NyaWindowHandle};
 
 use super::super::app_state::SettingsDraftSnapshot;
 use super::runtime_state::ShellRuntimeState;
 use crate::models::{
     ActivityBarContextMenuState, ActivityBarLayoutState, BottomPanelMode, BottomPanelResizeState,
-    HeaderStatusMode, HeaderStatusState, MainMode, NavItem, PanelOpenMode, PanelResizeSide,
-    PanelResizeState, PanelSide, PanelStackResizeState, RightFocus, SettingsTab, WorkspacePaneNode,
+    HeaderStatusMode, HeaderStatusState, NavItem, PanelOpenMode, PanelResizeSide, PanelResizeState,
+    PanelSide, PanelStackResizeState, RightFocus, SettingsTab, WorkspacePaneNode,
     WorkspaceSplitResizeState, WorkspaceSplitState,
 };
 
@@ -132,7 +132,6 @@ pub(super) struct WallpaperCache {
 /// Top-level page navigation and the settings-page/window lifecycle.
 pub(in crate::features) struct ShellNavigationState {
     pub(in crate::features) selected_nav: NavItem,
-    pub(in crate::features) main_mode: MainMode,
     pub(super) settings: ShellSettingsNavigationState,
 }
 
@@ -140,9 +139,6 @@ pub(super) struct ShellSettingsNavigationState {
     pub(super) active_tab: SettingsTab,
     pub(super) expanded_groups: HashSet<String>,
     pub(super) draft_snapshot: Option<SettingsDraftSnapshot>,
-    pub(super) window: ChildWindowSlot,
-    pub(super) previous_left_collapsed: Option<bool>,
-    pub(super) previous_right_collapsed: Option<bool>,
 }
 
 /// Side-panel selection, stack layout and resize interaction state.
@@ -176,6 +172,7 @@ pub(super) struct ShellChromeState {
     pub(super) activity_bar_layout: ActivityBarLayoutState,
     pub(super) activity_bar_context_menu: Option<ActivityBarContextMenuState>,
     pub(super) header_status: HeaderStatusState,
+    pub(super) header_status_menu_open: bool,
     pub(super) open_tabs_menu_open: bool,
     pub(super) new_session_menu_anchor: Option<NewSessionMenuAnchor>,
     pub(super) new_session_all_sessions_open: bool,
@@ -272,14 +269,10 @@ impl ShellFeatureState {
             },
             navigation: ShellNavigationState {
                 selected_nav: init.selected_nav,
-                main_mode: MainMode::Workspace,
                 settings: ShellSettingsNavigationState {
                     active_tab: SettingsTab::General,
                     expanded_groups: HashSet::from(["workspace".to_string()]),
                     draft_snapshot: None,
-                    window: ChildWindowSlot::default(),
-                    previous_left_collapsed: None,
-                    previous_right_collapsed: None,
                 },
             },
             panels: ShellPanelState {
@@ -308,6 +301,7 @@ impl ShellFeatureState {
                 activity_bar_layout: init.activity_bar_layout,
                 activity_bar_context_menu: None,
                 header_status: HeaderStatusState::default(),
+                header_status_menu_open: false,
                 open_tabs_menu_open: false,
                 new_session_menu_anchor: None,
                 new_session_all_sessions_open: false,
@@ -360,6 +354,11 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn leave_resize_handle_hover(&mut self, id: &SharedString) -> bool {
         self.resize_handle_hover.leave(id)
+    }
+
+    #[cfg(windows)]
+    pub(in crate::features) fn clear_resize_handle_hover(&mut self) -> bool {
+        self.resize_handle_hover.clear()
     }
 
     pub(in crate::features) fn resize_handle_is_highlighted(&self, id: &SharedString) -> bool {
@@ -442,27 +441,12 @@ impl ShellFeatureState {
         self.navigation.selected_nav
     }
 
-    pub(in crate::features) fn main_mode(&self) -> MainMode {
-        self.navigation.main_mode
-    }
-
     pub(in crate::features) fn select_nav(&mut self, nav: NavItem) {
         self.navigation.selected_nav = nav;
     }
 
     pub(in crate::features) fn show_workspace(&mut self) {
         self.navigation.selected_nav = NavItem::Workspace;
-        self.navigation.main_mode = MainMode::Workspace;
-    }
-
-    pub(in crate::features) fn show_page(&mut self, nav: NavItem) {
-        self.navigation.selected_nav = nav;
-        self.navigation.main_mode = MainMode::Page;
-    }
-
-    pub(in crate::features) fn is_settings_page(&self) -> bool {
-        self.navigation.main_mode == MainMode::Page
-            && self.navigation.selected_nav == NavItem::Settings
     }
 
     pub(in crate::features) fn settings_active_tab(&self) -> SettingsTab {
@@ -514,72 +498,6 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn clear_settings_draft_snapshot(&mut self) -> bool {
         self.navigation.settings.draft_snapshot.take().is_some()
-    }
-
-    pub(in crate::features) fn settings_window(&self) -> Option<NyaWindowHandle> {
-        self.navigation.settings.window.handle()
-    }
-
-    pub(in crate::features) fn settings_window_open_pending(&self) -> bool {
-        self.navigation.settings.window.is_pending()
-    }
-
-    pub(in crate::features) fn settings_window_is_open_or_pending(&self) -> bool {
-        self.navigation.settings.window.is_open_or_pending()
-    }
-
-    pub(in crate::features) fn settings_window_slot(&mut self) -> &mut ChildWindowSlot {
-        &mut self.navigation.settings.window
-    }
-
-    pub(in crate::features) fn begin_settings_window_open(&mut self) -> bool {
-        self.navigation.settings.window.begin_open()
-    }
-
-    pub(in crate::features) fn complete_settings_window_open(&mut self, handle: NyaWindowHandle) {
-        self.navigation.settings.window.finish_open(handle);
-        self.navigation.settings.previous_left_collapsed = None;
-        self.navigation.settings.previous_right_collapsed = None;
-    }
-
-    pub(in crate::features) fn clear_settings_window(&mut self) {
-        self.navigation.settings.window.clear();
-    }
-
-    pub(in crate::features) fn cancel_settings_window_open(&mut self) {
-        self.navigation.settings.window.cancel_open();
-    }
-
-    pub(in crate::features) fn fail_settings_window_open(&mut self) {
-        self.navigation.settings.window.fail_open();
-        self.show_page(NavItem::Settings);
-        self.panels.left_collapsed = true;
-        self.panels.right_collapsed = true;
-    }
-
-    /// Clears settings-window ownership and restores the embedded-page panel state.
-    pub(in crate::features) fn finish_settings_navigation(&mut self) -> bool {
-        self.clear_settings_window();
-        if self.is_settings_page() {
-            self.navigation.main_mode = MainMode::Workspace;
-            self.panels.left_collapsed = self
-                .navigation
-                .settings
-                .previous_left_collapsed
-                .take()
-                .unwrap_or_else(|| self.panels.active_left.is_none());
-            self.panels.right_collapsed = self
-                .navigation
-                .settings
-                .previous_right_collapsed
-                .take()
-                .unwrap_or_else(|| self.panels.active_right.is_none());
-            true
-        } else {
-            self.navigation.settings.previous_left_collapsed = None;
-            self.navigation.settings.previous_right_collapsed = None;
-            false
-        }
     }
 
     pub(in crate::features) fn capture_renderer(&mut self, window: &gpui::Window) {
@@ -749,6 +667,15 @@ impl ShellFeatureState {
         self.chrome.open_tabs_menu_open
     }
 
+    #[cfg(windows)]
+    pub(in crate::features) fn header_status_menu_is_open(&self) -> bool {
+        self.chrome.header_status_menu_open
+    }
+
+    pub(in crate::features) fn set_header_status_menu_open(&mut self, open: bool) {
+        self.chrome.header_status_menu_open = open;
+    }
+
     pub(in crate::features) fn prepare_session_switch(&mut self) {
         self.chrome.prepare_session_switch();
     }
@@ -914,7 +841,13 @@ impl ShellFeatureState {
         &mut self,
         tab_root: &str,
     ) -> Option<WorkspacePaneNode> {
-        self.workspace.pane_roots.remove(tab_root)
+        let removed = self.workspace.pane_roots.remove(tab_root);
+        // Dropping a root orphans every leaf it owned; without a rebuild the
+        // stale owner keeps former leaves resolving to this tab root.
+        if removed.is_some() {
+            self.workspace.rebuild_tab_owners();
+        }
+        removed
     }
 
     pub(in crate::features) fn insert_workspace_pane_root(
@@ -998,6 +931,18 @@ impl ResizeHandleHoverState {
             self.active_id = None;
         }
         active
+    }
+
+    /// Native child windows consume pointer-leave events, so clear stale dwell state.
+    #[cfg(windows)]
+    fn clear(&mut self) -> bool {
+        let highlighted = self.active_id.is_some();
+        if self.pending_id.is_some() || highlighted {
+            self.generation = self.generation.wrapping_add(1);
+            self.pending_id = None;
+            self.active_id = None;
+        }
+        highlighted
     }
 
     pub(in crate::features) fn is_highlighted(&self, id: &SharedString) -> bool {
@@ -1317,7 +1262,7 @@ mod tests {
 
     use super::{NewSessionMenuAnchor, ShellFeatureInit, ShellFeatureState};
     use crate::models::{
-        ActivityBarLayoutState, BottomPanelMode, MainMode, NavItem, PanelResizeSide, PanelSide,
+        ActivityBarLayoutState, BottomPanelMode, NavItem, PanelResizeSide, PanelSide,
         WorkspacePaneNode, WorkspaceSplitDirection,
     };
 
@@ -1469,6 +1414,30 @@ mod tests {
         assert!(shell.activate_resize_handle_hover(&second, second_generation));
         assert!(shell.leave_resize_handle_hover(&second));
         assert!(!shell.resize_handle_is_highlighted(&second));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clearing_resize_hover_drops_highlight_and_invalidates_dwell() {
+        let mut shell = shell(BottomPanelMode::Hidden);
+        let id = SharedString::from("resize-handle");
+        let pending_generation = shell
+            .begin_resize_handle_hover(id.clone())
+            .expect("enter should arm dwell");
+        assert!(!shell.clear_resize_handle_hover());
+        assert!(
+            !shell.activate_resize_handle_hover(&id, pending_generation),
+            "clearing the pending dwell must make its timer stale"
+        );
+
+        let generation = shell
+            .begin_resize_handle_hover(id.clone())
+            .expect("re-enter should arm a new dwell");
+        assert!(shell.activate_resize_handle_hover(&id, generation));
+        assert!(shell.resize_handle_is_highlighted(&id));
+        assert!(shell.clear_resize_handle_hover());
+        assert!(!shell.resize_handle_is_highlighted(&id));
+        assert!(!shell.clear_resize_handle_hover());
     }
 
     #[test]
@@ -1624,23 +1593,6 @@ mod tests {
         assert_eq!(shell.last_connect_failure_name(), None);
         assert_eq!(shell.last_connect_failure_error(), None);
         assert!(!shell.clear_last_connect_failure());
-    }
-
-    #[test]
-    fn finishing_embedded_settings_restores_navigation_and_panel_state() {
-        let mut shell = shell(BottomPanelMode::Hidden);
-        shell.show_page(NavItem::Settings);
-        shell.navigation.settings.previous_left_collapsed = Some(false);
-        shell.navigation.settings.previous_right_collapsed = Some(true);
-        shell.panels.left_collapsed = true;
-        shell.panels.right_collapsed = false;
-
-        assert!(shell.finish_settings_navigation());
-        assert_eq!(shell.main_mode(), MainMode::Workspace);
-        assert!(!shell.panels.left_collapsed);
-        assert!(shell.panels.right_collapsed);
-        assert_eq!(shell.navigation.settings.previous_left_collapsed, None);
-        assert_eq!(shell.navigation.settings.previous_right_collapsed, None);
     }
 
     #[test]

@@ -526,6 +526,7 @@ impl CloudSyncRemote for NativeAliyunDriveRemote {
         };
         let drive_id = self.drive_id()?;
         let mut marker = String::new();
+        let mut progress = super::listing::ListingProgress::default();
         let mut names = Vec::new();
         loop {
             let value = self.send_json_expect_success(
@@ -538,7 +539,11 @@ impl CloudSyncRemote for NativeAliyunDriveRemote {
                 }),
                 "Aliyun Drive file list",
             )?;
-            let page = parse_aliyun_drive_list_page(&value);
+            let page = parse_aliyun_drive_list_page(&value)?;
+            progress.observe(
+                &page.names,
+                (!page.next_marker.is_empty()).then_some(page.next_marker.as_str()),
+            )?;
             names.extend(page.names);
             marker = page.next_marker;
             if marker.is_empty() {
@@ -564,22 +569,28 @@ pub(super) struct AliyunDriveListPage {
     pub(super) next_marker: String,
 }
 
-pub(super) fn parse_aliyun_drive_list_page(value: &serde_json::Value) -> AliyunDriveListPage {
-    let names = value
+pub(super) fn parse_aliyun_drive_list_page(
+    value: &serde_json::Value,
+) -> Result<AliyunDriveListPage, CloudSyncError> {
+    let entries = value
         .get("items")
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("file"))
-        .filter_map(|item| item.get("name").and_then(serde_json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect();
-    let next_marker = value
-        .get("next_marker")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    AliyunDriveListPage { names, next_marker }
+        .ok_or_else(super::listing::invalid)?;
+    let mut names = Vec::new();
+    for item in entries {
+        let name = super::listing::name(item)?;
+        match item.get("type").and_then(serde_json::Value::as_str) {
+            Some("file") => names.push(name),
+            Some("folder") => {}
+            _ => return Err(super::listing::invalid()),
+        }
+    }
+    let next_marker = match value.get("next_marker") {
+        None => String::new(),
+        Some(serde_json::Value::String(marker)) => marker.clone(),
+        _ => return Err(super::listing::invalid()),
+    };
+    Ok(AliyunDriveListPage { names, next_marker })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

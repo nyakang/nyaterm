@@ -6,20 +6,40 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 pub(super) struct StagedQuickCommands {
     next_id: u64,
-    owners: HashMap<String, u64>,
+    owners: HashMap<String, (u64, bool)>,
 }
 
 impl StagedQuickCommands {
     pub(super) fn begin(&mut self, targets: &[String]) -> u64 {
         self.next_id = self.next_id.checked_add(1).expect("quick command run id");
         for target in targets {
-            self.owners.insert(target.clone(), self.next_id);
+            self.owners.insert(target.clone(), (self.next_id, false));
         }
         self.next_id
     }
 
     pub(super) fn owns(&self, session: &str, id: u64) -> bool {
-        self.owners.get(session) == Some(&id)
+        self.owners
+            .get(session)
+            .is_some_and(|(owner, _)| *owner == id)
+    }
+
+    pub(super) fn mark_receiver(&mut self, session: &str, id: u64) {
+        if let Some((owner, receiver)) = self.owners.get_mut(session)
+            && *owner == id
+        {
+            *receiver = true;
+        }
+    }
+
+    pub(super) fn cancel_receiver(&mut self, session: &str) {
+        if self
+            .owners
+            .get(session)
+            .is_some_and(|(_, receiver)| *receiver)
+        {
+            self.cancel(session);
+        }
     }
 
     pub(super) fn cancel(&mut self, session: &str) {

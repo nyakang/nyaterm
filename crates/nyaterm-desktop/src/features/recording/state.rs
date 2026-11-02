@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use gpui::{ListAlignment, ListState, px};
 use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
 use nyaterm_transport::RecordingStatus;
 
@@ -11,10 +12,20 @@ pub(in crate::features) struct RecordingFeatureState {
     active_count: usize,
     pipeline: RecordingWritePipeline,
     search_draft: String,
+    panel_list: ListState,
+    /// Invalidates cached measurements when optional lines appear or disappear.
+    panel_row_layout: Vec<RecordingPanelRowLayout>,
     busy_actions: HashMap<String, String>,
     rekeyed_sessions: HashMap<String, String>,
     statuses: HashMap<String, RecordingStatus>,
     prompts: HashMap<String, RecordingPrompt>,
+}
+
+#[derive(PartialEq, Eq)]
+pub(in crate::features) struct RecordingPanelRowLayout {
+    pub session_id: String,
+    pub has_path: bool,
+    pub has_error: bool,
 }
 
 #[derive(Default)]
@@ -31,11 +42,36 @@ impl RecordingFeatureState {
             active_count: 0,
             pipeline,
             search_draft: String::new(),
+            panel_list: ListState::new(0, ListAlignment::Top, px(100.)),
+            panel_row_layout: Vec::new(),
             busy_actions: HashMap::new(),
             rekeyed_sessions: HashMap::new(),
             statuses: HashMap::new(),
             prompts: HashMap::new(),
         }
+    }
+
+    pub(in crate::features) fn panel_list(
+        &mut self,
+        rows: Vec<RecordingPanelRowLayout>,
+    ) -> ListState {
+        if !self
+            .panel_row_layout
+            .iter()
+            .map(|row| &row.session_id)
+            .eq(rows.iter().map(|row| &row.session_id))
+        {
+            self.panel_list.reset(rows.len());
+        } else {
+            // Recording start/stop and failures can change even an off-screen row's height.
+            for (index, (previous, next)) in self.panel_row_layout.iter().zip(&rows).enumerate() {
+                if previous != next {
+                    self.panel_list.remeasure_items(index..index + 1);
+                }
+            }
+        }
+        self.panel_row_layout = rows;
+        self.panel_list.clone()
     }
 
     pub(in crate::features) fn observe_prompt(

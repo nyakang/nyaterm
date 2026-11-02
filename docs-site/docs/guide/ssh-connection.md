@@ -223,26 +223,43 @@ NyaTerm 可以在同一条 SSH 连接上多路复用多个终端会话。向同�
 
 ## 外部调用与协议调用
 
-NyaTerm 也可以从浏览器、脚本、启动器或其他工具中打开连接链接。外部调用会把链接交给当前 NyaTerm 主窗口；如果应用尚未启动，启动参数中的链接也会在主窗口就绪后处理。
+可以从浏览器、脚本和启动器打开 SSH、Telnet 或本地终端。外部连接默认复用最近使用的工作区；没有可用窗口时创建窗口。直接启动程序、不带参数时默认新开窗口，`--reuse-window` 可显式复用。
 
-支持的入口：
+```powershell
+NyaTerm.exe ssh://root@example.com:22
+NyaTerm.exe --reuse-window
+NyaTerm.exe --local --cwd "C:\中文 目录"
+NyaTerm.exe --local "--cwd=C:\My Projects"
+```
 
-- 程序调用：把链接作为启动参数传给 NyaTerm，例如 `NyaTerm.exe ssh://root@example.com:22`
-- 协议调用：安装版通过系统 URL Scheme 处理 `nyaterm://` 链接；通用 `ssh://` 和 `telnet://` 不会被 NyaTerm 抢占，但仍可作为程序启动参数传入
+安装版的稳定版声明 `nyaterm`、`ssh`、`telnet` 协议，预览版只声明 `nyaterm-preview`。系统可能要求选择默认处理器。卸载仅移除仍指向当前安装的注册；便携包不会主动注册协议。
 
-支持的链接格式：
+支持的链接示例（预览版将自定义前缀替换为 `nyaterm-preview://`）：
 
-- `ssh://user@host:port`
+- `ssh://user@host:port?mode=terminal`
+- `ssh://user:password@host:port?mode=sftp`
 - `telnet://host:port`
-- `nyaterm://connect/ssh?host=host&port=22&username=user`
+- `nyaterm://connect/ssh?host=host&port=22&username=user&mode=standard`
 - `nyaterm://connect/telnet?host=host&port=23`
+- `nyaterm://connect/local?cwd=C%3A%5CMy%20Projects`
 
-处理规则：
+SSH 默认用户名为 `root`、端口为 `22`；Telnet 默认端口为 `23`。支持 IPv6（例如 `ssh://user@[2001:db8::1]:2222`），协议名称不区分大小写。用户名、密码和查询值按 UTF-8 百分号编码，严格解码一次，例如 `user%40realm` 和 `p%40ssword`。`--cwd PATH` 和 `--cwd=PATH` 仅配合 `--local` 使用；目录不能为空，连接后台验证存在性与访问权限，不将路径当作启动命令。
 
-- SSH 默认用户名为 `root`，默认端口为 `22`；Telnet 默认端口为 `23`
-- NyaTerm 会优先匹配同协议、同主机、同端口的已保存连接；SSH 链接显式写了用户名时，还会按用户名精确匹配
-- 如果匹配到多个已保存连接，NyaTerm 会拒绝任意选择；SSH 链接可显式提供用户名来消除歧义。如果没有匹配项，会按临时连接打开
-- 所有外部链接都拒绝密码、登录后命令、代理、跳板机、端口转发或私钥参数；需要这些能力时，请先保存连接后再打开
+SSH 的 `mode` 可选：
+
+| 模式 | 行为 |
+| --- | --- |
+| `standard` | 普通 SSH；服务器拒绝 shell 但支持 SFTP 时降级为文件会话。 |
+| `terminal` | 仅终端，不启动 SFTP、目录跟随或远程监控；shell 不可用时连接失败。 |
+| `sftp` | 认证并验证 SFTP 后进入文件浏览，不请求 PTY/shell，不执行登录后命令，不启用终端 AI 执行、X11、agent forwarding 或远程监控。已保存连接禁用 SFTP 时会报错。 |
+
+未指定模式时保持普通 SSH。运行模式仅影响本次会话，重连、复制、窗口间移动和已保存连接的启动恢复保留该模式，不回写连接配置；旧恢复数据按普通模式处理，不支持的模式会保留原值并跳过恢复。
+
+不含密码的链接优先匹配同协议、规范化主机和端口的已保存连接；SSH 显式用户名还需精确匹配。唯一匹配直接使用，多匹配时弹窗选择已保存连接、临时连接或取消。已保存的有效登录后命令仍需确认，SFTP 模式不会执行该命令。取消只结束当前请求。
+
+一次性密码仅允许放在 `ssh://` 用户信息中。带密码的链接始终创建临时会话，不匹配或修改已保存凭据；密码仅驻留当前进程供重连使用，不进入恢复、备份或同步数据。应用重启后需要重新认证。链接可能进入调用工具或浏览器的历史记录，请按敏感信息处理。
+
+链接不允许传入启动命令、代理、跳板机、私钥和转发配置；未知或重复参数、非法端口和非法编码均被拒绝。批量调用逐项处理，某个链接无效不会阻止其他合法链接；最多处理 16 项连接意图，每项参数最长 4 KiB。重复系统投递在 500ms 内去重。请求会等待启动、恢复和解锁完成，其他弹窗占用时排队；窗口关闭会取消其剩余请求。
 
 ## 会话输入同步
 

@@ -38,6 +38,11 @@ path = "src/lib.rs"
 name = "nyaterm"
 path = "src/main.rs"
 
+[[test]]
+name = "panic_report"
+path = "tests/panic_report.rs"
+harness = false
+
 
 [features]
 default = ["font-kit"]
@@ -45,3 +50,6 @@ font-kit = ["gpui_platform/font-kit"]
 
 [build-dependencies]
 embed-resource = "3.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_Security"] }

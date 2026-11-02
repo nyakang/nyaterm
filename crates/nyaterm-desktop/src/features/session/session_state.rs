@@ -119,7 +119,59 @@ impl NyaTermApp {
             SessionLaunchConfig::Rdp(config) => {
                 let yes = || t!("sessionInfo.yes").to_string();
                 let no = || t!("sessionInfo.no").to_string();
+                #[cfg(windows)]
+                let native_details = self.native_rdp_session_details(session_id);
+                #[cfg(windows)]
+                let native_engine = native_details.is_some();
+                #[cfg(not(windows))]
+                let native_engine = false;
                 details.push((t!("sessionInfo.launch"), "RDP".to_string()));
+                #[cfg(windows)]
+                if let Some(native) = native_details.as_ref() {
+                    details.push((t!("sessionInfo.sectionWindowsClient"), String::new()));
+                    details.push((
+                        t!("sessionInfo.engine"),
+                        t!("sessionInfo.windowsRemoteDesktop").to_string(),
+                    ));
+                    if let Some(version) = native
+                        .version
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        details.push((t!("sessionInfo.rdpControlVersion"), version.to_string()));
+                    }
+                    if let Some(available) = native.dynamic_resize_available {
+                        details.push((
+                            t!("sessionInfo.dynamicResize"),
+                            if available {
+                                t!("sessionInfo.dynamicResizeAvailable")
+                            } else {
+                                t!("sessionInfo.dynamicResizeUnavailable")
+                            }
+                            .to_string(),
+                        ));
+                    }
+                    if let Some(bits) = native.cipher_strength {
+                        details.push((t!("sessionInfo.encryption"), format!("{bits}-bit")));
+                    }
+                    if let Some(status) = native
+                        .status_text
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        details.push((t!("sessionInfo.connectionStatus"), status.to_string()));
+                    }
+                    if let (Some(width), Some(height)) =
+                        (native.desktop_width, native.desktop_height)
+                    {
+                        details.push((
+                            t!("sessionInfo.activeResolution"),
+                            format!("{width} × {height}"),
+                        ));
+                    }
+                }
                 details.push((t!("sessionInfo.sectionClient"), String::new()));
                 details.push((
                     t!("sessionInfo.clientVersion"),
@@ -141,7 +193,11 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.sectionNetwork"), String::new()));
                 details.push((
                     t!("sessionInfo.transport"),
-                    t!("sessionInfo.tcpOnly").to_string(),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        t!("sessionInfo.tcpOnly").to_string()
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.rtt"),
@@ -158,19 +214,27 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.sectionGraphics"), String::new()));
                 details.push((
                     t!("sessionInfo.codecs"),
-                    t!("sessionInfo.bitmapUpdates").to_string(),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        t!("sessionInfo.bitmapUpdates").to_string()
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.graphicsPipeline"),
-                    format!(
-                        "{} ({})",
-                        if config.display.graphics_pipeline {
-                            yes()
-                        } else {
-                            no()
-                        },
-                        t!("sessionInfo.forcedOff"),
-                    ),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        format!(
+                            "{} ({})",
+                            if config.display.graphics_pipeline {
+                                yes()
+                            } else {
+                                no()
+                            },
+                            t!("sessionInfo.forcedOff"),
+                        )
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.resolution"),
@@ -188,11 +252,15 @@ impl NyaTermApp {
                 };
                 details.push((
                     t!("sessionInfo.renderer"),
-                    match renderer {
-                        Some(specs) if !specs.device_name.trim().is_empty() => {
-                            format!("{} ({kind})", specs.device_name)
+                    if native_engine {
+                        t!("sessionInfo.windowsRemoteDesktop").to_string()
+                    } else {
+                        match renderer {
+                            Some(specs) if !specs.device_name.trim().is_empty() => {
+                                format!("{} ({kind})", specs.device_name)
+                            }
+                            _ => kind.to_string(),
                         }
-                        _ => kind.to_string(),
                     },
                 ));
                 details.push((t!("sessionInfo.sectionRemote"), String::new()));
@@ -241,6 +309,10 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        self.ensure_sftp_session_view(session_id, cx);
+        if let Some(view) = self.file_manager.workspace(&format!("sftp-{session_id}")) {
+            view.update(cx, |view, cx| view.request_focus(cx));
+        }
         self.session.start.clear_active_selection();
         self.shell.prepare_session_switch();
         // Session switch resets terminal-output credential autofill (Tauri XTerminal remount).
@@ -249,6 +321,7 @@ impl NyaTermApp {
         let previous_session_id = self.session.active_id_owned();
         let switching_sessions = previous_session_id.as_deref() != Some(session_id);
         if switching_sessions {
+            self.close_action_link_menu(cx);
             self.clear_terminal_composition(cx);
             if let Some(previous_id) = previous_session_id.as_deref() {
                 self.transfer.cancel_browser_auto_cwd_sync(previous_id);

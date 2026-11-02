@@ -76,6 +76,14 @@ struct ControlledRemote<'a> {
 }
 
 impl CloudSyncRemote for ControlledRemote<'_> {
+    fn write_sync_file(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        self.control.checkpoint()?;
+        self.remote.write_sync_file(path, bytes)
+    }
+    fn list_sync_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.control.checkpoint()?;
+        self.remote.list_sync_files(path)
+    }
     fn provider(&self) -> &'static str {
         self.remote.provider()
     }

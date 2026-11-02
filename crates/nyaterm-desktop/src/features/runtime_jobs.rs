@@ -153,6 +153,7 @@ pub(in crate::features) struct ProcessJobResult {
 
 #[derive(Debug)]
 pub(in crate::features) struct StatsJobResult {
+    pub(in crate::features) users_revision: u64,
     pub(in crate::features) job_id: u64,
     pub(in crate::features) session_id: String,
     pub(in crate::features) result: Result<RemoteStats, String>,

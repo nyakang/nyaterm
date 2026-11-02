@@ -659,9 +659,7 @@ mod tests {
                 state.shell.settings_active_tab(),
                 crate::models::SettingsTab::Security
             );
-            assert!(
-                state.shell.settings_window_is_open_or_pending() || state.shell.is_settings_page()
-            );
+            assert!(state.shell.has_settings_draft());
             assert_eq!(
                 state.cloud_sync.status(),
                 rust_i18n::t!("settings.syncMasterPasswordRequired")

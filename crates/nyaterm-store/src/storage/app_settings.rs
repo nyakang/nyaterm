@@ -7,6 +7,7 @@
 
 use nyaterm_core::models::window_decoration::WindowDecoration;
 use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
+use redb::ReadableTableMetadata;
 use std::collections::HashMap;
 
 use super::{
@@ -249,6 +250,11 @@ impl ConnectionStore {
             search_custom_engines: load_search_engines(&value),
             ui_remote_stats_interval: json_u32(&value, &["ui", "remote_stats_interval"], 3)
                 .clamp(1, 60),
+            ui_remote_stats_show_users: json_bool(
+                &value,
+                &["ui", "remote_stats_show_users"],
+                false,
+            ),
             ui_gpu_monitor_interval: json_u32(&value, &["ui", "gpu_monitor_interval"], 3)
                 .clamp(3, 120),
             ui_ascend_npu_monitor_interval: json_u32(
@@ -669,6 +675,14 @@ impl ConnectionStore {
             .map(|token| bootstrap.decrypt_settings_secret(&token))
             .transpose()?
             .map(Into::into);
+        if current_password.as_deref() != next_password {
+            let txn = self.db.begin_write()?;
+            if txn.open_table(super::cloud_sync_v4::REPLICAS)?.len()? > 0 {
+                return Err(StorageError::InvalidData(
+                    "Cloud Sync V3 requires publishing and verifying a new space before changing the master password".into(),
+                ));
+            }
+        }
         let rewrapped_master_key = self
             .load_master_key_token()?
             .map(|token| {
@@ -690,6 +704,11 @@ impl ConnectionStore {
         );
 
         let txn = self.db.begin_write()?;
+        if current_password.as_deref() != next_password
+            && txn.open_table(super::cloud_sync_v4::REPLICAS)?.len()? > 0
+        {
+            return Err(StorageError::CloudSyncLocalChanged);
+        }
         write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_DEFAULT, &value)?;
         if let Some(token) = rewrapped_master_key.as_deref() {
             txn.open_table(META_TABLE)?.insert(META_MASTER_KEY, token)?;
@@ -1369,15 +1388,22 @@ impl ConnectionStore {
             &["terminal", "action_links_enabled"],
             serde_json::Value::Bool(settings.terminal_action_links_enabled),
         );
-        set_nested_json_value(
-            &mut value,
-            &["terminal", "action_links_matchers"],
-            serde_json::json!({
-                "ipv4": settings.terminal_action_links_matchers.ipv4,
-                "archive": settings.terminal_action_links_matchers.archive,
-                "host_port": settings.terminal_action_links_matchers.host_port,
-            }),
-        );
+        // Update only known keys so future matcher options survive older readers.
+        for (key, enabled) in [
+            ("mac", settings.terminal_action_links_matchers.mac),
+            ("ipv4", settings.terminal_action_links_matchers.ipv4),
+            ("archive", settings.terminal_action_links_matchers.archive),
+            (
+                "host_port",
+                settings.terminal_action_links_matchers.host_port,
+            ),
+        ] {
+            set_nested_json_value(
+                &mut value,
+                &["terminal", "action_links_matchers", key],
+                serde_json::Value::Bool(enabled),
+            );
+        }
         set_nested_json_value(
             &mut value,
             &["search", "custom_engines"],
@@ -1387,6 +1413,11 @@ impl ConnectionStore {
             &mut value,
             &["ui", "remote_stats_interval"],
             serde_json::Value::from(settings.ui_remote_stats_interval.clamp(1, 60)),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["ui", "remote_stats_show_users"],
+            serde_json::Value::Bool(settings.ui_remote_stats_show_users),
         );
         set_nested_json_value(
             &mut value,
@@ -2090,6 +2121,10 @@ fn load_action_links_matchers(
         return defaults;
     };
     nyaterm_core::ActionLinksMatcherSettings {
+        mac: obj
+            .get("mac")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.mac),
         ipv4: obj
             .get("ipv4")
             .and_then(|v| v.as_bool())

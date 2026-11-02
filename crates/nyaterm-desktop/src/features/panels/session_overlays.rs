@@ -12,11 +12,12 @@ use crate::widgets::small_button;
 
 use super::TAB_PRESET_COLORS;
 
-const SESSION_INFO_DIALOG_WIDTH: f32 = 560.;
+const SESSION_INFO_DIALOG_WIDTH: f32 = 900.;
 const SESSION_INFO_VIEWPORT_MARGIN: f32 = 8.;
 
 fn session_info_dialog_width(viewport_width: f32) -> f32 {
-    (viewport_width - 2. * SESSION_INFO_VIEWPORT_MARGIN).clamp(0., SESSION_INFO_DIALOG_WIDTH)
+    // Keep room to drag the dialog; a 900px cap only applies on wide windows.
+    (viewport_width * 0.8).clamp(0., SESSION_INFO_DIALOG_WIDTH)
 }
 
 /// Constrain the measured dialog; before prepaint use its maximum height.
@@ -176,16 +177,23 @@ impl NyaTermApp {
             .find(|(label, _)| *label == t!("sessionInfo.name"))
             .map(|(_, value)| value.clone())
             .unwrap_or_else(|| t!("tabCtx.sessionInfo").to_string());
+        let (viewport_width, viewport_height) = self.shell.viewport_size();
+        let dialog_width = session_info_dialog_width(viewport_width);
+        // A wide report uses two columns; otherwise the body scrolls.
+        let columns = if dialog_width >= 760. { 2 } else { 1 };
         let mut rows = div()
             .id(SharedString::from("session-info-rows"))
             .debug_selector(|| "session-info-rows".to_string())
             .mt_3()
-            .flex()
-            .flex_col()
-            .gap_1();
+            .w_full()
+            .grid()
+            .grid_cols(columns)
+            .gap_x_4()
+            .gap_y_1();
         if details.is_empty() {
             rows = rows.child(
                 div()
+                    .col_span(columns)
                     .rounded_sm()
                     .border_1()
                     .border_color(rgb(palette.border))
@@ -202,6 +210,7 @@ impl NyaTermApp {
                     // the dialog reads like the Windows "connection quality" sheet.
                     rows = rows.child(
                         div()
+                            .col_span(columns)
                             .mt_2()
                             .text_sm()
                             .font_weight(FontWeight(700.))
@@ -241,7 +250,6 @@ impl NyaTermApp {
             }
         }
 
-        let (viewport_width, viewport_height) = self.shell.viewport_size();
         self.constrain_session_info_to_viewport();
         let offset = self.session.dialog_session_info_offset();
         let dialog_max_height = (viewport_height - 32.).max(0.);
@@ -316,7 +324,7 @@ impl NyaTermApp {
                 div()
                     .id(SharedString::from("session-info-dialog"))
                     .debug_selector(|| "session-info-dialog".to_string())
-                    .w(px(session_info_dialog_width(viewport_width)))
+                    .w(px(dialog_width))
                     .flex_none()
                     .max_h(px(dialog_max_height))
                     .relative()
@@ -543,6 +551,8 @@ mod tests {
             app.session.metadata_mut("remote").unwrap().launch_config =
                 SessionLaunchConfig::Rdp(RdpSessionConfig {
                     relay: None,
+                    backend: Default::default(),
+                    windows_authentication: None,
                     name: "103".into(),
                     host: "10.168.10.103".into(),
                     port: 3389,
@@ -565,9 +575,19 @@ mod tests {
         app: Entity<NyaTermApp>,
         window_height: f32,
     ) -> &mut VisualTestContext {
-        let window = cx.open_window(size(px(760.), px(window_height)), move |window, cx| {
-            nyaterm_ui::nya_root(app, window, cx)
-        });
+        host_app_sized(cx, app, 760., window_height)
+    }
+
+    fn host_app_sized(
+        cx: &mut TestAppContext,
+        app: Entity<NyaTermApp>,
+        window_width: f32,
+        window_height: f32,
+    ) -> &mut VisualTestContext {
+        let window = cx.open_window(
+            size(px(window_width), px(window_height)),
+            move |window, cx| nyaterm_ui::nya_root(app, window, cx),
+        );
         let _ = window.root(cx).expect("test window root");
         VisualTestContext::from_window(*std::ops::Deref::deref(&window), cx).into_mut()
     }
@@ -591,7 +611,7 @@ mod tests {
     #[test]
     fn drag_limits_follow_the_measured_dialog_height() {
         let (horizontal, vertical) = super::session_info_drag_limits((760., 560.), 480.);
-        assert!((horizontal - 92.).abs() < 0.01);
+        assert!((horizontal - 68.).abs() < 0.01);
         assert!((vertical - 32.).abs() < 0.01);
 
         let (_, short_dialog) = super::session_info_drag_limits((760., 560.), 160.);
@@ -751,6 +771,31 @@ mod tests {
             (f32::from(reopened.origin.x) - f32::from(dialog.origin.x)).abs() < 2.
                 && (f32::from(reopened.origin.y) - f32::from(dialog.origin.y)).abs() < 2.,
             "reopening should center the dialog again: {dialog:?} vs {reopened:?}"
+        );
+    }
+
+    #[test]
+    fn wide_session_info_uses_two_columns_and_fits_the_report() {
+        let root = TestConfigDir::new("nyaterm-session-info-wide");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = rdp_session_app(&mut cx, root.path());
+        let vcx = host_app_sized(&mut cx, app.clone(), 1400., 800.);
+        draw(vcx);
+
+        open_session_info(vcx, &app);
+        let dialog = vcx.debug_bounds("session-info-dialog").expect("dialog");
+        let rows = vcx.debug_bounds("session-info-rows").expect("rows");
+        let body = vcx.debug_bounds("session-info-body-frame").expect("body");
+        assert!(
+            f32::from(dialog.size.width) >= 880.,
+            "a wide window should use the two-column dialog: {dialog:?}"
+        );
+        assert!(
+            f32::from(rows.size.height) <= f32::from(body.size.height) + 1.,
+            "two columns should fit the report: rows {:?}, body {:?}",
+            rows,
+            body
         );
     }
 

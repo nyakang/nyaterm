@@ -3,7 +3,7 @@ use nyaterm_store::{StoreDomain, store_request};
 
 use crate::features::shell::TerminalWindowDockResult;
 use crate::features::{NyaTermApp, formatting::short_id};
-use crate::models::{MainMode, NavItem, SmartSplitMode, TabDockZone};
+use crate::models::{NavItem, SmartSplitMode, TabDockZone};
 
 impl NyaTermApp {
     /// Ensure every live session appears in the multi-leaf layout once it is enabled.
@@ -29,6 +29,11 @@ impl NyaTermApp {
                 .workspaces()
                 .map(|(id, _)| crate::models::WorkspaceTabId::FileManager(id.clone()).layout_key()),
         );
+        // The settings tab has no session or document behind it; the draft is
+        // what keeps it alive.
+        if self.shell.has_settings_draft() {
+            live_ids.push(crate::models::WorkspaceTabId::settings_key());
+        }
         let preferred = self.current_terminal_group();
         let active = self.active_workspace_tab();
         self.shell
@@ -58,6 +63,9 @@ impl NyaTermApp {
                 .workspaces()
                 .map(|(id, _)| crate::models::WorkspaceTabId::FileManager(id.clone()).layout_key()),
         );
+        if self.shell.has_settings_draft() {
+            tab_ids.push(crate::models::WorkspaceTabId::settings_key());
+        }
         let active = self.active_workspace_tab();
         self.shell.ensure_terminal_windows_root(tab_ids, active);
     }
@@ -130,7 +138,6 @@ impl NyaTermApp {
         let _ = focused_leaf_id;
         self.activate_workspace_tab(&tab_id, cx);
         self.shell.navigation.selected_nav = NavItem::Workspace;
-        self.shell.navigation.main_mode = MainMode::Workspace;
         let zone_label = match zone {
             TabDockZone::Center => "merged into leaf".to_string(),
             TabDockZone::Edge(edge) => format!("split to {}", edge.label()),
@@ -176,7 +183,6 @@ impl NyaTermApp {
         self.sync_terminal_frame_snapshot_priority();
         self.shell.workspace.focused_group = focused_leaf_id;
         self.shell.navigation.selected_nav = NavItem::Workspace;
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell
             .set_status(format!("applied {}", mode.label().to_ascii_lowercase()));
         self.persist_terminal_window_layout();

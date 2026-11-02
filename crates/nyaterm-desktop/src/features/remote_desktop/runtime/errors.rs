@@ -9,7 +9,7 @@ pub(in crate::features::remote_desktop) fn format_rdp_error(error: &RdpError) ->
         RdpErrorKind::ConnectionRefused => "Connection refused",
         RdpErrorKind::Tls => "RDP TLS connection failed",
         RdpErrorKind::Transport => "RDP transport interrupted",
-        RdpErrorKind::Session => "RDP session failed",
+        RdpErrorKind::Session => "RDP session terminated",
         RdpErrorKind::Clipboard => "RDP clipboard failed",
         RdpErrorKind::Negotiation => "RDP negotiation failed",
         RdpErrorKind::HelperMissing => "RDP helper is missing",

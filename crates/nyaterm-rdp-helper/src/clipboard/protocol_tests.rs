@@ -252,9 +252,12 @@ fn remote_copy_is_delivered_over_ipc_and_does_not_disable_later_local_copies() {
     harness.receive(ClipboardPdu::FormatDataResponse(
         OwnedFormatDataResponse::new_unicode_string("remote text"),
     ));
-    let Outbound::Control(RdpControlMessage::Clipboard {
+    let Outbound::Control(message) = harness.output.try_recv().unwrap() else {
+        panic!("expected a control message");
+    };
+    let RdpControlMessage::Clipboard {
         text, generation, ..
-    }) = harness.output.try_recv().unwrap()
+    } = *message
     else {
         panic!("expected IPC clipboard event");
     };
@@ -384,9 +387,10 @@ fn superseded_file_list_reply(expire: bool) {
         harness
             .bridge
             .expire_remote_fetch(std::time::Duration::ZERO);
-        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
-            harness.output.try_recv().unwrap()
-        else {
+        let Outbound::Control(message) = harness.output.try_recv().unwrap() else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::Error { error, fatal, .. } = *message else {
             panic!("expected clipboard timeout diagnostic");
         };
         assert_eq!(error.kind, nyaterm_remote_desktop::RdpErrorKind::Clipboard);
@@ -456,11 +460,16 @@ async fn text_only_timeouts_are_reported_while_the_helper_waits_for_control() {
         .unwrap()
         .unwrap();
     assert!(matches!(message, RdpControlMessage::Ping { sequence: 42 }));
-    let Outbound::Control(RdpControlMessage::Error {
+    let Outbound::Control(message) =
+        timeout.expect("text-only clipboard must report a stalled remote response")
+    else {
+        panic!("expected a control message");
+    };
+    let RdpControlMessage::Error {
         error,
         fatal,
         session_id,
-    }) = timeout.expect("text-only clipboard must report a stalled remote response")
+    } = *message
     else {
         panic!("expected a typed clipboard timeout");
     };
@@ -483,9 +492,10 @@ async fn text_only_timeouts_are_reported_while_the_helper_waits_for_control() {
     harness.receive(ClipboardPdu::FormatDataResponse(
         OwnedFormatDataResponse::new_unicode_string("current remote text"),
     ));
-    let Outbound::Control(RdpControlMessage::Clipboard { text, .. }) =
-        harness.output.try_recv().unwrap()
-    else {
+    let Outbound::Control(message) = harness.output.try_recv().unwrap() else {
+        panic!("expected a control message");
+    };
+    let RdpControlMessage::Clipboard { text, .. } = *message else {
         panic!("expected the current remote text");
     };
     assert_eq!(text, "current remote text");

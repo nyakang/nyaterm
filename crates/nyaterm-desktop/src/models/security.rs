@@ -11,6 +11,10 @@ pub(crate) enum SecurityAuthTab {
 pub(crate) enum SecurityUnlockAction {
     SubmitSshAuthentication(String),
     SavePasswordEditor(u64),
+    RevealConnectionPassword {
+        editor_generation: u64,
+        revision: u64,
+    },
     ViewPrivateKey(String),
     CopyPublicKey(String),
     RevealPassword(String),

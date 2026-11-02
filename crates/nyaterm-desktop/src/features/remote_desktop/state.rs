@@ -64,6 +64,8 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) cursor_position: CursorPosition,
     pub(super) cursor_visible: bool,
     pub(super) cursor_texture: Option<DynamicTexture>,
+    pub(super) cursor_repaint_pending: bool,
+    pub(super) last_cursor_repaint_at: Option<Instant>,
     pub(super) certificate_request: Option<RdpCertificatePrompt>,
     pub(super) vnc_key_request:
         Option<(nyaterm_remote_desktop::VncServerKeyRequest, Option<String>)>,
@@ -85,8 +87,21 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) pending_resize: Option<(RdpDisplayMetrics, Instant)>,
     pub(super) dynamic_resize_disabled: bool,
     pub(super) viewport: Option<Bounds<Pixels>>,
+    /// Window scale factor that `viewport` was measured with, so a reconnect can
+    /// ask for the same desktop without waiting for a fresh layout.
+    pub(super) viewport_scale_factor: f32,
+    /// A fit-window session waiting for its panel to be measured.
+    ///
+    /// This is the launch request, not a second copy of the live configuration:
+    /// it is taken by whoever starts the helper, and it is dropped if the tab
+    /// goes away first.
+    pub(super) deferred_start: Option<(RdpSessionConfig, Instant)>,
     pub(super) reconnect_attempts: u32,
     pub(super) reconnect_at: Option<Instant>,
+    #[cfg(windows)]
+    pub(super) native_rdp_config: Option<RdpSessionConfig>,
+    #[cfg(windows)]
+    pub(super) native_rdp: Option<nyaterm_remote_desktop::activex::NativeRdpControl>,
 }
 
 impl Default for RemoteDesktopSessionState {
@@ -101,6 +116,8 @@ impl Default for RemoteDesktopSessionState {
             cursor_position: CursorPosition::default(),
             cursor_visible: true,
             cursor_texture: None,
+            cursor_repaint_pending: false,
+            last_cursor_repaint_at: None,
             certificate_request: None,
             vnc_key_request: None,
             vnc_trust_previous: None,
@@ -121,13 +138,29 @@ impl Default for RemoteDesktopSessionState {
             pending_resize: None,
             dynamic_resize_disabled: false,
             viewport: None,
+            viewport_scale_factor: 1.0,
+            deferred_start: None,
             reconnect_attempts: 0,
             reconnect_at: None,
+            #[cfg(windows)]
+            native_rdp_config: None,
+            #[cfg(windows)]
+            native_rdp: None,
         }
     }
 }
 
 impl RemoteDesktopFeatureState {
+    #[cfg(windows)]
+    pub(in crate::features) fn take_native_hosts_for_shutdown(
+        &mut self,
+    ) -> Vec<nyaterm_remote_desktop::activex::NativeRdpControl> {
+        self.sessions
+            .values_mut()
+            .filter_map(|session| session.native_rdp.take())
+            .collect()
+    }
+
     pub(in crate::features) fn release_inactive_textures(&mut self, active: &str) {
         for (id, session) in &mut self.sessions {
             if id == active {
@@ -138,6 +171,11 @@ impl RemoteDesktopFeatureState {
             }
             if let Some(texture) = session.cursor_texture.take() {
                 self.pending_texture_removals.push(texture);
+            }
+            session.cursor_repaint_pending = false;
+            #[cfg(windows)]
+            if let Some(native) = session.native_rdp.as_mut() {
+                native.set_visible(false);
             }
             session.texture_dirty = session.framebuffer.is_some();
         }
@@ -235,15 +273,6 @@ impl RemoteDesktopFeatureState {
         &self.focus
     }
 
-    pub(in crate::features) fn create_rdp_session(
-        &mut self,
-        config: RdpSessionConfig,
-    ) -> Result<String, RdpError> {
-        let session_id = self.manager.create_session(config)?;
-        self.insert_connecting(session_id.clone());
-        Ok(session_id)
-    }
-
     pub(in crate::features) fn create_vnc_session(
         &mut self,
         config: VncSessionConfig,
@@ -289,8 +318,19 @@ impl RemoteDesktopFeatureState {
     }
 
     pub(super) fn insert_connecting(&mut self, session_id: String) {
-        self.sessions
-            .insert(session_id, RemoteDesktopSessionState::default());
+        let measured = self
+            .sessions
+            .get(&session_id)
+            .map(|session| (session.viewport, session.viewport_scale_factor));
+        let mut session = RemoteDesktopSessionState::default();
+        if let Some((viewport, viewport_scale_factor)) = measured {
+            // The panel belongs to the tab, not to the connection: a failed or
+            // restarted session is still shown in the same place, so forgetting
+            // the measurement would make the next connect guess again.
+            session.viewport = viewport;
+            session.viewport_scale_factor = viewport_scale_factor;
+        }
+        self.sessions.insert(session_id, session);
     }
 
     pub(in crate::features) fn insert_disconnected(&mut self, session_id: String) {

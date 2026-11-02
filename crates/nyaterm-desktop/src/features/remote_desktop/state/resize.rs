@@ -13,12 +13,10 @@ pub(in crate::features::remote_desktop) const RESIZE_DEBOUNCE: Duration =
 impl RemoteDesktopSessionState {
     pub(in crate::features::remote_desktop) fn queue_resize(
         &mut self,
-        mut metrics: RdpDisplayMetrics,
+        metrics: RdpDisplayMetrics,
         now: Instant,
     ) {
-        metrics.width = metrics.width.clamp(200, 8192) & !1;
-        metrics.height = metrics.height.clamp(200, 8192) & !1;
-        metrics.desktop_scale_factor = metrics.desktop_scale_factor.clamp(100, 500);
+        let metrics = metrics.clamped();
         let remote_size = self
             .framebuffer
             .as_ref()

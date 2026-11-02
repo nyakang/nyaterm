@@ -5,6 +5,7 @@ pub mod notes;
 pub mod quick_commands;
 pub mod sessions;
 pub mod settings;
+pub mod ssh_runtime;
 pub mod ssh_runtime_auth;
 pub mod window_decoration;
 pub mod window_material;
@@ -100,6 +101,33 @@ fn default_telnet_auto_login_timeout_ms() -> u64 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_rdp_backend() -> String {
+    "builtin".to_string()
+}
+
+fn deserialize_rdp_backend<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        "auto" | "internal" => "builtin".to_string(),
+        "active-x" => "windows".to_string(),
+        _ => value,
+    })
+}
+
+fn serialize_rdp_backend<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(match value {
+        "auto" | "internal" => "builtin",
+        "active-x" => "windows",
+        _ => value,
+    })
 }
 
 fn default_rdp_certificate_policy() -> String {

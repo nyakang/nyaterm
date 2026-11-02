@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::heartbeat::{Heartbeat, Supervisor};
 use crate::helper_process;
+use crate::protocol::{MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH};
 use crate::{
     CursorPosition, CursorShape, CursorVisibility, FRAME_PAYLOAD_LIMIT, PROTOCOL_VERSION,
     PacketType, QueueWaker, RdpCertificateResponse, RdpControlMessage, RdpDisplayMetrics, RdpError,
@@ -18,10 +19,6 @@ use crate::{
 };
 use nyaterm_core::runtime::reaper::Reaper;
 
-const MIN_WIDTH: u32 = 200;
-const MIN_HEIGHT: u32 = 200;
-const MAX_WIDTH: u32 = 8192;
-const MAX_HEIGHT: u32 = 8192;
 const FRAME_QUEUE_LIMIT: usize = 64;
 const FRAME_QUEUE_BYTE_LIMIT: usize = FRAME_PAYLOAD_LIMIT;
 const CONTROL_QUEUE_LIMIT: usize = 256;
@@ -390,6 +387,14 @@ impl RdpSessionManager {
         session_id: String,
         config: RdpSessionConfig,
     ) -> Result<String, RdpError> {
+        config.backend.validate_config(&config)?;
+        if config.backend != crate::RdpBackend::Builtin {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "Use the ActiveX host manager for the Windows backend",
+            ));
+        }
+
         validate_config(&config)?;
         {
             let mut sessions = self.sessions.lock().map_err(|_| {

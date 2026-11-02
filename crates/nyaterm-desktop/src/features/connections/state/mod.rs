@@ -32,8 +32,12 @@ use nyaterm_ui::{
 };
 
 mod editor_logic;
+mod import;
 mod list_logic;
 mod network_logic;
+mod password;
+
+use self::password::EditorPasswordState;
 
 use self::editor_logic::{
     ConnectionEditorPlaceholder, add_connection_editor_agent_endpoint,
@@ -51,6 +55,7 @@ use self::editor_logic::{
     set_connection_group_editor_error, toggle_connection_editor_agent_allowlist_fingerprint,
     toggle_connection_editor_flag,
 };
+use self::import::ConnectionImportState;
 use self::list_logic::{
     AppliedSearchExpansion, clear_connection_list_runtime_state, clear_selected_connection_ids,
     connection_drop_position_for_target, cycle_connection_sort_mode,
@@ -177,12 +182,9 @@ struct ConnectionListState {
     expanded_groups_revision: u64,
 }
 
-struct ConnectionImportState {
-    import_path_prompt: Option<ConnectionImportSource>,
-}
-
 struct ConnectionEditorFeatureState {
     draft: Option<ConnectionEditorState>,
+    password: EditorPasswordState,
     /// One editable field per text input, built when the editor opens.
     ///
     /// The draft above stays the source of truth for saving; these own the
@@ -284,11 +286,10 @@ impl ConnectionFeatureState {
                 expanded_groups_revision: 0,
             },
             list_model: ConnectionListModelCache::default(),
-            import: ConnectionImportState {
-                import_path_prompt: None,
-            },
+            import: ConnectionImportState::default(),
             editor: ConnectionEditorFeatureState {
                 draft: None,
+                password: EditorPasswordState::default(),
                 fields: HashMap::new(),
                 number_fields: HashMap::new(),
                 field_subscriptions: Vec::new(),
@@ -780,7 +781,7 @@ impl ConnectionFeatureState {
                     .placeholder(placeholder);
                 match field {
                     ConnectionEditorField::Description => input.multi_line(Some(2)),
-                    ConnectionEditorField::PostLoginCommand => input.multi_line(Some(4)),
+                    ConnectionEditorField::PostLoginCommand => input.code(Some(4)).language("bash"),
                     _ => input,
                 }
             });
@@ -791,6 +792,10 @@ impl ConnectionFeatureState {
                         // The ancestor Enter handler already consumed and cleared
                         // this draft. The submitted snapshot can arrive afterwards.
                         NyaInputEvent::Submitted(_) if field == ConnectionEditorField::NewTag => {}
+                        // Only real edits change password intent; submitting an
+                        // empty input must not cancel an explicit removal.
+                        NyaInputEvent::Submitted(_) if field == ConnectionEditorField::Password => {
+                        }
                         NyaInputEvent::Changed(text) | NyaInputEvent::Submitted(text) => {
                             app.apply_connection_editor_field_text(field, text.clone(), cx);
                         }
@@ -801,6 +806,8 @@ impl ConnectionFeatureState {
             self.editor.field_subscriptions.push(subscription);
         }
         self.ensure_editor_forwarding_endpoint_fields(cx);
+        self.sync_editor_password_input(cx);
+        self.bind_editor_password_keys(cx);
     }
 
     /// Keep one independent input entity for every endpoint value.
@@ -877,6 +884,9 @@ impl ConnectionFeatureState {
             return;
         };
         for (field, value, _, _) in editor_field_seeds(draft) {
+            if field == ConnectionEditorField::Password {
+                continue;
+            }
             if let Some(entity) = self.editor.fields.get(&field) {
                 entity.update(cx, |entity, cx| entity.set_content(&value, cx));
             }
@@ -885,6 +895,7 @@ impl ConnectionFeatureState {
             }
         }
         self.sync_telnet_keep_alive_field_disabled(cx);
+        self.sync_editor_password_input(cx);
     }
 
     pub fn sync_telnet_keep_alive_field_disabled(&self, cx: &mut App) {
@@ -899,6 +910,9 @@ impl ConnectionFeatureState {
     }
 
     pub fn set_editor_field_text(&mut self, field: ConnectionEditorField, text: String) {
+        if field == ConnectionEditorField::Password {
+            self.invalidate_editor_password_request();
+        }
         if let Some(draft) = self.editor.draft.as_mut() {
             set_connection_editor_field_text(draft, field, text);
         }
@@ -914,6 +928,10 @@ impl ConnectionFeatureState {
     }
 
     pub fn begin_editor(&mut self, draft: ConnectionEditorState) {
+        let mut draft = draft;
+        if draft.password_account_id().is_none() {
+            draft.password_source = ConnectionEditorPasswordSource::Direct;
+        }
         self.editor.begin_edit(draft);
     }
 
@@ -1205,13 +1223,21 @@ impl ConnectionFeatureState {
         edit: crate::models::ConnectionPasswordEdit,
         cx: &mut App,
     ) {
+        self.invalidate_editor_password_request();
         if let Some(editor) = self.editor.draft.as_mut() {
             editor.password_edit = edit;
             editor.password.expose_secret_mut().clear();
             editor.error = None;
             editor.field_errors.clear();
         }
-        self.reset_editor_field(ConnectionEditorField::Password, "", cx);
+        // This is an explicit operation, not a user edit. A Changed event would
+        // turn a pending removal back into Keep when the emptied input is synced.
+        if let Some(input) = self.editor.fields.get(&ConnectionEditorField::Password) {
+            input.update(cx, |state, cx| {
+                state.set_content_silent("", cx);
+                state.hide_secret(cx);
+            });
+        }
     }
 
     pub fn set_editor_username_silent(&mut self, username: &str, cx: &mut App) {
@@ -1260,24 +1286,21 @@ impl ConnectionFeatureState {
             } else if gaining && selected_username.is_some() {
                 editor.username_source = nyaterm_core::ConnectionUsernameSource::Account;
             }
-            let has_password = selected.is_some_and(|account| account.has_password);
-            if editor.auth_mode == "password" {
-                if editor.password_source == ConnectionEditorPasswordSource::Saved && !has_password
-                {
-                    editor.password_source = ConnectionEditorPasswordSource::Ask;
-                    editor.password_source_demoted = true;
-                } else if editor.password_source == ConnectionEditorPasswordSource::Ask
-                    && has_password
-                {
-                    editor.password_source = ConnectionEditorPasswordSource::Saved;
-                    editor.password_source_demoted = false;
-                }
-            }
+            editor.password_source = if cleared {
+                ConnectionEditorPasswordSource::Direct
+            } else if selected.is_some_and(|account| !account.has_password) {
+                ConnectionEditorPasswordSource::Ask
+            } else {
+                ConnectionEditorPasswordSource::Saved
+            };
+            editor.password_source_demoted = false;
             username_sync
         };
         if let Some(username) = username_sync {
             self.set_editor_username_silent(&username, cx);
         }
+        self.invalidate_editor_password_request();
+        self.sync_editor_password_input(cx);
     }
 
     pub fn use_connection_username(&mut self, account_username: Option<&str>, cx: &mut App) {
@@ -1318,6 +1341,7 @@ impl ConnectionFeatureState {
     }
 
     pub fn clear_editor_secrets(&mut self, cx: &mut App) {
+        self.invalidate_editor_password_request();
         if let Some(editor) = self.editor.draft.as_mut() {
             editor.password.expose_secret_mut().clear();
             // Ciphertext may remain so saving unrelated metadata cannot remove it.
@@ -1326,10 +1350,16 @@ impl ConnectionFeatureState {
             }
             editor.password_edit = crate::models::ConnectionPasswordEdit::Keep;
         }
-        self.reset_editor_field(ConnectionEditorField::Password, "", cx);
+        if let Some(input) = self.editor.fields.get(&ConnectionEditorField::Password) {
+            input.update(cx, |state, cx| {
+                state.discard_content(cx);
+                state.set_content_silent("", cx);
+            });
+        }
     }
 
-    pub fn hide_editor_secrets(&self, cx: &mut App) {
+    pub fn hide_editor_secrets(&mut self, cx: &mut App) {
+        self.invalidate_editor_password_request();
         if let Some(input) = self.editor.fields.get(&ConnectionEditorField::Password) {
             input.update(cx, |state, cx| state.hide_secret(cx));
         }
@@ -1347,10 +1377,12 @@ impl ConnectionFeatureState {
         select: ConnectionEditorSelect,
         value: Option<String>,
     ) -> bool {
+        self.invalidate_editor_password_request();
         self.editor.set_select_value(select, value)
     }
 
     pub fn set_editor_password_source(&mut self, source: ConnectionEditorPasswordSource) -> bool {
+        self.invalidate_editor_password_request();
         self.editor.set_password_source(source)
     }
 
@@ -1402,6 +1434,7 @@ impl ConnectionFeatureState {
     }
 
     pub fn set_editor_kind(&mut self, kind: ConnectionKindTab) -> bool {
+        self.invalidate_editor_password_request();
         self.editor.set_kind(kind)
     }
 
@@ -2014,22 +2047,11 @@ fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-impl ConnectionImportState {
-    pub fn path_prompt_active(&self) -> bool {
-        self.import_path_prompt.is_some()
-    }
-
-    pub fn begin_path_prompt(&mut self, source: ConnectionImportSource) {
-        self.import_path_prompt = Some(source);
-    }
-
-    pub fn finish_path_prompt(&mut self) {
-        self.import_path_prompt = None;
-    }
-}
-
 impl ConnectionEditorFeatureState {
     pub fn begin_edit(&mut self, mut draft: ConnectionEditorState) {
+        self.password = EditorPasswordState::new(
+            draft.existing_password.is_some() || draft.existing_password_locked,
+        );
         draft.section = crate::models::ConnectionEditorSection::Basic;
         self.scroll = gpui::ScrollHandle::new();
         self.anchors.clear();
@@ -2308,6 +2330,7 @@ impl ConnectionEditorFeatureState {
     }
 
     pub fn close(&mut self) {
+        self.password = EditorPasswordState::default();
         self.save_generation = self.save_generation.wrapping_add(1);
         self.agent_identity_picker_open = false;
         self.credential_overlay = None;

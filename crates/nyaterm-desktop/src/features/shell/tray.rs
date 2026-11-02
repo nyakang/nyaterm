@@ -172,14 +172,15 @@ fn build_tray(
 ) -> Result<TrayIcon, String> {
     let icon =
         tray_icon::Icon::from_rgba(pixels, width, height).map_err(|error| error.to_string())?;
-    TrayIconBuilder::new()
+    let builder = TrayIconBuilder::new()
         .with_id(nyaterm_core::app_identity::AppFlavor::current().desktop_id())
         .with_tooltip(nyaterm_core::app_identity::AppFlavor::current().display_name())
         .with_icon(icon)
         .with_menu(Box::new(menu(snapshot)?))
-        .with_menu_on_left_click(false)
-        .build()
-        .map_err(|error| error.to_string())
+        .with_menu_on_left_click(false);
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_as_template(true);
+    builder.build().map_err(|error| error.to_string())
 }
 
 impl NyaTermApp {

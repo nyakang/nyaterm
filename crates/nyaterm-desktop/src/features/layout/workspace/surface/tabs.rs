@@ -9,7 +9,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
+use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
 
 use crate::features::NyaTermApp;
 use crate::features::icons::resolve_connection_icon;
@@ -519,18 +519,38 @@ impl NyaTermApp {
         let has_unread = leaf_ids
             .iter()
             .any(|id| self.terminal.session_has_unread(id));
-        let sync_group = leaf_ids
+        let terminal_ids = leaf_ids
+            .iter()
+            .filter(|id| self.terminal_sync_session(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let sync_group = terminal_ids
             .iter()
             .find_map(|id| self.sync_input.active_group_for_session(id));
-        let sync_paused = leaf_ids
-            .iter()
-            .any(|id| self.sync_input.session_is_paused_in_active_group(id));
-        let show_sync_indicator = self.sync_input.broadcast_to_all() || sync_group.is_some();
-        let sync_indicator_color = sync_group.map(|group| group.color).unwrap_or(palette.link);
+        let sync_paused = !self.sync_input.broadcast_to_all()
+            && terminal_ids
+                .iter()
+                .any(|id| self.sync_input.session_is_paused_in_active_group(id));
+        let show_sync_indicator = !terminal_ids.is_empty()
+            && (self.sync_input.broadcast_to_all() || sync_group.is_some());
+        let sync_checkbox = (self.sync_input.input_selection_active() && !terminal_ids.is_empty())
+            .then(|| {
+                let (checked, mixed) = self.sync_input.tab_receive_state(&terminal_ids);
+                (checked, mixed, terminal_ids)
+            });
+        let sync_indicator_color = if self.sync_input.broadcast_to_all() {
+            palette.link
+        } else {
+            sync_group.map(|group| group.color).unwrap_or(palette.link)
+        };
         let sync_indicator_label = show_sync_indicator.then(|| {
-            let scope = sync_group
-                .map(|group| group.name.clone())
-                .unwrap_or_else(|| t!("menu.broadcastToAll").to_string());
+            let scope = if self.sync_input.broadcast_to_all() {
+                t!("menu.broadcastToAll").to_string()
+            } else {
+                sync_group
+                    .map(|group| group.name.clone())
+                    .unwrap_or_default()
+            };
             if sync_paused {
                 format!("{scope} · {}", t!("syncGroup.paused"))
             } else {
@@ -807,6 +827,55 @@ impl NyaTermApp {
                         ),
                 )
             })
+            .when_some(sync_checkbox, |this, (checked, mixed, session_ids)| {
+                this.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "session-tab-sync-receive-{close_session_id}"
+                        )))
+                        .debug_selector(|| "session-tab-sync-receive".to_string())
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .tooltip(move |window, cx| {
+                            nyaterm_ui::NyaTooltip::new(if mixed {
+                                t!("syncGroup.receiveInputMixed").to_string()
+                            } else {
+                                t!("syncGroup.receiveInput").to_string()
+                            })
+                            .build(window, cx)
+                        })
+                        .child(
+                            NyaCheckbox::new(SharedString::from(format!(
+                                "session-tab-sync-receive-box-{close_session_id}"
+                            )))
+                            .checked(checked)
+                            .on_click(cx.listener(
+                                move |this, receive: &bool, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_sessions_receive_sync_input(
+                                        &session_ids,
+                                        *receive,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .when(mixed, |this| {
+                            this.child(
+                                div()
+                                    .text_size(px(9.))
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(t!("syncGroup.partial").to_string()),
+                            )
+                        }),
+                )
+            })
             .when(has_unread && !is_active, |this| {
                 this.child(div().size(px(7.)).rounded_full().bg(rgb(palette.success)))
             })
@@ -1033,6 +1102,9 @@ impl NyaTermApp {
                 }
                 SessionStripTabId::Workspace(crate::models::WorkspaceTabId::FileManager(id)) => {
                     self.file_manager_strip_tab(id, index, index + 1, group_active.as_deref(), cx)
+                }
+                SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Settings) => {
+                    self.settings_strip_tab(index, index + 1, group_active.as_deref(), cx)
                 }
                 SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Session(id)) => {
                     let Some(session) = self.session.session_info(&id) else {
@@ -1349,6 +1421,71 @@ impl NyaTermApp {
 #[cfg(test)]
 mod tests {
     use super::{tab_drop_insert_after, tab_scroll_x, tab_strip_overflows};
+
+    #[test]
+    fn checkbox_click_keeps_the_active_tab_and_terminal_focus() {
+        use crate::features::NyaTermApp;
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::{
+            AppContext as _, Entity, IntoElement, Modifiers, Render, TestAppContext, div,
+            prelude::*, px, size,
+        };
+
+        struct Host(Entity<NyaTermApp>);
+        impl Render for Host {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                self.0.update(cx, |app, cx| {
+                    let session = app
+                        .session
+                        .ordered_sessions()
+                        .into_iter()
+                        .find(|session| session.id == "other")
+                        .unwrap();
+                    div()
+                        .size_full()
+                        .child(div().track_focus(app.terminal.input_focus()))
+                        .child(app.session_strip_tab(session, 1, 2, Some("active"), cx))
+                })
+            }
+        }
+        let root = TestConfigDir::new("nyaterm-sync-checkbox-focus");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "active");
+        cx.update_entity(&app, |app, cx| {
+            let metadata = app.session.metadata("active").unwrap().clone();
+            app.session.register_session_metadata("other", metadata);
+            app.sync_input.toggle_broadcast_to_all();
+            nyaterm_ui::apply_component_theme(
+                app.theme_palette(),
+                gpui::font("Arial"),
+                px(12.),
+                cx,
+            );
+        });
+        let (_, vcx) = cx.add_window_view(|_, _| Host(app.clone()));
+        vcx.simulate_resize(size(px(480.), px(100.)));
+        vcx.update(|window, cx| {
+            let focus = app.read(cx).terminal.input_focus().clone();
+            focus.focus(window, cx);
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        let checkbox = vcx.debug_bounds("session-tab-sync-receive").unwrap();
+        vcx.simulate_click(checkbox.center(), Modifiers::default());
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            assert!(!app.sync_input.session_receives_input("other"));
+            assert_eq!(app.session.active_id(), Some("active"));
+            assert!(app.terminal.input_focus().is_focused(window));
+            assert!(!app.session.tab_drag_source_is("other"));
+        });
+    }
 
     #[test]
     fn tab_drop_uses_source_and_target_order_for_insertion_side() {

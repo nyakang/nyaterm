@@ -511,6 +511,22 @@ impl RemoteOpsFeatureState {
         self.stats.begin_job(session_id, manual)
     }
 
+    pub(in crate::features) fn stats_users_revision(&self) -> u64 {
+        self.stats.users_revision()
+    }
+
+    pub(in crate::features) fn invalidate_stats_users(&mut self, enabled: bool) {
+        self.stats.invalidate_users(enabled);
+    }
+
+    pub(in crate::features) fn stats_users_refresh_pending(&self) -> bool {
+        self.stats.users_refresh_pending()
+    }
+
+    pub(in crate::features) fn take_stats_users_refresh_due(&mut self) -> bool {
+        self.stats.take_users_refresh_due()
+    }
+
     pub(in crate::features) fn take_stats_warmup_retry_due(&mut self) -> bool {
         self.stats.take_warmup_retry_due()
     }

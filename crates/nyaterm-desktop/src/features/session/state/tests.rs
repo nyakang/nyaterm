@@ -77,6 +77,58 @@ fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
 }
 
 #[test]
+fn host_key_prompt_overlay_keeps_its_content_height() {
+    use crate::features::NyaTermApp;
+    use gpui::{
+        Context, Entity, IntoElement, Render, VisualTestContext, Window, div, prelude::*, px,
+    };
+
+    struct HostKeyHost(Entity<NyaTermApp>);
+
+    impl Render for HostKeyHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let overlay = self.0.update(cx, |app, cx| {
+                app.ssh_auth_prompt_overlay(cx).into_any_element()
+            });
+            div().relative().size_full().child(overlay)
+        }
+    }
+
+    let root = TestConfigDir::new("nyaterm-host-key-layout");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "terminal");
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        let (response_tx, _) = mpsc::channel();
+        app.session.prompts.active_host_key_prompt = Some(HostKeyPromptRequest {
+            id: "host-key-layout".into(),
+            host_key: SshHostKey {
+                host: "example.test".into(),
+                port: 22,
+                host_identifier: "example.test".into(),
+                key_type: "ssh-ed25519".into(),
+                key_base64: "fixture-key".into(),
+                fingerprint: "SHA256:fixture".into(),
+            },
+            issue: HostKeyPromptIssue::Unknown,
+            response_tx,
+        });
+    });
+    let (_, cx) = cx.add_window_view(|_, _| HostKeyHost(app));
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let card = cx.debug_bounds("ssh-host-key-card").unwrap();
+    let viewport = cx.update(|window, _| window.viewport_size());
+    assert!(card.size.height > px(100.));
+    assert!(card.top() >= px(12.));
+    assert!(card.bottom() <= viewport.height - px(12.));
+}
+
+#[test]
 fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_completes() {
     for prefix in [b":".as_slice(), b"*", b"::TRZ"] {
         let root = TestConfigDir::new("nyaterm-sideband-prefix-routing");
@@ -105,6 +157,7 @@ fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_complete
 
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
+        requested_ssh_runtime_mode: None,
         attempt: Default::default(),
         connection_name: name.to_string(),
         launch_config: None,
@@ -865,6 +918,37 @@ fn session_metadata(name: &str, multiplex_key: Option<&str>) -> SessionRuntimeMe
         source_connection_id: None,
         ai_execution_profile: AiExecutionProfile::Posix,
         launch_config: SessionLaunchConfig::Local(config),
+        disconnected: false,
+    }
+}
+
+fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
+    nyaterm_remote_desktop::RdpSessionConfig {
+        relay: None,
+        backend: Default::default(),
+        windows_authentication: None,
+        name: name.into(),
+        host: "127.0.0.1".into(),
+        port: 3389,
+        username: String::new(),
+        domain: String::new(),
+        password: None,
+        use_nla: false,
+        certificate_policy: Default::default(),
+        administrative_session: false,
+        display: Default::default(),
+        clipboard: Default::default(),
+        reconnect: Default::default(),
+    }
+}
+
+fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
+    SessionRuntimeMetadata {
+        ssh_config: None,
+        ssh_multiplex_key: None,
+        source_connection_id: Some(connection_id.to_string()),
+        ai_execution_profile: AiExecutionProfile::Posix,
+        launch_config: SessionLaunchConfig::Rdp(rdp_session_config("rdp")),
         disconnected: false,
     }
 }
@@ -2170,6 +2254,41 @@ fn pending_registration_promotes_saved_preparation_without_changing_placement() 
 }
 
 #[test]
+fn saved_ssh_mode_survives_failure_before_config_build_and_retry_preparation() {
+    use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+
+    for mode in [SshRuntimeMode::Terminal, SshRuntimeMode::Sftp] {
+        let mut starts = SessionStartFeatureState::new();
+        let mut request = pending("saved");
+        request.launch_config = None;
+        request.source_connection_id = Some("saved-connection".into());
+        request.requested_ssh_runtime_mode = Some(mode);
+        starts.register_pending("first".into(), request);
+        let SessionStartEventRequest::Pending {
+            pending,
+            was_active,
+        } = starts.take_event_request("first")
+        else {
+            panic!("expected pending request");
+        };
+        starts.record_failure(
+            "first".into(),
+            pending,
+            "config failed".into(),
+            was_active,
+            false,
+        );
+        let failed = starts.take_failed_for_retry("first").unwrap();
+        assert_eq!(failed.pending.ssh_runtime_mode(), Some(mode));
+        starts.begin_retry_preparation("retry".into(), failed.pending);
+        assert_eq!(
+            starts.pending.get("retry").unwrap().ssh_runtime_mode(),
+            Some(mode)
+        );
+    }
+}
+
+#[test]
 fn unrelated_start_from_same_connection_does_not_release_preparation() {
     let mut starts = SessionStartFeatureState::new();
     let preparing = starts.allocate_tab_placement(0);
@@ -2533,3 +2652,28 @@ fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
 }
 
 mod tab_actions;
+
+#[test]
+fn independent_rdp_instances_can_reference_the_same_saved_connection() {
+    let root = TestConfigDir::new("nyaterm-rdp-multiple-instances");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let first = app_with_visible_local_session(&mut cx, root.path(), "local");
+    let other_root = TestConfigDir::new("nyaterm-rdp-other-window");
+    let second = app_with_visible_local_session(&mut cx, other_root.path(), "other");
+    first.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-one", remote_desktop_metadata("saved-rdp"));
+        app.session
+            .register_session_metadata("rdp-two", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-one"));
+        assert!(app.session.has_session("rdp-two"));
+        app.session.remove_session_catalog("rdp-one");
+        assert!(app.session.has_session("rdp-two"));
+    });
+    second.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-three", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-three"));
+    });
+}

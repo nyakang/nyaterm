@@ -101,6 +101,7 @@ pub(super) async fn delete_remote_path(
         let output = match multiplex {
             Some(multiplex) => {
                 exec_ssh_command_with_multiplex(
+                    config.clone(),
                     multiplex.clone(),
                     command.into_bytes(),
                     DELETE_EXEC_TIMEOUT,

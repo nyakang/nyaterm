@@ -8,7 +8,7 @@ use rust_i18n::t;
 use crate::features::{NyaTermApp, runtime_jobs::ActivitySide, view_widgets::mono_icon};
 use crate::models::{
     ActivityBarContextMenuState, ActivityBarContextTarget, ActivityBarEntry,
-    ActivityBarLayoutState, ActivityBarZone, BottomPanelMode, MainMode, NavItem, PanelSide,
+    ActivityBarLayoutState, ActivityBarZone, BottomPanelMode, NavItem, PanelSide,
 };
 
 #[derive(Clone, Debug)]
@@ -539,10 +539,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn activity_entry_selected(&self, entry: ActivityBarEntry) -> bool {
         match entry {
-            ActivityBarEntry::Panel(NavItem::Settings) => {
-                self.shell.navigation.settings.window.is_open()
-                    || self.shell.navigation.main_mode == MainMode::Page
-            }
+            ActivityBarEntry::Panel(NavItem::Settings) => self.settings_tab_is_open(),
             ActivityBarEntry::Panel(item) => self.panel_entry_selected(item),
             ActivityBarEntry::QuickCommands => {
                 self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands

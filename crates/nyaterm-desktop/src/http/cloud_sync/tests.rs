@@ -85,6 +85,23 @@ fn webdav_propfind_parser_rejects_invalid_percent_encoding() {
 }
 
 #[test]
+fn webdav_listing_errors_are_not_interpreted_as_an_empty_space() {
+    for body in [
+        "<html><body>Authentication required</body></html>",
+        "<multistatus><response><href>/missing.redb.enc</href><status>HTTP/1.1 403 Forbidden</status></response></multistatus>",
+        "<multistatus><response><href>/missing.redb.enc</href>",
+    ] {
+        assert!(parse_webdav_file_names(body).is_err());
+    }
+    assert!(
+        parse_webdav_file_names("<multistatus/>")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(parse_webdav_file_names("<multistatus><response><href>/a&amp;b.redb.enc</href><status>HTTP/1.1 200 OK</status></response></multistatus>").unwrap(), vec!["a&b.redb.enc"]);
+}
+
+#[test]
 fn s3_list_parser_reads_keys_and_continuation_token() {
     let body = r#"<?xml version="1.0" encoding="UTF-8"?>
         <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -144,9 +161,40 @@ fn drive_list_page_parsers_keep_files_and_pagination_tokens() {
             {"name": "folder", "type": "folder"}
         ],
         "next_marker": "aliyun-next"
-    }));
+    }))
+    .expect("Aliyun Drive page");
     assert_eq!(aliyun.names, vec!["r3.redb.enc"]);
     assert_eq!(aliyun.next_marker, "aliyun-next");
+}
+
+#[test]
+fn drive_list_parsers_reject_malformed_or_partial_pages_instead_of_empty_spaces() {
+    for body in [
+        "{}",
+        "{\"files\":null}",
+        r#"{"files":[],"nextPageToken":false}"#,
+        r#"{"files":[],"incompleteSearch":true}"#,
+        r#"{"files":[{"name":"missing-type"}]}"#,
+        r#"{"files":[{"name":"../outside","mimeType":"application/octet-stream"}]}"#,
+    ] {
+        assert!(parse_google_drive_list_page(body).is_err());
+    }
+    for body in [
+        "{}",
+        r#"{"value":[],"@odata.nextLink":null}"#,
+        r#"{"value":[{"name":"missing-kind"}]}"#,
+        r#"{"value":[{"name":"object","file":null}]}"#,
+    ] {
+        assert!(parse_onedrive_list_page(body).is_err());
+    }
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"items":[],"next_marker":false}),
+        serde_json::json!({"items":[{"type":"file"}]}),
+        serde_json::json!({"items":[{"type":"unknown","name":"object"}]}),
+    ] {
+        assert!(parse_aliyun_drive_list_page(&value).is_err());
+    }
 }
 
 #[test]

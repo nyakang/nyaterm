@@ -5,21 +5,21 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg, uniform_list,
+    Window, div, list, prelude::*, px, rgb, rgba, svg,
 };
-use nyaterm_transport::{RecordingMode, RecordingStatusState, SessionInfo};
+use nyaterm_transport::{RecordingMode, RecordingStatus, RecordingStatusState, SessionInfo};
 use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaScrollable, NyaSearchInput};
 
 use crate::features::formatting::{session_kind_label, short_id};
 use crate::features::perf::record_gpui_perf_sample;
+use crate::features::recording::state::RecordingPanelRowLayout;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
-
-const RECORDING_PANEL_LOGICAL_ROW_HEIGHT_PX: f32 = 100.;
 
 #[derive(Clone)]
 struct RecordingSessionPanelRow {
     session: SessionInfo,
     display_name: String,
+    status: Option<RecordingStatus>,
 }
 
 pub(in crate::features) struct RecordingSessionsPanelModel {
@@ -49,6 +49,7 @@ impl NyaTermApp {
                 let display_name = self.session.display_name_by_info(&session);
                 recording_session_matches_query(&session, &display_name, &query).then_some(
                     RecordingSessionPanelRow {
+                        status: self.recording.status(&session.id),
                         session,
                         display_name,
                     },
@@ -91,7 +92,24 @@ impl NyaTermApp {
             cx,
         );
 
-        let list_scroll = self.session.recording_list_scroll().clone();
+        let list_scroll = self.recording.panel_list(
+            rows.iter()
+                .map(|row| RecordingPanelRowLayout {
+                    session_id: row.session.id.clone(),
+                    has_path: row
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.file_path.as_ref())
+                        .is_some_and(|path| !path.as_os_str().is_empty()),
+                    has_error: row.status.as_ref().is_some_and(|status| {
+                        matches!(
+                            status.state,
+                            RecordingStatusState::Degraded | RecordingStatusState::Failed
+                        )
+                    }),
+                })
+                .collect(),
+        );
         let session_list: AnyElement = if total_count == 0 {
             div()
                 .id(SharedString::from("recording-session-list"))
@@ -115,35 +133,20 @@ impl NyaTermApp {
                 ))
                 .into_any_element()
         } else {
-            uniform_list(
-                "recording-session-list",
-                rows.len(),
-                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    let mut items = Vec::with_capacity(range.len());
-                    for index in range {
-                        let Some(row) = rows.get(index).cloned() else {
-                            continue;
-                        };
-                        items.push(
-                            div()
-                                .h(px(RECORDING_PANEL_LOGICAL_ROW_HEIGHT_PX))
-                                .px_2()
-                                .pb_1()
-                                .flex_none()
-                                .child(this.recording_session_row(
-                                    row.session,
-                                    row.display_name,
-                                    active_session_id.as_deref(),
-                                    cx,
-                                )),
-                        );
-                    }
-                    items
+            list(
+                list_scroll.clone(),
+                cx.processor(move |this, index: usize, _, cx| {
+                    let row = rows[index].clone();
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .flex_none()
+                        .child(this.recording_session_row(row, active_session_id.as_deref(), cx))
+                        .into_any_element()
                 }),
             )
             .flex_1()
             .min_h_0()
-            .track_scroll(&list_scroll)
             .into_any_element()
         };
 
@@ -197,18 +200,21 @@ impl NyaTermApp {
 
     fn recording_session_row(
         &mut self,
-        session: SessionInfo,
-        display_name: String,
+        row: RecordingSessionPanelRow,
         active_session_id: Option<&str>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let RecordingSessionPanelRow {
+            session,
+            display_name,
+            status,
+        } = row;
         let palette = self.theme_palette();
         let session_id = session.id.clone();
         let start_session_id = session.id.clone();
         let select_session_id = session.id.clone();
         let menu_session_id = session.id.clone();
         let is_current = active_session_id == Some(session.id.as_str());
-        let status = self.recording.status(&session.id);
         let is_recording = status.is_some();
         let is_busy = self.recording.busy_action(&session.id).is_some();
         let is_problem = status.as_ref().is_some_and(|status| {
@@ -245,6 +251,7 @@ impl NyaTermApp {
             status
                 .as_ref()
                 .and_then(|status| status.last_error.clone())
+                .filter(|error| !error.is_empty())
                 .unwrap_or_else(|| status_label.clone())
         } else {
             String::new()
@@ -261,7 +268,6 @@ impl NyaTermApp {
             })
             .w_full()
             .min_w_0()
-            .h(px(96.))
             .overflow_hidden()
             .rounded_md()
             .p_2()
@@ -344,16 +350,20 @@ impl NyaTermApp {
                         summary,
                         palette.text_dimmed,
                     ))
-                    .child(recording_text_line(
-                        format!("recording-session-path-{session_id}"),
-                        path,
-                        palette.text_dimmed,
-                    ))
-                    .child(recording_text_line(
-                        format!("recording-session-error-{session_id}"),
-                        error,
-                        palette.warning,
-                    )),
+                    .when(!path.is_empty(), |this| {
+                        this.child(recording_text_line(
+                            format!("recording-session-path-{session_id}"),
+                            path,
+                            palette.text_dimmed,
+                        ))
+                    })
+                    .when(!error.is_empty(), |this| {
+                        this.child(recording_text_line(
+                            format!("recording-session-error-{session_id}"),
+                            error,
+                            palette.warning,
+                        ))
+                    }),
             )
             .child(
                 div()

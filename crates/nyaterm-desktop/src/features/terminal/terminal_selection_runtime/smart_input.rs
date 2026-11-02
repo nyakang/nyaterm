@@ -264,6 +264,7 @@ impl NyaTermApp {
         paste: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.terminal.editing.state_mut().suggestion_fill = None;
         if !self.can_use_smart_cursor_selection() {
             return false;
         }

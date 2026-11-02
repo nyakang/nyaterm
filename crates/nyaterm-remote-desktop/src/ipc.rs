@@ -187,6 +187,34 @@ impl PacketReader {
     }
 }
 
+pub(crate) fn encode_json_control<T: serde::Serialize>(message: &T) -> io::Result<Packet> {
+    let payload = serde_json::to_vec(message).map_err(io::Error::other)?;
+    if payload.len() > CONTROL_PAYLOAD_LIMIT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Control payload exceeds limit",
+        ));
+    }
+    Ok(Packet {
+        packet_type: PacketType::Control,
+        payload: payload.into(),
+        body: Default::default(),
+    })
+}
+
+pub(crate) fn decode_json_control<T: serde::de::DeserializeOwned>(
+    packet: &Packet,
+) -> io::Result<T> {
+    if packet.packet_type != PacketType::Control {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Expected control packet",
+        ));
+    }
+    serde_json::from_slice(&packet.payload)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid control message"))
+}
+
 pub fn encode_control(message: &RdpControlMessage) -> io::Result<Packet> {
     let payload = serde_json::to_vec(message).map_err(io::Error::other)?;
     if payload.len() > CONTROL_PAYLOAD_LIMIT {

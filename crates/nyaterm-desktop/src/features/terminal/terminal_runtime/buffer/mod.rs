@@ -15,14 +15,14 @@ use crate::features::terminal::terminal_surface_entity::{
     terminal_snapshot_covers_display_offset, terminal_surface_paint_count,
 };
 use crate::models::{
-    MainMode, TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalFrameActionLinks, TerminalFrameEvent,
+    TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalFrameActionLinks, TerminalFrameEvent,
     TerminalFrameOutputEvent, TerminalFrameOutputSubmission, TerminalFrameParts,
     TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
     TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose, TerminalPresentation,
     TerminalSearchMode, TerminalViewState, TerminalWindowNode, TerminalWorkPolicy,
-    WorkspacePaneNode, append_terminal_ui_output_tail, terminal_action_link_matcher_key,
-    terminal_frame_scroll_window_extra_rows, terminal_frame_search_result_is_current,
-    terminal_geometry_diagnostics_enabled, terminal_snapshot_matches_grid_geometry,
+    WorkspacePaneNode, terminal_action_link_matcher_key, terminal_frame_scroll_window_extra_rows,
+    terminal_frame_search_result_is_current, terminal_geometry_diagnostics_enabled,
+    terminal_snapshot_matches_grid_geometry,
 };
 
 use super::view_io::terminal_visual_display_offset;
@@ -1019,6 +1019,7 @@ impl NyaTermApp {
                     // Priority lag: visible surface without a snapshot yet — keep
                     // protocol/revision current and request a live snapshot.
                     view.apply_terminal_background_frame_parts(
+                        &visible_text,
                         None,
                         None,
                         protocol_state,
@@ -1030,9 +1031,6 @@ impl NyaTermApp {
                             view.output_burst_bytes.saturating_add(accepted_bytes);
                         view.enter_render_degraded_mode();
                     }
-                    if !visible_text.is_empty() && !view.render_degraded {
-                        append_terminal_ui_output_tail(&mut view.output, &visible_text);
-                    }
                     if view.scroll_offset > 0 {
                         view.has_new_while_scrolled = true;
                     }
@@ -1042,6 +1040,7 @@ impl NyaTermApp {
                 let retain = keep_hidden_snapshot.then_some(snapshot).flatten();
                 shell_edit_snapshot_available = retain.is_some();
                 view.apply_terminal_background_frame_parts(
+                    &visible_text,
                     retain,
                     if keep_hidden_snapshot {
                         action_links
@@ -1140,16 +1139,13 @@ impl NyaTermApp {
         &self,
         session_id: &str,
     ) -> bool {
-        if session_id.is_empty() || self.shell.main_mode() != MainMode::Workspace {
+        if session_id.is_empty() {
             return false;
         }
         self.visible_terminal_session_ids().contains(&session_id)
     }
 
     pub(in crate::features) fn visible_terminal_session_ids(&self) -> Vec<&str> {
-        if self.shell.main_mode() != MainMode::Workspace {
-            return Vec::new();
-        }
         if self.shell.pane_focus_mode() {
             if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
                 return Vec::new();
@@ -1168,6 +1164,19 @@ impl NyaTermApp {
             {
                 visible.retain(|tab| root.leaf_for_tab(tab) != Some(group.as_str()));
             }
+            // A tab whose content is a projected pane tree (tmux control mode
+            // or a workspace split) renders its leaves inside the tab — those
+            // sessions are on screen too. Without them the frame worker
+            // deprioritizes pane snapshots and pane echoes only surface on
+            // lazy live-snapshot fetches.
+            let pane_roots = self.shell.workspace_pane_roots();
+            let pane_leaves: Vec<&str> = visible
+                .iter()
+                .filter_map(|tab| pane_roots.get(*tab))
+                .flat_map(workspace_pane_node_visible_session_ids)
+                .filter(|id| !self.shell.session_tab_is_hidden(id))
+                .collect();
+            visible.extend(pane_leaves);
             return visible;
         }
         if let Some(root) = self.shell.workspace_split() {

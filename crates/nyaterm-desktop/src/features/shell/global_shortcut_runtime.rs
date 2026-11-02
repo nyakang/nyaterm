@@ -16,6 +16,10 @@ impl NyaTermApp {
             return false;
         }
 
+        if event.keystroke.key.as_str() == "escape" && self.dismiss_action_link_menu(window, cx) {
+            return true;
+        }
+
         if event.keystroke.key.as_str() == "escape" && self.shell.pane_focus_mode() {
             self.shell.set_pane_focus_mode(false);
             cx.notify();

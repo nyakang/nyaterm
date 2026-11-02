@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod single_instance;
+#[cfg(windows)]
+mod url_protocols;
 
 use anyhow::Context as _;
 use gpui::{App, AppContext};
-use nyaterm_app::assets;
+use nyaterm_app::{assets, crash_report};
 use nyaterm_core::app_identity::AppFlavor;
 use nyaterm_core::{ActivationRequest, AppRuntime, LOG_FILE_PREFIX, LOG_FILE_SUFFIX};
 use nyaterm_desktop::{AppShellStartup, DesktopController, DesktopControllerGlobal};
@@ -14,6 +16,10 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use single_instance::{SingleInstanceOutcome, acquire};
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if let Some(result) = url_protocols::run_if_requested() {
+        return result;
+    }
     if let Some(status) = nyaterm_store::run_cloud_snapshot_decode_helper_if_requested() {
         std::process::exit(status);
     }
@@ -24,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     runtime
         .ensure_directories()
         .context("prepare runtime directories")?;
+    let crash_report_status = crash_report::install(runtime.crash_dir());
     let initial_activation = ActivationRequest::from_os_args(
         *uuid::Uuid::new_v4().as_bytes(),
         std::env::args_os().skip(1),
@@ -35,6 +42,12 @@ fn main() -> anyhow::Result<()> {
     let activation_tx = instance_owner.activation_sender();
     let activation_rx = instance_owner.take_activation_receiver();
     let _log_guard = init_tracing(&runtime)?;
+    if let Err(error) = crash_report_status {
+        tracing::warn!(%error, "panic reporting unavailable");
+    }
+    if let Err(error) = crash_report::cleanup_old_reports(&runtime.crash_dir()) {
+        tracing::warn!(%error, "could not clean up old panic reports");
+    }
     #[cfg(windows)]
     if let Err(error) = nyaterm_transport::local_conpty::configure_from_executable() {
         tracing::warn!(%error, "could not configure bundled ConPTY");

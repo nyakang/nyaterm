@@ -102,6 +102,10 @@ impl AppRuntime {
         &self.log_dir
     }
 
+    pub fn crash_dir(&self) -> PathBuf {
+        self.data_dir.join("crashes")
+    }
+
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }
@@ -170,6 +174,8 @@ mod tests {
         assert_eq!(preview.cache_dir(), Path::new("cache/nyaterm-preview"));
         assert_ne!(stable.data_dir(), preview.data_dir());
         assert_ne!(stable.log_dir(), preview.log_dir());
+        assert_eq!(stable.crash_dir(), home.join(".nyaterm/crashes"));
+        assert_eq!(preview.crash_dir(), home.join(".nyaterm-preview/crashes"));
         assert_ne!(
             stable.config_dir().join(".instance/owner.lock"),
             preview.config_dir().join(".instance/owner.lock")
@@ -189,11 +195,24 @@ mod tests {
         assert_eq!(runtime.mode(), RuntimeMode::Portable);
         assert_eq!(runtime.config_dir(), directory.join("data/config"));
         assert_eq!(runtime.log_dir(), directory.join("data/logs"));
+        assert_eq!(runtime.crash_dir(), directory.join("data/crashes"));
         assert_eq!(runtime.cache_dir(), directory.join("data/cache"));
         assert_eq!(
             runtime.portable_key_path(),
             Some(directory.join("data/config/portable.key").as_path())
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_unavailable_crash_directory_does_not_block_runtime_preparation() {
+        let directory = crate::test_support::TestTempDir::new("nyaterm-runtime-crashes");
+        std::fs::create_dir_all(directory.path()).unwrap();
+        std::fs::write(directory.join("nyaterm-portable"), b"").unwrap();
+        let runtime = AppRuntime::portable_from_directory(&directory).unwrap();
+        std::fs::create_dir_all(runtime.data_dir()).unwrap();
+        std::fs::write(runtime.crash_dir(), b"blocked").unwrap();
+        runtime.ensure_directories().unwrap();
+        assert!(runtime.crash_dir().is_file());
     }
 }

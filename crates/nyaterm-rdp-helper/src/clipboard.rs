@@ -181,7 +181,7 @@ impl ClipboardBridge {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .expire(timeout);
         if timed_out {
-            let _ = self.output_tx.send(Outbound::Control(RdpControlMessage::Error {
+            let _ = self.output_tx.send(Outbound::control(RdpControlMessage::Error {
                 session_id: self.session_id.clone(),
                 error: nyaterm_remote_desktop::RdpError::new(
                     nyaterm_remote_desktop::RdpErrorKind::Clipboard,
@@ -206,7 +206,7 @@ impl ClipboardBridge {
         };
         let _ = self
             .output_tx
-            .send(Outbound::Control(RdpControlMessage::Clipboard {
+            .send(Outbound::control(RdpControlMessage::Clipboard {
                 session_id: self.session_id.clone(),
                 text,
                 generation,
@@ -246,7 +246,7 @@ impl ClipboardBridge {
     fn send_transfer_progress(&self, progress: RdpClipboardTransferProgress) {
         let _ = self
             .output_tx
-            .send(Outbound::Control(RdpControlMessage::ClipboardTransfer {
+            .send(Outbound::control(RdpControlMessage::ClipboardTransfer {
                 session_id: self.session_id.clone(),
                 progress,
             }));
@@ -627,7 +627,7 @@ impl CliprdrBackend for TextClipboardBackend {
                 let _ = self
                     .bridge
                     .output_tx
-                    .send(Outbound::Control(RdpControlMessage::Error {
+                    .send(Outbound::control(RdpControlMessage::Error {
                         session_id: self.bridge.session_id.clone(),
                         error: nyaterm_remote_desktop::RdpError::new(
                             nyaterm_remote_desktop::RdpErrorKind::Clipboard,

@@ -253,7 +253,7 @@ jobs:
           - { label: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
           # Keep the x64 glibc floor at 2.35 while ubuntu-22.04 is supported.
           - { label: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { label: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { label: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
           - { label: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
           - { label: windows-arm64, os: windows-2025, target: aarch64-pc-windows-msvc }
     steps:
@@ -321,6 +321,18 @@ jobs:
           python scripts/release/verify_native_package.py
           --target "${TARGET}" --version "${VERSION}"
           --artifact-version "${VERSION}" --dist dist
+      # Run host tests even when the package contains ARM64 executables.
+      - name: Test portable updater against packaged ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          $arch = if ($env:TARGET -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          $env:NYATERM_TEST_PORTABLE_ARCH = if ($arch -eq 'arm64') { 'aarch64' } else { 'x86_64' }
+          $env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path "dist/NyaTerm_$($env:VERSION)_windows_${arch}_portable.zip").Path
+          cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
       - name: Record package provenance
         shell: bash
         env:

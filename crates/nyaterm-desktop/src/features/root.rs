@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::models::{MainMode, NavItem, PanelResizeSide, PanelSide};
+use crate::models::{NavItem, PanelResizeSide, PanelSide};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, IntoElement, KeyDownEvent, MouseButton,
     MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render, SharedString, Stateful,
@@ -23,13 +23,15 @@ use crate::theme::ThemePalette;
 const WALLPAPER_TILE_ELEMENT_LIMIT: usize = 8192;
 const WALLPAPER_TILE_MIN_SIZE: f32 = 8.;
 const SSH_AUTH_PROMPT_PRIORITY: usize = usize::MAX;
+pub(in crate::features) const SSH_AUTH_OVERLAY_PADDING_PX: f32 = 12.;
 
 /// Which overlays the root chrome should render this frame.
 ///
 /// Computed from `NyaTermApp` directly. This used to be read back from a
 /// snapshot the same `Render` pass had just published into `OverlayStore`,
 /// with a fallback that recomputed exactly these expressions.
-struct OverlayFlags {
+#[derive(Clone, Copy, Default)]
+pub(in crate::features) struct OverlayFlags {
     tab_actions_open: bool,
     color_picker_open: bool,
     session_info_open: bool,
@@ -40,6 +42,101 @@ struct OverlayFlags {
     command_suggestions_open: bool,
     credential_suggestions_open: bool,
     locked: bool,
+    quick_switch_open: bool,
+    external_sync_open: bool,
+    ssh_auth_open: bool,
+    full_access_open: bool,
+    mcp_approval_open: bool,
+    job_menu_open: bool,
+    favorites_menu_open: bool,
+    path_menu_open: bool,
+    upload_menu_open: bool,
+    connection_editor_open: bool,
+    quick_editor_open: bool,
+    quick_details_open: bool,
+    quick_variable_open: bool,
+    activity_menu_open: bool,
+    modal_child_open: bool,
+    #[cfg(windows)]
+    header_menu_open: bool,
+    #[cfg(windows)]
+    open_tabs_menu_open: bool,
+    #[cfg(windows)]
+    new_session_menu_open: bool,
+}
+
+impl OverlayFlags {
+    #[cfg(any(windows, test))]
+    pub(in crate::features) fn obscures_native_surface(self) -> bool {
+        let Self {
+            tab_actions_open,
+            color_picker_open,
+            session_info_open,
+            multi_line_paste_open,
+            terminal_actions_open,
+            action_link_menu_open,
+            action_link_tooltip_open,
+            command_suggestions_open,
+            credential_suggestions_open,
+            locked,
+            quick_switch_open,
+            external_sync_open,
+            ssh_auth_open,
+            full_access_open,
+            mcp_approval_open,
+            job_menu_open,
+            favorites_menu_open,
+            path_menu_open,
+            upload_menu_open,
+            connection_editor_open,
+            quick_editor_open,
+            quick_details_open,
+            quick_variable_open,
+            activity_menu_open,
+            modal_child_open,
+            #[cfg(windows)]
+            header_menu_open,
+            #[cfg(windows)]
+            open_tabs_menu_open,
+            #[cfg(windows)]
+            new_session_menu_open,
+        } = self;
+        [
+            tab_actions_open,
+            color_picker_open,
+            session_info_open,
+            multi_line_paste_open,
+            terminal_actions_open,
+            action_link_menu_open,
+            action_link_tooltip_open,
+            command_suggestions_open,
+            credential_suggestions_open,
+            locked,
+            quick_switch_open,
+            external_sync_open,
+            ssh_auth_open,
+            full_access_open,
+            mcp_approval_open,
+            job_menu_open,
+            favorites_menu_open,
+            path_menu_open,
+            upload_menu_open,
+            connection_editor_open,
+            quick_editor_open,
+            quick_details_open,
+            quick_variable_open,
+            activity_menu_open,
+            modal_child_open,
+            #[cfg(windows)]
+            header_menu_open,
+            #[cfg(windows)]
+            open_tabs_menu_open,
+            #[cfg(windows)]
+            new_session_menu_open,
+        ]
+        .into_iter()
+        .any(|visible| visible)
+    }
 }
 
 impl NyaTermApp {
@@ -457,17 +554,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let started_at = Instant::now();
-        let output = if self.shell.main_mode() == MainMode::Page
-            && self.shell.selected_nav() == NavItem::Settings
-        {
-            div()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .bg(self.shell_surface_color(palette.bg))
-                .child(self.settings_view(cx))
-                .into_any_element()
-        } else {
+        let output = {
             let compact_layout = !cfg!(target_os = "macos");
             let has_left_activity_items = self.activity_side_has_items(ActivitySide::Left);
             let has_right_activity_items = self.activity_side_has_items(ActivitySide::Right);
@@ -703,14 +790,14 @@ impl NyaTermApp {
             )
     }
 
-    fn overlay_host(
+    /// Derived once from the authoritative feature state; shared by root
+    /// rendering and native child visibility. Never stored as mutable app state.
+    pub(in crate::features) fn root_overlay_visibility(
         &mut self,
-        content: Stateful<Div>,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> OverlayFlags {
         let terminal_overlays = self.terminal.overlay_visibility();
-        let overlay = OverlayFlags {
+        OverlayFlags {
             tab_actions_open: self.session.dialog_tab_actions_target().is_some(),
             color_picker_open: self.session.dialog_color_picker_is_open(),
             session_info_open: self.session.dialog_session_info_is_open(),
@@ -721,10 +808,37 @@ impl NyaTermApp {
             command_suggestions_open: self.terminal.command_suggestions_open(),
             credential_suggestions_open: self.terminal.credential_suggestions_open(),
             locked: self.security.screen_locked(),
-        };
-        let quick_switch_open = self.quick_switch_open(cx);
-        let transfer_external_sync_open = self.active_external_editor_sync_prompt().is_some();
-        let ssh_auth_prompt_open = self.session.prompt_has_active_ssh_auth();
+            quick_switch_open: self.quick_switch_open(cx),
+            external_sync_open: self.active_external_editor_sync_prompt().is_some(),
+            ssh_auth_open: self.session.prompt_has_active_ssh_auth(),
+            full_access_open: self.pending_ai_full_access().is_some(),
+            mcp_approval_open: !self.mcp_pending_approval_requests().is_empty(),
+            job_menu_open: self.transfer.transfer_job_menu().is_some(),
+            favorites_menu_open: self.transfer.browser_view().favorites_menu.is_some(),
+            path_menu_open: self.transfer.browser_view().path_menu.is_some(),
+            upload_menu_open: self.transfer.browser_view().upload_menu.is_some(),
+            connection_editor_open: self.connection_state.inline_editor_panel_draft().is_some(),
+            quick_editor_open: self.commands.quick_editor_is_inline(),
+            quick_details_open: self.commands.quick_details().is_some(),
+            quick_variable_open: self.commands.quick_variable_prompt().is_some(),
+            activity_menu_open: self.shell.activity_bar_context_menu().is_some(),
+            modal_child_open: self.modal_child_window_is_open_or_pending(),
+            #[cfg(windows)]
+            header_menu_open: self.shell.header_status_menu_is_open(),
+            #[cfg(windows)]
+            open_tabs_menu_open: self.shell.open_tabs_menu_is_open(),
+            #[cfg(windows)]
+            new_session_menu_open: self.shell.new_session_menu_is_open(),
+        }
+    }
+
+    fn overlay_host(
+        &mut self,
+        content: Stateful<Div>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let overlay = self.root_overlay_visibility(cx);
         let full_access_confirmation = self.pending_ai_full_access();
         let mcp_approval = self.mcp_pending_approval_requests().into_iter().next();
 
@@ -747,34 +861,31 @@ impl NyaTermApp {
                     self.session_info_overlay(cx),
                 ))
             })
-            .when(self.transfer.transfer_job_menu().is_some(), |this| {
+            .when(overlay.job_menu_open, |this| {
                 this.child(full_window_overlay_layer(
                     "transfer-job-menu-input-layer",
                     self.transfer_job_menu_overlay(cx),
                 ))
             })
-            .when(transfer_external_sync_open, |this| {
+            .when(overlay.external_sync_open, |this| {
                 this.child(full_window_overlay_layer(
                     "transfer-external-sync-input-layer",
                     self.transfer_external_sync_prompt_overlay(cx),
                 ))
             })
-            .when(
-                self.transfer.browser_view().favorites_menu.is_some(),
-                |this| {
-                    this.child(full_window_overlay_layer(
-                        "transfer-favorites-menu-input-layer",
-                        self.transfer_browser_favorites_menu_overlay(cx),
-                    ))
-                },
-            )
-            .when(self.transfer.browser_view().path_menu.is_some(), |this| {
+            .when(overlay.favorites_menu_open, |this| {
+                this.child(full_window_overlay_layer(
+                    "transfer-favorites-menu-input-layer",
+                    self.transfer_browser_favorites_menu_overlay(cx),
+                ))
+            })
+            .when(overlay.path_menu_open, |this| {
                 this.child(full_window_overlay_layer(
                     "transfer-path-menu-input-layer",
                     self.transfer_browser_path_menu_overlay(cx),
                 ))
             })
-            .when(self.transfer.browser_view().upload_menu.is_some(), |this| {
+            .when(overlay.upload_menu_open, |this| {
                 this.child(full_window_overlay_layer(
                     "transfer-upload-menu-input-layer",
                     self.transfer_browser_upload_menu_overlay(cx),
@@ -813,7 +924,10 @@ impl NyaTermApp {
                 ))
             })
             .when_some(
-                self.connection_state.inline_editor_panel_draft(),
+                overlay
+                    .connection_editor_open
+                    .then(|| self.connection_state.inline_editor_panel_draft())
+                    .flatten(),
                 |this, editor| {
                     this.child(full_window_overlay_layer(
                         "connection-editor-input-layer",
@@ -828,56 +942,64 @@ impl NyaTermApp {
                     ))
                 },
             )
-            .when(self.commands.quick_editor_is_inline(), |this| {
+            .when(overlay.quick_editor_open, |this| {
                 this.child(full_window_overlay_layer(
                     "quick-command-editor-input-layer",
                     self.quick_command_editor_overlay(cx),
                 ))
             })
-            .when(self.commands.quick_details().is_some(), |this| {
+            .when(overlay.quick_details_open, |this| {
                 this.child(full_window_overlay_layer(
                     "quick-command-details-input-layer",
                     self.quick_command_details_overlay(cx),
                 ))
             })
-            .when(self.commands.quick_variable_prompt().is_some(), |this| {
+            .when(overlay.quick_variable_open, |this| {
                 this.child(full_window_overlay_layer(
                     "quick-command-variable-input-layer",
                     self.quick_command_variable_prompt_overlay(cx),
                 ))
             })
-            .when(quick_switch_open, |this| {
+            .when(overlay.quick_switch_open, |this| {
                 this.child(full_window_overlay_layer(
                     "quick-switch-input-layer",
                     self.quick_switch_overlay(cx),
                 ))
             })
-            .when(self.shell.activity_bar_context_menu().is_some(), |this| {
+            .when(overlay.activity_menu_open, |this| {
                 this.child(full_window_overlay_layer(
                     "activity-context-input-layer",
                     self.activity_bar_context_menu_overlay(cx),
                 ))
             })
-            .when_some(full_access_confirmation, |this, setting| {
-                this.child(full_window_overlay_layer(
-                    "ai-full-access-confirmation-layer",
-                    self.ai_full_access_confirmation_overlay(setting, cx),
-                ))
-            })
-            .when_some(mcp_approval, |this, request| {
-                this.child(full_window_overlay_layer(
-                    "mcp-approval-input-layer",
-                    self.mcp_approval_overlay(request, cx),
-                ))
-            })
+            .when_some(
+                overlay
+                    .full_access_open
+                    .then_some(full_access_confirmation)
+                    .flatten(),
+                |this, setting| {
+                    this.child(full_window_overlay_layer(
+                        "ai-full-access-confirmation-layer",
+                        self.ai_full_access_confirmation_overlay(setting, cx),
+                    ))
+                },
+            )
+            .when_some(
+                overlay.mcp_approval_open.then_some(mcp_approval).flatten(),
+                |this, request| {
+                    this.child(full_window_overlay_layer(
+                        "mcp-approval-input-layer",
+                        self.mcp_approval_overlay(request, cx),
+                    ))
+                },
+            )
             // Below the lock screen on purpose: both layers share
             // `APP_OVERLAY_PRIORITY`, so insertion order decides, and a layer
             // painted above the lock screen would swallow the pointer input the
             // lock screen needs.
-            .when(
-                modal_scrim_is_drawn() && self.modal_child_window_is_open_or_pending(),
-                |this| this.child(passive_overlay_layer(self.modal_owner_scrim())),
-            )
+            .when(modal_scrim_is_drawn() && overlay.modal_child_open, |this| {
+                this.child(passive_overlay_layer(self.modal_owner_scrim()))
+            })
             .when(overlay.locked, |this| {
                 // The lock screen owns its input boundary so Windows caption
                 // presses can reach the native window procedure and start a drag.
@@ -885,7 +1007,7 @@ impl NyaTermApp {
             })
             // Background SSH operations can request credentials while another
             // overlay is open, so authentication must be the topmost overlay.
-            .when(ssh_auth_prompt_open, |this| {
+            .when(overlay.ssh_auth_open, |this| {
                 this.child(
                     deferred(full_window_overlay_layer(
                         "ssh-auth-prompt-input-layer",
@@ -1143,18 +1265,18 @@ impl NyaTermApp {
 
     /// Whether the main window should be held back for a modal child window.
     ///
-    /// The three windows below hold one shared draft slot each, so the main
-    /// window must not be edited underneath them. Deliberately absent: the remote
-    /// file editor, which is an independent document window, and the
-    /// external-editor prompt, which is a topmost `PopUp` that must not block the
-    /// workspace it is reporting on.
+    /// The two windows below hold one shared draft slot each, so the main
+    /// window must not be edited underneath them. Deliberately absent: the
+    /// remote file editor, which is an independent document window, and the
+    /// external-editor prompt, which is a topmost `PopUp` that must not block
+    /// the workspace it is reporting on. Settings is also absent -- it is a
+    /// workspace tab, so opening it must never disable the main window.
     ///
     /// The pending state counts: a child window is opened from a deferred
     /// callback, and without it the main window would be live for the frames in
     /// between.
     fn modal_child_window_is_open_or_pending(&self) -> bool {
-        self.shell.settings_window_is_open_or_pending()
-            || self.connection_state.editor_window_is_open_or_pending()
+        self.connection_state.editor_window_is_open_or_pending()
             || self.commands.quick_editor_window_is_open_or_pending()
             || self.sync_input.window_is_open_or_pending()
     }
@@ -1172,7 +1294,10 @@ impl NyaTermApp {
             .bg(rgba(0x00000066))
     }
 
-    fn ssh_auth_prompt_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(in crate::features) fn ssh_auth_prompt_overlay(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let host_key_prompt = self.session.prompt_active_host_key().cloned();
         let agent_prompt = self.session.prompt_active_agent().cloned();
         let credential_prompt = self.session.prompt_active_credential().cloned();
@@ -1194,7 +1319,7 @@ impl NyaTermApp {
             .flex()
             .items_center()
             .justify_center()
-            .p_3()
+            .p(px(SSH_AUTH_OVERLAY_PADDING_PX))
             .track_focus(self.session.prompt_credential_focus())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
@@ -1210,7 +1335,6 @@ impl NyaTermApp {
                 div()
                     .w(px(dialog_width))
                     .max_w_full()
-                    .max_h_full()
                     .min_h_0()
                     .when_some(host_key_prompt, |this, prompt| {
                         this.child(self.host_key_prompt_banner(prompt, cx))
@@ -1381,6 +1505,84 @@ mod tests {
     use super::{fit_wallpaper_tile_size, wallpaper_tile_grid};
 
     #[test]
+    fn paste_review_and_terminal_actions_share_the_overlay_snapshot() {
+        use crate::features::test_support::{
+            app_with_visible_local_session, session_focus_test_window,
+        };
+        use nyaterm_core::test_support::TestTempDir;
+        let root = TestTempDir::new("nyaterm-paste-overlay-snapshot");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| {
+            app.sync_component_theme(cx);
+            let mut summary = app.settings.summary().clone();
+            summary.terminal_show_multi_line_paste_dialog = true;
+            app.settings.replace_summary(summary);
+        });
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.paste_terminal_text("one\ntwo".into(), window, cx);
+                let overlay = app.root_overlay_visibility(cx);
+                assert!(overlay.multi_line_paste_open && overlay.obscures_native_surface());
+                app.open_terminal_actions(window, cx);
+                app.close_multi_line_paste(window, cx);
+                let overlay = app.root_overlay_visibility(cx);
+                assert!(!overlay.multi_line_paste_open && overlay.terminal_actions_open);
+                assert!(overlay.obscures_native_surface());
+                app.close_terminal_actions(window, cx);
+                assert!(!app.root_overlay_visibility(cx).obscures_native_surface());
+            });
+        });
+    }
+
+    #[test]
+    fn overlay_snapshot_keeps_native_hidden_until_all_layers_close() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::models::{TransferBrowserUploadMenuState, TransferExternalSyncPromptState};
+        use nyaterm_core::test_support::TestTempDir;
+        let root = TestTempDir::new("nyaterm-overlay-snapshot");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        let other_root = TestTempDir::new("nyaterm-other-window-overlay-snapshot");
+        let other = app_with_visible_local_session(&mut cx, other_root.path(), "other");
+        app.update(&mut cx, |app, cx| {
+            assert!(!app.root_overlay_visibility(cx).obscures_native_surface());
+            app.transfer
+                .open_browser_upload_menu(TransferBrowserUploadMenuState {
+                    x: gpui::px(10.),
+                    y: gpui::px(10.),
+                });
+            let snapshot = app.root_overlay_visibility(cx);
+            assert!(snapshot.upload_menu_open && snapshot.obscures_native_surface());
+            app.transfer.insert_external_sync_prompt(
+                "prompt".into(),
+                TransferExternalSyncPromptState {
+                    session_id: Some("local".into()),
+                    job_id: "job".into(),
+                    remote_path: "/file".into(),
+                    raw_path_token: None,
+                    local_path: PathBuf::from("file"),
+                },
+            );
+            app.transfer.close_browser_upload_menu();
+            let snapshot = app.root_overlay_visibility(cx);
+            assert!(!snapshot.upload_menu_open && snapshot.external_sync_open);
+            assert!(snapshot.obscures_native_surface());
+            other.update(cx, |other, cx| {
+                assert!(!other.root_overlay_visibility(cx).obscures_native_surface())
+            });
+            app.transfer.dismiss_external_sync_prompt("prompt");
+            assert!(!app.root_overlay_visibility(cx).obscures_native_surface());
+        });
+        other.update(&mut cx, |other, cx| {
+            assert!(!other.root_overlay_visibility(cx).obscures_native_surface());
+        });
+    }
+
+    #[test]
     fn wallpaper_tiles_cover_viewport_and_cap_extreme_counts() {
         assert_eq!(wallpaper_tile_grid((1280., 800.), (256., 256.)), (5, 4));
         assert_eq!(wallpaper_tile_grid((1280., 800.), (2048., 2048.)), (1, 1));
@@ -1418,36 +1620,35 @@ mod tests {
         cx.new(|cx| super::NyaTermApp::new(runtime, stores, cx))
     }
 
-    /// The three windows that hold a draft shared with the main window each hold
-    /// it back, and each does so from the moment the open is requested -- a child
-    /// window is opened from a deferred callback, so the pending state is the only
-    /// thing covering the frames in between.
+    /// The remaining draft-owning child windows hold the main window back, each
+    /// from the moment the open is requested -- a child window is opened from a
+    /// deferred callback, so the pending state is the only thing covering the
+    /// frames in between.
     #[gpui::test]
     fn every_draft_owning_child_window_holds_the_main_window_back(cx: &mut TestAppContext) {
         let app = modal_predicate_app(cx);
 
-        cx.update_entity(&app, |app, _| {
+        cx.update_entity(&app, |app, cx| {
             assert!(
                 !app.modal_child_window_is_open_or_pending(),
                 "nothing is open yet"
             );
 
-            assert!(app.shell.begin_settings_window_open());
-            assert!(app.modal_child_window_is_open_or_pending());
-            app.shell.cancel_settings_window_open();
-            assert!(!app.modal_child_window_is_open_or_pending());
-
             assert!(app.connection_state.begin_editor_window_open());
             assert!(app.modal_child_window_is_open_or_pending());
+            assert!(app.root_overlay_visibility(cx).modal_child_open);
             app.connection_state.clear_editor_window_pending();
             assert!(!app.modal_child_window_is_open_or_pending());
+            assert!(!app.root_overlay_visibility(cx).modal_child_open);
 
             app.commands
                 .open_quick_editor(crate::models::QuickCommandEditorState::blank());
             assert!(app.commands.request_quick_editor_window());
             assert!(app.modal_child_window_is_open_or_pending());
+            assert!(app.root_overlay_visibility(cx).modal_child_open);
             app.commands.cancel_quick_editor_window_request();
             assert!(!app.modal_child_window_is_open_or_pending());
+            assert!(!app.root_overlay_visibility(cx).modal_child_open);
         });
     }
 

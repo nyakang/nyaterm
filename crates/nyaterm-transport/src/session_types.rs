@@ -26,7 +26,8 @@ pub enum SessionKind {
     Vnc,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// `Eq` is impossible: `TmuxState` carries `f64` layout ratios.
+#[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
     /// In-process ordering fence; never sent to the terminal or persisted.
     OutputBoundary {
@@ -61,6 +62,12 @@ pub enum SessionEvent {
     Error {
         session_id: String,
         message: String,
+    },
+    /// tmux control-mode state for an SSH session in control mode. The
+    /// payload carries the full window/pane projection the workspace renders.
+    TmuxState {
+        session_id: String,
+        state: Box<crate::tmux::TmuxStatePayload>,
     },
 }
 
@@ -101,7 +108,7 @@ pub struct SessionDrainStats {
     pub dropped_output_bytes: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionDrain {
     pub events: Vec<SessionEvent>,
     pub stats: SessionDrainStats,

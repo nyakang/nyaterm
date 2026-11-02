@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
 use nyaterm_core::{QuickCommand, QuickCommandCategory, quick_command_category_sibling_order};
+use nyaterm_ui::NyaSwitch;
+use rust_i18n::t;
 
 use crate::features::{
     NyaTermApp, commands::quick_command_category_label, icons::quick_command_icon,
@@ -284,22 +286,41 @@ pub(in crate::features::panels) fn quick_command_editor_field(
     spec: QuickCommandEditorFieldSpec,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::AnyElement {
-    quick_command_editor_input(app, spec, false, cx)
+    quick_command_editor_input(app, spec, false, None, cx)
 }
 
 /// The script box, which is the one that takes newlines.
 pub(in crate::features::panels) fn quick_command_editor_script_field(
     app: &mut NyaTermApp,
     spec: QuickCommandEditorFieldSpec,
+    raw_send: bool,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::AnyElement {
-    quick_command_editor_input(app, spec, true, cx)
+    let toggle = div()
+        .debug_selector(|| "quick-command-editor-raw-send-control".into())
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_xs()
+        .text_color(rgb(app.theme_palette().text_muted))
+        .child(t!("quickCommands.rawSend"))
+        .child(
+            NyaSwitch::new("quick-command-editor-raw-send")
+                .checked(raw_send)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_quick_command_editor_raw_send(cx);
+                })),
+        )
+        .into_any_element();
+    quick_command_editor_input(app, spec, true, Some(toggle), cx)
 }
 
 fn quick_command_editor_input(
     app: &mut NyaTermApp,
     spec: QuickCommandEditorFieldSpec,
     multi_line: bool,
+    caption_action: Option<gpui::AnyElement>,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::AnyElement {
     let QuickCommandEditorFieldSpec {
@@ -350,16 +371,24 @@ fn quick_command_editor_input(
                         .text_color(rgb(palette.text_muted))
                         .child(label),
                 )
-                .when_some(error, |this, error| {
-                    this.child(
-                        div()
-                            .min_w_0()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.danger))
-                            .truncate()
-                            .child(error),
-                    )
-                }),
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when_some(error, |this, error| {
+                            this.child(
+                                div()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette.danger))
+                                    .truncate()
+                                    .child(error),
+                            )
+                        })
+                        .children(caption_action),
+                ),
         )
         .child(input)
         .into_any_element()

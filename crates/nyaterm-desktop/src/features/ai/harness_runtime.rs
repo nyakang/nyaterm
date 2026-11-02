@@ -3,7 +3,7 @@ use nyaterm_core::ai::AiCommandCard;
 use nyaterm_core::ai::harness::{
     AgentPlan, AgentTool, AgentToolCall, AgentToolResult, AgentVerification,
 };
-use nyaterm_core::capabilities::CapabilityScopeSnapshot;
+use nyaterm_core::capabilities::{AgentApprovalDecision, CapabilityScopeSnapshot};
 use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs};
 use rust_i18n::t;
 use serde_json::{Value, json};
@@ -16,11 +16,55 @@ use super::ai_jobs::{AiJobRunOptions, run_ai_ask_job};
 use super::presentation::AiAgentStepKind;
 
 impl NyaTermApp {
+    pub(in crate::features) fn respond_to_native_capability_approval(
+        &mut self,
+        run_id: &str,
+        ai_session_id: &str,
+        request_id: &str,
+        decision: AgentApprovalDecision,
+        cx: &mut Context<Self>,
+    ) {
+        // A virtualized row can outlive its conversation or tool call. Never
+        // let a stale callback approve another run, even after a scope switch.
+        if self.ai.chat_session_id() != ai_session_id
+            || !self.ai.native_run_is_live(run_id, ai_session_id)
+            || !self.ai.native_run_view().is_some_and(|view| {
+                view.run_id == run_id
+                    && view
+                        .call_id
+                        .as_ref()
+                        .is_some_and(|call_id| request_id == format!("native:{run_id}:{call_id}"))
+            })
+            || !self
+                .mcp
+                .capabilities
+                .native_approval_requests(run_id, ai_session_id)
+                .iter()
+                .any(|view| view.approval.request_id == request_id)
+        {
+            return;
+        }
+        self.respond_to_mcp_approval(request_id, decision, cx);
+    }
+
     pub(in crate::features) fn cancel_native_run_for_closed_session(
         &mut self,
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        // A run can target a different terminal from the one that owns its
+        // conversation. Closing either must make its pending buttons inert.
+        for request in self
+            .mcp
+            .capabilities
+            .cancel_native_approvals_for_target(session_id)
+        {
+            let _ = request.reply.send(Err(RpcError {
+                code: "target_disconnected".into(),
+                message: "The authorization target was closed.".into(),
+            }));
+        }
+        self.defer_ai_panel_snapshot_flush(cx);
         let scope = format!("terminal:{session_id}");
         if self.ai.native_owner_in_scope(&scope).is_none() {
             return;

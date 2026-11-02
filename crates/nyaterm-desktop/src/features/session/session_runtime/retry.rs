@@ -72,6 +72,7 @@ impl NyaTermApp {
         let profile = pending.ai_execution_profile;
         let new_id = uuid();
         let options = SavedConnectionStartOptions {
+            ssh_runtime_mode: pending.ssh_runtime_mode(),
             custom_name: pending.custom_name.clone(),
             tab_color: pending.tab_color,
             locked: pending.locked,

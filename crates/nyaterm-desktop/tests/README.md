@@ -1,5 +1,84 @@
 # Shell Free Type 验证
 
+## 命令建议安全填充
+
+建议填充只允许对最新快照确认的行尾输入追加原始字符串后缀，不发送清行、移动、
+退格或 Enter。相同内容不写入；非前缀目标拒绝替换。Enter 选择建议后也需要再次
+手动按 Enter 执行。OSC、SSH 类型和提示符不作为编辑键或自动执行语义的证明。
+
+自动化入口：
+
+```powershell
+cargo test -p nyaterm-desktop --lib features::terminal
+cargo test -p nyaterm-desktop --test shell_free_type_windows -- --ignored
+```
+
+GPUI/TCP 测试检查实际字节、输入版本、回显确认、超时及迟到回显、Session 边界、
+密码/锁屏/alternate screen、同步配置修订、编码失败、Kitty 手动 Enter 和历史记录。
+真实 ConPTY 测试额外确认 PowerShell/PSReadLine 能把普通后缀留在未提交的编辑行。
+这些测试不证明未知远端程序支持任何编辑快捷键。
+
+人工测试矩阵（需要分别记录执行环境和结果，未运行项不能记为通过）：
+
+| 环境 | 操作与检查 |
+| --- | --- |
+| Windows PowerShell/PSReadLine | Tab/Enter 选择精确前缀建议，仅追加；再次独立 Enter 执行一次；检查首尾空格、中文和历史 |
+| SSH Bash/Readline，有/无 OSC | 重复填充、拒绝整行替换、切换/断开、等待时输入及 Ctrl+C；不得自动 Enter |
+| 真实 H3C 类 CLI | `display ver` → `display version` 只追加 `sion`；`show ver` → 目标应拒绝；由用户手动执行 |
+| 同步输入、密码、TUI | 接受旧建议不能发送内容或 Enter；同步开关切回原值也不能恢复旧请求 |
+
+可使用隔离会话的测试服务端捕获发送字节；报告只保留合成输入，避免记录真实凭据、
+终端正文或用户命令。命令建议之外的普通手动编辑仍复用既有 Shell Editing。
+
+本次调用链由 `command_suggestion_input()` 拼接清行/命令/Enter 后直接发送，改为：
+
+```text
+选择建议 → 校验 Session/输入版本/快照/同步修订 → plan_suggestion_fill()
+  → 相同：零写入；非前缀或不可信：拒绝
+  → 精确前缀：发送后缀 → note_shell_editing_input() → Pending
+  → reconcile_shell_editing()：只确认填充，不发送 Enter
+  → 用户独立按 Enter → 会话按键编码 → 成功写入 → 记录一次普通命令历史
+```
+
+实际改动位置与核心类型：
+
+| 文件（相对 desktop） | 作用 |
+| --- | --- |
+| `src/features/terminal/command_suggestions/fill.rs` | `SuggestionFill`、`SuggestionSubmitResult` 及纯后缀决策 |
+| `src/features/terminal/command_suggestions/mod.rs` | 搜索版本校验、接受门禁、提交与弹窗提示 |
+| `src/models/connections.rs` | `CommandSuggestionState` 的输入版本和同步修订 |
+| `src/features/terminal/editing_state.rs` | `SuggestionFillRequest`、会话所有权及确认身份 |
+| `src/features/terminal/editing_runtime.rs` | 回显、超时及失效时消费或取消请求 |
+| `src/features/sync_input.rs` | 非持久化同步路由修订号 |
+| `src/features/terminal/terminal_runtime/view_io/input.rs` | 输入取消旧请求；Kitty Enter 的逻辑历史处理 |
+| `src/features/terminal/terminal_selection_runtime/smart_input.rs` | 其他编辑取消建议请求，保留既有编辑算法 |
+| `src/features/terminal/command_suggestions/fill_tests.rs` | GPUI/TCP 字节与生命周期回归 |
+| `tests/shell_free_type_windows.rs` | 真实 PowerShell 后缀回显验证 |
+| `tests/README.md` | 验证说明与人工矩阵 |
+
+本版明确不提供建议整行替换和自动执行；缺失回显、复杂字素、未知编码、未知远端
+语义均不能通过追加控制字符补救。无 OSC 的空输入不能得到可靠边界时也拒绝填充。
+未改持久化格式、依赖或 vendor；没有新增设置、设备特例和远端探测。
+
+### 本轮验证结果（2026-10-30，Windows）
+
+以下均为本次实际运行结果，不沿用后文旧轮次记录：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo check -p nyaterm-desktop` | 通过 |
+| `cargo check --workspace` | 通过 |
+| `cargo test -p nyaterm-core -p nyaterm-terminal -p nyaterm-terminal-gpui` | 1052 通过，4 忽略，0 失败 |
+| `cargo test -p nyaterm-desktop --lib features::terminal` | 443 通过，2 忽略，0 失败 |
+| `cargo test -p nyaterm-desktop --test shell_free_type_windows -- --ignored` | 两项真实 PowerShell/ConPTY 测试通过 |
+| `cargo test --workspace -j 2` | 合计 4750 通过，36 忽略，0 失败；desktop 单元测试 2400 通过、11 忽略 |
+| `cargo clippy --workspace --all-targets` | 通过，无警告 |
+
+workspace 的忽略数包括需显式启用的环境测试；上表中的 PowerShell 两项已另外运行。
+SSH Bash/Readline、真实 H3C/Huawei/Cisco 设备及原生窗口人工交互本轮未实测，不能
+据 GPUI/TCP 测试宣称设备语义兼容。真实设备仍须按上方矩阵验证。
+
 编辑模型位于 `nyaterm-core::terminal::editing`，真实 cell 映射和 OSC 输入锚点位于
 `nyaterm-terminal`，按会话保存的状态与 GPUI 协调位于 desktop 的
 `features/terminal/editing_state.rs` 和 `editing_runtime.rs`。

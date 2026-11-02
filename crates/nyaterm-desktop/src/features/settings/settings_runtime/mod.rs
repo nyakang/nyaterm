@@ -6,10 +6,11 @@ mod helpers;
 
 mod draft;
 mod general_interaction;
+mod quit;
 mod recording_transfer;
 mod search_engines;
+mod tab;
 mod terminal_remote;
-mod window;
 
 pub(in crate::features) use general_interaction::SettingsSaveKind;
 

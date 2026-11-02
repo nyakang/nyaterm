@@ -148,21 +148,23 @@ fn enqueue_racing_with_overwrite_batch_never_leaves_a_sibling_waiting() {
         let barrier = Arc::new(Barrier::new(2));
         let worker_broker = broker.clone();
         let worker_barrier = barrier.clone();
-        let worker = std::thread::spawn(move || {
-            worker_barrier.wait();
-            answer(
-                worker_broker
-                    .enqueue_batch_request(request("racing"), Some(batch))
-                    .unwrap(),
-            )
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                worker_barrier.wait();
+                answer(
+                    worker_broker
+                        .enqueue_batch_request(request("racing"), Some(batch))
+                        .unwrap(),
+                )
+            });
+            barrier.wait();
+            broker
+                .resolve(prompt, DuplicatePromptAction::OverwriteUploadBatch)
+                .unwrap();
+            assert_eq!(answer(current), SftpDuplicateDecision::Overwrite);
+            assert_eq!(worker.join().unwrap(), SftpDuplicateDecision::Overwrite);
+            assert!(!broker.has_pending());
         });
-        barrier.wait();
-        broker
-            .resolve(prompt, DuplicatePromptAction::OverwriteUploadBatch)
-            .unwrap();
-        assert_eq!(answer(current), SftpDuplicateDecision::Overwrite);
-        assert_eq!(worker.join().unwrap(), SftpDuplicateDecision::Overwrite);
-        assert!(!broker.has_pending());
     }
 }
 
@@ -199,29 +201,31 @@ fn retry_options_keep_batch_choice_while_new_batches_and_non_uploads_still_ask()
     let (wake, mut wake_rx) = crate::models::event_wake::EventWake::new();
     wake.arm(crate::models::event_wake::ANY_INTEREST);
     broker.set_wake(wake);
-    let worker = std::thread::spawn(move || resolver.resolve_duplicate(&download));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        use futures::StreamExt as _;
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), wake_rx.next())
-                .await
-                .unwrap(),
-            Some(())
-        );
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(move || resolver.resolve_duplicate(&download));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            use futures::StreamExt as _;
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), wake_rx.next())
+                    .await
+                    .unwrap(),
+                Some(())
+            );
+        });
+        let prompt = activate(&broker);
+        assert!(prompt.upload_batch.is_none());
+        broker
+            .resolve(
+                prompt,
+                DuplicatePromptAction::Current(SftpDuplicateDecision::Skip),
+            )
+            .unwrap();
+        assert_eq!(worker.join().unwrap().unwrap(), SftpDuplicateDecision::Skip);
     });
-    let prompt = activate(&broker);
-    assert!(prompt.upload_batch.is_none());
-    broker
-        .resolve(
-            prompt,
-            DuplicatePromptAction::Current(SftpDuplicateDecision::Skip),
-        )
-        .unwrap();
-    assert_eq!(worker.join().unwrap().unwrap(), SftpDuplicateDecision::Skip);
 }
 
 #[test]

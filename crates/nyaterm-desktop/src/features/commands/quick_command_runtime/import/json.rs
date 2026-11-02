@@ -55,11 +55,12 @@ pub(super) fn parse_import_command(value: Value) -> Result<ImportCommand, String
     let Value::Object(object) = value else {
         return Err("command must be an object".to_string());
     };
+    let raw_send = optional_bool_field(&object, "raw_send")?;
     Ok(ImportCommand {
         id: optional_string_field(&object, "id")?,
         label: required_string_field(&object, "label")?,
         command: required_string_field(&object, "command")?,
-        preserve_command_text: false,
+        preserve_command_text: raw_send.unwrap_or_default(),
         category_id: optional_string_field(&object, "category_id")?,
         category: optional_string_field(&object, "category")?,
         description: optional_string_field(&object, "description")?,
@@ -67,6 +68,7 @@ pub(super) fn parse_import_command(value: Value) -> Result<ImportCommand, String
         icon_tag: optional_string_field(&object, "icon_tag")?,
         pinned: optional_bool_field(&object, "pinned")?,
         execution_mode: optional_string_field(&object, "execution_mode")?,
+        raw_send,
         source: optional_string_field(&object, "source")?,
         risk_level: optional_risk_field(&object, "risk_level")?,
         sort_order: optional_i32_field(&object, "sort_order")?,

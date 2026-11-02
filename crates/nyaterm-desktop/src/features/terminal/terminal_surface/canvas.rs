@@ -971,7 +971,9 @@ impl NyaTermApp {
                                                     return;
                                                 }
                                             } else if (modifiers.control || modifiers.platform)
-                                                && this.try_activate_action_link_at_click(event, cx)
+                                                && this.try_activate_action_link_at_click(
+                                                    event, window, cx,
+                                                )
                                             {
                                                 cx.stop_propagation();
                                                 return;

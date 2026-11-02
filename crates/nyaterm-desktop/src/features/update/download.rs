@@ -207,6 +207,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn start_native_update_download(&mut self, cx: &mut Context<Self>) {
+        if !self.cloud_sync.operations.accepting() {
+            return;
+        }
         if !supports_native_install(self.runtime.mode() == nyaterm_core::RuntimeMode::Portable) {
             return;
         }
@@ -412,6 +415,150 @@ mod tests {
             assert!(app.has_live_sessions());
             assert!(!app.session.dialog_should_quit_after_close_all());
         });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_failure_preserves_sync_result_in_final_snapshot_and_allows_retry() {
+        use crate::features::settings::SettingsPersistenceDomain;
+        use gpui::{AppContext as _, EmptyView, TestAppContext, px, size};
+        use nyaterm_core::cloud_sync::control::CloudSyncOperationControl;
+        use nyaterm_core::{
+            AppRuntime, MainWindowBounds, MainWindowState, RuntimeMode, test_support::TestTempDir,
+        };
+        use nyaterm_store::StoreDomain;
+        use std::time::{Duration, Instant};
+
+        use super::DownloadState;
+        use crate::app_shell::{AppShellStartup, DesktopController};
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::features::update::install::PreparedUpdate;
+
+        let root = TestTempDir::new("nyaterm-update-failed-launch-controller");
+        let app_root = TestTempDir::new("nyaterm-update-failed-launch-app");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.path().into(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let startup = AppShellStartup::prepare(&runtime);
+        let controller = cx.new(|cx| DesktopController::new(runtime, startup, cx));
+        let app = app_with_visible_local_session(&mut cx, &app_root, "update-failure-session");
+        let handle = cx.open_window(size(px(800.), px(600.)), |_, _| EmptyView);
+        let workspace_id = cx.read(|cx| app.read(cx).workspace_id);
+        let shell = controller.update(&mut cx, |controller, cx| {
+            let shell = controller.register_tab_drag_test_workspace(
+                workspace_id,
+                app.clone(),
+                handle.into(),
+                cx,
+            );
+            drop(
+                controller
+                    .submit_window_state(
+                        workspace_id,
+                        MainWindowState::new(
+                            None,
+                            MainWindowBounds {
+                                x: 0,
+                                y: 0,
+                                width: 800,
+                                height: 600,
+                            },
+                            false,
+                        ),
+                        0,
+                    )
+                    .unwrap(),
+            );
+            shell
+        });
+        let operations = cx.read(|cx| controller.read(cx).sync_operations());
+        let update = cx.read(|cx| controller.read(cx).update_store());
+        app.update(&mut cx, |app, _| {
+            app.update = update.clone();
+            app.cloud_sync.operations = operations.clone();
+        });
+        // Run the real persistence and exit coordination twice. The helper path
+        // deliberately does not exist, so no installer process can be launched.
+        for language in ["ja", "en"] {
+            let control = CloudSyncOperationControl::default();
+            control.begin_commit().unwrap();
+            let registration = operations
+                .register("committing-sync", vec![control], None)
+                .unwrap();
+            app.update(&mut cx, |app, _| {
+                app.settings
+                    .mark_persistence_dirty(SettingsPersistenceDomain::General);
+            });
+            update.update(&mut cx, |update, _| {
+                update.install_requested = true;
+                update.download = DownloadState::Ready(PreparedUpdate::WindowsInstalled {
+                    helper: root.join("missing-helper.exe"),
+                    installer: root.join("missing-installer.exe"),
+                    target: root.join("NyaTerm.exe"),
+                    work_dir: root.join("update-work"),
+                });
+            });
+            shell.update(&mut cx, |shell, cx| shell.request_close(cx));
+            // A committed pull updates storage first and then reloads GPUI state.
+            // The exit snapshot must wait for that reload, even after the main
+            // operation registration has been released.
+            let store = app.update(&mut cx, |app, cx| {
+                let store = app.store_blocking_client();
+                store
+                    .request_fn(StoreDomain::CloudSync, move |store| {
+                        let mut settings = store.load_app_settings_summary()?;
+                        settings.language = language.into();
+                        store.save_general_settings(&settings)
+                    })
+                    .unwrap();
+                app.refresh_store_from_runtime_and_sync_theme(cx);
+                app.queue_cloud_sync_credentials_refresh(cx);
+                store
+            });
+            drop(registration);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                cx.run_until_parked();
+                let attempted = cx.read(|cx| !update.read(cx).install_requested);
+                if attempted && operations.accepting() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "failed installer launch did not restore the app"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let persisted_language = store
+                .request_fn(StoreDomain::Settings, |store| {
+                    Ok(store.load_app_settings_summary()?.language)
+                })
+                .unwrap();
+            assert_eq!(persisted_language, language);
+            cx.read(|cx| {
+                let app = app.read(cx);
+                assert_eq!(app.settings.summary().language, language);
+                assert!(
+                    app.blocking_jobs
+                        .submit_detached("manual-sync-retry", |_| {})
+                        .is_ok()
+                );
+                assert!(
+                    update
+                        .read(cx)
+                        .blocking_jobs()
+                        .submit_detached("process-sync-retry", |_| {})
+                        .is_ok()
+                );
+            });
+        }
     }
 
     #[cfg(windows)]

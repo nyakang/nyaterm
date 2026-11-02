@@ -231,6 +231,24 @@ impl ConnectionStore {
         let encoded = encode_encrypted_raw_portable_snapshot(&snapshot, master_password)?;
         write_portable_snapshot_file(database_path, output_path, &encoded)
     }
+    /// Independent .nya backup for V4 confirmation. Unlike the ordinary legacy
+    /// reader, this does not migrate icons or credentials while taking it.
+    pub fn export_v4_safety_backup(
+        &self,
+        output_path: impl AsRef<Path>,
+        master_password: &str,
+    ) -> Result<ConfigBackupInfo, StorageError> {
+        let sessions = self.v4_backup_sessions()?;
+        let mut snapshot = self.build_raw_portable_snapshot_with_sessions(
+            PortableSnapshotKind::Backup,
+            "v4-migration",
+            env!("CARGO_PKG_VERSION"),
+            Some(sessions),
+        )?;
+        snapshot.recalculate_hash()?;
+        let encoded = encode_encrypted_raw_portable_snapshot(&snapshot, master_password)?;
+        write_portable_snapshot_file(self.db_path().to_path_buf(), output_path, &encoded)
+    }
     pub fn import_portable_snapshot(
         config_dir: impl AsRef<Path>,
         portable_key_path: Option<PathBuf>,
@@ -346,6 +364,16 @@ impl ConnectionStore {
         device_id: impl Into<String>,
         app_version: impl Into<String>,
     ) -> Result<RawPortableSnapshot, StorageError> {
+        self.build_raw_portable_snapshot_with_sessions(snapshot_kind, device_id, app_version, None)
+    }
+
+    fn build_raw_portable_snapshot_with_sessions(
+        &self,
+        snapshot_kind: PortableSnapshotKind,
+        device_id: impl Into<String>,
+        app_version: impl Into<String>,
+        sessions_override: Option<serde_json::Value>,
+    ) -> Result<RawPortableSnapshot, StorageError> {
         let mut snapshot = match snapshot_kind {
             PortableSnapshotKind::Sync => RawPortableSnapshot::sync(device_id, app_version),
             PortableSnapshotKind::Backup => RawPortableSnapshot::backup(device_id, app_version),
@@ -369,10 +397,15 @@ impl ConnectionStore {
         snapshot
             .entities
             .insert("settings".to_string(), serde_json::to_string(&settings)?);
-        let mut sessions = self.load_sessions()?;
-        if snapshot_kind == PortableSnapshotKind::Sync {
-            strip_device_local_ssh_agent_settings(&mut sessions);
-        }
+        let sessions = if let Some(sessions) = sessions_override {
+            sessions
+        } else {
+            let mut sessions = self.load_sessions()?;
+            if snapshot_kind == PortableSnapshotKind::Sync {
+                strip_device_local_ssh_agent_settings(&mut sessions);
+            }
+            serde_json::to_value(sessions)?
+        };
         snapshot
             .entities
             .insert("sessions".to_string(), serde_json::to_string(&sessions)?);
@@ -406,9 +439,7 @@ impl ConnectionStore {
         );
         snapshot.entities.insert(
             "proxies".to_string(),
-            serde_json::to_string(
-                &self.list_raw_json_values_by_prefix(PROXIES_TABLE, PROXY_PREFIX)?,
-            )?,
+            serde_json::to_string(&self.portable_proxy_records()?)?,
         );
         snapshot.entities.insert(
             "proxy_groups".to_string(),
@@ -461,6 +492,28 @@ impl ConnectionStore {
             serde_json::to_string(&self.load_notes_snapshot()?)?,
         );
         Ok(snapshot)
+    }
+
+    fn portable_proxy_records(&self) -> Result<Vec<serde_json::Value>, StorageError> {
+        let mut records = self.list_raw_json_values_by_prefix(PROXIES_TABLE, PROXY_PREFIX)?;
+        let crypto = self.credential_crypto()?;
+        let token = self.load_master_key_token()?;
+        for record in &mut records {
+            if let Some(ciphertext) = record
+                .get("password")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| value.strip_prefix(super::PROXY_SECRET_PREFIX))
+            {
+                record["password"] = serde_json::Value::String(crypto.decrypt_secret(
+                    token.as_deref().ok_or(StorageError::MissingMasterKey)?,
+                    ciphertext,
+                )?);
+            }
+        }
+        // Released .nya readers expect this field in plaintext inside the
+        // independently encrypted backup envelope. Retain that contract and
+        // every unknown proxy property, regardless of the local storage codec.
+        Ok(records)
     }
 
     fn load_opaque_portable_entities(&self) -> Result<BTreeMap<String, String>, StorageError> {

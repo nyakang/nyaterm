@@ -1,7 +1,7 @@
 use gpui::Context;
 
 use crate::features::NyaTermApp;
-use crate::models::{MainMode, NavItem, PanelSide, RightFocus};
+use crate::models::{NavItem, PanelSide, RightFocus};
 
 impl NyaTermApp {
     pub(in crate::features) fn open_page(&mut self, item: NavItem, cx: &mut Context<Self>) {
@@ -12,11 +12,11 @@ impl NyaTermApp {
                 .desktop_controller
                 .as_ref()
                 .and_then(|controller| controller.upgrade())
-                && controller.update(cx, |controller, cx| {
-                    controller.activate_or_claim_settings(self.workspace_id, cx)
-                })
             {
-                return;
+                let workspace_id = self.workspace_id;
+                controller.update(cx, |controller, cx| {
+                    controller.activate_or_claim_settings(workspace_id, cx)
+                });
             }
             self.begin_settings_draft(cx);
             // Inputs are built where a tab is revealed, never in its render.
@@ -35,26 +35,13 @@ impl NyaTermApp {
                     .expanded_groups
                     .insert(group.to_string());
             }
-            if self.shell.navigation.main_mode != MainMode::Page {
-                self.shell.navigation.settings.previous_left_collapsed =
-                    Some(self.shell.panels.left_collapsed);
-                self.shell.navigation.settings.previous_right_collapsed =
-                    Some(self.shell.panels.right_collapsed);
-            }
-            if self.open_settings_window(cx) {
-                self.shell.navigation.main_mode = MainMode::Workspace;
-                self.shell.set_status("settings opened".to_string());
-                cx.notify();
-                return;
-            }
-            self.shell.navigation.main_mode = MainMode::Page;
+            // Settings is an ordinary workspace tab. Ending the draft (apply
+            // and close, cancel, or the tab close button) removes the tab;
+            // every session keeps running exactly as before it was opened.
             self.shell.navigation.selected_nav = NavItem::Settings;
-            self.shell.panels.left_collapsed = true;
-            self.shell.panels.right_collapsed = true;
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
             self.shell.set_status("settings opened".to_string());
-            self.request_settings_panel_refresh(cx);
-            cx.notify();
+            self.open_settings_workspace_tab(cx);
             return;
         }
 
@@ -88,7 +75,6 @@ impl NyaTermApp {
             return;
         }
 
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.navigation.selected_nav = item;
         self.shell.panels.right_focus = if item == NavItem::Recording {
             RightFocus::Recording
@@ -150,7 +136,6 @@ impl NyaTermApp {
             self.ensure_panel_in_stack(item, cx);
             return;
         }
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.navigation.selected_nav = item;
         match self.panel_side_for_item(item) {
             Some(PanelSide::Left) => {
@@ -169,10 +154,6 @@ impl NyaTermApp {
             None => {}
         }
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
-    }
-
-    pub(in crate::features) fn close_settings(&mut self, cx: &mut Context<Self>) {
-        self.cancel_settings(cx);
     }
 
     pub(in crate::features) fn toggle_left_sidebar(&mut self, cx: &mut Context<Self>) {

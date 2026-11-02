@@ -24,6 +24,17 @@ use std::time::Instant;
 
 pub(super) const POINTER_MOVE_INTERVAL: Duration = Duration::from_millis(8);
 
+const HARDWARE_CURSOR_REPAINT_INTERVAL: Duration = Duration::from_millis(8);
+const SOFTWARE_CURSOR_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
+
+pub(super) fn remote_cursor_repaint_interval(software_renderer: bool) -> Duration {
+    if software_renderer {
+        SOFTWARE_CURSOR_REPAINT_INTERVAL
+    } else {
+        HARDWARE_CURSOR_REPAINT_INTERVAL
+    }
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn clear_remote_composition(
         &mut self,
@@ -47,6 +58,16 @@ impl NyaTermApp {
             if let Some(session_id) = this.session.active_id_owned()
                 && this.remote_desktop.is_session(&session_id)
             {
+                #[cfg(windows)]
+                if let Some(native) = this
+                    .remote_desktop
+                    .sessions
+                    .get(&session_id)
+                    .and_then(|session| session.native_rdp.as_ref())
+                {
+                    native.focus();
+                    return;
+                }
                 let _ = this.send_remote_modifier_state(
                     &session_id,
                     window.modifiers(),
@@ -122,6 +143,13 @@ impl NyaTermApp {
                     .sessions
                     .get(session_id)
                     .is_some_and(|session| {
+                        // The Microsoft control owns keyboard input; the global
+                        // capture hook would swallow those keys and send them to a
+                        // helper session that does not exist.
+                        #[cfg(windows)]
+                        if session.native_rdp.is_some() {
+                            return false;
+                        }
                         matches!(session.state, RemoteDesktopViewState::Connected)
                             && (is_vnc
                                 || session.viewport.is_some_and(|bounds| {
@@ -670,9 +698,73 @@ impl NyaTermApp {
         })
     }
 
-    pub(super) fn drive_rdp_pointer_flush(&mut self) -> bool {
+    pub(in crate::features) fn request_remote_cursor_repaint(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let software_renderer = crate::platform::is_software_renderer(self.shell.renderer());
+        self.repaint_remote_cursor(
+            session_id,
+            remote_cursor_repaint_interval(software_renderer),
+            cx,
+        );
+    }
+
+    pub(super) fn flush_pending_remote_cursor_repaint(&mut self, cx: &mut Context<Self>) {
+        let Some(session_id) = self.session.active_id_owned() else {
+            return;
+        };
+        let pending = self
+            .remote_desktop
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.cursor_repaint_pending);
+        if !pending {
+            return;
+        }
+        let software_renderer = crate::platform::is_software_renderer(self.shell.renderer());
+        self.repaint_remote_cursor(
+            &session_id,
+            remote_cursor_repaint_interval(software_renderer),
+            cx,
+        );
+    }
+
+    fn repaint_remote_cursor(
+        &mut self,
+        session_id: &str,
+        interval: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.active_id() != Some(session_id) {
+            if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+                session.cursor_repaint_pending = false;
+            }
+            return;
+        }
         let now = Instant::now();
-        let mut sent = false;
+        let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
+            return;
+        };
+        let due = session
+            .last_cursor_repaint_at
+            .is_none_or(|last| now.saturating_duration_since(last) >= interval);
+        if !due {
+            session.cursor_repaint_pending = true;
+            return;
+        }
+        session.cursor_repaint_pending = false;
+        session.last_cursor_repaint_at = Some(now);
+        if let Some(surface) = self.remote_desktop.surfaces.get(session_id) {
+            surface.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    pub(super) fn drive_rdp_pointer_flush(&mut self) {
+        // The local cursor moved when the event was deferred; this pass only
+        // releases the protocol send and must not invalidate the whole root view.
+        let now = Instant::now();
         for (session_id, session) in &mut self.remote_desktop.sessions {
             let Some(pointer) = session.pending_pointer else {
                 continue;
@@ -702,9 +794,7 @@ impl NyaTermApp {
                 pointer,
                 pointer_sent,
             );
-            sent |= pointer_sent;
         }
-        sent
     }
 }
 

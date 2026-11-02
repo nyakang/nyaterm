@@ -149,8 +149,12 @@ impl NyaTermApp {
         let preferences: Arc<dyn RemoteFileBackendPreferenceStore> = Arc::new(
             ConnectionStoreBackendPreferences::new(self.store_blocking_client()),
         );
+        // A tmux pane leaf shares the host's SSH connection — resolve so the
+        // multiplex handle lookup and the remote-files service cache key on
+        // the real session (and all panes reuse the one service).
+        let session_id = self.ssh_scoped_session_id(session_id);
         self.session
-            .remote_file_service_for_session(session_id, config, preferences)
+            .remote_file_service_for_session(&session_id, config, preferences)
     }
 
     pub(in crate::features) fn active_remote_file_service(

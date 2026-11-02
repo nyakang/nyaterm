@@ -28,6 +28,72 @@ impl Render for RecordingPanelHost {
 }
 
 #[gpui::test]
+fn recording_rows_resize_when_recording_starts_fails_and_stops(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-recording-row-height");
+    let app = app_with_visible_local_session(cx, root.path(), "fixture");
+    cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
+    let host_app = app.clone();
+    let (_, vcx) = cx.add_window_view(move |_, _| RecordingPanelHost {
+        app: host_app,
+        width: 320.,
+    });
+    for (state, has_path, expected_height) in [
+        (None, false, 56.),
+        (Some(RecordingStatusState::Recording), true, 74.),
+        (Some(RecordingStatusState::Failed), true, 92.),
+        (Some(RecordingStatusState::Failed), false, 74.),
+        (None, false, 56.),
+    ] {
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                if let Some(state) = state {
+                    app.recording.apply_status(RecordingStatus {
+                        session_id: "fixture".into(),
+                        state,
+                        mode: RecordingMode::Transcript,
+                        file_path: has_path.then(|| root.join("session.log")),
+                        input_file_path: None,
+                        started_at: None,
+                        written_bytes: 1024,
+                        queued_bytes: 0,
+                        dropped_bytes: 0,
+                        last_error: None,
+                    });
+                } else {
+                    app.recording.remove_status("fixture");
+                }
+                cx.notify();
+            });
+            window.refresh();
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let row = vcx.debug_bounds("recording-session-row-fixture").unwrap();
+        assert_eq!(row.size.height, px(expected_height));
+        assert_eq!(
+            vcx.debug_bounds("recording-session-path-fixture").is_some(),
+            has_path,
+        );
+        assert_eq!(
+            vcx.debug_bounds("recording-session-error-fixture")
+                .is_some(),
+            state == Some(RecordingStatusState::Failed),
+        );
+        let summary = vcx
+            .debug_bounds("recording-session-summary-fixture")
+            .unwrap();
+        let toggle = vcx
+            .debug_bounds("recording-session-toggle-fixture")
+            .unwrap();
+        assert!(summary.bottom() < row.bottom());
+        assert!(toggle.bottom() < row.bottom());
+    }
+}
+
+#[gpui::test]
 fn recording_panel_keeps_long_names_paths_errors_and_actions_inside_narrow_rows(
     cx: &mut TestAppContext,
 ) {
@@ -85,7 +151,7 @@ fn recording_panel_keeps_long_names_paths_errors_and_actions_inside_narrow_rows(
         let row = vcx
             .debug_bounds("recording-session-row-session-00")
             .unwrap();
-        assert_eq!(row.size.height, px(96.));
+        assert_eq!(row.size.height, px(92.));
         assert!(row.right() <= px(width));
         let name = vcx
             .debug_bounds("recording-session-name-session-00")
@@ -116,6 +182,10 @@ fn recording_panel_keeps_long_names_paths_errors_and_actions_inside_narrow_rows(
             .debug_bounds("recording-session-row-session-01")
             .unwrap();
         assert!(next_row.top() >= row.bottom());
+        let recording_row = vcx
+            .debug_bounds("recording-session-row-session-02")
+            .unwrap();
+        assert_eq!(recording_row.size.height, px(74.));
         // The remaining rows must stay virtualized, rather than overflowing the viewport.
         assert!(
             vcx.debug_bounds("recording-session-row-session-29")

@@ -133,7 +133,10 @@ impl russh::server::Handler for ShellPeer {
 }
 
 #[tokio::test]
-#[cfg_attr(windows, ignore = "Requires WSL Ubuntu; run explicitly with --ignored")]
+#[cfg_attr(
+    any(windows, target_os = "macos"),
+    ignore = "Requires a GNU userland (WSL Ubuntu on Windows); run explicitly with --ignored"
+)]
 async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

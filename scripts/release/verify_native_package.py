@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 import package_native
 import windows_msi
+import windows_portable
 
 
 MIN_ARTIFACT_SIZE = 1024
@@ -25,7 +26,7 @@ MIN_ARTIFACT_SIZE = 1024
 
 def helper_filenames(target: str) -> list[str]:
     suffix = ".exe" if "windows" in target else ""
-    return [f"{name}{suffix}" for name in package_native.HELPER_BINS]
+    return [f"{name}{suffix}" for name in package_native.helper_bins(target)]
 
 
 def require_safe_archive_path(name: str) -> None:
@@ -207,9 +208,9 @@ def verify_macos_url_scheme(
     if not isinstance(url_type, dict):
         raise RuntimeError(f"{artifact} contains an invalid macOS URL type")
     schemes = url_type.get("CFBundleURLSchemes")
-    if schemes != [identity.desktop_id]:
+    if schemes != list(identity.url_schemes):
         raise RuntimeError(
-            f"{artifact} must register only the {identity.desktop_id} URL scheme"
+            f"{artifact} must register URL schemes {identity.url_schemes}"
         )
 
 
@@ -235,7 +236,7 @@ def verify_linux_desktop(
         "Icon": identity.desktop_id,
         "StartupWMClass": identity.desktop_id,
         "Exec": f"{expected_executable} %U",
-        "MimeType": f"x-scheme-handler/{identity.desktop_id};",
+        "MimeType": "".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes),
     }
     for key, value in expected.items():
         if fields.get(key) != value:
@@ -283,21 +284,25 @@ def read_rpm_member(path: Path, member: str) -> bytes:
 
 
 def verify_windows_portable(path: Path, target: str, version: str) -> None:
-    root = "NyaTerm-portable"
+    root = windows_portable.LAYOUT["root"]
     executables = ["NyaTerm.exe", *helper_filenames(target)]
     conpty_files = package_native.conpty_files(target)
-    required = {
-        f"{root}/{name}" for name in executables
-    } | {
-        f"{root}/nyaterm-portable",
-        f"{root}/LICENSE",
-        f"{root}/VERSION",
-        f"{root}/data/.keep",
-        f"{root}/conpty/LICENSE.txt",
-        *(f"{root}/conpty/{relative.as_posix()}" for relative in conpty_files),
-    }
+    required = windows_portable.archive_files(target)
     with zipfile.ZipFile(path) as archive:
         names = verify_zip_paths(archive)
+        seen = set()
+        directories = {str(parent) for name in required
+                       for parent in PurePosixPath(name).parents if str(parent) != "."}
+        for entry in archive.infolist():
+            name = entry.filename.rstrip("/")
+            if name.casefold() in seen:
+                raise RuntimeError(f"{path.name} contains a duplicate entry: {name}")
+            seen.add(name.casefold())
+            if (entry.external_attr >> 16) & 0o170000 == 0o120000:
+                raise RuntimeError(f"{path.name} contains a symbolic link: {name}")
+            allowed = directories if entry.is_dir() else required
+            if name not in allowed:
+                raise RuntimeError(f"{path.name} contains an unexpected entry: {name}")
         missing = required - names
         if missing:
             raise RuntimeError(f"{path.name} is missing: {', '.join(sorted(missing))}")
@@ -373,6 +378,12 @@ def verify_windows_installer_script(content: str, version: str) -> None:
         rf'Delete "$DESKTOP\{identity.display_name}.lnk"',
         rf'RMDir "$SMPROGRAMS\{identity.display_name}"',
     ]
+    for scheme in identity.url_schemes:
+        required.extend([
+            rf'WriteRegStr HKCU "Software\Classes\{scheme}" "URL Protocol" ""',
+            rf'ReadRegStr $0 HKCU "Software\Classes\{scheme}\shell\open\command" ""',
+            rf'StrCmp $0 "$\"$INSTDIR\NyaTerm.exe$\" $\"%1$\"" 0 protocol_skip_{scheme}',
+        ])
     directives = {line.strip() for line in content.splitlines()}
     for line in required:
         if line not in directives:
@@ -537,8 +548,17 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
             [sequence[a] for a in required_actions] != sorted(sequence[a] for a in required_actions) or
             sequence["RemoveExistingProducts"] != sequence["InstallInitialize"] + 1):
         raise RuntimeError("MSI must remove old products immediately after InstallInitialize")
-    if tables["CustomAction"]:
-        raise RuntimeError("MSI must not run custom actions")
+    actions = {(row["Action"], row["Type"], row["Source"], row["Target"]) for row in tables["CustomAction"]}
+    expected_actions = {(name, "3090", files["NyaTerm.exe"], argument) for name, argument in (
+        ("RegisterUrlProtocols", "--register-url-protocols"), ("UnregisterUrlProtocols", "--unregister-url-protocols"))}
+    if actions != expected_actions:
+        raise RuntimeError("MSI contains unexpected protocol helper custom actions")
+    rows = {row["Action"]: row for row in tables["InstallExecuteSequence"]}
+    if (sequence.get("RegisterUrlProtocols") != sequence["InstallFiles"] + 1 or
+        sequence.get("UnregisterUrlProtocols") != sequence.get("RemoveFiles", 0) - 1 or
+        rows["RegisterUrlProtocols"]["Condition"] != 'NOT REMOVE~="ALL"' or
+        rows["UnregisterUrlProtocols"]["Condition"] != 'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE'):
+        raise RuntimeError("MSI protocol helpers have unsafe sequencing")
     if any(row["FileName"] or row["DirProperty"] != "ApplicationProgramsFolder"
            or row["InstallMode"] != "2" for row in tables["RemoveFile"]):
         raise RuntimeError("MSI must not delete user data")
@@ -547,12 +567,8 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
     if shortcuts != {(directory, "NyaTerm", f"[#{files['NyaTerm.exe']}]")
                      for directory in ("DesktopFolder", "ApplicationProgramsFolder")}:
         raise RuntimeError("MSI contains invalid shortcuts")
-    registry = {(row["Root"], row["Key"], row["Name"], row["Value"]) for row in tables["Registry"]}
-    protocol = r"Software\Classes\nyaterm"
-    if registry != {("2", protocol, "", "URL:NyaTerm Protocol"), ("2", protocol, "URL Protocol", ""),
-                    ("2", protocol + r"\DefaultIcon", "", "[INSTALLDIR]NyaTerm.exe,0"),
-                    ("2", protocol + r"\shell\open\command", "", '"[INSTALLDIR]NyaTerm.exe" "%1"')}:
-        raise RuntimeError("MSI contains invalid protocol registration")
+    if tables["Registry"]:
+        raise RuntimeError("MSI must delegate ownership-aware protocol cleanup to the native helper")
     return files
 
 

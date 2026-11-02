@@ -179,6 +179,20 @@ class VerifyNativePackageTests(unittest.TestCase):
                 path, "x86_64-pc-windows-msvc", "2.0.0"
             )
 
+    def test_windows_portable_rejects_unknown_duplicate_and_symlink_entries(self) -> None:
+        for name in ("unknown.exe", "NYATERM.EXE", "conpty/unknown.dll", "unknown/", "link"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "portable.zip"
+                write_portable(path, 0x8664, helper_machine=0x8664)
+                with zipfile.ZipFile(path, "a") as archive:
+                    info = zipfile.ZipInfo(f"NyaTerm-portable/{name}")
+                    if name == "link":
+                        info.create_system = 3
+                        info.external_attr = 0o120777 << 16
+                    archive.writestr(info, b"unexpected")
+                with self.assertRaises(RuntimeError):
+                    verify_native_package.verify_windows_portable(path, "x86_64-pc-windows-msvc", "2.0.0")
+
     def test_windows_portable_rejects_application_without_version_resource(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portable.zip"
@@ -329,7 +343,7 @@ class VerifyNativePackageTests(unittest.TestCase):
                     "CFBundleExecutable": "NyaTerm",
                     "CFBundleShortVersionString": version,
                     "CFBundleVersion": version,
-                    "CFBundleURLTypes": [{"CFBundleURLSchemes": [identity.desktop_id]}],
+                    "CFBundleURLTypes": [{"CFBundleURLSchemes": list(identity.url_schemes)}],
                 }
                 entries = {
                     f"{bundle}/Contents/MacOS/NyaTerm": fake_macho(0x0100000C),
@@ -364,11 +378,11 @@ class VerifyNativePackageTests(unittest.TestCase):
                     plist[field] = original
 
     def test_macos_scheme_validation_rejects_extra_protocols(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "must register only"):
+        with self.assertRaisesRegex(RuntimeError, "must register URL schemes"):
             verify_native_package.verify_macos_url_scheme(
                 {
                     "CFBundleURLTypes": [
-                        {"CFBundleURLSchemes": ["nyaterm", "ssh", "telnet"]}
+                        {"CFBundleURLSchemes": ["nyaterm", "ssh", "telnet", "unexpected"]}
                     ]
                 },
                 "Info.plist",
@@ -385,7 +399,7 @@ class VerifyNativePackageTests(unittest.TestCase):
                 "Icon=nyaterm",
                 "StartupWMClass=nyaterm",
                 "Exec=/opt/nyaterm/nyaterm %U",
-                "MimeType=x-scheme-handler/nyaterm;",
+                "MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;",
             )
         )
         verify_native_package.verify_linux_desktop(
@@ -395,7 +409,7 @@ class VerifyNativePackageTests(unittest.TestCase):
             verify_native_package.verify_linux_desktop(
                 desktop.replace(
                     "x-scheme-handler/nyaterm;",
-                    "x-scheme-handler/nyaterm;x-scheme-handler/ssh;",
+                    "x-scheme-handler/unexpected;",
                 ),
                 "/opt/nyaterm/nyaterm",
                 "nyaterm.desktop",

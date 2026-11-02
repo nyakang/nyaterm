@@ -29,6 +29,13 @@ fn first_conflict_preview_reuses_the_snapshot_validated_by_that_check() {
     let options = options(&dir, &dir, "device");
     let store = OptionsTestLocalStore(&options);
     let memory = MemoryRemote::default();
+    ConnectionStore::open(&options.config_dir)
+        .unwrap()
+        .replace_sessions(&SessionsConfig {
+            connections: vec![local_connection("remote", "Remote", "bash")],
+            ..Default::default()
+        })
+        .unwrap();
     push_snapshot_with_remote(&store, &options, &memory, &CloudSyncState::default(), false)
         .unwrap();
     ConnectionStore::open(&options.config_dir)

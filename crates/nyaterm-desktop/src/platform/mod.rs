@@ -47,6 +47,18 @@ impl RendererKind {
     }
 }
 
+/// Windows reports WARP through the Basic Render Driver without always setting
+/// the DXGI software-adapter flag, so the adapter name is part of the check.
+pub(crate) fn is_software_renderer(specs: Option<&gpui::GpuSpecs>) -> bool {
+    specs.is_some_and(|specs| {
+        specs.is_software_emulated
+            || specs
+                .device_name
+                .trim()
+                .eq_ignore_ascii_case("Microsoft Basic Render Driver")
+    })
+}
+
 /// Probe once outside rendering. GPUI exposes no result for applying a material,
 /// so these describe known support, not confirmation of the visible effect.
 pub(crate) fn window_material_capabilities() -> WindowMaterialCapabilities {
@@ -82,7 +94,7 @@ pub fn init_native_menu_theme() {
 
 #[cfg(test)]
 mod tests {
-    use super::RendererKind;
+    use super::{RendererKind, is_software_renderer};
 
     #[test]
     fn renderer_kind_uses_device_flags_and_preserves_unknown() {
@@ -103,5 +115,19 @@ mod tests {
             RendererKind::from_specs(Some(&specs)),
             RendererKind::Software
         );
+    }
+
+    #[test]
+    fn basic_render_driver_counts_as_software_even_without_the_flag() {
+        let mut specs = gpui::GpuSpecs {
+            device_name: "Microsoft Basic Render Driver".into(),
+            ..Default::default()
+        };
+        assert!(is_software_renderer(Some(&specs)));
+
+        specs.device_name = "AMD Radeon RX 580 Series".into();
+        assert!(!is_software_renderer(Some(&specs)));
+        specs.is_software_emulated = true;
+        assert!(is_software_renderer(Some(&specs)));
     }
 }

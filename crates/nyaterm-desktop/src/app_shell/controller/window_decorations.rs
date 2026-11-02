@@ -30,8 +30,9 @@ impl DesktopController {
     /// Other workspaces retain their committed settings until Apply succeeds.
     pub(crate) fn effective_window_decorations(&self, cx: &App) -> WindowDecorations {
         let preview = self
-            .settings_owner_workspace_id
-            .and_then(|id| self.windows.get(&id))
+            .settings_owners
+            .last()
+            .and_then(|id| self.windows.get(id))
             .and_then(|entry| entry.shell.upgrade())
             .and_then(|shell| shell.read(cx).app.clone())
             .and_then(|app| app.read(cx).window_decoration_preview());

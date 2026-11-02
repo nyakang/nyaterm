@@ -209,8 +209,9 @@ impl NyaTermApp {
     ) {
         let targets: Vec<_> = self
             .file_manager
-            .workspaces()
-            .flat_map(|(id, workspace)| {
+            .all_workspaces()
+            .flat_map(|workspace| {
+                let id = workspace.read(cx).id.clone();
                 [PaneId::Left, PaneId::Right]
                     .into_iter()
                     .filter_map(|pane_id| {
@@ -280,11 +281,7 @@ impl NyaTermApp {
         disconnected: bool,
         cx: &mut Context<Self>,
     ) {
-        let workspaces: Vec<_> = self
-            .file_manager
-            .workspaces()
-            .map(|(_, entity)| entity.clone())
-            .collect();
+        let workspaces: Vec<_> = self.file_manager.all_workspaces().collect();
         for workspace in workspaces {
             workspace.update(cx, |workspace, cx| {
                 workspace.mark_disconnected(session_id, disconnected);
@@ -303,8 +300,8 @@ impl NyaTermApp {
     ) {
         let workspaces: Vec<_> = self
             .file_manager
-            .workspaces()
-            .map(|(id, entity)| (id.clone(), entity.clone()))
+            .all_workspaces()
+            .map(|entity| (entity.read(cx).id.clone(), entity.clone()))
             .collect();
         for (manager_id, workspace) in workspaces {
             let panes = workspace.read(cx).pane_ids_for_session(session_id);

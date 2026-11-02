@@ -105,6 +105,28 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn toggle_quick_command_editor_raw_send(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.commands.toggle_quick_editor_raw_send() {
+            return;
+        }
+        let raw_send = self
+            .commands
+            .quick_editor()
+            .is_some_and(|editor| editor.raw_send);
+        if let Some(input) = self.existing_text_input("quick-command.editor.command") {
+            let placeholder = if raw_send {
+                t!("quickCommands.rawCommandPlaceholder")
+            } else {
+                t!("quickCommands.commandPlaceholder")
+            };
+            input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        }
+        cx.notify();
+    }
+
     pub(in crate::features) fn save_quick_command_editor(&mut self, cx: &mut Context<Self>) {
         let label_required = t!("quickCommands.errorLabelRequired").to_string();
         let command_required = t!("quickCommands.errorCommandRequired").to_string();
@@ -164,6 +186,7 @@ impl NyaTermApp {
             icon_tag: editor.icon_tag.clone(),
             pinned: editor.pinned.then_some(true),
             execution_mode: Some(editor.execution_mode.clone()),
+            raw_send: editor.raw_send.then_some(true),
             source: original.as_ref().and_then(|command| command.source.clone()),
             risk_level: original
                 .as_ref()

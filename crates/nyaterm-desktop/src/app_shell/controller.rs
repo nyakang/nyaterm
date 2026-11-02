@@ -29,6 +29,8 @@ mod bootstrap;
 pub(crate) mod native_menu;
 mod shutdown;
 #[cfg(test)]
+mod shutdown_tests;
+#[cfg(test)]
 mod tab_drag_tests;
 mod tab_moves;
 #[cfg(test)]
@@ -96,11 +98,14 @@ pub struct DesktopController {
     windows: HashMap<WorkspaceId, WorkspaceWindow>,
     pending_tab_moves: HashMap<WorkspaceId, MoveTabTreeRequest>,
     tab_drag: TabDragCoordinator,
-    settings_owner_workspace_id: Option<WorkspaceId>,
+    /// Workspaces whose settings tab is open, oldest first. The last entry owns
+    /// the process-wide settings preview.
+    settings_owners: Vec<WorkspaceId>,
     tray: Option<SystemTray>,
     screen_locked: bool,
     most_recent_workspace_id: Option<WorkspaceId>,
     recent_activations: RecentActivationCache,
+    recent_connections: nyaterm_core::activation::RecentConnectionRequests,
     closing_workspaces: HashSet<WorkspaceId>,
     process_quitting: bool,
     pending_bootstrap: Option<StoreTask<BootstrapSnapshot>>,
@@ -136,10 +141,11 @@ impl DesktopController {
             windows: HashMap::new(),
             pending_tab_moves: HashMap::new(),
             tab_drag: TabDragCoordinator::default(),
-            settings_owner_workspace_id: None,
+            settings_owners: Vec::new(),
             tray: None,
             screen_locked: false,
             recent_activations: RecentActivationCache::default(),
+            recent_connections: Default::default(),
             closing_workspaces: HashSet::new(),
             process_quitting: false,
             pending_bootstrap,
@@ -168,6 +174,10 @@ impl DesktopController {
             let startup = self.startup.for_workspace(workspace_id);
             self.open_workspace_with_startup(startup, None, false, None, cx)?;
         }
+        self.recent_activations
+            .remember(initial_activation.request_id);
+        let mut initial_activation = initial_activation.parse();
+        self.deduplicate_connections(&mut initial_activation);
         let _ = self.activate_and_deliver(self.most_recent_workspace_id, initial_activation, cx);
         self.launch_initial_bootstrap(cx);
         if let Some(recent) = self.most_recent_workspace_id
@@ -198,6 +208,12 @@ impl DesktopController {
         Ok(())
     }
 
+    pub(crate) fn sync_operations(
+        &self,
+    ) -> crate::features::sync::operation::CloudSyncOperationRegistry {
+        self.auto_sync.operations.clone()
+    }
+
     pub(crate) fn update_store(&self) -> gpui::Entity<UpdateStore> {
         self.update_store.clone()
     }
@@ -214,6 +230,7 @@ impl DesktopController {
             }
         })
     }
+    #[cfg(test)]
     pub(crate) fn restart_plugins(&mut self, cx: &mut gpui::App) {
         let runtime = self.runtime.clone();
         self.plugin_process

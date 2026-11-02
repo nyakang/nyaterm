@@ -48,6 +48,95 @@ fn command(id: &str, text: &str) -> QuickCommand {
     .unwrap()
 }
 
+struct QuickCommandEditorFixture {
+    app: Entity<NyaTermApp>,
+    native: bool,
+}
+
+impl Render for QuickCommandEditorFixture {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let surface = self.app.update(cx, |app, cx| {
+            if self.native {
+                app.quick_command_editor_window_view(560., cx)
+            } else {
+                app.quick_command_editor_overlay(cx)
+            }
+        });
+        div().relative().w(px(560.)).h(px(800.)).child(surface)
+    }
+}
+
+#[test]
+fn quick_command_editor_literal_toggle_preserves_the_editor_selection_and_undo_in_both_surfaces() {
+    for native in [false, true] {
+        let root = TestTempDir::new("nyaterm-quick-command-editor-literal");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root);
+        app.update(&mut cx, |app, _| {
+            app.commands
+                .open_quick_editor(crate::models::QuickCommandEditorState::blank());
+        });
+        let fixture_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+            let fixture = cx.new(|_| QuickCommandEditorFixture {
+                app: fixture_app,
+                native,
+            });
+            nya_root(fixture, window, cx)
+        });
+        draw(cx);
+        let input = app.read_with(cx, |app, _| {
+            app.existing_text_input("quick-command.editor.command")
+                .unwrap()
+        });
+        cx.update(|window, cx| {
+            window.focus(&input.read(cx).component_focus_handle(cx), cx);
+        });
+        draw(cx);
+        cx.simulate_input("abc");
+        cx.simulate_keystrokes("shift-left shift-left");
+        draw(cx);
+        assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "abc");
+        let control = cx
+            .debug_bounds("quick-command-editor-raw-send-control")
+            .unwrap();
+        let script = cx.debug_bounds("quick-command.editor.command").unwrap();
+        assert!(control.bottom() <= script.top());
+        assert!(control.right() <= script.right());
+        // Exercise the switch callback while retaining the editor's active selection.
+        app.update(cx, |app, cx| app.toggle_quick_command_editor_raw_send(cx));
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert!(
+                app.commands.quick_editor().unwrap().raw_send,
+                "native={native} control={control:?} script={script:?}"
+            );
+            assert_eq!(
+                app.existing_text_input("quick-command.editor.command")
+                    .unwrap(),
+                input
+            );
+        });
+        assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "abc");
+        cx.update(|window, cx| {
+            window.focus(&input.read(cx).component_focus_handle(cx), cx);
+        });
+        draw(cx);
+        cx.simulate_input("X");
+        draw(cx);
+        assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "aX");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-z"
+        } else {
+            "ctrl-z"
+        });
+        draw(cx);
+        assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "abc");
+    }
+}
+
 fn app(cx: &mut TestAppContext, root: &TestTempDir) -> Entity<NyaTermApp> {
     let runtime = AppRuntime::from_parts_for_test(
         RuntimeMode::Portable,

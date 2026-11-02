@@ -440,7 +440,8 @@ pub(super) fn control_key_bytes(key: &str) -> Option<Vec<u8>> {
         "backslash" | "\\" => 0x1c,
         "right_bracket" | "]" => 0x1d,
         "6" => 0x1e,
-        "slash" | "/" => 0x1f,
+        // Ctrl+- and Ctrl+_ (Ctrl+Shift+-) also send US, as in xterm; nano uses ^_ for go-to-line.
+        "slash" | "/" | "minus" | "-" | "_" => 0x1f,
         value if value.len() == 1 => {
             let byte = value.as_bytes()[0].to_ascii_lowercase();
             if byte.is_ascii_lowercase() {

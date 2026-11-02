@@ -2,7 +2,7 @@ use gpui::{AppContext as _, Entity, TestAppContext, px, size};
 use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, test_support::TestTempDir};
 
 use super::{DesktopController, WorkspaceWindow};
-use crate::app_shell::{AppShell, AppShellStartup};
+use crate::app_shell::{AppShell, AppShellLifecycle, AppShellStartup};
 use crate::features::NyaTermApp;
 use crate::features::test_support::app_with_visible_local_session;
 
@@ -26,7 +26,10 @@ impl DesktopController {
                 cx,
             )
         });
-        shell.update(cx, |shell, _| shell.app = Some(app));
+        shell.update(cx, |shell, _| {
+            shell.app = Some(app);
+            shell.lifecycle = AppShellLifecycle::Ready;
+        });
         self.windows.insert(
             workspace_id,
             WorkspaceWindow {

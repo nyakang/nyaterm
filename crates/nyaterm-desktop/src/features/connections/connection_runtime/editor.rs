@@ -23,10 +23,21 @@ fn save_editor_connection(
     store: &ConnectionStore,
     mut persisted: SavedConnection,
     pending_group: Option<&Group>,
+    password_edit: Option<crate::models::ConnectionPasswordEdit>,
 ) -> Result<SessionsConfig, StorageError> {
     // Read metadata in the store job so edits cannot restore stale usage or
     // ordering values captured when the editor was opened.
     let previous = store.get_connection(&persisted.id)?;
+    if password_edit == Some(crate::models::ConnectionPasswordEdit::Keep)
+        && let Some(auth) = persisted.auth.as_mut()
+        && auth.mode == "password"
+    {
+        // Locking discards plaintext in the UI. Keep the latest stored secret,
+        // including its ciphertext marker, rather than serializing the empty input.
+        let original = previous.as_ref().and_then(|entry| entry.auth.as_ref());
+        auth.password = original.and_then(|auth| auth.password.clone());
+        auth.has_password = original.is_some_and(|auth| auth.has_password);
+    }
     persisted.sort_order = if let Some(previous) = previous.as_ref()
         && previous.group_id == persisted.group_id
     {
@@ -83,12 +94,6 @@ impl NyaTermApp {
             ConnectionEditorValidationError::MissingAccount => {
                 t!("passwordManager.missingAccount").into()
             }
-            ConnectionEditorValidationError::AccountPasswordMissing => {
-                t!("authForm.accountPasswordMissing").into()
-            }
-            ConnectionEditorValidationError::PasswordReplacementRequired => {
-                t!("authForm.passwordRequired").into()
-            }
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
             ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
@@ -105,6 +110,15 @@ impl NyaTermApp {
             }
             ConnectionEditorValidationError::BaudRateInvalid => {
                 t!("dialog.baudRateInvalid", min = "1", max = "4000000").into()
+            }
+            ConnectionEditorValidationError::RdpWindowsAuthenticationRequired => {
+                t!("dialog.rdpWindowsAuthenticationRequired").into()
+            }
+            ConnectionEditorValidationError::RdpRelayUnsupported => {
+                t!("dialog.rdpActiveXRelayUnsupported").into()
+            }
+            ConnectionEditorValidationError::RdpClipboardUnsupported => {
+                t!("dialog.rdpActiveXClipboardUnsupported").into()
             }
             ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
                 t!("dialog.rdpDisplayWidthInvalid").into()
@@ -219,6 +233,7 @@ impl NyaTermApp {
                 username: "root".to_string(),
                 domain: String::new(),
                 auth_mode: "password".to_string(),
+                rdp_backend: "builtin".to_string(),
                 rdp_security: RdpSecuritySettings::default(),
                 rdp_display: RdpDisplaySettings::default(),
                 rdp_clipboard: RdpClipboardSettings::default(),
@@ -236,7 +251,7 @@ impl NyaTermApp {
                 username_source: nyaterm_core::ConnectionUsernameSource::Connection,
                 password_source_touched: false,
                 password_source_demoted: false,
-                password_edit: crate::models::ConnectionPasswordEdit::Replace,
+                password_edit: crate::models::ConnectionPasswordEdit::Keep,
                 field_errors: Default::default(),
                 password: nyaterm_core::SecretString::default(),
                 existing_password: None,
@@ -319,6 +334,10 @@ impl NyaTermApp {
         };
 
         self.connection_state.begin_editor(editor);
+        self.reconcile_open_editor_password_source();
+        if self.security_secrets_locked() {
+            self.connection_state.clear_editor_secrets(cx);
+        }
         // Fields mirror the draft, so they are rebuilt with it.
         self.connection_state.build_editor_fields(cx);
         self.shell
@@ -394,19 +413,6 @@ impl NyaTermApp {
         if self.connection_state.set_editor_baud_popover_open(open) {
             cx.notify();
         }
-    }
-
-    pub(in crate::features) fn edit_connection_password(
-        &mut self,
-        edit: crate::models::ConnectionPasswordEdit,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.set_editor_password_edit(edit, cx);
-        cx.notify();
-    }
-
-    pub(in crate::features) fn clear_connection_editor_password(&mut self, cx: &mut Context<Self>) {
-        self.edit_connection_password(crate::models::ConnectionPasswordEdit::Remove, cx);
     }
 
     pub(in crate::features) fn set_connection_editor_baud_rate(
@@ -541,6 +547,31 @@ impl NyaTermApp {
             );
         }
 
+        if matches!(
+            select,
+            ConnectionEditorSelect::Account | ConnectionEditorSelect::SavedPassword
+        ) {
+            let id = self
+                .connection_state
+                .active_editor_draft()
+                .and_then(|draft| draft.password_account_id().map(str::to_owned));
+            let source = if let Some(id) = id {
+                match self
+                    .security
+                    .passwords()
+                    .iter()
+                    .find(|entry| entry.id == id)
+                {
+                    Some(entry) if !entry.has_password => ConnectionEditorPasswordSource::Ask,
+                    _ => ConnectionEditorPasswordSource::Saved,
+                }
+            } else {
+                ConnectionEditorPasswordSource::Direct
+            };
+            self.connection_state.set_editor_password_source(source);
+            self.connection_state.sync_editor_password_input(cx);
+        }
+
         cx.notify();
     }
 
@@ -609,17 +640,16 @@ impl NyaTermApp {
             ConnectionKindTab::Ssh | ConnectionKindTab::Telnet => editor.account_id.clone(),
             _ => editor.password_id.clone(),
         };
-        let has_password = id
-            .as_ref()
-            .and_then(|id| {
-                self.security
-                    .passwords()
-                    .iter()
-                    .find(|entry| entry.id == *id)
-            })
-            .is_some_and(|entry| entry.has_password);
-        self.connection_state
-            .demote_saved_password_if_unavailable(has_password);
+        let account = id.as_ref().and_then(|id| {
+            self.security
+                .passwords()
+                .iter()
+                .find(|entry| entry.id == *id)
+        });
+        if let Some(account) = account {
+            self.connection_state
+                .demote_saved_password_if_unavailable(account.has_password);
+        }
     }
 
     fn editor_bound_account(&self) -> Option<nyaterm_core::SavedPassword> {
@@ -633,16 +663,6 @@ impl NyaTermApp {
             .iter()
             .find(|entry| entry.id == id)
             .cloned()
-    }
-
-    pub(in crate::features) fn set_connection_editor_password_source(
-        &mut self,
-        source: ConnectionEditorPasswordSource,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.hide_editor_secrets(cx);
-        self.connection_state.set_editor_password_source(source);
-        cx.notify();
     }
 
     pub(in crate::features) fn set_connection_editor_ssh_algorithm_tab(
@@ -1003,6 +1023,19 @@ impl NyaTermApp {
                 {
                     return true;
                 }
+                if let Some(input) = self
+                    .connection_state
+                    .editor_fields()
+                    .get(&ConnectionEditorField::PostLoginCommand)
+                    .cloned()
+                    .filter(|input| input.read(cx).component_focus_handle(cx).is_focused(window))
+                    && (input.update(cx, |input, cx| input.is_composing(window, cx))
+                        || (!keystroke.modifiers.platform && !keystroke.modifiers.control))
+                {
+                    // The script editor owns newlines and IME confirmation;
+                    // only the explicit save shortcut may submit this field.
+                    return false;
+                }
                 if !keystroke.modifiers.platform
                     && !keystroke.modifiers.control
                     && self.connection_state.editor_tag_field_is_focused(cx)
@@ -1181,7 +1214,9 @@ impl NyaTermApp {
         };
         let origin_window = window.window_handle();
         let saved_id = built.id.clone();
-        let persisted = built.clone();
+        let mut persisted = built.clone();
+        let password_edit = (editor.password_source == ConnectionEditorPasswordSource::Direct)
+            .then_some(editor.password_edit);
         let account_id = built
             .auth
             .as_ref()
@@ -1215,34 +1250,39 @@ impl NyaTermApp {
                     {
                         return Ok(Err((ConnectionEditorField::Username, missing_username)));
                     }
-                    if account_password {
-                        if !account.has_password {
-                            return Ok(Err((ConnectionEditorField::Password, missing_password)));
-                        }
-                        if inspect_password {
-                            match store.load_decrypted_password_by_id(id) {
-                                Ok(Some(entry))
-                                    if entry
-                                        .password
-                                        .as_deref()
-                                        .is_some_and(|value| !value.trim().is_empty()) => {}
-                                Ok(_) => {
-                                    return Ok(Err((
-                                        ConnectionEditorField::Password,
-                                        missing_password,
-                                    )));
-                                }
-                                Err(_) => {
-                                    return Ok(Err((
-                                        ConnectionEditorField::Password,
-                                        invalid_password,
-                                    )));
-                                }
+                    if account_password
+                        && !account.has_password
+                        && let Some(auth) = persisted.auth.as_mut()
+                        && auth.account_id.is_some()
+                    {
+                        auth.password_source = Some(
+                            nyaterm_core::models::credentials::ConnectionPasswordSource::Connection,
+                        );
+                    }
+                    if account_password && account.has_password && inspect_password {
+                        match store.load_decrypted_password_by_id(id) {
+                            Ok(Some(entry))
+                                if entry
+                                    .password
+                                    .as_deref()
+                                    .is_some_and(|value| !value.is_empty()) => {}
+                            Ok(_) => {
+                                return Ok(Err((
+                                    ConnectionEditorField::Password,
+                                    missing_password,
+                                )));
+                            }
+                            Err(_) => {
+                                return Ok(Err((
+                                    ConnectionEditorField::Password,
+                                    invalid_password,
+                                )));
                             }
                         }
                     }
                 }
-                save_editor_connection(store, persisted, pending_group.as_ref()).map(Ok)
+                save_editor_connection(store, persisted, pending_group.as_ref(), password_edit)
+                    .map(Ok)
             }),
             move |this, event, cx| match event.outcome {
                 Ok(Err((_field, message))) => {

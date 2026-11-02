@@ -1,6 +1,7 @@
 use super::DesktopController;
 use crate::features::WorkspaceCloseSnapshot;
 use crate::features::shell::tray::show_window as show_tray_window;
+use gpui::AppContext as _;
 use gpui::Context;
 use gpui::Task;
 use nyaterm_core::DeviceWindowManifest;
@@ -278,47 +279,7 @@ impl DesktopController {
             return;
         }
         if self.windows.len() == 1 {
-            self.process_quitting = true;
-            let Some(store_runtime) = self.startup.shared_store_runtime() else {
-                self.process_quitting = false;
-                self.defer_workspace_close_failure(
-                    workspace_id,
-                    "The storage runtime is unavailable".to_string(),
-                    cx,
-                );
-                return;
-            };
-            store_runtime.begin_shutdown();
-            let task = store_runtime
-                .ui_client()
-                .try_submit_shutdown(0, FlushBarrier);
-            match task {
-                Ok(task) => {
-                    cx.spawn(async move |this, cx| {
-                        let outcome = task.await.outcome;
-                        let _ = this.update(cx, |controller, cx| match outcome {
-                            Ok(()) => {
-                                controller.quit_after_workspace_shutdown(cx);
-                            }
-                            Err(error) => {
-                                controller.process_quitting = false;
-                                store_runtime.resume_after_failed_shutdown();
-                                controller.report_workspace_close_failure(
-                                    workspace_id,
-                                    error.to_string(),
-                                    cx,
-                                );
-                            }
-                        });
-                    })
-                    .detach();
-                }
-                Err(error) => {
-                    self.process_quitting = false;
-                    store_runtime.resume_after_failed_shutdown();
-                    self.defer_workspace_close_failure(workspace_id, error.to_string(), cx);
-                }
-            }
+            self.request_quit_without_ready(cx);
             return;
         }
         let Some(store_runtime) = self.startup.shared_store_runtime() else {
@@ -363,11 +324,15 @@ impl DesktopController {
                 })
             })
             .collect::<Vec<_>>();
-        // Settings has one owner. Route process quit through it so its theme draft
-        // cannot be lost just because another workspace has the most recent session.
+        // Route process quit through the settings owner so its theme draft is
+        // handled first; the dirty-draft gate then visits any other window that
+        // holds its own settings tab draft.
         let workspace_id = self
-            .settings_owner_workspace_id
-            .filter(|id| ready.contains(id))
+            .settings_owners
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| ready.contains(id))
             .or_else(|| {
                 ready.iter().copied().find(|id| {
                     self.windows.get(id).is_some_and(|entry| {
@@ -433,6 +398,40 @@ impl DesktopController {
         if !self.begin_process_quit() {
             return;
         }
+        let operations = self.sync_operations();
+        let started_at = std::time::Instant::now();
+        tracing::info!(
+            pid = std::process::id(),
+            stage = "sync",
+            "shutdown stage started"
+        );
+        // A loading shell can request quit while it is already leased by GPUI.
+        let shells = self
+            .windows
+            .values()
+            .map(|entry| entry.shell.clone())
+            .collect::<Vec<_>>();
+        cx.defer(move |cx| {
+            for shell in shells {
+                let _ = shell.update(cx, |shell, cx| shell.enter_flushing(cx));
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            operations.wait_for_idle().await;
+            tracing::info!(
+                pid = std::process::id(),
+                stage = "sync",
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "shutdown stage finished"
+            );
+            let _ = this.update(cx, |controller, cx| {
+                controller.quit_without_ready_after_sync(cx)
+            });
+        })
+        .detach();
+    }
+
+    fn quit_without_ready_after_sync(&mut self, cx: &mut Context<Self>) {
         let Some(store_runtime) = self.startup.shared_store_runtime() else {
             self.quit_after_workspace_shutdown(cx);
             return;
@@ -475,7 +474,8 @@ impl DesktopController {
         }
     }
 
-    /// Run each workspace's editor gate before releasing any process resources.
+    /// Run each workspace's unsaved-draft gate before releasing any process
+    /// resources. Covers editor documents and all per-window settings drafts.
     pub fn defer_quit_for_dirty_editors(
         &mut self,
         current: WorkspaceId,
@@ -488,10 +488,11 @@ impl DesktopController {
             let dirty = entry
                 .shell
                 .update(cx, |shell, cx| {
-                    shell
-                        .app
-                        .as_ref()
-                        .is_some_and(|app| app.read(cx).has_unconfirmed_editor_changes())
+                    shell.app.as_ref().is_some_and(|app| {
+                        let app = app.read(cx);
+                        app.has_unconfirmed_editor_changes()
+                            || app.has_unconfirmed_settings_changes()
+                    })
                 })
                 .unwrap_or(false);
             dirty.then(|| (entry.shell.clone(), entry.handle))
@@ -648,7 +649,39 @@ impl DesktopController {
             for task in tasks {
                 task.await;
             }
-            let _ = this.update(cx, |_, cx| cx.quit());
+            let _ = this.update(cx, |controller, cx| controller.quit_after_process_jobs(cx));
+        })
+        .detach();
+    }
+
+    pub(in crate::app_shell) fn quit_after_process_jobs(&mut self, cx: &mut Context<Self>) {
+        // Sync results and history have been consumed before scheduler cancellation.
+        let Some(cleanup) = self
+            .update_store
+            .update(cx, |store, _| store.begin_shutdown())
+        else {
+            return;
+        };
+        let started_at = std::time::Instant::now();
+        tracing::info!(
+            pid = std::process::id(),
+            stage = "process_jobs",
+            "shutdown stage started"
+        );
+        let cleanup = cx.background_spawn(async move {
+            cleanup();
+        });
+        cx.spawn(async move |this, cx| {
+            cleanup.await;
+            let _ = this.update(cx, |_, cx| {
+                tracing::info!(
+                    pid = std::process::id(),
+                    stage = "process_jobs",
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    "shutdown stage finished"
+                );
+                cx.quit();
+            });
         })
         .detach();
     }

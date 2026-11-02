@@ -4,6 +4,9 @@ use nyaterm_core::cloud_sync::control::{CloudSyncCancellation, CloudSyncOperatio
 
 use crate::blocking_jobs::{JobRejected, JobTask};
 
+mod registry;
+pub(crate) use registry::{CloudSyncOperationRegistration, CloudSyncOperationRegistry};
+
 #[derive(Clone, Default)]
 pub(crate) struct AutoSyncOperationControls {
     pub sync: CloudSyncOperationControl,

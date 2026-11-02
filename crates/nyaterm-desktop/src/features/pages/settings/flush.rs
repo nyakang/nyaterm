@@ -7,7 +7,7 @@ use crate::models::SettingsTab;
 
 use super::panel::{
     AiSettingsPresentation, CloudSyncPresentation, MasterPasswordPresentation, SettingsChrome,
-    SettingsPresentation, SettingsSectionPresentation, SettingsSnapshot, SettingsSurface,
+    SettingsPresentation, SettingsSectionPresentation, SettingsSnapshot,
     TransferSettingsPresentation, TranslationPresentation,
 };
 
@@ -23,26 +23,13 @@ impl NyaTermApp {
 
     pub(in crate::features) fn flush_settings_panel_snapshots(&mut self, cx: &mut Context<Self>) {
         self.settings.clear_panel_refresh_request();
-        let main = self.build_settings_snapshot(SettingsSurface::MainPage);
+        let main = self.build_settings_snapshot();
         self.settings_panel
             .clone()
             .update(cx, |panel, cx| panel.set_snapshot(main, cx));
-
-        let Some(native_panel) = self
-            .native_settings_panel
-            .as_ref()
-            .and_then(gpui::WeakEntity::upgrade)
-        else {
-            return;
-        };
-        let native = self.build_settings_snapshot(SettingsSurface::NativeWindow);
-        native_panel.update(cx, |panel, cx| panel.set_snapshot(native, cx));
     }
 
-    pub(in crate::features) fn build_settings_snapshot(
-        &self,
-        surface: SettingsSurface,
-    ) -> SettingsSnapshot {
+    pub(in crate::features) fn build_settings_snapshot(&self) -> SettingsSnapshot {
         let active_tab = self.shell.settings_active_tab();
         let backup_prompt = self.settings.snapshot_password_prompt();
         let draft_dirty = self.settings_draft_dirty() || self.settings.theme_designer().dirty();
@@ -50,7 +37,6 @@ impl NyaTermApp {
             chrome: SettingsChrome {
                 palette: self.theme_palette(),
             },
-            surface,
             active_tab,
             settings: SettingsPresentation {
                 summary: Arc::new(self.settings.summary().clone()),
@@ -98,6 +84,7 @@ impl NyaTermApp {
                 agent_management: self.ai.agent_management_view().clone(),
             },
             cloud_sync: CloudSyncPresentation {
+                v4_preview: self.cloud_sync.v4_summary(),
                 settings: Arc::new(self.cloud_sync.settings().clone()),
                 state: self.cloud_sync.state().clone(),
                 history: self.cloud_sync.history().to_vec(),
@@ -151,41 +138,6 @@ impl NyaTermApp {
                 SettingsTab::Security => SettingsSectionPresentation::Security,
                 SettingsTab::SyncBackup => SettingsSectionPresentation::SyncBackup,
             },
-        }
-    }
-
-    pub(in crate::features) fn register_native_settings_panel(
-        &mut self,
-        panel: &gpui::Entity<super::panel::SettingsPanel>,
-        cx: &mut Context<Self>,
-    ) {
-        self.native_settings_panel = Some(panel.downgrade());
-        self.request_settings_panel_refresh(cx);
-    }
-
-    pub(in crate::features) fn clear_native_settings_panel(
-        &mut self,
-        panel: &gpui::Entity<super::panel::SettingsPanel>,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .native_settings_panel
-            .as_ref()
-            .and_then(gpui::WeakEntity::upgrade)
-            .as_ref()
-            == Some(panel)
-        {
-            self.native_settings_panel = None;
-            if let Some(controller) = self
-                .desktop_controller
-                .as_ref()
-                .and_then(gpui::WeakEntity::upgrade)
-            {
-                controller.update(cx, |controller, cx| {
-                    controller.release_settings_owner(self.workspace_id, cx)
-                });
-            }
-            self.request_settings_panel_refresh(cx);
         }
     }
 }

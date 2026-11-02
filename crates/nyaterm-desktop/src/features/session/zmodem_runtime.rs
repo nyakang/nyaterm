@@ -76,6 +76,16 @@ impl Drop for ZmodemSessionState {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn modem_transfer_disabled_message(&self, session_id: &str) -> String {
+        if self.tmux.is_control_session(session_id)
+            || self.tmux.pane_for_session(session_id).is_some()
+        {
+            rust_i18n::t!("tmux.modemDisabled").to_string()
+        } else {
+            rust_i18n::t!("dialog.serialSoftwareFlowControlModemDisabled").to_string()
+        }
+    }
+
     pub(in crate::features) fn rebind_zmodem_recording(&mut self) {
         let recording = self.recording.writer();
         for (_, state) in self.session.zmodem_states_mut() {
@@ -128,6 +138,12 @@ impl NyaTermApp {
         files: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        if !self.session.manager().supports_modem_transfer(&session_id) {
+            self.shell
+                .set_status(self.modem_transfer_disabled_message(&session_id));
+            cx.notify();
+            return;
+        }
         if files.is_empty() {
             return;
         }
@@ -239,9 +255,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if !self.session.manager().supports_modem_transfer(&session_id) {
-            self.shell.set_status(
-                rust_i18n::t!("dialog.serialSoftwareFlowControlModemDisabled").to_string(),
-            );
+            self.shell
+                .set_status(self.modem_transfer_disabled_message(&session_id));
             cx.notify();
             return;
         }

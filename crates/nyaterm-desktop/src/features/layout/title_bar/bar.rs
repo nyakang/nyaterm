@@ -383,6 +383,10 @@ impl NyaTermApp {
                                 this.shell.close_open_tabs_menu();
                                 this.shell.close_new_session_menu();
                                 cx.notify();
+                            }))
+                            .on_open_change(cx.listener(|this, open, _, cx| {
+                                this.shell.set_header_status_menu_open(*open);
+                                cx.notify();
                             })),
                     ),
             )

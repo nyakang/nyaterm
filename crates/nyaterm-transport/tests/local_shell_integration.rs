@@ -6,6 +6,48 @@ use std::time::{Duration, Instant};
 use nyaterm_terminal::TerminalCore;
 use nyaterm_transport::{LocalSessionConfig, SessionEvent, SessionManager};
 
+#[test]
+#[ignore = "requires a working Windows ConPTY and CMD"]
+fn external_local_directory_with_chinese_and_spaces_is_used_without_a_startup_command() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("中文 directory with spaces");
+    std::fs::create_dir(&directory).unwrap();
+    let manager = SessionManager::new();
+    let session = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some("cmd.exe".into()),
+            shell_args: vec!["/D".into(), "/Q".into()],
+            working_dir: Some(directory.clone()),
+            cols: 240,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut terminal = TerminalCore::new(240, 24);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut matched = false;
+    while Instant::now() < deadline && !matched {
+        for event in manager.drain_events(64).unwrap().events {
+            if let SessionEvent::Output { data, .. } = event {
+                terminal.advance(&data);
+                for reply in terminal.take_effects().pty_write {
+                    manager.write_raw(&session.id, &reply).unwrap();
+                }
+            }
+        }
+        matched = terminal
+            .lines()
+            .iter()
+            .any(|line| line.contains(directory.to_str().unwrap()));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    manager.close(&session.id).unwrap();
+    assert!(
+        matched,
+        "CMD prompt must show the requested working directory"
+    );
+    assert!(manager.list_sessions().unwrap().is_empty());
+}
+
 fn observe(args: &[&str], input: Option<&[u8]>) -> (bool, bool) {
     let manager = SessionManager::new();
     let session = manager

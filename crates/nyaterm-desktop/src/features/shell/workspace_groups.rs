@@ -109,9 +109,15 @@ impl NyaTermApp {
                 }
                 return;
             }
+            // The settings surface owns its own focus targets.
+            crate::models::WorkspaceTabId::Settings => return,
             crate::models::WorkspaceTabId::Session(_) => {}
         }
-        if self.remote_desktop.is_session(session) {
+        if self.session_is_sftp_only(session) {
+            if let Some(view) = self.file_manager.workspace(&format!("sftp-{session}")) {
+                window.focus(&view.read(cx).focus_handle(cx), cx);
+            }
+        } else if self.remote_desktop.is_session(session) {
             window.focus(self.remote_desktop.focus(), cx);
         } else {
             window.focus(self.terminal.input_focus(), cx);
@@ -259,6 +265,7 @@ mod tests {
         placement: Option<crate::features::session::SessionStartTabPlacement>,
     ) -> PendingSessionStart {
         PendingSessionStart {
+            requested_ssh_runtime_mode: None,
             attempt: Default::default(),
             connection_name: "new local".into(),
             launch_config: None,

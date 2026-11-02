@@ -48,6 +48,26 @@ fn linux_controls_follow_actual_decorations_even_when_client_was_requested() {
 }
 
 #[test]
+fn linux_child_headers_follow_actual_decorations() {
+    for decorations in [
+        Decorations::Client {
+            tiling: Tiling::default(),
+        },
+        Decorations::Server,
+    ] {
+        let policy = WindowChrome::derive(WindowChromeInput {
+            main: false,
+            decorations,
+            ..input(Platform::Linux)
+        });
+        assert_eq!(
+            policy.show_child_header,
+            matches!(decorations, Decorations::Client { .. })
+        );
+    }
+}
+
+#[test]
 fn window_flags_and_platform_capabilities_both_gate_controls() {
     for (minimizable, resizable) in [(false, true), (true, false), (false, false)] {
         let policy = WindowChrome::derive(WindowChromeInput {
@@ -95,6 +115,7 @@ fn fullscreen_and_sheets_remove_controls_gutters_and_dragging() {
             assert!(!policy.minimize && !policy.maximize && !policy.close);
             assert!(!policy.native_button_gutter);
             assert_eq!(policy.drag, TitleDragBehavior::Disabled);
+            assert!(policy.show_child_header);
         }
     }
 }
@@ -108,6 +129,7 @@ fn macos_keeps_native_buttons_and_windows_keeps_custom_caption_buttons() {
             ..input(Platform::MacOS)
         });
         assert!(!mac.minimize && !mac.maximize && !mac.close);
+        assert!(mac.show_child_header);
         assert!(mac.native_button_gutter);
         assert_eq!(
             mac.drag,
@@ -123,6 +145,7 @@ fn macos_keeps_native_buttons_and_windows_keeps_custom_caption_buttons() {
             ..input(Platform::Windows)
         });
         assert!(windows.minimize && windows.maximize && windows.close);
+        assert!(windows.show_child_header);
         assert_eq!(windows.drag, TitleDragBehavior::Native);
     }
 }

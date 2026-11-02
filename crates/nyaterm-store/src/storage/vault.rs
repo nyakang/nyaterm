@@ -239,6 +239,11 @@ impl ConnectionStore {
 
     pub fn delete_ssh_key(&self, key_id: &str) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
+        super::cloud_sync_v4::record_remove(
+            &txn,
+            CREDENTIALS_TABLE,
+            &entity_key(SSH_KEY_PREFIX, key_id),
+        )?;
         txn.open_table(CREDENTIALS_TABLE)?
             .remove(entity_key(SSH_KEY_PREFIX, key_id).as_str())?;
         txn.commit()?;
@@ -293,6 +298,11 @@ impl ConnectionStore {
 
     pub fn delete_otp_entry(&self, otp_id: &str) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
+        super::cloud_sync_v4::record_remove(
+            &txn,
+            OTP_ACCOUNTS_TABLE,
+            &entity_key(OTP_PREFIX, otp_id),
+        )?;
         txn.open_table(OTP_ACCOUNTS_TABLE)?
             .remove(entity_key(OTP_PREFIX, otp_id).as_str())?;
         txn.commit()?;
@@ -501,6 +511,11 @@ impl ConnectionStore {
 
     pub fn delete_password(&self, password_id: &str) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
+        super::cloud_sync_v4::record_remove(
+            &txn,
+            CREDENTIALS_TABLE,
+            &entity_key(PASSWORD_PREFIX, password_id),
+        )?;
         txn.open_table(CREDENTIALS_TABLE)?
             .remove(entity_key(PASSWORD_PREFIX, password_id).as_str())?;
         txn.commit()?;
@@ -648,6 +663,11 @@ impl ConnectionStore {
 
     pub fn delete_credential(&self, credential_id: &str) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
+        super::cloud_sync_v4::record_remove(
+            &txn,
+            CREDENTIALS_TABLE,
+            &entity_key(CREDENTIAL_PREFIX, credential_id),
+        )?;
         txn.open_table(CREDENTIALS_TABLE)?
             .remove(entity_key(CREDENTIAL_PREFIX, credential_id).as_str())?;
         txn.commit()?;

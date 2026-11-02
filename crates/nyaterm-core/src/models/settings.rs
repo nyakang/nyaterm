@@ -288,6 +288,8 @@ impl InternalEditorDisplay {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionLinksMatcherSettings {
     #[serde(default = "default_true_action_link")]
+    pub mac: bool,
+    #[serde(default = "default_true_action_link")]
     pub ipv4: bool,
     #[serde(default = "default_true_action_link")]
     pub archive: bool,
@@ -302,6 +304,7 @@ fn default_true_action_link() -> bool {
 impl Default for ActionLinksMatcherSettings {
     fn default() -> Self {
         Self {
+            mac: true,
             ipv4: true,
             archive: true,
             host_port: true,
@@ -454,7 +457,7 @@ pub struct AppSettingsSummary {
     pub terminal_low_latency_mode: bool,
     #[serde(default = "default_terminal_zebra_stripes_enabled")]
     pub terminal_zebra_stripes_enabled: bool,
-    /// Detect clickable entities (IP/host:port/archive) in terminal output (Tauri action_links_enabled).
+    /// Detect clickable entities (IP/MAC/host:port/archive) in terminal output (Tauri action_links_enabled).
     #[serde(default)]
     pub terminal_action_links_enabled: bool,
     #[serde(default)]
@@ -463,6 +466,9 @@ pub struct AppSettingsSummary {
     #[serde(default = "default_search_engines")]
     pub search_custom_engines: Vec<SearchEngineConfig>,
     pub ui_remote_stats_interval: u32,
+    /// Show `who` sessions in the resource monitor and the host header reading.
+    #[serde(default)]
+    pub ui_remote_stats_show_users: bool,
     #[serde(default = "default_hardware_monitor_interval")]
     pub ui_gpu_monitor_interval: u32,
     #[serde(default = "default_hardware_monitor_interval")]
@@ -736,6 +742,7 @@ impl Default for AppSettingsSummary {
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
             ui_remote_stats_interval: 3,
+            ui_remote_stats_show_users: false,
             ui_gpu_monitor_interval: 3,
             ui_ascend_npu_monitor_interval: 3,
             ui_process_manager_interval: 5,
@@ -1014,6 +1021,20 @@ fn default_highlight_color_light() -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn mac_matcher_defaults_on_for_legacy_settings_and_preserves_explicit_false() {
+        for value in [serde_json::json!({}), serde_json::json!({"ipv4": false})] {
+            let matchers: super::ActionLinksMatcherSettings =
+                serde_json::from_value(value).unwrap();
+            assert!(matchers.mac);
+        }
+        let matchers: super::ActionLinksMatcherSettings =
+            serde_json::from_value(serde_json::json!({"mac": false})).unwrap();
+        assert!(!matchers.mac);
+        assert_eq!(serde_json::to_value(matchers).unwrap()["mac"], false);
+        assert!(!super::AppSettingsSummary::default().terminal_action_links_enabled);
+    }
+
+    #[test]
     fn legacy_and_unknown_encoding_labels_round_trip_unchanged() {
         for label in ["UTF8", " CP936 ", "shift-jis", "euckr", "unknown", ""] {
             let mut document = serde_json::to_value(super::AppSettingsSummary::default()).unwrap();
@@ -1163,10 +1184,26 @@ mod tests {
         assert!(summary.ui_asset_sort_key.is_none());
         assert!(summary.ui_asset_sort_direction.is_none());
         assert!(!summary.terminal_reconnect_restore_cwd);
+        assert!(!summary.ui_remote_stats_show_users);
         assert_eq!(summary.transfer_internal_editor_font_size, 13);
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);
+    }
+
+    #[test]
+    fn login_monitoring_is_opt_in_for_legacy_settings_and_roundtrips() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("ui_remote_stats_show_users");
+        let mut summary: AppSettingsSummary = serde_json::from_value(value).unwrap();
+        assert!(!summary.ui_remote_stats_show_users);
+        summary.ui_remote_stats_show_users = true;
+        let restored: AppSettingsSummary =
+            serde_json::from_str(&serde_json::to_string(&summary).unwrap()).unwrap();
+        assert!(restored.ui_remote_stats_show_users);
     }
 
     #[test]

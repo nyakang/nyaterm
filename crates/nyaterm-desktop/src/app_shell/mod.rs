@@ -1,5 +1,7 @@
 //! Root GPUI shell boundary.
 
+use nyaterm_core::activation::ParsedActivationRequest;
+
 mod controller;
 pub(crate) use controller::native_menu;
 mod process_state;
@@ -27,8 +29,8 @@ use gpui::{
     actions, div, prelude::FluentBuilder, px, rgb, svg,
 };
 use nyaterm_core::{
-    ActivationRequest, AppRuntime, DiagnosticsExportOptions, DiagnosticsRuntimeSnapshot,
-    WorkspaceId, export_diagnostics_archive,
+    AppRuntime, DiagnosticsExportOptions, DiagnosticsRuntimeSnapshot, WorkspaceId,
+    export_diagnostics_archive,
 };
 use nyaterm_store::{FlushBarrier, StoreOperationError, StoreRuntime, StoreSubmitError, StoreTask};
 use nyaterm_ui::{NyaAppMenu, NyaAppMenuBar, NyaButton, NyaButtonVariant};
@@ -80,7 +82,7 @@ pub struct AppShell {
     workspace_seed: Option<nyaterm_core::WorkspaceRestoreState>,
     startup_restore: Entity<StartupRestoreStore>,
     overlays: Entity<OverlayStore>,
-    pending_activations: VecDeque<ActivationRequest>,
+    pending_activations: VecDeque<ParsedActivationRequest>,
     pending_process_quit_tasks: Vec<StoreTask<()>>,
     main_window_state: MainWindowStateController,
     _subscriptions: Vec<Subscription>,
@@ -103,7 +105,7 @@ struct RecoveryState {
 impl AppShell {
     pub fn new(
         runtime: AppRuntime,
-        initial_activation: Option<ActivationRequest>,
+        initial_activation: Option<ParsedActivationRequest>,
         startup: AppShellStartup,
         workspace_id: WorkspaceId,
         controller: Entity<DesktopController>,
@@ -226,16 +228,22 @@ impl AppShell {
 
     pub(super) fn receive_activation_direct(
         &mut self,
-        request: ActivationRequest,
+        request: ParsedActivationRequest,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        if matches!(self.lifecycle, AppShellLifecycle::Flushing) {
+            return false;
+        }
         if matches!(self.lifecycle, AppShellLifecycle::Ready) {
             if let Some(app) = &self.app {
                 app.update(cx, |app, cx| app.handle_activation(request, cx));
+                return true;
             }
-        } else if !matches!(self.lifecycle, AppShellLifecycle::Flushing) {
+        } else {
             self.pending_activations.push_back(request);
+            return true;
         }
+        false
     }
 
     fn drain_pending_activations(&mut self, cx: &mut Context<Self>) {
@@ -300,12 +308,18 @@ impl AppShell {
         };
         let update_store = self.controller.read(cx).update_store();
         let plugin_process = self.controller.read(cx).plugin_process();
+        let sync_operations = self.controller.read(cx).sync_operations();
         let app = cx.new(|cx| {
             let session_hub = self.session_hub.read(cx).clone();
             NyaTermApp::from_bootstrap(
                 self.runtime.clone(),
                 stores,
-                NyaTermProcessEntities::new(process_state, update_store.clone(), plugin_process),
+                NyaTermProcessEntities::new(
+                    process_state,
+                    update_store.clone(),
+                    plugin_process,
+                    sync_operations,
+                ),
                 workspace_init,
                 NyaTermStoreClients::new(
                     store_runtime.ui_client(),
@@ -348,24 +362,6 @@ impl AppShell {
                                 .update(cx, |controller, _| controller.begin_process_quit())
                             {
                                 return;
-                            }
-                            let workspace_id = this.workspace_id;
-                            let tasks = this.controller.update(cx, |controller, cx| {
-                                controller.prepare_other_workspaces_for_quit(workspace_id, cx)
-                            });
-                            match tasks {
-                                Ok(tasks) => this.pending_process_quit_tasks = tasks,
-                                Err(error) => {
-                                    this.controller.update(cx, |controller, _| {
-                                        controller.cancel_process_quit()
-                                    });
-                                    if let Some(app) = &this.app {
-                                        app.update(cx, |app, cx| {
-                                            app.report_close_save_failed(error.to_string(), cx)
-                                        });
-                                    }
-                                    return;
-                                }
                             }
                             this.request_close(cx);
                         } else {
@@ -630,6 +626,43 @@ impl AppShell {
     }
 
     fn quit_after_worker_shutdown(&mut self, launch_update: bool, cx: &mut Context<Self>) {
+        let admitted = self.controller.update(cx, |controller, _| {
+            controller.is_process_quitting() || controller.begin_process_quit()
+        });
+        if !admitted {
+            return;
+        }
+        self.enter_flushing(cx);
+        let operations = self.controller.read(cx).sync_operations();
+        operations.pause_and_cancel();
+        cx.spawn(async move |this, cx| {
+            operations.wait_for_idle().await;
+            let _ = this.update(cx, |this, cx| {
+                this.stop_workspace_workers(launch_update, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn stop_workspace_workers(&mut self, launch_update: bool, cx: &mut Context<Self>) {
+        // The installer helper waits for process exit. Validate its launch before
+        // destroying workspace workers so a failed launch can return to a usable app.
+        if launch_update && let Some(app) = &self.app {
+            let update_result =
+                app.update(cx, |app, cx| app.launch_pending_update_after_shutdown(cx));
+            if let Err(error) = update_result {
+                if let Some(store_runtime) = &self.store_runtime {
+                    store_runtime.resume_after_failed_shutdown();
+                }
+                self.controller.update(cx, |controller, _| {
+                    controller.cancel_process_quit();
+                });
+                self.lifecycle = AppShellLifecycle::FlushFailed(error.clone());
+                app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
+                cx.notify();
+                return;
+            }
+        }
         let started_at = Instant::now();
         let mut tasks = self.controller.update(cx, |controller, cx| {
             let mut tasks = controller.shutdown_other_workspaces(self.workspace_id, cx);
@@ -651,45 +684,31 @@ impl AppShell {
                 task.await;
             }
             let _ = this.update(cx, |this, cx| {
-                this.finish_worker_shutdown(launch_update, started_at, cx);
+                this.finish_worker_shutdown(started_at, cx);
             });
         })
         .detach();
     }
 
-    fn finish_worker_shutdown(
-        &mut self,
-        launch_update: bool,
-        started_at: Instant,
-        cx: &mut Context<Self>,
-    ) {
+    fn finish_worker_shutdown(&mut self, started_at: Instant, cx: &mut Context<Self>) {
         tracing::info!(
+            pid = std::process::id(),
+            stage = "workspace_jobs",
             elapsed_ms = started_at.elapsed().as_millis(),
             "workspace workers stopped"
         );
-        if launch_update && let Some(app) = &self.app {
-            let update_result =
-                app.update(cx, |app, cx| app.launch_pending_update_after_shutdown(cx));
-            if let Err(error) = update_result {
-                if let Some(store_runtime) = &self.store_runtime {
-                    store_runtime.resume_after_failed_shutdown();
-                }
-                self.controller.update(cx, |controller, cx| {
-                    controller.cancel_process_quit();
-                    controller.restart_plugins(cx);
-                });
-                self.lifecycle = AppShellLifecycle::FlushFailed(error.clone());
-                app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
-                cx.notify();
-                return;
-            }
-        }
-        cx.defer(move |cx| {
-            cx.quit();
-        });
+        self.controller
+            .update(cx, |controller, cx| controller.quit_after_process_jobs(cx));
     }
 
     fn enter_flushing(&mut self, cx: &mut Context<Self>) {
+        self.pending_activations.clear();
+        if let Some(app) = &self.app {
+            app.update(cx, |app, _| app.cancel_external_activations());
+        }
+        if matches!(self.lifecycle, AppShellLifecycle::Flushing) {
+            return;
+        }
         self.lifecycle = AppShellLifecycle::Flushing;
         self.flushing_view_ready = self.app.is_none();
         cx.notify();
@@ -713,6 +732,50 @@ impl AppShell {
     }
 
     fn begin_shutdown(&mut self, cx: &mut Context<Self>) {
+        let admitted = self.controller.update(cx, |controller, _| {
+            controller.is_process_quitting() || controller.begin_process_quit()
+        });
+        if !admitted {
+            return;
+        }
+        self.enter_flushing(cx);
+        let operations = self.controller.read(cx).sync_operations();
+        operations.pause_and_cancel();
+        let started_at = Instant::now();
+        tracing::info!(
+            pid = std::process::id(),
+            stage = "sync",
+            "shutdown stage started"
+        );
+        cx.spawn(async move |this, cx| {
+            operations.wait_for_idle().await;
+            let _ = this.update(cx, |this, cx| {
+                tracing::info!(
+                    pid = std::process::id(),
+                    stage = "sync",
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    "shutdown stage finished"
+                );
+                this.begin_shutdown_after_sync(cx);
+            });
+        })
+        .detach();
+    }
+
+    fn begin_shutdown_after_sync(&mut self, cx: &mut Context<Self>) {
+        let workspace_id = self.workspace_id;
+        match self.controller.update(cx, |controller, cx| {
+            controller.prepare_other_workspaces_for_quit(workspace_id, cx)
+        }) {
+            Ok(tasks) => self.pending_process_quit_tasks = tasks,
+            Err(error) => {
+                self.controller
+                    .update(cx, |controller, _| controller.cancel_process_quit());
+                self.lifecycle = AppShellLifecycle::FlushFailed(error.to_string());
+                cx.notify();
+                return;
+            }
+        }
         let started_at = Instant::now();
         let Some(store_runtime) = &self.store_runtime else {
             self.controller
@@ -788,6 +851,8 @@ impl AppShell {
         let pending_tasks = std::mem::take(&mut self.pending_process_quit_tasks);
         self.enter_flushing(cx);
         tracing::info!(
+            pid = std::process::id(),
+            stage = "persistence",
             elapsed_ms = started_at.elapsed().as_millis(),
             "shutdown persistence queued"
         );
@@ -809,6 +874,8 @@ impl AppShell {
                 failure.get_or_insert(error);
             }
             tracing::info!(
+                pid = std::process::id(),
+                stage = "persistence",
                 elapsed_ms = flush_started_at.elapsed().as_millis(),
                 "shutdown persistence finished"
             );

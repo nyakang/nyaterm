@@ -229,3 +229,104 @@ fn successful_put_invalidates_metadata_before_readback() {
     assert_eq!(remote.read_if_exists(path).unwrap().unwrap(), b"new");
     server.join().unwrap();
 }
+
+#[test]
+fn v4_listing_keeps_every_page_and_rejects_repeated_tokens_or_error_documents() {
+    let page_one = r#"<ListBucketResult><IsTruncated>true</IsTruncated><Contents><Key>space/sync/v4/registry/a.bin</Key></Contents><NextContinuationToken>next</NextContinuationToken></ListBucketResult>"#;
+    let page_two = r#"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>space/sync/v4/registry/b.bin</Key></Contents></ListBucketResult>"#;
+    let (settings, worker) = server(vec![
+        Reply {
+            status: 200,
+            headers: "",
+            body: page_one,
+            conditional: false,
+        },
+        Reply {
+            status: 200,
+            headers: "",
+            body: page_two,
+            conditional: false,
+        },
+    ]);
+    let entries = NativeS3Remote::new(&settings)
+        .unwrap()
+        .list_sync_files("space/sync/v4/registry")
+        .unwrap();
+    assert_eq!(
+        entries,
+        vec![
+            "space/sync/v4/registry/a.bin",
+            "space/sync/v4/registry/b.bin"
+        ]
+    );
+    worker.join().unwrap();
+    let (settings, worker) = server(vec![
+        Reply {
+            status: 200,
+            headers: "",
+            body: page_one,
+            conditional: false,
+        },
+        Reply {
+            status: 200,
+            headers: "",
+            body: page_one,
+            conditional: false,
+        },
+    ]);
+    assert!(
+        NativeS3Remote::new(&settings)
+            .unwrap()
+            .list_sync_files("space/sync/v4/registry")
+            .is_err()
+    );
+    worker.join().unwrap();
+    for body in [
+        "<Error><Code>AccessDenied</Code></Error>",
+        "<ListBucketResult><IsTruncated>false</IsTruncated>",
+        "<ListBucketResult></ListBucketResult>",
+        "<ListBucketResult><IsTruncated>unknown</IsTruncated></ListBucketResult>",
+    ] {
+        assert!(super::parse_s3_list_page(body).is_err());
+    }
+}
+
+#[test]
+fn listing_rejects_outside_prefix_objects_and_duplicate_objects_across_pages() {
+    for body in [
+        r#"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>other/space/object.bin</Key></Contents></ListBucketResult>"#,
+        r#"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>provider-copy/space/object.bin</Key></Contents></ListBucketResult>"#,
+    ] {
+        let (mut settings, worker) = server(vec![Reply {
+            status: 200,
+            headers: "",
+            body,
+            conditional: false,
+        }]);
+        settings.root = "provider".into();
+        let result = NativeS3Remote::new(&settings)
+            .unwrap()
+            .list_metadata("space/");
+        worker.join().unwrap();
+        assert!(result.is_err());
+    }
+    let (settings, worker) = server(vec![
+        Reply {
+            status: 200,
+            headers: "",
+            body: r#"<ListBucketResult><IsTruncated>true</IsTruncated><Contents><Key>space/a.bin</Key></Contents><NextContinuationToken>next</NextContinuationToken></ListBucketResult>"#,
+            conditional: false,
+        },
+        Reply {
+            status: 200,
+            headers: "",
+            body: r#"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>space/a.bin</Key></Contents></ListBucketResult>"#,
+            conditional: false,
+        },
+    ]);
+    let result = NativeS3Remote::new(&settings)
+        .unwrap()
+        .list_metadata("space/");
+    worker.join().unwrap();
+    assert!(result.is_err());
+}

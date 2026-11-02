@@ -6,7 +6,7 @@ use super::super::connection_runtime::ConnectionEditorToggle;
 use crate::models::{
     ConnectionEditorField, ConnectionEditorPasswordSource, ConnectionEditorSelect,
     ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionGroupEditorState,
-    ConnectionKindTab,
+    ConnectionKindTab, ConnectionPasswordEdit,
 };
 
 pub(super) fn clear_connection_editor_runtime_state(
@@ -214,8 +214,20 @@ pub(super) fn set_connection_editor_select_value(
                 _ => None,
             };
         }
+        ConnectionEditorSelect::RdpBackend => {
+            let value = value.unwrap_or_else(|| "builtin".to_string());
+            if !cfg!(windows) && value == "windows" {
+                return false;
+            }
+            editor.rdp_backend = value;
+        }
         ConnectionEditorSelect::RdpCertificatePolicy => {
-            editor.rdp_security.certificate_policy = value.unwrap_or_else(|| "prompt".to_string());
+            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+                editor.rdp_security.windows_authentication = value;
+            } else {
+                editor.rdp_security.certificate_policy =
+                    value.unwrap_or_else(|| "prompt".to_string());
+            }
         }
         ConnectionEditorSelect::RdpDisplayMode => {
             editor.rdp_display.mode = value.unwrap_or_else(|| "fit-window".to_string());
@@ -965,7 +977,15 @@ pub(super) fn editor_field_seeds(
             ConnectionEditorField::Password,
             draft.password.expose_secret().to_owned(),
             true,
-            I18n("dialog.passwordPlaceholder"),
+            I18n(
+                if draft.existing_password.is_some()
+                    && draft.password_edit == ConnectionPasswordEdit::Keep
+                {
+                    "authForm.connectionPasswordStored"
+                } else {
+                    "authForm.connectionPasswordEnter"
+                },
+            ),
         ),
         (
             ConnectionEditorField::ShellPath,
@@ -1224,7 +1244,18 @@ pub(super) fn set_connection_editor_field_text(
             }
         }
         ConnectionEditorField::Domain => draft.domain = text,
-        ConnectionEditorField::Password => draft.password = text.into(),
+        ConnectionEditorField::Password => {
+            if draft.password_account_id().is_some() || draft.password.expose_secret() == text {
+                return;
+            }
+            draft.password_edit = if text.is_empty() {
+                ConnectionPasswordEdit::Remove
+            } else {
+                ConnectionPasswordEdit::Replace
+            };
+            draft.password = text.into();
+            draft.password_source = ConnectionEditorPasswordSource::Direct;
+        }
         ConnectionEditorField::ShellPath => draft.shell_path = text,
         ConnectionEditorField::ShellArgs => draft.shell_args = text,
         ConnectionEditorField::WorkingDir => draft.working_dir = text,

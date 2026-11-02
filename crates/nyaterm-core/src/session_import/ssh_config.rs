@@ -53,6 +53,7 @@ pub(super) fn prepare_ssh_config_import(path: &Path) -> AppResult<PreparedSessio
     let mut builder = ImportBuilder::new(&config);
     builder.materialize_all()?;
     Ok(PreparedSessionImport {
+        warnings: Vec::new(),
         custom_icons: Vec::new(),
         groups: Vec::new(),
         passwords: Vec::new(),

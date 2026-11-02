@@ -107,8 +107,23 @@ pub(in crate::features) fn none_if_blank(value: &str) -> Option<String> {
     }
 }
 
+/// The last `max_lines` of a raw output tail as plain text for AI and MCP.
+///
+/// Control sequences are dropped and a carriage return keeps only what was
+/// written after it, so progress bars read as their final state.
 pub(in crate::features) fn recent_terminal_output(output: &str, max_lines: usize) -> String {
-    let lines = output.lines().collect::<Vec<_>>();
+    let plain = nyaterm_core::strip_terminal_control_sequences(output);
+    let lines = plain
+        .lines()
+        .map(|line| {
+            line.rsplit('\r')
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .filter(|ch| *ch == '\t' || !ch.is_control())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
 }
@@ -552,9 +567,16 @@ mod tests {
     use nyaterm_terminal::TerminalScreen;
 
     use super::{
-        TerminalTimestampFormatter, format_history_timestamp_ms, terminal_gutter_labels,
-        terminal_gutter_row_count, terminal_timestamp_format_width_chars,
+        TerminalTimestampFormatter, format_history_timestamp_ms, recent_terminal_output,
+        terminal_gutter_labels, terminal_gutter_row_count, terminal_timestamp_format_width_chars,
     };
+
+    #[test]
+    fn recent_output_is_plain_text_tail() {
+        let raw = "\x1b]0;title\x07old\r\n\x1b[32mok\x1b[0m\r\n10%\r50%\r100%\r\nuser@host:~$ \x07";
+        assert_eq!(recent_terminal_output(raw, 3), "ok\n100%\nuser@host:~$ ");
+        assert_eq!(recent_terminal_output(raw, 1), "user@host:~$ ");
+    }
 
     #[test]
     fn gutter_omits_metadata_for_locally_cleared_rows() {

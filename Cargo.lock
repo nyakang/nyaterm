@@ -720,6 +720,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "automerge"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fb849130973a7808a167887f56b1e8bdc36b9b541542602dcb337f34aecf47b"
+dependencies = [
+ "cfg-if",
+ "flate2",
+ "getrandom 0.4.3",
+ "hex",
+ "hexane",
+ "itertools 0.15.0",
+ "leb128",
+ "rand 0.10.3",
+ "rustc-hash 2.1.3",
+ "serde",
+ "sha2 0.11.0",
+ "smol_str",
+ "thiserror 2.0.20",
+ "tinyvec",
+ "tracing",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "av-scenechange"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4317,6 +4341,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
+name = "hexane"
+version = "1.0.0-alpha.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81df830f11babb0eee9a082e09135ef0a7d8791f3fe9b279bb9485bf7eaf23e0"
+dependencies = [
+ "leb128",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5222,6 +5256,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5283,6 +5326,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ecded084f9b9a718d39668a42657c32253663d1f6afb3fbb9134f0305f73f48"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -5400,6 +5452,12 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
  "spin 0.9.9",
 ]
+
+[[package]]
+name = "leb128"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52"
 
 [[package]]
 name = "leb128fmt"
@@ -6363,8 +6421,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-activex-helper"
+version = "2.0.1"
+dependencies = [
+ "nyaterm-remote-desktop",
+ "serde_json",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
 name = "nyaterm-app"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -6385,15 +6453,18 @@ dependencies = [
  "tracing-subscriber",
  "usvg 0.46.0",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nyaterm-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
+ "aes 0.8.4",
  "aes-gcm",
  "argon2 0.5.3",
  "base64 0.22.1",
+ "cbc 0.1.2",
  "crypto_secretbox",
  "csscolorparser",
  "dirs",
@@ -6406,6 +6477,7 @@ dependencies = [
  "md5",
  "nyaterm-mcp-protocol",
  "nyaterm-plugin-api",
+ "pbkdf2 0.12.2",
  "percent-encoding",
  "quick-xml 0.40.1",
  "rand 0.10.3",
@@ -6416,6 +6488,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "sha3 0.10.9",
  "ssh-key",
  "thiserror 2.0.20",
  "time",
@@ -6430,7 +6503,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-desktop"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6454,6 +6527,7 @@ dependencies = [
  "nyaterm-plugin-host",
  "nyaterm-remote-desktop",
  "nyaterm-store",
+ "nyaterm-sync",
  "nyaterm-terminal",
  "nyaterm-terminal-gpui",
  "nyaterm-transport",
@@ -6486,7 +6560,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "dirs",
  "nyaterm-core",
@@ -6503,7 +6577,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp-protocol"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "schemars",
  "serde",
@@ -6523,7 +6597,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-plugin-host"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -6538,7 +6612,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-rdp-helper"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6562,7 +6636,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-remote-desktop"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "nyaterm-core",
@@ -6576,7 +6650,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-store"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -6584,6 +6658,7 @@ dependencies = [
  "futures",
  "hmac 0.13.0",
  "nyaterm-core",
+ "nyaterm-sync",
  "rand 0.10.3",
  "redb",
  "semver",
@@ -6598,8 +6673,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-sync"
+version = "2.0.1"
+dependencies = [
+ "automerge",
+ "hex",
+ "nyaterm-core",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "nyaterm-terminal"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "alacritty_terminal",
  "encoding_rs",
@@ -6613,7 +6704,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal-gpui"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "aho-corasick",
  "futures",
@@ -6631,7 +6722,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-transport"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "async-http-proxy",
@@ -6669,7 +6760,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-ui"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -6682,7 +6773,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-vnc-helper"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "nyaterm-core",
  "nyaterm-remote-desktop",
@@ -8830,7 +8921,7 @@ dependencies = [
  "hex-literal",
  "hmac 0.13.0",
  "inout 0.2.2",
- "keccak",
+ "keccak 0.2.2",
  "log",
  "md5",
  "ml-kem",
@@ -9610,12 +9701,22 @@ dependencies = [
 
 [[package]]
 name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest 0.10.7",
+ "keccak 0.1.6",
+]
+
+[[package]]
+name = "sha3"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.3",
- "keccak",
+ "keccak 0.2.2",
 ]
 
 [[package]]
@@ -9625,7 +9726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
 dependencies = [
  "digest 0.11.3",
- "keccak",
+ "keccak 0.2.2",
  "sponge-cursor",
 ]
 
@@ -9822,6 +9923,7 @@ version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
 dependencies = [
+ "borsh",
  "serde_core",
 ]
 
@@ -11619,7 +11721,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.6.0"
-source = "git+https://github.com/nyakang/vnc-rs?rev=ff1f60518247362dd763bfc84e60f8478d9cc18e#ff1f60518247362dd763bfc84e60f8478d9cc18e"
+source = "git+https://github.com/nyakang/vnc-rs?rev=336ed94c9cce7cba93fa8cba33b5a5d01ef2c227#336ed94c9cce7cba93fa8cba33b5a5d01ef2c227"
 dependencies = [
  "aes 0.8.4",
  "async_io_stream",

@@ -717,6 +717,7 @@ fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState 
     let focus = cx.update(|cx| cx.focus_handle());
     let mut owner = ConnectionEditorFeatureState {
         draft: None,
+        password: Default::default(),
         fields: HashMap::new(),
         number_fields: HashMap::new(),
         field_subscriptions: Vec::new(),
@@ -1344,10 +1345,7 @@ fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened(
         assert!(field.read(cx).is_masked());
         field.update(cx, |state, cx| state.set_masked(!state.is_masked(), cx));
 
-        app.set_connection_editor_password_source(
-            crate::models::ConnectionEditorPasswordSource::Ask,
-            cx,
-        );
+        app.connection_state.hide_editor_secrets(cx);
         assert!(field.read(cx).is_masked());
         assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
         field.update(cx, |state, cx| state.set_masked(false, cx));
@@ -1364,6 +1362,225 @@ fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened(
         let reopened = &app.connection_state.editor_fields()[&ConnectionEditorField::Password];
         assert!(reopened.read(cx).is_masked());
         assert_eq!(reopened.read(cx).value(cx), draft.password.expose_secret());
+    });
+}
+
+#[test]
+fn connection_password_input_replaces_or_removes_the_existing_secret_without_trimming() {
+    use crate::models::ConnectionPasswordEdit;
+
+    for kind in [
+        ConnectionKindTab::Ssh,
+        ConnectionKindTab::Telnet,
+        ConnectionKindTab::Rdp,
+        ConnectionKindTab::Vnc,
+    ] {
+        let mut draft = ConnectionEditorState {
+            kind,
+            password_edit: ConnectionPasswordEdit::Keep,
+            password: Default::default(),
+            ..connection_editor_state_with_secret_draft()
+        };
+        for text in [" new ", "", "  ", ""] {
+            set_connection_editor_field_text(
+                &mut draft,
+                ConnectionEditorField::Password,
+                text.to_string(),
+            );
+            assert_eq!(draft.password.expose_secret(), text);
+            assert_eq!(
+                draft.password_edit,
+                if text.is_empty() {
+                    ConnectionPasswordEdit::Remove
+                } else {
+                    ConnectionPasswordEdit::Replace
+                }
+            );
+            assert_eq!(draft.existing_password.as_deref(), Some("existing-secret"));
+        }
+    }
+}
+
+#[test]
+fn connection_password_removal_survives_submission_and_can_be_replaced() {
+    use crate::models::ConnectionPasswordEdit;
+    use nyaterm_ui::NyaInputEvent;
+
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        app.connection_state
+            .begin_editor(connection_editor_state_with_secret_draft());
+        app.connection_state.build_editor_fields(cx);
+        app.connection_state
+            .set_editor_password_edit(ConnectionPasswordEdit::Remove, cx);
+        let input = &app.connection_state.editor_fields()[&ConnectionEditorField::Password];
+        assert!(input.read(cx).value(cx).is_empty());
+        assert!(input.read(cx).is_masked());
+        input.update(cx, |_, cx| cx.emit(NyaInputEvent::Submitted(String::new())));
+    });
+    cx.update_entity(&app, |app, cx| {
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Remove);
+        assert!(draft.password.is_empty());
+        assert_eq!(draft.existing_password.as_deref(), Some("existing-secret"));
+        app.connection_state
+            .set_editor_password_edit(ConnectionPasswordEdit::Keep, cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Keep);
+        assert!(draft.password.is_empty());
+        assert_eq!(draft.existing_password.as_deref(), Some("existing-secret"));
+
+        app.connection_state
+            .set_editor_password_edit(ConnectionPasswordEdit::Remove, cx);
+        let input = &app.connection_state.editor_fields()[&ConnectionEditorField::Password];
+        input.update(cx, |_, cx| {
+            cx.emit(NyaInputEvent::Changed(" new ".to_string()))
+        });
+    });
+    cx.update_entity(&app, |app, cx| {
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Replace);
+        assert_eq!(draft.password.expose_secret(), " new ");
+        let input = &app.connection_state.editor_fields()[&ConnectionEditorField::Password];
+        input.update(cx, |_, cx| cx.emit(NyaInputEvent::Changed(String::new())));
+    });
+    cx.update_entity(&app, |app, _| {
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Remove);
+        assert!(draft.password.is_empty());
+    });
+}
+
+#[test]
+fn password_reveal_keeps_edit_intent_and_rejects_replies_after_changes_or_lock() {
+    use crate::models::ConnectionPasswordEdit;
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        for change in ["typing", "account", "close", "lock", "kind"] {
+            let mut draft = connection_editor_state_with_secret_draft();
+            draft.password_edit = ConnectionPasswordEdit::Keep;
+            draft.password = Default::default();
+            draft.existing_password_locked = true;
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+            let token = app.connection_state.begin_editor_password_reveal().unwrap();
+            match change {
+                "typing" => app
+                    .connection_state
+                    .set_editor_field_text(ConnectionEditorField::Password, "new".into()),
+                "account" => {
+                    app.connection_state.set_editor_select_value(
+                        ConnectionEditorSelect::Account,
+                        Some("other".into()),
+                    );
+                }
+                "close" => app.close_connection_editor(cx),
+                "lock" => app.connection_state.clear_editor_secrets(cx),
+                _ => {
+                    app.connection_state.set_editor_kind(ConnectionKindTab::Rdp);
+                }
+            }
+            assert!(!app.connection_state.editor_password_request_matches(token));
+            app.connection_state.complete_editor_password_reveal(
+                token,
+                Ok(Some("stale".into())),
+                cx,
+            );
+            if let Some(draft) = app.connection_state.active_editor_draft() {
+                assert_ne!(draft.password.expose_secret(), "stale");
+            }
+        }
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.password_edit = ConnectionPasswordEdit::Keep;
+        draft.password = Default::default();
+        draft.existing_password_locked = true;
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        let token = app.connection_state.begin_editor_password_reveal().unwrap();
+        app.connection_state
+            .complete_editor_password_reveal(token, Err("unreadable".into()), cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Keep);
+        assert_eq!(draft.existing_password.as_deref(), Some("existing-secret"));
+        assert!(draft.error.is_some());
+        let token = app.connection_state.begin_editor_password_reveal().unwrap();
+        app.connection_state.complete_editor_password_reveal(
+            token,
+            Ok(Some("original".into())),
+            cx,
+        );
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.password_edit, ConnectionPasswordEdit::Keep);
+        assert_eq!(draft.password.expose_secret(), "original");
+        assert!(
+            !app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .is_masked()
+        );
+        app.connection_state.clear_editor_secrets(cx);
+        assert!(app.connection_state.editor_password_can_delete_stored());
+        assert!(app.connection_state.delete_editor_stored_password(cx));
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password_edit,
+            ConnectionPasswordEdit::Remove
+        );
+    });
+}
+
+#[test]
+fn account_password_reveal_is_readonly_and_does_not_become_a_connection_password() {
+    use crate::models::ConnectionPasswordEdit;
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.account_id = Some("account".into());
+        draft.password_source = ConnectionEditorPasswordSource::Saved;
+        draft.password_edit = ConnectionPasswordEdit::Keep;
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        app.connection_state
+            .set_editor_field_text(ConnectionEditorField::Password, "forbidden".into());
+        assert!(!app.connection_state.editor_password_can_delete_stored());
+        let token = app.connection_state.begin_editor_password_reveal().unwrap();
+        app.connection_state.complete_editor_password_reveal(
+            token,
+            Ok(Some("account secret".into())),
+            cx,
+        );
+        assert_eq!(
+            app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .value(cx),
+            "account secret"
+        );
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password
+                .expose_secret(),
+            "draft-secret"
+        );
+        app.connection_state
+            .set_editor_select_value(ConnectionEditorSelect::Account, None);
+        app.connection_state
+            .set_editor_password_source(ConnectionEditorPasswordSource::Direct);
+        app.connection_state.sync_editor_password_input(cx);
+        assert_eq!(
+            app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .value(cx),
+            "draft-secret"
+        );
     });
 }
 
@@ -1944,6 +2161,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: "password".to_string(),
+        rdp_backend: "builtin".to_string(),
         rdp_security: Default::default(),
         rdp_display: Default::default(),
         rdp_clipboard: Default::default(),
@@ -2092,7 +2310,7 @@ fn raw_tcp_toggle_retains_telnet_keepalive_configuration() {
 }
 
 #[test]
-fn selecting_an_account_follows_its_username_without_replacing_an_explicit_password() {
+fn selecting_an_account_uses_its_password_and_unlink_restores_the_local_draft() {
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
@@ -2133,7 +2351,7 @@ fn selecting_an_account_follows_its_username_without_replacing_an_explicit_passw
             nyaterm_core::ConnectionUsernameSource::Account
         );
         assert_eq!(draft.password_source, ConnectionEditorPasswordSource::Saved);
-        assert!(!draft.password_source_touched);
+        assert!(draft.password_source_touched);
         assert_eq!(draft.password.expose_secret(), "draft-secret");
         app.set_connection_editor_select_value(ConnectionEditorSelect::Account, None, cx);
         let draft = app.connection_state.active_editor_draft().unwrap();
@@ -2155,22 +2373,20 @@ fn selecting_an_account_follows_its_username_without_replacing_an_explicit_passw
         );
         let draft = app.connection_state.active_editor_draft().unwrap();
         assert_eq!(draft.password_source, ConnectionEditorPasswordSource::Ask);
-        assert!(draft.password_source_demoted);
+        assert!(!draft.password_source_demoted);
         assert_eq!(
             draft.username_source,
             nyaterm_core::ConnectionUsernameSource::Account
         );
-        app.set_connection_editor_password_source(ConnectionEditorPasswordSource::Direct, cx);
+        app.connection_state
+            .set_editor_password_source(ConnectionEditorPasswordSource::Direct);
         app.set_connection_editor_select_value(
             ConnectionEditorSelect::Account,
             Some("with-password"),
             cx,
         );
         let draft = app.connection_state.active_editor_draft().unwrap();
-        assert_eq!(
-            draft.password_source,
-            ConnectionEditorPasswordSource::Direct
-        );
+        assert_eq!(draft.password_source, ConnectionEditorPasswordSource::Saved);
         assert!(draft.password_source_touched);
         app.use_connection_editor_username(cx);
         let draft = app.connection_state.active_editor_draft().unwrap();
@@ -2222,6 +2438,66 @@ fn account_dropdown_selection_reaches_the_connection_editor() {
         );
         let draft = app.connection_state.active_editor_draft().unwrap();
         assert!(draft.account_id.is_none());
+    });
+}
+
+#[test]
+fn rdp_backend_dropdown_selection_reaches_the_connection_editor() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Rdp;
+        app.connection_state.begin_editor(draft);
+        app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        // The Windows backend is disabled outside Windows; selecting it must not
+        // store a backend the platform cannot launch.
+        assert_eq!(
+            draft.rdp_backend,
+            if cfg!(windows) { "windows" } else { "builtin" }
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.rdp_backend, "builtin");
+    });
+}
+
+#[test]
+fn existing_windows_backend_is_retained_until_user_explicitly_changes_it() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Rdp;
+        draft.rdp_backend = "windows".into();
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "builtin"
+        );
     });
 }
 

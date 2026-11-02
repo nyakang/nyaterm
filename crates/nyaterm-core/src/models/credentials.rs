@@ -135,10 +135,7 @@ impl ConnectionAuth {
                 return Err(AccountAuthError::MissingAccount);
             }
         }
-        let password = self
-            .password
-            .clone()
-            .filter(|value| !value.trim().is_empty());
+        let password = self.password.clone().filter(|value| !value.is_empty());
         if password.is_some() && self.has_password {
             return Err(AccountAuthError::LockedConnectionPassword);
         }
@@ -397,3 +394,22 @@ impl_redacted_debug!(
     },
     secret { secret }
 );
+
+#[cfg(test)]
+mod connection_password_tests {
+    use super::{ConnectionAuth, ConnectionPasswordSource};
+
+    #[test]
+    fn independent_password_resolution_preserves_spaces() {
+        for password in [" secret ", "   "] {
+            let auth = ConnectionAuth {
+                mode: "password".into(),
+                password_source: Some(ConnectionPasswordSource::Connection),
+                password: Some(password.into()),
+                ..ConnectionAuth::default()
+            };
+            let (_, resolved) = auth.resolve_account_auth("user", None).unwrap();
+            assert_eq!(resolved.as_deref(), Some(password));
+        }
+    }
+}

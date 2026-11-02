@@ -1,5 +1,7 @@
 mod input;
 mod keyboard_capture;
+#[cfg(windows)]
+mod native;
 mod runtime;
 mod state;
 mod surface;

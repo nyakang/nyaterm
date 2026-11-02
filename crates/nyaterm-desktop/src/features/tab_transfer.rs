@@ -256,6 +256,9 @@ impl NyaTermApp {
             .session
             .detach_sessions_for_transfer(&session_ids, bridge_events)
             .ok_or_else(|| "the source tab changed during transfer".to_string())?;
+        for id in &session_ids {
+            self.file_manager.remove_sftp_session(id);
+        }
         let pane_root = self.shell.take_workspace_pane_root(root_tab_id);
         self.rebuild_session_tab_owners();
         self.reconcile_terminal_windows();
@@ -342,6 +345,9 @@ impl NyaTermApp {
         }
         self.session
             .attach_sessions_from_transfer(catalog, insert_index);
+        for id in &session_ids {
+            self.ensure_sftp_session_view(id, cx);
+        }
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(transfer);
         self.sync_input.attach_sessions_from_transfer(sync_input);
@@ -394,6 +400,9 @@ impl NyaTermApp {
             .map_err(|_| "the source terminal pipeline is unavailable".to_string())?;
         self.session
             .attach_sessions_from_transfer(bundle.catalog, Some(bundle.source_index));
+        for id in &bundle.session_ids {
+            self.ensure_sftp_session_view(id, cx);
+        }
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(bundle.transfer);
         self.sync_input

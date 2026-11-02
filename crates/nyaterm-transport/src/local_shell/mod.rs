@@ -18,6 +18,22 @@ pub(crate) struct ResolvedLocalShell {
 }
 
 impl ResolvedLocalShell {
+    pub(crate) fn validate_working_directory(
+        &self,
+        directory: Option<&Path>,
+    ) -> std::io::Result<()> {
+        #[cfg(windows)]
+        if self.is_wsl() {
+            // WSL validates its guest --cd directory; a host filesystem lookup
+            // would reject valid Linux paths and paths overridden by --cd.
+            return Ok(());
+        }
+        if let Some(directory) = directory {
+            std::fs::read_dir(directory)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn resolve(config: &LocalSessionConfig) -> Self {
         #[cfg(windows)]
         {
@@ -120,6 +136,27 @@ mod tests {
     use crate::session_config::LocalSessionConfig;
 
     use super::ResolvedLocalShell;
+
+    #[test]
+    fn validates_host_directories_before_spawning_a_terminal() {
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-local-directory");
+        let directory = root.path().join("中文 directory ; literal");
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = root.path().join("file");
+        std::fs::write(&file, "test").unwrap();
+        let shell = ResolvedLocalShell {
+            program: "custom-shell".into(),
+            args: Vec::new(),
+        };
+        assert!(shell.validate_working_directory(Some(&directory)).is_ok());
+        assert!(shell.validate_working_directory(Some(&file)).is_err());
+        assert!(
+            shell
+                .validate_working_directory(Some(&root.path().join("missing")))
+                .is_err()
+        );
+        assert_eq!(shell.command(Some(&directory)).get_argv().len(), 1);
+    }
 
     #[test]
     fn direct_shell_preserves_explicit_arguments_and_empty_values() {

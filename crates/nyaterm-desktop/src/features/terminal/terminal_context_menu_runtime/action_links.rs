@@ -1,9 +1,11 @@
 use rust_i18n::t;
 
 use gpui::{Context, IntoElement, MouseButton, SharedString, div, prelude::*, px, rgb};
+use nyaterm_core::mac_address::MacAddressFormat;
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable};
 
+use crate::action_links::ActionLinkTarget;
 use crate::features::NyaTermApp;
 
 use super::helpers::{clamp_menu_position, terminal_ctx_item_with_icon};
@@ -17,11 +19,19 @@ impl NyaTermApp {
         let Some(menu) = self.terminal.menus.action_link_menu.clone() else {
             return div().into_any_element();
         };
+        if !self.action_link_source_is_active(&menu.session_id) {
+            return div().into_any_element();
+        }
+        let is_mac = menu
+            .actions
+            .iter()
+            .any(|action| action.mac_format.is_some());
+        let menu_width = if is_mac { 420. } else { 260. };
         let (viewport_w, viewport_h) = self.shell.viewport_size();
         let (menu_x, menu_y) = clamp_menu_position(
             f32::from(menu.x),
             f32::from(menu.y),
-            260.,
+            menu_width,
             360.,
             viewport_w,
             viewport_h,
@@ -53,38 +63,81 @@ impl NyaTermApp {
                             .child(truncate_preview(&menu.value, 42)),
                     ),
             );
-        for action in menu.actions {
-            let command = action.command.clone();
-            let open_url = action.open_url.clone();
-            let label = if action.is_default {
-                format!("{} (default)", action.label)
-            } else {
-                action.label.clone()
-            };
-            items = items.child(terminal_ctx_item_with_icon(
-                palette,
-                format!("action-link-menu-{}", action.id),
-                label,
-                Some(crate::features::icons::IconDef::mono(
-                    if open_url.is_some() {
-                        "icons/conn/connect.svg"
-                    } else {
-                        "icons/fe/forward.svg"
-                    },
-                    palette.text_muted,
-                )),
-                None,
-                cx.listener(move |this, _, _, cx| {
-                    this.close_action_link_menu(cx);
-                    if let Some(url) = open_url.clone() {
-                        this.open_external_url_for_ui(&url, cx);
-                        return;
-                    }
-                    if let Some(command) = command.clone() {
-                        this.execute_action_link_command(command, cx);
-                    }
-                }),
-            ));
+        if is_mac {
+            for (index, format) in MacAddressFormat::ALL.into_iter().enumerate() {
+                let actions = menu
+                    .actions
+                    .iter()
+                    .filter(|action| action.mac_format == Some(format))
+                    .collect::<Vec<_>>();
+                let Some(first) = actions.first() else {
+                    continue;
+                };
+                let text = first.target.text().to_owned();
+                let mut row = div().px_3().py_1().flex().items_center().gap_2().child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_family(crate::features::shell::gpui_code_font_family())
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.text))
+                        .child(text.clone()),
+                );
+                for action in actions {
+                    let target = action.target.clone();
+                    let origin = menu.clone();
+                    let selector = format!("action-link-menu-{}", action.id);
+                    let button = NyaButton::new(
+                        SharedString::from(format!("action-link-menu-{}", action.id)),
+                        action.label.clone(),
+                    )
+                    .small()
+                    .compact()
+                    .variant(NyaButtonVariant::Ghost)
+                    .tooltip(format!("{} {text}", action.label))
+                    .when(
+                        index == 0 && matches!(action.target, ActionLinkTarget::CopyText(_)),
+                        |button| button.autofocus(),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.execute_action_link_menu_action(&origin, target.clone(), window, cx);
+                    }));
+                    row = row.child(
+                        div()
+                            .flex_none()
+                            .debug_selector(move || selector.clone())
+                            .child(button),
+                    );
+                }
+                items = items.child(row);
+            }
+        } else {
+            for action in &menu.actions {
+                let target = action.target.clone();
+                let origin = menu.clone();
+                let label = if action.is_default {
+                    format!("{} (default)", action.label)
+                } else {
+                    action.label.clone()
+                };
+                items = items.child(terminal_ctx_item_with_icon(
+                    palette,
+                    format!("action-link-menu-{}", action.id),
+                    label,
+                    Some(crate::features::icons::IconDef::mono(
+                        if matches!(target, ActionLinkTarget::OpenUrl(_)) {
+                            "icons/conn/connect.svg"
+                        } else {
+                            "icons/fe/forward.svg"
+                        },
+                        palette.text_muted,
+                    )),
+                    None,
+                    cx.listener(move |this, _, window, cx| {
+                        this.execute_action_link_menu_action(&origin, target.clone(), window, cx);
+                    }),
+                ));
+            }
         }
         div()
             .id(SharedString::from("action-link-menu-overlay"))
@@ -95,29 +148,31 @@ impl NyaTermApp {
             .right_0()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.close_action_link_menu(cx);
+                cx.listener(|this, _, window, cx| {
+                    this.dismiss_action_link_menu(window, cx);
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, _, _, cx| {
-                    this.close_action_link_menu(cx);
+                cx.listener(|this, _, window, cx| {
+                    this.dismiss_action_link_menu(window, cx);
                 }),
             )
             .child(
                 div()
                     .id(SharedString::from("action-link-menu"))
+                    .debug_selector(|| "action-link-menu".into())
                     .absolute()
                     .top(px(menu_y))
                     .left(px(menu_x))
-                    .w(px(260.))
+                    .w(px(menu_width))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(self.shell_surface_color(palette.surface))
                     .shadow_lg()
-                    .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(items),
             )

@@ -144,3 +144,40 @@ fn powershell_echo_confirms_cursor_delete_replace_paste_and_soft_wrap() {
     assert_eq!(input.cursor, 5);
     shell.manager.write(&shell.id, b"\x03").unwrap();
 }
+
+#[test]
+#[ignore = "requires Windows ConPTY and an interactive PowerShell with PSReadLine"]
+fn powershell_confirms_a_plain_suffix_without_executing_the_command() {
+    let manager = SessionManager::new();
+    let info = manager.create_local_session(LocalSessionConfig {
+        shell_path: Some("powershell.exe".into()),
+        shell_args: vec!["-NoLogo".into(), "-NoProfile".into(), "-NoExit".into(), "-Command".into(),
+            "Import-Module PSReadLine; Set-PSReadLineOption -HistorySaveStyle SaveNothing; function prompt { 'NYA> ' }; Clear-Host".into()],
+        cols: 80,
+        rows: 12,
+        ..LocalSessionConfig::default()
+    }).expect("start isolated PowerShell");
+    let mut shell = Shell {
+        manager,
+        id: info.id,
+        screen: TerminalScreen::new(80, 12),
+    };
+    shell.wait_for(|screen| {
+        let snapshot = screen.snapshot();
+        snapshot
+            .line(snapshot.cursor.row)
+            .is_some_and(|line| line.trim() == "NYA>")
+    });
+    let initial = "Write-Out";
+    let target = "Write-Output 'NYATERM_SUFFIX_TEST'";
+    shell.manager.write(&shell.id, initial.as_bytes()).unwrap();
+    shell.wait_for(|screen| resolve_input(&screen.snapshot(), initial, initial.len()).is_some());
+    // The desktop TCP tests validate this is the only emitted payload. This
+    // real-shell test validates that the suffix remains an unsubmitted buffer.
+    shell
+        .manager
+        .write(&shell.id, target.strip_prefix(initial).unwrap().as_bytes())
+        .unwrap();
+    shell.wait_for(|screen| resolve_input(&screen.snapshot(), target, target.len()).is_some());
+    shell.manager.write(&shell.id, b"\x03").unwrap();
+}

@@ -557,6 +557,7 @@ impl NyaTermApp {
                     "connection-editor-ssh-terminal-type" => {
                         ConnectionEditorSelect::SshTerminalType
                     }
+                    "connection-editor-rdp-backend" => ConnectionEditorSelect::RdpBackend,
                     "connection-editor-rdp-certificate-policy" => {
                         ConnectionEditorSelect::RdpCertificatePolicy
                     }

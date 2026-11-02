@@ -36,6 +36,7 @@ struct ImportCommand {
     icon_tag: Option<String>,
     pinned: Option<bool>,
     execution_mode: Option<String>,
+    raw_send: Option<bool>,
     source: Option<String>,
     risk_level: Option<RiskLevel>,
     sort_order: Option<i32>,

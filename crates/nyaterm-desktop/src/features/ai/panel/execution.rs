@@ -70,11 +70,12 @@ impl AiExecutionGroup {
             }) || steps.iter().any(|index| {
                 snapshot.agent_steps[*index].step.kind != AiAgentStepKind::FinalAnswer
             }) || (end == snapshot.messages.len()
-                && snapshot.native_run.as_ref().is_some_and(|view| {
-                    !view.plan.tasks.is_empty()
-                        || !view.questions.is_empty()
-                        || view.verification.is_some()
-                }));
+                && (!snapshot.native_approvals.is_empty()
+                    || snapshot.native_run.as_ref().is_some_and(|view| {
+                        !view.plan.tasks.is_empty()
+                            || !view.questions.is_empty()
+                            || view.verification.is_some()
+                    })));
             if has_execution && !range.is_empty() {
                 let final_message = range
                     .clone()

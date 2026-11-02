@@ -1941,3 +1941,113 @@ fn retained_snapshot_from_before_history_rotation_is_not_painted() {
     assert!(!terminal_retained_snapshot_matches_view(&old, &view, 3, 3));
     assert!(terminal_paint_window_snapshot_for_view(Some(&view), 3, 3, Some(old)).is_none());
 }
+
+#[test]
+fn cached_mouse_drag_targets_cannot_bypass_target_exclusion() {
+    use super::TerminalMouseReportRequest;
+    use crate::models::SessionLaunchConfig;
+    use nyaterm_transport::TelnetSessionConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    let root = TestConfigDir::new("nyaterm-sync-mouse-exclusion");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (manager, ids) = cx.update_entity(&app, |app, _| {
+        let manager = app.session.manager_handle();
+        let metadata = app.session.metadata("fixture").unwrap().clone();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let config = TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                raw_tcp: true,
+                ..Default::default()
+            };
+            let info = manager.create_telnet_session(config.clone()).unwrap();
+            let mut metadata = metadata.clone();
+            metadata.launch_config = SessionLaunchConfig::Telnet(config);
+            app.session.register_session_metadata(&info.id, metadata);
+            app.terminal
+                .seed_session_view(info.id.clone(), String::new(), "UTF-8");
+            ids.push(info.id);
+        }
+        app.session.metadata_mut("fixture").unwrap().disconnected = true;
+        app.session.select_active_session(&ids[0]);
+        (manager, ids)
+    });
+    let mut streams = (0..2)
+        .map(|_| {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+        })
+        .collect::<Vec<_>>();
+    cx.update_entity(&app, |app, cx| {
+        app.sync_input.toggle_broadcast_to_all();
+        let mut settings = app.settings.summary().clone();
+        settings.interaction_mouse_events_require_alt = false;
+        app.settings.replace_summary(settings);
+        for id in &ids {
+            let protocol = &mut app.terminal.view.views.get_mut(id).unwrap().protocol_state;
+            protocol.mouse_reporting = true;
+            protocol.mouse_sgr = true;
+            protocol.mouse_drag_reporting = true;
+        }
+        let source = &ids[0];
+        assert!(app.maybe_send_mouse_report_for_session(
+            TerminalMouseReportRequest {
+                session_id: source,
+                button: 0,
+                col: 1,
+                row: 1,
+                press: true,
+                motion: false,
+                modifiers: Default::default()
+            },
+            cx
+        ));
+        assert_eq!(
+            app.terminal.selection.mouse_report_peer_session_ids,
+            [ids[1].clone()]
+        );
+        app.set_sessions_receive_sync_input(&[ids[1].clone()], false, cx);
+        assert!(app.maybe_send_mouse_report_for_session(
+            TerminalMouseReportRequest {
+                session_id: source,
+                button: 0,
+                col: 2,
+                row: 2,
+                press: true,
+                motion: true,
+                modifiers: Default::default()
+            },
+            cx
+        ));
+        assert!(app.maybe_send_mouse_report_for_session(
+            TerminalMouseReportRequest {
+                session_id: source,
+                button: 0,
+                col: 2,
+                row: 2,
+                press: false,
+                motion: false,
+                modifiers: Default::default()
+            },
+            cx
+        ));
+        app.write_session_protocol_response(&ids[1], b"END")
+            .unwrap();
+    });
+    let expected = b"\x1b[<0;2;2MEND";
+    let mut actual = vec![0; expected.len()];
+    streams[1].read_exact(&mut actual).unwrap();
+    assert_eq!(actual, expected);
+    for id in ids {
+        let _ = manager.close(&id);
+    }
+}

@@ -538,6 +538,7 @@ pub(crate) fn terminal_action_link_matcher_key(
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     enabled.hash(&mut hasher);
+    matchers.mac.hash(&mut hasher);
     matchers.ipv4.hash(&mut hasher);
     matchers.archive.hash(&mut hasher);
     matchers.host_port.hash(&mut hasher);
@@ -703,6 +704,10 @@ fn merge_terminal_effects(target: &mut TerminalEffects, mut incoming: TerminalEf
 }
 
 pub(crate) struct TerminalViewState {
+    /// Bounded tail of decoded session output, control sequences included.
+    /// Kept current for every session whatever its visibility or render mode:
+    /// AI context, MCP recent output, and CLI prompt detection read it, and
+    /// none of them can wait on the frame worker's grid.
     pub(crate) output: String,
     pub(crate) screen: TerminalScreen,
     pub(crate) max_line_number_digits: usize,
@@ -1177,11 +1182,7 @@ impl TerminalViewState {
             skipped_output_bytes,
             revision,
         } = parts;
-        // UI output tail is only used for copy/export helpers. Skip rebuilding a
-        // large String during output pressure / degraded paint so frame apply stays cheap.
-        if !visible_text.is_empty() && !self.render_degraded {
-            append_terminal_ui_output_tail(&mut self.output, visible_text);
-        }
+        append_terminal_ui_output_tail(&mut self.output, visible_text);
         let previous_history = self.history_state();
         self.observe_line_number_digits(&snapshot);
         let preserved_action_links = action_links.or_else(|| {
@@ -1234,12 +1235,16 @@ impl TerminalViewState {
 
     pub(crate) fn apply_terminal_background_frame_parts(
         &mut self,
+        visible_text: &str,
         snapshot: Option<Arc<TerminalSnapshot>>,
         action_links: Option<TerminalFrameActionLinks>,
         protocol_state: TerminalProtocolState,
         skipped_output_bytes: usize,
         revision: u64,
     ) {
+        // Paint work can wait for visibility; the output tail cannot, because
+        // AI context and MCP read it for sessions that are not on screen.
+        append_terminal_ui_output_tail(&mut self.output, visible_text);
         let previous_history = self.history_state();
         let has_snapshot = snapshot.is_some();
         // Hidden sessions keep protocol/revision current without retaining a full

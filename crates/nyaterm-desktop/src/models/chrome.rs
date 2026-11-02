@@ -121,6 +121,7 @@ pub(crate) struct QuickCommandEditorState {
     pub(crate) icon_tag: Option<String>,
     pub(crate) pinned: bool,
     pub(crate) execution_mode: String,
+    pub(crate) raw_send: bool,
     pub(crate) error: Option<String>,
     /// Which field the error belongs to. `None` is a general error, which the
     /// dialog shows in its own box instead of beside a caption.
@@ -204,6 +205,7 @@ impl QuickCommandEditorState {
             icon_tag: None,
             pinned: false,
             execution_mode: "execute".to_string(),
+            raw_send: false,
             error: None,
             error_field: None,
         }
@@ -243,6 +245,7 @@ impl QuickCommandEditorState {
             color_tag: command.color_tag.clone(),
             icon_tag: command.icon_tag.clone(),
             pinned: command.pinned.unwrap_or_default(),
+            raw_send: command.raw_send.unwrap_or_default(),
             execution_mode: command
                 .execution_mode
                 .clone()

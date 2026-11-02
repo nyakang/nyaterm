@@ -62,7 +62,10 @@ pub use input::{
     NyaSearchInput, NyaTextArea, set_nya_input_label_provider,
 };
 pub use markdown::NyaMarkdown;
-pub use menu::{NyaContextMenu, NyaDropdownMenu, NyaMenuAnchor, NyaMenuItem};
+pub use menu::{
+    NyaContextMenu, NyaDropdownMenu, NyaMenuAnchor, NyaMenuItem, nya_popup_is_active,
+    nya_popup_menu_is_active,
+};
 pub use number_input::{
     NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,
 };

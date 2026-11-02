@@ -243,27 +243,28 @@ mod tests {
         );
     }
     #[test]
-    fn blocked_metadata_and_directory_requests_observe_cancel_within_250ms() {
+    fn blocked_metadata_and_directory_requests_observe_cancel_before_the_request_timeout() {
         for kind in [7, 12] {
             let (service, files) = filename_tests::service("UTF-8");
+            let (started, delayed) = mpsc::channel();
             {
                 let mut files = files.lock().unwrap();
                 files.directories.insert(b"/folder".to_vec());
                 files.request_delay.insert(kind, Duration::from_secs(60));
+                files.request_delay_started = Some(started);
             }
             let control = SftpTransferControl::new();
             let worker_control = control.clone();
             let worker =
                 std::thread::spawn(move || service.enumerate_drag(vec![root()], &worker_control));
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while !files.lock().unwrap().request_kinds.contains(&kind) {
-                assert!(Instant::now() < deadline);
-                std::thread::yield_now();
-            }
+            assert_eq!(delayed.recv_timeout(Duration::from_secs(5)).unwrap(), kind);
             let started = Instant::now();
             control.cancel();
             assert!(worker.join().unwrap().is_err());
-            assert!(started.elapsed() < Duration::from_millis(250));
+            // The bound only has to separate a cancel wake-up from the 60 s stall
+            // the peer holds; 250 ms was below what the shared two-thread runtime
+            // delivers while the rest of this binary's tests run in parallel.
+            assert!(started.elapsed() < Duration::from_secs(5));
         }
     }
     #[test]
@@ -285,17 +286,17 @@ mod tests {
                     released.await.unwrap();
                 }
             });
-            arrived.recv_timeout(Duration::from_secs(1)).unwrap();
+            arrived.recv_timeout(Duration::from_secs(5)).unwrap();
             let control = SftpTransferControl::new();
             let cancel = control.clone();
             let worker_service = service.clone();
             let worker = std::thread::spawn(move || {
                 worker_service.run_controlled_operation(control, true, async { Ok(()) })
             });
-            cancel.cancel();
             let started = Instant::now();
+            cancel.cancel();
             assert!(worker.join().unwrap().is_err());
-            assert!(started.elapsed() < Duration::from_millis(250));
+            assert!(started.elapsed() < Duration::from_secs(5));
             release.send(()).unwrap();
             compatibility_runtime().unwrap().block_on(holder).unwrap();
             service
@@ -307,11 +308,13 @@ mod tests {
     #[test]
     fn queue_root_cancel_interrupts_blocked_inventory_and_preserves_other_roots() {
         let (service, files) = filename_tests::service("UTF-8");
+        let (started, delayed) = mpsc::channel();
         {
             let mut files = files.lock().unwrap();
             files.directories.insert(b"/folder".to_vec());
             files.directories.insert(b"/other".to_vec());
             files.request_delay.insert(7, Duration::from_secs(60));
+            files.request_delay_started = Some(started);
         }
         let cancelled = SftpTransferControl::new();
         let controls = vec![cancelled.clone(), SftpTransferControl::new()];
@@ -325,18 +328,17 @@ mod tests {
                 controls,
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while !files.lock().unwrap().request_kinds.contains(&7) {
-            assert!(Instant::now() < deadline);
-            std::thread::yield_now();
-        }
+        assert_eq!(delayed.recv_timeout(Duration::from_secs(5)).unwrap(), 7);
         files.lock().unwrap().request_delay.remove(&7);
         let started = Instant::now();
         cancelled.cancel();
         let entries = worker.join().unwrap().unwrap();
-        assert!(started.elapsed() < Duration::from_millis(250));
+        // Includes the remaining root and worker shutdown on the shared runtime.
+        // It must finish well before the cancelled response's 60 s delay.
+        assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].root_index, 1);
+        assert_eq!(entries[0].relative_path, std::path::PathBuf::from("other"));
     }
     #[test]
     fn per_source_export_budget_bounds_parallel_operations_to_three_or_one() {

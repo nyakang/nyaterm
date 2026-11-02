@@ -174,7 +174,7 @@ impl NyaTermApp {
         .detach();
     }
 
-    fn finish_security_unlock(
+    pub(in crate::features) fn finish_security_unlock(
         &mut self,
         request_id: u64,
         generation: u64,
@@ -256,6 +256,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         match action {
+            SecurityUnlockAction::RevealConnectionPassword {
+                editor_generation,
+                revision,
+            } => {
+                self.reveal_connection_password_after_unlock((editor_generation, revision), cx);
+            }
             SecurityUnlockAction::SubmitSshAuthentication(id) => {
                 if self
                     .session

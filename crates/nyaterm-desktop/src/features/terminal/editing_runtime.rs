@@ -27,6 +27,7 @@ impl NyaTermApp {
             return;
         };
         self.terminal.editing.activate(&id);
+        self.terminal.editing.state_mut().suggestion_fill = None;
         if self.active_terminal_uses_alternate_screen()
             || self.is_credential_prompt_input_mode()
             || self.terminal.assist.credential_suggestions.is_some()
@@ -130,6 +131,8 @@ impl NyaTermApp {
             return;
         };
         let version = self.terminal.editing.state_mut().model.version;
+        let confirmation_id = self.terminal.editing.allocate_confirmation_id();
+        self.terminal.editing.state_mut().confirmation_id = confirmation_id;
         let task = cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(EDIT_CONFIRMATION_TIMEOUT)
@@ -137,12 +140,17 @@ impl NyaTermApp {
             let _ = this.update(cx, |this, cx| {
                 if let Some(state) = this.terminal.editing.sessions.get_mut(&id)
                     && state.model.version == version
+                    && state.confirmation_id == confirmation_id
                     && state.model.expire(Instant::now())
                 {
+                    let suggestion_expired = state.suggestion_fill.take().is_some();
                     state.mapping = None;
                     state.selection = None;
                     if this.session.active_id() == Some(id.as_str()) {
                         this.dismiss_command_suggestions(cx);
+                        if suggestion_expired {
+                            this.shell.set_status("Suggestion confirmation timed out; inspect the input before executing");
+                        }
                     }
                     cx.notify();
                 }
@@ -178,6 +186,7 @@ impl NyaTermApp {
             return;
         };
         let geometry = (snapshot.cols, snapshot.viewport_rows, line_id.epoch);
+        let sync_revision = self.sync_input.revision();
         let shell_session = self.session.metadata(id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -186,6 +195,7 @@ impl NyaTermApp {
             )
         });
         let state = self.terminal.editing.state_mut();
+        state.cancel_stale_suggestion_fill(Instant::now(), sync_revision);
         if state.awaiting_snapshot {
             return;
         }
@@ -209,6 +219,7 @@ impl NyaTermApp {
         }
         state.observed_anchor = Some(snapshot.shell_input_anchor);
         if state.model.expire(Instant::now()) {
+            state.suggestion_fill = None;
             state.mapping = None;
             state.selection = None;
         }
@@ -291,6 +302,15 @@ impl NyaTermApp {
             };
             state.model.confirm()
         } else {
+            // An incomplete or different redraw cannot acknowledge this
+            // suggestion. Ordinary typing reconciliation may continue, but the
+            // cancelled request must never be revived by a later matching frame.
+            if state.suggestion_fill.take().is_some() {
+                self.shell.set_status(
+                    "Suggestion echo is not confirmed; inspect the input before executing",
+                );
+                cx.notify();
+            }
             if state.model.phase == EditPhase::Ready {
                 state.invalidate();
             }
@@ -298,6 +318,21 @@ impl NyaTermApp {
         };
         if let Some(target) = queued {
             let _ = self.move_smart_input_cursor(target, cx);
+        }
+        if let Some(execute_requested) = self
+            .terminal
+            .editing
+            .state_mut()
+            .take_confirmed_suggestion_fill(Instant::now(), sync_revision)
+        {
+            // Echo proves the fill only. No current capability proves that the
+            // foreground program would interpret a synthetic Enter as intended.
+            self.shell.set_status(if execute_requested {
+                "Suggestion confirmed; press Enter again to execute"
+            } else {
+                "Suggestion fill confirmed"
+            });
+            cx.notify();
         }
     }
 }

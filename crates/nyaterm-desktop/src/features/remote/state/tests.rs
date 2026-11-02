@@ -444,6 +444,7 @@ fn stats_owner_reduces_matching_success_failure_and_stale_events() {
     stats.system.hostname = "host-a".to_string();
     let outcome = state.apply_stats_event(
         StatsJobResult {
+            users_revision: 0,
             job_id: ticket.job_id,
             session_id: "session-a".to_string(),
             result: Ok(stats),
@@ -459,6 +460,7 @@ fn stats_owner_reduces_matching_success_failure_and_stale_events() {
     assert!(matches!(
         state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: ticket.job_id,
                 session_id: "session-a".to_string(),
                 result: Err("stale".to_string()),
@@ -472,6 +474,7 @@ fn stats_owner_reduces_matching_success_failure_and_stale_events() {
         let ticket = state.begin_stats_job("session-a".to_string(), false);
         let outcome = state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: ticket.job_id,
                 session_id: "session-a".to_string(),
                 result: Err(format!("failure-{failure}")),
@@ -509,6 +512,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
         assert!(matches!(
             state.apply_stats_event(
                 StatsJobResult {
+                    users_revision: 0,
                     job_id: ticket.job_id,
                     session_id: "session-a".to_string(),
                     result: Ok(stats(rate as f64)),
@@ -527,6 +531,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
     assert!(matches!(
         state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: ticket.job_id,
                 session_id: "session-b".to_string(),
                 result: Ok(stats(100.0)),
@@ -569,6 +574,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
     assert!(matches!(
         state.apply_stats_event(
             StatsJobResult {
+                users_revision: 0,
                 job_id: stale.job_id,
                 session_id: "session-a".into(),
                 result: Ok(stats(999.0))

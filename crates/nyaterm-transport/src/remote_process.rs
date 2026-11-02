@@ -350,7 +350,7 @@ pub(crate) async fn exec_ssh_command(
     timeout: Duration,
 ) -> anyhow::Result<RemoteCommandOutput> {
     tokio::time::timeout(timeout, async move {
-        config.attempt.ensure_shell_available()?;
+        config.ensure_shell_available()?;
         let (handle, jump_handles) = open_authenticated_ssh_handle(&config).await?;
         let channel = open_exec_channel_on_handle(&handle, command).await?;
         let output = collect_exec_channel(channel, &config.attempt).await?;
@@ -375,9 +375,11 @@ pub(crate) fn run_ssh_command(
     command: Vec<u8>,
     timeout: Duration,
 ) -> anyhow::Result<RemoteCommandOutput> {
+    config.ensure_shell_available()?;
     if let Some(multiplex) = multiplex {
         multiplex.ensure_matches_config(&config)?;
         return multiplex.block_on(exec_ssh_command_with_multiplex(
+            config,
             multiplex.clone(),
             command,
             timeout,
@@ -394,6 +396,7 @@ pub(crate) fn run_ssh_command_with_input(
     input: Option<nyaterm_core::SecretString>,
     timeout: Duration,
 ) -> anyhow::Result<RemoteCommandOutput> {
+    config.ensure_shell_available()?;
     let attempt = multiplex
         .as_ref()
         .map(|m| &m.inner.attempt)
@@ -450,11 +453,13 @@ pub(crate) fn run_ssh_command_with_input(
 }
 
 pub(crate) async fn exec_ssh_command_with_multiplex(
+    config: SshSessionConfig,
     multiplex: SshMultiplexHandle,
     command: Vec<u8>,
     timeout: Duration,
 ) -> anyhow::Result<RemoteCommandOutput> {
     tokio::time::timeout(timeout, async move {
+        config.ensure_shell_available()?;
         multiplex.inner.attempt.ensure_shell_available()?;
         let handle = multiplex.exec_target_handle().await;
         let channel = {

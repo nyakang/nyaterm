@@ -151,7 +151,7 @@ fn toggle_child_window_zoom(window: &mut Window, _cx: &mut App) {
     window.zoom_window();
 }
 
-/// The 40px bar every child window draws in place of a native title bar.
+/// The 40px child-window header, omitted when Linux supplies a system title bar.
 ///
 /// Which controls appear is read off the window itself rather than passed in, so
 /// a window cannot end up offering a button the platform will ignore -- or, worse,
@@ -165,9 +165,12 @@ pub(in crate::features) fn child_window_header(
     window: &mut Window,
     cx: &mut App,
     on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let title = title.into();
+) -> AnyElement {
     let policy = WindowChrome::child(window, chrome == ChildWindowChrome::Sheet);
+    if !policy.show_child_header {
+        return div().size_0().into_any_element();
+    }
+    let title = title.into();
     div()
         .h(px(40.))
         .flex_none()
@@ -260,6 +263,7 @@ pub(in crate::features) fn child_window_header(
                     ))
                 }),
         )
+        .into_any_element()
 }
 
 pub(in crate::features) fn child_window_titlebar(

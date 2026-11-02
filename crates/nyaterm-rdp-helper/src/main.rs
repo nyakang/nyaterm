@@ -45,8 +45,14 @@ const CLIPBOARD_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_millis(750);
 const STDOUT_BUFFER_BYTES: usize = 256 * 1024;
 
 enum Outbound {
-    Control(RdpControlMessage),
+    Control(Box<RdpControlMessage>),
     Packet(Packet),
+}
+
+impl Outbound {
+    fn control(message: RdpControlMessage) -> Self {
+        Self::Control(Box::new(message))
+    }
 }
 
 #[derive(Default)]
@@ -207,6 +213,16 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                 hello_received = true;
             }
             RdpControlMessage::Connect { session_id, config } => {
+                if config.backend != nyaterm_remote_desktop::RdpBackend::Builtin {
+                    send_error(
+                        &output_tx,
+                        &session_id,
+                        RdpErrorKind::Unsupported,
+                        "The IronRDP helper only supports the built-in backend",
+                        true,
+                    )?;
+                    continue;
+                }
                 if let Some(error) = provider_error.as_deref() {
                     send_error(&output_tx, &session_id, RdpErrorKind::Protocol, error, true)?;
                     return Ok(());
@@ -574,7 +590,7 @@ fn build_config(
             };
             let _ = validation_error;
             if certificate_output_tx
-                .send(Outbound::Control(RdpControlMessage::CertificateRequest(
+                .send(Outbound::control(RdpControlMessage::CertificateRequest(
                     request,
                 )))
                 .is_err()
@@ -637,9 +653,10 @@ fn build_config(
     // Options are what separate "the graphics pipeline was never asked for" from
     // "the server refused it" when a log is all you have.
     eprintln!(
-        "RDP session options width={} height={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
+        "RDP session options width={} height={} scale={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
         config.display.width,
         config.display.height,
+        config.display.desktop_scale_factor,
         color_depth,
         u8::from(config.display.graphics_pipeline),
         u8::from(gfx_effective),
@@ -685,6 +702,13 @@ fn build_config(
         .with_clipboard(ClipboardType::Disable);
     if clipboard_enabled {
         builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
+    }
+    // Zero means the caller had no panel-derived scale to ask for, which is what
+    // a fixed-size connection and every pre-existing saved connection send.
+    // Negotiating the scale together with the size is what keeps the desktop from
+    // being re-negotiated a moment after the session is up.
+    if (100..=500).contains(&config.display.desktop_scale_factor) {
+        builder = builder.with_desktop_scale_factor(config.display.desktop_scale_factor);
     }
     if let Some(relay) = &config.relay {
         relay.validate().map_err(anyhow::Error::msg)?;
@@ -890,7 +914,7 @@ fn forward_desktop_update(
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(reason) => {
-            let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+            let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
                 session_id: session_id.to_string(),
                 error: RdpError::new(RdpErrorKind::Protocol, reason),
                 fatal: true,
@@ -902,7 +926,7 @@ fn forward_desktop_update(
 
     if let Some((epoch, width, height)) = prepared.reset {
         output_tx
-            .send(Outbound::Control(RdpControlMessage::DesktopReset {
+            .send(Outbound::control(RdpControlMessage::DesktopReset {
                 session_id: session_id.to_string(),
                 epoch,
                 width,
@@ -912,7 +936,7 @@ fn forward_desktop_update(
         if !*connected {
             *connected = true;
             output_tx
-                .send(Outbound::Control(RdpControlMessage::State {
+                .send(Outbound::control(RdpControlMessage::State {
                     session_id: session_id.to_string(),
                     state: RdpSessionState::Connected,
                     message: None,
@@ -982,7 +1006,7 @@ async fn forward_output(
                             .reset(tokio::time::Instant::now() + connection_timeout);
                         continue;
                     }
-                    let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+                    let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
                         session_id: session_id.clone(),
                         error: RdpError::new(
                             RdpErrorKind::Timeout,
@@ -1041,7 +1065,7 @@ async fn forward_output(
             // resize; the reconnect surfaces through the ordinary state events. The
             // reason is not carried over the IPC protocol, which has no field for it.
             RdpOutputEvent::DisplayResizeFallback(_reason) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Capability {
+                .send(Outbound::control(RdpControlMessage::Capability {
                     session_id: session_id.clone(),
                     capability: RdpCapability::DynamicResizeUnavailable,
                 }))
@@ -1130,33 +1154,34 @@ async fn forward_output(
                 Ok(())
             })(),
             RdpOutputEvent::ConnectionFailure(error) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
-                    error: classify_error(error.to_string(), RdpErrorKind::Transport),
+                    // A refusal during the connection sequence is the server's decision, so
+                    // it is reported as a negotiation failure and left to manual retry.
+                    error: classify_failure(&error, RdpErrorKind::Negotiation),
                     fatal: true,
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Ok(reason)) if connected => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
-                    error: RdpError::new(
-                        RdpErrorKind::Session,
-                        format!("active RDP session terminated: {reason:?}"),
-                    ),
+                    // The reason alone: the application prefixes every RDP error with its
+                    // category, which already says the session was terminated.
+                    error: RdpError::new(RdpErrorKind::Session, reason.description()),
                     fatal: true,
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Ok(reason)) => output_tx
-                .send(Outbound::Control(RdpControlMessage::State {
+                .send(Outbound::control(RdpControlMessage::State {
                     session_id: session_id.clone(),
                     state: RdpSessionState::Disconnected,
-                    message: Some(format!("{reason:?}")),
+                    message: Some(reason.description()),
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Err(error)) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
-                    error: classify_error(error.to_string(), RdpErrorKind::Session),
+                    error: classify_failure(&error, RdpErrorKind::Session),
                     fatal: true,
                 }))
                 .map_err(|_| ()),
@@ -1322,7 +1347,9 @@ fn rgba_to_bgra(mut pixels: Vec<u8>) -> Vec<u8> {
 fn rgb_u32_to_bgra(pixels: Vec<u32>) -> Vec<u8> {
     let mut bgra = Vec::with_capacity(pixels.len().saturating_mul(4));
     for pixel in pixels {
-        bgra.extend_from_slice(&[pixel as u8, (pixel >> 8) as u8, (pixel >> 16) as u8, 0xff]);
+        // The source is 0x00RRGGBB; adding the alpha byte turns little-endian
+        // storage into the B, G, R, A byte order GPUI expects.
+        bgra.extend_from_slice(&((pixel & 0x00ff_ffff) | 0xff00_0000).to_le_bytes());
     }
     bgra
 }
@@ -1434,12 +1461,81 @@ fn classify_error(message: String, fallback: RdpErrorKind) -> RdpError {
     RdpError::new(kind, message)
 }
 
+/// Classifies an error that ended the session or prevented it from starting.
+///
+/// The reconnect policy turns on this one decision, so it must not rest on message text
+/// alone: IronRDP renders a transport failure as `[read frame] custom error`, and the
+/// Windows socket code for an aborted connection ("An existing connection was forcibly
+/// closed by the remote host") matches none of [`classify_error`]'s keywords. Only a chain
+/// that reaches an I/O failure says the connection was actually lost, so only that is
+/// allowed to produce a reconnectable kind; `non_transport` is what the caller reports for
+/// everything else, which the application deliberately does not retry.
+fn classify_failure(
+    error: &(dyn std::error::Error + 'static),
+    non_transport: RdpErrorKind,
+) -> RdpError {
+    let message = error_chain(error);
+    if is_transport_failure(error) {
+        refine_transport_kind(classify_error(message, RdpErrorKind::Transport))
+    } else {
+        classify_error(message, non_transport)
+    }
+}
+
+/// Keeps a confirmed transport failure inside the connection-level kinds.
+///
+/// [`classify_error`] matches `logon`, `x224` and `cliprdr` before it reaches its
+/// transport keywords, and the application never reconnects for the kinds those produce.
+/// Once the chain has been shown to reach an I/O failure, a sharper label is welcome but
+/// a kind that closes the session for good is not: it would turn a lost connection into a
+/// desktop that silently stays down.
+fn refine_transport_kind(error: RdpError) -> RdpError {
+    match error.kind {
+        RdpErrorKind::Timeout | RdpErrorKind::ConnectionRefused | RdpErrorKind::Tls => error,
+        _ => RdpError::new(RdpErrorKind::Transport, error.message),
+    }
+}
+
+/// True when the error chain reaches an I/O failure, which is the transport dying rather
+/// than the server or the protocol.
+///
+/// A decode failure also surfaces through the frame reader as an `io::Error`, and
+/// reconnecting would fail on the same bytes, so it is excluded. This mirrors IronRDP's
+/// own `is_transport_read_error`, which is private.
+fn is_transport_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(io_error) = error.downcast_ref::<io::Error>() {
+            return !io_error
+                .get_ref()
+                .is_some_and(|cause| cause.is::<ironrdp_core::DecodeError>());
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Renders an error with its whole cause chain.
+///
+/// IronRDP's `Display` stops at the outermost context, so the cause -- the text that
+/// actually says what went wrong -- is otherwise lost before it reaches the application.
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut chain = error.to_string();
+    let mut current = error.source();
+    while let Some(cause) = current {
+        chain.push_str(", caused by: ");
+        chain.push_str(&cause.to_string());
+        current = cause.source();
+    }
+    chain
+}
+
 fn send_control(
     output_tx: &mpsc::SyncSender<Outbound>,
     message: RdpControlMessage,
 ) -> anyhow::Result<()> {
     output_tx
-        .send(Outbound::Control(message))
+        .send(Outbound::control(message))
         .map_err(|_| anyhow::anyhow!("RDP stdout writer stopped"))
 }
 
@@ -1474,7 +1570,7 @@ fn report_ironrdp_panic(
     };
     let detail = detail.replace(['\r', '\n'], " ");
     let detail = detail.chars().take(512).collect::<String>();
-    let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+    let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
         session_id: session_id.to_string(),
         error: RdpError::new(
             RdpErrorKind::HelperCrashed,
@@ -1486,17 +1582,19 @@ fn report_ironrdp_panic(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::num::NonZeroU16;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, build_config,
-        classify_error, convert_and_send_input, convert_input, desktop_update_payload,
-        forward_full_frame_request, forward_output, graphics_pipeline_effective,
-        install_crypto_provider, output_channel, performance_flags_bits, report_ironrdp_panic,
-        secure_attention_input, send_iron_input, send_reliable_iron_input,
-        validate_active_session_id, validate_input_events,
+        classify_error, classify_failure, convert_and_send_input, convert_input,
+        desktop_update_payload, error_chain, forward_full_frame_request, forward_output,
+        graphics_pipeline_effective, install_crypto_provider, is_transport_failure, output_channel,
+        performance_flags_bits, report_ironrdp_panic, rgb_u32_to_bgra, secure_attention_input,
+        send_iron_input, send_reliable_iron_input, validate_active_session_id,
+        validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
@@ -1511,6 +1609,14 @@ mod tests {
     };
 
     #[test]
+    fn rgb_pixels_convert_to_bgra_bytes_with_an_opaque_alpha() {
+        assert_eq!(
+            rgb_u32_to_bgra(vec![0x0012_3456, 0x00ab_cdef]),
+            vec![0x56, 0x34, 0x12, 0xff, 0xef, 0xcd, 0xab, 0xff]
+        );
+    }
+
+    #[test]
     fn active_session_id_rejects_foreign_messages() {
         validate_active_session_id(None, "before-connect")
             .expect("pre-connect handling keeps its existing semantics");
@@ -1523,6 +1629,8 @@ mod tests {
     fn helper_config() -> RdpSessionConfig {
         RdpSessionConfig {
             relay: None,
+            backend: Default::default(),
+            windows_authentication: None,
             name: "test".to_string(),
             host: "server.example".to_string(),
             port: 3389,
@@ -1604,7 +1712,9 @@ mod tests {
         // failing so that the test never leaves a certificate-waiting thread behind.
         let completed = result_rx.recv_timeout(Duration::from_secs(5));
         let unexpected = output_rx.try_recv();
-        if let Ok(Outbound::Control(RdpControlMessage::CertificateRequest(request))) = &unexpected {
+        if let Ok(Outbound::Control(message)) = &unexpected
+            && let RdpControlMessage::CertificateRequest(request) = message.as_ref()
+        {
             *gate.response.lock().unwrap() = Some((
                 request.request_id.clone(),
                 nyaterm_remote_desktop::RdpCertificateResponse::Reject,
@@ -1622,9 +1732,11 @@ mod tests {
         let worker = std::thread::spawn(move || {
             callback(b"test-certificate", "server.example:3389", "untrusted")
         });
-        let Outbound::Control(RdpControlMessage::CertificateRequest(request)) =
-            output_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        let Outbound::Control(message) = output_rx.recv_timeout(Duration::from_secs(5)).unwrap()
         else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::CertificateRequest(request) = *message else {
             panic!("expected a certificate prompt for the configured host");
         };
         assert_eq!(request.host, "server.example");
@@ -1672,6 +1784,180 @@ mod tests {
         );
     }
 
+    /// Stands in for IronRDP's session error: the cause is only reachable through the
+    /// source chain, and `Display` renders the context alone.
+    #[derive(Debug)]
+    struct Contextual {
+        context: &'static str,
+        cause: Box<dyn std::error::Error + Send + Sync + 'static>,
+    }
+
+    impl std::fmt::Display for Contextual {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "[{}] custom error", self.context)
+        }
+    }
+
+    impl std::error::Error for Contextual {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&*self.cause)
+        }
+    }
+
+    /// A cause whose text is the whole message and which is not an I/O failure, so a test
+    /// can put a keyword into the chain without tripping `is_transport_failure`.
+    #[derive(Debug)]
+    struct Text(&'static str);
+
+    impl std::fmt::Display for Text {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Text {}
+
+    /// The whole reconnect policy rests on this split, and the context string cannot make
+    /// it: the Windows text for an aborted connection matches no keyword at all.
+    #[test]
+    fn termination_classification_reads_the_cause_that_display_hides() {
+        let aborted = Contextual {
+            context: "read frame",
+            cause: Box::new(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "An existing connection was forcibly closed by the remote host.",
+            )),
+        };
+        assert!(is_transport_failure(&aborted));
+        let error = classify_failure(&aborted, RdpErrorKind::Session);
+        assert_eq!(error.kind, RdpErrorKind::Transport);
+        assert!(
+            error.message.contains("forcibly closed"),
+            "the user needs the cause, not the context: {}",
+            error.message
+        );
+        assert!(
+            !aborted.to_string().contains("forcibly closed"),
+            "the old classifier only ever saw the context"
+        );
+    }
+
+    #[test]
+    fn termination_classification_refuses_to_chase_an_undecodable_frame() {
+        let decode = io::Error::new(
+            io::ErrorKind::InvalidData,
+            ironrdp_core::DecodeError::new(
+                "decode",
+                ironrdp_core::DecodeErrorKind::NotEnoughBytes {
+                    received: 2,
+                    expected: 8,
+                    offset: None,
+                },
+            ),
+        );
+        assert!(
+            !is_transport_failure(&decode),
+            "a decode failure surfaces through the reader as an I/O error, and a reconnect \
+             would read the same bytes"
+        );
+        assert_eq!(
+            classify_failure(&decode, RdpErrorKind::Session).kind,
+            RdpErrorKind::Session
+        );
+    }
+
+    #[test]
+    fn termination_classification_keeps_keyword_detail_within_the_connection_kinds() {
+        let tls = io::Error::other("TLS handshake failed");
+        assert!(is_transport_failure(&tls));
+        assert_eq!(
+            classify_failure(&tls, RdpErrorKind::Session).kind,
+            RdpErrorKind::Tls
+        );
+    }
+
+    /// The reconnect decision used to hinge on this: each of these texts is matched by
+    /// `classify_error` ahead of its transport keywords, and every kind it produces there
+    /// is one the application never retries.
+    #[test]
+    fn transport_failure_stays_reconnectable_whatever_the_chain_mentions() {
+        for text in [
+            "CredSSP logon failed",
+            "NLA negotiation failed",
+            "cliprdr channel read failed",
+            "certificate rejected by the peer",
+            "x224 transport disconnected",
+        ] {
+            let aborted = Contextual {
+                context: "read frame",
+                cause: Box::new(io::Error::other(text)),
+            };
+            assert!(is_transport_failure(&aborted), "{text}");
+            assert_eq!(
+                classify_failure(&aborted, RdpErrorKind::Session).kind,
+                RdpErrorKind::Transport,
+                "the text may sharpen the label but not close the session: {text}"
+            );
+        }
+    }
+
+    /// The guard must not become a blanket rewrite: with no I/O failure in the chain the
+    /// keywords still decide, including the kinds that are deliberately not retried.
+    #[test]
+    fn non_transport_termination_still_reaches_the_non_retryable_kinds() {
+        let logon = Contextual {
+            context: "active stage",
+            cause: Box::new(Text("CredSSP logon failed")),
+        };
+        assert!(!is_transport_failure(&logon));
+        assert_eq!(
+            classify_failure(&logon, RdpErrorKind::Session).kind,
+            RdpErrorKind::Authentication
+        );
+    }
+
+    /// A refusal during the connection sequence used to fall back to `Transport`, which
+    /// made every unrecognised server decision -- including a policy denial -- retryable.
+    #[test]
+    fn connection_refusal_without_an_io_cause_is_not_retried() {
+        let denied = Contextual {
+            context: "connection",
+            cause: Box::new(Text("the server denied the connection")),
+        };
+        assert!(!is_transport_failure(&denied));
+        assert_eq!(
+            classify_failure(&denied, RdpErrorKind::Negotiation).kind,
+            RdpErrorKind::Negotiation
+        );
+    }
+
+    #[test]
+    fn connection_failure_with_an_io_cause_stays_reconnectable() {
+        let unreachable = Contextual {
+            context: "connection",
+            cause: Box::new(io::Error::other(
+                "No connection could be made because the target machine actively refused it.",
+            )),
+        };
+        assert!(is_transport_failure(&unreachable));
+        assert_eq!(
+            classify_failure(&unreachable, RdpErrorKind::Negotiation).kind,
+            RdpErrorKind::ConnectionRefused
+        );
+    }
+
+    #[test]
+    fn error_chain_appends_every_cause() {
+        let nested = Contextual {
+            context: "read frame",
+            cause: Box::new(io::Error::other("peer closed without notice")),
+        };
+        assert_eq!(
+            error_chain(&nested),
+            "[read frame] custom error, caused by: peer closed without notice"
+        );
+    }
+
     #[tokio::test]
     async fn stalled_security_negotiation_reports_a_fatal_timeout() {
         let (rdp_output_tx, rdp_output_rx) = output_channel(1);
@@ -1688,9 +1974,10 @@ mod tests {
         )
         .await;
 
-        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
-            output_rx.recv().unwrap()
-        else {
+        let Outbound::Control(message) = output_rx.recv().unwrap() else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::Error { error, fatal, .. } = *message else {
             panic!("expected a timeout error");
         };
         assert_eq!(error.kind, RdpErrorKind::Timeout);
@@ -1712,9 +1999,10 @@ mod tests {
             Box::new("connector assertion\nfailed".to_string()),
         );
 
-        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
-            output_rx.recv().unwrap()
-        else {
+        let Outbound::Control(message) = output_rx.recv().unwrap() else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::Error { error, fatal, .. } = *message else {
             panic!("expected a helper crash error");
         };
         assert_eq!(error.kind, RdpErrorKind::HelperCrashed);

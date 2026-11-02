@@ -32,6 +32,10 @@ pub(in crate::features) struct SyncInputFeatureState {
     selected_id: Option<String>,
     delete_pending: Option<String>,
     broadcast_to_all: bool,
+    /// Runtime target veto across every route; never restricts a source.
+    receive_excluded: HashSet<String>,
+    // Runtime-only: even toggling routing on and back off invalidates old fills.
+    revision: u64,
 }
 
 pub(in crate::features) enum SyncSessionPauseResult {
@@ -44,14 +48,28 @@ pub(in crate::features) enum SyncSessionPauseResult {
 pub(in crate::features) struct SyncInputTransferBundle {
     original_groups: Vec<SyncInputGroup>,
     moved_groups: Vec<SyncInputGroup>,
+    moved_excluded: HashSet<String>,
 }
 
 impl SyncInputFeatureState {
+    pub(in crate::features) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn note_routing_change(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(in crate::features) fn detach_sessions_for_transfer(
         &mut self,
         session_ids: &[String],
     ) -> SyncInputTransferBundle {
+        self.note_routing_change();
         let original_groups = self.groups.clone();
+        let moved_excluded = self
+            .receive_excluded
+            .extract_if(|id| session_ids.contains(id))
+            .collect();
         let mut moved_groups = Vec::new();
         for group in &mut self.groups {
             let mut moved = group.clone();
@@ -72,6 +90,7 @@ impl SyncInputFeatureState {
         SyncInputTransferBundle {
             original_groups,
             moved_groups,
+            moved_excluded,
         }
     }
 
@@ -79,6 +98,8 @@ impl SyncInputFeatureState {
         &mut self,
         bundle: SyncInputTransferBundle,
     ) {
+        self.note_routing_change();
+        self.receive_excluded.extend(bundle.moved_excluded);
         for mut group in bundle.moved_groups {
             if self.groups.iter().any(|existing| existing.id == group.id) {
                 group.id = format!("sync-group-{}", uuid());
@@ -92,14 +113,18 @@ impl SyncInputFeatureState {
         &mut self,
         bundle: SyncInputTransferBundle,
     ) {
+        self.note_routing_change();
         self.groups = bundle.original_groups;
+        self.receive_excluded.extend(bundle.moved_excluded);
         self.repair_selection();
     }
 
     pub(in crate::features) fn retains_transfer_session(&self, id: &str) -> bool {
-        self.groups
-            .iter()
-            .any(|group| group.session_ids.iter().any(|member| member == id))
+        self.receive_excluded.contains(id)
+            || self
+                .groups
+                .iter()
+                .any(|group| group.session_ids.iter().any(|member| member == id))
     }
 
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
@@ -113,6 +138,8 @@ impl SyncInputFeatureState {
             selected_id: None,
             delete_pending: None,
             broadcast_to_all: false,
+            receive_excluded: HashSet::new(),
+            revision: 0,
         }
     }
 
@@ -171,6 +198,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn create_group(&mut self) {
+        self.note_routing_change();
         let index = self.groups.len();
         let group = SyncInputGroup {
             id: format!("sync-group-{}", uuid()),
@@ -222,6 +250,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn delete_selected(&mut self) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self.selected_id.clone() else {
             return false;
         };
@@ -285,6 +314,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_ids: Vec<String>,
     ) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -300,6 +330,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn add_selected_sessions(&mut self, session_ids: Vec<String>) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -315,6 +346,7 @@ impl SyncInputFeatureState {
         &mut self,
         remove_ids: &HashSet<String>,
     ) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -326,6 +358,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn toggle_selected_enabled(&mut self) -> Option<bool> {
+        self.note_routing_change();
         let group = self.selected_group_mut()?;
         group.enabled = !group.enabled;
         Some(group.enabled)
@@ -336,6 +369,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_id: String,
     ) -> Option<bool> {
+        self.note_routing_change();
         let group = self.selected_group_mut()?;
         if group.session_ids.iter().any(|id| id == &session_id) {
             group.session_ids.retain(|id| id != &session_id);
@@ -351,6 +385,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_id: String,
     ) -> SyncSessionPauseResult {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return SyncSessionPauseResult::NoGroup;
         };
@@ -409,29 +444,98 @@ impl SyncInputFeatureState {
                 }
             }
         }
+        peers.retain(|peer_id| !self.receive_excluded.contains(peer_id));
         let mut peers = peers.into_iter().collect::<Vec<_>>();
         peers.sort();
         peers
     }
 
     pub(in crate::features) fn may_fan_out_from(&self, session_id: &str) -> bool {
-        self.broadcast_to_all
-            || self.groups.iter().any(|group| {
-                group.enabled
-                    && group.session_ids.iter().any(|id| id == session_id)
-                    && !group.paused_session_ids.iter().any(|id| id == session_id)
-            })
+        if self.broadcast_to_all {
+            return true;
+        }
+        self.groups.iter().any(|group| {
+            group.enabled
+                && group.session_ids.iter().any(|id| id == session_id)
+                && !group.paused_session_ids.iter().any(|id| id == session_id)
+        })
     }
 
     pub(in crate::features) fn toggle_broadcast_to_all(&mut self) -> bool {
+        self.note_routing_change();
         self.broadcast_to_all = !self.broadcast_to_all;
         self.broadcast_to_all
+    }
+
+    /// True while any session can mirror input, so tabs offer the per-session checkbox.
+    pub(in crate::features) fn input_selection_active(&self) -> bool {
+        self.broadcast_to_all || self.groups.iter().any(|group| group.enabled)
+    }
+
+    /// Tab target eligibility. Group pause is an independent control, shown separately.
+    pub(in crate::features) fn session_receives_input(&self, session_id: &str) -> bool {
+        self.target_allowed(session_id)
+            && (self.broadcast_to_all || self.active_group_for_session(session_id).is_some())
+    }
+
+    pub(in crate::features) fn target_allowed(&self, session_id: &str) -> bool {
+        !self.receive_excluded.contains(session_id)
+    }
+
+    /// Returns (all, mixed) for the terminal panes of a tab.
+    pub(in crate::features) fn tab_receive_state(&self, session_ids: &[String]) -> (bool, bool) {
+        let selected = session_ids
+            .iter()
+            .filter(|id| self.session_receives_input(id))
+            .count();
+        (
+            !session_ids.is_empty() && selected == session_ids.len(),
+            selected > 0 && selected < session_ids.len(),
+        )
+    }
+
+    /// Ticking a nonmember joins the selected enabled group, or the first enabled
+    /// group. Existing membership and group-specific pause state are preserved.
+    pub(in crate::features) fn set_session_receives_input(
+        &mut self,
+        session_id: &str,
+        receive: bool,
+    ) -> bool {
+        let mut joined = false;
+        if receive && !self.broadcast_to_all && self.active_group_for_session(session_id).is_none()
+        {
+            let target_id = self
+                .selected_group()
+                .filter(|group| group.enabled)
+                .or_else(|| self.groups.iter().find(|group| group.enabled))
+                .map(|group| group.id.clone());
+            let Some(target_id) = target_id else {
+                return false;
+            };
+            let group = self
+                .groups
+                .iter_mut()
+                .find(|group| group.id == target_id)
+                .unwrap();
+            group.session_ids.push(session_id.to_string());
+            joined = true;
+        }
+        let changed = if receive {
+            self.receive_excluded.remove(session_id)
+        } else {
+            self.receive_excluded.insert(session_id.to_string())
+        } || joined;
+        if changed {
+            self.note_routing_change();
+        }
+        changed
     }
 
     pub(in crate::features) fn toggle_active_session_paused(
         &mut self,
         session_id: String,
     ) -> SyncSessionPauseResult {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(&session_id)
             .map(|group| group.id.clone())
@@ -451,6 +555,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn leave_active_group(&mut self, session_id: &str) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(session_id)
             .map(|group| group.id.clone())
@@ -467,6 +572,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn close_active_group(&mut self, session_id: &str) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(session_id)
             .map(|group| group.id.clone())
@@ -481,6 +587,8 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn purge_session(&mut self, session_id: &str) {
+        self.note_routing_change();
+        self.receive_excluded.remove(session_id);
         for group in &mut self.groups {
             group.session_ids.retain(|id| id != session_id);
             group.paused_session_ids.retain(|id| id != session_id);
@@ -490,6 +598,10 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn replace_session_id(&mut self, old_id: &str, new_id: &str) {
+        self.note_routing_change();
+        if self.receive_excluded.remove(old_id) {
+            self.receive_excluded.insert(new_id.to_string());
+        }
         for group in &mut self.groups {
             for session_id in &mut group.session_ids {
                 if session_id == old_id {
@@ -813,14 +925,34 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    /// Metadata is authoritative for both terminal and helper-backed sessions.
+    pub(in crate::features) fn terminal_sync_session(&self, session_id: &str) -> bool {
+        self.session.metadata(session_id).is_some_and(|metadata| {
+            !matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Rdp(_)
+                    | crate::models::SessionLaunchConfig::Vnc(_)
+            )
+        })
+    }
+
+    pub(in crate::features) fn sync_target_allowed(&self, session_id: &str) -> bool {
+        self.terminal_sync_session(session_id)
+            && !self.session.is_disconnected(session_id)
+            && self.sync_input.target_allowed(session_id)
+    }
+
     pub(in crate::features) fn sync_peer_session_ids(&self, session_id: &str) -> Vec<String> {
-        if !self.sync_input.may_fan_out_from(session_id) {
+        if !self.terminal_sync_session(session_id)
+            || self.session.is_disconnected(session_id)
+            || !self.sync_input.may_fan_out_from(session_id)
+        {
             return Vec::new();
         }
         let live_ids = self
             .session
             .metadata_entries()
-            .filter(|(_, metadata)| !metadata.disconnected)
+            .filter(|(id, metadata)| !metadata.disconnected && self.terminal_sync_session(id))
             .map(|(session_id, _)| session_id.to_string())
             .collect::<HashSet<_>>();
         self.sync_input.peer_session_ids(session_id, &live_ids)
@@ -833,6 +965,36 @@ impl NyaTermApp {
             } else {
                 "broadcast to all sessions disabled".to_string()
             });
+        cx.notify();
+    }
+
+    /// Tab checkbox: tick or untick every pane under one tab in a single step.
+    pub(in crate::features) fn set_sessions_receive_sync_input(
+        &mut self,
+        session_ids: &[String],
+        receive: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for session_id in session_ids {
+            if !self.terminal_sync_session(session_id) {
+                continue;
+            }
+            if !receive {
+                self.commands.cancel_staged_sync_receiver(session_id);
+            }
+            changed |= self
+                .sync_input
+                .set_session_receives_input(session_id, receive);
+        }
+        if !changed {
+            return;
+        }
+        self.shell.set_status(if receive {
+            "session sync resumed".to_string()
+        } else {
+            "session sync paused".to_string()
+        });
         cx.notify();
     }
 
@@ -1048,6 +1210,134 @@ mod tests {
         assert!(state.toggle_broadcast_to_all());
         assert!(state.may_fan_out_from("primary"));
         assert!(state.may_fan_out_from("outside"));
+    }
+
+    #[test]
+    fn unticked_sources_still_broadcast_and_target_exclusions_survive_mode_changes() {
+        let mut state = state();
+        let live_ids = ["a", "b", "c"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        assert!(!state.input_selection_active());
+        assert!(state.toggle_broadcast_to_all());
+        assert!(state.input_selection_active());
+
+        let revision = state.revision();
+        assert!(state.set_session_receives_input("b", false));
+        assert_ne!(state.revision(), revision);
+        assert!(!state.set_session_receives_input("b", false));
+        assert!(!state.session_receives_input("b"));
+        assert!(state.may_fan_out_from("b"));
+        assert_eq!(state.peer_session_ids("b", &live_ids), ["a", "c"]);
+        assert_eq!(state.peer_session_ids("a", &live_ids), ["c"]);
+
+        assert!(state.set_session_receives_input("b", true));
+        assert_eq!(state.peer_session_ids("a", &live_ids), ["b", "c"]);
+
+        state.set_session_receives_input("c", false);
+        assert!(!state.toggle_broadcast_to_all());
+        assert!(state.toggle_broadcast_to_all());
+        assert!(!state.session_receives_input("c"));
+    }
+
+    #[test]
+    fn target_selection_preserves_group_pause_state_and_can_join_an_enabled_group() {
+        let mut state = state();
+        let mut disabled = group("off", "Off");
+        disabled.enabled = false;
+        let mut enabled = group("on", "On");
+        enabled.session_ids = vec!["member".to_string()];
+        state.groups = vec![disabled, enabled];
+        state.selected_id = Some("off".to_string());
+
+        assert!(state.set_session_receives_input("member", false));
+        assert!(state.groups()[1].paused_session_ids.is_empty());
+        assert!(!state.session_receives_input("member"));
+        assert!(state.set_session_receives_input("member", true));
+        assert!(state.groups()[1].paused_session_ids.is_empty());
+
+        assert!(state.set_session_receives_input("outsider", false));
+        assert!(state.set_session_receives_input("outsider", true));
+        assert!(state.groups()[0].session_ids.is_empty());
+        assert_eq!(state.groups()[1].session_ids, ["member", "outsider"]);
+        assert!(state.session_receives_input("outsider"));
+
+        state.groups[1].enabled = false;
+        assert!(!state.input_selection_active());
+        assert!(!state.set_session_receives_input("stranger", true));
+    }
+
+    #[test]
+    fn shared_membership_cannot_bypass_target_veto_and_restore_preserves_pauses() {
+        let mut state = state();
+        let live = ["one", "two", "three"]
+            .map(str::to_string)
+            .into_iter()
+            .collect();
+        for (id, peer) in [("a", "two"), ("b", "three")] {
+            let mut g = group(id, id);
+            g.session_ids = vec!["one".into(), peer.into()];
+            state.groups.push(g);
+        }
+        let original = state.groups.clone();
+        assert!(state.set_session_receives_input("one", false));
+        assert!(state.peer_session_ids("two", &live).is_empty());
+        assert!(state.peer_session_ids("three", &live).is_empty());
+        assert_eq!(state.peer_session_ids("one", &live), ["three", "two"]);
+        assert_eq!(state.groups, original);
+        state.groups[0].paused_session_ids.push("one".into());
+        assert!(state.set_session_receives_input("one", true));
+        assert_eq!(state.groups[0].paused_session_ids, ["one"]);
+        assert_eq!(state.peer_session_ids("three", &live), ["one"]);
+        assert!(state.peer_session_ids("two", &live).is_empty());
+        state.toggle_broadcast_to_all();
+        assert_eq!(state.peer_session_ids("two", &live), ["one", "three"]);
+        state.set_session_receives_input("one", false);
+        state.toggle_broadcast_to_all();
+        assert!(state.peer_session_ids("three", &live).is_empty());
+        state.toggle_broadcast_to_all();
+        assert_eq!(state.peer_session_ids("three", &live), ["two"]);
+    }
+
+    #[test]
+    fn split_target_state_and_revision_follow_batch_selection() {
+        let mut state = state();
+        state.toggle_broadcast_to_all();
+        let ids = vec!["a".into(), "b".into()];
+        assert_eq!(state.tab_receive_state(&ids), (true, false));
+        state.set_session_receives_input("a", false);
+        assert_eq!(state.tab_receive_state(&ids), (false, true));
+        state.set_session_receives_input("b", false);
+        assert_eq!(state.tab_receive_state(&ids), (false, false));
+        for id in &ids {
+            state.set_session_receives_input(id, true);
+        }
+        assert_eq!(state.tab_receive_state(&ids), (true, false));
+        let revision = state.revision();
+        assert!(!state.set_session_receives_input("b", true));
+        assert_eq!(state.revision(), revision);
+        assert_eq!(state.tab_receive_state(&[]), (false, false));
+    }
+
+    #[test]
+    fn exclusions_follow_id_replacement_transfer_rollback_and_close_without_groups() {
+        let mut source = state();
+        source.set_session_receives_input("old", false);
+        source.replace_session_id("old", "new");
+        assert!(source.target_allowed("old"));
+        assert!(!source.target_allowed("new"));
+        let bundle = source.detach_sessions_for_transfer(&["new".into()]);
+        assert!(!source.retains_transfer_session("new"));
+        source.restore_sessions_after_failed_transfer(bundle);
+        assert!(!source.target_allowed("new"));
+        let bundle = source.detach_sessions_for_transfer(&["new".into()]);
+        let mut target = state();
+        target.attach_sessions_from_transfer(bundle);
+        assert!(!target.target_allowed("new"));
+        target.purge_session("new");
+        assert!(!target.retains_transfer_session("new"));
+        assert!(target.target_allowed("new"));
     }
 
     #[test]

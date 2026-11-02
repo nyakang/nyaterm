@@ -1,5 +1,6 @@
 //! Shared capability authorization, execution, bounded output and audit adapters.
 
+pub(in crate::features) mod approvals;
 pub(in crate::features) mod terminal_execution;
 
 use super::NyaTermApp;
@@ -187,6 +188,7 @@ impl CapabilityRuntimeState {
             .retain(|_, pending| !pending.cancellation.is_cancelled());
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn pending_approval_requests(
         &mut self,
     ) -> Vec<CapabilityApprovalRequest> {
@@ -469,6 +471,7 @@ impl NyaTermApp {
                 .send(Err(rpc_failure("cancelled", "Capability caller ended.")));
         }
         self.poll_terminal_executions(cx);
+        self.defer_ai_panel_snapshot_flush(cx);
         cx.notify();
     }
 
@@ -753,6 +756,7 @@ impl NyaTermApp {
                             approval,
                             grant_key,
                         });
+                    self.defer_ai_panel_snapshot_flush(cx);
                     cx.notify();
                     return;
                 }

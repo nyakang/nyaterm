@@ -21,8 +21,8 @@ use crate::models::{
     ConnectionGroupEditorState, ConnectionSortMode,
 };
 use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaInput, NyaInputState, NyaNumberInput, NyaNumberInputState,
-    NyaSelect, NyaSelectState, NyaSwitch,
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaInput, NyaInputShell, NyaInputState, NyaNumberInput,
+    NyaNumberInputState, NyaSelect, NyaSelectState, NyaSwitch,
 };
 
 #[derive(Clone)]
@@ -416,6 +416,7 @@ pub(super) struct ConnectionEditorChoice {
     pub search_text: Option<String>,
     pub subtitle: Option<String>,
     pub selected: bool,
+    pub disabled: bool,
 }
 
 impl ConnectionEditorChoice {
@@ -426,6 +427,7 @@ impl ConnectionEditorChoice {
             search_text: None,
             subtitle: None,
             selected,
+            disabled: false,
         }
     }
 
@@ -1211,7 +1213,7 @@ pub(super) fn editor_field(
     label: impl Into<FieldLabel>,
     field: ConnectionEditorField,
     fields: &ConnectionEditorFields,
-    cx: &App,
+    cx: &Context<NyaTermApp>,
 ) -> impl IntoElement {
     let label = label.into();
     div()
@@ -1282,109 +1284,6 @@ pub(super) fn connection_editor_select_on_open(
         )
 }
 
-pub(super) struct EditorSecretFieldOptions<Clear> {
-    disabled: bool,
-    clear_tooltip: SharedString,
-    on_clear: Clear,
-}
-
-impl<Clear> EditorSecretFieldOptions<Clear> {
-    pub(super) fn new(
-        disabled: bool,
-        clear_tooltip: impl Into<SharedString>,
-        on_clear: Clear,
-    ) -> Self {
-        Self {
-            disabled,
-            clear_tooltip: clear_tooltip.into(),
-            on_clear,
-        }
-    }
-}
-
-pub(super) fn editor_secret_field<Clear>(
-    palette: crate::theme::ThemePalette,
-    label: impl Into<FieldLabel>,
-    field: ConnectionEditorField,
-    fields: &ConnectionEditorFields,
-    options: EditorSecretFieldOptions<Clear>,
-    cx: &App,
-) -> impl IntoElement
-where
-    Clear: Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-{
-    let EditorSecretFieldOptions {
-        disabled,
-        clear_tooltip,
-        on_clear,
-    } = options;
-    let label = label.into();
-    let entity = fields.get(&field).cloned();
-    let focused = entity
-        .as_ref()
-        .is_some_and(|field| field.read(cx).has_focus());
-    div()
-        .id(SharedString::from(format!(
-            "connection-editor-field-{field:?}"
-        )))
-        .debug_selector(move || format!("connection-editor-field-{field:?}"))
-        .anchor_scroll(
-            fields
-                .anchors
-                .get(&ConnectionEditorFocusTarget::Field(field))
-                .cloned(),
-        )
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .when(!label.is_empty(), |this| {
-            this.child(field_caption(palette, &label))
-        })
-        .child(
-            div()
-                .h(px(EDITOR_CONTROL_HEIGHT_PX))
-                .min_w_0()
-                .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
-                .flex()
-                .items_center()
-                .gap_1()
-                .opacity(if disabled { 0.55 } else { 1.0 })
-                .rounded_sm()
-                .border_1()
-                .border_color(ordinary_input_shell_border_color(palette, focused))
-                .when(focused, |this| {
-                    this.shadow(ordinary_input_focus_ring(palette))
-                })
-                .bg(rgb(palette.input))
-                .children(entity.map(|field| {
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .text_xs()
-                        .text_color(rgb(palette.text))
-                        .child(NyaInput::new(&field))
-                }))
-                .child(
-                    nyaterm_ui::NyaIconButton::new(
-                        "connection-editor-password-clear",
-                        "icons/delete.svg",
-                    )
-                    .disabled(disabled)
-                    .tooltip(clear_tooltip)
-                    .on_click(on_clear),
-                ),
-        )
-        .when_some(fields.errors.get(&field), |this, error| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.danger))
-                    .child(error.clone()),
-            )
-        })
-}
-
 pub(super) fn forwarding_endpoint_editor_field(
     palette: crate::theme::ThemePalette,
     label: impl Into<FieldLabel>,
@@ -1450,22 +1349,34 @@ pub(super) fn editor_field_box(
     palette: crate::theme::ThemePalette,
     field: ConnectionEditorField,
     fields: &ConnectionEditorFields,
-    cx: &App,
+    cx: &Context<NyaTermApp>,
 ) -> impl IntoElement {
     let entity = fields.get(&field);
+    if field == ConnectionEditorField::PostLoginCommand {
+        let app = cx.weak_entity();
+        return div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .children(entity.map(|field| {
+                NyaInputShell::new("connection-editor-post-login-command", field)
+                    .multi_line()
+                    .height(px(168.))
+                    .tab_navigation()
+                    .on_secondary_enter(move |window, cx| {
+                        let _ = app.update(cx, |app, cx| app.save_connection_editor(window, cx));
+                    })
+            }))
+            .into_any_element();
+    }
     let handle = entity.map(|field| field.read(cx).focus_handle());
     let focused = entity.is_some_and(|field| field.read(cx).has_focus());
     div()
-        .h(px(
-            if matches!(
-                field,
-                ConnectionEditorField::Description | ConnectionEditorField::PostLoginCommand
-            ) {
-                112.
-            } else {
-                EDITOR_CONTROL_HEIGHT_PX
-            },
-        ))
+        .h(px(if field == ConnectionEditorField::Description {
+            112.
+        } else {
+            EDITOR_CONTROL_HEIGHT_PX
+        }))
         .id("connection-list-search-input-shell")
         .min_w_0()
         .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
@@ -1492,6 +1403,7 @@ pub(super) fn editor_field_box(
                 .text_color(rgb(palette.text))
                 .child(NyaInput::new(field))
         }))
+        .into_any_element()
 }
 
 /// A numeric field backed by gpui-kit's spinner control.

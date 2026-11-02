@@ -26,6 +26,7 @@ fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
         icon_tag: None,
         pinned: None,
         execution_mode: execution_mode.map(ToOwned::to_owned),
+        raw_send: None,
         source: None,
         risk_level: None,
         updated_at: None,
@@ -115,6 +116,7 @@ impl WireFixture {
                     .seed_session_view(info.id.clone(), String::new(), "UTF-8");
                 ids.push(info.id);
             }
+            app.session.metadata_mut("fixture").unwrap().disconnected = true;
             app.session.select_active_session(&ids[0]);
             (manager, ids)
         });
@@ -210,6 +212,71 @@ impl Drop for WireFixture {
             let _ = self.manager.close(id);
         }
     }
+}
+
+#[test]
+fn literal_quick_command_sends_exact_text_without_variables_or_pauses_in_both_execution_modes() {
+    let mut fixture = WireFixture::new(1);
+    for execute in [false, true] {
+        for ending in ["  ", "\r", "\n", "\r\n"] {
+            let text = format!("  {{{{变量}}}} \\r\\n\\t\\p\\\\ C:\\temp\n下一行{ending}");
+            fixture.cx.update_entity(&fixture.app, |app, cx| {
+                let mut command =
+                    command_with_execution_mode(Some(if execute { "execute" } else { "append" }));
+                command.command = text.clone();
+                command.raw_send = Some(true);
+                app.commands
+                    .replace_quick_command_catalog(vec![command], Vec::new());
+                app.apply_quick_command_by_id("command-1", false, cx);
+                assert!(app.commands.quick_variable_prompt().is_none());
+            });
+            fixture.cx.run_until_parked();
+            let mut expected = text.into_bytes();
+            if execute && ending == "  " {
+                expected.push(b'\r');
+            }
+            fixture.assert_wire(0, &expected);
+        }
+    }
+}
+
+#[test]
+fn literal_quick_command_broadcast_preserves_text_for_each_session() {
+    let mut fixture = WireFixture::new(2);
+    let text = "  {{host}} \\p C:\\temp\n下一行 ";
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = text.into();
+        command.raw_send = Some(true);
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", true, cx);
+        assert!(app.commands.quick_variable_prompt().is_none());
+    });
+    fixture.cx.run_until_parked();
+    for index in 0..2 {
+        fixture.assert_wire(index, text.as_bytes());
+    }
+}
+
+#[test]
+fn disabling_literal_mode_restores_variable_prompts_and_escape_processing() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = r"{{host}}\t\pnext".into();
+        command.raw_send = Some(false);
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+        assert!(app.commands.quick_variable_prompt().is_some());
+        app.commands.set_quick_variable_value(0, "prod".into());
+        app.submit_quick_command_variable_prompt(cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"prod\t");
+    fixture.advance();
+    fixture.assert_wire(0, b"next");
 }
 
 #[test]
@@ -417,4 +484,152 @@ fn staged_quick_command_waits_for_all_leading_pauses_before_writing() {
     fixture.assert_wire(0, b"");
     fixture.advance();
     fixture.assert_wire(0, b"command\r");
+}
+
+#[test]
+fn target_exclusions_apply_to_keyboard_paste_raw_and_quick_commands_without_blocking_sources() {
+    let mut fixture = WireFixture::new(4);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.sync_input.toggle_broadcast_to_all();
+        app.set_sessions_receive_sync_input(
+            &[fixture.ids[0].clone(), fixture.ids[3].clone()],
+            false,
+            cx,
+        );
+        assert!(app.send_terminal_input(b"key".to_vec(), cx));
+        app.send_terminal_paste_input("paste", cx);
+        assert!(app.send_terminal_literal_input(b"raw".to_vec(), cx));
+    });
+    fixture.send("quick");
+    fixture.assert_wire(0, b"keypasterawquick\r");
+    fixture.assert_wire(1, b"keypasterawquick\r");
+    fixture.assert_wire(2, b"keypasterawquick\r");
+    fixture.assert_wire(3, b"");
+}
+
+#[test]
+fn excluding_a_staged_receiver_cancels_future_chunks_even_after_rechecking() {
+    let mut fixture = WireFixture::new(2);
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        app.sync_input.toggle_broadcast_to_all();
+    });
+    fixture.send(r"first\psecond");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.set_sessions_receive_sync_input(&fixture.ids, false, cx);
+        app.set_sessions_receive_sync_input(&fixture.ids, true, cx);
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"firstsecond\r");
+    fixture.assert_wire(1, b"first");
+}
+
+#[test]
+fn ime_preedit_is_local_and_commit_reaches_each_eligible_session_once() {
+    use crate::features::test_support::session_focus_test_window;
+    use gpui::EntityInputHandler;
+
+    let mut fixture = WireFixture::new(3);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.sync_input.toggle_broadcast_to_all();
+        app.set_sessions_receive_sync_input(
+            &[fixture.ids[0].clone(), fixture.ids[2].clone()],
+            false,
+            cx,
+        );
+    });
+    let vcx = session_focus_test_window(&mut fixture.cx, &fixture.app);
+    vcx.update(|window, cx| {
+        fixture.app.update(cx, |app, cx| {
+            app.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
+            let key = gpui::KeyDownEvent {
+                keystroke: gpui::Keystroke {
+                    key: "中".into(),
+                    key_char: Some("中".into()),
+                    modifiers: Default::default(),
+                },
+                is_held: false,
+                prefer_character_input: false,
+            };
+            assert!(app.terminal_should_defer_key_text_to_input_handler(&key));
+            app.replace_text_in_range(None, "中文", window, cx);
+        });
+    });
+    fixture.assert_wire(0, "中文".as_bytes());
+    fixture.assert_wire(1, "中文".as_bytes());
+    fixture.assert_wire(2, b"");
+}
+
+#[test]
+fn explicit_send_to_all_respects_excluded_targets_for_immediate_and_staged_commands() {
+    for text in ["firstsecond", r"first\psecond"] {
+        let mut fixture = WireFixture::new(2);
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            app.set_sessions_receive_sync_input(&[fixture.ids[1].clone()], false, cx);
+            app.send_resolved_quick_command(
+                "test".into(),
+                "Test".into(),
+                text.into(),
+                true,
+                true,
+                cx,
+            );
+        });
+        fixture.cx.run_until_parked();
+        fixture.advance();
+        fixture.assert_wire(0, b"firstsecond\r");
+        fixture.assert_wire(1, b"");
+    }
+}
+
+#[test]
+fn helper_backed_and_disconnected_sessions_are_never_terminal_sync_targets() {
+    let mut fixture = WireFixture::new(4);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.sync_input.toggle_broadcast_to_all();
+        app.session
+            .metadata_mut(&fixture.ids[1])
+            .unwrap()
+            .launch_config = SessionLaunchConfig::Rdp(nyaterm_remote_desktop::RdpSessionConfig {
+            relay: None,
+            backend: Default::default(),
+            windows_authentication: None,
+            name: "RDP".into(),
+            host: "127.0.0.1".into(),
+            port: 3389,
+            username: String::new(),
+            domain: String::new(),
+            password: None,
+            use_nla: false,
+            certificate_policy: Default::default(),
+            administrative_session: false,
+            display: Default::default(),
+            clipboard: Default::default(),
+            reconnect: Default::default(),
+        });
+        app.session
+            .metadata_mut(&fixture.ids[2])
+            .unwrap()
+            .launch_config = SessionLaunchConfig::Vnc(nyaterm_remote_desktop::VncSessionConfig {
+            relay: None,
+            username: String::new(),
+            name: "VNC".into(),
+            host: "127.0.0.1".into(),
+            port: 5900,
+            password: None,
+            security: Default::default(),
+            display: Default::default(),
+            clipboard: Default::default(),
+            reconnect: Default::default(),
+            shared: true,
+            view_only: false,
+        });
+        app.session
+            .metadata_mut(&fixture.ids[3])
+            .unwrap()
+            .disconnected = true;
+        assert!(app.sync_peer_session_ids(&fixture.ids[0]).is_empty());
+        app.set_sessions_receive_sync_input(&fixture.ids, false, cx);
+        assert!(app.sync_input.target_allowed(&fixture.ids[1]));
+        assert!(app.sync_input.target_allowed(&fixture.ids[2]));
+    });
 }

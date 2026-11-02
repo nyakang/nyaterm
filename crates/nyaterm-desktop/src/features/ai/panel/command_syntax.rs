@@ -31,6 +31,7 @@ impl AiPanel {
                     .zip(snapshot.messages.iter())
                     .all(|(a, b)| Arc::ptr_eq(a, b) || a.command_cards == b.command_cards)
                 && previous.command_cards == snapshot.command_cards
+                && previous.native_approvals == snapshot.native_approvals
                 && previous.agent_steps.len() == snapshot.agent_steps.len()
                 && previous
                     .agent_steps
@@ -46,6 +47,12 @@ impl AiPanel {
             .flat_map(|message| &message.command_cards)
             .chain(snapshot.command_cards.iter())
             .map(|card| card.command.clone())
+            .chain(
+                snapshot
+                    .native_approvals
+                    .iter()
+                    .filter_map(|view| view.command.clone()),
+            )
             .chain(
                 snapshot
                     .agent_steps

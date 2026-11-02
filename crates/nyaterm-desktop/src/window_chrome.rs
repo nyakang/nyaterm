@@ -78,6 +78,7 @@ impl Platform {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WindowChrome {
+    pub show_child_header: bool,
     pub minimize: bool,
     pub maximize: bool,
     pub close: bool,
@@ -129,6 +130,8 @@ impl WindowChrome {
                 Platform::Linux => matches!(decorations, Decorations::Client { .. }),
             };
         Self {
+            show_child_header: platform != Platform::Linux
+                || !matches!(decorations, Decorations::Server),
             minimize: buttons && minimizable && controls.minimize,
             maximize: buttons && resizable && controls.maximize,
             close: buttons,

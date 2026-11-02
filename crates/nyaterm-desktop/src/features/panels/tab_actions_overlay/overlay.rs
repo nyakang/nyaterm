@@ -5,6 +5,7 @@ use super::{
     CompactTabActionsMenuState, TabActionPolicy, TabActionPolicyInput, TabSessionCapability,
 };
 use crate::features::NyaTermApp;
+use crate::features::formatting::recent_terminal_output;
 
 impl NyaTermApp {
     fn tab_action_session_capability(&self, session_id: &str) -> Option<TabSessionCapability> {
@@ -109,7 +110,10 @@ impl NyaTermApp {
                 2_800,
             );
             let buffer = terminal_action_prompt_text(
-                self.terminal_buffer_tail_for_session(&session_id),
+                &recent_terminal_output(
+                    self.terminal_buffer_tail_for_session(&session_id),
+                    usize::MAX,
+                ),
                 4_000,
             );
             (visible, buffer)

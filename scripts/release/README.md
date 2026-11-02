@@ -78,3 +78,32 @@ Release notes use `scripts/release/notes/<version>.md` when present, otherwise a
 local Git history summary. The 2.0.0 notes include the required manual portable
 and MSI migration instructions. Check in version-specific notes before the
 candidate is frozen.
+
+## Windows portable update recovery (#1089)
+
+The v2.0.0 portable updater rejects the ConPTY files in normal release ZIPs.
+Updating the published ZIP cannot repair that already installed updater.
+For affected users, close NyaTerm and back up the entire `data/` directory, then
+download the matching architecture's portable ZIP and replace the complete
+program file set, including helpers and `conpty/`. Preserve the existing `data/`
+directory; do not replace it with the ZIP's empty data directory.
+
+Portable packaging and update validation share
+`crates/nyaterm-core/src/packaging/windows-portable.json`. Change this contract
+when adding a packaged component. Release and snapshot jobs test their actual
+ZIPs through the Rust extraction and replacement code before uploading them.
+To repeat this check locally in PowerShell:
+
+```powershell
+$env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path 'dist/NyaTerm_2.0.1_windows_x64_portable.zip').Path
+$env:NYATERM_TEST_PORTABLE_ARCH = 'x86_64' # 'aarch64' for the ARM64 ZIP
+cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
+```
+
+The test operates on isolated temporary directories and does not run the ZIP's
+executables. Before release, also verify helper launch, file-lock recovery and
+application restart on Windows 10 and Windows 11. If rollback fails, retain the
+reported `portable-backup` directory for recovery; it must not be automatically
+cleaned or followed by an automatic application restart. Include
+[the prepared upgrade notice](notes/portable-update-recovery.md) in the next
+version's release notes.

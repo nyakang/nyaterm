@@ -148,7 +148,7 @@ class CompiledWindowsMsiTests(unittest.TestCase):
         for table, field, value in (
             ("Component", "ComponentId", "wrong"), ("Directory", "DefaultDir", "../data"),
             ("Upgrade", "Attributes", "0"), ("RemoveFile", "FileName", "*"),
-            ("Shortcut", "Target", "wrong.exe"), ("Registry", "Value", "wrong.exe"),
+            ("Shortcut", "Target", "wrong.exe"), ("CustomAction", "Target", "--unsafe-command"),
         ):
             changed = copy.deepcopy(baseline)
             changed["tables"][table][0][field] = value

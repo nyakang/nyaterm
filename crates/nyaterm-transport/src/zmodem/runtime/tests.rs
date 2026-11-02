@@ -24,6 +24,7 @@ fn mock_session() -> (Arc<SessionManager>, ssh_mailbox::Receiver) {
     manager.sessions.lock().unwrap().insert(
         "test".into(),
         ManagedSession::Ssh(SshChannelTransport {
+            shell_enabled: true,
             info: SessionInfo {
                 id: "test".into(),
                 name: "test".into(),
@@ -34,6 +35,8 @@ fn mock_session() -> (Arc<SessionManager>, ssh_mailbox::Receiver) {
             },
             attempt: SshSessionConfig::default().attempt,
             command_tx,
+            tmux_tx: crate::tmux::mailbox::channel().0,
+            tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             backspace_as_bs: false,
             worker_thread: None,
         }),
@@ -270,4 +273,61 @@ fn cancellation_can_publish_a_terminal_result_with_all_lifecycle_slots_full() {
     let state = shared.state.lock().unwrap();
     assert_eq!(state.events.len(), super::EVENT_CAPACITY);
     assert!(state.events.back().unwrap().done);
+}
+
+#[test]
+fn tmux_modem_capability_and_every_raw_writer_reject_before_sending() {
+    use crate::SessionError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (manager, mut receiver) = mock_session();
+    let (tx, mut info, active) = {
+        let sessions = manager.sessions.lock().unwrap();
+        let ManagedSession::Ssh(host) = &sessions["test"] else {
+            unreachable!()
+        };
+        (
+            host.tmux_tx.clone(),
+            host.info.clone(),
+            host.tmux_active.clone(),
+        )
+    };
+    active.store(true, Ordering::Release);
+    info.id = "pane".into();
+    SessionManager::register_tmux_pane(
+        &manager.sessions,
+        &manager.event_queue,
+        "test",
+        info,
+        "%0".into(),
+        tx,
+    )
+    .unwrap();
+    for session in ["test", "pane"] {
+        assert!(!manager.supports_modem_transfer(session));
+        for error in [
+            manager.write_raw(session, b"binary").unwrap_err(),
+            manager
+                .write_raw_cancellable(session, b"binary", &AtomicBool::new(false))
+                .unwrap_err(),
+            manager
+                .write_raw_cancellable_measured(session, b"binary", &AtomicBool::new(false))
+                .unwrap_err(),
+        ] {
+            let SessionError::Write { source, .. } = error else {
+                panic!("unexpected error")
+            };
+            assert_eq!(
+                source.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::Unsupported
+            );
+        }
+    }
+    assert!(receiver.try_recv().is_err());
+    active.store(false, Ordering::Release);
+    assert!(manager.supports_modem_transfer("test"));
+    manager.write_raw("test", b"binary").unwrap();
+    assert!(
+        matches!(receiver.try_recv().unwrap(), SshCommand::Write(write) if write.bytes == b"binary")
+    );
 }

@@ -209,6 +209,7 @@ impl NyaTermApp {
                 drained_events += 1;
                 match event {
                     SessionEvent::Output { session_id, data } => {
+                        self.ensure_sftp_session_view(&session_id, cx);
                         output_event_count += 1;
                         let chunk_input_bytes = data.len();
                         processed_output_bytes =
@@ -280,6 +281,14 @@ impl NyaTermApp {
                             );
                             self.request_settings_panel_refresh(cx);
                         }
+                    }
+                    SessionEvent::TmuxState { session_id, state } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        root_chrome_dirty |=
+                            self.handle_session_tmux_state_event(session_id, *state, cx);
                     }
                     SessionEvent::Exited { session_id, reason } => {
                         self.flush_pending_session_frame_outputs(

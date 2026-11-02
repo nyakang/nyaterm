@@ -136,7 +136,33 @@ impl NyaTermApp {
         if self.remote_desktop.is_session(&session_id) {
             return self.remote_desktop_view(session_id, cx);
         }
+        if self.session_is_sftp_only(&session_id) {
+            return self.sftp_session_content(&session_id);
+        }
         self.terminal_canvas_for(session_id, cx).into_any_element()
+    }
+
+    /// Content for one workspace tab: the owning root's pane tree when the
+    /// session has a `pane_roots` projection (manual split or tmux control),
+    /// otherwise the plain session view. tmux hosts also get their window
+    /// strip under the tree. Both the workspace page and the terminal-window
+    /// group renderer go through here so the projection cannot diverge.
+    pub(super) fn workspace_tab_session_content(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let tab_root = self.tab_root_for_session(&session_id);
+        let Some(root) = self.shell.workspace_pane_root(&tab_root).cloned() else {
+            return self.workspace_session_content(session_id, cx);
+        };
+        let tree = self.render_workspace_pane_node(root, cx);
+        let mut area = div().flex_1().min_h_0().min_w_0().flex().flex_col();
+        area = area.child(div().flex_1().min_h_0().min_w_0().child(tree));
+        if self.tmux.is_control_session(&tab_root) {
+            area = area.child(self.tmux_window_strip(&tab_root, cx));
+        }
+        area.into_any_element()
     }
 
     pub(super) fn render_workspace_pane_node(
@@ -161,7 +187,7 @@ impl NyaTermApp {
                         this.activate_workspace_pane(focus_id.clone(), cx);
                         if this.remote_desktop.is_session(&focus_id) {
                             window.focus(this.remote_desktop.focus(), cx);
-                        } else {
+                        } else if !this.session_is_sftp_only(&focus_id) {
                             window.focus(this.terminal.input_focus(), cx);
                         }
                         cx.notify();

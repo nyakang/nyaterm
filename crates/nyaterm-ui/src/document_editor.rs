@@ -57,11 +57,21 @@ impl NyaDocumentEditorState {
         content: impl Into<SharedString>,
         language: impl Into<SharedString>,
     ) -> Self {
+        Self::new_source_with_placeholder(window, cx, content, language, SharedString::default())
+    }
+
+    pub fn new_source_with_placeholder(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        content: impl Into<SharedString>,
+        language: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+    ) -> Self {
         Self::build(
             window,
             cx,
             content.into(),
-            SharedString::default(),
+            placeholder.into(),
             Some(language.into()),
         )
     }
@@ -307,6 +317,43 @@ mod tests {
     use crate::document_snapshot::NyaDocumentSnapshot;
     use crate::root::nya_root;
     use gpui::{AppContext as _, Focusable as _, Modifiers, MouseButton, TestAppContext};
+
+    #[gpui::test]
+    fn source_placeholder_preserves_bash_language_and_unicode_content(cx: &mut TestAppContext) {
+        use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+        cx.update(gpui_kit::init);
+        let script = "if [ -n \"$HOME\" ]; then\n  echo \"你好 $HOME\" # 注释\nfi";
+        let (document, cx) = cx.add_window_view(|window, cx| {
+            NyaDocumentEditorState::new_source_with_placeholder(
+                window,
+                cx,
+                script,
+                "bash",
+                "输入命令",
+            )
+        });
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            let editor = document.read(cx).editor.read(cx);
+            assert_eq!(editor.language_name().as_ref(), "bash");
+            assert_eq!(editor.presentation().placeholder().as_ref(), "输入命令");
+            assert_eq!(editor.text().to_string(), script);
+            let mut highlighter = SyntaxHighlighter::new(&editor.language_name());
+            highlighter.update(None, editor.text(), None);
+            for theme in [
+                HighlightTheme::default_dark(),
+                HighlightTheme::default_light(),
+            ] {
+                let styles = highlighter.styles(&(0..script.len()), theme.as_ref());
+                assert!(!styles.is_empty());
+                for (range, _) in styles {
+                    assert!(script.is_char_boundary(range.start));
+                    assert!(script.is_char_boundary(range.end));
+                }
+            }
+        });
+    }
 
     #[gpui::test]
     fn document_wheel_scrolls_with_or_without_modifiers_and_clamps_at_both_edges(

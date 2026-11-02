@@ -252,6 +252,28 @@ impl NyaTermApp {
             None
         };
         let native_run = self.ai.native_run_view();
+        let native_approvals = native_run
+            .as_ref()
+            .filter(|view| {
+                self.ai
+                    .native_run_is_live(&view.run_id, self.ai.chat_session_id())
+            })
+            .map(|view| {
+                let mut approvals = self
+                    .mcp
+                    .capabilities
+                    .native_approval_requests(&view.run_id, self.ai.chat_session_id());
+                for view in &mut approvals {
+                    if let Some(target) = &view.approval.target
+                        && let Some(label) = self.session.display_name(target)
+                    {
+                        view.approval.target = Some(format!("{label} ({target})"));
+                    }
+                }
+                approvals
+            })
+            .unwrap_or_default()
+            .into();
         let mut native_answer_inputs = Vec::new();
         if let Some(view) = &native_run
             && view.status == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser
@@ -279,6 +301,7 @@ impl NyaTermApp {
         AiPanelSnapshot {
             index: Arc::default(),
             native_run,
+            native_approvals,
             native_answer_inputs,
             ui_font_family: if self.settings.summary().ui_font_family.trim().is_empty() {
                 crate::features::shell::gpui_ui_font_fallback().into()
