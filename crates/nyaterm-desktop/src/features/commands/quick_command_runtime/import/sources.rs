@@ -129,12 +129,19 @@ fn split_windterm_command(raw: &str) -> (&str, bool) {
 fn escape_windterm_bare_returns(command: &str) -> String {
     let mut escaped = String::with_capacity(command.len());
     let mut chars = command.chars().peekable();
+    let mut backslashes = 0;
     while let Some(ch) = chars.next() {
         if ch == '\r' && chars.peek() != Some(&'\n') {
+            // An unpaired backslash used to send both itself and the literal
+            // CR. Pair it first so it cannot consume the new escape.
+            if backslashes % 2 == 1 {
+                escaped.push('\\');
+            }
             escaped.push_str("\\r");
         } else {
             escaped.push(ch);
         }
+        backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
     }
     escaped
 }

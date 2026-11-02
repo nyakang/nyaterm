@@ -232,6 +232,43 @@ fn windterm_keeps_crlf_and_lf_line_breaks_as_lines() {
 }
 
 #[test]
+fn windterm_bare_returns_preserve_execution_after_backslash_runs() {
+    for backslashes in 0..=3 {
+        for line_ending in ["\r", "\r\n", "\n"] {
+            for execute in [false, true] {
+                let original = format!(
+                    "echo {}\rnext{line_ending}echo {}{line_ending}last\\pdone",
+                    "\\".repeat(backslashes),
+                    "\\".repeat(backslashes),
+                );
+                let raw = serde_json::json!([{
+                    "quick.label": "Backslashes",
+                    "quick.text": if execute {
+                        format!("{original}\r")
+                    } else {
+                        original.clone()
+                    },
+                    "quick.type": "Send Text",
+                }])
+                .to_string();
+                let mut config = QuickCommandsConfig::default();
+                merge_import(&mut config, parse_windterm_quickbar(&raw).unwrap()).unwrap();
+                let command = &config.commands[0];
+                assert_eq!(
+                    command.execution_mode.as_deref(),
+                    Some(if execute { "execute" } else { "append" })
+                );
+                assert_eq!(
+                    plan_quick_command(&command.command, execute),
+                    plan_quick_command(&original, execute),
+                    "backslashes={backslashes}, line_ending={line_ending:?}, execute={execute}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn imports_xshell_quick_buttons_type_one_only() {
     let import_config = parse_xshell_quick_buttons_content(
         r#"[Info]
