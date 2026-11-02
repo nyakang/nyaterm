@@ -1023,6 +1023,39 @@ mod tests {
         );
     }
 
+    /// Editing only the word separators must still be written when the draft is applied.
+    ///
+    /// The box used to update memory and nothing else, so no persistence domain was
+    /// marked dirty and applying the draft saved no interaction settings at all. The
+    /// assertion is on disk for the same reason as the header-status test above.
+    #[test]
+    fn applying_a_draft_persists_word_separators() {
+        const SEPARATORS: &str = " ()[]{}\"':=,;|&<>";
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let stored = |app: &gpui::Entity<NyaTermApp>, cx: &mut TestAppContext| {
+            cx.update_entity(app, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+            })
+            .expect("load stored settings")
+            .interaction_word_separators
+        };
+        assert_ne!(stored(&app, &mut cx), SEPARATORS, "fixture baseline");
+
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.apply_interaction_word_separators(SEPARATORS.to_string(), cx);
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(stored(&app, &mut cx), SEPARATORS);
+    }
+
     #[test]
     fn canceling_a_draft_restores_ui_typography_source() {
         let mut cx = TestAppContext::single();
