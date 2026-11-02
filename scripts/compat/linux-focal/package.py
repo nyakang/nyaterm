@@ -133,7 +133,7 @@ def create_deb(stage, output, version):
         launcher.chmod(0o755)
         desktop = root / "usr/share/applications" / (desktop_id + ".desktop")
         desktop.parent.mkdir(parents=True)
-        wm_class = "NyaTerm Preview" if "-" in version else "NyaTerm"
+        wm_class = "NyaTerm Preview" if "-" in version.split("+", 1)[0] else "NyaTerm"
         desktop.write_text(textwrap.dedent("""\
             [Desktop Entry]
             Type=Application
