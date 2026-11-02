@@ -1298,11 +1298,8 @@ impl SettingsPanel {
         let palette = snapshot.chrome.palette;
         let dirty = snapshot.draft_dirty || snapshot.settings.theme_designer.dirty();
         let validation_error = snapshot.validation_error.clone();
-        // A validation error must not grey out Apply/Confirm. Those two buttons are
-        // the only place that explains *why* the draft cannot be saved: the click
-        // lands in `apply_settings_draft`, which reports the blocker. Disabling them
-        // leaves the user stuck on "apply your settings first" with no way to learn
-        // what is missing, and no way to close the window except Cancel.
+        // Keep save actions reachable while the status below explains validation
+        // errors. The runtime rejects invalid drafts and keeps settings open.
         let apply_disabled = !dirty;
         let status = validation_error.clone().unwrap_or_else(|| {
             if dirty {
@@ -1367,6 +1364,7 @@ impl SettingsPanel {
                     .child(
                         div()
                             .id("settings-apply")
+                            .debug_selector(|| "settings-apply".into())
                             .h(px(28.))
                             .min_w(px(64.))
                             .px_4()
@@ -1396,6 +1394,7 @@ impl SettingsPanel {
                     .child(
                         div()
                             .id("settings-confirm")
+                            .debug_selector(|| "settings-confirm".into())
                             .h(px(28.))
                             .min_w(px(64.))
                             .px_4()
@@ -1996,7 +1995,7 @@ mod tests {
     use std::path::Path;
 
     use gpui::{
-        AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
         TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
@@ -2122,6 +2121,106 @@ mod tests {
 
     fn rebuilds(panel: &Entity<SettingsPanel>, cx: &mut gpui::App) -> usize {
         panel.read(cx).rebuild_count
+    }
+
+    fn click_footer(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, selector: &'static str) {
+        draw(app, vcx);
+        let bounds = vcx
+            .debug_bounds(selector)
+            .expect("settings footer button is drawn");
+        vcx.simulate_click(bounds.center(), Modifiers::default());
+        draw(app, vcx);
+    }
+
+    #[test]
+    fn invalid_draft_footer_buttons_report_validation_and_keep_settings_open() {
+        let dir = TestConfigDir::new("nyaterm-settings-footer-invalid");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, dir.path());
+        let error = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.settings
+                    .toggle_master_password(false)
+                    .expect("stage enabled");
+                app.request_settings_panel_refresh(cx);
+                app.pending_settings_validation_error().unwrap()
+            })
+        });
+        for selector in ["settings-apply", "settings-confirm"] {
+            vcx.update(|_, cx| app.update(cx, |app, _| app.shell.set_status("before click")));
+            click_footer(&app, vcx, selector);
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                assert!(
+                    app.shell.status().contains(&error),
+                    "{selector} must invoke validation"
+                );
+                assert_eq!(app.settings.store_status().message, error);
+                assert!(app.settings_tab_is_open());
+                assert!(app.shell.has_settings_draft());
+                assert!(app.settings_draft_dirty());
+                assert!(app.settings.master_password().enabled);
+                assert_eq!(
+                    app.settings_panel
+                        .read(cx)
+                        .snapshot()
+                        .unwrap()
+                        .validation_error,
+                    Some(error.clone()),
+                    "the footer must retain its validation message"
+                );
+                let saved = app
+                    .store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .expect("read stored settings");
+                assert!(!saved.has_master_password);
+            });
+        }
+    }
+
+    #[test]
+    fn clean_footer_disables_apply_and_allows_confirm_even_with_a_validation_error() {
+        for invalid_baseline in [false, true] {
+            let dir = TestConfigDir::new("nyaterm-settings-footer-clean");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let (app, vcx) = hosted(&mut cx, dir.path());
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    if invalid_baseline {
+                        app.cloud_sync.toggle_enabled();
+                        app.rebase_open_settings_draft(cx);
+                    }
+                    assert!(!app.settings_draft_dirty());
+                    assert_eq!(
+                        app.pending_settings_validation_error().is_some(),
+                        invalid_baseline
+                    );
+                    app.shell.set_status("disabled apply must not run");
+                    app.settings
+                        .set_store_message("disabled apply must not run");
+                })
+            });
+            click_footer(&app, vcx, "settings-apply");
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                assert_eq!(app.shell.status(), "disabled apply must not run");
+                assert_eq!(
+                    app.settings.store_status().message,
+                    "disabled apply must not run"
+                );
+                assert!(app.settings_tab_is_open());
+            });
+            click_footer(&app, vcx, "settings-confirm");
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                assert!(!app.settings_tab_is_open());
+                assert!(!app.shell.has_settings_draft());
+            });
+        }
     }
 
     #[test]
