@@ -185,10 +185,20 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
-        for (instance, class) in [("nyaterm", "NyaTerm"), ("nyaterm-preview", "NyaTerm Preview")] {
+        for (instance, class) in [
+            ("nyaterm", "NyaTerm"),
+            ("nyaterm-preview", "NyaTerm Preview"),
+        ] {
             set_window_class(&window, instance, class);
             let property = connection
-                .get_property(false, window.id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+                .get_property(
+                    false,
+                    window.id,
+                    AtomEnum::WM_CLASS,
+                    AtomEnum::STRING,
+                    0,
+                    1024,
+                )
                 .unwrap()
                 .reply()
                 .unwrap();
