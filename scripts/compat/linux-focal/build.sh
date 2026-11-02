@@ -12,12 +12,17 @@ export CARGO_TARGET_DIR="$PWD/target/linux-focal"
 export CARGO_HOME="${NYATERM_FOCAL_CARGO_HOME:-$CARGO_TARGET_DIR/cargo}"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 export CARGO_PROFILE_RELEASE_STRIP=debuginfo
-# All four default members are required at runtime, including the MCP bridge.
+# Default members include the MCP bridge; the Windows-only ActiveX host is not
+# shipped in the focal package.
 cargo build --release --locked --target x86_64-unknown-linux-gnu
 binary_dir="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release"
 bash scripts/compat/linux-focal/prepare-opengl.sh
+package_options=()
+if [[ "${NYATERM_FOCAL_DEB:-0}" == 1 ]]; then
+  package_options+=(--deb)
+fi
 python3 scripts/compat/linux-focal/package.py --binary-dir "$binary_dir" \
-  --opengl "$CARGO_TARGET_DIR/opengl" --output dist
+  --opengl "$CARGO_TARGET_DIR/opengl" --output "${NYATERM_FOCAL_DIST:-dist}" "${package_options[@]}"
 if [[ "${NYATERM_FOCAL_TESTS:-1}" == 1 ]]; then
   cargo test --release --locked --target x86_64-unknown-linux-gnu \
     -p nyaterm-rdp-helper -p nyaterm-vnc-helper --test lifecycle

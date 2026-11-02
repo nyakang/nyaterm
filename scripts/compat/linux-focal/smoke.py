@@ -15,9 +15,10 @@ import time
 
 def main():
     output = Path(sys.argv[1]).resolve()
-    for name in ("workbench.xwd", "workbench.png", "window-tree.txt"):
+    for name in ("workbench.xwd", "workbench.png", "window-tree.txt", "wm-class.txt"):
         (output / name).unlink(missing_ok=True)
-    archives = list(Path("dist").glob("NyaTerm_*_linux_x64_glibc231.tar.gz"))
+    dist = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("dist")
+    archives = list(dist.glob("NyaTerm_*_linux_x64_glibc231.tar.gz"))
     if len(archives) != 1:
         raise RuntimeError("expected exactly one newly built focal archive in dist")
     with tempfile.TemporaryDirectory() as directory:
@@ -37,6 +38,10 @@ def main():
                     tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
                     window = re.search(r'(0x[0-9a-f]+) "NyaTerm(?: Preview)?".*?1280x800', tree)
                     if window:
+                        wm_class = re.search(r'\("(nyaterm(?:-preview)?)" "(NyaTerm(?: Preview)?)"\)', window[0])
+                        if not wm_class:
+                            raise RuntimeError("window WM_CLASS does not match StartupWMClass")
+                        (output / "wm-class.txt").write_text(wm_class[0] + "\n", encoding="utf-8")
                         time.sleep(3)
                         if shutil.which("xwd"):
                             capture = ["xwd", "-silent", "-id", window[1], "-out",

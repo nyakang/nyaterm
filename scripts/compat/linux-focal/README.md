@@ -44,8 +44,40 @@ license, target-side read-only diagnosis and Chinese offline instructions. It
 also includes a **private CPU OpenGL runtime**, selected by `start-nyaterm.sh`, so
 Vulkan and a proprietary NVIDIA driver are not prerequisites. No Rust, Python,
 package manager, AppImage/FUSE or libc installation is needed on the destination.
-This avoids a `.deb` with unsatisfied versioned dependencies in a customized
-downstream package database.
+The tarball works without package-manager installation, including customized
+downstream package databases that cannot satisfy ordinary Ubuntu dependencies.
+
+## Optional Debian package
+
+Set `NYATERM_FOCAL_DEB=1` on the build container to also generate an installable
+`NyaTerm_<version>_linux_x64_glibc231.deb` and checksum. To package already built
+executables, run the following **inside the focal builder**:
+
+```sh
+python3 scripts/compat/linux-focal/package.py \
+  --binary-dir target/linux-focal/x86_64-unknown-linux-gnu/release \
+  --opengl target/linux-focal/opengl --output target/focal-review --deb
+```
+
+Both formats pass the same ABI/runtime audits. The `nyaterm-compat` package
+installs the private OpenGL launcher under `/opt/nyaterm-compat` and exposes
+`/usr/bin/nyaterm-compat`. Unlike the portable tarball, it stores data in the
+normal per-user NyaTerm directory, so `/opt` can stay root-owned. Review the
+declared dependencies against the target's package database before choosing the
+deb; continue using the tarball on customized systems that reject them.
+
+The generated desktop entry uses `StartupWMClass=NyaTerm`, matching the X11
+window class; Wayland keeps its lowercase desktop ID. Packages include the
+repository's original 32, 64, 128, 256 and 512 pixel hicolor PNGs. Package staging
+normalizes directories to 0755 and data/icons to 0644 even with a restrictive
+checkout or umask. `dpkg-deb --root-owner-group` sets archive ownership; it is a
+build argument, not a Debian control field. The generated `postinst configure`
+repairs only the package's explicit regular icon files and refreshes the icon
+cache when the tool is available. It tolerates missing sizes and repeated calls.
+
+`NYATERM_FOCAL_DIST` and `NYATERM_FOCAL_SMOKE_OUTPUT` select independent build and
+smoke-evidence directories, so verification need not overwrite an earlier
+artifact. Nothing here publishes or rewrites an existing Release.
 
 ## Private OpenGL runtime
 

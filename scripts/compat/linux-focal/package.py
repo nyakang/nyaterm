@@ -10,11 +10,16 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts/release"))
+import linux_icons
+
 BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper")
 LIMITS = {"GLIBC": (2, 31), "GLIBCXX": (3, 4, 28), "CXXABI": (1, 3, 12)}
 # These SONAMEs are supplied by the documented focal desktop. No newer SSL/FFI,
@@ -112,7 +117,63 @@ def audit_opengl(runtime):
     return reports
 
 
-def create_package(binary_dir, output, version, opengl):
+def create_deb(stage, output, version):
+    """Package the audited runtime without touching an installed/released copy."""
+    desktop_id = "nyaterm-compat"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        app_root = root / "opt" / desktop_id
+        shutil.copytree(stage, app_root, symlinks=True)
+        # Installed builds store user data in the normal per-user directory;
+        # /opt is read-only to ordinary users. The tarball remains portable.
+        (app_root / "nyaterm-portable").unlink()
+        launcher = root / "usr/bin" / desktop_id
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('#!/bin/sh\nexec /opt/nyaterm-compat/start-nyaterm.sh "$@"\n')
+        launcher.chmod(0o755)
+        desktop = root / "usr/share/applications" / (desktop_id + ".desktop")
+        desktop.parent.mkdir(parents=True)
+        wm_class = "NyaTerm Preview" if "-" in version else "NyaTerm"
+        desktop.write_text(textwrap.dedent("""\
+            [Desktop Entry]
+            Type=Application
+            Name=NyaTerm (Compatibility)
+            Comment=Ubuntu 20.04 terminal with private software OpenGL
+            Exec=/usr/bin/nyaterm-compat %U
+            Icon=nyaterm-compat
+            StartupWMClass={}
+            Terminal=false
+            Categories=Development;TerminalEmulator;Network;
+            StartupNotify=true
+            """).format(wm_class), encoding="utf-8")
+        desktop.chmod(0o644)
+        linux_icons.copy_icons(root, ROOT / "crates/nyaterm-app/resources/icons", desktop_id)
+        control = root / "DEBIAN"
+        control.mkdir()
+        linux_icons.write_postinst(control / "postinst", desktop_id)
+        (control / "control").write_text(textwrap.dedent("""\
+            Package: nyaterm-compat
+            Version: {}-1+glibc231
+            Section: net
+            Priority: optional
+            Architecture: amd64
+            Maintainer: NyaTerm compatibility packaging <noreply@github.com>
+            Depends: bash, libc6 (>= 2.31), libgcc-s1, libgtk-3-0 (>= 3.24), libglib2.0-0 (>= 2.64), libgdk-pixbuf2.0-0, libdbus-1-3, libxcb1, libxkbcommon0, libxkbcommon-x11-0
+            Description: NyaTerm Ubuntu 20.04 compatibility build with private software OpenGL
+             Includes the application, MCP/RDP/VNC helpers and a checksum-pinned Mesa runtime.
+             Requires X11. Does not replace libc or system graphics drivers.
+            """).format(version.replace("-", "~")), encoding="utf-8")
+        linux_icons.normalize_permissions(root)
+        artifact = output / ("NyaTerm_{}_linux_x64_glibc231.deb".format(version))
+        subprocess.run(["dpkg-deb", "--build", "--root-owner-group", str(root), str(artifact)],
+                       check=True)
+    artifact.with_name(artifact.name + ".sha256").write_text(
+        sha256(artifact) + "  " + artifact.name + "\n", encoding="utf-8")
+    print(artifact)
+    return artifact
+
+
+def create_package(binary_dir, output, version, opengl, deb=False):
     if os.confstr("CS_GNU_LIBC_VERSION") != "glibc 2.31":
         raise ValueError("package and resolve libraries inside the focal / glibc 2.31 image")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?", version):
@@ -142,6 +203,8 @@ def create_package(binary_dir, output, version, opengl):
         (stage / "abi-report.json").write_text(json.dumps(
             {"baseline": "Ubuntu 20.04 x86_64 / glibc 2.31", "version": version,
              "binaries": reports, "opengl_libraries": graphics}, indent=2) + "\n", encoding="utf-8")
+        if deb:
+            create_deb(stage, output, version)
         archive = output / (label + ".tar.gz")
         with tarfile.open(archive, "w:gz", compresslevel=6) as handle:
             handle.add(stage, arcname=label)
@@ -158,12 +221,13 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     parser.add_argument("--opengl", type=Path, required=True)
     parser.add_argument("--version")
+    parser.add_argument("--deb", action="store_true", help="also build an installable compatibility deb")
     args = parser.parse_args()
     version = args.version
     if version is None:
         metadata = json.loads(command("cargo", "metadata", "--no-deps", "--offline", "--format-version=1"))
         version = next(p["version"] for p in metadata["packages"] if p["name"] == "nyaterm-app")
-    create_package(args.binary_dir, args.output, version, args.opengl)
+    create_package(args.binary_dir, args.output, version, args.opengl, deb=args.deb)
 
 
 if __name__ == "__main__":

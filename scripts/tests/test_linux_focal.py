@@ -21,6 +21,30 @@ spec.loader.exec_module(focal)
 
 
 class FocalAbiTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb required")
+    def test_compat_deb_uses_private_launcher_and_complete_readable_icons(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage = root / "stage"
+            stage.mkdir()
+            for name in (*focal.BINARIES, "nyaterm-portable", "start-nyaterm.sh"):
+                (stage / name).touch()
+            output = root / "dist"
+            output.mkdir()
+            deb = focal.create_deb(stage, output, "2.0.1")
+            extracted = root / "extracted"
+            subprocess.run(["dpkg-deb", "--extract", str(deb), str(extracted)], check=True)
+            self.assertFalse((extracted / "opt/nyaterm-compat/nyaterm-portable").exists())
+            self.assertIn("/opt/nyaterm-compat/start-nyaterm.sh", (extracted / "usr/bin/nyaterm-compat").read_text())
+            desktop = (extracted / "usr/share/applications/nyaterm-compat.desktop").read_text()
+            self.assertIn("StartupWMClass=NyaTerm\n", desktop)
+            self.assertIn("Exec=/usr/bin/nyaterm-compat %U\n", desktop)
+            for size in focal.linux_icons.ICON_SIZES:
+                icon = extracted / "usr/share/icons/hicolor" / size / "apps/nyaterm-compat.png"
+                self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(struct.unpack(">II", icon.read_bytes()[16:24]), tuple(map(int, size.split("x"))))
+            self.assertTrue(deb.with_name(deb.name + ".sha256").is_file())
+
     @unittest.skipUnless(shutil.which("cc"), "C compiler required")
     def test_egl_adapter_changes_only_desktop_only_config_filter(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -119,9 +143,9 @@ print(count.value)
                 (root / name).write_bytes(name.encode())
             runtime = root / "opengl"
             runtime.mkdir()
-            with (mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"),
-                  mock.patch.object(focal, "audit", side_effect=lambda p: {"name": p.name}),
-                  mock.patch.object(focal, "audit_opengl", return_value=[])):
+            with mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
+                    mock.patch.object(focal, "audit", side_effect=lambda p: {"name": p.name}), \
+                    mock.patch.object(focal, "audit_opengl", return_value=[]):
                 archive = focal.create_package(root, root / "dist", "2.0.0", runtime)
             with tarfile.open(archive) as handle:
                 prefix = "NyaTerm_2.0.0_linux_x64_glibc231/"
