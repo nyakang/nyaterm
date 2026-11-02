@@ -2966,3 +2966,20 @@ fn history_scroll_counter_wrap_preserves_a_continuous_observation() {
     assert_eq!(current.reanchor_offset(previous, 7), 8);
     assert!(!current.preserves_coordinates_from(previous));
 }
+
+#[test]
+fn row_signature_ignores_trailing_default_blanks_but_not_styled_ones() {
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"ab");
+    let plain = screen.snapshot().row(0).unwrap().signature;
+
+    screen.advance(b"\x1b[2K\rab");
+    assert_eq!(screen.snapshot().row(0).unwrap().signature, plain);
+
+    screen.advance(b"\x1b[2K\rab\x1b[44m   \x1b[0m");
+    assert_ne!(screen.snapshot().row(0).unwrap().signature, plain);
+
+    screen.advance(b"\x1b[2K\rab\x1b[0m");
+    let erased_and_rewritten = screen.snapshot().row(0).unwrap().signature;
+    assert_eq!(erased_and_rewritten, plain);
+}
