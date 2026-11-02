@@ -1858,6 +1858,62 @@ fn cloud_pull_without_source_key_keeps_local_key_for_inline_passwords() {
     );
 }
 
+/// The export dialog asks for "a password", so it must be enough on its own: a source
+/// without a master password used to leave the vault key wrapped by the device key, and
+/// importing with the very password typed at export failed to unwrap it.
+#[test]
+fn encrypted_backup_opens_with_its_own_password_without_a_source_master_password() {
+    let source_dir = unique_temp_dir("backup-own-password-source");
+    let target_dir = unique_temp_dir("backup-own-password-target");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    let mut saved: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id": "server", "name": "Server", "type": "ssh",
+        "host": "server.example", "port": 22, "username": "root"
+    }))
+    .unwrap();
+    saved.auth = Some(nyaterm_core::ConnectionAuth {
+        mode: "password".into(),
+        password: Some("fixture-backup-password".into()),
+        ..Default::default()
+    });
+    source.save_connection(&saved).unwrap();
+    let backup_path = source_dir.join("encrypted.nya");
+    source
+        .export_encrypted_portable_snapshot_from_open_store(
+            &backup_path,
+            "source",
+            "2.0.0",
+            "backup-password",
+        )
+        .unwrap();
+
+    let target = ConnectionStore::open(&target_dir).unwrap();
+    assert!(
+        target
+            .import_encrypted_portable_snapshot_into_open_store(&backup_path, "wrong-password")
+            .is_err()
+    );
+    target
+        .import_encrypted_portable_snapshot_into_open_store(&backup_path, "backup-password")
+        .unwrap();
+    assert_eq!(
+        target
+            .get_connection("server")
+            .unwrap()
+            .unwrap()
+            .auth
+            .unwrap()
+            .password
+            .unwrap()
+            .expose_secret(),
+        "fixture-backup-password"
+    );
+    drop(target);
+    drop(source);
+    std::fs::remove_dir_all(target_dir).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+}
+
 #[test]
 fn encrypted_backup_import_reencrypts_retained_standalone_cloud_settings() {
     let source_dir = unique_temp_dir("backup-rekey-source");
