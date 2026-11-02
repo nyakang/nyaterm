@@ -36,6 +36,22 @@ overlay HWND。它不是全局置顶窗口，也不拥有独立业务状态。�
 切换 Builtin；仅改变当前会话，不修改保存的连接。系统认证授权、服务器
 身份验证和剪贴板/资源授权继续执行，不能通过自动降级绕过。
 
+## 认证与剪贴板策略
+
+选择 Windows 后端即使用系统证书验证，验证失败拒绝连接。旧数据中缺失的
+`windows_authentication` 在启动配置中补为 `system`，未知值仍拒绝使用。
+保存的 Builtin 证书策略保持不变，不转换为系统信任授权。
+
+当前 ActiveX 剪贴板固定禁用。编辑器禁用控件，启动/恢复/重连统一覆盖旧的
+剪贴板请求，原生宿主再次校验并将 `RedirectClipboard` 固定关闭。归一化
+不批量改写保存数据；用户保存编辑时才保存禁用值。不开放“仅文本”或完整重定向。
+本机离线回归测试创建隐藏父窗口和真实系统控件，覆盖 NLA/管理会话开关，
+读回确认系统验证级别、剪贴板和动态资源策略，再销毁宿主；不调用 Connect。
+该测试通过仅证明本机初始化可用，不代表服务器登录或实际会话验收通过。
+
+动态驱动器和设备重定向通过 `IMsRdpClientNonScriptable3` 关闭；其他设置使用
+类型库的强类型接口，初始化失败返回具体属性和 HRESULT，不包含连接数据。
+
 ## 关闭与发布
 
 关闭期间停止新输入和操作，将焦点归还父窗口。优先 RequestClose 并等待
@@ -67,7 +83,7 @@ cargo run -p nyaterm-windows-rdp --example native_overlay_smoke -- <保存的连
 
 | 项目 | 验收要求 |
 | --- | --- |
-| 登录与安全 | 真实登录、失败认证、证书拒绝、剪贴板授权 |
+| 登录与安全 | 真实登录、失败认证、证书拒绝、剪贴板双向不传输 |
 | 输入 | 中文 IME、系统快捷键、Ctrl+Alt+Home、无双重输入 |
 | 浮层 | 菜单区域命中、外部点击只执行一次、tooltip 穿透、模态阻断；远程画面持续更新 |
 | 布局 | 连续切页签、分屏、最大化、跨 DPI 显示器、动态/固定分辨率 |
@@ -113,3 +129,13 @@ cargo run -p nyaterm-windows-rdp --example native_overlay_smoke -- <保存的连
 - ARM64 交叉检查因本机缺少 `atlmfc/lib/arm64/atls.lib` 停止；自动安装
   ATL 返回 5007。CI 已增加 ATL/ARM64 组件安装，但尚未在本轮运行远端
   发布任务，不能记录为 ARM64 构建通过。
+
+## ActiveX 初始化与设置联动修复验证（Windows x64）
+
+- 本机真实 ActiveX 控件离线初始化、策略读回及释放测试通过，不连接服务器。
+- `cargo check --workspace --locked -j 1` 通过。
+- `cargo test --workspace --locked -j 1`：5046 项通过、0 失败、42 项忽略；
+  包含旧配置归一化、未知认证拒绝、编辑器联动及启动/重试回归。
+- `cargo clippy --workspace --all-targets --locked -j 1 -- -D warnings` 通过。
+- `cargo fmt --all -- --check` 和 `git diff --check` 通过。
+- 尚未完成真实服务器登录、证书拒绝、断网重连、剪贴板双向不传输及 ARM64 实机验收。

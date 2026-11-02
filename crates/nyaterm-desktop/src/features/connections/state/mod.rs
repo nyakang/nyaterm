@@ -927,8 +927,8 @@ impl ConnectionFeatureState {
         set_connection_editor_forwarding_endpoint_field(&mut self.editor.draft, index, field, text)
     }
 
-    pub fn begin_editor(&mut self, draft: ConnectionEditorState) {
-        let mut draft = draft;
+    pub fn begin_editor(&mut self, mut draft: ConnectionEditorState) {
+        draft.normalize_rdp_backend_settings();
         if draft.password_account_id().is_none() {
             draft.password_source = ConnectionEditorPasswordSource::Direct;
         }

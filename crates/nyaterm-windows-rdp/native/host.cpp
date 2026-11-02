@@ -21,16 +21,7 @@ CComBSTR text(NyaRdpText value) {
     return CComBSTR(static_cast<int>(value.len), reinterpret_cast<const wchar_t*>(value.data));
 }
 
-HRESULT set_property(IDispatch* object, const wchar_t* name, CComVariant value) {
-    if (!object) return E_NOINTERFACE;
-    LPOLESTR key = const_cast<LPOLESTR>(name);
-    DISPID id = 0;
-    HRESULT hr = object->GetIDsOfNames(IID_NULL, &key, 1, LOCALE_INVARIANT, &id);
-    if (FAILED(hr)) return hr;
-    DISPID named = DISPID_PROPERTYPUT;
-    DISPPARAMS args{&value, &named, 1, 1};
-    return object->Invoke(id, IID_NULL, LOCALE_INVARIANT, DISPATCH_PROPERTYPUT, &args, nullptr, nullptr, nullptr);
-}
+
 }
 
 struct NyaRdpHost {
@@ -165,35 +156,61 @@ public:
     }
 };
 
-HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config) {
-    HRESULT hr = host.client->put_Server(text(config.server));
-    if (SUCCEEDED(hr)) hr = host.client->put_UserName(text(config.username));
-    if (SUCCEEDED(hr)) hr = host.client->put_Domain(text(config.domain));
-    if (SUCCEEDED(hr)) hr = host.client->put_DesktopWidth(static_cast<LONG>(config.width));
-    if (SUCCEEDED(hr)) hr = host.client->put_DesktopHeight(static_cast<LONG>(config.height));
-    if (SUCCEEDED(hr)) hr = host.client->put_ColorDepth(static_cast<LONG>(config.color_depth));
-    if (SUCCEEDED(hr)) hr = host.client->get_AdvancedSettings9(&host.advanced);
-    if (FAILED(hr)) return hr;
-    CComQIPtr<IDispatch> advanced(host.advanced);
-    const auto put = [&](const wchar_t* name, CComVariant value) { return set_property(advanced, name, value); };
-    if (FAILED(hr = put(L"RDPPort", CComVariant(static_cast<LONG>(config.port))))) return hr;
-    if (FAILED(hr = put(L"EnableCredSspSupport", CComVariant(config.nla != 0)))) return hr;
-    if (FAILED(hr = put(L"AuthenticationLevel", CComVariant(LONG{1})))) return hr;
-    if (FAILED(hr = put(L"ConnectToAdministerServer", CComVariant(config.admin != 0)))) return hr;
-    if (FAILED(hr = put(L"RedirectClipboard", CComVariant(config.clipboard != 0)))) return hr;
-    if (FAILED(hr = put(L"RedirectDrives", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectPrinters", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectSmartCards", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectPorts", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectDevices", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectPOSDevices", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectDynamicDrives", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"RedirectDynamicDevices", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"AudioCaptureRedirectionMode", CComVariant(false)))) return hr;
-    if (FAILED(hr = put(L"EnableAutoReconnect", CComVariant(config.reconnect != 0)))) return hr;
-    if (FAILED(hr = put(L"MaxReconnectAttempts", CComVariant(static_cast<LONG>(config.max_attempts))))) return hr;
-    if (FAILED(hr = put(L"PerformanceFlags", CComVariant(static_cast<LONG>(config.performance))))) return hr;
-    if (FAILED(hr = put(L"SmartSizing", CComVariant(false)))) return hr;
+HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage) {
+    HRESULT hr = S_OK;
+    CComPtr<IMsRdpClientNonScriptable3> resources;
+    *stage = 100; // Server
+    if (FAILED(hr = host.client->put_Server(text(config.server)))) return hr;
+    *stage = 101; // UserName
+    if (FAILED(hr = host.client->put_UserName(text(config.username)))) return hr;
+    *stage = 102; // Domain
+    if (FAILED(hr = host.client->put_Domain(text(config.domain)))) return hr;
+    *stage = 103; // DesktopWidth
+    if (FAILED(hr = host.client->put_DesktopWidth(static_cast<LONG>(config.width)))) return hr;
+    *stage = 104; // DesktopHeight
+    if (FAILED(hr = host.client->put_DesktopHeight(static_cast<LONG>(config.height)))) return hr;
+    *stage = 105; // ColorDepth
+    if (FAILED(hr = host.client->put_ColorDepth(static_cast<LONG>(config.color_depth)))) return hr;
+    *stage = 106; // AdvancedSettings9
+    if (FAILED(hr = host.client->get_AdvancedSettings9(&host.advanced))) return hr;
+    *stage = 107; // RDPPort
+    if (FAILED(hr = host.advanced->put_RDPPort(static_cast<LONG>(config.port)))) return hr;
+    *stage = 108; // EnableCredSspSupport
+    if (FAILED(hr = host.advanced->put_EnableCredSspSupport(config.nla ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
+    *stage = 109; // AuthenticationLevel
+    if (FAILED(hr = host.advanced->put_AuthenticationLevel(1))) return hr;
+    *stage = 110; // ConnectToAdministerServer
+    if (FAILED(hr = host.advanced->put_ConnectToAdministerServer(config.admin ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
+    *stage = 111; // RedirectClipboard
+    if (FAILED(hr = host.advanced->put_RedirectClipboard(VARIANT_FALSE))) return hr;
+    *stage = 112; // RedirectDrives
+    if (FAILED(hr = host.advanced->put_RedirectDrives(VARIANT_FALSE))) return hr;
+    *stage = 113; // RedirectPrinters
+    if (FAILED(hr = host.advanced->put_RedirectPrinters(VARIANT_FALSE))) return hr;
+    *stage = 114; // RedirectSmartCards
+    if (FAILED(hr = host.advanced->put_RedirectSmartCards(VARIANT_FALSE))) return hr;
+    *stage = 115; // RedirectPorts
+    if (FAILED(hr = host.advanced->put_RedirectPorts(VARIANT_FALSE))) return hr;
+    *stage = 116; // RedirectDevices
+    if (FAILED(hr = host.advanced->put_RedirectDevices(VARIANT_FALSE))) return hr;
+    *stage = 117; // RedirectPOSDevices
+    if (FAILED(hr = host.advanced->put_RedirectPOSDevices(VARIANT_FALSE))) return hr;
+    *stage = 118; // IMsRdpClientNonScriptable3
+    if (FAILED(hr = host.control->QueryInterface(__uuidof(IMsRdpClientNonScriptable3), reinterpret_cast<void**>(&resources)))) return hr;
+    *stage = 119; // RedirectDynamicDrives
+    if (FAILED(hr = resources->put_RedirectDynamicDrives(VARIANT_FALSE))) return hr;
+    *stage = 120; // RedirectDynamicDevices
+    if (FAILED(hr = resources->put_RedirectDynamicDevices(VARIANT_FALSE))) return hr;
+    *stage = 121; // AudioCaptureRedirectionMode
+    if (FAILED(hr = host.advanced->put_AudioCaptureRedirectionMode(VARIANT_FALSE))) return hr;
+    *stage = 122; // EnableAutoReconnect
+    if (FAILED(hr = host.advanced->put_EnableAutoReconnect(config.reconnect ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
+    *stage = 123; // MaxReconnectAttempts
+    if (FAILED(hr = host.advanced->put_MaxReconnectAttempts(static_cast<LONG>(config.max_attempts)))) return hr;
+    *stage = 124; // PerformanceFlags
+    if (FAILED(hr = host.advanced->put_PerformanceFlags(static_cast<LONG>(config.performance)))) return hr;
+    *stage = 125; // SmartSizing
+    if (FAILED(hr = host.advanced->put_SmartSizing(VARIANT_FALSE))) return hr;
     CComQIPtr<IMsRdpExtendedSettings> extended(host.control);
     if (extended) {
         CComVariant scale(static_cast<ULONG>(config.scale));
@@ -204,14 +221,19 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config) {
         host.desktop_scale = SUCCEEDED(desktop_hr) && SUCCEEDED(device_hr);
     }
     CComPtr<IMsRdpClientSecuredSettings2> secured;
+    *stage = 130;
     hr = host.client->get_SecuredSettings3(&secured);
     if (FAILED(hr)) return hr;
+    *stage = 131;
     if (FAILED(hr = secured->put_KeyboardHookMode(1))) return hr;
+    *stage = 132;
     if (FAILED(hr = secured->put_AudioRedirectionMode(2))) return hr;
     if (config.password.len) {
+        *stage = 133;
         CComQIPtr<IMsTscNonScriptable> secret(host.control);
         if (!secret) return E_NOINTERFACE;
         CComBSTR password = text(config.password);
+        *stage = 134;
         hr = secret->put_ClearTextPassword(password);
         if (password.m_str) SecureZeroMemory(password.m_str, SysStringByteLen(password));
     }
@@ -248,7 +270,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
     if (!valid_text(config->server) || !config->server.len || !valid_text(config->username) ||
         !valid_text(config->domain) || !valid_text(config->password) || !config->port || config->port > 65535 ||
         config->width < 200 || config->width > 8192 || config->height < 200 || config->height > 8192 ||
-        config->scale < 100 || config->scale > 500 || config->max_attempts > 200) return E_INVALIDARG;
+        config->scale < 100 || config->scale > 500 || config->max_attempts > 200 || config->clipboard != 0) return E_INVALIDARG;
     const HWND parent = reinterpret_cast<HWND>(config->parent);
     if (!IsWindow(parent) || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return RPC_E_WRONG_THREAD;
     NyaRdpHost* host = new (std::nothrow) NyaRdpHost();
@@ -287,7 +309,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
             result = host->point->Advise(host->sink, &host->cookie);
             if (FAILED(result)) return result;
             *stage = 7;
-            return configure(*host, *config);
+            return configure(*host, *config, stage);
         };
         hr = create();
     } catch (...) { hr = E_OUTOFMEMORY; }
@@ -413,4 +435,21 @@ extern "C" int32_t nya_rdp_destroy(NyaRdpHost** owner) noexcept try {
     const HRESULT result = release_host(**owner);
     if (FAILED(result)) return result;
     delete *owner; *owner = nullptr; return S_OK;
+} catch (...) { return E_FAIL; }
+
+// Read the actual system control in the offline Windows initialization regression test.
+extern "C" int32_t nya_rdp_verify_disabled_resources(NyaRdpHost* host) noexcept try {
+    HRESULT hr = admit(host); if (FAILED(hr)) return hr;
+    VARIANT_BOOL enabled = VARIANT_TRUE;
+    unsigned int authentication = 0;
+    if (FAILED(hr = host->advanced->get_AuthenticationLevel(&authentication))) return hr;
+    if (authentication != 1) return E_FAIL;
+    if (FAILED(hr = host->advanced->get_RedirectClipboard(&enabled))) return hr;
+    if (enabled != VARIANT_FALSE) return E_FAIL;
+    CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);
+    if (!resources) return E_NOINTERFACE;
+    if (FAILED(hr = resources->get_RedirectDynamicDrives(&enabled))) return hr;
+    if (enabled != VARIANT_FALSE) return E_FAIL;
+    if (FAILED(hr = resources->get_RedirectDynamicDevices(&enabled))) return hr;
+    return enabled == VARIANT_FALSE ? S_OK : E_FAIL;
 } catch (...) { return E_FAIL; }

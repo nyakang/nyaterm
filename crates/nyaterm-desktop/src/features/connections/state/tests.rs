@@ -1402,6 +1402,75 @@ fn connection_password_input_replaces_or_removes_the_existing_secret_without_tri
 }
 
 #[test]
+fn stored_password_placeholder_is_fixed_and_disappears_when_deleted_or_replaced() {
+    use super::editor_logic::{ConnectionEditorPlaceholder, editor_field_seeds};
+    use crate::models::ConnectionPasswordEdit;
+
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        for kind in [
+            ConnectionKindTab::Ssh,
+            ConnectionKindTab::Telnet,
+            ConnectionKindTab::Rdp,
+            ConnectionKindTab::Vnc,
+        ] {
+            for stored in ["short", "a much longer stored ciphertext"] {
+                let draft = ConnectionEditorState {
+                    kind,
+                    password_source: ConnectionEditorPasswordSource::Direct,
+                    password_edit: ConnectionPasswordEdit::Keep,
+                    password: Default::default(),
+                    existing_password: Some(stored.into()),
+                    existing_password_locked: true,
+                    ..connection_editor_state_with_secret_draft()
+                };
+                let (_, value, _, placeholder) = editor_field_seeds(&draft)
+                    .into_iter()
+                    .find(|(field, _, _, _)| *field == ConnectionEditorField::Password)
+                    .unwrap();
+                assert!(value.is_empty());
+                assert!(matches!(
+                    placeholder,
+                    ConnectionEditorPlaceholder::Literal("••••••••")
+                ));
+                app.connection_state.begin_editor(draft);
+                app.connection_state.build_editor_fields(cx);
+                assert_eq!(
+                    app.connection_state.editor_password_placeholder(),
+                    "••••••••"
+                );
+                assert!(!app.connection_state.editor_password_is_draft());
+                let input =
+                    app.connection_state.editor_fields()[&ConnectionEditorField::Password].clone();
+                assert!(input.read(cx).value(cx).is_empty());
+                assert!(app.connection_state.delete_editor_stored_password(cx));
+                assert_eq!(
+                    app.connection_state.editor_password_placeholder(),
+                    rust_i18n::t!("authForm.connectionPasswordEnter")
+                );
+                assert!(app.connection_state.editor_password_is_draft());
+                assert!(input.read(cx).value(cx).is_empty());
+                assert!(!app.connection_state.delete_editor_stored_password(cx));
+                let draft = app.connection_state.active_editor_draft().unwrap();
+                assert_eq!(draft.password_edit, ConnectionPasswordEdit::Remove);
+                assert_eq!(draft.existing_password.as_deref(), Some(stored));
+
+                app.connection_state
+                    .set_editor_field_text(ConnectionEditorField::Password, " replacement ".into());
+                app.connection_state.sync_editor_password_input(cx);
+                assert!(app.connection_state.editor_password_is_draft());
+                assert_eq!(input.read(cx).value(cx), " replacement ");
+                let draft = app.connection_state.active_editor_draft().unwrap();
+                assert_eq!(draft.password_edit, ConnectionPasswordEdit::Replace);
+                assert_eq!(draft.existing_password.as_deref(), Some(stored));
+            }
+        }
+    });
+}
+
+#[test]
 fn connection_password_removal_survives_submission_and_can_be_replaced() {
     use crate::models::ConnectionPasswordEdit;
     use nyaterm_ui::NyaInputEvent;
@@ -2607,5 +2676,61 @@ fn reopening_connection_editor_starts_on_basic_information() {
     assert_eq!(
         owner.active_draft().unwrap().section,
         ConnectionEditorSection::Basic
+    );
+}
+
+#[test]
+fn windows_rdp_editor_normalizes_old_clipboard_modes_and_blocks_changes() {
+    for mode in ["text-only", "text-and-files", "disabled"] {
+        for authentication in [None, Some("system"), Some("future-auth")] {
+            let mut draft = connection_editor_state_with_secret_draft();
+            draft.kind = ConnectionKindTab::Rdp;
+            draft.rdp_backend = "active-x".into();
+            draft.rdp_clipboard.mode = mode.into();
+            draft.rdp_security.windows_authentication = authentication.map(str::to_owned);
+            draft.normalize_rdp_backend_settings();
+            assert_eq!(draft.rdp_clipboard.mode, "disabled");
+            assert_eq!(
+                draft.rdp_security.windows_authentication.as_deref(),
+                Some(authentication.unwrap_or("system"))
+            );
+            let mut draft = Some(draft);
+            assert!(!set_connection_editor_select_value(
+                &mut draft,
+                ConnectionEditorSelect::RdpClipboardMode,
+                Some("text-and-files".into())
+            ));
+            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "disabled");
+            assert!(set_connection_editor_select_value(
+                &mut draft,
+                ConnectionEditorSelect::RdpBackend,
+                Some("builtin".into())
+            ));
+            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "disabled");
+            assert!(set_connection_editor_select_value(
+                &mut draft,
+                ConnectionEditorSelect::RdpClipboardMode,
+                Some("text-only".into())
+            ));
+            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "text-only");
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn selecting_windows_rdp_disables_clipboard_and_selects_system_authentication() {
+    let mut draft = Some(connection_editor_state_with_secret_draft());
+    draft.as_mut().unwrap().rdp_clipboard.mode = "text-and-files".into();
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::RdpBackend,
+        Some("windows".into())
+    ));
+    let draft = draft.unwrap();
+    assert_eq!(draft.rdp_clipboard.mode, "disabled");
+    assert_eq!(
+        draft.rdp_security.windows_authentication.as_deref(),
+        Some("system")
     );
 }

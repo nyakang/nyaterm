@@ -618,7 +618,7 @@ impl NyaTermApp {
                         return;
                     }
                 };
-                let config = RdpSessionConfig {
+                let mut config = RdpSessionConfig {
                     relay: self
                         .remote_desktop
                         .prepared_routes
@@ -644,6 +644,7 @@ impl NyaTermApp {
                         max_attempts: reconnect.max_attempts,
                     },
                 };
+                config.normalize_backend_settings();
                 let session_id = self.schedule_rdp_runtime(config.clone(), cx);
                 if let Some(route) = self.remote_desktop.prepared_routes.remove(&connection.id) {
                     self.remote_desktop.routes.insert(session_id.clone(), route);

@@ -25,6 +25,14 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        // Revealing text entered in this editor does not grant access to stored secrets.
+        if self.connection_state.editor_password_is_draft() {
+            self.connection_state.invalidate_editor_password_request();
+            self.connection_state.sync_editor_password_input(cx);
+            input.update(cx, |state, cx| state.set_masked(false, cx));
+            cx.notify();
+            return;
+        }
         let Some((editor_generation, revision)) =
             self.connection_state.begin_editor_password_reveal()
         else {

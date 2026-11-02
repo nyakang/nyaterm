@@ -5,7 +5,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
 
-use nyaterm_remote_desktop::{RdpClipboardMode, RdpDisplayConfig, RdpSessionConfig};
+use nyaterm_remote_desktop::{RdpDisplayConfig, RdpSessionConfig};
 use zeroize::Zeroizing;
 
 use crate::cleanup::{Cleanup, CleanupAction};
@@ -214,7 +214,7 @@ impl NativeRdpHost {
             scale: config.display.desktop_scale_factor.max(100),
             color_depth: config.display.color_depth.into(),
             nla: config.use_nla.into(),
-            clipboard: (config.clipboard.mode == RdpClipboardMode::TextAndFiles).into(),
+            clipboard: 0,
             admin: config.administrative_session.into(),
             reconnect: config.reconnect.enabled.into(),
             max_attempts: config.reconnect.max_attempts,
@@ -231,6 +231,37 @@ impl NativeRdpHost {
             5 => "attach system control",
             6 => "subscribe system events",
             7 => "apply authentication and resource policy",
+            100 => "Server",
+            101 => "UserName",
+            102 => "Domain",
+            103 => "DesktopWidth",
+            104 => "DesktopHeight",
+            105 => "ColorDepth",
+            106 => "AdvancedSettings9",
+            107 => "RDPPort",
+            108 => "EnableCredSspSupport",
+            109 => "AuthenticationLevel",
+            110 => "ConnectToAdministerServer",
+            111 => "RedirectClipboard",
+            112 => "RedirectDrives",
+            113 => "RedirectPrinters",
+            114 => "RedirectSmartCards",
+            115 => "RedirectPorts",
+            116 => "RedirectDevices",
+            117 => "RedirectPOSDevices",
+            118 => "IMsRdpClientNonScriptable3",
+            119 => "RedirectDynamicDrives",
+            120 => "RedirectDynamicDevices",
+            121 => "AudioCaptureRedirectionMode",
+            122 => "EnableAutoReconnect",
+            123 => "MaxReconnectAttempts",
+            124 => "PerformanceFlags",
+            125 => "SmartSizing",
+            130 => "SecuredSettings3",
+            131 => "KeyboardHookMode",
+            132 => "AudioRedirectionMode",
+            133 => "IMsTscNonScriptable",
+            134 => "ClearTextPassword",
             _ => "validate native configuration",
         };
         if let Err(error) = result(operation, status) {
@@ -473,4 +504,72 @@ fn performance_flags(display: &RdpDisplayConfig) -> u32 {
         | (u32::from(display.disable_cursor_blinking) << 6)
         | (u32::from(display.enable_font_smoothing) << 7)
         | (u32::from(display.enable_desktop_composition) << 8)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use nyaterm_remote_desktop::RdpSessionConfig;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+    };
+    use windows::core::w;
+
+    use crate::native::{NativeRdpHost, maintain_retired};
+
+    unsafe extern "C" {
+        fn nya_rdp_verify_disabled_resources(owner: *mut std::ffi::c_void) -> i32;
+    }
+
+    #[test]
+    fn system_control_initializes_offline_with_disabled_clipboard_and_resources() {
+        // A dedicated thread supplies a fresh apartment; no GPUI or remote server.
+        std::thread::spawn(|| unsafe {
+            struct Parent(HWND);
+            impl Drop for Parent {
+                fn drop(&mut self) {
+                    for _ in 0..3 {
+                        maintain_retired(Instant::now());
+                    }
+                    unsafe { DestroyWindow(self.0).unwrap() };
+                }
+            }
+            let parent = Parent(
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("NyaTerm offline test"),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    800,
+                    600,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap(),
+            );
+            for nla in [false, true] {
+                let config: RdpSessionConfig = serde_json::from_value(serde_json::json!({
+                    "backend":"windows", "windows_authentication":"system",
+                    "name":"offline", "host":"example.invalid", "port":3389,
+                    "username":"", "domain":"", "password":"offline-fixture",
+                    "use_nla":nla, "administrative_session":nla, "certificate_policy":"strict",
+                    "display":{"mode":"fixed","width":800,"height":600,"color_depth":32},
+                    "clipboard":{"mode":"disabled"},
+                    "reconnect":{"enabled":nla,"max_attempts":5}
+                }))
+                .unwrap();
+                let host = NativeRdpHost::create(parent.0.0 as usize, 1, &config).unwrap();
+                assert_eq!(nya_rdp_verify_disabled_resources(host.owner.as_ptr()), 0);
+                assert_eq!(host.try_destroy().err().map(|(_, error)| error), None);
+            }
+        })
+        .join()
+        .unwrap();
+    }
 }

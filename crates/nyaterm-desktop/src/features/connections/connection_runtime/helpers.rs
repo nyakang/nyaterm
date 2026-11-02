@@ -409,6 +409,7 @@ pub(super) fn connection_editor_from_saved(
             editor.vnc_view_only = view_only;
         }
     }
+    editor.normalize_rdp_backend_settings();
     editor
 }
 
@@ -625,10 +626,7 @@ pub(super) fn build_saved_connection_from_editor(
                 if editor.rdp_security.windows_authentication.as_deref() != Some("system") {
                     return Err(ConnectionEditorValidationError::RdpWindowsAuthenticationRequired);
                 }
-                if !matches!(
-                    editor.rdp_clipboard.mode.as_str(),
-                    "disabled" | "off" | "text-and-files"
-                ) {
+                if !matches!(editor.rdp_clipboard.mode.as_str(), "disabled" | "off") {
                     return Err(ConnectionEditorValidationError::RdpClipboardUnsupported);
                 }
             }
@@ -1560,6 +1558,47 @@ mod tests {
         assert!(!send_naws);
         assert!(!send_sga);
         assert_eq!(keep_alive_interval_secs, 45);
+    }
+
+    #[test]
+    fn old_windows_connections_normalize_only_the_editor_and_saved_changes() {
+        for backend in ["windows", "active-x"] {
+            for mode in ["text-only", "text-and-files", "disabled"] {
+                for authentication in [None, Some("system"), Some("future-auth")] {
+                    let mut document = serde_json::json!({
+                        "id":"old-windows", "name":"Old Windows", "type":"rdp",
+                        "backend":backend, "host":"example.invalid", "username":"user",
+                        "security":{"certificate_policy":"strict"},
+                        "clipboard":{"mode":mode}
+                    });
+                    if let Some(authentication) = authentication {
+                        document["security"]["windows_authentication"] = authentication.into();
+                    }
+                    let stored: SavedConnection = serde_json::from_value(document).unwrap();
+                    let original = serde_json::to_value(&stored).unwrap();
+                    let editor = connection_editor_from_saved(stored.clone(), false);
+                    assert_eq!(editor.rdp_clipboard.mode, "disabled");
+                    assert_eq!(editor.rdp_security.certificate_policy, "strict");
+                    assert_eq!(
+                        editor.rdp_security.windows_authentication.as_deref(),
+                        Some(authentication.unwrap_or("system"))
+                    );
+                    let saved = build_saved_connection_from_editor(&editor);
+                    if authentication == Some("future-auth") {
+                        assert_eq!(
+                            saved.unwrap_err(),
+                            ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
+                        );
+                    } else {
+                        let saved = serde_json::to_value(saved.unwrap()).unwrap();
+                        assert_eq!(saved["clipboard"]["mode"], "disabled");
+                        assert_eq!(saved["security"]["windows_authentication"], "system");
+                        assert_eq!(saved["security"]["certificate_policy"], "strict");
+                    }
+                    assert_eq!(serde_json::to_value(&stored).unwrap(), original);
+                }
+            }
+        }
     }
 
     #[test]

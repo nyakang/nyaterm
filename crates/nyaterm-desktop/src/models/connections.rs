@@ -407,6 +407,19 @@ pub(crate) struct ConnectionEditorState {
 }
 
 impl ConnectionEditorState {
+    pub(crate) fn uses_windows_rdp(&self) -> bool {
+        matches!(self.rdp_backend.as_str(), "windows" | "active-x")
+    }
+
+    pub(crate) fn normalize_rdp_backend_settings(&mut self) {
+        if self.uses_windows_rdp() {
+            self.rdp_security
+                .windows_authentication
+                .get_or_insert_with(|| "system".into());
+            self.rdp_clipboard.mode = "disabled".into();
+        }
+    }
+
     pub(crate) fn select_section(&mut self, section: ConnectionEditorSection) -> bool {
         if !ConnectionEditorSection::for_kind(self.kind).contains(&section) {
             return false;
