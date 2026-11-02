@@ -39,6 +39,13 @@ pub(crate) enum PreparedUpdate {
     },
 }
 
+#[cfg(windows)]
+fn is_valid_installed_executable(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("NyaTerm.exe"))
+}
+
 pub(super) fn prepare_artifact(
     artifact: PathBuf,
     executable: PathBuf,
@@ -55,6 +62,13 @@ pub(super) fn prepare_artifact(
         let directory = executable
             .parent()
             .ok_or("installed executable has no parent directory")?;
+        if !is_valid_installed_executable(&executable) {
+            return Err(format!(
+                "unexpected installed executable name: {}",
+                executable.display()
+            ));
+        }
+
         if !directory.join("Uninstall.exe").is_file() {
             return Err("this installation must be updated manually".into());
         }
@@ -418,7 +432,7 @@ fn run_windows_installed_helper(
     let target_dir = target
         .parent()
         .ok_or("installed application directory is unavailable")?;
-    if target.file_name().and_then(|name| name.to_str()) != Some("NyaTerm.exe")
+    if !is_valid_installed_executable(&target)
         || !target_dir.join("Uninstall.exe").is_file()
     {
         return Err("installed update target failed validation".into());
@@ -645,6 +659,31 @@ mod tests {
             assert!(staged_macos_bundle(&stage, flavor).is_err());
             std::fs::write(binaries.join("nyaterm-mcp"), b"test").unwrap();
             assert_eq!(staged_macos_bundle(&stage, flavor).unwrap(), bundle);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_executable_name_is_case_insensitive() {
+        use super::is_valid_installed_executable;
+        use std::path::Path;
+
+        for name in [
+            "NyaTerm.exe",
+            "nyaterm.exe",
+            "NYATERM.EXE",
+            "NyAtErM.ExE",
+        ] {
+            assert!(is_valid_installed_executable(Path::new(name)));
+        }
+
+        for name in [
+            "NyaTerm-old.exe",
+            "NyaTerm.exe.bak",
+            "Uninstall.exe",
+            "other.exe",
+        ] {
+            assert!(!is_valid_installed_executable(Path::new(name)));
         }
     }
 }
