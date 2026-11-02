@@ -439,6 +439,7 @@ impl NyaTermApp {
                 },
             ),
             recording,
+            tmux: crate::features::tmux::TmuxFeatureState::default(),
             tunnel_state: TunnelFeatureState::new(TunnelCatalogState::new(
                 tunnels,
                 tunnel_groups,

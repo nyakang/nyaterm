@@ -38,6 +38,113 @@ fn wait_for_queue_state(mut predicate: impl FnMut() -> bool, description: &str) 
     }
 }
 
+#[test]
+fn tmux_host_close_releases_full_pane_output_without_cancelling_other_hosts() {
+    for detached in [false, true] {
+        let manager = Arc::new(SessionManager::new());
+        let (command_tx, _receiver) = crate::ssh_mailbox::channel();
+        let (tmux_tx, _tmux_receiver) = crate::tmux::mailbox::channel();
+        let info = crate::SessionInfo {
+            id: "host".into(),
+            name: "host".into(),
+            kind: crate::SessionKind::Ssh,
+            working_dir: None,
+            cols: 80,
+            rows: 24,
+        };
+        for (id, sender) in [
+            ("projection", tmux_tx.clone()),
+            ("host:unrelated", crate::tmux::mailbox::channel().0),
+        ] {
+            let mut pane_info = info.clone();
+            pane_info.id = id.into();
+            SessionManager::register_tmux_pane(
+                &manager.sessions,
+                &manager.event_queue,
+                "host",
+                pane_info,
+                "%0".into(),
+                sender,
+            )
+            .unwrap();
+        }
+        manager.event_queue.push(SessionEvent::Output {
+            session_id: "projection".into(),
+            data: vec![b'x'; SESSION_EVENT_QUEUE_OUTPUT_LIMIT],
+        });
+        let queue = manager.event_queue.clone();
+        let (worker_done_tx, worker_done_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            queue.push(SessionEvent::Output {
+                session_id: "projection".into(),
+                data: vec![b'y'; 1024],
+            });
+            worker_done_tx.send(()).unwrap();
+        });
+        wait_for_queue_state(
+            || manager.event_queue.waiting_output_producers() == 1,
+            "tmux pane output to block",
+        );
+        manager.sessions.lock().unwrap().insert(
+            "host".into(),
+            crate::ManagedSession::Ssh(crate::SshChannelTransport {
+                info,
+                shell_enabled: true,
+                attempt: SshSessionConfig::default().attempt,
+                command_tx,
+                tmux_tx,
+                tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                backspace_as_bs: false,
+                worker_thread: Some(worker),
+            }),
+        );
+        let closer = manager.clone();
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let close_thread = std::thread::spawn(move || {
+            let result = if detached {
+                closer.close_detached("host")
+            } else {
+                closer.close("host")
+            };
+            done_tx.send(result).unwrap();
+        });
+        let result = done_rx.recv_timeout(Duration::from_secs(5));
+        if result.is_err() {
+            // Release a regressed join before failing, so the suite can finish.
+            manager.event_queue.cancel_session("projection");
+        }
+        close_thread.join().unwrap();
+        result
+            .expect("closing host must wake its pane producer")
+            .unwrap();
+        worker_done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(manager.event_queue.session_cancelled("projection"));
+        assert!(!manager.event_queue.session_cancelled("host:unrelated"));
+        let (late_info, late_tx) = {
+            let sessions = manager.sessions.lock().unwrap();
+            let crate::ManagedSession::TmuxPane(pane) = &sessions["projection"] else {
+                unreachable!()
+            };
+            (pane.info.clone(), pane.tmux_tx.clone())
+        };
+        assert!(matches!(
+            SessionManager::register_tmux_pane(
+                &manager.sessions,
+                &manager.event_queue,
+                "host",
+                late_info,
+                "%0".into(),
+                late_tx,
+            ),
+            Err(SessionError::NotFound(_))
+        ));
+        assert!(
+            manager.event_queue.session_cancelled("projection"),
+            "a late layout must not reopen the cancelled output queue"
+        );
+    }
+}
+
 /// A push must hand the event straight to a parked consumer. Before the
 /// queue carried a condvar the bridge could only poll, so every event paid
 /// an arbitrary slice of the poll interval before anyone looked at it.

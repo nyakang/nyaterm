@@ -295,9 +295,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if !self.session.manager().supports_modem_transfer(&session_id) {
-            self.shell.set_status(
-                rust_i18n::t!("dialog.serialSoftwareFlowControlModemDisabled").to_string(),
-            );
+            self.shell
+                .set_status(self.modem_transfer_disabled_message(&session_id));
             cx.notify();
             return;
         }

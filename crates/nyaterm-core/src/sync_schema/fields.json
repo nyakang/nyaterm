@@ -229,7 +229,8 @@
       "updated_at": "local",
       "created_at": "local",
       "use_count": "local",
-      "sort_order": "portable:sort_order"
+      "sort_order": "portable:sort_order",
+      "raw_send": "portable:raw_send"
     }
   },
   "QuickCommandCategory": {

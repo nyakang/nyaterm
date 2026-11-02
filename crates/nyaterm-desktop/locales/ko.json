@@ -3979,6 +3979,15 @@
     "showSecret": "내용 표시",
     "hideSecret": "내용 숨기기"
   },
+  "tmux": {
+    "modemDisabled": "tmux 제어 모드에서는 XMODEM/YMODEM/ZMODEM 파일 전송을 사용할 수 없습니다. SFTP를 사용하세요.",
+    "detach": "분리 (원격 tmux 세션 유지)",
+    "killWindow": "창 닫기 (kill-window)",
+    "newWindow": "새 창",
+    "splitHorizontal": "위아래 분할",
+    "splitVertical": "좌우 분할",
+    "commandPlaceholder": "tmux 명령, 예: resize-pane -Z"
+  },
   "externalOpen": {
     "queueFull": "외부 연결 요청이 너무 많습니다. 나중에 다시 시도하세요.",
     "invalidUrl": "외부 연결 요청이 거부되었습니다. 매개변수가 잘못되었거나 지원되지 않습니다.",

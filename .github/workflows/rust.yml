@@ -119,6 +119,62 @@ jobs:
         if: runner.os == 'Windows'
         run: python -m unittest scripts.tests.test_windows_resources -v
 
+  tmux-compatibility:
+    name: tmux (${{ matrix.tmux }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            tmux: 3.2a
+          - os: ubuntu-24.04
+            tmux: '3.4'
+          - os: ubuntu-24.04
+            tmux: '3.8'
+          - os: macos-15
+            tmux: system
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: tmux-${{ runner.os }}
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-deps
+        with:
+          extra_packages: libevent-dev libncurses-dev
+      - name: Build pinned tmux release
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TMUX_VERSION: ${{ matrix.tmux }}
+        run: |
+          archive="$RUNNER_TEMP/tmux-$TMUX_VERSION.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz" \
+            --output "$archive"
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/tmux-$TMUX_VERSION"
+          ./configure --prefix="$RUNNER_TEMP/tmux-install"
+          make -j2
+          make install
+          echo "NYATERM_TEST_TMUX=$RUNNER_TEMP/tmux-install/bin/tmux" >> "$GITHUB_ENV"
+      - name: Locate macOS tmux
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          command -v tmux || brew install tmux
+          echo "NYATERM_TEST_TMUX=$(command -v tmux)" >> "$GITHUB_ENV"
+      - name: Test real Control Mode over SSH
+        shell: bash
+        run: |
+          "$NYATERM_TEST_TMUX" -V
+          cargo test -p nyaterm-transport --lib real_tmux --locked -- --ignored
+
   plugin-sdk:
     name: Plugin SDK
     runs-on: ubuntu-24.04
@@ -200,7 +256,7 @@ jobs:
   gate:
     name: Rust gate
     runs-on: ubuntu-24.04
-    needs: [lint, test, plugin-sdk, python, workflows]
+    needs: [lint, test, tmux-compatibility, plugin-sdk, python, workflows]
     if: always()
     timeout-minutes: 5
     steps:

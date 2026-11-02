@@ -127,7 +127,11 @@ fn quick_command_editor_literal_toggle_preserves_the_editor_selection_and_undo_i
         cx.simulate_input("X");
         draw(cx);
         assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "aX");
-        cx.simulate_keystrokes("ctrl-z");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-z"
+        } else {
+            "ctrl-z"
+        });
         draw(cx);
         assert_eq!(input.read_with(cx, |input, cx| input.value(cx)), "abc");
     }

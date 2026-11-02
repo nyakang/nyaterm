@@ -841,7 +841,13 @@ impl ShellFeatureState {
         &mut self,
         tab_root: &str,
     ) -> Option<WorkspacePaneNode> {
-        self.workspace.pane_roots.remove(tab_root)
+        let removed = self.workspace.pane_roots.remove(tab_root);
+        // Dropping a root orphans every leaf it owned; without a rebuild the
+        // stale owner keeps former leaves resolving to this tab root.
+        if removed.is_some() {
+            self.workspace.rebuild_tab_owners();
+        }
+        removed
     }
 
     pub(in crate::features) fn insert_workspace_pane_root(

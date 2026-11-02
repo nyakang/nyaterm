@@ -3972,6 +3972,15 @@
     "showSecret": "Show value",
     "hideSecret": "Hide value"
   },
+  "tmux": {
+    "modemDisabled": "XMODEM/YMODEM/ZMODEM transfers are unavailable in tmux control mode. Use SFTP instead.",
+    "detach": "Detach (tmux session stays on the server)",
+    "killWindow": "Close window (kill-window)",
+    "newWindow": "New window",
+    "splitHorizontal": "Split top/bottom",
+    "splitVertical": "Split left/right",
+    "commandPlaceholder": "tmux command, e.g. resize-pane -Z"
+  },
   "externalOpen": {
     "queueFull": "Too many external connection requests. Try again later.",
     "invalidUrl": "An external connection request was rejected: invalid or unsupported parameters.",

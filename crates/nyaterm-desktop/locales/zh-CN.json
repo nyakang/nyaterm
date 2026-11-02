@@ -3972,6 +3972,15 @@
     "showSecret": "显示内容",
     "hideSecret": "隐藏内容"
   },
+  "tmux": {
+    "modemDisabled": "tmux 控制模式不支持 XMODEM/YMODEM/ZMODEM 文件传输，请使用 SFTP。",
+    "detach": "分离（远端 tmux 会话保留）",
+    "killWindow": "关闭窗口（kill-window）",
+    "newWindow": "新建窗口",
+    "splitHorizontal": "上下分屏",
+    "splitVertical": "左右分屏",
+    "commandPlaceholder": "tmux 命令，例如 resize-pane -Z"
+  },
   "externalOpen": {
     "queueFull": "外部连接请求过多，请稍后重试。",
     "invalidUrl": "外部连接请求被拒绝：参数无效或不受支持。",
