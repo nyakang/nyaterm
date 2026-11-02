@@ -356,6 +356,26 @@ fn filter_quick_switch_items(items: Vec<QuickSwitchItem>, query: &str) -> Vec<Qu
         .iter()
         .map(|(display, id)| (display.as_str(), id.as_str()))
         .collect::<Vec<_>>();
+
+    // A query made of digits and address separators (an IP/port fragment typed
+    // without the dots, e.g. `2128` for `10.26.21.28`) must match the candidate
+    // digits as a contiguous run. The generic fuzzy matcher only requires a
+    // subsequence, which wrongly also matches `10.26.113.28` because its digits
+    // `2,1,2,8` appear in order. Require the normalized digits to contain the
+    // query digits as a substring so the result matches user intent.
+    if let Some(ids) = numeric_quick_switch_ids(&candidates, &query) {
+        if !ids.is_empty() {
+            let mut items_by_id = items
+                .into_iter()
+                .map(|item| (item.id(), item))
+                .collect::<HashMap<_, _>>();
+            return ids
+                .into_iter()
+                .filter_map(|id| items_by_id.remove(&id))
+                .collect();
+        }
+    }
+
     let matches = fuzzy_search_items(
         &candidate_refs,
         &query,
@@ -372,6 +392,42 @@ fn filter_quick_switch_items(items: Vec<QuickSwitchItem>, query: &str) -> Vec<Qu
         .into_iter()
         .filter_map(|matched| items_by_id.remove(&matched.command))
         .collect()
+}
+
+/// Returns `Some(matched ids)` when `query` is a numeric address fragment, or
+/// `None` when ordinary fuzzy matching should be used. The returned list is
+/// empty when no candidate matches the contiguous-digit rule, in which case the
+/// caller falls back to fuzzy search so loose numeric queries (e.g. a port)
+/// still find sessions.
+fn numeric_quick_switch_ids(candidates: &[(String, String)], query: &str) -> Option<Vec<String>> {
+    if !is_numeric_query(query) {
+        return None;
+    }
+    let query_digits: String = query.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if query_digits.is_empty() {
+        return None;
+    }
+    let ids = candidates
+        .iter()
+        .filter(|(display, _)| {
+            let candidate_digits: String = display
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|ch| ch.is_ascii_digit())
+                .collect();
+            candidate_digits.contains(&query_digits)
+        })
+        .map(|(_, id)| id.clone())
+        .take(QUICK_SWITCH_RESULT_LIMIT)
+        .collect();
+    Some(ids)
+}
+
+fn is_numeric_query(query: &str) -> bool {
+    !query.is_empty()
+        && query
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | ':' | '/' | '-'))
 }
 
 fn quick_switch_transient_insert_index(
@@ -440,6 +496,50 @@ mod tests {
                 .iter()
                 .all(|item| item.subtitle() == "needle target")
         );
+    }
+
+    #[test]
+    fn numeric_ip_fragment_matches_contiguous_digits_only() {
+        let items = vec![
+            session_item(0, "Alpha", "10.26.21.28"),
+            session_item(1, "Beta", "10.26.113.28"),
+            session_item(2, "Gamma", "192.168.1.28"),
+        ];
+
+        let matched: Vec<String> = filter_quick_switch_items(items, "2128")
+            .iter()
+            .map(|item| item.subtitle().to_string())
+            .collect();
+
+        assert_eq!(matched, vec!["10.26.21.28".to_string()]);
+    }
+
+    #[test]
+    fn numeric_ip_fragment_with_dots_also_matches() {
+        let items = vec![
+            session_item(0, "Alpha", "10.26.21.28"),
+            session_item(1, "Beta", "10.26.113.28"),
+        ];
+
+        let matched: Vec<String> = filter_quick_switch_items(items, "10.26.21")
+            .iter()
+            .map(|item| item.subtitle().to_string())
+            .collect();
+
+        assert_eq!(matched, vec!["10.26.21.28".to_string()]);
+    }
+
+    #[test]
+    fn numeric_query_matches_digits_anywhere_in_search_text() {
+        let items = vec![
+            session_item(0, "node2128", "Local"),
+            session_item(1, "other", "10.26.113.28"),
+        ];
+        let matched: Vec<String> = filter_quick_switch_items(items, "2128")
+            .iter()
+            .map(|item| item.title().to_string())
+            .collect();
+        assert_eq!(matched, vec!["node2128".to_string()]);
     }
 
     #[test]
