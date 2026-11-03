@@ -33,6 +33,17 @@ impl NyaTermApp {
         path: RemoteFilePath,
         cx: &mut Context<Self>,
     ) {
+        self.navigate_file_manager_pane_selecting(manager_id, pane_id, path, None, cx);
+    }
+
+    pub(in crate::features) fn navigate_file_manager_pane_selecting(
+        &mut self,
+        manager_id: String,
+        pane_id: PaneId,
+        path: RemoteFilePath,
+        select_after_load: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(workspace) = self.file_manager.workspace(&manager_id) else {
             return;
         };
@@ -40,6 +51,7 @@ impl NyaTermApp {
             let pane = workspace.pane_mut(pane_id);
             let snapshot = pane.capture_navigation();
             let generation = pane.begin_load(path.clone());
+            pane.select_after_load = select_after_load;
             cx.notify();
             (pane.endpoint.clone(), generation, snapshot)
         });

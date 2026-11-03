@@ -79,6 +79,7 @@ pub(in crate::features) struct BrowserPaneState {
     pub source_history: HashMap<PaneEndpoint, PaneNavigationSnapshot>,
     pub remembered_directories: Vec<nyaterm_core::FileManagerPaneRestore>,
     pub history_target: Option<usize>,
+    pub select_after_load: Option<String>,
     filter: BrowserFilterCache,
     visibility_filter: Option<(String, bool)>,
 }
@@ -123,6 +124,7 @@ impl BrowserPaneState {
             source_history: HashMap::new(),
             remembered_directories: Vec::new(),
             history_target: None,
+            select_after_load: None,
             filter: BrowserFilterCache::default(),
             visibility_filter: None,
         }
@@ -179,10 +181,12 @@ impl BrowserPaneState {
             .min(self.history.len().saturating_sub(1));
         self.selected_path = snapshot.selected_path;
         self.selected_paths = snapshot.selected_paths;
+        self.select_after_load = None;
     }
 
     pub(in crate::features) fn begin_load(&mut self, path: RemoteFilePath) -> u64 {
         self.generation = self.generation.wrapping_add(1);
+        self.select_after_load = None;
         if self.path != path {
             self.clear_selection();
         }
@@ -219,6 +223,15 @@ impl BrowserPaneState {
             .is_some_and(|key| self.entries.iter().any(|entry| entry.matches_identity(key)))
         {
             self.selected_path = None;
+        }
+        if let Some(identity) = self.select_after_load.take()
+            && let Some(identity) = self
+                .entries
+                .iter()
+                .find(|entry| entry.matches_identity(&identity))
+                .map(SftpFileEntry::identity_key)
+        {
+            self.select_entry(identity);
         }
         self.loading = false;
         self.error = None;
@@ -276,6 +289,7 @@ impl BrowserPaneState {
         self.history_index = 0;
         self.selected_path = None;
         self.selected_paths.clear();
+        self.select_after_load = None;
         self.error = None;
         self.disconnected = false;
         self.search.clear();
@@ -481,6 +495,42 @@ mod tests {
             ));
             assert_eq!(pane.entries.len(), 1);
             assert_eq!(pane.entries[0].name, "fresh");
+        });
+    }
+
+    #[test]
+    fn parent_listing_selects_the_directory_that_was_opened() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let endpoint = PaneEndpoint::Session("sftp".into());
+            let mut pane = BrowserPaneState::new(endpoint.clone(), cx.focus_handle());
+            let child = RemoteFilePath::new("/parent/child");
+            let parent = RemoteFilePath::new("/parent");
+            let generation = pane.begin_load(parent.clone());
+            pane.select_after_load = Some(child.identity_key());
+
+            assert!(pane.apply_listing(
+                generation,
+                &endpoint,
+                &parent,
+                vec![SftpFileEntry {
+                    name: "child".into(),
+                    path: child.display_path.clone(),
+                    file_type: SftpFileType::Directory,
+                    size: None,
+                    permissions: None,
+                    owner: String::new(),
+                    group: String::new(),
+                    modified_at: None,
+                    raw_path_token: None,
+                    symlink_target_is_directory: false,
+                }],
+            ));
+
+            assert_eq!(pane.selected_path.as_deref(), Some("/parent/child"));
+            assert_eq!(pane.selected_paths.len(), 1);
+            assert!(pane.selected_paths.contains("/parent/child"));
+            assert!(pane.select_after_load.is_none());
         });
     }
 
