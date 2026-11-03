@@ -12,8 +12,8 @@ export CARGO_TARGET_DIR="$PWD/target/linux-focal"
 export CARGO_HOME="${NYATERM_FOCAL_CARGO_HOME:-$CARGO_TARGET_DIR/cargo}"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 export CARGO_PROFILE_RELEASE_STRIP=debuginfo
-# Default members include the MCP bridge; the Windows-only ActiveX host is not
-# shipped in the focal package.
+# Default members include the MCP bridge; the Windows-only RDP integration is
+# not shipped in the focal package.
 cargo build --release --locked --target x86_64-unknown-linux-gnu
 binary_dir="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release"
 bash scripts/compat/linux-focal/prepare-opengl.sh

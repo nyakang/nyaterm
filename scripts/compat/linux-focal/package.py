@@ -203,11 +203,19 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         (stage / "abi-report.json").write_text(json.dumps(
             {"baseline": "Ubuntu 20.04 x86_64 / glibc 2.31", "version": version,
              "binaries": reports, "opengl_libraries": graphics}, indent=2) + "\n", encoding="utf-8")
+        linux_icons.normalize_permissions(stage)
         if deb:
             create_deb(stage, output, version)
         archive = output / (label + ".tar.gz")
+
+        def archive_owner(info):
+            # Do not retain the builder's identity or restrictive checkout modes.
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            return info
+
         with tarfile.open(archive, "w:gz", compresslevel=6) as handle:
-            handle.add(stage, arcname=label)
+            handle.add(stage, arcname=label, filter=archive_owner)
     digest = sha256(archive)
     archive.with_name(archive.name + ".sha256").write_text(
         digest + "  " + archive.name + "\n", encoding="utf-8")

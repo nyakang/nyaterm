@@ -141,14 +141,27 @@ print(count.value)
             root = Path(directory)
             for name in focal.BINARIES:
                 (root / name).write_bytes(name.encode())
+                (root / name).chmod(0o600)
             runtime = root / "opengl"
             runtime.mkdir()
             with mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
                     mock.patch.object(focal, "audit", side_effect=lambda p: {"name": p.name}), \
                     mock.patch.object(focal, "audit_opengl", return_value=[]):
-                archive = focal.create_package(root, root / "dist", "2.0.0", runtime)
+                previous_umask = os.umask(0o077)
+                try:
+                    archive = focal.create_package(root, root / "dist", "2.0.0", runtime)
+                finally:
+                    os.umask(previous_umask)
             with tarfile.open(archive) as handle:
                 prefix = "NyaTerm_2.0.0_linux_x64_glibc231/"
+                for member in handle.getmembers():
+                    self.assertEqual((member.uid, member.gid, member.uname, member.gname),
+                                     (0, 0, "root", "root"))
+                    if member.isdir():
+                        self.assertEqual(member.mode, 0o755)
+                    elif member.isfile():
+                        executable = Path(member.name).name in (*focal.BINARIES, "start-nyaterm.sh", "diagnose.sh")
+                        self.assertEqual(member.mode, 0o755 if executable else 0o644)
                 for name in (*focal.BINARIES, "nyaterm-portable", "diagnose.sh", "LICENSE",
                              "OFFLINE-README.zh-CN.md", "abi-report.json", "start-nyaterm.sh",
                              "opengl/opengl-lock.txt", "opengl/egl_desktop.c"):
