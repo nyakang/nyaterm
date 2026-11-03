@@ -238,6 +238,43 @@ mod tests {
         SmartSplitMode, TabDockEdge, TabDockZone, TerminalWindowNode, WorkspacePaneNode,
         WorkspaceSplitDirection,
     };
+
+    #[test]
+    fn dock_zone_keeps_edge_priority_at_equal_distances() {
+        assert_eq!(
+            TabDockZone::detect(10., 10., 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Left)
+        );
+        assert_eq!(
+            TabDockZone::detect(790., 10., 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Right)
+        );
+        assert_eq!(
+            TabDockZone::detect(400., 10., 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Top)
+        );
+        assert_eq!(
+            TabDockZone::detect(400., 590., 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Bottom)
+        );
+        assert_eq!(
+            TabDockZone::detect(400., 300., 800., 600.),
+            TabDockZone::Center
+        );
+    }
+
+    #[test]
+    fn dock_zone_orders_nan_distances_after_finite_edges() {
+        assert_eq!(
+            TabDockZone::detect(f32::NAN, 10., 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Top)
+        );
+        assert_eq!(
+            TabDockZone::detect(10., f32::NAN, 800., 600.),
+            TabDockZone::Edge(TabDockEdge::Left)
+        );
+    }
+
     fn assert_leaf_sizes(tree: &TerminalWindowNode, width: f32, height: f32) {
         match tree {
             TerminalWindowNode::Leaf { .. } => {

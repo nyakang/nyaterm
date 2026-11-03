@@ -75,7 +75,7 @@ impl TabDockZone {
             (TabDockEdge::Top, local_y, v_thresh),
             (TabDockEdge::Bottom, height - local_y, v_thresh),
         ];
-        edges.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        edges.sort_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((edge, distance, threshold)) = edges.first().copied()
             && distance <= threshold
         {

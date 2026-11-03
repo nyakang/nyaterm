@@ -72,7 +72,7 @@ fn submenu_direction_probe_width(
         .iter()
         .filter_map(|item| item.children().map(|_| item.submenu_min_width))
         .map(|width| width.unwrap_or(px(NYA_MENU_WIDTH)))
-        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))?;
+        .max_by(|left, right| f32::from(*left).total_cmp(&f32::from(*right)))?;
     let parent_width = parent_min_width.unwrap_or(px(NYA_MENU_WIDTH));
     let parent_and_child = parent_width + child_width - px(NYA_SUBMENU_OVERLAP);
     (pointer_x + parent_and_child > window_width).then_some(parent_and_child)
@@ -1147,6 +1147,27 @@ mod tests {
             submenu_direction_probe_width(&[NyaMenuItem::action("Open")], None, px(360.), px(381.)),
             None
         );
+    }
+
+    #[test]
+    fn context_submenu_uses_widest_child_independently_of_item_order() {
+        for widths in [[160., 240., 240., 176.], [240., 176., 160., 240.]] {
+            let items: Vec<_> = widths
+                .into_iter()
+                .map(|width| {
+                    NyaMenuItem::submenu("Move", vec![NyaMenuItem::action("Folder")])
+                        .submenu_min_width(px(width))
+                })
+                .collect();
+            assert_eq!(
+                submenu_direction_probe_width(&items, None, px(48.), px(381.)),
+                Some(px(452.))
+            );
+            assert_eq!(
+                submenu_direction_probe_width(&items, None, px(48.), px(900.)),
+                None
+            );
+        }
     }
 
     #[test]
