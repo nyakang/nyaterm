@@ -98,6 +98,8 @@ pub(crate) enum QuickSwitchItem {
         title: String,
         subtitle: String,
         active: bool,
+        /// Original endpoint, separate from display text for structured search.
+        endpoint: Option<(String, u16)>,
     },
     Connection {
         connection: Box<SavedConnection>,
