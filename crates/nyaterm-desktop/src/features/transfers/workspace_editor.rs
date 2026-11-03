@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn editor_font_controls_restore_focus_preserve_undo_and_ignore_modified_wheels() {
-        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, point, px};
+        use gpui::{Modifiers, ScrollDelta, ScrollEvent, point, px};
 
         for display in [
             InternalEditorDisplay::Workspace,
@@ -566,7 +566,7 @@ mod tests {
                 },
             ] {
                 for delta in [100_000., -100., -100., -100_000., -100., 100_000.] {
-                    cx.simulate_event(ScrollWheelEvent {
+                    cx.simulate_event(ScrollEvent {
                         position: point(px(120.), px(120.)),
                         delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
                         modifiers,

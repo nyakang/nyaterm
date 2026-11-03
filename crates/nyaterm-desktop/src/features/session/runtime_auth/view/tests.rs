@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, IntoElement, Pixels, Render, ScrollDelta,
-    ScrollWheelEvent, Subscription, TestAppContext, VisualTestContext, Window, div, point,
-    prelude::*, px, size,
+    ScrollEvent, Subscription, TestAppContext, VisualTestContext, Window, div, point, prelude::*,
+    px, size,
 };
 use nyaterm_core::SavedConnection;
 use nyaterm_store::ConnectionStore;
@@ -196,7 +196,7 @@ fn expanded_form_scrolls_without_moving_footer_and_reflows_on_resize() {
     let footer = bounds(cx, "ssh-auth-footer");
     let content_top = bounds(cx, "ssh-auth-content").top();
     let body = bounds(cx, "ssh-auth-body-layout/scrollbar-layer");
-    cx.simulate_event(ScrollWheelEvent {
+    cx.simulate_event(ScrollEvent {
         position: body.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-1000.))),
         ..Default::default()

@@ -5,8 +5,8 @@ use super::tab_motion::{TabMotionElement, TabStripViewportElement};
 use crate::features::shell::session_tabs::{SessionStripTab, SessionStripTabId};
 
 use gpui::{
-    Anchor, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ScrollDelta,
-    ScrollWheelEvent, SharedString, div, point, prelude::*, px, rgb, rgba, svg,
+    Anchor, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ScrollDelta, ScrollEvent,
+    SharedString, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
@@ -1065,7 +1065,7 @@ impl NyaTermApp {
                     this.drop_session_tab_on_strip(payload, &group, cx);
                 }
             }))
-            .on_scroll_wheel(cx.listener(move |_, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(move |_, event: &ScrollEvent, _, cx| {
                 let (delta_x, delta_y) = match event.delta {
                     ScrollDelta::Lines(delta) => (delta.x * 36., delta.y * 36.),
                     ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),

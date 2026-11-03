@@ -2680,8 +2680,8 @@ fn reopening_connection_editor_starts_on_basic_information() {
 }
 
 #[test]
-fn windows_rdp_editor_normalizes_old_clipboard_modes_and_blocks_changes() {
-    for mode in ["text-only", "text-and-files", "disabled"] {
+fn windows_rdp_editor_preserves_legacy_clipboard_values_when_changing_backend() {
+    for mode in ["text-only", "text-and-files", "disabled", "future-mode"] {
         for authentication in [None, Some("system"), Some("future-auth")] {
             let mut draft = connection_editor_state_with_secret_draft();
             draft.kind = ConnectionKindTab::Rdp;
@@ -2689,37 +2689,25 @@ fn windows_rdp_editor_normalizes_old_clipboard_modes_and_blocks_changes() {
             draft.rdp_clipboard.mode = mode.into();
             draft.rdp_security.windows_authentication = authentication.map(str::to_owned);
             draft.normalize_rdp_backend_settings();
-            assert_eq!(draft.rdp_clipboard.mode, "disabled");
+            assert_eq!(draft.rdp_clipboard.mode, mode);
             assert_eq!(
                 draft.rdp_security.windows_authentication.as_deref(),
                 Some(authentication.unwrap_or("system"))
             );
             let mut draft = Some(draft);
-            assert!(!set_connection_editor_select_value(
-                &mut draft,
-                ConnectionEditorSelect::RdpClipboardMode,
-                Some("text-and-files".into())
-            ));
-            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "disabled");
             assert!(set_connection_editor_select_value(
                 &mut draft,
                 ConnectionEditorSelect::RdpBackend,
                 Some("builtin".into())
             ));
-            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "disabled");
-            assert!(set_connection_editor_select_value(
-                &mut draft,
-                ConnectionEditorSelect::RdpClipboardMode,
-                Some("text-only".into())
-            ));
-            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, "text-only");
+            assert_eq!(draft.as_ref().unwrap().rdp_clipboard.mode, mode);
         }
     }
 }
 
 #[cfg(windows)]
 #[test]
-fn selecting_windows_rdp_disables_clipboard_and_selects_system_authentication() {
+fn selecting_windows_rdp_preserves_clipboard_data_and_selects_system_authentication() {
     let mut draft = Some(connection_editor_state_with_secret_draft());
     draft.as_mut().unwrap().rdp_clipboard.mode = "text-and-files".into();
     assert!(set_connection_editor_select_value(
@@ -2728,7 +2716,7 @@ fn selecting_windows_rdp_disables_clipboard_and_selects_system_authentication() 
         Some("windows".into())
     ));
     let draft = draft.unwrap();
-    assert_eq!(draft.rdp_clipboard.mode, "disabled");
+    assert_eq!(draft.rdp_clipboard.mode, "text-and-files");
     assert_eq!(
         draft.rdp_security.windows_authentication.as_deref(),
         Some("system")

@@ -189,7 +189,7 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     *stage = 110; // ConnectToAdministerServer
     if (FAILED(hr = host.advanced->put_ConnectToAdministerServer(config.admin ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     *stage = 111; // RedirectClipboard
-    if (FAILED(hr = host.advanced->put_RedirectClipboard(VARIANT_FALSE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectClipboard(VARIANT_TRUE))) return hr;
     *stage = 112; // RedirectDrives
     if (FAILED(hr = host.advanced->put_RedirectDrives(VARIANT_FALSE))) return hr;
     *stage = 113; // RedirectPrinters
@@ -281,7 +281,7 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
     if (!valid_text(config->server) || !config->server.len || !valid_text(config->username) ||
         !valid_text(config->domain) || !valid_text(config->password) || !config->port || config->port > 65535 ||
         config->width < 200 || config->width > 8192 || config->height < 200 || config->height > 8192 ||
-        config->scale < 100 || config->scale > 500 || config->max_attempts > 200 || config->clipboard != 0) return E_INVALIDARG;
+        config->scale < 100 || config->scale > 500 || config->max_attempts > 200 || config->clipboard != 1) return E_INVALIDARG;
     const HWND parent = reinterpret_cast<HWND>(config->parent);
     if (!IsWindow(parent) || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return RPC_E_WRONG_THREAD;
     NyaRdpHost* host = new (std::nothrow) NyaRdpHost();
@@ -486,7 +486,7 @@ extern "C" int32_t nya_rdp_verify_connection_policy(NyaRdpHost* host) noexcept t
     if (FAILED(hr = host->advanced->get_AuthenticationLevel(&authentication))) return hr;
     if (authentication != 2) return E_FAIL;
     if (FAILED(hr = host->advanced->get_RedirectClipboard(&enabled))) return hr;
-    if (enabled != VARIANT_FALSE) return E_FAIL;
+    if (enabled != VARIANT_TRUE) return E_FAIL;
     CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);
     if (!resources) return E_NOINTERFACE;
     wireHWND ui_parent = nullptr;

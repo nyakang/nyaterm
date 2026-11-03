@@ -13,8 +13,8 @@ use crate::terminal::{
 };
 use gpui::prelude::*;
 use gpui::{
-    AppContext, Context, Entity, Render, ScrollDelta, ScrollWheelEvent, TestAppContext, Window,
-    bounds, div, point, px, size,
+    AppContext, Context, Entity, Render, ScrollDelta, ScrollEvent, TestAppContext, Window, bounds,
+    div, point, px, size,
 };
 use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
 use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
@@ -2343,10 +2343,10 @@ fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() 
     // must wait until the callback returns before reading the geometry.
     cx.update_entity(&surface, |surface, cx| {
         surface.handle_scroll_wheel(
-            &ScrollWheelEvent {
+            &ScrollEvent {
                 position: point(px(8.), px(8.)),
                 delta: ScrollDelta::Lines(point(0., 1.)),
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             },
             cx,
         );
@@ -2486,13 +2486,13 @@ fn assert_return_to_live_paints_latest_last_row(
     cx.update_entity(&surface, |surface, cx| {
         surface.set_app(app.clone());
         surface.handle_scroll_wheel(
-            &ScrollWheelEvent {
+            &ScrollEvent {
                 delta: if fractional {
                     ScrollDelta::Pixels(point(px(0.), px(-0.6 * surface.cell_height)))
                 } else {
                     ScrollDelta::Lines(point(0., -1.))
                 },
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             },
             cx,
         );
@@ -2614,9 +2614,9 @@ fn reversing_local_scroll_before_app_sync_keeps_the_latest_wheel_target() {
     let wheel = |cx: &mut TestAppContext, lines| {
         cx.update_entity(&surface, |surface, cx| {
             surface.handle_scroll_wheel(
-                &ScrollWheelEvent {
+                &ScrollEvent {
                     delta: ScrollDelta::Lines(point(0., lines)),
-                    ..ScrollWheelEvent::default()
+                    ..ScrollEvent::default()
                 },
                 cx,
             );

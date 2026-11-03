@@ -117,9 +117,6 @@ impl NyaTermApp {
             ConnectionEditorValidationError::RdpRelayUnsupported => {
                 t!("dialog.rdpActiveXRelayUnsupported").into()
             }
-            ConnectionEditorValidationError::RdpClipboardUnsupported => {
-                t!("dialog.rdpActiveXClipboardUnsupported").into()
-            }
             ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
                 t!("dialog.rdpDisplayWidthInvalid").into()
             }

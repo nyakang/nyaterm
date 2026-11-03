@@ -40,7 +40,9 @@ The default resolution is 1920×1080 at 32-bit color depth.
 
 ### Clipboard
 
-**Clipboard** is **text only** (default) or disabled. File, image, and rich-text clipboard channels are not supported.
+Clipboard sharing is always enabled and has no setting. Builtin supports bidirectional text and file/directory copies; image and rich-text channels are not implemented. Windows Native uses Microsoft's full clipboard redirection, with formats and file transfers subject to the installed control and server policy.
+
+Older connections, backups, and restored sessions still accept saved disabled/text-only values, but those values no longer restrict clipboard sharing at runtime. Clipboard sharing does not enable drive, printer, or device redirection.
 
 ### Reconnect
 

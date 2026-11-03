@@ -5,8 +5,8 @@ use std::borrow::Cow;
 use gpui::{
     Bounds, Context, CursorStyle, FontWeight, HoverListenerMode, IntoElement, KeyDownEvent,
     KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    NavigationDirection, Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Size, canvas,
-    div, prelude::*, px, rgb,
+    NavigationDirection, Pixels, Point, ScrollDelta, ScrollEvent, SharedString, Size, canvas, div,
+    prelude::*, px, rgb,
 };
 use nyaterm_remote_desktop::{
     CertificatePromptReason, CursorShape, DisplayScaleMode, DisplayTransform, LogicalPoint,
@@ -657,24 +657,22 @@ impl NyaTermApp {
                     }
                 }),
             )
-            .on_scroll_wheel(
-                cx.listener(move |this, event: &ScrollWheelEvent, window, cx| {
-                    let line_height = f32::from(window.line_height()).max(1.0);
-                    let (delta_x, delta_y) = match event.delta {
-                        ScrollDelta::Pixels(delta) => (
-                            f32::from(delta.x) / line_height,
-                            f32::from(delta.y) / line_height,
-                        ),
-                        ScrollDelta::Lines(delta) => (delta.x, delta.y),
-                    };
-                    if (delta_x != 0.0 || delta_y != 0.0)
-                        && this.send_remote_wheel(&scroll_id, event.position, delta_x, delta_y)
-                    {
-                        cx.stop_propagation();
-                        this.mark_user_activity();
-                    }
-                }),
-            )
+            .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
+                let line_height = f32::from(window.line_height()).max(1.0);
+                let (delta_x, delta_y) = match event.delta {
+                    ScrollDelta::Pixels(delta) => (
+                        f32::from(delta.x) / line_height,
+                        f32::from(delta.y) / line_height,
+                    ),
+                    ScrollDelta::Lines(delta) => (delta.x, delta.y),
+                };
+                if (delta_x != 0.0 || delta_y != 0.0)
+                    && this.send_remote_wheel(&scroll_id, event.position, delta_x, delta_y)
+                {
+                    cx.stop_propagation();
+                    this.mark_user_activity();
+                }
+            }))
             .child(canvas)
             .when_some(input, |this, input| this.child(input))
             .into_any_element()

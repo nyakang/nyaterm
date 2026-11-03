@@ -1,6 +1,6 @@
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, IntoElement, Modifiers, Render, ScrollDelta,
-    ScrollWheelEvent, TestAppContext, VisualTestContext, Window, div, point, prelude::*, px, size,
+    ScrollEvent, TestAppContext, VisualTestContext, Window, div, point, prelude::*, px, size,
 };
 use nyaterm_core::{AiExecutionProfile, test_support::TestTempDir};
 use nyaterm_transport::LocalSessionConfig;
@@ -61,7 +61,7 @@ fn draw(cx: &mut VisualTestContext) {
 fn scroll_to_end(cx: &mut VisualTestContext, selector: &'static str) {
     let viewport = cx.debug_bounds(selector).unwrap();
     cx.simulate_mouse_move(viewport.center(), None, Modifiers::default());
-    cx.simulate_event(ScrollWheelEvent {
+    cx.simulate_event(ScrollEvent {
         position: viewport.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-10000.))),
         ..Default::default()

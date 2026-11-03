@@ -1,8 +1,8 @@
 use rust_i18n::t;
 
 use gpui::{
-    Context, FontWeight, IntoElement, ScrollDelta, ScrollWheelEvent, SharedString, div, prelude::*,
-    px, rgb, rgba, svg,
+    Context, FontWeight, IntoElement, ScrollDelta, ScrollEvent, SharedString, div, prelude::*, px,
+    rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_transport::{
@@ -596,7 +596,7 @@ fn rich_gpu_panel(
             } else {
                 t!("gpuMonitor.noMatches")
             },
-            cx.listener(move |panel, event: &ScrollWheelEvent, _, cx| {
+            cx.listener(move |panel, event: &ScrollEvent, _, cx| {
                 handle_accelerator_process_scroll(
                     event,
                     total_processes,
@@ -696,7 +696,7 @@ fn rich_npu_panel(
             } else {
                 t!("ascendNpuMonitor.noMatches")
             },
-            cx.listener(move |panel, event: &ScrollWheelEvent, _, cx| {
+            cx.listener(move |panel, event: &ScrollEvent, _, cx| {
                 handle_accelerator_process_scroll(
                     event,
                     total_processes,
@@ -1247,7 +1247,7 @@ fn accelerator_process_section(
     total_processes: usize,
     window: AcceleratorProcessWindow,
     empty_message: impl Into<SharedString>,
-    on_scroll: impl Fn(&ScrollWheelEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    on_scroll: impl Fn(&ScrollEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
     let AcceleratorProcessWindow { rows, list_height } = window;
     let empty_message: SharedString = empty_message.into();
@@ -1292,7 +1292,7 @@ fn accelerator_process_section(
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .on_scroll_wheel(on_scroll)
+                .on_scroll(on_scroll)
                 .child(list_rows),
         )
 }
@@ -1393,7 +1393,7 @@ fn accelerator_process_row(
 }
 
 fn handle_accelerator_process_scroll(
-    event: &ScrollWheelEvent,
+    event: &ScrollEvent,
     total: usize,
     current: usize,
     kind: RemoteMonitorKind,
@@ -2356,8 +2356,8 @@ mod login_users_view_tests {
     use super::{login_users_action, resource_section_card_with_action};
     use crate::test_support::TestAppCleanup;
     use gpui::{
-        Context, IntoElement, Modifiers, Render, ScrollDelta, ScrollWheelEvent, TestAppContext,
-        Window, div, point, prelude::*, px, size,
+        Context, IntoElement, Modifiers, Render, ScrollDelta, ScrollEvent, TestAppContext, Window,
+        div, point, prelude::*, px, size,
     };
     use nyaterm_transport::{LoggedInSession, LoggedInUser, LoggedInUsersStatus, RemoteStats};
 
@@ -2488,7 +2488,7 @@ mod login_users_view_tests {
                     if users == 100 {
                         let last_before = vcx.debug_bounds("stats-login-session-199").unwrap();
                         assert!(last_before.bottom() > popup.bottom());
-                        vcx.simulate_event(ScrollWheelEvent {
+                        vcx.simulate_event(ScrollEvent {
                             position: first.center(),
                             delta: ScrollDelta::Pixels(point(px(0.), px(-20_000.))),
                             ..Default::default()

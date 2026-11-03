@@ -562,9 +562,6 @@ impl NyaTermApp {
                         ConnectionEditorSelect::RdpCertificatePolicy
                     }
                     "connection-editor-rdp-display-mode" => ConnectionEditorSelect::RdpDisplayMode,
-                    "connection-editor-rdp-clipboard-mode" => {
-                        ConnectionEditorSelect::RdpClipboardMode
-                    }
                     "connection-editor-vnc-security-mode" => {
                         ConnectionEditorSelect::VncSecurityMode
                     }

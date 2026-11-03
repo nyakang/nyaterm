@@ -217,7 +217,7 @@ impl NativeRdpHost {
             scale: config.display.desktop_scale_factor.max(100),
             color_depth: config.display.color_depth.into(),
             nla: config.use_nla.into(),
-            clipboard: 0,
+            clipboard: 1,
             admin: config.administrative_session.into(),
             reconnect: config.reconnect.enabled.into(),
             max_attempts: config.reconnect.max_attempts,
@@ -298,6 +298,7 @@ impl NativeRdpHost {
         if self.last_viewport == Some((rect, visible)) {
             return Ok(());
         }
+        tracing::trace!(target: "nyaterm_windows_rdp::presentation", x = rect.x, y = rect.y, width = rect.width, height = rect.height, scale = rect.scale, visible, "applying native viewport");
         result("viewport", unsafe {
             nya_rdp_viewport(self.owner.as_ptr(), &rect, visible.into())
         })?;
@@ -306,6 +307,7 @@ impl NativeRdpHost {
     }
 
     pub fn resize(&mut self, width: u32, height: u32, scale: u32) -> Result<(), NativeRdpError> {
+        tracing::trace!(target: "nyaterm_windows_rdp::presentation", width, height, scale, "updating remote display");
         result("resize", unsafe {
             nya_rdp_resize(self.owner.as_ptr(), width, height, scale)
         })
@@ -318,6 +320,7 @@ impl NativeRdpHost {
     }
 
     pub fn focus(&mut self, remote: bool) -> Result<(), NativeRdpError> {
+        tracing::trace!(target: "nyaterm_windows_rdp::presentation", remote, "requesting native focus");
         result("focus", unsafe {
             nya_rdp_focus(self.owner.as_ptr(), remote.into())
         })
@@ -550,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn system_control_initializes_offline_with_dialog_parent_and_disabled_resources() {
+    fn system_control_initializes_with_clipboard_enabled_and_other_resources_disabled() {
         // A dedicated thread supplies a fresh apartment; no GPUI or remote server.
         std::thread::spawn(|| unsafe {
             let parent = Parent(

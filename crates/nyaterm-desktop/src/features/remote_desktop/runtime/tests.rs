@@ -1371,7 +1371,11 @@ fn legacy_native_settings_are_normalized_before_start_launch_and_retry() {
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "legacy-native");
     app.update(&mut cx, |app, cx| {
-        for mode in [RdpClipboardMode::TextOnly, RdpClipboardMode::TextAndFiles] {
+        for mode in [
+            RdpClipboardMode::Disabled,
+            RdpClipboardMode::TextOnly,
+            RdpClipboardMode::TextAndFiles,
+        ] {
             let mut config = fit_window_rdp_config("legacy-native");
             config.backend = RdpBackend::Windows;
             config.clipboard.mode = mode;
@@ -1387,14 +1391,14 @@ fn legacy_native_settings_are_normalized_before_start_launch_and_retry() {
                 .as_ref()
                 .unwrap()
                 .0;
-            assert_eq!(deferred.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert_eq!(deferred.windows_authentication.as_deref(), Some("system"));
             app.launch_rdp_runtime("legacy-native", config);
             let native = app.remote_desktop.sessions["legacy-native"]
                 .native_rdp_config
                 .as_ref()
                 .unwrap();
-            assert_eq!(native.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(native.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert_eq!(native.windows_authentication.as_deref(), Some("system"));
             app.retry_rdp_runtime("legacy-native", cx);
             let SessionLaunchConfig::Rdp(launch) =
@@ -1402,13 +1406,68 @@ fn legacy_native_settings_are_normalized_before_start_launch_and_retry() {
             else {
                 panic!("RDP metadata");
             };
-            assert_eq!(launch.clipboard.mode, RdpClipboardMode::Disabled);
+            assert_eq!(launch.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert_eq!(launch.windows_authentication.as_deref(), Some("system"));
             let session = &app.remote_desktop.sessions["legacy-native"];
             assert_eq!(session.state, RemoteDesktopViewState::Connecting);
             assert!(session.error.is_none());
             assert!(session.deferred_start.is_some());
             assert!(app.remote_desktop.manager.state("legacy-native").is_none());
+        }
+    });
+}
+
+#[test]
+fn builtin_legacy_clipboard_modes_enable_full_clipboard_before_start_and_retry() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use gpui::TestAppContext;
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RdpClipboardMode;
+
+    let root = TestTempDir::new("nyaterm-builtin-clipboard-policy");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "legacy-builtin");
+    app.update(&mut cx, |app, cx| {
+        for mode in [
+            RdpClipboardMode::Disabled,
+            RdpClipboardMode::TextOnly,
+            RdpClipboardMode::TextAndFiles,
+        ] {
+            let mut config = fit_window_rdp_config("legacy-builtin");
+            config.clipboard.mode = mode;
+            config.password = Some("offline-fixture".into());
+            app.session
+                .metadata_mut("legacy-builtin")
+                .unwrap()
+                .launch_config = SessionLaunchConfig::Rdp(config.clone());
+            app.remote_desktop
+                .insert_connecting("legacy-builtin".into());
+            app.begin_rdp_runtime("legacy-builtin", config, cx);
+            let deferred = &app.remote_desktop.sessions["legacy-builtin"]
+                .deferred_start
+                .as_ref()
+                .unwrap()
+                .0;
+            assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
+            app.retry_rdp_runtime("legacy-builtin", cx);
+            let SessionLaunchConfig::Rdp(launch) = &app
+                .session
+                .metadata("legacy-builtin")
+                .unwrap()
+                .launch_config
+            else {
+                panic!("RDP metadata");
+            };
+            assert_eq!(launch.clipboard.mode, RdpClipboardMode::TextAndFiles);
+            let deferred = &app.remote_desktop.sessions["legacy-builtin"]
+                .deferred_start
+                .as_ref()
+                .unwrap()
+                .0;
+            assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
+            assert!(app.remote_desktop.manager.state("legacy-builtin").is_none());
         }
     });
 }

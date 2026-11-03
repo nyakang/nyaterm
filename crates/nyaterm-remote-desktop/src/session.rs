@@ -385,8 +385,9 @@ impl RdpSessionManager {
     pub fn create_session_with_id(
         &self,
         session_id: String,
-        config: RdpSessionConfig,
+        mut config: RdpSessionConfig,
     ) -> Result<String, RdpError> {
+        config.normalize_backend_settings();
         config.backend.validate_config(&config)?;
         if config.backend != crate::RdpBackend::Builtin {
             return Err(RdpError::new(

@@ -886,7 +886,7 @@ fn category_after_marker_follows_the_whole_subtree_and_root_target_stays_visible
             .is_none()
     );
     // "All" remains pinned when the tree is scrolled during a drag.
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: child.center(),
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-200.))),
         ..Default::default()

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AppContext as _, Entity, Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
+    AppContext as _, Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, point, px,
 };
 use nyaterm_core::{AppRuntime, RuntimeMode};
 use nyaterm_terminal::TerminalScreen;
@@ -52,8 +52,8 @@ fn zoom_surface(
     })
 }
 
-fn wheel_event(y: f32) -> ScrollWheelEvent {
-    ScrollWheelEvent {
+fn wheel_event(y: f32) -> ScrollEvent {
+    ScrollEvent {
         position: point(px(8.0), px(8.0)),
         delta: ScrollDelta::Lines(point(0.0, y)),
         modifiers: if cfg!(target_os = "macos") {
@@ -61,7 +61,7 @@ fn wheel_event(y: f32) -> ScrollWheelEvent {
         } else {
             Modifiers::control()
         },
-        ..ScrollWheelEvent::default()
+        ..ScrollEvent::default()
     }
 }
 

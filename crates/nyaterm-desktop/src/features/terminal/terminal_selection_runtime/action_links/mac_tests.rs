@@ -197,7 +197,7 @@ fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-fn press_key(cx: &mut VisualTestContext, key: &str) {
+fn press_key(cx: &mut VisualTestContext, key: &'static str) {
     let keystroke = Keystroke::parse(key).unwrap();
     // Native button activation completes on key-up, unlike menu key bindings.
     cx.simulate_event(KeyDownEvent {

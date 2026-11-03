@@ -4,13 +4,16 @@ use std::time::Duration;
 use nyaterm_core::{CloudSyncError, CloudSyncRemote, WebdavSyncSettings};
 use quick_xml::Reader;
 use quick_xml::events::Event;
-use zed_reqwest::header::AUTHORIZATION;
+use zed_reqwest::header::{AUTHORIZATION, LOCATION};
 use zed_reqwest::{Method, StatusCode};
 
 use super::helpers::{
     build_digest_authorization, digest_challenge, map_webdav_http_error, normalize_endpoint,
     path_and_query, trim_remote_path, webdav_cnonce,
 };
+
+/// Redirect hops a single WebDAV request may take.
+const MAX_REDIRECTS: usize = 4;
 
 #[derive(Clone)]
 pub struct NativeWebdavRemote {
@@ -32,6 +35,11 @@ impl NativeWebdavRemote {
         let client = zed_reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("NyaTerm")
+            // Redirects are followed in `send_with_headers` instead. The default
+            // policy rewrites any redirected non-GET/HEAD request into a GET and
+            // drops its body, which would silently turn a `PROPFIND` on a
+            // slashless collection URL into a `GET` of an HTML index page.
+            .redirect(zed_reqwest::redirect::Policy::none())
             .build()
             .map_err(map_webdav_http_error)?;
         Ok(Self {
@@ -75,27 +83,69 @@ impl NativeWebdavRemote {
         body: Option<Vec<u8>>,
         headers: &[(&str, &str)],
     ) -> Result<zed_reqwest::blocking::Response, CloudSyncError> {
-        let response = self.send_once(method.clone(), url, body.clone(), None, headers)?;
-        if response.status() != StatusCode::UNAUTHORIZED {
-            return Ok(response);
+        let mut current = url.to_string();
+        let mut redirects = 0;
+        let mut challenge: Option<String> = None;
+        let cnonce = webdav_cnonce();
+        let mut nonce_count = 0;
+        loop {
+            // Digest signs the actual path and query, including redirects after
+            // authentication. Never replay a signature for an earlier URI.
+            let authorization = if let Some(challenge) = &challenge {
+                nonce_count += 1;
+                Some(build_digest_authorization(
+                    challenge,
+                    &self.username,
+                    self.password.as_deref().unwrap_or_default(),
+                    method.as_str(),
+                    path_and_query(&current),
+                    &cnonce,
+                    &format!("{nonce_count:08x}"),
+                )?)
+            } else {
+                None
+            };
+            let response = self.send_once(
+                method.clone(),
+                &current,
+                body.clone(),
+                authorization,
+                headers,
+            )?;
+            // Allow one Digest challenge per logical request. Authentication
+            // retries do not consume or reset the redirect budget.
+            if response.status() == StatusCode::UNAUTHORIZED
+                && challenge.is_none()
+                && !self.username.is_empty()
+                && !self.password.as_deref().unwrap_or_default().is_empty()
+                && let Some(next_challenge) = digest_challenge(&response)
+            {
+                challenge = Some(next_challenge);
+                let _ = response.bytes_counted();
+                continue;
+            }
+            let Some(next) = redirect_target(
+                response.status(),
+                response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|v| v.to_str().ok()),
+                &current,
+                &method,
+            )?
+            else {
+                return Ok(response);
+            };
+            let _ = response.bytes_counted();
+            if redirects == MAX_REDIRECTS {
+                return Err(CloudSyncError::Remote(format!(
+                    "WebDAV {} redirect chain is too long",
+                    method.as_str()
+                )));
+            }
+            redirects += 1;
+            current = next;
         }
-        let Some(challenge) = digest_challenge(&response) else {
-            return Ok(response);
-        };
-        if self.username.is_empty() || self.password.as_deref().unwrap_or_default().is_empty() {
-            return Ok(response);
-        }
-        let auth = build_digest_authorization(
-            &challenge,
-            &self.username,
-            self.password.as_deref().unwrap_or_default(),
-            method.as_str(),
-            path_and_query(url),
-            &webdav_cnonce(),
-            "00000001",
-        )?;
-        let _ = response.bytes_counted();
-        self.send_once(method, url, body, Some(auth), headers)
     }
 
     fn send_once(
@@ -137,7 +187,7 @@ impl CloudSyncRemote for NativeWebdavRemote {
                 current.push('/');
             }
             current.push_str(segment);
-            let url = format!("{}/{}", self.endpoint, current);
+            let url = format!("{}/{}/", self.endpoint, current);
             let method = Method::from_bytes(b"MKCOL").map_err(|error| {
                 CloudSyncError::Remote(format!("failed to build WebDAV MKCOL method: {error}"))
             })?;
@@ -234,13 +284,21 @@ impl CloudSyncRemote for NativeWebdavRemote {
 }
 
 impl NativeWebdavRemote {
+    fn collection_url(&self, path: &str) -> String {
+        // A `Depth: 1` enumeration targets a collection, and a collection URL
+        // ends with a slash. Without it many servers answer with a redirect to
+        // the slashed form instead of a multistatus document.
+        let url = self.url_for(path);
+        format!("{}/", url.trim_end_matches('/'))
+    }
+
     fn list_names(&self, path: &str, v4: bool) -> Result<Vec<String>, CloudSyncError> {
         let method = Method::from_bytes(b"PROPFIND").map_err(|error| {
             CloudSyncError::Remote(format!("failed to build WebDAV PROPFIND method: {error}"))
         })?;
         let response = self.send_with_headers(
             method,
-            &self.url_for(path),
+            &self.collection_url(path),
             Some(b"<?xml version=\"1.0\"?><propfind xmlns=\"DAV:\"><prop><resourcetype/></prop></propfind>".to_vec()),
             &[("Depth", "1"), ("Content-Type", "application/xml")],
         )?;
@@ -264,6 +322,7 @@ impl NativeWebdavRemote {
         } else {
             parse_webdav_file_names(&body)
         })
+        .map_err(|error| describe_listing_failure(error, status, &body))
         .map(|names| {
             let prefix = trim_remote_path(path);
             names
@@ -276,6 +335,74 @@ impl NativeWebdavRemote {
 
 pub(super) fn parse_webdav_file_names(body: &str) -> Result<Vec<String>, CloudSyncError> {
     parse_webdav_names(body, false)
+}
+
+/// Whether a redirect target may receive this request.
+///
+/// Credentials and bodies stay within one origin, except for a same-host
+/// upgrade from HTTP's default port to HTTPS's default port. A 303 describes
+/// an indirect response, so it must never replay a WebDAV mutation there.
+fn redirect_target(
+    status: StatusCode,
+    location: Option<&str>,
+    current: &str,
+    method: &Method,
+) -> Result<Option<String>, CloudSyncError> {
+    if !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+        return Ok(None);
+    }
+    if status == StatusCode::SEE_OTHER && method != Method::GET && method != Method::HEAD {
+        return Err(CloudSyncError::Remote(format!(
+            "WebDAV {} cannot be replayed after HTTP 303 See Other",
+            method.as_str()
+        )));
+    }
+    let invalid = || CloudSyncError::Remote("invalid WebDAV redirect".into());
+    let Some(location) = location else {
+        return Ok(None);
+    };
+    let base = url::Url::parse(current).map_err(|_| invalid())?;
+    let next = base.join(location).map_err(|_| invalid())?;
+    let same_origin = base.origin() == next.origin();
+    let default_port_upgrade = base.scheme() == "http"
+        && next.scheme() == "https"
+        && base.port_or_known_default() == Some(80)
+        && next.port_or_known_default() == Some(443);
+    if next.host_str() != base.host_str()
+        || !(same_origin || default_port_upgrade)
+        || !next.username().is_empty()
+        || next.password().is_some()
+        || next.fragment().is_some()
+        || !matches!(
+            (base.scheme(), next.scheme()),
+            ("http", "http") | ("http", "https") | ("https", "https")
+        )
+    {
+        // Leave the redirect as the response: the caller reports the status and
+        // no credentials or bodies travel to an untrusted origin.
+        return Ok(None);
+    }
+    Ok(Some(next.to_string()))
+}
+
+/// Adds the HTTP status and body size to a listing failure.
+///
+/// The response body is server-controlled and may contain file names, so it is
+/// never included; the status code and size are what identify the failure mode
+/// (an HTML login page, a redirect stub, a truncated document).
+fn describe_listing_failure(
+    error: CloudSyncError,
+    status: StatusCode,
+    body: &str,
+) -> CloudSyncError {
+    match error {
+        CloudSyncError::Remote(detail) => CloudSyncError::Remote(format!(
+            "{detail} (HTTP {}, {}-byte response body)",
+            status.as_u16(),
+            body.len()
+        )),
+        other => other,
+    }
 }
 
 fn parse_webdav_names(body: &str, v4: bool) -> Result<Vec<String>, CloudSyncError> {
@@ -320,7 +447,15 @@ fn parse_webdav_names(body: &str, v4: bool) -> Result<Vec<String>, CloudSyncErro
             }
             Ok(Event::End(event)) => {
                 let name = event.local_name();
-                if name.as_ref() == b"status" {
+                // Only a `status` that answers the whole `response` decides whether
+                // the resource exists. A `status` inside `propstat` reports one
+                // property, and servers legally answer 404 for a property they do
+                // not expose, which must not discard an otherwise complete listing.
+                let parent = stack
+                    .len()
+                    .checked_sub(2)
+                    .map(|index| stack[index].as_slice());
+                if name.as_ref() == b"status" && parent == Some(b"response".as_slice()) {
                     let code = text_value
                         .split_whitespace()
                         .nth(1)
