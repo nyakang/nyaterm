@@ -504,3 +504,213 @@ mod regression_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod natural_sort_equivalence_tests {
+    use std::cmp::Ordering;
+
+    use super::natural_compare_ascii;
+
+    // Reference: the original allocation-heavy implementation (lowercase + chars).
+    fn reference(left: &str, right: &str) -> Ordering {
+        let (left, right) = (left.to_lowercase(), right.to_lowercase());
+        let (mut l, mut r) = (left.chars().peekable(), right.chars().peekable());
+        loop {
+            match (l.peek().copied(), r.peek().copied()) {
+                (None, None) => return Ordering::Equal,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => {
+                    let mut ln = String::new();
+                    while let Some(c) = l.peek().copied().filter(char::is_ascii_digit) {
+                        ln.push(c);
+                        l.next();
+                    }
+                    let mut rn = String::new();
+                    while let Some(c) = r.peek().copied().filter(char::is_ascii_digit) {
+                        rn.push(c);
+                        r.next();
+                    }
+                    let (lt, rt) = (ln.trim_start_matches('0'), rn.trim_start_matches('0'));
+                    let (lk, rk) = (
+                        if lt.is_empty() { "0" } else { lt },
+                        if rt.is_empty() { "0" } else { rt },
+                    );
+                    let o = lk
+                        .len()
+                        .cmp(&rk.len())
+                        .then_with(|| lk.cmp(rk))
+                        .then_with(|| ln.len().cmp(&rn.len()));
+                    if o != Ordering::Equal {
+                        return o;
+                    }
+                }
+                (Some(a), Some(b)) => {
+                    l.next();
+                    r.next();
+                    if a != b {
+                        return a.cmp(&b);
+                    }
+                }
+            }
+        }
+    }
+
+    const SAMPLES: &[&str] = &[
+        "",
+        "a",
+        "A",
+        "file1",
+        "file01",
+        "file001",
+        "file2",
+        "file10",
+        "File10",
+        "0",
+        "00",
+        "000",
+        "007",
+        "7",
+        "a0",
+        "a00",
+        "a1b2",
+        "a01b2",
+        "x.tar.gz",
+        ".hidden",
+        "name (1)",
+        "z",
+        "123456789012345678901234567890123",
+        "0123456789012345678901234567890123",
+        "é",
+        "É",
+        "e\u{301}",
+        "İ",
+        "ß",
+        "ẞ",
+        "ǅ",
+        "\u{212A}",
+        "k",
+        "K",
+        "Σ",
+        "ς",
+        "σ",
+        "中",
+        "😀",
+        "a中1",
+        "A中01",
+        "k1",
+        "\u{212A}1",
+        "ÉCOLE2",
+        "école10",
+    ];
+
+    #[test]
+    fn natural_compare_matches_reference_for_ascii_and_unicode_samples() {
+        for a in SAMPLES {
+            for b in SAMPLES {
+                assert_eq!(
+                    natural_compare_ascii(a, b),
+                    reference(a, b),
+                    "{a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn natural_compare_matches_reference_on_pseudo_random_strings() {
+        const ALPHABET: &[&str] = &[
+            "a", "B", "k", "K", "0", "0", "1", "9", ".", " ", "-", "é", "İ", "ß", "\u{212A}", "中",
+            "😀", "\u{301}",
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let make = |next: &mut dyn FnMut() -> u64| {
+            let len = (next() % 12) as usize;
+            (0..len)
+                .map(|_| ALPHABET[(next() % ALPHABET.len() as u64) as usize])
+                .collect::<String>()
+        };
+        for _ in 0..20_000 {
+            let (a, b) = (make(&mut next), make(&mut next));
+            assert_eq!(
+                natural_compare_ascii(&a, &b),
+                reference(&a, &b),
+                "{a:?} vs {b:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod browser_filter_equivalence_tests {
+    use nyaterm_transport::{SftpFileEntry, SftpFileType};
+
+    use super::transfer_browser_entry_is_visible;
+
+    fn entry(name: &str) -> SftpFileEntry {
+        SftpFileEntry {
+            name: name.to_string(),
+            path: name.to_string(),
+            file_type: SftpFileType::File,
+            size: None,
+            permissions: None,
+            owner: String::new(),
+            group: String::new(),
+            modified_at: None,
+            raw_path_token: None,
+            symlink_target_is_directory: false,
+        }
+    }
+
+    // Callers pass `search.trim().to_lowercase()`; the contract is a lowercase query.
+    fn reference(name: &str, query: &str, show_hidden: bool) -> bool {
+        (show_hidden || !name.starts_with('.'))
+            && (query.is_empty() || name.to_lowercase().contains(query))
+    }
+
+    #[test]
+    fn filter_matches_reference_for_lowercase_queries() {
+        let names = [
+            "Notes.TXT",
+            "notes",
+            ".Env",
+            "résumé.PDF",
+            "\u{212A}elvin",
+            "İstanbul",
+            "ẞ",
+            "中文.md",
+            "",
+            "a b",
+        ];
+        let queries = [
+            "", "notes", "txt", "env", "résumé", "k", "kelvin", "i̇s", "ß", "中", "a b", "zzz", "é",
+        ];
+        for n in names {
+            for q in queries {
+                for hidden in [false, true] {
+                    assert_eq!(
+                        transfer_browser_entry_is_visible(&entry(n), q, hidden),
+                        reference(n, q, hidden),
+                        "{n:?} {q:?} {hidden}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filter_matches_non_ascii_case_folding_that_yields_ascii() {
+        // Kelvin sign lowercases to ASCII 'k'; the non-ASCII fallback must keep this match.
+        assert!(transfer_browser_entry_is_visible(
+            &entry("\u{212A}elvin"),
+            "kelvin",
+            false
+        ));
+    }
+}
