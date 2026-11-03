@@ -1,6 +1,6 @@
 use gpui::{
-    Context, Entity, FontFallbacks, IntoElement, MouseButton, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
+    Context, Entity, FontFallbacks, IntoElement, MouseButton, Render, ScrollDelta, ScrollEvent,
+    SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
 };
 use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
 
@@ -2006,7 +2006,7 @@ impl TerminalSurface {
         }
     }
 
-    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn handle_scroll_wheel(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let Some(app) = self.app.as_ref().and_then(WeakEntity::upgrade) else {
             self.wheel_zoom = TerminalWheelZoom::default();
             return;
@@ -2995,7 +2995,7 @@ impl Render for TerminalSurface {
             .when(!self.protocol_state.mouse_reporting, |this| {
                 this.cursor_text()
             })
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 this.handle_scroll_wheel(event, cx);
             }))
             .child(

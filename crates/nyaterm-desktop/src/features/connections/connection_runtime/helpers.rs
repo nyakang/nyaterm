@@ -29,7 +29,6 @@ pub(super) enum ConnectionEditorValidationError {
     RdpDisplayHeightInvalid,
     RdpReconnectAttemptsInvalid,
     RdpWindowsAuthenticationRequired,
-    RdpClipboardUnsupported,
     RdpRelayUnsupported,
     VncReconnectAttemptsInvalid,
     VncPasswordTooLong,
@@ -625,9 +624,6 @@ pub(super) fn build_saved_connection_from_editor(
                 }
                 if editor.rdp_security.windows_authentication.as_deref() != Some("system") {
                     return Err(ConnectionEditorValidationError::RdpWindowsAuthenticationRequired);
-                }
-                if !matches!(editor.rdp_clipboard.mode.as_str(), "disabled" | "off") {
-                    return Err(ConnectionEditorValidationError::RdpClipboardUnsupported);
                 }
             }
             ConnectionType::Rdp {
@@ -1561,7 +1557,7 @@ mod tests {
     }
 
     #[test]
-    fn old_windows_connections_normalize_only_the_editor_and_saved_changes() {
+    fn old_windows_connections_preserve_clipboard_settings_through_editor_and_save() {
         for backend in ["windows", "active-x"] {
             for mode in ["text-only", "text-and-files", "disabled"] {
                 for authentication in [None, Some("system"), Some("future-auth")] {
@@ -1577,7 +1573,7 @@ mod tests {
                     let stored: SavedConnection = serde_json::from_value(document).unwrap();
                     let original = serde_json::to_value(&stored).unwrap();
                     let editor = connection_editor_from_saved(stored.clone(), false);
-                    assert_eq!(editor.rdp_clipboard.mode, "disabled");
+                    assert_eq!(editor.rdp_clipboard.mode, mode);
                     assert_eq!(editor.rdp_security.certificate_policy, "strict");
                     assert_eq!(
                         editor.rdp_security.windows_authentication.as_deref(),
@@ -1591,7 +1587,7 @@ mod tests {
                         );
                     } else {
                         let saved = serde_json::to_value(saved.unwrap()).unwrap();
-                        assert_eq!(saved["clipboard"]["mode"], "disabled");
+                        assert_eq!(saved["clipboard"]["mode"], mode);
                         assert_eq!(saved["security"]["windows_authentication"], "system");
                         assert_eq!(saved["security"]["certificate_policy"], "strict");
                     }

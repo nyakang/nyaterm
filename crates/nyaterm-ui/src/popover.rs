@@ -316,7 +316,7 @@ mod tests {
 
     use gpui::{
         Anchor, Context, InteractiveElement as _, IntoElement as _, Modifiers, ParentElement as _,
-        Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _,
+        Render, ScrollDelta, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
         TestAppContext, VisualTestContext, Window, div, point, px,
     };
 
@@ -512,7 +512,7 @@ mod tests {
 
         let content = cx.debug_bounds("side-popover-content").unwrap();
         let initial_last_y = cx.debug_bounds("side-popover-last-row").unwrap().origin.y;
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: content.center(),
             delta: ScrollDelta::Pixels(point(px(0.), px(-48.))),
             ..Default::default()

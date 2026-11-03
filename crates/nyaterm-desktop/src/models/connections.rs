@@ -157,7 +157,6 @@ pub(crate) enum ConnectionEditorSelect {
     RdpBackend,
     RdpCertificatePolicy,
     RdpDisplayMode,
-    RdpClipboardMode,
     VncSecurityMode,
     VncScaleMode,
     RecordingMode,
@@ -416,7 +415,6 @@ impl ConnectionEditorState {
             self.rdp_security
                 .windows_authentication
                 .get_or_insert_with(|| "system".into());
-            self.rdp_clipboard.mode = "disabled".into();
         }
     }
 

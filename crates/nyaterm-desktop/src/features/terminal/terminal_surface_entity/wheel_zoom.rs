@@ -1,4 +1,4 @@
-use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use gpui::{Modifiers, ScrollDelta, ScrollEvent, TouchPhase};
 
 const ZOOM_PIXELS_PER_STEP: f32 = 40.0;
 // No single event needs to traverse more than the entire supported font range.
@@ -13,7 +13,7 @@ impl TerminalWheelZoom {
     /// `Some(0)` consumes a zoom gesture while accumulating sub-step motion.
     pub(super) fn handle_event(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         enabled: bool,
         is_macos: bool,
     ) -> Option<i16> {
@@ -76,15 +76,15 @@ fn zoom_modifiers(modifiers: Modifiers, is_macos: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px};
+    use gpui::{Modifiers, ScrollDelta, ScrollEvent, TouchPhase, point, px};
 
     use super::{TerminalWheelZoom, zoom_modifiers};
 
-    fn pixel_event(y: f32) -> ScrollWheelEvent {
-        ScrollWheelEvent {
+    fn pixel_event(y: f32) -> ScrollEvent {
+        ScrollEvent {
             delta: ScrollDelta::Pixels(point(px(0.0), px(y))),
             modifiers: Modifiers::control(),
-            ..ScrollWheelEvent::default()
+            ..ScrollEvent::default()
         }
     }
 
@@ -131,10 +131,10 @@ mod tests {
             (f32::NAN, 0),
             (f32::INFINITY, 0),
         ] {
-            let event = ScrollWheelEvent {
+            let event = ScrollEvent {
                 delta: ScrollDelta::Lines(point(5.0, y)),
                 modifiers: Modifiers::control(),
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             };
             assert_eq!(zoom.handle_event(&event, true, false), Some(expected));
         }

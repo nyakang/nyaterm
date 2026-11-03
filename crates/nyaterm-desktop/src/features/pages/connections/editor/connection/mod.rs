@@ -802,20 +802,6 @@ impl NyaTermApp {
             ConnectionEditorChoice::new(Some(value.to_string()), label, current == value)
         })
         .collect::<Vec<_>>();
-        let rdp_clipboard_options = [
-            ("text-only", t!("dialog.rdpClipboardTextOnly")),
-            ("text-and-files", t!("dialog.rdpClipboardTextAndFiles")),
-            ("disabled", t!("dialog.disabled")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.rdp_clipboard.mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
         let vnc_security_options = [
             ("auto", t!("dialog.vncSecurityAuto")),
             ("none", t!("dialog.vncSecurityNone")),
@@ -1152,11 +1138,6 @@ impl NyaTermApp {
                 String::new(),
             ),
             (
-                ConnectionEditorSelect::RdpClipboardMode,
-                rdp_clipboard_options.as_slice(),
-                String::new(),
-            ),
-            (
                 ConnectionEditorSelect::VncSecurityMode,
                 vnc_security_options.as_slice(),
                 String::new(),
@@ -1220,8 +1201,6 @@ impl NyaTermApp {
                     | ConnectionEditorSelect::SftpPipelineDepth
             ) && !editor.sftp_enabled
                 || select_key == ConnectionEditorSelect::SavedPassword && password_disabled
-                || select_key == ConnectionEditorSelect::RdpClipboardMode
-                    && editor.uses_windows_rdp()
                 || select_key == ConnectionEditorSelect::SerialPort
                     && self.connection_state.serial_ports_loading();
             select.update(cx, |select, cx| select.set_disabled(disabled, cx));
@@ -1628,7 +1607,7 @@ impl NyaTermApp {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&scroll)
-            .on_scroll_wheel(cx.listener(|this, _: &gpui::ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(|this, _: &gpui::ScrollEvent, window, cx| {
                 if this.connection_editor_select_menu_is_focused(window, cx) {
                     cx.stop_propagation();
                 }
@@ -2305,7 +2284,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 32] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -2327,7 +2306,6 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 32] {
         ConnectionEditorSelect::RdpBackend,
         ConnectionEditorSelect::RdpCertificatePolicy,
         ConnectionEditorSelect::RdpDisplayMode,
-        ConnectionEditorSelect::RdpClipboardMode,
         ConnectionEditorSelect::VncSecurityMode,
         ConnectionEditorSelect::VncScaleMode,
         ConnectionEditorSelect::RecordingMode,
@@ -2367,7 +2345,6 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::RdpBackend => "connection-editor-rdp-backend",
         ConnectionEditorSelect::RdpCertificatePolicy => "connection-editor-rdp-certificate-policy",
         ConnectionEditorSelect::RdpDisplayMode => "connection-editor-rdp-display-mode",
-        ConnectionEditorSelect::RdpClipboardMode => "connection-editor-rdp-clipboard-mode",
         ConnectionEditorSelect::VncSecurityMode => "connection-editor-vnc-security-mode",
         ConnectionEditorSelect::VncScaleMode => "connection-editor-vnc-scale-mode",
         ConnectionEditorSelect::RecordingMode => "connection-editor-recording-mode",
@@ -2979,7 +2956,7 @@ mod tests {
 
     use gpui::{
         AppContext as _, Entity, InteractiveElement as _, IntoElement, Modifiers,
-        ParentElement as _, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Styled as _,
+        ParentElement as _, Render, RenderImage, ScrollDelta, ScrollEvent, Styled as _,
         TestAppContext, VisualTestContext, div, point, px,
     };
     use nyaterm_core::{AppRuntime, Group, RuntimeMode, models::sessions::ConnectionCustomIcon};
@@ -3150,7 +3127,7 @@ mod tests {
             let overlay = vcx.debug_bounds("scrollbar-overlay").unwrap();
             assert!(overlay.size.height >= viewport.size.height - px(2.));
 
-            vcx.simulate_event(ScrollWheelEvent {
+            vcx.simulate_event(ScrollEvent {
                 position: viewport.center(),
                 delta: ScrollDelta::Pixels(point(px(0.), px(-108.))),
                 ..Default::default()
@@ -4132,7 +4109,7 @@ mod tests {
             popup_before.size.height - popup_without_custom.size.height,
             px(60.)
         );
-        vcx.simulate_event(ScrollWheelEvent {
+        vcx.simulate_event(ScrollEvent {
             position: point(grid_before.left() + px(20.), grid_before.top() + px(20.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(-48.))),
             ..Default::default()

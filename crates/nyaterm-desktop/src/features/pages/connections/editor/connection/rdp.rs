@@ -426,24 +426,6 @@ fn rdp_session(
                 .text_color(rgb(palette.text_muted))
                 .child(t!("dialog.rdpBackendDesc")),
         )
-        .child(connection_editor_select(
-            ConnectionEditorRenderContext {
-                palette,
-                fields,
-                cx,
-            },
-            "connection-editor-rdp-clipboard-mode",
-            t!("dialog.rdpClipboard"),
-            ConnectionEditorSelect::RdpClipboardMode,
-        ))
-        .when(editor.uses_windows_rdp(), |this| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!("dialog.rdpWindowsClipboardDisabled")),
-            )
-        })
         .flex()
         .flex_col()
         .gap_3()

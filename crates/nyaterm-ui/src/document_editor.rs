@@ -359,7 +359,7 @@ mod tests {
     fn document_wheel_scrolls_with_or_without_modifiers_and_clamps_at_both_edges(
         cx: &mut TestAppContext,
     ) {
-        use gpui::{ScrollDelta, ScrollWheelEvent, TouchPhase, point, px};
+        use gpui::{ScrollDelta, ScrollEvent, TouchPhase, point, px};
 
         cx.update(gpui_kit::init);
         let mut document = None;
@@ -404,11 +404,12 @@ mod tests {
                 (100_000., 1),
                 (100., 0),
             ] {
-                cx.simulate_event(ScrollWheelEvent {
+                cx.simulate_event(ScrollEvent {
                     position,
                     delta: ScrollDelta::Pixels(point(px(0.), px(delta_y))),
                     modifiers,
                     touch_phase: TouchPhase::Moved,
+                    source: gpui::ScrollSource::Pointer,
                 });
                 cx.run_until_parked();
                 cx.update(|window, cx| _ = window.draw(cx));

@@ -725,6 +725,7 @@ impl Default for RdpDisplaySettings {
     }
 }
 
+/// Retained for saved-connection and backup compatibility; runtime always enables RDP clipboard.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RdpClipboardSettings {
     #[serde(default = "default_rdp_clipboard_mode")]
@@ -1019,4 +1020,27 @@ where
             .map(|number| number.clamp(4, 64) as u32)
             .or_else(|| value.as_u64().map(|number| number.clamp(4, 64) as u32))
     }))
+}
+
+#[cfg(test)]
+mod rdp_clipboard_compatibility_tests {
+    use super::RdpClipboardSettings;
+
+    #[test]
+    fn legacy_clipboard_modes_round_trip_and_new_settings_enable_text_and_files() {
+        assert_eq!(RdpClipboardSettings::default().mode, "text-and-files");
+        let missing: RdpClipboardSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.mode, "text-and-files");
+        for mode in [
+            "disabled",
+            "off",
+            "text-only",
+            "text-and-files",
+            "future-mode",
+        ] {
+            let value = serde_json::json!({"mode": mode});
+            let settings: RdpClipboardSettings = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(settings).unwrap(), value);
+        }
+    }
 }

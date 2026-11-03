@@ -151,7 +151,7 @@ fn default_rdp_color_depth() -> u8 {
 }
 
 fn default_rdp_clipboard_mode() -> String {
-    "text-only".to_string()
+    "text-and-files".to_string()
 }
 
 fn default_rdp_reconnect_attempts() -> u32 {

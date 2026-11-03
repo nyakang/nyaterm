@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{App, Global, KeyBinding, KeyContext, Keystroke, Modifiers};
+use gpui::{
+    Action, App, Global, KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, Modifiers,
+};
 
 mod actions;
 pub(crate) use actions::*;
@@ -943,7 +945,7 @@ pub(crate) fn rebuild_keymap(overrides: &HashMap<String, String>, cx: &mut App) 
     ensure_global(cx);
     let resolved = ResolvedKeymap::resolve(overrides);
     let baseline = cx.global::<ShortcutKeymapGlobal>().baseline.clone();
-    let bindings = gpui_bindings(&resolved);
+    let bindings = gpui_bindings(&resolved, cx);
     cx.clear_key_bindings();
     cx.bind_keys(baseline.clone());
     cx.bind_keys(bindings);
@@ -1030,7 +1032,7 @@ fn keystroke_matches(event: &Keystroke, binding: &Keystroke) -> bool {
     event.modifiers == binding.modifiers && normalize_key_name(&event.key) == binding.key
 }
 
-fn gpui_bindings(resolved: &ResolvedKeymap) -> Vec<KeyBinding> {
+fn gpui_bindings(resolved: &ResolvedKeymap, cx: &App) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for shortcut in &resolved.shortcuts {
         let definition = SHORTCUT_REGISTRY
@@ -1044,6 +1046,7 @@ fn gpui_bindings(resolved: &ResolvedKeymap) -> Vec<KeyBinding> {
                         definition.action,
                         chord,
                         definition.scope.context(),
+                        cx,
                     ));
                 }
             }
@@ -1051,12 +1054,13 @@ fn gpui_bindings(resolved: &ResolvedKeymap) -> Vec<KeyBinding> {
                 for template in shortcut.binding.chords() {
                     for index in first..=last {
                         let chord = template.with_key(index.to_string());
-                        bindings.push(KeyBinding::new(
+                        bindings.push(dynamic_key_binding(
                             &chord.gpui_source(),
                             SwitchToTab {
                                 index: usize::from(index),
                             },
                             definition.scope.context(),
+                            cx,
                         ));
                     }
                 }
@@ -1066,11 +1070,31 @@ fn gpui_bindings(resolved: &ResolvedKeymap) -> Vec<KeyBinding> {
     bindings
 }
 
-fn binding_for_action(id: ShortcutId, chord: &ShortcutChord, context: Option<&str>) -> KeyBinding {
+fn dynamic_key_binding(
+    source: &str,
+    action: impl Action,
+    context: Option<&str>,
+    cx: &App,
+) -> KeyBinding {
+    let predicate = context.map(|context| {
+        KeyBindingContextPredicate::parse(context)
+            .expect("shortcut registry context must be valid")
+            .into()
+    });
+    KeyBinding::load(source, Box::new(action), predicate, false, None, cx)
+        .expect("resolved shortcut must remain a valid GPUI binding")
+}
+
+fn binding_for_action(
+    id: ShortcutId,
+    chord: &ShortcutChord,
+    context: Option<&str>,
+    cx: &App,
+) -> KeyBinding {
     let source = chord.gpui_source();
     macro_rules! binding {
         ($action:ident) => {
-            KeyBinding::new(&source, $action, context)
+            dynamic_key_binding(&source, $action, context, cx)
         };
     }
     match id {
@@ -1505,10 +1529,10 @@ mod tests {
         assert!(!ShortcutScope::Modal.overlaps(ShortcutScope::Workspace));
     }
 
-    #[test]
-    fn indexed_tab_binding_expands_one_template_to_nine_actions() {
+    #[gpui::test]
+    fn indexed_tab_binding_expands_one_template_to_nine_actions(cx: &mut gpui::TestAppContext) {
         let resolved = ResolvedKeymap::resolve(&HashMap::new());
-        let bindings = gpui_bindings(&resolved);
+        let bindings = cx.update(|cx| gpui_bindings(&resolved, cx));
         let indexed = bindings
             .iter()
             .filter(|binding| binding.action().as_any().is::<SwitchToTab>())
@@ -1553,10 +1577,12 @@ mod tests {
         assert_eq!(overrides["plugin.futureAction"], " win+Q ");
     }
 
-    #[test]
-    fn gpui_contexts_dispatch_local_actions_and_allow_workspace_in_inputs() {
+    #[gpui::test]
+    fn gpui_contexts_dispatch_local_actions_and_allow_workspace_in_inputs(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let resolved = ResolvedKeymap::resolve(&HashMap::new());
-        let mut keymap = Keymap::new(gpui_bindings(&resolved));
+        let mut keymap = Keymap::new(cx.update(|cx| gpui_bindings(&resolved, cx)));
 
         let terminal_copy = SHORTCUT_REGISTRY
             .iter()
@@ -1649,14 +1675,16 @@ mod tests {
         assert_eq!(resolve_invocation(&resolved, &paste, &contexts), None);
     }
 
-    #[test]
-    fn terminal_paste_override_preserves_nested_input_paste_in_keymap() {
+    #[gpui::test]
+    fn terminal_paste_override_preserves_nested_input_paste_in_keymap(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let resolved = ResolvedKeymap::resolve(&HashMap::from([(
             "terminal.paste".to_string(),
             "ctrl+v".to_string(),
         )]));
         let mut bindings = vec![KeyBinding::new("ctrl-v", NyaPaste, Some("Input"))];
-        bindings.extend(gpui_bindings(&resolved));
+        bindings.extend(cx.update(|cx| gpui_bindings(&resolved, cx)));
         let keymap = Keymap::new(bindings);
         let paste = ShortcutBinding::parse("ctrl+v").unwrap().chords()[0]
             .keystroke()
