@@ -214,21 +214,17 @@ pub(super) fn detect(line: &str) -> LineRole {
 }
 
 fn looks_like_file_listing(line: &str) -> bool {
-    let mut chars = line.chars();
-    let Some(kind) = chars.next() else {
-        return false;
-    };
-    if !matches!(kind, '-' | 'd' | 'l' | 'c' | 'b' | 's' | 'p') {
+    // One kind character and nine mode characters, all ASCII, so this can be
+    // decided on bytes without building a string for every candidate line.
+    let bytes = line.as_bytes();
+    if bytes.len() < 10 || !matches!(bytes[0], b'-' | b'd' | b'l' | b'c' | b'b' | b's' | b'p') {
         return false;
     }
-    let mode: String = chars.take(9).collect();
-    let valid_mode = mode.len() == 9
-        && mode
-            .chars()
-            .all(|c| matches!(c, 'r' | 'w' | 'x' | '-' | 's' | 'S' | 't' | 'T'))
-        && mode
-            .chars()
-            .any(|c| c == 'r' || c == 'w' || c == 'x' || c == 's');
+    let mode = &bytes[1..10];
+    let valid_mode = mode
+        .iter()
+        .all(|b| matches!(b, b'r' | b'w' | b'x' | b'-' | b's' | b'S' | b't' | b'T'))
+        && mode.iter().any(|b| matches!(b, b'r' | b'w' | b'x' | b's'));
     if !valid_mode {
         return false;
     }
@@ -248,32 +244,49 @@ fn looks_like_file_listing(line: &str) -> bool {
 
 /// `ps aux` data row: `USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND`.
 fn looks_like_ps_aux_row(line: &str) -> bool {
-    let fields: Vec<&str> = line.split_whitespace().collect();
-    if fields.len() < 11 {
-        return false;
+    // Walk the columns once and stop at the first one that disagrees, instead of
+    // collecting every field of every line into a vector. A row needs at least
+    // eleven fields (the command is the last and may contain spaces).
+    let mut fields = line.split_whitespace();
+    for column in 0..10 {
+        let Some(field) = fields.next() else {
+            return false;
+        };
+        let matches_column = match column {
+            1 | 4 | 5 => is_uint(field),
+            2 | 3 => is_decimal(field),
+            6 => is_tty(field),
+            7 => looks_like_ps_state(field),
+            9 => looks_like_clock(field),
+            _ => true,
+        };
+        if !matches_column {
+            return false;
+        }
     }
-    is_uint(fields[1])
-        && is_decimal(fields[2])
-        && is_decimal(fields[3])
-        && is_uint(fields[4])
-        && is_uint(fields[5])
-        && is_tty(fields[6])
-        && looks_like_ps_state(fields[7])
-        && looks_like_clock(fields[9])
+    fields.next().is_some()
 }
 
 /// `ps -ef` data row: `UID PID PPID C STIME TTY TIME CMD`.
 fn looks_like_ps_full_row(line: &str) -> bool {
-    let fields: Vec<&str> = line.split_whitespace().collect();
-    if fields.len() < 8 {
-        return false;
+    // Same early-exit walk as `ps aux`; this row needs at least eight fields.
+    let mut fields = line.split_whitespace();
+    for column in 0..7 {
+        let Some(field) = fields.next() else {
+            return false;
+        };
+        let matches_column = match column {
+            1..=3 => is_uint(field),
+            4 => looks_like_start_time(field),
+            5 => is_tty(field),
+            6 => looks_like_clock(field),
+            _ => true,
+        };
+        if !matches_column {
+            return false;
+        }
     }
-    is_uint(fields[1])
-        && is_uint(fields[2])
-        && is_uint(fields[3])
-        && looks_like_start_time(fields[4])
-        && is_tty(fields[5])
-        && looks_like_clock(fields[6])
+    fields.next().is_some()
 }
 
 fn is_uint(value: &str) -> bool {
@@ -686,11 +699,8 @@ fn looks_like_docker_ps(line: &str) -> bool {
         return true;
     }
     // Rows begin with a 12-hex container id followed by whitespace.
-    let mut chars = line.chars();
-    let id: String = chars.by_ref().take(12).collect();
-    id.len() == 12
-        && id.chars().all(|c| c.is_ascii_hexdigit())
-        && chars.next().is_some_and(|c| c == ' ')
+    let bytes = line.as_bytes();
+    bytes.len() > 12 && bytes[..12].iter().all(u8::is_ascii_hexdigit) && bytes[12] == b' '
 }
 
 fn container_fields(line: &str) -> Vec<RoleField> {
@@ -2680,5 +2690,241 @@ mod tests {
                 .any(|f| &line[f.range.clone()] == "Oct" && f.rule == "builtin-month"),
             "{texts:?}"
         );
+    }
+}
+
+/// The row checks used to build vectors and strings for every line. These tests
+/// keep the allocation-free versions behaviourally identical to the originals.
+#[cfg(test)]
+mod row_check_equivalence_tests {
+    use super::{
+        is_decimal, is_tty, is_uint, looks_like_clock, looks_like_docker_ps,
+        looks_like_file_listing, looks_like_ps_aux_row, looks_like_ps_full_row,
+        looks_like_ps_state, looks_like_start_time,
+    };
+
+    fn reference_file_listing(line: &str) -> bool {
+        let mut chars = line.chars();
+        let Some(kind) = chars.next() else {
+            return false;
+        };
+        if !matches!(kind, '-' | 'd' | 'l' | 'c' | 'b' | 's' | 'p') {
+            return false;
+        }
+        let mode: String = chars.take(9).collect();
+        let valid_mode = mode.len() == 9
+            && mode
+                .chars()
+                .all(|c| matches!(c, 'r' | 'w' | 'x' | '-' | 's' | 'S' | 't' | 'T'))
+            && mode
+                .chars()
+                .any(|c| c == 'r' || c == 'w' || c == 'x' || c == 's');
+        if !valid_mode {
+            return false;
+        }
+        let Some(rest) = line.get(10..) else {
+            return false;
+        };
+        let rest = rest.strip_prefix(['.', '+', '@']).unwrap_or(rest);
+        let trimmed = rest.trim_start();
+        rest.len() > trimmed.len() && trimmed.bytes().take_while(u8::is_ascii_digit).count() > 0
+    }
+
+    fn reference_ps_aux_row(line: &str) -> bool {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 11 {
+            return false;
+        }
+        is_uint(fields[1])
+            && is_decimal(fields[2])
+            && is_decimal(fields[3])
+            && is_uint(fields[4])
+            && is_uint(fields[5])
+            && is_tty(fields[6])
+            && looks_like_ps_state(fields[7])
+            && looks_like_clock(fields[9])
+    }
+
+    fn reference_ps_full_row(line: &str) -> bool {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            return false;
+        }
+        is_uint(fields[1])
+            && is_uint(fields[2])
+            && is_uint(fields[3])
+            && looks_like_start_time(fields[4])
+            && is_tty(fields[5])
+            && looks_like_clock(fields[6])
+    }
+
+    fn reference_docker_row(line: &str) -> bool {
+        let mut chars = line.chars();
+        let id: String = chars.by_ref().take(12).collect();
+        id.len() == 12
+            && id.chars().all(|c| c.is_ascii_hexdigit())
+            && chars.next().is_some_and(|c| c == ' ')
+    }
+
+    /// Deterministic xorshift so a failure is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    const SEEDS: &[&str] = &[
+        "-rw-r--r--@  1 jakubwerwinski  staff  13980 Mar 26  2026 capture.pcap",
+        "drwxr-xr-x. 10 root root  4096 Oct 29 09:00 dir",
+        "lrwxrwxrwx  1 root root     7 Oct 28 08:00 link -> /usr/bin/x",
+        "-rwsr-xr-t+ 1 root root 1518 Sep  8 10:33 shared.txt",
+        "root          1234  0.1 0.2   12000   2000 ?        Ss   10:01   0:01 /usr/sbin/sshd -D",
+        "jakub         4321 12.5 1.0 9812344 123456 pts/3    R+   Oct30   1:22.33 vim a b c",
+        "USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND",
+        "root         1     0  0 Oct30 ?        00:00:05 /sbin/init splash",
+        "UID          PID    PPID  C STIME TTY          TIME CMD",
+        "a1b2c3d4e5f6   nginx:latest   \"/docker-entrypoint.\"   2 hours ago   Up 2 hours   80/tcp   web",
+        "0123456789ab rest of the row",
+        "hello world line 42",
+        "done",
+        "  --> crates/nyaterm-ui/src/theme.rs:100:5",
+        "dev dev dev dev dev dev dev dev dev dev dev",
+        "中文 行 -rw-r--r-- 1 root",
+    ];
+
+    const ALPHABET: &[&str] = &[
+        "-", "d", "l", "r", "w", "x", "s", "S", "t", "T", " ", "  ", "\t", "0", "1", "9", ".", ":",
+        "?", "@", "+", "a", "f", "F", "g", "é", "中", "\u{a0}", "/", "R", "Z", "<", "pts/", "tty",
+    ];
+
+    fn mutate(rng: &mut Rng, seed: &str) -> String {
+        let mut chars: Vec<String> = seed.chars().map(|c| c.to_string()).collect();
+        for _ in 0..rng.below(5) {
+            match rng.below(4) {
+                0 if !chars.is_empty() => {
+                    let at = rng.below(chars.len());
+                    chars[at] = ALPHABET[rng.below(ALPHABET.len())].to_string();
+                }
+                1 => {
+                    let at = rng.below(chars.len() + 1);
+                    chars.insert(at, ALPHABET[rng.below(ALPHABET.len())].to_string());
+                }
+                2 if !chars.is_empty() => {
+                    let at = rng.below(chars.len());
+                    chars.remove(at);
+                }
+                _ if !chars.is_empty() => {
+                    let keep = rng.below(chars.len() + 1);
+                    chars.truncate(keep);
+                }
+                _ => {}
+            }
+        }
+        chars.concat()
+    }
+
+    #[test]
+    fn allocation_free_row_checks_match_the_originals_on_mutated_lines() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut positives = [0usize; 4];
+        for seed in SEEDS {
+            for round in 0..20_000 {
+                let line = if round == 0 {
+                    (*seed).to_string()
+                } else {
+                    mutate(&mut rng, seed)
+                };
+                let expected = [
+                    reference_file_listing(&line),
+                    reference_ps_aux_row(&line),
+                    reference_ps_full_row(&line),
+                    reference_docker_row(&line),
+                ];
+                let actual = [
+                    looks_like_file_listing(&line),
+                    looks_like_ps_aux_row(&line),
+                    looks_like_ps_full_row(&line),
+                    // `looks_like_docker_ps` also accepts header rows, so compare
+                    // only the row shape it falls back to.
+                    looks_like_docker_ps(&line)
+                        && !line.starts_with("CONTAINER ID")
+                        && !line.starts_with("NAME"),
+                ];
+                for (index, name) in ["ls -l", "ps aux", "ps -ef", "docker row"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if index == 3 {
+                        // The docker check has earlier header branches; a row
+                        // match must still agree with the reference.
+                        if expected[3] {
+                            assert!(actual[3], "{name} rejected {line:?}");
+                        }
+                        continue;
+                    }
+                    assert_eq!(actual[index], expected[index], "{name} on {line:?}");
+                    positives[index] += usize::from(expected[index]);
+                }
+            }
+        }
+        // The corpus must exercise both outcomes, or the comparison proves nothing.
+        assert!(positives[0] > 500, "ls -l positives: {}", positives[0]);
+        assert!(positives[1] > 500, "ps aux positives: {}", positives[1]);
+        assert!(positives[2] > 100, "ps -ef positives: {}", positives[2]);
+    }
+
+    #[test]
+    fn ps_rows_need_exactly_their_minimum_number_of_fields() {
+        let aux = |n: usize| {
+            let head = [
+                "root", "1", "0.0", "0.1", "100", "200", "?", "Ss", "10:00", "0:01",
+            ];
+            let mut fields: Vec<&str> = head.to_vec();
+            fields.extend(std::iter::repeat_n("cmd", n));
+            fields.join(" ")
+        };
+        assert!(
+            !looks_like_ps_aux_row(&aux(0)),
+            "ten fields is a header-less row"
+        );
+        assert!(looks_like_ps_aux_row(&aux(1)));
+        assert!(looks_like_ps_aux_row(&aux(5)));
+        assert!(!looks_like_ps_aux_row(""));
+        assert!(!looks_like_ps_aux_row("root 1 0.0"));
+
+        let full = |n: usize| {
+            let head = ["root", "1", "0", "0", "Oct30", "?", "00:00:05"];
+            let mut fields: Vec<&str> = head.to_vec();
+            fields.extend(std::iter::repeat_n("cmd", n));
+            fields.join(" ")
+        };
+        assert!(!looks_like_ps_full_row(&full(0)));
+        assert!(looks_like_ps_full_row(&full(1)));
+    }
+
+    #[test]
+    fn mode_string_and_container_id_edge_cases_are_unchanged() {
+        // A multi-byte character inside the nine mode characters is not a mode.
+        assert!(!looks_like_file_listing(
+            "-rw-r-é-r-- 1 root root 1 Jan 1 f"
+        ));
+        // Fewer than ten bytes can never be a listing.
+        assert!(!looks_like_file_listing("-rw-r--r-"));
+        assert!(looks_like_file_listing("-rw-r--r-- 1 root"));
+        // The link count must follow a space.
+        assert!(!looks_like_file_listing("-rw-r--r--1 root"));
+        // Container ids are exactly twelve hex digits then one space.
+        assert!(looks_like_docker_ps("0123456789ab web"));
+        assert!(!looks_like_docker_ps("0123456789ab\tweb"));
+        assert!(!looks_like_docker_ps("0123456789abc web"));
+        assert!(!looks_like_docker_ps("0123456789a"));
+        assert!(!looks_like_docker_ps("0123456789ag web"));
     }
 }
