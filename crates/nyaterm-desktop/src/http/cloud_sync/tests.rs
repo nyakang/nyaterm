@@ -85,6 +85,42 @@ fn webdav_propfind_parser_rejects_invalid_percent_encoding() {
 }
 
 #[test]
+fn webdav_propfind_parser_tolerates_property_level_failures() {
+    // A `propstat` 404 answers one property, not the resource: servers that do
+    // not expose `getcontentlength` (or answer it separately) must not turn a
+    // complete listing into an invalid one.
+    let body = r#"<?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+          <D:response>
+            <D:href>/dav/nyaterm/sync/snapshots/2026-10-30.redb.enc</D:href>
+            <D:propstat>
+              <D:prop><D:resourcetype/></D:prop>
+              <D:status>HTTP/1.1 200 OK</D:status>
+            </D:propstat>
+            <D:propstat>
+              <D:prop><D:getcontentlength/></D:prop>
+              <D:status>HTTP/1.1 404 Not Found</D:status>
+            </D:propstat>
+          </D:response>
+        </D:multistatus>"#;
+
+    assert_eq!(
+        parse_webdav_file_names(body).expect("parse PROPFIND"),
+        vec!["2026-10-30.redb.enc"]
+    );
+}
+
+#[test]
+fn webdav_propfind_parser_tolerates_a_byte_order_mark() {
+    let body = "\u{feff}<multistatus xmlns=\"DAV:\"><response><href>/rev-one.redb.enc</href></response></multistatus>";
+
+    assert_eq!(
+        parse_webdav_file_names(body).expect("parse PROPFIND"),
+        vec!["rev-one.redb.enc"]
+    );
+}
+
+#[test]
 fn webdav_listing_errors_are_not_interpreted_as_an_empty_space() {
     for body in [
         "<html><body>Authentication required</body></html>",
