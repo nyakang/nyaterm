@@ -350,7 +350,6 @@ impl NyaTermApp {
     }
 }
 
-#[path = "quick_switch_search.rs"]
 mod quick_switch_search;
 use quick_switch_search::filter_quick_switch_items;
 
