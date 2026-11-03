@@ -165,3 +165,69 @@ zsh／fish 时省略了推荐包，缺少 Fish history 使用的 pager。已验�
 `fish-binary-unchanged.txt` 和 `x11-test-with-less.log`。
 功能源码在本轮复核期间未改变；本次补充只更新验证记录。内网目标机的
 真实桌面壳层、Linux 5.4／安全补丁、驱动和服务仍按前述要求验收。
+
+
+## 再次同步与 2.0.1 兼容发行验证（2026-11-03）
+
+本轮从兼容分支 `873422e716b89d03d455b17ab6bb93d7728e705a` 开始，普通 merge
+合入启动时实际抓取的上游 `e855789e2269841a4e84c9ffb78c2808c30cc793`（11 个新增提交），
+合并提交为 `e5fb1f083c380e76043b0b13e411cea34ed4584b`。唯一实际冲突在
+`scripts/tests/test_package_native.py`：同时保留本分支真实 deb 图标／权限测试和
+上游 Windows 静态 CRT 测试。GPUI `fa96acbd`、gpui-kit `e87ad22c`、Windows RDP
+新架构和上游备份修复均保留。兼容补丁没有额外改动持久化格式。
+
+`4c343583e382db09472c5bee6f3dd7729d62f7c4` 另补齐便携 tar 的目录 0755、
+可执行文件 0755、数据 0644 及 root 归档元数据，避免继承构建者身份或受限权限。
+实际归档回归覆盖 0600 源文件与 umask 0077。
+
+本轮构建期间，上游继续推进 9 个提交至 `84015d4542b1a2fef98cbe182f2c0ee1b3e4d087`，
+包含 GPUI／gpui-kit 0.9 等大幅依赖更新。本轮固定上述启动时基线，不将这些后来更新
+计入发行或沿用本轮结果宣称其兼容。当前兼容分支与该新 tip 的 `git merge-tree --write-tree`
+预演退出 0、无冲突；预演没有改变工作区、提交或正在执行的构建。
+
+| 本轮新树检查 | 实际结果 |
+| --- | --- |
+| 标准调试工作区测试 | `RUST_TEST_THREADS=2 cargo test --workspace --locked --no-fail-fast`：**4995 通过、0 失败、28 项既有忽略**，退出 0 |
+| 测试配置 | Cargo 元数据确认 desktop／ui 的 `debug_assertions=true`、`overflow_checks=true`；仅设 `CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_PROFILE_TEST_DEBUG=0` 关闭调试符号，保留仓库优化配置 |
+| 严格 Clippy | `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过（标准调试配置） |
+| 源码检查 | `cargo fmt --all -- --check`、架构边界、Shell 语法、actionlint 1.7.7 和相对固定上游基线的兼容差异空白检查通过 |
+| Python | 151 项：143 通过、8 项平台／工具跳过；focal Python 3.8 专项 9 项通过 |
+| 原生 X11 类名 | 缓存的标准调试二进制另行执行 ignored 类名回归：1 项通过，覆盖稳定／预览类名与实例组合 |
+
+默认并发首轮完整汇总为 4994 通过、1 失败、28 忽略。唯一失败是
+`remote_file::shell::transfer::tests::pause_does_not_consume_idle_budget_and_upload_activity_keeps_reply_wait_alive`：
+该用例使用 80ms 空闲预算，在 oneshot sender 处因 receiver 已释放而失败。
+同一个缓存二进制单独连续复测 5 次全部通过，SHA-256 不变，且在上述两线程完整汇总中通过。
+该模块及 transport 的全部本地依赖闭包、根 Cargo 清单与锁文件，与本轮固定上游的 Git
+对象逐项相同。保留首轮失败日志，不将首次失败隐去，也没有修改断言、超时或忽略项。
+
+| 最终发行制品检查 | 实际结果 |
+| --- | --- |
+| 锁定依赖优化构建 | 四个默认发行可执行文件在 focal 普通 UID 1000 下构建通过，用时 51m35s；生成本轮独立目录的新 tar／deb |
+| 可执行文件 ABI | 主程序、MCP、RDP、VNC 最高要求均为 **GLIBC 2.30**；解释器、SONAME、RPATH、GLIBCXX／CXXABI 与 focal `ldd -r` 审计通过 |
+| 私有 OpenGL | **83 个 ELF 库**审计通过，最高要求 **GLIBC 2.17**；使用原校验和锁定的运行库缓存并重新执行整理／EGL 适配层构建 |
+| 真实 tar | 新目录重新解压并以普通用户启动；绘制 1280×800 工作台，截图已检查；日志确认 llvmpipe／backend=Gl／type=Cpu，Vulkan ICD 禁用 |
+| 真实 deb | 独立一次性 focal 容器 `dpkg -i` 安装，普通 UID 1000 执行 `/usr/bin/nyaterm-compat` 绘制工作台，截图已检查 |
+| 实际窗口类名 | tar 和安装版均为 `("nyaterm", "NyaTerm")`，与 desktop 的 StartupWMClass 一致 |
+| 归档权限与图标 | tar 的 1339 个条目、deb 的 1363 个条目均为 root 元数据；目录 0755，常规数据 0644、可执行文件 0755；五种尺寸图标与仓库原 PNG 逐字节一致 |
+| 安装后图标与修复 | 普通用户 GTK 图标主题查找和 GdkPixbuf 解码 128／256／512 均通过；root:root／0644；主动改为 0600 后重复 postinst configure 两次成功修复 |
+| 优化版辅助进程 | RDP／VNC 生命周期回归 **22 通过**，无失败或忽略 |
+| 发布内容与完整性 | 两包及两个校验文件 SHA-256 通过；仅显式应用／运行库／许可证／诊断材料，无个人 data、凭据、日志或构建缓存 |
+
+最终收尾提交只补充本验证文档；发布前再次锁定构建，并对照包内四个 ELF 的 SHA-256，
+确认最终源码对应的输出与已测制品逐字节一致，记录见 `source-provenance.json`。
+
+
+本轮编译和测试在现有 Codex 云实例的本地 Docker 中完成。构建器为 glibc 2.31、
+Rust 1.99.1、普通 UID 1000，
+容器共享宿主内核 **6.18.57**。旧 2.0.0 四个本地发行文件的 SHA-256 与已发布资产记录一致。
+
+证据保存在 `target/validation-20261103/`：`standard-final-summary.json`、
+`standard-debug-profiles.json`、`workspace-tests.log`（首轮）、
+`workspace-tests-two-threads.log`、`timing-recheck-*.log`、
+`timing-binary-unchanged.txt`、`transport-upstream-equivalence.json`、`clippy.log`、
+`x11-test.log`、`builder-info.txt` 及新制品验证记录。
+
+内网目标机的真实桌面壳层图标、Linux 5.4／定制安全策略、实际驱动、中文输入、剪贴板、
+内部 SSH／SFTP／RDP／VNC 服务和软件渲染性能仍需真机验收。Windows／macOS 未在本轮
+Linux 环境运行；新上游基线的依赖升级也不属于本轮已测范围。
