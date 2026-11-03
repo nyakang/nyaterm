@@ -1297,6 +1297,35 @@ fn line_role_cost_benchmark() {
     let (m, lo, hi) = median(samples);
     println!("  混合语料 160 行          中位 {m:>4} ns  [{lo} ~ {hi}]");
 
+    // WerVa 怀疑「关掉行角色仍比 main 慢 5%」来自形状化的 prompt 检测。
+    // 这里单独量它：无分配，只看第一个 token，理论上应该很便宜。
+    println!("\n== fallback_prompt 单行开销（{ROUNDS} 轮取中位）==");
+    for (name, line) in [
+        (
+            "nginx 日志",
+            "10.0.0.1 - - [03/Nov/2026:10:00:00 +0800] \"GET /api HTTP/1.1\" 200 512",
+        ),
+        (
+            "ls -l",
+            "drwxr-xr-x 18 root root 4096 Oct 7 21:37 some-directory",
+        ),
+        ("普通文本", "ordinary output with calm filler"),
+        ("真 prompt", "[root@nginx-wan ~]# ls -l"),
+    ] {
+        let mut samples = Vec::new();
+        for _ in 0..ROUNDS {
+            let started = std::time::Instant::now();
+            let mut acc = 0usize;
+            for _ in 0..1000 {
+                acc += super::fallback_prompt(line).map_or(0, |(a, b)| a + b);
+            }
+            samples.push(started.elapsed().as_nanos() as u128 / 1000);
+            std::hint::black_box(acc);
+        }
+        samples.sort_unstable();
+        println!("  {name:<10} 中位 {:>4} ns", samples[samples.len() / 2]);
+    }
+
     println!("\n== 整屏预计算（120 列，{ROUNDS} 轮取中位）==");
     for (rows, label) in [(200usize, "200 行"), (2000, "2000 行")] {
         for (case, fixture) in [
