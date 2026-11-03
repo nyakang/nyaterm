@@ -359,7 +359,7 @@ impl FileRecording {
             }
             _ => {}
         }
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let now = local_now();
         let next_key = recording_day_key(now);
         let rotate = match self.profile.rotation {
             RecordingRotationPolicy::Session => false,
@@ -1200,7 +1200,7 @@ impl RecordingManager {
             host: None,
             port: None,
             username: None,
-            started_at: OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+            started_at: local_now(),
         };
         self.start_with_profile(session_id, context, profile, Some(path))
             .map(|_| ())
@@ -1952,11 +1952,21 @@ fn format_record_parts(
 }
 
 fn chrono_timestamp() -> String {
-    let now = OffsetDateTime::now_utc();
+    let now = local_now();
     now.format(time::macros::format_description!(
         "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
     ))
     .unwrap_or_else(|_| "1970-01-01 00:00:00.000".to_string())
+}
+
+/// The clock every transcript timestamp and session header/footer shares.
+///
+/// Records, headers and the footer must agree on one clock, and users compare
+/// them with the timestamps the terminal displays. Both use local time; UTC is
+/// only the fallback for environments where the local offset is unavailable
+/// (`OffsetDateTime::now_local` refuses to guess on some platforms).
+fn local_now() -> OffsetDateTime {
+    OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
 }
 
 fn format_time(time: OffsetDateTime, token: &str) -> String {
@@ -2022,7 +2032,7 @@ fn format_session_header(context: &RecordingContext) -> String {
 }
 
 fn format_session_footer(context: &RecordingContext, reason: &str) -> String {
-    let stopped_at = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    let stopped_at = local_now();
     let duration = stopped_at - context.started_at;
     format!(
         "\n========== NyaTerm Session End ==========\nStopped: {}\nReason: {reason}\nDuration: {}s\n=========================================\n",
@@ -2314,6 +2324,46 @@ mod tests {
             .join(format!("nyaterm-recording-{name}-{nanos}.log"))
             .to_string_lossy()
             .to_string()
+    }
+
+    #[test]
+    fn transcript_record_timestamps_use_the_local_clock() {
+        // Records, headers and the footer must share one clock, and it must be
+        // the local clock the terminal displays. Fixed-width zero-padded
+        // timestamps compare chronologically as strings, with one special case
+        // when the boundary wraps over midnight.
+        let stamp = |now: time::OffsetDateTime| {
+            now.format(time::macros::format_description!(
+                "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
+            ))
+            .unwrap()
+        };
+        let manager = RecordingManager::new();
+        let path = unique_path("local-clock");
+        let before = stamp(super::local_now());
+        manager.write_output("s1", "line\n");
+        let after = stamp(super::local_now());
+        manager.save_transcript("s1", &path, false, true).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let record = text
+            .lines()
+            .find_map(|line| {
+                let (timestamp, _) = line.split_once("] ")?;
+                timestamp.strip_prefix('[').map(str::to_owned)
+            })
+            .unwrap_or_else(|| panic!("transcript has no timestamped record: {text}"));
+        if before <= after {
+            assert!(
+                before <= record && record <= after,
+                "record timestamp {record} is not between {before} and {after}"
+            );
+        } else {
+            assert!(
+                record <= after || record >= before,
+                "record timestamp {record} is not between {before} and {after}"
+            );
+        }
+        let _ = fs::remove_file(path);
     }
 
     #[test]
