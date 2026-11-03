@@ -2051,3 +2051,10 @@ fn cached_mouse_drag_targets_cannot_bypass_target_exclusion() {
         let _ = manager.close(&id);
     }
 }
+
+#[test]
+fn option_arrows_jump_by_word_only_when_option_is_meta() {
+    use super::input::alt_arrows_send_word_motion;
+    assert!(alt_arrows_send_word_motion(true));
+    assert!(!alt_arrows_send_word_motion(false));
+}
