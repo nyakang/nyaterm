@@ -93,6 +93,8 @@ def write_source(staging: Path, output: Path, version: str, architecture: str) -
                 Name=relative.name, KeyPath="yes")
         element(feature, "ComponentRef", Id=component_id)
         if relative.as_posix() == "NyaTerm.exe":
+            element(component, "RemoveFile", Id="RemoveLegacyActiveXHelper",
+                    Name="nyaterm-activex-helper.exe", On="install")
             for shortcut_id, directory in (("StartMenuShortcut", "ApplicationProgramsFolder"),
                                             ("DesktopShortcut", "DesktopFolder")):
                 element(component, "Shortcut", Id=shortcut_id, Directory=directory,

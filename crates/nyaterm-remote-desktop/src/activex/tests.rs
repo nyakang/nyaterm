@@ -1,23 +1,21 @@
 use crate::{RdpBackend, RdpErrorKind, RdpSessionConfig, RdpSessionManager};
 
-#[cfg(windows)]
 use crate::RdpClipboardMode;
 
-use super::{HostCommand, NativeRdpRect, decode, encode};
+use super::NativeRdpRect;
 
 #[test]
 fn session_details_accept_old_hosts_and_round_trip_optional_resize_capability() {
-    use super::{HostEvent, NativeRdpSessionDetails};
+    use super::NativeRdpSessionDetails;
     let old: NativeRdpSessionDetails = serde_json::from_str("{}").unwrap();
     assert_eq!(old.dynamic_resize_available, None);
     for available in [None, Some(true), Some(false)] {
-        let event = HostEvent::Details(NativeRdpSessionDetails {
+        let event = NativeRdpSessionDetails {
             dynamic_resize_available: available,
             ..Default::default()
-        });
-        let HostEvent::Details(details) = decode(&encode(&event).unwrap()).unwrap() else {
-            panic!("expected session details");
         };
+        let details: NativeRdpSessionDetails =
+            serde_json::from_value(serde_json::to_value(event).unwrap()).unwrap();
         assert_eq!(details.dynamic_resize_available, available);
     }
 }
@@ -45,7 +43,7 @@ fn builtin_manager_never_silently_runs_an_activex_configuration() {
 
 #[cfg(windows)]
 #[test]
-fn activex_requires_explicit_system_authentication_and_clipboard_permission() {
+fn activex_requires_normalized_system_authentication_and_disabled_clipboard() {
     let mut config = config();
     assert!(config.backend.validate_config(&config).is_ok());
     config.windows_authentication = None;
@@ -60,9 +58,71 @@ fn activex_requires_explicit_system_authentication_and_clipboard_permission() {
         RdpErrorKind::Unsupported
     );
     config.clipboard.mode = RdpClipboardMode::TextAndFiles;
+    assert!(config.backend.validate_config(&config).is_err());
+    config.normalize_backend_settings();
     assert!(config.backend.validate_config(&config).is_ok());
     config.reconnect.max_attempts = 201;
     assert!(config.backend.validate_config(&config).is_err());
+}
+
+#[test]
+fn windows_launch_policy_normalizes_legacy_settings_without_rewriting_the_source() {
+    for backend in ["windows", "active-x"] {
+        for authentication in [None, Some("system"), Some("future-auth")] {
+            for clipboard in ["text_only", "text_and_files", "disabled"] {
+                let mut stored = serde_json::to_value(config()).unwrap();
+                stored["backend"] = backend.into();
+                stored["clipboard"]["mode"] = clipboard.into();
+                if let Some(authentication) = authentication {
+                    stored["windows_authentication"] = authentication.into();
+                } else {
+                    stored
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("windows_authentication");
+                }
+                let source: RdpSessionConfig = serde_json::from_value(stored).unwrap();
+                let original = source.clone();
+                let mut launch = source.clone();
+                launch.normalize_backend_settings();
+                assert_eq!(launch.clipboard.mode, RdpClipboardMode::Disabled);
+                assert_eq!(
+                    launch.windows_authentication.as_deref(),
+                    Some(authentication.unwrap_or("system"))
+                );
+                let normalized = launch.clone();
+                launch.normalize_backend_settings();
+                assert_eq!(launch, normalized);
+                assert_eq!(source, original);
+                let round_trip: RdpSessionConfig =
+                    serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+                assert_eq!(round_trip, source);
+                #[cfg(windows)]
+                assert_eq!(
+                    launch.backend.validate_config(&launch).is_ok(),
+                    authentication != Some("future-auth")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn builtin_launch_policy_preserves_authentication_certificate_and_clipboard_settings() {
+    for mode in [
+        RdpClipboardMode::Disabled,
+        RdpClipboardMode::TextOnly,
+        RdpClipboardMode::TextAndFiles,
+    ] {
+        let mut launch = config();
+        launch.backend = RdpBackend::Builtin;
+        launch.windows_authentication = Some("future-auth".into());
+        launch.clipboard.mode = mode;
+        let original = launch.clone();
+        launch.normalize_backend_settings();
+        assert_eq!(launch, original);
+        assert!(launch.backend.validate_config(&launch).is_ok());
+    }
 }
 
 #[cfg(not(windows))]
@@ -94,7 +154,7 @@ fn route_support_is_checked_before_a_relay_is_created() {
 }
 
 #[test]
-fn viewport_ipc_preserves_dpi_and_rejects_non_control_packets() {
+fn viewport_rejects_invalid_dpi_and_dimensions() {
     let rect = NativeRdpRect {
         x: 10,
         y: 20,
@@ -102,20 +162,6 @@ fn viewport_ipc_preserves_dpi_and_rejects_non_control_packets() {
         height: 900,
         scale_percent: 200,
     };
-    let packet = encode(&HostCommand::Viewport {
-        rect,
-        visible: true,
-    })
-    .unwrap();
-    let HostCommand::Viewport {
-        rect: decoded,
-        visible,
-    } = decode(&packet).unwrap()
-    else {
-        panic!("viewport")
-    };
-    assert_eq!(decoded, rect);
-    assert!(visible);
     assert!(rect.validate().is_ok());
     assert!(
         NativeRdpRect {
@@ -125,19 +171,5 @@ fn viewport_ipc_preserves_dpi_and_rejects_non_control_packets() {
         .validate()
         .is_err()
     );
-    let mut wrong = packet;
-    wrong.packet_type = crate::PacketType::Frame;
-    assert!(decode::<HostCommand>(&wrong).is_err());
-}
-
-#[test]
-fn secret_bearing_commands_have_redacted_debug() {
-    let mut config = config();
-    config.password = Some(nyaterm_core::SecretString::from("fixture-secret"));
-    let command = HostCommand::Prepare {
-        parent: 1,
-        rect: NativeRdpRect::default(),
-        config: Box::new(config),
-    };
-    assert!(!format!("{command:?}").contains("fixture-secret"));
+    assert!(NativeRdpRect { width: 0, ..rect }.validate().is_err());
 }

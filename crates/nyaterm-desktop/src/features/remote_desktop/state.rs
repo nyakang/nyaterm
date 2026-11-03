@@ -40,6 +40,8 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     wake_rx: Option<UnboundedReceiver<()>>,
     /// True while the periodic-maintenance clock task is alive.
     periodic_clock_armed: bool,
+    #[cfg(windows)]
+    pub(super) native_shutting_down: bool,
 }
 
 #[derive(Clone)]
@@ -101,7 +103,7 @@ pub(super) struct RemoteDesktopSessionState {
     #[cfg(windows)]
     pub(super) native_rdp_config: Option<RdpSessionConfig>,
     #[cfg(windows)]
-    pub(super) native_rdp: Option<nyaterm_remote_desktop::activex::NativeRdpControl>,
+    pub(super) native_rdp: Option<nyaterm_windows_rdp::NativeRdpControl>,
 }
 
 impl Default for RemoteDesktopSessionState {
@@ -154,10 +156,21 @@ impl RemoteDesktopFeatureState {
     #[cfg(windows)]
     pub(in crate::features) fn take_native_hosts_for_shutdown(
         &mut self,
-    ) -> Vec<nyaterm_remote_desktop::activex::NativeRdpControl> {
+    ) -> Vec<nyaterm_windows_rdp::NativeRdpControl> {
+        // Latch before taking owners: COM shutdown may pump the UI queue and
+        // re-enter maintenance or complete an asynchronous reconnect.
+        self.native_shutting_down = true;
         self.sessions
             .values_mut()
-            .filter_map(|session| session.native_rdp.take())
+            .filter_map(|session| {
+                session.native_rdp_config = None;
+                if session.deferred_start.as_ref().is_some_and(|(config, _)| {
+                    config.backend == nyaterm_remote_desktop::RdpBackend::Windows
+                }) {
+                    session.deferred_start = None;
+                }
+                session.native_rdp.take()
+            })
             .collect()
     }
 
@@ -223,6 +236,8 @@ impl RemoteDesktopFeatureState {
             wake,
             wake_rx: Some(wake_rx),
             periodic_clock_armed: false,
+            #[cfg(windows)]
+            native_shutting_down: false,
         }
     }
 

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use nyaterm_ui::ChildWindowSlot;
 
 use super::super::connection_runtime::ConnectionEditorToggle;
+use super::password::STORED_PASSWORD_PLACEHOLDER;
 use crate::models::{
     ConnectionEditorField, ConnectionEditorPasswordSource, ConnectionEditorSelect,
     ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionGroupEditorState,
@@ -220,11 +221,10 @@ pub(super) fn set_connection_editor_select_value(
                 return false;
             }
             editor.rdp_backend = value;
+            editor.normalize_rdp_backend_settings();
         }
         ConnectionEditorSelect::RdpCertificatePolicy => {
-            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
-                editor.rdp_security.windows_authentication = value;
-            } else {
+            if !editor.uses_windows_rdp() {
                 editor.rdp_security.certificate_policy =
                     value.unwrap_or_else(|| "prompt".to_string());
             }
@@ -233,6 +233,9 @@ pub(super) fn set_connection_editor_select_value(
             editor.rdp_display.mode = value.unwrap_or_else(|| "fit-window".to_string());
         }
         ConnectionEditorSelect::RdpClipboardMode => {
+            if editor.uses_windows_rdp() {
+                return false;
+            }
             editor.rdp_clipboard.mode = value.unwrap_or_else(|| "text-only".to_string());
         }
         ConnectionEditorSelect::VncSecurityMode => {
@@ -977,15 +980,14 @@ pub(super) fn editor_field_seeds(
             ConnectionEditorField::Password,
             draft.password.expose_secret().to_owned(),
             true,
-            I18n(
-                if draft.existing_password.is_some()
-                    && draft.password_edit == ConnectionPasswordEdit::Keep
-                {
-                    "authForm.connectionPasswordStored"
-                } else {
-                    "authForm.connectionPasswordEnter"
-                },
-            ),
+            if (draft.existing_password.is_some() || draft.existing_password_locked)
+                && draft.password_edit == ConnectionPasswordEdit::Keep
+                && draft.password.is_empty()
+            {
+                Literal(STORED_PASSWORD_PLACEHOLDER)
+            } else {
+                I18n("authForm.connectionPasswordEnter")
+            },
         ),
         (
             ConnectionEditorField::ShellPath,

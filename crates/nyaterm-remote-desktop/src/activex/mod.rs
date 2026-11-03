@@ -1,14 +1,8 @@
-//! ActiveX host contracts. No COM or protocol decoder is linked into the application.
-
-mod session;
-
-use std::io;
+//! Native system-host policy and session models. No IPC or COM dependency.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Packet, RdpBackend, RdpError, RdpErrorKind, RdpSessionConfig};
-
-pub use session::NativeRdpControl;
+use crate::{RdpBackend, RdpError, RdpErrorKind, RdpSessionConfig};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRdpRect {
@@ -51,7 +45,7 @@ pub struct NativeRdpDisconnectInfo {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRdpSessionDetails {
-    /// None until probed; false means SmartSizing remains in use.
+    /// None until probed; false means the last display update exhausted retries.
     #[serde(default)]
     pub dynamic_resize_available: Option<bool>,
     pub version: Option<String>,
@@ -60,46 +54,6 @@ pub struct NativeRdpSessionDetails {
     pub desktop_width: Option<u32>,
     pub desktop_height: Option<u32>,
     pub color_depth: Option<u32>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum HostCommand {
-    Hello {
-        version: u32,
-        parent_pid: u32,
-    },
-    Prepare {
-        parent: u64,
-        rect: NativeRdpRect,
-        config: Box<RdpSessionConfig>,
-    },
-    Start,
-    Viewport {
-        rect: NativeRdpRect,
-        visible: bool,
-    },
-    Focus,
-    Ping,
-    Close,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum HostEvent {
-    Hello { version: u32 },
-    Prepared { child: u64 },
-    Connection(NativeRdpConnectionEvent),
-    Details(NativeRdpSessionDetails),
-    PointerInside(bool),
-    Pong,
-    Closed,
-}
-
-pub fn encode<T: Serialize>(message: &T) -> io::Result<Packet> {
-    crate::ipc::encode_json_control(message)
-}
-
-pub fn decode<T: serde::de::DeserializeOwned>(packet: &Packet) -> io::Result<T> {
-    crate::ipc::decode_json_control(packet)
 }
 
 pub fn validate_start(config: &RdpSessionConfig, rect: NativeRdpRect) -> Result<(), RdpError> {

@@ -359,7 +359,7 @@ mod tests {
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::text_inputs::TextInputSetup;
-    use crate::features::view_widgets::passive_overlay_layer;
+    use crate::features::view_widgets::modal_overlay_layer;
 
     struct LockScreenFixture {
         app: Entity<NyaTermApp>,
@@ -383,7 +383,7 @@ mod tests {
                             workspace_mouse_downs.set(workspace_mouse_downs.get() + 1);
                         }),
                 )
-                .child(passive_overlay_layer(overlay))
+                .child(modal_overlay_layer(overlay))
         }
     }
 

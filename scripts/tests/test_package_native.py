@@ -106,6 +106,23 @@ class PackageNativeTests(unittest.TestCase):
                 subprocess.run(["sh", str(script), "configure"], check=True)
                 self.assertEqual(unrelated.stat().st_mode & 0o777, 0o600)
 
+    def test_windows_release_builds_use_one_static_crt_and_preserve_existing_flags(self) -> None:
+        for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu"):
+            for existing in ({"RUSTFLAGS": "-C debuginfo=1"}, {"CARGO_ENCODED_RUSTFLAGS": "-C\x1fdebuginfo=1"}):
+                with self.subTest(target=target, existing=existing), tempfile.TemporaryDirectory() as directory:
+                    binary = Path(directory) / "binary"
+                    binary.write_bytes(b"fixture")
+                    with (mock.patch.dict(package_native.os.environ, existing, clear=True),
+                          mock.patch.object(package_native, "release_binary_path", return_value=binary),
+                          mock.patch.object(package_native, "run") as run):
+                        self.assertEqual(package_native.build_binary("nyaterm-app", "nyaterm", target), binary)
+                    environment = run.call_args.kwargs["env"]
+                    if target.endswith("-windows-msvc"):
+                        self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"],
+                                         "-C\x1fdebuginfo=1\x1f-C\x1ftarget-feature=+crt-static")
+                    else:
+                        self.assertIsNone(environment)
+
     def test_portable_packages_match_shared_contract_for_both_architectures(self) -> None:
         for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
             with self.subTest(target=target), staged_package(target) as (root, binary, info):
@@ -388,6 +405,9 @@ class PackageNativeTests(unittest.TestCase):
             with self.subTest(helper=filename):
                 self.assertRegex(script, rf'File ".*{filename}"')
                 self.assertIn(f'Delete "$INSTDIR\\{filename}"', script)
+        self.assertNotIn("nyaterm-activex-helper", package_native.HELPER_BINS)
+        self.assertIn('Delete "$INSTDIR\\nyaterm-activex-helper.exe"', script)
+        self.assertNotIn("NyaTerm-portable/nyaterm-activex-helper.exe", portable_entries)
         for relative in package_native.conpty_files(target):
             self.assertIn(str(relative.name), script)
             self.assertIn(

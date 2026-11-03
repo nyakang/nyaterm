@@ -39,10 +39,7 @@ CONPTY_LICENSE = Path(__file__).with_name("conpty-license.txt")
 
 
 def helper_bins(target: str) -> tuple[str, ...]:
-    return tuple(
-        name for name in HELPER_BINS
-        if name != "nyaterm-activex-helper" or "windows" in target
-    )
+    return HELPER_BINS
 
 
 def conpty_files(target: str) -> tuple[Path, ...]:
@@ -266,20 +263,22 @@ def helper_binary_paths(target: str) -> list[Path]:
 
 
 def build_binary(package: str, name: str, target: str) -> Path:
-    run(
-        [
-            "cargo",
-            "build",
-            "-p",
-            package,
-            "--bin",
-            name,
-            "--release",
-            "--target",
-            target,
-            "--locked",
-        ]
-    )
+    command = [
+        "cargo", "build", "-p", package, "--bin", name,
+        "--release", "--target", target, "--locked",
+    ]
+    environment = None
+    if target.endswith("-windows-msvc"):
+        # Keep Rust and every C/C++ dependency on the same static CRT. The ATL
+        # shim must not make portable packages require a VC++ redistributable.
+        environment = os.environ.copy()
+        flags = environment.get("CARGO_ENCODED_RUSTFLAGS")
+        if flags is None:
+            flags = "\x1f".join(environment.get("RUSTFLAGS", "").split())
+        environment["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
+            filter(None, [flags, "-C", "target-feature=+crt-static"])
+        )
+    run(command, env=environment)
     binary = release_binary_path(target, name)
     if not binary.is_file():
         raise FileNotFoundError(f"release executable not found: {binary}")
@@ -476,6 +475,7 @@ def create_windows_packages(
 
             Section "{identity.display_name}" SecMain
               SetOutPath "$INSTDIR"
+              Delete "$INSTDIR\nyaterm-activex-helper.exe"
               File "{nsis_path(installer_root / 'NyaTerm.exe')}"
               {helper_install}
               File "{nsis_path(installer_root / 'LICENSE')}"

@@ -240,9 +240,13 @@ pub(super) fn commit_portable_files_with(
     mut rename: impl FnMut(&Path, &Path) -> Result<(), String>,
 ) -> Result<(), PortableUpdateError> {
     let files = windows_portable_layout().files(architecture);
+    let removed = ["nyaterm-activex-helper.exe"];
     // Validate the whole payload and destination before moving any installed file.
     for name in &files {
         validate_payload_path(staged, name, true)?;
+        validate_payload_path(target, name, false)?;
+    }
+    for name in removed {
         validate_payload_path(target, name, false)?;
     }
     let backup = work.join(BACKUP_DIRECTORY);
@@ -251,7 +255,7 @@ pub(super) fn commit_portable_files_with(
     let mut backed_up = Vec::new();
     let mut installed = Vec::new();
     let result = (|| {
-        for name in &files {
+        for name in files.iter().copied().chain(removed).collect::<Vec<_>>() {
             let current = target.join(name);
             if current.exists() {
                 let previous = backup.join(name);
@@ -259,7 +263,7 @@ pub(super) fn commit_portable_files_with(
                     .map_err(|error| format!("failed to prepare backup for {name}: {error}"))?;
                 rename(&current, &previous)
                     .map_err(|error| format!("failed to back up {name}: {error}"))?;
-                backed_up.push(*name);
+                backed_up.push(name);
             }
         }
         for name in &files {
@@ -526,17 +530,42 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_activex_helper_is_restored_on_rollback_and_removed_on_success() {
+        for architecture in ARCHITECTURES {
+            let root = TestTempDir::new("nyaterm-portable-remove-activex");
+            let (staged, target, work) =
+                (root.join("staged"), root.join("target"), root.join("work"));
+            write_files(&staged, architecture, b"new");
+            write_files(&target, architecture, b"old");
+            std::fs::create_dir(&work).unwrap();
+            let legacy = target.join("nyaterm-activex-helper.exe");
+            std::fs::write(&legacy, b"obsolete").unwrap();
+            let error =
+                commit_portable_files_with(&staged, &target, &work, architecture, |from, to| {
+                    if from == staged.join("NyaTerm.exe") {
+                        Err("injected replacement failure".into())
+                    } else {
+                        rename(from, to)
+                    }
+                })
+                .unwrap_err();
+            assert!(!error.recovery_required);
+            assert_eq!(std::fs::read(&legacy).unwrap(), b"obsolete");
+            assert_eq!(std::fs::read(target.join("NyaTerm.exe")).unwrap(), b"old");
+            commit_portable_files_with(&staged, &target, &work, architecture, rename).unwrap();
+            assert!(!legacy.exists());
+            assert_eq!(std::fs::read(target.join("NyaTerm.exe")).unwrap(), b"new");
+        }
+    }
+
+    #[test]
     fn portable_commit_rolls_back_every_move_and_removes_new_components() {
         for architecture in ARCHITECTURES {
             let files = windows_portable_layout().files(architecture);
             for old_complete in [true, false] {
                 let old_files = files
                     .iter()
-                    .filter(|name| {
-                        old_complete
-                            || !name.starts_with("conpty/")
-                                && **name != "nyaterm-activex-helper.exe"
-                    })
+                    .filter(|name| old_complete || !name.starts_with("conpty/"))
                     .copied()
                     .collect::<Vec<_>>();
                 for fail_at in 0..old_files.len() + files.len() {
@@ -712,7 +741,7 @@ mod tests {
         let (staged, target, work) = (root.join("staged"), root.join("target"), root.join("work"));
         extract_windows_portable(archive, &staged, architecture).unwrap();
         write_files(&target, architecture, b"old");
-        std::fs::remove_file(target.join("nyaterm-activex-helper.exe")).unwrap();
+        std::fs::write(target.join("nyaterm-activex-helper.exe"), b"obsolete").unwrap();
         std::fs::remove_dir_all(target.join("conpty")).unwrap();
         std::fs::create_dir_all(target.join("data/config")).unwrap();
         std::fs::write(target.join("data/config/user.db"), b"user-data").unwrap();
@@ -739,6 +768,7 @@ mod tests {
             std::fs::read(target.join("user-file.txt")).unwrap(),
             b"keep"
         );
+        assert!(!target.join("nyaterm-activex-helper.exe").exists());
         assert!(!target.join("data/.keep").exists());
         assert!(!recovery_pending(&work));
         cleanup_update_work_dir(work.clone());

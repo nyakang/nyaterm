@@ -29,6 +29,15 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Install Windows ATL toolchains
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./scripts/ci/install-msvc-atl.ps1
+    - name: Configure MSVC
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ contains(inputs.targets, 'aarch64') && 'amd64_arm64' || 'amd64' }}
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:

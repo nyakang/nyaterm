@@ -137,6 +137,7 @@ impl DesktopController {
         let window_decorations = self.effective_window_decorations(cx);
         let handle = cx.open_window(
             WindowOptions {
+                native_child_surfaces: cfg!(target_os = "windows"),
                 app_id: Some(flavor.desktop_id().to_string()),
                 titlebar: Some(TitlebarOptions {
                     title: Some(flavor.display_name().into()),

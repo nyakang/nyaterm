@@ -15,6 +15,7 @@ mod input;
 mod input_focus;
 mod markdown;
 mod menu;
+mod native_overlay;
 pub mod notification;
 mod number_input;
 pub mod plot;
@@ -65,6 +66,9 @@ pub use markdown::NyaMarkdown;
 pub use menu::{
     NyaContextMenu, NyaDropdownMenu, NyaMenuAnchor, NyaMenuItem, nya_popup_is_active,
     nya_popup_menu_is_active,
+};
+pub use native_overlay::{
+    enable_native_child_overlays, nya_modal_overlay, nya_passive_overlay, nya_region_overlay,
 };
 pub use number_input::{
     NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,

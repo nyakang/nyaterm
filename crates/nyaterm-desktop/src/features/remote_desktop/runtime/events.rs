@@ -259,17 +259,73 @@ impl NyaTermApp {
                     if this.drive_remote_desktop_periodic(window, cx) {
                         cx.notify();
                     }
-                    let running = this.remote_desktop.has_sessions();
-                    if !running {
-                        this.remote_desktop.set_periodic_clock_armed(false);
-                    }
-                    running
+                    this.remote_desktop.has_sessions()
                 }) else {
                     break;
                 };
+                #[cfg(windows)]
+                {
+                    let operations = this
+                        .update(cx, |this, _| {
+                            this.remote_desktop
+                                .sessions
+                                .iter_mut()
+                                .filter_map(|(id, session)| {
+                                    session
+                                        .native_rdp
+                                        .as_mut()
+                                        .and_then(|native| native.take_operation())
+                                        .map(|operation| (id.clone(), operation))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    for (id, operation) in operations {
+                        // COM can dispatch nested window messages. There is no
+                        // App/entity/window borrow across this boundary.
+                        let result = operation.run();
+                        let _ = this.update(cx, |this, _| {
+                            if let Some(native) = this
+                                .remote_desktop
+                                .sessions
+                                .get_mut(&id)
+                                .and_then(|session| session.native_rdp.as_mut())
+                            {
+                                native.commit(result);
+                            }
+                        });
+                    }
+                    let retained = nyaterm_windows_rdp::maintain_retired(std::time::Instant::now());
+                    if retained != 0 {
+                        tracing::warn!(
+                            count = retained,
+                            "retained native RDP callback resources after cleanup deadline"
+                        );
+                    }
+                }
                 if !keep_running {
+                    #[cfg(windows)]
+                    if nyaterm_windows_rdp::retired_count() != 0 {
+                        continue;
+                    }
+                    let _ = this.update(cx, |this, _| {
+                        this.remote_desktop.set_periodic_clock_armed(false)
+                    });
                     break;
                 }
+            }
+            // Entity release drops controls without COM. Their creating
+            // foreground task must outlive the weak Entity to drain retirement.
+            #[cfg(windows)]
+            while nyaterm_windows_rdp::retired_count() != 0 {
+                let retained = nyaterm_windows_rdp::maintain_retired(Instant::now());
+                if retained != 0 {
+                    tracing::warn!(
+                        count = retained,
+                        "retained native RDP resources after Entity release"
+                    );
+                }
+                cx.background_executor().timer(Duration::from_secs(1)).await;
             }
         })
         .detach();

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use gpui::{App, Context, Modifiers, Subscription};
 use nyaterm_core::SecretString;
 use rust_i18n::t;
@@ -7,6 +9,8 @@ use crate::features::NyaTermApp;
 use crate::models::{
     ConnectionEditorField, ConnectionEditorPasswordSource, ConnectionPasswordEdit,
 };
+
+pub(super) const STORED_PASSWORD_PLACEHOLDER: &str = "••••••••";
 
 #[derive(Default)]
 pub(super) struct EditorPasswordState {
@@ -97,19 +101,21 @@ impl ConnectionFeatureState {
         })
     }
 
-    pub fn editor_password_placeholder(&self) -> &'static str {
+    pub fn editor_password_is_draft(&self) -> bool {
+        !self.editor_password_uses_account()
+            && self.editor.draft.as_ref().is_some_and(|draft| {
+                draft.password_edit != ConnectionPasswordEdit::Keep
+                    || !self.editor.password.has_saved
+            })
+    }
+
+    pub fn editor_password_placeholder(&self) -> Cow<'static, str> {
         if self.editor_password_uses_account() {
-            "authForm.connectionPasswordAccount"
-        } else if self.editor.password.has_saved
-            && self
-                .editor
-                .draft
-                .as_ref()
-                .is_some_and(|draft| draft.password_edit == ConnectionPasswordEdit::Keep)
-        {
-            "authForm.connectionPasswordStored"
+            t!("authForm.connectionPasswordAccount")
+        } else if self.editor_password_needs_loading() {
+            Cow::Borrowed(STORED_PASSWORD_PLACEHOLDER)
         } else {
-            "authForm.connectionPasswordEnter"
+            t!("authForm.connectionPasswordEnter")
         }
     }
 
@@ -131,7 +137,7 @@ impl ConnectionFeatureState {
         };
         input.update(cx, |state, cx| {
             state.set_readonly(draft.password_account_id().is_some(), cx);
-            state.set_placeholder(t!(self.editor_password_placeholder()), cx);
+            state.set_placeholder(self.editor_password_placeholder(), cx);
             if state.value(cx) != value {
                 state.set_content_silent(value, cx);
             }
