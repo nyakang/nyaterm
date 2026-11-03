@@ -104,7 +104,10 @@ pub(in crate::features) fn transfer_browser_entry_is_visible(
     show_hidden_files: bool,
 ) -> bool {
     (show_hidden_files || !entry.name.starts_with('.'))
-        && (normalized_query.is_empty() || entry.name.to_lowercase().contains(normalized_query))
+        && (normalized_query.is_empty()
+            || contains_ascii_case_insensitive(&entry.name, normalized_query)
+            || (!entry.name.is_ascii()
+                && entry.name.to_lowercase().contains(normalized_query)))
 }
 
 pub(in crate::features) fn compare_transfer_browser_entries(
@@ -143,8 +146,58 @@ pub(in crate::features) fn compare_transfer_browser_entries(
 }
 
 pub(in crate::features) fn natural_compare_ascii(left: &str, right: &str) -> Ordering {
+    if left.is_ascii() && right.is_ascii() {
+        return natural_compare_ascii_bytes(left.as_bytes(), right.as_bytes());
+    }
     let left = left.to_lowercase();
     let right = right.to_lowercase();
+    natural_compare_lowercase(left.as_str(), right.as_str())
+}
+
+fn natural_compare_ascii_bytes(left: &[u8], right: &[u8]) -> Ordering {
+    let mut left_rest = left;
+    let mut right_rest = right;
+
+    loop {
+        match (left_rest.is_empty(), right_rest.is_empty()) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Less,
+            (false, true) => return Ordering::Greater,
+            (false, false) => {}
+        }
+
+        if left_rest[0].is_ascii_digit() && right_rest[0].is_ascii_digit() {
+            let left_end = left_rest
+                .iter()
+                .position(|value| !value.is_ascii_digit())
+                .unwrap_or(left_rest.len());
+            let right_end = right_rest
+                .iter()
+                .position(|value| !value.is_ascii_digit())
+                .unwrap_or(right_rest.len());
+            let ordering = compare_digit_runs(
+                &left_rest[..left_end],
+                &right_rest[..right_end],
+            );
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+            left_rest = &left_rest[left_end..];
+            right_rest = &right_rest[right_end..];
+            continue;
+        }
+
+        let left_char = left_rest[0].to_ascii_lowercase();
+        let right_char = right_rest[0].to_ascii_lowercase();
+        if left_char != right_char {
+            return left_char.cmp(&right_char);
+        }
+        left_rest = &left_rest[1..];
+        right_rest = &right_rest[1..];
+    }
+}
+
+fn natural_compare_lowercase(left: &str, right: &str) -> Ordering {
     let mut left_chars = left.chars().peekable();
     let mut right_chars = right.chars().peekable();
 
@@ -156,41 +209,21 @@ pub(in crate::features) fn natural_compare_ascii(left: &str, right: &str) -> Ord
             (Some(left_char), Some(right_char))
                 if left_char.is_ascii_digit() && right_char.is_ascii_digit() =>
             {
-                let mut left_number = String::new();
-                while let Some(value) = left_chars.peek().copied() {
-                    if value.is_ascii_digit() {
-                        left_number.push(value);
-                        left_chars.next();
-                    } else {
-                        break;
-                    }
+                let left_start = left_chars.clone();
+                let right_start = right_chars.clone();
+                while left_chars.peek().is_some_and(|value| value.is_ascii_digit()) {
+                    left_chars.next();
                 }
-                let mut right_number = String::new();
-                while let Some(value) = right_chars.peek().copied() {
-                    if value.is_ascii_digit() {
-                        right_number.push(value);
-                        right_chars.next();
-                    } else {
-                        break;
-                    }
+                while right_chars.peek().is_some_and(|value| value.is_ascii_digit()) {
+                    right_chars.next();
                 }
-                let left_trimmed = left_number.trim_start_matches('0');
-                let right_trimmed = right_number.trim_start_matches('0');
-                let left_key = if left_trimmed.is_empty() {
-                    "0"
-                } else {
-                    left_trimmed
-                };
-                let right_key = if right_trimmed.is_empty() {
-                    "0"
-                } else {
-                    right_trimmed
-                };
-                let ordering = left_key
-                    .len()
-                    .cmp(&right_key.len())
-                    .then_with(|| left_key.cmp(right_key))
-                    .then_with(|| left_number.len().cmp(&right_number.len()));
+                let left_number = left_start
+                    .take_while(|value| value.is_ascii_digit())
+                    .collect::<String>();
+                let right_number = right_start
+                    .take_while(|value| value.is_ascii_digit())
+                    .collect::<String>();
+                let ordering = compare_digit_runs(&left_number, &right_number);
                 if ordering != Ordering::Equal {
                     return ordering;
                 }
@@ -205,6 +238,36 @@ pub(in crate::features) fn natural_compare_ascii(left: &str, right: &str) -> Ord
             }
         }
     }
+}
+
+fn compare_digit_runs(left: &[u8], right: &[u8]) -> Ordering {
+    let left_trimmed = trim_leading_zeroes(left);
+    let right_trimmed = trim_leading_zeroes(right);
+    left_trimmed
+        .len()
+        .cmp(&right_trimmed.len())
+        .then_with(|| left_trimmed.cmp(right_trimmed))
+        .then_with(|| left.len().cmp(&right.len()))
+}
+
+fn trim_leading_zeroes(value: &[u8]) -> &[u8] {
+    let first_nonzero = value
+        .iter()
+        .position(|byte| *byte != b'0')
+        .unwrap_or(value.len().saturating_sub(1));
+    &value[first_nonzero..]
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if !haystack.is_ascii() || !needle.is_ascii() {
+        return false;
+    }
+    let needle = needle.as_bytes();
+    needle.is_empty()
+        || haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 /// Shared back/forward history used by the sidebar browser and file-manager panes.
