@@ -257,8 +257,9 @@ Sync encrypted portable configuration snapshots and restore backups through WebD
 For customized Ubuntu 20.04 x86-64 desktops with **glibc 2.31**, use the dedicated
 [focal offline compatibility build](scripts/compat/linux-focal/README.md).
 Standard Linux release packages are built on newer distributions and may require
-a newer glibc. The compatibility build includes all runtime helpers and an ABI
-report and a private CPU OpenGL launcher; the target needs a working X11 session.
+a newer glibc. The compatibility build includes all runtime helpers, an ABI
+report, a system/GPU-first launcher and an explicit private CPU OpenGL fallback;
+the target needs a working X11 session.
 
 Download installers from [nyaterm.app](https://nyaterm.app) or the [Releases](https://github.com/nyakang/nyaterm/releases) page.
 

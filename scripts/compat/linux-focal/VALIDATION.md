@@ -1,5 +1,11 @@
 # Compatibility validation (2026-10-29)
 
+Current source policy after the published 2.0.1 build: prefer the system GPU
+renderer by default; select the bundled CPU path with `--software` or
+`NYATERM_RENDERER=software`. The dated sections below retain the original CPU
+default's historical results. See the final GPU-default section for the new
+launcher's tests and hardware-validation boundary.
+
 Target from the supplied environment guide: customized Ubuntu 20.04, x86-64,
 glibc 2.31, GTK 3.24.23, GLib 2.64.6, Linux 5.4, isolated network; GT 1010
 (GP108), proprietary driver not confirmed. The offline default uses CPU OpenGL
@@ -231,3 +237,44 @@ Rust 1.99.1、普通 UID 1000，
 内网目标机的真实桌面壳层图标、Linux 5.4／定制安全策略、实际驱动、中文输入、剪贴板、
 内部 SSH／SFTP／RDP／VNC 服务和软件渲染性能仍需真机验收。Windows／macOS 未在本轮
 Linux 环境运行；新上游基线的依赖升级也不属于本轮已测范围。
+
+
+## 默认 GPU 与显式 CPU 回退（2026-11-03）
+
+基于已发布的兼容源码 `04477c441203cd37821fc4bae200c72c04870167` 修改启动与打包脚本。
+检查时用户兼容分支及 2.0.1 tag 仍指向该提交，上游 main 已推进至 `da26ec5f`；本轮聚焦
+启动方式，没有合入后来上游。应用 Rust 源码与 Cargo 清单／锁文件没有改动。
+
+默认 `./start-nyaterm.sh` 和新 deb 的 `nyaterm-compat` 使用系统图形栈，不添加私有
+Mesa 路径、不强制 llvmpipe，也不禁用 Vulkan。锁定 GPUI 的适配器排序在用户／显示服务
+显式选择之后优先硬件设备，再比较图形后端；保留用户自定义的驱动环境变量。
+`--software` 或 `NYATERM_RENDERER=software` 显式选择原有私有 Mesa／llvmpipe CPU
+路径；首个 `--gpu`／`--software` 参数覆盖环境变量，首个 `--` 用于转发同名应用参数。
+新 deb 增加“使用 CPU 软件渲染启动”桌面动作。应用参数与退出码保留，不因普通错误码
+自动重新启动应用。无效模式或不完整软件运行库在启动应用前明确报错。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Python 全量脚本 | 158 项：**150 通过、8 项平台／工具跳过** |
+| focal Python 3.8 专项 | ABI／打包与启动器 **16 项全部通过** |
+| 默认 GPU 路径 | 记录型可执行文件验证默认／空模式、无私有运行库启动、系统驱动环境保留、参数含空格、CLI 覆盖、选项转义及退出码；默认没有注入七项软件渲染环境变量 |
+| 安装版入口 | 实际安装新 deb 后，以普通 UID 1000 调用 `/usr/bin/nyaterm-compat`；使用临时记录型可执行文件验证 GPU 默认及 `--software` 选择，随后恢复原 ELF 并确认其 SHA-256 未变 |
+| tar 软件回退 | 实际新 tar 解压后执行 `start-nyaterm.sh --software`，普通用户在 focal Xvfb 绘制工作台，截图已检查；日志为 llvmpipe／backend=Gl／type=Cpu，实际 WM_CLASS 为 ("nyaterm", "NyaTerm") |
+| deb 软件回退 | 新 deb 独立安装，普通用户执行 `nyaterm-compat --software` 绘制工作台；128／256／512 图标主题查找与解码、重复 postinst 权限修复均通过 |
+| 实际包与 ABI | 四个 ELF 与已发布 2.0.1 二进制逐字节一致，重新执行 ABI 审计，各自最高 GLIBC 2.30；83 个私有库最高 GLIBC 2.17；归档 root 所有权、0755／0644 权限、五尺寸图标与 SHA-256 通过 |
+| 桌面动作与源码 | 实际 deb 的 desktop-file-validate 退出 0（只有原有 Categories 提示）；Shell 语法、actionlint、架构边界和差异空白检查通过 |
+
+本地验证包使用单独目录 `target/validation-gpu-default-20261103/artifacts/` 和测试版本
+`2.0.1+gpu.1`，没有覆盖旧制品。详细证据包括 `python-all.log`、`python38-focused.log`、
+`artifact-verification.json`、`installed-launcher-selection.json`、`unchanged-release-binaries.json`、
+`software-smoke/`、`deb-smoke/` 与 `deb-install.log`。
+
+当前云环境没有提供可用硬件 GPU，本轮默认路径通过启动环境／参数契约和已安装入口验证，
+真实窗口验证只覆盖显式 CPU 回退。用户报告其内网设备 GPU 已可启动，但没有据此声称
+本轮已在该设备验证硬件加速、性能、驱动、输入法或内部服务。
+
+已发布的 `compat-glibc231-2.0.1` 仍保留 CPU 默认，其 Release／tag／附件 ID、大小和
+SHA-256 已重新读取，保持不变。本轮只提交本地源码，不推送、发布或替换附件。
+旧便携包可先直接执行 `./nyaterm` 使用系统驱动；就地部署本修改仅需关闭应用、备份并
+以 0755 替换 `start-nyaterm.sh`，保留原二进制、`opengl/` 与 `data/`。安装版对应文件为
+`/opt/nyaterm-compat/start-nyaterm.sh`，桌面回退动作由新 deb 提供。

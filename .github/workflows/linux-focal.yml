@@ -9,6 +9,7 @@ on:
       - crates/**
       - scripts/compat/linux-focal/**
       - scripts/tests/test_linux_focal.py
+      - scripts/tests/test_linux_focal_launcher.py
       - scripts/release/linux_icons.py
       - .github/workflows/linux-focal.yml
 
@@ -27,8 +28,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Test ABI gate
-        run: python3 -m unittest scripts.tests.test_linux_focal
+      - name: Test ABI gate and renderer selection
+        run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher
       - name: Build focal toolchain image
         run: >-
           docker build --build-arg BUILDER_UID="$(id -u)" --build-arg BUILDER_GID="$(id -g)"
@@ -50,7 +51,7 @@ jobs:
             dist/*_glibc231.deb
             dist/*_glibc231.deb.sha256
           if-no-files-found: error
-      - name: Verify bundled OpenGL without Vulkan or NVIDIA
+      - name: Verify CPU fallback without Vulkan or NVIDIA
         run: >-
           docker run --rm --user "$(id -u):$(id -g)"
           -v "$PWD:/src" -w /src nyaterm-focal

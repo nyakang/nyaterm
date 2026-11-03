@@ -41,8 +41,10 @@ file. All four executables must pass the following **before** archive creation:
 
 The archive includes `abi-report.json`, all helpers, a portable-mode marker,
 license, target-side read-only diagnosis and Chinese offline instructions. It
-also includes a **private CPU OpenGL runtime**, selected by `start-nyaterm.sh`, so
-Vulkan and a proprietary NVIDIA driver are not prerequisites. No Rust, Python,
+also includes a **private CPU OpenGL fallback runtime**. `start-nyaterm.sh` now
+defaults to the system graphics stack, where GPUI prefers available hardware GPUs;
+`start-nyaterm.sh --software` selects the bundled fallback without requiring
+Vulkan or a proprietary NVIDIA driver. No Rust, Python,
 package manager, AppImage/FUSE or libc installation is needed on the destination.
 The tarball works without package-manager installation, including customized
 downstream package databases that cannot satisfy ordinary Ubuntu dependencies.
@@ -60,7 +62,7 @@ python3 scripts/compat/linux-focal/package.py \
 ```
 
 Both formats pass the same ABI/runtime audits. The `nyaterm-compat` package
-installs the private OpenGL launcher under `/opt/nyaterm-compat` and exposes
+installs the renderer-selecting launcher under `/opt/nyaterm-compat` and exposes
 `/usr/bin/nyaterm-compat`. Unlike the portable tarball, it stores data in the
 normal per-user NyaTerm directory, so `/opt` can stay root-owned. Review the
 declared dependencies against the target's package database before choosing the
@@ -78,6 +80,35 @@ cache when the tool is available. It tolerates missing sizes and repeated calls.
 `NYATERM_FOCAL_DIST` and `NYATERM_FOCAL_SMOKE_OUTPUT` select independent build and
 smoke-evidence directories, so verification need not overwrite an earlier
 artifact. Nothing here publishes or rewrites an existing Release.
+
+## Renderer selection
+
+New packages built from this revision prefer the **system GPU driver** by default.
+The launcher leaves existing driver variables intact, adds no private library path,
+and does not force llvmpipe or disable Vulkan in this mode. GPUI selects a usable
+hardware adapter ahead of CPU adapters; actual acceleration depends on the driver
+and any environment overrides supplied by the user.
+
+| Selection | Portable tar | Installed deb |
+| --- | --- | --- |
+| Default system/GPU path | `./start-nyaterm.sh` | `nyaterm-compat` or the normal desktop entry |
+| Explicit CPU fallback | `./start-nyaterm.sh --software` | `nyaterm-compat --software` or the desktop entry's **Start with CPU software rendering** action |
+| Environment selection | `NYATERM_RENDERER=software ./start-nyaterm.sh` | `NYATERM_RENDERER=software nyaterm-compat` |
+
+`NYATERM_RENDERER=gpu` selects the system path. A leading `--gpu` or `--software`
+overrides that variable; use a leading `--` to pass a literal launcher option to
+the application. Other application arguments and the exit status are preserved.
+There is no application restart on an error: if graphics initialization fails,
+choose the explicit CPU fallback. Software mode uses only the application-private
+Mesa/EGL libraries, forces llvmpipe, and disables Vulkan as in the original build.
+
+The already published `compat-glibc231-2.0.1` assets retain their original CPU
+launcher and SHA-256 values. For that existing portable package, `./nyaterm`
+already uses system drivers. To apply this change in place, close NyaTerm, back up
+and replace only `start-nyaterm.sh` from this revision (mode 0755), retaining all
+binaries, `opengl/` and `data/`. For an installed package, the corresponding file
+is `/opt/nyaterm-compat/start-nyaterm.sh`; a newly built deb additionally provides
+the desktop CPU action.
 
 ## Private OpenGL runtime
 
@@ -105,32 +136,35 @@ There are two separate old-graphics problems:
 The private `egl_desktop.c` adapter changes that config filter **only when EGL
 reports OpenGL without OpenGL_ES**, and forwards the real EGL ABI. The original
 GLVND library is renamed privately with patchelf; the adapter and vendor library
-are loaded only by the launch script. It does not change glibc versions, fake
+are loaded only by the launcher's explicit software mode. It does not change glibc versions, fake
 GPU limits, edit third-party Cargo sources, or replace the system EGL driver.
-Its source is included in the archive. The launcher explicitly disables Vulkan
+Its source is included in the archive. Software mode explicitly disables Vulkan
 ICDs and selects llvmpipe; software rendering trades GPU independence for CPU
 usage and lower graphics performance.
 
 ## Validation
 
 ```sh
-python3 -m unittest scripts.tests.test_linux_focal
+python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src \
   nyaterm-focal bash scripts/compat/linux-focal/smoke.sh
 ```
 
 The smoke test extracts the actual archive into a new temporary directory,
-starts its launcher under focal's Xvfb, checks a mapped NyaTerm window and captures
-its pixels. It uses the **packaged OpenGL runtime**, not newer host Mesa libraries.
+starts its launcher with **--software** under focal's Xvfb, checks a mapped NyaTerm
+window and captures its pixels. This explicitly validates the CPU fallback using
+the **packaged OpenGL runtime**; it does not certify default hardware rendering.
+Launcher tests separately exercise default environment/argument forwarding and
+explicit renderer selection using a recording executable.
 Evidence is retained in `target/linux-focal/smoke/`. See
 [validation evidence](VALIDATION.md).
 
 The dedicated `Linux glibc 2.31` Actions workflow builds, audits, tests, exercises
-OpenGL without Vulkan/NVIDIA, and uploads the archive. It does not publish a
+the CPU fallback without Vulkan/NVIDIA, and uploads the archive. It does not publish a
 release or change the updater channel.
 
 Containers share the host kernel. This validates the glibc 2.31 / GTK / GLib
 userspace, **not** the destination's Linux 5.4 kernel, custom security patches,
 real NVIDIA driver or real network services. Finish acceptance on that machine
 using `OFFLINE-README.zh-CN.md`. No private glibc or system driver replacement is
-shipped; system-driver mode (`./nyaterm`) still needs a working graphics driver.
+shipped; default system-driver mode still needs a working graphics driver.

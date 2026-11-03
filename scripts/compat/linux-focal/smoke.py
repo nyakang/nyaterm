@@ -28,7 +28,7 @@ def main():
         application = next(Path(directory).glob("*/nyaterm"))
         with (output / "application.log").open("w") as log:
             launcher = application.with_name("start-nyaterm.sh")
-            process = subprocess.Popen(["dbus-run-session", "--", str(launcher)],
+            process = subprocess.Popen(["dbus-run-session", "--", str(launcher), "--software"],
                                        stdout=log, stderr=log, start_new_session=True,
                                        env=dict(os.environ, RUST_LOG="info"))
             try:

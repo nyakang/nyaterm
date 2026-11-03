@@ -138,13 +138,20 @@ def create_deb(stage, output, version):
             [Desktop Entry]
             Type=Application
             Name=NyaTerm (Compatibility)
-            Comment=Ubuntu 20.04 terminal with private software OpenGL
+            Comment=Ubuntu 20.04 terminal with GPU rendering and a CPU fallback
             Exec=/usr/bin/nyaterm-compat %U
             Icon=nyaterm-compat
             StartupWMClass={}
             Terminal=false
             Categories=Development;TerminalEmulator;Network;
             StartupNotify=true
+
+            Actions=SoftwareRendering;
+
+            [Desktop Action SoftwareRendering]
+            Name=Start with CPU software rendering
+            Name[zh_CN]=使用 CPU 软件渲染启动
+            Exec=/usr/bin/nyaterm-compat --software %U
             """).format(wm_class), encoding="utf-8")
         desktop.chmod(0o644)
         linux_icons.copy_icons(root, ROOT / "crates/nyaterm-app/resources/icons", desktop_id)
@@ -159,7 +166,7 @@ def create_deb(stage, output, version):
             Architecture: amd64
             Maintainer: NyaTerm compatibility packaging <noreply@github.com>
             Depends: bash, libc6 (>= 2.31), libgcc-s1, libgtk-3-0 (>= 3.24), libglib2.0-0 (>= 2.64), libgdk-pixbuf2.0-0, libdbus-1-3, libxcb1, libxkbcommon0, libxkbcommon-x11-0
-            Description: NyaTerm Ubuntu 20.04 compatibility build with private software OpenGL
+            Description: NyaTerm Ubuntu 20.04 compatibility build with GPU rendering and a CPU fallback
              Includes the application, MCP/RDP/VNC helpers and a checksum-pinned Mesa runtime.
              Requires X11. Does not replace libc or system graphics drivers.
             """).format(version.replace("-", "~")), encoding="utf-8")

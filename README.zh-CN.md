@@ -264,7 +264,7 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 基于 Ubuntu 20.04、使用 **glibc 2.31** 的定制 x86-64 桌面，请使用专门的
 [focal 离线兼容构建](scripts/compat/linux-focal/README.md)。普通 Linux 发布包在
 更新的发行版上编译，可能要求更高版本的 glibc。兼容包包含全部辅助程序及 ABI
-报告及独立的 OpenGL 软件渲染入口，目标机需可用的 X11 会话。
+报告，默认优先系统 GPU 驱动，并保留显式的独立 OpenGL CPU 回退入口；目标机需可用的 X11 会话。
 
 可从 [nyaterm.app](https://nyaterm.app) 或 [Releases](https://github.com/nyakang/nyaterm/releases) 页面下载安装包。
 

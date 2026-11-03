@@ -11,8 +11,8 @@ GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动�
 2. 解压到当前用户可写目录，例如 `~/apps/`。无需 root、apt、Rust、Python、FUSE
    或联网下载。保留主程序与三个辅助程序的相对位置。
 3. 从目标电脑的 X11 桌面终端进入解压目录，执行 `bash diagnose.sh`。
-4. 执行 **`./start-nyaterm.sh`**。该入口不要求 Vulkan 或 NVIDIA 专有驱动，使用
-   包内的 OpenGL CPU 软件渲染。首次启动会在包内生成 `data/`，包含设置和凭据，迁移前请备份。
+4. 执行 **`./start-nyaterm.sh`**，默认使用系统图形栈，优先选择可用的硬件 GPU。
+   首次启动会在包内生成 `data/`，包含设置和凭据，迁移前请备份。
    更新兼容包时关闭应用，仅替换程序文件，保留原有 `data/`。
 
 此构建使用项目原有配置/备份格式。便携版数据与已安装版数据隔离，导入已有配置时
@@ -20,14 +20,33 @@ GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动�
 
 ## 图形与功能边界
 
-需要可用的 X11。默认启动脚本使用附带的 Mesa/llvmpipe，无需 GT 1010 的 NVIDIA
-专有驱动，也不依赖 Vulkan。该路径已经在 glibc 2.31、禁用 Vulkan 的环境下验证。
-软件渲染会增加 CPU 占用，其性能不能等同于 NVIDIA 硬件加速，尤其在大量图形更新时。
-附带库仅作用于应用进程及其子进程；无需修改 `/etc` 或向系统库目录复制任何文件。
+需要可用的 X11。默认启动不注入包内 Mesa、不强制 CPU，也不禁用 Vulkan，沿用系统
+驱动与用户显式设置的图形环境变量。实际是否硬件加速取决于系统驱动；如果系统环境
+本身设置了 `LIBGL_ALWAYS_SOFTWARE=1` 等强制软件选项，默认启动会保留该设置。
 
-如果目标机已有兼容驱动，可以另用 `./nyaterm` 尝试系统驱动模式。GT 1010 硬件本身
-不能证明驱动已装好；`nvidia-smi` 不可用也不能排除 Nouveau/Mesa。不要混用从其他
-发行版复制的 NVIDIA `.so`，也不要升级系统 libc 来解决驱动错误。
+如驱动初始化失败或需要离线 CPU 回退，可选择：
+
+```sh
+./start-nyaterm.sh --software
+# 或
+NYATERM_RENDERER=software ./start-nyaterm.sh
+```
+
+安装 deb 后，普通入口 `nyaterm-compat` 默认走 GPU／系统驱动路径；CPU 回退使用
+`nyaterm-compat --software`，或桌面入口右键菜单中的“使用 CPU 软件渲染启动”。
+`NYATERM_RENDERER=gpu` 或首个参数 `--gpu` 可显式选择系统路径；首个命令行选择优先于环境变量。
+程序报错后如需 CPU 回退，请用上述入口重新启动，不会因普通退出码自动重启应用。
+
+只有软件模式会加载包内 Mesa／llvmpipe，强制 CPU OpenGL 并禁用 Vulkan，无需 NVIDIA
+专有驱动。该回退路径仍保留 glibc 2.31 兼容性；软件渲染会增加 CPU 占用，尤其在大量
+画面更新时。附带库只作用于应用进程及其子进程，不需要修改系统库或显卡驱动。
+不要混用从其他发行版复制的 NVIDIA `.so`，也不要通过升级系统 libc 解决驱动错误。
+
+本行为适用于本次源码生成的新包；已发布的 `compat-glibc231-2.0.1` 附件保持原样。
+旧便携包可直接执行 `./nyaterm` 使用系统驱动。要更新默认入口，先关闭应用、备份旧脚本，
+仅替换本次的 `start-nyaterm.sh` 并设置 0755，保留原有二进制、`opengl/` 和 `data/`。
+已安装版对应脚本位于 `/opt/nyaterm-compat/start-nyaterm.sh`；新的桌面回退菜单随新 deb 安装。
+
 `diagnose.sh` 会在相应工具已安装时显示驱动、OpenGL 和 Vulkan 信息；缺少诊断工具
 不等于驱动不可用。若无图形驱动或发生渲染错误，请保留脱敏后的启动日志及驱动版本。
 

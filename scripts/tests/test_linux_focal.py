@@ -39,6 +39,9 @@ class FocalAbiTests(unittest.TestCase):
             desktop = (extracted / "usr/share/applications/nyaterm-compat.desktop").read_text()
             self.assertIn("StartupWMClass=NyaTerm\n", desktop)
             self.assertIn("Exec=/usr/bin/nyaterm-compat %U\n", desktop)
+            self.assertIn("Actions=SoftwareRendering;\n", desktop)
+            self.assertIn("[Desktop Action SoftwareRendering]\n", desktop)
+            self.assertIn("Exec=/usr/bin/nyaterm-compat --software %U\n", desktop)
             for size in focal.linux_icons.ICON_SIZES:
                 icon = extracted / "usr/share/icons/hicolor" / size / "apps/nyaterm-compat.png"
                 self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
