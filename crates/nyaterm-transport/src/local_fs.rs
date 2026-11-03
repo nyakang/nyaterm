@@ -46,12 +46,7 @@ impl LocalFileService {
                 entries.push(file_entry);
             }
         }
-        entries.sort_by(|left, right| {
-            (left.file_type != SftpFileType::Directory)
-                .cmp(&(right.file_type != SftpFileType::Directory))
-                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-                .then_with(|| left.name.cmp(&right.name))
-        });
+        sort_entries(&mut entries);
         Ok(entries)
     }
 
@@ -332,6 +327,15 @@ fn ensure_safe_local_target(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn sort_entries(entries: &mut [SftpFileEntry]) {
+    entries.sort_by(|left, right| {
+        (!left.is_directory())
+            .cmp(&(!right.is_directory()))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
 fn file_entry_from_path(path: &Path, name: String) -> anyhow::Result<SftpFileEntry> {
     let symlink_metadata = fs::symlink_metadata(path)?;
     let metadata = fs::metadata(path).unwrap_or_else(|_| symlink_metadata.clone());
@@ -511,11 +515,58 @@ fn set_local_mode_if_supported(_path: &Path, _mode: Option<u32>) -> anyhow::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::LocalFileService;
-    use crate::{RemoteTextWriteResult, SftpFileType, SftpWriteTextResult};
+    use super::{LocalFileService, sort_entries};
+    use crate::{RemoteTextWriteResult, SftpFileEntry, SftpFileType, SftpWriteTextResult};
 
     fn temp_dir(name: &str) -> nyaterm_core::test_support::TestTempDir {
         nyaterm_core::test_support::TestTempDir::new(&format!("nyaterm-local-fs-{name}"))
+    }
+
+    #[test]
+    fn local_listing_groups_directory_links_before_files_and_preserves_name_order() {
+        let mut entries: Vec<_> = [
+            ("a.txt", SftpFileType::File, false),
+            ("m-file-link", SftpFileType::Symlink, false),
+            ("z-dir-link", SftpFileType::Symlink, true),
+            ("target-file.txt", SftpFileType::File, false),
+            ("target-dir", SftpFileType::Directory, false),
+            ("A.txt", SftpFileType::File, false),
+            ("entry10", SftpFileType::Other, false),
+            ("entry2", SftpFileType::File, false),
+        ]
+        .into_iter()
+        .map(
+            |(name, file_type, symlink_target_is_directory)| SftpFileEntry {
+                name: name.to_string(),
+                path: name.to_string(),
+                file_type,
+                size: None,
+                permissions: None,
+                owner: String::new(),
+                group: String::new(),
+                modified_at: None,
+                raw_path_token: None,
+                symlink_target_is_directory,
+            },
+        )
+        .collect();
+        sort_entries(&mut entries);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "target-dir",
+                "z-dir-link",
+                "A.txt",
+                "a.txt",
+                "entry10",
+                "entry2",
+                "m-file-link",
+                "target-file.txt",
+            ]
+        );
     }
 
     #[test]
