@@ -250,7 +250,8 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::filter_quick_switch_items;
+    use crate::models::QuickSwitchItem;
 
     fn session(title: &str, host: Option<&str>, port: u16) -> QuickSwitchItem {
         QuickSwitchItem::Session {
