@@ -92,6 +92,9 @@ impl SemanticHighlighter {
         let mut regex = Vec::new();
         let mut words = Vec::new();
         let mut patterns = Vec::new();
+        // Only a fallback now: sub-match colours prefer the rule's own colour, which
+        // carries the theme palette. This inference is kept for the case where that
+        // rule is disabled, and is why it is not the primary source any more.
         let dark = rules
             .iter()
             .find(|r| r.id == "builtin-string")
@@ -191,7 +194,15 @@ impl SemanticHighlighter {
         self.colors.get(id).copied()
     }
 
+    /// The colour for a sub-match of a rule.
+    ///
+    /// Prefers the rule's own colour, which already came from the palette the rest
+    /// of the highlighting uses, so nested values match their parent. The fixed
+    /// swatches are only a fallback for when that rule is disabled.
     fn child_color(&self, id: &str) -> u32 {
+        if let Some(color) = self.color(id) {
+            return color;
+        }
         match id {
             "builtin-info" => self.children.read,
             "builtin-warn" => self.children.write,

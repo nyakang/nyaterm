@@ -1445,6 +1445,44 @@ fn line_role_cost_benchmark() {
     }
 }
 
+/// 子色必须跟随规则自身的颜色（也就是主题调色板），而不是固定的浅色 swatch。
+///
+/// `compile` 原来靠「规则颜色 == 固定深色 swatch」推断明暗，但绘制规则是从调色板
+/// 生成的，永远不相等，于是深色主题下 info/warn/error/debug/operator 这些子色
+/// 全部落到浅色变体上。
+#[test]
+fn palette_coloured_rules_keep_their_own_child_colours() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let rules = nyaterm_core::get_builtin_keyword_rules_with_ansi(palette.terminal_ansi, true);
+    let highlighter = SemanticHighlighter::compile(&rules, true);
+
+    for id in [
+        "builtin-info",
+        "builtin-warn",
+        "builtin-error",
+        "builtin-debug",
+        "builtin-operator",
+    ] {
+        let rule = rules
+            .iter()
+            .find(|rule| rule.id == id)
+            .unwrap_or_else(|| panic!("missing rule {id}"));
+        let expected = super::parse_hex_rgb(&rule.color).expect("rule colour");
+        let light = super::parse_hex_rgb(nyaterm_core::builtin_keyword_rule_swatch(id, false))
+            .expect("light swatch");
+        assert_ne!(
+            expected, light,
+            "{id}: 深色调色板与浅色 swatch 相同，这个断言就没意义了"
+        );
+        assert_eq!(
+            highlighter.child_color(id),
+            expected,
+            "{id}: 子色应跟随规则颜色 {expected:#08x}，实际 {:#08x}（浅色变体是 {light:#08x}）",
+            highlighter.child_color(id)
+        );
+    }
+}
+
 #[test]
 #[ignore = "manual fixture-only background precompute benchmark"]
 fn semantic_precompute_benchmark() {
