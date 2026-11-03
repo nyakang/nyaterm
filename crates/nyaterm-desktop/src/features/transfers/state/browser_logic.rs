@@ -113,16 +113,18 @@ pub(in crate::features) fn compare_transfer_browser_entries(
     column: TransferBrowserSortColumn,
     direction: TransferBrowserSortDirection,
 ) -> Ordering {
-    if left.file_type != right.file_type {
-        let left_dir = left.is_directory();
-        let right_dir = right.is_directory();
-        if left_dir != right_dir {
-            return if left_dir {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            };
-        }
+    // Directories come first whatever their entry type: a symlink that points at
+    // a directory belongs with the directories. Deciding this only when the entry
+    // types differed left two symlinks -- one to a directory, one to a file --
+    // ordered by name instead, which made the comparator non-transitive.
+    let left_dir = left.is_directory();
+    let right_dir = right.is_directory();
+    if left_dir != right_dir {
+        return if left_dir {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
     }
 
     let result = match column {
@@ -232,8 +234,9 @@ pub(in crate::features) fn record_browser_history(
 
 #[cfg(test)]
 mod regression_tests {
-    use super::*;
-    use nyaterm_transport::SftpFileType;
+    use super::compare_transfer_browser_entries;
+    use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
+    use nyaterm_transport::{SftpFileEntry, SftpFileType};
 
     fn entry(name: &str, file_type: SftpFileType, target_is_directory: bool) -> SftpFileEntry {
         SftpFileEntry {
