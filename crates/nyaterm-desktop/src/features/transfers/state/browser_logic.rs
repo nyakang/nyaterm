@@ -106,8 +106,7 @@ pub(in crate::features) fn transfer_browser_entry_is_visible(
     (show_hidden_files || !entry.name.starts_with('.'))
         && (normalized_query.is_empty()
             || contains_ascii_case_insensitive(&entry.name, normalized_query)
-            || (!entry.name.is_ascii()
-                && entry.name.to_lowercase().contains(normalized_query)))
+            || (!entry.name.is_ascii() && entry.name.to_lowercase().contains(normalized_query)))
 }
 
 pub(in crate::features) fn compare_transfer_browser_entries(
@@ -175,10 +174,7 @@ fn natural_compare_ascii_bytes(left: &[u8], right: &[u8]) -> Ordering {
                 .iter()
                 .position(|value| !value.is_ascii_digit())
                 .unwrap_or(right_rest.len());
-            let ordering = compare_digit_runs(
-                &left_rest[..left_end],
-                &right_rest[..right_end],
-            );
+            let ordering = compare_digit_runs(&left_rest[..left_end], &right_rest[..right_end]);
             if ordering != Ordering::Equal {
                 return ordering;
             }
@@ -211,10 +207,16 @@ fn natural_compare_lowercase(left: &str, right: &str) -> Ordering {
             {
                 let left_start = left_chars.clone();
                 let right_start = right_chars.clone();
-                while left_chars.peek().is_some_and(|value| value.is_ascii_digit()) {
+                while left_chars
+                    .peek()
+                    .is_some_and(|value| value.is_ascii_digit())
+                {
                     left_chars.next();
                 }
-                while right_chars.peek().is_some_and(|value| value.is_ascii_digit()) {
+                while right_chars
+                    .peek()
+                    .is_some_and(|value| value.is_ascii_digit())
+                {
                     right_chars.next();
                 }
                 let left_number = left_start
@@ -223,7 +225,7 @@ fn natural_compare_lowercase(left: &str, right: &str) -> Ordering {
                 let right_number = right_start
                     .take_while(|value| value.is_ascii_digit())
                     .collect::<String>();
-                let ordering = compare_digit_runs(&left_number, &right_number);
+                let ordering = compare_digit_runs(left_number.as_bytes(), right_number.as_bytes());
                 if ordering != Ordering::Equal {
                     return ordering;
                 }
