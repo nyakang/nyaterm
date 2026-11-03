@@ -3488,7 +3488,6 @@
     "resetColor": "色をリセット",
     "runCommandTitle": "複製したセッションでコマンドを実行",
     "sessionInfo": "セッション情報",
-    "editConnection": "編集",
     "setColor": "タブの色を設定",
     "sshCommand": "SSH コマンド",
     "splitFailed": "分割に失敗しました",

@@ -3488,7 +3488,6 @@
     "resetColor": "색상 재설정",
     "runCommandTitle": "복제된 세션에서 명령 실행",
     "sessionInfo": "세션 정보",
-    "editConnection": "편집",
     "setColor": "탭 색상 설정",
     "sshCommand": "SSH 명령",
     "splitFailed": "분할 실패",
