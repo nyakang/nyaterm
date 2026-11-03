@@ -248,7 +248,7 @@ impl NyaTermApp {
         let path = match session_transcript_file_path(
             self.settings.summary(),
             &session.name,
-            OffsetDateTime::now_utc(),
+            OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
         ) {
             Ok(path) => path,
             Err(error) => {
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn session_transcript_path_uses_safe_name_and_utc_iso_timestamp() {
+    fn session_transcript_path_uses_safe_name_and_iso_timestamp() {
         let settings = AppSettingsSummary {
             recording_path: "/tmp/nyaterm-recordings".to_string(),
             ..AppSettingsSummary::default()
