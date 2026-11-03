@@ -43,7 +43,7 @@ fn builtin_manager_never_silently_runs_an_activex_configuration() {
 
 #[cfg(windows)]
 #[test]
-fn activex_requires_normalized_system_authentication_and_disabled_clipboard() {
+fn activex_requires_system_authentication_and_accepts_legacy_clipboard_modes() {
     let mut config = config();
     assert!(config.backend.validate_config(&config).is_ok());
     config.windows_authentication = None;
@@ -52,15 +52,16 @@ fn activex_requires_normalized_system_authentication_and_disabled_clipboard() {
         RdpErrorKind::Unsupported
     );
     config.windows_authentication = Some("system".into());
-    config.clipboard.mode = RdpClipboardMode::TextOnly;
-    assert_eq!(
-        config.backend.validate_config(&config).unwrap_err().kind,
-        RdpErrorKind::Unsupported
-    );
-    config.clipboard.mode = RdpClipboardMode::TextAndFiles;
-    assert!(config.backend.validate_config(&config).is_err());
-    config.normalize_backend_settings();
-    assert!(config.backend.validate_config(&config).is_ok());
+    for mode in [
+        RdpClipboardMode::Disabled,
+        RdpClipboardMode::TextOnly,
+        RdpClipboardMode::TextAndFiles,
+    ] {
+        config.clipboard.mode = mode;
+        assert!(config.backend.validate_config(&config).is_ok());
+        config.normalize_backend_settings();
+        assert_eq!(config.clipboard.mode, RdpClipboardMode::TextAndFiles);
+    }
     config.reconnect.max_attempts = 201;
     assert!(config.backend.validate_config(&config).is_err());
 }
@@ -85,7 +86,7 @@ fn windows_launch_policy_normalizes_legacy_settings_without_rewriting_the_source
                 let original = source.clone();
                 let mut launch = source.clone();
                 launch.normalize_backend_settings();
-                assert_eq!(launch.clipboard.mode, RdpClipboardMode::Disabled);
+                assert_eq!(launch.clipboard.mode, RdpClipboardMode::TextAndFiles);
                 assert_eq!(
                     launch.windows_authentication.as_deref(),
                     Some(authentication.unwrap_or("system"))
@@ -108,7 +109,7 @@ fn windows_launch_policy_normalizes_legacy_settings_without_rewriting_the_source
 }
 
 #[test]
-fn builtin_launch_policy_preserves_authentication_certificate_and_clipboard_settings() {
+fn builtin_launch_policy_enables_all_clipboard_without_changing_other_settings() {
     for mode in [
         RdpClipboardMode::Disabled,
         RdpClipboardMode::TextOnly,
@@ -118,9 +119,10 @@ fn builtin_launch_policy_preserves_authentication_certificate_and_clipboard_sett
         launch.backend = RdpBackend::Builtin;
         launch.windows_authentication = Some("future-auth".into());
         launch.clipboard.mode = mode;
-        let original = launch.clone();
+        let mut expected = launch.clone();
+        expected.clipboard.mode = RdpClipboardMode::TextAndFiles;
         launch.normalize_backend_settings();
-        assert_eq!(launch, original);
+        assert_eq!(launch, expected);
         assert!(launch.backend.validate_config(&launch).is_ok());
     }
 }

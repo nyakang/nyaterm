@@ -15,10 +15,10 @@ anyhow.workspace = true
 arboard = { version = "3", features = ["wayland-data-control"] }
 dirs.workspace = true
 ironrdp-client = { version = "0.1.0", features = ["clipboard", "rustls"] }
-ironrdp-cliprdr = "0.8"
+ironrdp-cliprdr = "0.9"
 ironrdp-core = { version = "0.3", features = ["alloc"] }
 ironrdp-input.workspace = true
-ironrdp-pdu = "0.10"
+ironrdp-pdu = "0.11"
 # Only for the certificate-validation policy types named by `ConfigBuilder`.
 # ironrdp-client does not re-export them.
 ironrdp-tls = { version = "0.3", default-features = false }
@@ -31,5 +31,5 @@ uuid.workspace = true
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-ironrdp-svc = "0.9"
+ironrdp-svc = "0.10"
 nyaterm-core = { workspace = true, features = ["test-support"] }
