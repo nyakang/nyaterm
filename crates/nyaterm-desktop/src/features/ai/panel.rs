@@ -1349,7 +1349,7 @@ impl AiPanel {
                         .font_weight(FontWeight(600.))
                         .text_color(rgb(palette.text_on_fill(palette.success)))
                         .cursor_pointer()
-                        .hover(|this| this.bg(rgb(0x2ea043)))
+                        .hover(move |this| this.bg(rgb(palette.hover_fill(palette.success))))
                         .on_click(cx.listener(|panel, _, _, cx| {
                             panel.with_app(cx, |app, cx| {
                                 app.shell.set_settings_active_tab(SettingsTab::AiGeneral);

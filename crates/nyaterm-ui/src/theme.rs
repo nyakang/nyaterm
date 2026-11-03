@@ -64,6 +64,25 @@ impl ThemePalette {
         }
     }
 
+    /// Hover fill that improves contrast against the normal-state label color.
+    ///
+    /// Move a little toward white behind dark text, or toward black behind light
+    /// text, instead of swapping to a hard-coded green that may lose contrast.
+    pub fn hover_fill(self, fill: u32) -> u32 {
+        let text = self.text_on_fill(fill);
+        let toward = if relative_luminance(text) < relative_luminance(fill) {
+            0xffffff
+        } else {
+            0x000000
+        };
+        let mix = |shift: u32| {
+            let start = ((fill >> shift) & 0xff) as f32;
+            let end = ((toward >> shift) & 0xff) as f32;
+            (start + (end - start) * 0.12).round() as u32
+        };
+        (mix(16) << 16) | (mix(8) << 8) | mix(0)
+    }
+
     /// Keep the cursor visible without changing terminal foreground/background colors.
     pub fn apply_cursor_contrast_ratio(&mut self, ratio: f32) {
         if ratio <= 1.01 {
@@ -965,8 +984,8 @@ mod tests {
 
     #[test]
     fn dracula_palettes_follow_the_official_specification() {
-        // Dracula Classic and Alucard Classic from https://draculatheme.com/spec;
-        // the light variant keeps `black` dark so ANSI 30 stays readable.
+        // Dracula Classic follows https://draculatheme.com/spec; Alucard Classic
+        // uses its official palette, except for adapted ANSI black and white.
         for (id, bg, panel, fg, selection, ansi) in [
             (
                 "dracula",
@@ -1016,6 +1035,29 @@ mod tests {
             if super::contrast_ratio(0xffffff, palette.link) >= 2.0 {
                 assert_eq!(palette.text_on_fill(palette.link), 0xffffff, "{id}");
             }
+        }
+    }
+
+    #[test]
+    fn success_button_hover_keeps_dracula_labels_readable() {
+        for id in ["dracula", "dracula-light"] {
+            let palette = theme_palette(id);
+            let fill = palette.success;
+            let hover_fill = palette.hover_fill(fill);
+            let text = palette.text_on_fill(fill);
+            assert_ne!(fill, hover_fill, "{id} should have a hover cue");
+            assert!(
+                super::contrast_ratio(text, fill) >= 4.5,
+                "{id} normal success label"
+            );
+            assert!(
+                super::contrast_ratio(text, hover_fill) >= 4.5,
+                "{id} hovered success label"
+            );
+            assert!(
+                super::contrast_ratio(text, hover_fill) >= super::contrast_ratio(text, fill),
+                "{id} hover should not reduce label contrast"
+            );
         }
     }
 
