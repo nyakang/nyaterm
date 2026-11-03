@@ -121,6 +121,11 @@ impl NyaTermApp {
             .child(
                 div()
                     .id(SharedString::from("quick-command-variable-dialog"))
+                    // Occlude the backdrop so its click handler cannot steal focus
+                    // from a variable field the pointer just landed on. GPUI reports
+                    // every hitbox under the pointer as hovered, even when another
+                    // element is painted on top.
+                    .occlude()
                     .w(px((self.shell.viewport_size().0 - 32.).clamp(280., 400.)))
                     .max_w_full()
                     .rounded_md()
