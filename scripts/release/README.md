@@ -1,4 +1,64 @@
-# Release version
+# Release tooling
+
+## Windows crash diagnostic builds (#1065)
+
+Run from an x64 MSVC developer shell on Windows, with Python 3.11+, Git, and
+the original compiler installed:
+
+```powershell
+rustup toolchain install 1.99.1 --profile minimal --component rustfmt
+python scripts/release/package_diagnostic.py --source-ref v2.0.1 --toolchain 1.99.1 --id issue1065-test1
+```
+
+The manual `Windows Diagnostic` workflow runs the same command and retains its
+outputs as an Actions artifact; it does not publish a release or post messages.
+`--prepare-only` prepares the source and patch without compiling; `--resume`
+continues the same ID/ref/toolchain after preparation or a failed compilation,
+provided the recorded sources, compiler and lockfile still match.
+
+The builder checks out the exact application revision in
+`target/diagnostic-build/<id>/source`. It adds a narrowly scoped diagnostic
+overlay there, leaving ordinary builds and release packaging untouched. Unknown
+source layouts fail before applying any edits. The original dependency revisions,
+lockfile and version remain frozen. In particular, v2.0.1's packaging includes
+its ActiveX helper, even though current releases use a different architecture.
+Rust 1.99.1's `58cf8f9c3` compiler matches the reports in #1065.
+
+Release optimization is retained, with full debuginfo and no symbol stripping for
+the application and dependencies. Every Rust executable ships with its matching
+PDB. The builder runs an intentional, caught panic in a relocated copy of the
+actual GUI executable while hiding the build-directory PDB. Packaging succeeds
+only if its panic report resolves the named probe function and a source line.
+This self-test exits before opening a database, acquiring the app instance or
+starting GPUI. It does not reproduce or claim to fix the reported crash.
+
+Diagnostic breadcrumbs track asset saving, editor closing, session startup,
+PTY creation, shell spawning, layout, text shaping and painting. Callbacks only
+update bounded process-wide atomic counters, first/last sequence numbers and
+numeric font/cell/scale values. They do not capture names, paths, terminal text,
+commands, credentials or keys, and do not perform render-path disk I/O. The
+existing synchronous panic hook writes these values before resolving symbols.
+Concurrent snapshots are best effort; sequence numbers establish instrumentation
+order, not wall-clock timestamps or per-session attribution.
+
+Outputs under `dist/diagnostic-<id>/` include the portable ZIP and SHA-256,
+`build-info.json`, the exact `diagnostic.patch`, and `symbol-self-test.log`.
+The manifest records the compiler, source SHA, patch SHA-256, lockfile SHA-256,
+and packaged file hashes. Send the ZIP to the reporter, who should extract it
+into a fresh writable directory, retain all PDB/ConPTY/helper files, and return
+new `data/crashes/panic-*.log`, corresponding `data/logs/*.jsonl`, the build
+manifest and reproduction steps. Panic reports are not part of the ordinary
+diagnostic export. If clean settings do not reproduce, compare font/display
+settings through the UI. Do not copy an installed database or keys into this
+portable build, and do not request the entire `data` directory.
+
+Validation:
+
+```powershell
+python -m unittest scripts.tests.test_package_diagnostic -v
+```
+
+## Release version
 
 Use Python 3.11 or newer to preview and apply a release version from the repository root:
 
