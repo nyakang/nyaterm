@@ -1268,7 +1268,7 @@ fn line_role_cost_benchmark() {
             for _ in 0..1000 {
                 acc += crate::semantic_roles::detect(line) as usize;
             }
-            samples.push(started.elapsed().as_nanos() as u128 / 1000);
+            samples.push(started.elapsed().as_nanos() / 1000);
             std::hint::black_box(acc);
         }
         let (m, lo, hi) = median(samples);
@@ -1291,7 +1291,7 @@ fn line_role_cost_benchmark() {
         for line in &corpus {
             acc += crate::semantic_roles::detect(line) as usize;
         }
-        samples.push(started.elapsed().as_nanos() as u128 / corpus.len() as u128);
+        samples.push(started.elapsed().as_nanos() / corpus.len() as u128);
         std::hint::black_box(acc);
     }
     let (m, lo, hi) = median(samples);
@@ -1319,7 +1319,7 @@ fn line_role_cost_benchmark() {
             for _ in 0..1000 {
                 acc += super::fallback_prompt(line).map_or(0, |(a, b)| a + b);
             }
-            samples.push(started.elapsed().as_nanos() as u128 / 1000);
+            samples.push(started.elapsed().as_nanos() / 1000);
             std::hint::black_box(acc);
         }
         samples.sort_unstable();
