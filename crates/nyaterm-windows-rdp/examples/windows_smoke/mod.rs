@@ -261,6 +261,7 @@ pub fn run() -> Result<()> {
         let close = layout.clone();
         let view_layout = layout.clone();
         let window = cx.open_window(WindowOptions {
+            native_child_surfaces: true,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1100.), px(760.)), cx))),
             titlebar: Some(gpui::TitlebarOptions { title: Some("NyaTerm native overlay smoke".into()), ..Default::default() }),
             ..Default::default()
@@ -293,6 +294,7 @@ pub fn run() -> Result<()> {
                     match result {
                         Ok(mut native) => {
                             let _ = window.update(cx, |view, _, cx| { view.status = "Connecting with system authentication; a Windows dialog may require attention".into(); cx.notify(); });
+                            let _ = native.viewport(rect, false);
                             match native.start() {
                             Ok(()) => host = Some(native),
                             Err(error) => { let message = error.to_string(); let _ = window.update(cx, |view, _, cx| { view.status = message; cx.notify(); }); }
@@ -307,7 +309,7 @@ pub fn run() -> Result<()> {
                         lifecycle.apply(event);
                         let message = format!("{:?}", event.kind);
                         let _ = window.update(cx, |view, _, cx| { view.status = message; cx.notify(); });
-                        login_complete |= event.kind == NativeRdpEventKind::LoginComplete;
+                        login_complete |= matches!(event.kind, NativeRdpEventKind::Connected | NativeRdpEventKind::LoginComplete);
                     }
                     if let Some(rect) = rect {
                         let ready = native.status().is_ok_and(|status| status.drawing_ready != 0);

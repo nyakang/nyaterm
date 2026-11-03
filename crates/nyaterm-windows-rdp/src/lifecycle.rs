@@ -43,7 +43,11 @@ impl NativeRdpLifecycle {
     }
 
     pub fn can_present(&self, drawing_ready: bool) -> bool {
-        self.phase == NativeRdpPhase::Active && self.login_complete && drawing_ready
+        // Remote logon, expired-password, and session-selection screens can
+        // require input before OnLoginComplete. Hiding them would prevent login.
+        drawing_ready
+            && (self.phase == NativeRdpPhase::Connected
+                || (self.phase == NativeRdpPhase::Active && self.login_complete))
     }
 
     pub fn apply(&mut self, event: NativeRdpEvent) -> bool {
@@ -63,7 +67,10 @@ impl NativeRdpLifecycle {
         }
         match event.kind {
             NativeRdpEventKind::Connected => {
-                if self.phase == NativeRdpPhase::Connecting {
+                if matches!(
+                    self.phase,
+                    NativeRdpPhase::Connecting | NativeRdpPhase::Reconnecting
+                ) {
                     self.phase = NativeRdpPhase::Connected;
                 }
             }
@@ -80,7 +87,11 @@ impl NativeRdpLifecycle {
                 self.login_complete = false;
             }
             NativeRdpEventKind::CloseConfirmed => return false,
-            NativeRdpEventKind::FocusReleased => {}
+            NativeRdpEventKind::FocusReleased
+            | NativeRdpEventKind::Connecting
+            | NativeRdpEventKind::AuthenticationWarningDisplayed
+            | NativeRdpEventKind::AuthenticationWarningDismissed
+            | NativeRdpEventKind::LogonError { .. } => {}
         }
         true
     }
@@ -114,13 +125,15 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn login_and_drawing_readiness_are_both_required() {
+    fn connected_logon_surface_is_visible_before_login_completes() {
         let mut state = NativeRdpLifecycle::new(7);
+        assert!(!state.can_present(true));
         state.apply(NativeRdpEvent {
             generation: 7,
             kind: NativeRdpEventKind::Connected,
         });
-        assert!(!state.can_present(true));
+        assert!(!state.can_present(false));
+        assert!(state.can_present(true));
         state.apply(NativeRdpEvent {
             generation: 7,
             kind: NativeRdpEventKind::LoginComplete,
@@ -131,6 +144,13 @@ mod tests {
             generation: 7,
             kind: NativeRdpEventKind::Reconnecting,
         });
+        assert!(!state.can_present(true));
+        state.apply(NativeRdpEvent {
+            generation: 7,
+            kind: NativeRdpEventKind::Connected,
+        });
+        assert!(state.can_present(true));
+        state.begin_close(Instant::now());
         assert!(!state.can_present(true));
     }
 
@@ -155,5 +175,36 @@ mod tests {
             generation: 2,
             kind: NativeRdpEventKind::CloseConfirmed
         }));
+    }
+
+    #[test]
+    fn authentication_notifications_do_not_claim_login_or_close_the_logon_surface() {
+        let mut state = NativeRdpLifecycle::new(7);
+        let notifications = [
+            NativeRdpEventKind::Connecting,
+            NativeRdpEventKind::AuthenticationWarningDisplayed,
+            NativeRdpEventKind::AuthenticationWarningDismissed,
+            // Session arbitration and interactive logon also use OnLogonError.
+            NativeRdpEventKind::LogonError { code: -2 },
+        ];
+        for kind in notifications {
+            assert!(state.apply(NativeRdpEvent {
+                generation: 7,
+                kind
+            }));
+            assert_eq!(state.phase(), NativeRdpPhase::Connecting);
+        }
+        state.apply(NativeRdpEvent {
+            generation: 7,
+            kind: NativeRdpEventKind::Connected,
+        });
+        for kind in notifications {
+            assert!(state.apply(NativeRdpEvent {
+                generation: 7,
+                kind
+            }));
+            assert_eq!(state.phase(), NativeRdpPhase::Connected);
+            assert!(state.can_present(true));
+        }
     }
 }

@@ -762,7 +762,7 @@
     "rdpActiveXRelayUnsupported": "ActiveX 不支援 Relay。請移除代理及跳板機，或選擇內建後端。",
     "rdpActiveXClipboardUnsupported": "ActiveX 目前停用剪貼簿重新導向。",
     "rdpWindowsAuthenticationRequired": "不支援此 Windows 驗證模式；此後端使用 Windows 系統憑證驗證。",
-    "rdpWindowsAuthentication": "使用 Windows 系統憑證驗證，驗證失敗時拒絕連線。",
+    "rdpWindowsAuthentication": "使用 Windows 系統憑證驗證，驗證失敗時由你確認繼續或取消連線。",
     "rdpWindowsClipboardDisabled": "ActiveX 目前固定停用剪貼簿，暫不支援啟用。",
     "rdpBackendUnsupported": "不支援的後端",
     "rdpDomain": "網域",

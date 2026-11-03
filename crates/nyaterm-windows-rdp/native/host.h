@@ -20,6 +20,7 @@ struct NyaRdpStatus {
     uint32_t drawing_ready;
     uint32_t callbacks;
     uint32_t width, height, color_depth, cipher_strength;
+    uint32_t surface_width, surface_height, surface_visible;
 };
 struct NyaRdpCapabilities { uint32_t size, flags; uint16_t version[128]; };
 

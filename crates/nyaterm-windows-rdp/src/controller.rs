@@ -16,7 +16,7 @@ use nyaterm_remote_desktop::{RdpDisplayMode, RdpError, RdpErrorKind, RdpSessionC
 use crate::display::DisplayUpdates;
 use crate::lifecycle::{NativeRdpLifecycle, NativeRdpPhase};
 use crate::native::NativeOperationLease;
-use crate::{NativeRdpError, NativeRdpEventKind, NativeRdpHost, Viewport};
+use crate::{HostStatus, NativeRdpError, NativeRdpEventKind, NativeRdpHost, Viewport};
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -53,6 +53,7 @@ struct Runtime {
     local_input: bool,
     events: VecDeque<NativeRdpConnectionEvent>,
     details: NativeRdpSessionDetails,
+    last_native_status: Option<(HostStatus, NativeRdpPhase, bool, bool)>,
 }
 
 pub struct NativeRdpOperation {
@@ -99,6 +100,7 @@ impl NativeRdpControl {
                 local_input: false,
                 events: VecDeque::new(),
                 details: NativeRdpSessionDetails::default(),
+                last_native_status: None,
             }),
             desired: Presentation {
                 rect,
@@ -252,7 +254,25 @@ impl Runtime {
                 let capabilities = host.capabilities()?;
                 self.details.version = Some(capabilities.version);
                 host.smart_sizing(!self.fit)?;
+                // Size the control before Connect can pump a system dialog.
+                // It remains hidden until the transport can show a logon surface.
+                let rect = presentation.rect;
+                host.viewport(
+                    Viewport {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                        scale: rect.scale_percent,
+                    },
+                    false,
+                )?;
+                tracing::info!(
+                    generation = self.generation,
+                    "Windows RDP Connect requested"
+                );
                 host.start()?;
+                tracing::info!(generation = self.generation, "Windows RDP Connect returned");
             }
         }
         if cancelled.get() {
@@ -266,18 +286,23 @@ impl Runtime {
             }
             return Ok(());
         };
-        let mut login = false;
+        let mut focus_surface = false;
         for _ in 0..256 {
             let Some(event) = host.poll()? else {
                 break;
             };
+            // Only typed event names and numeric codes; never connection data.
+            tracing::info!(generation = self.generation, event = ?event.kind, "Windows RDP control event");
             if !self.lifecycle.apply(event) {
                 continue;
             }
             match event.kind {
+                NativeRdpEventKind::Connected => {
+                    focus_surface = true;
+                }
                 NativeRdpEventKind::LoginComplete | NativeRdpEventKind::Reconnected => {
                     self.display.login_complete(now);
-                    login = true;
+                    focus_surface = true;
                     self.events.push_back(NativeRdpConnectionEvent::Connected);
                 }
                 NativeRdpEventKind::Reconnecting => {
@@ -343,13 +368,34 @@ impl Runtime {
             }
         }
         let status = host.status()?;
+        let visible = presentation.visible
+            && self.lifecycle.can_present(status.drawing_ready != 0)
+            && !cancelled.get();
+        let native_status = (
+            status,
+            self.lifecycle.phase(),
+            presentation.visible,
+            visible,
+        );
+        if self.last_native_status != Some(native_status) {
+            tracing::info!(
+                generation = self.generation,
+                connected = status.connected,
+                drawing_ready = status.drawing_ready,
+                surface_width = status.surface_width,
+                surface_height = status.surface_height,
+                surface_visible = status.surface_visible,
+                requested_visible = presentation.visible,
+                allowed_visible = visible,
+                phase = ?self.lifecycle.phase(),
+                "Windows RDP control status"
+            );
+            self.last_native_status = Some(native_status);
+        }
         self.details.desktop_width = Some(status.width);
         self.details.desktop_height = Some(status.height);
         self.details.color_depth = Some(status.color_depth);
         self.details.cipher_strength = Some(status.cipher_strength);
-        let visible = presentation.visible
-            && self.lifecycle.can_present(status.drawing_ready != 0)
-            && !cancelled.get();
         host.viewport(
             Viewport {
                 x: rect.x,
@@ -365,7 +411,7 @@ impl Runtime {
         }
         if visible
             && !presentation.local_input
-            && (focus || login || (self.local_input && presentation.restore_focus))
+            && (focus || focus_surface || (self.local_input && presentation.restore_focus))
         {
             host.focus(true)?;
         }

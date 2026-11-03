@@ -227,9 +227,37 @@ impl ConnectionStore {
         let database_path = self.db_path().to_path_buf();
         let mut snapshot =
             self.build_raw_portable_snapshot(PortableSnapshotKind::Backup, device_id, app_version)?;
+        self.wrap_vault_key_for_backup(&mut snapshot, master_password)?;
         snapshot.recalculate_hash()?;
         let encoded = encode_encrypted_raw_portable_snapshot(&snapshot, master_password)?;
         write_portable_snapshot_file(database_path, output_path, &encoded)
+    }
+    /// An encrypted `.nya` is opened with the file password alone, so the vault key
+    /// inside must be wrapped by that password. Left as stored it is wrapped by the
+    /// master password or the device key, and the import can only unwrap it when the
+    /// file password happens to equal the master password.
+    fn wrap_vault_key_for_backup(
+        &self,
+        snapshot: &mut RawPortableSnapshot,
+        password: &str,
+    ) -> Result<(), StorageError> {
+        let Some(token) = read_snapshot_entity::<Option<String>>(snapshot, "master_key_token")?
+            .filter(|token| !token.trim().is_empty())
+        else {
+            return Ok(());
+        };
+        let target = CredentialCrypto::new(
+            self.portable_key_path.clone(),
+            Some(password.to_owned().into()),
+        );
+        let token = self
+            .credential_crypto()?
+            .rewrap_master_key_token_for(&token, &target)?;
+        snapshot.entities.insert(
+            "master_key_token".to_string(),
+            serde_json::to_string(&Some(token))?,
+        );
+        Ok(())
     }
     /// Independent .nya backup for V4 confirmation. Unlike the ordinary legacy
     /// reader, this does not migrate icons or credentials while taking it.
@@ -245,6 +273,7 @@ impl ConnectionStore {
             env!("CARGO_PKG_VERSION"),
             Some(sessions),
         )?;
+        self.wrap_vault_key_for_backup(&mut snapshot, master_password)?;
         snapshot.recalculate_hash()?;
         let encoded = encode_encrypted_raw_portable_snapshot(&snapshot, master_password)?;
         write_portable_snapshot_file(self.db_path().to_path_buf(), output_path, &encoded)
@@ -328,6 +357,7 @@ impl ConnectionStore {
             "portable-import-safety-backup",
             env!("CARGO_PKG_VERSION"),
         )?;
+        self.wrap_vault_key_for_backup(&mut current, master_password)?;
         current.recalculate_hash()?;
         let safety_bytes = encode_encrypted_raw_portable_snapshot(&current, master_password)?;
         let config_dir = self.db_path().parent().ok_or_else(|| {
