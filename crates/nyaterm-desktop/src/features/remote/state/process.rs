@@ -15,6 +15,7 @@ pub(in crate::features) enum ProcessApplyOutcome {
 pub(super) struct ProcessPaneState {
     job: RemoteJobState<ProcessJobResult>,
     items: Arc<[RemoteProcess]>,
+    search_keys: Arc<[String]>,
     /// Bumped by every mutation that changes what `process_presentation` returns.
     revision: u64,
     data_generation: u64,
@@ -170,7 +171,13 @@ impl ProcessPaneState {
         if self.menu_pid.is_some_and(|pid| !contains_pid(pid)) {
             self.menu_pid = None;
         }
+        let search_keys: Arc<[String]> = processes
+            .iter()
+            .map(process_search_key)
+            .collect::<Vec<_>>()
+            .into();
         self.items = processes.into();
+        self.search_keys = search_keys;
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.snapshot_loaded = true;
@@ -179,6 +186,7 @@ impl ProcessPaneState {
 
     fn clear_data(&mut self) {
         self.items = Arc::from([]);
+        self.search_keys = Arc::from([]);
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.snapshot_loaded = false;
@@ -249,7 +257,9 @@ impl ProcessPaneState {
         let mut items = self
             .items
             .iter()
-            .filter(|process| process_matches(process, &key.normalized_query))
+            .zip(self.search_keys.iter())
+            .filter(|(_, search_key)| search_key.contains(&key.normalized_query))
+            .map(|(process, _)| process)
             .cloned()
             .collect::<Vec<_>>();
         sort_processes(&mut items, key.sort_key, key.sort_direction);
@@ -268,10 +278,7 @@ impl ProcessPaneState {
     }
 }
 
-fn process_matches(process: &RemoteProcess, normalized_query: &str) -> bool {
-    if normalized_query.is_empty() {
-        return true;
-    }
+fn process_search_key(process: &RemoteProcess) -> String {
     format!(
         "{} {} {} {} {} {}",
         process.pid,
@@ -282,7 +289,6 @@ fn process_matches(process: &RemoteProcess, normalized_query: &str) -> bool {
         process.command_line
     )
     .to_ascii_lowercase()
-    .contains(normalized_query)
 }
 
 fn sort_processes(
@@ -334,6 +340,7 @@ impl ProcessPaneState {
         Self {
             job: RemoteJobState::new(),
             items: Arc::from([]),
+            search_keys: Arc::from([]),
             revision: 0,
             data_generation: 0,
             derived: None,
