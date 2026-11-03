@@ -1225,6 +1225,197 @@ fn category_switches_disable_structured_children_and_light_colors_remain_distinc
     }
 }
 
+/// 行角色高亮的开销基准：回答「开/关 Line Role Highlighting 差多少」。
+///
+/// 手动跑（必须 release，debug 数据没意义）：
+/// ```text
+/// cargo test --release -p nyaterm-terminal-gpui --lib line_role_cost -- --ignored --nocapture
+/// ```
+///
+/// 方法：每组跑 `ROUNDS` 次取**中位数**并给出区间。单次采样在这个量级会被噪声
+/// 淹没 —— 实测同一配置反复跑，倍数会在 0.89x~1.29x 之间跳。
+#[test]
+#[ignore = "manual benchmark: line-role highlighting cost"]
+fn line_role_cost_benchmark() {
+    const ROUNDS: usize = 15;
+    let rules = get_builtin_keyword_rules(true);
+    let palette = nyaterm_ui::theme_palette("github-dark");
+
+    fn median(mut v: Vec<u128>) -> (u128, u128, u128) {
+        v.sort_unstable();
+        (v[v.len() / 2], v[0], *v.last().unwrap())
+    }
+
+    println!("\n== detect() 单行开销（{ROUNDS} 轮取中位）==");
+    for (name, line) in [
+        (
+            "不命中（24 分支全走完）",
+            "some ordinary output line that matches nothing at all",
+        ),
+        (
+            "命中 ps aux",
+            "root 1234 0.0 0.1 123456 7890 ? Ss 10:00 0:00 /usr/sbin/sshd -D",
+        ),
+        (
+            "命中 ls -l",
+            "drwxr-xr-x 18 root root 4096 Oct 7 21:37 some-directory",
+        ),
+    ] {
+        let mut samples = Vec::new();
+        for _ in 0..ROUNDS {
+            let started = std::time::Instant::now();
+            let mut acc = 0usize;
+            for _ in 0..1000 {
+                acc += crate::semantic_roles::detect(line) as usize;
+            }
+            samples.push(started.elapsed().as_nanos() as u128 / 1000);
+            std::hint::black_box(acc);
+        }
+        let (m, lo, hi) = median(samples);
+        println!("  {name:<24} 中位 {m:>4} ns  [{lo} ~ {hi}]");
+    }
+
+    let mut corpus: Vec<&str> = Vec::new();
+    for _ in 0..40 {
+        corpus.extend_from_slice(&[
+            "some ordinary output line that matches nothing at all",
+            "another plain line with words and 12345 numbers in it",
+            "drwxr-xr-x 18 root root 4096 Oct 7 21:37 some-directory",
+            "root 1234 0.0 0.1 123456 7890 ? Ss 10:00 0:00 /usr/sbin/sshd -D",
+        ]);
+    }
+    let mut samples = Vec::new();
+    for _ in 0..ROUNDS {
+        let started = std::time::Instant::now();
+        let mut acc = 0usize;
+        for line in &corpus {
+            acc += crate::semantic_roles::detect(line) as usize;
+        }
+        samples.push(started.elapsed().as_nanos() as u128 / corpus.len() as u128);
+        std::hint::black_box(acc);
+    }
+    let (m, lo, hi) = median(samples);
+    println!("  混合语料 160 行          中位 {m:>4} ns  [{lo} ~ {hi}]");
+
+    println!("\n== 整屏预计算（120 列，{ROUNDS} 轮取中位）==");
+    for (rows, label) in [(200usize, "200 行"), (2000, "2000 行")] {
+        for (case, fixture) in [
+            ("plain", "ordinary output with calm filler"),
+            (
+                "dense",
+                "drwxr-xr-x 18 root root 4096 Oct 7 21:37 ERROR 2001:db8::1 128MiB",
+            ),
+        ] {
+            let mut screen = TerminalScreen::new(120, rows as u16);
+            screen.advance(
+                std::iter::repeat_n(fixture, rows)
+                    .collect::<Vec<_>>()
+                    .join("\r\n")
+                    .as_bytes(),
+            );
+            let snapshot = screen.snapshot();
+            // 交替测：每轮 off 与 on 紧挨着跑，机器漂移同时影响两者，
+            // 取「每轮增量」的中位数，比分段跑稳得多。
+            let off_h = compile_terminal_keyword_highlighter(&rules, false);
+            let on_h = compile_terminal_keyword_highlighter(&rules, true);
+            for h in [&off_h, &on_h] {
+                let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
+                    &snapshot,
+                    h,
+                    palette,
+                    None,
+                    0..snapshot.row_count(),
+                );
+            }
+            let mut deltas = Vec::new();
+            let mut offs = Vec::new();
+            for _ in 0..ROUNDS {
+                let t0 = std::time::Instant::now();
+                let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
+                    &snapshot,
+                    &off_h,
+                    palette,
+                    None,
+                    0..snapshot.row_count(),
+                );
+                let off_us = t0.elapsed().as_micros();
+                let t1 = std::time::Instant::now();
+                let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
+                    &snapshot,
+                    &on_h,
+                    palette,
+                    None,
+                    0..snapshot.row_count(),
+                );
+                let on_us = t1.elapsed().as_micros();
+                offs.push(off_us);
+                deltas.push(on_us as i128 - off_us as i128);
+            }
+            let (off_m, _, _) = median(offs);
+            deltas.sort_unstable();
+            let delta_m = deltas[deltas.len() / 2];
+            let (d_lo, d_hi) = (deltas[0], *deltas.last().unwrap());
+            println!(
+                "  {label:<7} {case:<6} 基线(关) {off_m:>6}us  行角色增量 中位 {delta_m:>+6}us [{d_lo}~{d_hi}]  即 {:+.1}%",
+                delta_m as f64 * 100.0 / off_m.max(1) as f64
+            );
+        }
+    }
+
+    println!("\n== 可见行同步补算（40 行视口，{ROUNDS} 轮取中位）==");
+    for (case, fixture) in [
+        ("plain", "ordinary output with calm filler"),
+        (
+            "dense",
+            "drwxr-xr-x 18 root root 4096 Oct 7 21:37 ERROR 2001:db8::1 128MiB",
+        ),
+    ] {
+        let rows = 40usize;
+        let mut screen = TerminalScreen::new(120, rows as u16);
+        screen.advance(
+            std::iter::repeat_n(fixture, rows)
+                .collect::<Vec<_>>()
+                .join("\r\n")
+                .as_bytes(),
+        );
+        let snapshot = screen.snapshot();
+        let off_h = compile_terminal_keyword_highlighter(&rules, false);
+        let on_h = compile_terminal_keyword_highlighter(&rules, true);
+        let mut deltas = Vec::new();
+        let mut offs = Vec::new();
+        for _ in 0..ROUNDS {
+            let t0 = std::time::Instant::now();
+            let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
+                &snapshot,
+                &off_h,
+                palette,
+                None,
+                0..snapshot.row_count(),
+            );
+            let off_us = t0.elapsed().as_micros();
+            let t1 = std::time::Instant::now();
+            let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
+                &snapshot,
+                &on_h,
+                palette,
+                None,
+                0..snapshot.row_count(),
+            );
+            let on_us = t1.elapsed().as_micros();
+            offs.push(off_us);
+            deltas.push(on_us as i128 - off_us as i128);
+        }
+        let (off_m, _, _) = median(offs);
+        deltas.sort_unstable();
+        let delta_m = deltas[deltas.len() / 2];
+        let (d_lo, d_hi) = (deltas[0], *deltas.last().unwrap());
+        println!(
+            "  {case:<6} 基线(关) {off_m:>4}us  行角色增量 中位 {delta_m:>+5}us [{d_lo}~{d_hi}]  即 {:+.1}%",
+            delta_m as f64 * 100.0 / off_m.max(1) as f64
+        );
+    }
+}
+
 #[test]
 #[ignore = "manual fixture-only background precompute benchmark"]
 fn semantic_precompute_benchmark() {
