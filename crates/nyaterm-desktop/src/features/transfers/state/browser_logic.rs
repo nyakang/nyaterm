@@ -229,3 +229,47 @@ pub(in crate::features) fn record_browser_history(
     *history_index = 0;
     true
 }
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use nyaterm_transport::SftpFileType;
+
+    fn entry(name: &str, file_type: SftpFileType, target_is_directory: bool) -> SftpFileEntry {
+        SftpFileEntry {
+            name: name.to_string(),
+            path: name.to_string(),
+            file_type,
+            size: None,
+            permissions: None,
+            owner: String::new(),
+            group: String::new(),
+            modified_at: None,
+            raw_path_token: None,
+            symlink_target_is_directory: target_is_directory,
+        }
+    }
+
+    #[test]
+    fn browser_sort_must_be_transitive() {
+        let a = entry("z", SftpFileType::Symlink, true);
+        let b = entry("m", SftpFileType::Symlink, false);
+        let c = entry("a", SftpFileType::File, false);
+
+        let before = |left: &SftpFileEntry, right: &SftpFileEntry| {
+            compare_transfer_browser_entries(
+                left,
+                right,
+                TransferBrowserSortColumn::Name,
+                TransferBrowserSortDirection::Ascending,
+            )
+            .is_lt()
+        };
+
+        // A strict ordering cannot contain a cycle.
+        assert!(
+            !(before(&b, &a) && before(&a, &c) && before(&c, &b)),
+            "browser sorting comparator is not transitive"
+        );
+    }
+}

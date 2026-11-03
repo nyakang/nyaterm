@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::{
     Action, AnyElement, App, AppContext as _, Context, DefiniteLength, Entity, FocusHandle,
     Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce,
-    SharedString, Window, div, prelude::FluentBuilder as _,
+    SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px, rgb, rgba,
 };
 use gpui_base::actions::Cancel;
 use gpui_kit::component::{
@@ -30,6 +30,56 @@ impl From<NyaCommandIndex> for IndexPath {
     fn from(index: NyaCommandIndex) -> Self {
         IndexPath::new(index.row).section(index.section)
     }
+}
+
+/// Row that should show the command palette's current choice.
+///
+/// Enter confirms the highlighted item, and a palette with no highlight yet
+/// confirms the first row. An empty list has nothing to mark.
+pub fn command_row_highlight_index(
+    selected: Option<NyaCommandIndex>,
+    row_count: usize,
+) -> Option<usize> {
+    if row_count == 0 {
+        return None;
+    }
+    Some(match selected {
+        Some(index) if index.section == 0 && index.row < row_count => index.row,
+        _ => 0,
+    })
+}
+
+/// Primary wash covering one command row, including the padding around a custom
+/// child.
+///
+/// The command item paints its highlight with the theme accent. NyaTerm maps
+/// that token to the hover surface, which sits only a few steps from the
+/// popover, so the current row is hard to see. A custom child is laid out
+/// inside the item's `px_2` / `py_1p5` padding (half a rem, and 0.375 rem),
+/// and this layer reaches back out by that same inset. Those two lengths are
+/// the command item's own padding; they have to stay in step with it.
+pub fn command_row_selection_wash(primary: u32, window: &Window) -> gpui::Div {
+    let rem = window.rem_size();
+    // `px_2` is 0.5rem and `py_1p5` is 0.375rem on the command item row.
+    let pad_x = rem * 0.5;
+    let pad_y = rem * 0.375;
+    div()
+        .absolute()
+        .top(-pad_y)
+        .bottom(-pad_y)
+        .left(-pad_x)
+        .right(-pad_x)
+        .rounded(px(4.))
+        .bg(rgba((primary << 8) | 0x40))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(3.))
+                .bg(rgb(primary)),
+        )
 }
 
 pub struct NyaCommandState {
@@ -323,11 +373,14 @@ mod tests {
 
     use gpui::{
         AppContext as _, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-        TestAppContext,
+        Styled as _, TestAppContext, div, prelude::FluentBuilder as _, px, rgb, rgba,
     };
     use gpui_base::actions::Cancel;
 
-    use super::{NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState};
+    use super::{
+        NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState, command_row_highlight_index,
+        command_row_selection_wash,
+    };
 
     struct CommandFixture {
         state: gpui::Entity<NyaCommandState>,
@@ -463,5 +516,137 @@ mod tests {
             &[NyaCommandIndex { section: 0, row: 1 }]
         );
         assert_eq!(raw_keydown_count.get(), 0);
+    }
+
+    #[test]
+    fn command_row_highlight_follows_the_confirmed_row() {
+        assert_eq!(command_row_highlight_index(None, 0), None);
+        assert_eq!(command_row_highlight_index(None, 3), Some(0));
+        assert_eq!(
+            command_row_highlight_index(Some(NyaCommandIndex { section: 0, row: 2 }), 3),
+            Some(2)
+        );
+        assert_eq!(
+            command_row_highlight_index(Some(NyaCommandIndex { section: 0, row: 4 }), 3),
+            Some(0)
+        );
+        assert_eq!(
+            command_row_highlight_index(Some(NyaCommandIndex { section: 1, row: 0 }), 3),
+            Some(0)
+        );
+    }
+
+    struct SelectionWashFixture {
+        state: gpui::Entity<NyaCommandState>,
+        highlight: usize,
+    }
+
+    impl Render for SelectionWashFixture {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let highlight = self.highlight;
+            let owner = cx.entity().downgrade();
+            let row = |index: usize, marker: u32| {
+                NyaCommandItem::new()
+                    .label(if index == 0 {
+                        "First host"
+                    } else {
+                        "Second host"
+                    })
+                    .child(move |window, _| {
+                        div()
+                            .relative()
+                            .h(px(36.))
+                            .w_full()
+                            .when(index == highlight, |this| {
+                                this.child(command_row_selection_wash(0x3b82f6, window))
+                            })
+                            .child(div().size_full().bg(rgb(marker)))
+                    })
+            };
+            div().w(px(360.)).child(
+                NyaCommand::new(&self.state)
+                    .bordered(false)
+                    .items([row(0, 0xff2255), row(1, 0x22cc88)])
+                    .on_select(move |index, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.highlight = index.row;
+                            cx.notify();
+                        });
+                    }),
+            )
+        }
+    }
+
+    fn wash_and_marker(
+        cx: &mut gpui::VisualTestContext,
+        marker: u32,
+    ) -> (gpui::Bounds<gpui::Pixels>, gpui::Bounds<gpui::Pixels>) {
+        let wash = rgba(0x3b82f640);
+        cx.update(|window, _| {
+            let scale = window.scale_factor();
+            let bounds = |color: gpui::Background| {
+                window
+                    .painted_quads()
+                    .into_iter()
+                    .find(|quad| quad.background == color)
+                    .unwrap_or_else(|| panic!("missing quad {color:?}"))
+                    .bounds
+                    .map(|value| px(value.0 / scale))
+            };
+            (bounds(wash.into()), bounds(gpui::rgb(marker).into()))
+        })
+    }
+
+    #[gpui::test]
+    fn selection_wash_covers_the_command_row_and_follows_the_keyboard(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|window, cx| SelectionWashFixture {
+            state: cx.new(|cx| NyaCommandState::new(window, cx)),
+            highlight: 0,
+        });
+        let state = fixture.read_with(cx, |fixture, _| fixture.state.clone());
+
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            state.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.update(|window, cx| _ = window.draw(cx));
+
+        let (wash, first) = wash_and_marker(cx, 0xff2255);
+        let (_, second) = wash_and_marker(cx, 0x22cc88);
+        assert!(
+            wash.size.width > first.size.width + px(4.),
+            "wash {wash:?} should cover the command row padding around {first:?}"
+        );
+        assert!(
+            wash.size.height > first.size.height + px(4.),
+            "wash {wash:?} should cover the command row padding around {first:?}"
+        );
+        assert!(wash.origin.y <= first.origin.y);
+        assert!(second.origin.y > first.origin.y + first.size.height);
+
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        cx.update(|window, cx| _ = window.draw(cx));
+
+        let (wash, second) = wash_and_marker(cx, 0x22cc88);
+        let (_, first) = wash_and_marker(cx, 0xff2255);
+        assert!(
+            wash.origin.y <= second.origin.y
+                && wash.origin.y + wash.size.height >= second.origin.y + second.size.height,
+            "after Down the wash {wash:?} should cover the second row {second:?}"
+        );
+        assert!(
+            wash.origin.y > first.origin.y + first.size.height,
+            "after Down the wash {wash:?} should leave the first row {first:?}"
+        );
+        assert_eq!(
+            state.read_with(cx, |state, cx| state.selected_index(cx)),
+            Some(NyaCommandIndex { section: 0, row: 1 })
+        );
     }
 }
