@@ -1,14 +1,11 @@
 use rust_i18n::t;
 
-use std::collections::HashMap;
-
 use gpui::{AppContext as _, Context, Focusable as _, Window};
-use nyaterm_core::fuzzy_search_items;
 use nyaterm_ui::NyaCommandState;
 
 use crate::entities::{OverlayStore, QuickSwitchState};
 use crate::features::{NyaTermApp, formatting::session_kind_label, formatting::short_id};
-use crate::models::QuickSwitchItem;
+use crate::models::{QuickSwitchItem, SessionLaunchConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorkspaceSurfaceFocusTarget {
@@ -150,6 +147,16 @@ impl NyaTermApp {
                 title,
                 subtitle,
                 active,
+                endpoint: self.session.metadata(&session.id).and_then(|metadata| {
+                    match &metadata.launch_config {
+                        SessionLaunchConfig::Ssh(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Telnet(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Rdp(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Vnc(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Local(_) | SessionLaunchConfig::Serial(_) => None,
+                    }
+                    .map(|(host, port)| (host.clone(), port))
+                }),
             });
         }
 
@@ -162,6 +169,7 @@ impl NyaTermApp {
                             id: key,
                             title: document.name,
                             subtitle: document.remote_path,
+                            endpoint: None,
                         });
                     }
                 }
@@ -171,6 +179,7 @@ impl NyaTermApp {
                         id: key,
                         title: t!("fileManager.tabTitle").to_string(),
                         subtitle: id,
+                        endpoint: None,
                     });
                 }
                 crate::models::WorkspaceTabId::Settings => {
@@ -179,6 +188,7 @@ impl NyaTermApp {
                         id: key,
                         title: t!("settings.title").to_string(),
                         subtitle: t!("settings.title").to_string(),
+                        endpoint: None,
                     });
                 }
                 crate::models::WorkspaceTabId::Session(_) => {}
@@ -340,95 +350,9 @@ impl NyaTermApp {
     }
 }
 
-const QUICK_SWITCH_RESULT_LIMIT: usize = 50;
-
-fn filter_quick_switch_items(items: Vec<QuickSwitchItem>, query: &str) -> Vec<QuickSwitchItem> {
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return items.into_iter().take(QUICK_SWITCH_RESULT_LIMIT).collect();
-    }
-
-    let candidates = items
-        .iter()
-        .map(|item| (item.search_text(), item.id()))
-        .collect::<Vec<_>>();
-    let candidate_refs = candidates
-        .iter()
-        .map(|(display, id)| (display.as_str(), id.as_str()))
-        .collect::<Vec<_>>();
-
-    // A query made of digits and address separators (an IP/port fragment typed
-    // without the dots, e.g. `2128` for `10.26.21.28`) must match the candidate
-    // digits as a contiguous run. The generic fuzzy matcher only requires a
-    // subsequence, which wrongly also matches `10.26.113.28` because its digits
-    // `2,1,2,8` appear in order. Require the normalized digits to contain the
-    // query digits as a substring so the result matches user intent.
-    if let Some(ids) = numeric_quick_switch_ids(&candidates, &query) {
-        if !ids.is_empty() {
-            let mut items_by_id = items
-                .into_iter()
-                .map(|item| (item.id(), item))
-                .collect::<HashMap<_, _>>();
-            return ids
-                .into_iter()
-                .filter_map(|id| items_by_id.remove(&id))
-                .collect();
-        }
-    }
-
-    let matches = fuzzy_search_items(
-        &candidate_refs,
-        &query,
-        "sessionQuickSwitcher",
-        QUICK_SWITCH_RESULT_LIMIT,
-        None,
-        None,
-    );
-    let mut items_by_id = items
-        .into_iter()
-        .map(|item| (item.id(), item))
-        .collect::<HashMap<_, _>>();
-    matches
-        .into_iter()
-        .filter_map(|matched| items_by_id.remove(&matched.command))
-        .collect()
-}
-
-/// Returns `Some(matched ids)` when `query` is a numeric address fragment, or
-/// `None` when ordinary fuzzy matching should be used. The returned list is
-/// empty when no candidate matches the contiguous-digit rule, in which case the
-/// caller falls back to fuzzy search so loose numeric queries (e.g. a port)
-/// still find sessions.
-fn numeric_quick_switch_ids(candidates: &[(String, String)], query: &str) -> Option<Vec<String>> {
-    if !is_numeric_query(query) {
-        return None;
-    }
-    let query_digits: String = query.chars().filter(|ch| ch.is_ascii_digit()).collect();
-    if query_digits.is_empty() {
-        return None;
-    }
-    let ids = candidates
-        .iter()
-        .filter(|(display, _)| {
-            let candidate_digits: String = display
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|ch| ch.is_ascii_digit())
-                .collect();
-            candidate_digits.contains(&query_digits)
-        })
-        .map(|(_, id)| id.clone())
-        .take(QUICK_SWITCH_RESULT_LIMIT)
-        .collect();
-    Some(ids)
-}
-
-fn is_numeric_query(query: &str) -> bool {
-    !query.is_empty()
-        && query
-            .chars()
-            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | ':' | '/' | '-'))
-}
+#[path = "quick_switch_search.rs"]
+mod quick_switch_search;
+use quick_switch_search::filter_quick_switch_items;
 
 fn quick_switch_transient_insert_index(
     session_count: usize,
@@ -454,11 +378,17 @@ mod tests {
         title: impl Into<String>,
         subtitle: impl Into<String>,
     ) -> QuickSwitchItem {
+        let subtitle = subtitle.into();
+        let endpoint = subtitle
+            .parse::<std::net::Ipv4Addr>()
+            .ok()
+            .map(|_| (subtitle.clone(), 22));
         QuickSwitchItem::Session {
             id: format!("session-{index}"),
             title: title.into(),
-            subtitle: subtitle.into(),
+            subtitle,
             active: false,
+            endpoint,
         }
     }
 
