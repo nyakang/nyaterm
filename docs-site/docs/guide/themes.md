@@ -13,6 +13,8 @@ NyaTerm 支持对工作区外观做细粒度调整，包括 UI 主题、终端�
 
 内置的 **WindTerm Dark**（`windterm-dark`）和 **WindTerm Light**（`windterm-light`）分别基于 [WindTerm](https://github.com/kingToolbox/WindTerm) 的 `dige-black` 与 `dige-white` 配色，保留其 ANSI 16 色，并适配 NyaTerm 的界面状态色。两者都可独立用于界面或终端，也支持终端跟随界面。若要查看原始终端配色，请关闭下方的最小对比度增强；浅色主题的部分 ANSI 颜色在白底上对比度较低。
 
+内置的 **Dracula**（`dracula`）和 **Dracula Light**（`dracula-light`）基于 [Dracula 官方规范](https://draculatheme.com/spec)：深色版使用 Dracula Classic 的配色，浅色版使用 Alucard Classic（奶油白底）。官方规范也定义了 Alucard Classic 的 ANSI 16 色；但考虑到官方 ANSI 黑色（`#fffbeb`）在浅色终端背景上几乎不可见，NyaTerm 有意将浅色版的 ANSI 黑色调整为 `#1f1f1f`、ANSI 白色调整为 `#6c664b`。因此浅色版的这两项 ANSI 颜色与官方映射不同。深色版的亮黑（`#6272a4`）较暗，需要更高可读性时可以使用最小对比度增强。
+
 主题列表里有两个高对比度主题，用于无障碍辅助、明亮环境或投屏场景：
 
 - **Nya HC** — 深色底的高对比度

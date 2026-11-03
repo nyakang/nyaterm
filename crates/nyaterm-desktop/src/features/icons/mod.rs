@@ -174,6 +174,7 @@ mod tests {
             "rose-pine-dawn",
             "nord-light",
             "one-light",
+            "dracula-light",
         ] {
             let palette = crate::theme::theme_palette(theme);
             for def in [
