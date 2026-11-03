@@ -1709,6 +1709,45 @@ fn encoding_failures_write_nothing_and_mouse_and_protocol_bytes_bypass_charset()
 }
 
 #[test]
+fn pasted_line_breaks_are_cr_outside_bracketed_paste_and_untouched_inside_it() {
+    let root = TestConfigDir::new("nyaterm-paste-line-breaks");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "bracketed");
+    cx.update_entity(&app, |app, _| {
+        let metadata = app
+            .session
+            .metadata_entries()
+            .find(|(id, _)| *id == "bracketed")
+            .unwrap()
+            .1
+            .clone();
+        app.session.register_session_metadata("plain", metadata);
+        app.terminal
+            .seed_session_view("plain".into(), String::new(), "UTF-8");
+        app.terminal
+            .view
+            .views
+            .get_mut("bracketed")
+            .unwrap()
+            .protocol_state
+            .bracketed_paste = true;
+        // A program without bracketed paste (nano 3.x) must receive Enter, not Ctrl+J.
+        assert_eq!(
+            app.wrap_terminal_paste_bytes_for_session("plain", "one\ntwo\n三")
+                .unwrap(),
+            "one\rtwo\r三".as_bytes()
+        );
+        // Inside bracketed paste the text is delivered verbatim.
+        assert_eq!(
+            app.wrap_terminal_paste_bytes_for_session("bracketed", "one\ntwo")
+                .unwrap(),
+            b"\x1b[200~one\ntwo\x1b[201~"
+        );
+    });
+}
+
+#[test]
 fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
     use crate::models::SessionLaunchConfig;
     use nyaterm_transport::TelnetSessionConfig;
