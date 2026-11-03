@@ -1182,6 +1182,73 @@ fn logical_line_numbers_keep_local_clear_origin_when_wrapped_history_is_pruned()
 }
 
 #[test]
+fn line_numbers_keep_increasing_after_scrollback_reaches_its_limit() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_scrollback_limit(8);
+    for _ in 0..40 {
+        screen.advance(b"line\r\n");
+    }
+    let numbers = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .collect::<Vec<_>>();
+    // The visible rows are the newest lines of the session, so their numbers
+    // must keep growing past the retained scrollback size instead of being
+    // rebased and frozen at `scrollback_limit + screen rows`.
+    let max = numbers.iter().copied().max().unwrap_or(0);
+    assert!(
+        max > 8 + 4,
+        "line numbers stopped growing at the scrollback limit: {numbers:?}"
+    );
+}
+
+#[test]
+fn line_numbers_survive_width_reflow_from_gutter_growth() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_scrollback_limit(8);
+    for _ in 0..40 {
+        screen.advance(b"line\r\n");
+    }
+    let before = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    // The gutter grows a digit when the count crosses a power of ten, which
+    // steals one column from the grid. That width reflow must not rebase the
+    // numbering to the retained window.
+    screen.resize(19, 4);
+    let after = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        after, before,
+        "width reflow rebased the line numbers (before={before}, after={after})"
+    );
+    screen.advance(b"next\r\n");
+    let continued = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        continued,
+        before + 1,
+        "line numbers did not continue after the reflow (before={before}, continued={continued})"
+    );
+}
+
+#[test]
 fn logical_line_numbers_rebuild_primary_history_after_resizing_an_alternate_screen() {
     let mut screen = TerminalScreen::new(4, 3);
     screen.advance(b"abcdefghijkl\r\nnext\r\nlast");

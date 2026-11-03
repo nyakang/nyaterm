@@ -94,14 +94,13 @@ pub(crate) fn capture(term: &Term<NyaTermEventProxy>, state: &ScreenLineState) -
                             .clear_line_origin
                             .and_then(|origin| usize::try_from(logical - origin).ok())
                             .map(|line| line.saturating_add(1)),
-                        logical_line_number: state
-                            .clear_line_origin
-                            .filter(|_| !metadata.is_some_and(|metadata| metadata.cleared))
-                            .and_then(|_| {
+                        logical_line_number: (!metadata.is_some_and(|metadata| metadata.cleared))
+                            .then(|| {
                                 state
                                     .line_numbers
                                     .number(logical, state.logical_line(term.topmost_line()))
-                            }),
+                            })
+                            .flatten(),
                     },
                 }
             })

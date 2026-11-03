@@ -394,6 +394,21 @@ impl TerminalSnapshot {
     pub fn line(&self, row: usize) -> Option<&str> {
         self.row(row).map(|row| row.text.as_str())
     }
+
+    /// Largest `display_line_number` retained by this snapshot, if any row
+    /// carries one.
+    ///
+    /// Line numbers are preserved across reflow, local clears, and scrollback
+    /// pruning via [`LineNumbers::retain_from`]. Their origin is tracked in
+    /// grid coordinates rather than display order, so the maximum can exceed
+    /// [`Self::total_rows`]. Width decisions for the gutter must use the
+    /// actual largest number rather than a row-count-derived estimate.
+    pub fn max_display_line_number(&self) -> Option<usize> {
+        self.row_data
+            .iter()
+            .filter_map(|row| row.display_line_number)
+            .max()
+    }
 }
 
 /// Formats a host clipboard value into an OSC 52 protocol response.
@@ -975,6 +990,10 @@ impl TerminalCore {
         if self.cols != old_cols {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
+            // Width reflow rewrites grid coordinates (reflow scrolling does
+            // not advance the scroll epoch), so the wrap index and numbering
+            // origin must be rebuilt from scratch. Numbering continuity is
+            // restored from the captured `logical_line_number` metadata below.
             self.primary_lines.line_numbers = Default::default();
             self.alternate_lines.line_numbers = Default::default();
             self.primary_lines.clear_line_origin = None;
@@ -2124,7 +2143,14 @@ impl TerminalCore {
         for index in self.term.topmost_line().0..=self.term.bottommost_line().0 {
             self.index_line_wrap(Line(index));
         }
-        self.active_line_state_mut().line_numbers.initialized = true;
+        let topmost = self
+            .active_line_state()
+            .logical_line(self.term.topmost_line());
+        let state = self.active_line_state_mut();
+        // Pin the numbering origin here so scrollback pruning does not rebase
+        // the gutter to the oldest retained row once history is full.
+        state.line_numbers.ensure_origin(topmost);
+        state.line_numbers.initialized = true;
     }
 
     fn allocate_line_revision(&mut self) -> u64 {

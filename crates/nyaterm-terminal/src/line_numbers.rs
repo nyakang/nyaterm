@@ -38,6 +38,20 @@ impl LineNumbers {
         self.restore_number(line, 1);
     }
 
+    /// Anchor numbering to the oldest line the first time line numbers are
+    /// initialized.
+    ///
+    /// [`Self::number`] falls back to the current topmost line when no origin
+    /// was recorded, which rebases numbering to the top of scrollback on every
+    /// snapshot. Once history is full that retained window stops growing, so
+    /// the numbers would freeze; pinning the origin keeps them increasing for
+    /// the whole session. An origin already recorded by a local clear wins.
+    pub(crate) fn ensure_origin(&mut self, topmost: i64) {
+        if self.origin.is_none() {
+            self.origin = Some(self.coordinate(topmost));
+        }
+    }
+
     pub(crate) fn restore_number(&mut self, line: i64, number: usize) {
         self.origin = Some(self.coordinate(line) - number.saturating_sub(1) as i64);
     }
