@@ -312,6 +312,8 @@
       "terminal_show_workspace_padding": "local",
       "terminal_show_line_numbers": "local",
       "terminal_show_timestamps": "local",
+      "terminal_wrap_mode": "local",
+      "terminal_show_wrap_markers": "local",
       "terminal_show_multi_line_paste_dialog": "local",
       "terminal_paste_image_as_path": "local",
       "terminal_reconnect_restore_cwd": "local",

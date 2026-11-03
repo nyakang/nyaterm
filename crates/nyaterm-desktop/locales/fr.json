@@ -2320,6 +2320,13 @@
     "unread": "Non lu"
   },
   "settings": {
+    "terminalWrapMode": "Retour à la ligne",
+    "terminalWrapModeDesc": "Sans retour, les lignes repliées sont réunies avec défilement horizontal. Les écrans interactifs utilisent la grille standard.",
+    "terminalWrapCharacter": "Par caractère",
+    "terminalWrapNone": "Sans retour",
+    "showWrapMarkers": "Afficher les marques de retour",
+    "showWrapMarkersDesc": "Signale uniquement les retours automatiques. Masqué sans retour.",
+    "terminalWrapGridFallback": "Écran interactif : grille standard",
     "syncV3Description": "L’aperçu Cloud Sync V3 prend en charge le dossier local, WebDAV et S3. Connexions, groupes, commandes, notes et thèmes sont fusionnés par champ. Apparence, raccourcis et configuration IA sont facultatifs. La synchronisation des données sensibles est désactivée par défaut.",
     "syncV3Trust": "Identités des hôtes SSH / VNC",
     "syncV3TrustDesc": "Désactivé par défaut. Chaque modification ou suppression reçue nécessite une confirmation distincte sur cet appareil avant de modifier la confiance.",

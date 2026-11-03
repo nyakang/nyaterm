@@ -580,12 +580,25 @@ impl NyaTermApp {
             return None;
         }
         if let Some(session_id) = session_id.filter(|id| !id.is_empty()) {
+            let logical_offset = self
+                .terminal_scrollbar_logical_index(Some(session_id))
+                .and_then(|index| {
+                    let view = self.terminal.view.views.get(session_id)?;
+                    Some(index.offset_for_logical_scroll(
+                        view.scroll_offset,
+                        view.viewport_rows_for_ui(),
+                        delta_lines,
+                    ))
+                });
             if let Some(view) = self.terminal.view.views.get_mut(session_id) {
                 let max = view.scrollback_len_for_ui();
-                let next = if delta_lines > 0 {
+                let next = if let Some(offset) = logical_offset {
+                    offset
+                } else if delta_lines > 0 {
                     view.scroll_offset.saturating_add(delta_lines as usize)
                 } else {
-                    view.scroll_offset.saturating_sub((-delta_lines) as usize)
+                    view.scroll_offset
+                        .saturating_sub(delta_lines.unsigned_abs() as usize)
                 };
                 view.scroll_offset = next.min(max);
                 if view.scroll_offset == 0 {
@@ -1215,7 +1228,9 @@ impl NyaTermApp {
         else {
             return;
         };
-        let max = self.terminal_scroll_max_for_session(drag.session_id.as_deref());
+        let max = self
+            .terminal_scrollbar_range_for_session(drag.session_id.as_deref())
+            .0;
         let metrics =
             self.terminal_scrollbar_metrics_for_session(drag.session_id.as_deref(), bounds);
         let offset = terminal_scroll_offset_from_pointer(
@@ -1225,6 +1240,7 @@ impl NyaTermApp {
             drag.grab_offset_y,
             max,
         );
+        let offset = self.terminal_grid_offset_for_scrollbar(drag.session_id.as_deref(), offset);
         let repaint_session_id = self
             .set_terminal_scroll_offset_for_session_state_only(drag.session_id.as_deref(), offset);
         if repaint_session_id.is_some() {
@@ -1391,14 +1407,61 @@ impl NyaTermApp {
         )
     }
 
+    fn terminal_scrollbar_logical_index(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<&nyaterm_terminal::logical_lines::TerminalLogicalLineIndex> {
+        if self.settings.summary().terminal_wrap_mode
+            != nyaterm_core::models::settings::TerminalWrapMode::None
+        {
+            return None;
+        }
+        self.terminal
+            .view
+            .views
+            .get(session_id?)?
+            .frame_snapshot
+            .as_ref()?
+            .logical_lines
+            .as_deref()
+    }
+
+    pub(in crate::features) fn terminal_scrollbar_range_for_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> (usize, usize) {
+        let offset = self.terminal_scroll_offset_for_session(session_id);
+        if let Some(index) = self.terminal_scrollbar_logical_index(session_id) {
+            let (offset, max) =
+                index.scroll_metrics(offset, self.terminal_viewport_rows_for_session(session_id));
+            (max, offset)
+        } else {
+            (self.terminal_scroll_max_for_session(session_id), offset)
+        }
+    }
+
+    pub(in crate::features) fn terminal_grid_offset_for_scrollbar(
+        &self,
+        session_id: Option<&str>,
+        offset: usize,
+    ) -> usize {
+        self.terminal_scrollbar_logical_index(session_id)
+            .map_or(offset, |index| {
+                index.physical_offset_for_logical_offset(
+                    offset,
+                    self.terminal_viewport_rows_for_session(session_id),
+                )
+            })
+    }
+
     pub(in crate::features) fn terminal_scrollbar_metrics_for_session(
         &self,
         session_id: Option<&str>,
         bounds: gpui::Bounds<gpui::Pixels>,
     ) -> crate::features::terminal::terminal_surface::TerminalScrollbarMetrics {
         let viewport_rows = self.terminal_viewport_rows_for_session(session_id);
-        let scrollback_rows = self.terminal_scroll_max_for_session(session_id);
-        let scroll_offset = self.terminal_scroll_offset_for_session(session_id);
+        let (scrollback_rows, scroll_offset) =
+            self.terminal_scrollbar_range_for_session(session_id);
         terminal_scrollbar_metrics(TerminalScrollbarInput {
             viewport_rows,
             scrollback_rows,
@@ -1474,7 +1537,8 @@ impl NyaTermApp {
     ) -> TerminalResizeGeometry {
         let (cell_w, cell_h) = self.terminal_cell_size();
         let insets = self.terminal_content_insets_for_bounds(session_id, bounds);
-        let gutter = self.terminal_gutter_width_px_for_session(session_id);
+        let gutter = self.terminal_gutter_width_px_for_session(session_id)
+            + self.terminal_wrap_marker_width_px();
         terminal_resize_geometry_for_size_with_insets_and_scale(
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),

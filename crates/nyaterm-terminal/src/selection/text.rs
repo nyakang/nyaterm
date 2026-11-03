@@ -43,7 +43,14 @@ impl TerminalScreen {
                 .cols_for_absolute_line(index)
                 .ok_or(SelectionTextError::OutOfBounds)?;
             let slice = selected_row_text(&cells, left, right);
-            let slice = slice.trim_end();
+            let wraps_to_next = self.term.grid()[line][Column(cols - 1)]
+                .flags
+                .contains(Flags::WRAPLINE);
+            let slice = if wraps_to_next && right >= cols {
+                slice.as_str()
+            } else {
+                slice.trim_end()
+            };
             let wrapped = line > topmost
                 && self.term.grid()[Line(line.0 - 1)][Column(cols - 1)]
                     .flags

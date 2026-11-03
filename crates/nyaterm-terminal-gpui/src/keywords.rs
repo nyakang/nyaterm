@@ -69,8 +69,10 @@ pub struct TerminalKeywordHighlightSnapshot {
     wrapped_flags: Vec<bool>,
     row_reuse_keys: Vec<Option<TerminalKeywordRowReuseKey>>,
     known_rows: Vec<bool>,
+    known_prefix: Vec<usize>,
     rows: Vec<Option<Arc<Vec<TerminalKeywordRange>>>>,
     source_rows: Vec<Option<Arc<TerminalSnapshotRow>>>,
+    source_buffer: Arc<[Arc<TerminalSnapshotRow>]>,
     rows_by_reuse_key: HashMap<TerminalKeywordRowReuseKey, Option<Arc<Vec<TerminalKeywordRange>>>>,
 }
 
@@ -232,6 +234,13 @@ impl TerminalKeywordHighlightSnapshot {
         }
         let start = rows.start.min(snapshot.row_count());
         let end = rows.end.min(snapshot.row_count()).max(start);
+        if snapshot.logical_lines.is_some() {
+            // Logical snapshots can contain a very long source group. Reuse
+            // its immutable frame directly without rebuilding all group keys
+            // on the UI thread.
+            return Arc::ptr_eq(&self.source_buffer, &snapshot.row_data)
+                && self.known_prefix[end] - self.known_prefix[start] == end - start;
+        }
         let reuse_keys = terminal_keyword_row_reuse_keys(snapshot);
         (start..end).all(|row| {
             self.has_row_at_with_reuse_key(row, snapshot, reuse_keys.get(row).copied().flatten())
@@ -255,6 +264,11 @@ impl TerminalKeywordHighlightSnapshot {
         reuse_key: Option<TerminalKeywordRowReuseKey>,
     ) -> Option<TerminalKeywordHighlightLookup<'_>> {
         snapshot.row(row)?;
+        let reuse_key = if snapshot.logical_lines.is_some() {
+            self.frame_row_reuse_key(row, snapshot).or(reuse_key)
+        } else {
+            reuse_key
+        };
         if self.has_row_at_with_reuse_key(row, snapshot, reuse_key) {
             return Some(TerminalKeywordHighlightLookup::Current(
                 self.rows.get(row)?.as_ref(),
@@ -264,6 +278,16 @@ impl TerminalKeywordHighlightSnapshot {
         self.rows_by_reuse_key
             .get(&reuse_key)
             .map(|ranges| TerminalKeywordHighlightLookup::Reused(ranges.as_ref()))
+    }
+
+    pub(super) fn frame_row_reuse_key(
+        &self,
+        row: usize,
+        snapshot: &TerminalSnapshot,
+    ) -> Option<TerminalKeywordRowReuseKey> {
+        Arc::ptr_eq(&self.source_buffer, &snapshot.row_data)
+            .then(|| self.row_reuse_keys.get(row).copied().flatten())
+            .flatten()
     }
 
     #[cfg(test)]
@@ -345,6 +369,21 @@ pub fn terminal_keyword_highlight_expanded_rows(
     let end = rows.end.min(snapshot.row_count()).max(start);
     if start == end {
         return start..end;
+    }
+    if let Some(index) = snapshot.logical_lines.as_ref() {
+        let source_start = snapshot
+            .total_rows
+            .saturating_sub(snapshot.display_offset)
+            .saturating_sub(snapshot.row_count());
+        return index
+            .group(source_start + start)
+            .start
+            .saturating_sub(source_start)
+            ..index
+                .group(source_start + end - 1)
+                .end
+                .saturating_sub(source_start)
+                .min(snapshot.row_count());
     }
     let first = terminal_keyword_wrapped_group_bounds(snapshot, start);
     let last = terminal_keyword_wrapped_group_bounds(snapshot, end.saturating_sub(1));
@@ -507,6 +546,11 @@ fn precompute_keyword_rows(
         .filter(|row| known_rows[*row])
         .filter_map(|row| row_reuse_keys[row].map(|key| (key, rows[row].clone())))
         .collect();
+    let mut known_prefix = Vec::with_capacity(known_rows.len() + 1);
+    known_prefix.push(0);
+    for known in &known_rows {
+        known_prefix.push(known_prefix.last().copied().unwrap_or(0) + usize::from(*known));
+    }
     let snapshot = TerminalKeywordHighlightSnapshot {
         rules_key: highlighter.rules_key,
         cols: snapshot.cols,
@@ -516,11 +560,13 @@ fn precompute_keyword_rows(
         wrapped_flags: snapshot.rows().iter().map(|row| row.wrapped).collect(),
         row_reuse_keys,
         known_rows,
+        known_prefix,
         source_rows: rows
             .iter()
             .zip(snapshot.rows())
             .map(|(ranges, row)| ranges.as_ref().map(|_| row.clone()))
             .collect(),
+        source_buffer: snapshot.row_data.clone(),
         rows,
         rows_by_reuse_key,
     };

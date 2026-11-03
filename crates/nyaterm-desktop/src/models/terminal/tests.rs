@@ -41,6 +41,29 @@ use super::{
 };
 
 #[test]
+fn frame_worker_wrap_preference_applies_to_created_seeded_and_transferred_sessions() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.seed_session("existing", "abc", "UTF-8", 100);
+    pipeline.set_logical_line_snapshots(true);
+    pipeline.ensure_session("new", "UTF-8", 100);
+    pipeline.seed_session("seeded", "def", "UTF-8", 100);
+    pipeline.submit_output("from-output", b"ghi".to_vec(), "UTF-8", 100);
+    pipeline.finish_pending_output().unwrap();
+    for id in ["existing", "new", "seeded", "from-output"] {
+        let session = pipeline.take_session_for_transfer(id).unwrap().unwrap();
+        let geometry = (session.screen.cols(), session.screen.rows());
+        assert!(session.screen.snapshot().logical_lines.is_some(), "{id}");
+        let target = TerminalFramePipeline::default();
+        target
+            .insert_sessions_from_transfer(vec![(id.into(), session)])
+            .unwrap();
+        let session = target.take_session_for_transfer(id).unwrap().unwrap();
+        assert!(session.screen.snapshot().logical_lines.is_none());
+        assert_eq!((session.screen.cols(), session.screen.rows()), geometry);
+    }
+}
+
+#[test]
 fn frame_worker_publishes_input_colors_with_each_echo_and_obeys_rule_changes() {
     let mut recording = RecordingWritePipeline::spawn(4096);
     let mut pipeline = TerminalFramePipeline::spawn(recording.writer());

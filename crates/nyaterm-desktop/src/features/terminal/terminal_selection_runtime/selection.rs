@@ -293,7 +293,10 @@ impl NyaTermApp {
             } else {
                 None
             };
-            self.terminal.selection.selection = editable.or_else(|| {
+            let logical_line = geometry.unwrapped.as_ref().and_then(|_| {
+                terminal_logical_selection_at_pointer(event.position, &geometry, None)
+            });
+            self.terminal.selection.selection = editable.or(logical_line).or_else(|| {
                 Some(TerminalSelection::from_range(
                     TerminalBufferCellPos::new(endpoint.position.line, 0),
                     TerminalBufferCellPos::new(endpoint.position.line, cols.saturating_sub(1)),
@@ -305,6 +308,21 @@ impl NyaTermApp {
                 .set_status(format!("selected line {}", cell.row + 1));
             self.notify_terminal_selection_owner_surface(cx);
             // Discrete click: status bar update is fine (not a high-frequency path).
+            cx.notify();
+            return;
+        }
+        if event.click_count == 2
+            && geometry.unwrapped.is_some()
+            && let Some(selection) = terminal_logical_selection_at_pointer(
+                event.position,
+                &geometry,
+                Some(&self.settings.summary().interaction_word_separators),
+            )
+        {
+            self.terminal.selection.selection = Some(selection);
+            self.terminal.selection.session_id = selection_session_id;
+            self.terminal.selection.dragging = false;
+            self.notify_terminal_selection_owner_surface(cx);
             cx.notify();
             return;
         }
@@ -1084,7 +1102,11 @@ fn terminal_selected_text_for_view(
             let row = snapshot.row(line - absolute_start)?;
             let (left, right) = selection.cols_for_absolute_line(line)?;
             let slice = selected_row_text(&row.cells, left, right);
-            let slice = slice.trim_end();
+            let slice = if row.wraps_to_next && right >= row.cells.len() {
+                slice.as_str()
+            } else {
+                slice.trim_end()
+            };
             // Preserve the existing empty-row endpoint copy policy.
             let empty_endpoint_at_row_start = line == end.line && end.col == 0 && slice.is_empty();
             if !first_line && !row.wrapped && !empty_endpoint_at_row_start {
@@ -1106,6 +1128,52 @@ fn terminal_selected_text_from_screen(
     screen: &TerminalScreen,
 ) -> Option<String> {
     screen.text_for_selection(selection).ok().flatten()
+}
+
+/// Select in logical columns, then retain source grid endpoints for copying.
+fn terminal_logical_selection_at_pointer(
+    position: gpui::Point<gpui::Pixels>,
+    geometry: &TerminalHitTestGeometry,
+    separators: Option<&str>,
+) -> Option<TerminalSelection> {
+    let snapshot = geometry.snapshot.as_ref();
+    let index = snapshot.logical_lines.as_ref()?;
+    let source_row = terminal_snapshot_row_for_visual_geometry(position, geometry);
+    let col = terminal_cell_for_visual_geometry(position, geometry).col;
+    let (absolute_start, _) = terminal_snapshot_absolute_range(snapshot);
+    let physical = absolute_start + source_row;
+    let logical = index.logical_row(physical);
+    let group = index.group(physical);
+    let width = index.logical_col(group.end - 1, snapshot.cols);
+    let mut left = 0;
+    let mut right = width;
+    if let Some(separators) = separators {
+        let is_word = |column| {
+            let (row, mut col) = index.source_position(logical, column);
+            let row = snapshot.row(row.checked_sub(absolute_start)?)?;
+            if row.cells.get(col)?.width == 0 && col > 0 {
+                col -= 1;
+            }
+            let ch = row.cells.get(col)?.text.chars().next()?;
+            Some(!ch.is_whitespace() && !separators.contains(ch))
+        };
+        left = index.logical_col(physical, col);
+        right = (left + 1).min(width);
+        if is_word(left) == Some(true) {
+            while left > 0 && is_word(left - 1) == Some(true) {
+                left -= 1;
+            }
+            while right < width && is_word(right) == Some(true) {
+                right += 1;
+            }
+        }
+    }
+    let (start_row, start_col) = index.source_position(logical, left);
+    let (end_row, end_col) = index.source_position(logical, right.saturating_sub(1));
+    Some(TerminalSelection::from_range(
+        TerminalBufferCellPos::new(start_row, start_col),
+        TerminalBufferCellPos::new(end_row, end_col),
+    ))
 }
 
 fn terminal_word_bounds_for_visual_geometry(
@@ -1207,6 +1275,54 @@ mod tests {
         terminal_selection_line_after_scroll, terminal_snapshot_covering_selection,
         terminal_text_cell_is_word, terminal_word_bounds_for_visual_geometry,
     };
+
+    #[test]
+    fn horizontal_hit_testing_selects_and_copies_words_across_soft_wraps() {
+        use nyaterm_terminal_gpui::unwrapped::TerminalUnwrappedLayout;
+        let mut screen = TerminalScreen::new(4, 3);
+        screen.set_logical_line_snapshots(true);
+        screen.advance(b"abcdefgh\r\nlast");
+        let snapshot = Arc::new(screen.snapshot());
+        let layout = Arc::new(TerminalUnwrappedLayout::new(&snapshot, 0, 3, 4.25).unwrap());
+        let geometry = TerminalHitTestGeometry {
+            bounds: gpui::bounds(
+                gpui::point(px(30.0), px(40.0)),
+                gpui::size(px(32.0), px(54.0)),
+            ),
+            snapshot: snapshot.clone(),
+            cell_w: 8.0,
+            cell_h: 18.0,
+            padding_left: 0.0,
+            padding_top: 0.0,
+            gutter: 0.0,
+            rows: 3,
+            cols: 4,
+            display_offset: 0,
+            viewport_anchor_row: 0,
+            snapshot_rows: snapshot.row_count(),
+            viewport_rows: 3,
+            visual_y_offset: 0.0,
+            unwrapped: Some(layout),
+        };
+        let pointer = gpui::point(px(40.0), px(49.0));
+        let cell = super::super::metrics::terminal_cell_for_visual_geometry(pointer, &geometry);
+        assert_eq!(cell.col, 1);
+        assert_eq!(
+            super::super::metrics::terminal_snapshot_row_for_visual_geometry(pointer, &geometry),
+            1
+        );
+        let word =
+            super::terminal_logical_selection_at_pointer(pointer, &geometry, Some(" ")).unwrap();
+        assert_eq!(
+            screen.text_for_selection(word).unwrap().as_deref(),
+            Some("abcdefgh")
+        );
+        let line = super::terminal_logical_selection_at_pointer(pointer, &geometry, None).unwrap();
+        assert_eq!(
+            screen.text_for_selection(line).unwrap().as_deref(),
+            Some("abcdefgh")
+        );
+    }
 
     fn click_terminal_cell(
         app: &mut NyaTermApp,
@@ -1649,6 +1765,7 @@ mod tests {
         assert!(snapshot.row_count() >= 5);
         let anchor = snapshot.row_count() - 3;
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1866,6 +1983,7 @@ mod tests {
         screen.advance(b"wrong\r\ntarget word");
         let snapshot = Arc::new(screen.viewport_snapshot(0));
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),

@@ -2313,6 +2313,13 @@
     "unread": "Unread"
   },
   "settings": {
+    "terminalWrapMode": "Line wrapping",
+    "terminalWrapModeDesc": "No wrap joins soft-wrapped rows and scrolls horizontally. Interactive screens use the standard grid.",
+    "terminalWrapCharacter": "Wrap by character",
+    "terminalWrapNone": "No wrap",
+    "showWrapMarkers": "Show wrap markers",
+    "showWrapMarkersDesc": "Mark soft wraps only. Hidden in no-wrap display.",
+    "terminalWrapGridFallback": "Interactive screen uses the standard grid",
     "syncV3Description": "Preview Cloud Sync V3 for Local Directory, WebDAV and S3. Connections, groups, commands, notes and custom themes merge by field. Appearance, keyboard shortcuts and AI configuration are optional. Sensitive data sync is off by default.",
     "syncV3Trust": "SSH / VNC host identities",
     "syncV3TrustDesc": "Off by default. Each received identity change or removal requires a separate confirmation on this device before it changes trust.",

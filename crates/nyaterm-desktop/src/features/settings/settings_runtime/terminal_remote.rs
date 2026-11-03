@@ -80,6 +80,36 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
+    pub(in crate::features) fn set_terminal_wrap_mode(
+        &mut self,
+        mode: nyaterm_core::models::settings::TerminalWrapMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_terminal_wrap_mode(mode);
+        self.save_terminal_settings(cx);
+        let session_ids = self
+            .visible_terminal_session_ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.notify_terminal_surface_only(Some(&session_id), cx);
+        }
+    }
+
+    pub(in crate::features) fn toggle_terminal_wrap_markers(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_terminal_wrap_markers();
+        self.save_terminal_settings(cx);
+        let session_ids = self
+            .visible_terminal_session_ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.notify_terminal_surface_only(Some(&session_id), cx);
+        }
+    }
+
     pub(in crate::features) fn toggle_terminal_timestamps(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_terminal_timestamps();
         self.save_terminal_settings(cx);

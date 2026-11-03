@@ -290,6 +290,10 @@ impl NyaTermApp {
                     self.set_diagnostics_retention_days(days, cx);
                 }
             }
+            "settings.terminal.wrap-mode" => self.set_terminal_wrap_mode(
+                nyaterm_core::models::settings::TerminalWrapMode::from_compat_value(value),
+                cx,
+            ),
             "settings.terminal.keep-alive-mode" => match value {
                 "strict" => self.set_terminal_keep_alive_mode("strict", cx),
                 "disabled" => self.set_terminal_keep_alive_mode("disabled", cx),

@@ -21,9 +21,11 @@ mod encoding;
 mod graphics;
 mod kitty_payload;
 mod line_numbers;
+pub mod logical_lines;
 pub mod navigation;
 pub mod recording_sanitizer;
 mod reflow_timestamps;
+mod scroll_region;
 pub mod selection;
 mod signature;
 mod sixel;
@@ -320,6 +322,8 @@ pub struct TerminalSnapshot {
     pub cols: usize,
     pub viewport_rows: usize,
     pub row_data: Arc<[Arc<TerminalSnapshotRow>]>,
+    /// Optional full-history logical-line index, committed with this frame.
+    pub logical_lines: Option<Arc<logical_lines::TerminalLogicalLineIndex>>,
     pub cursor: CursorSnapshot,
     pub selection: Option<SelectionSnapshot>,
     /// Rows available above the live screen (scrollback).
@@ -360,6 +364,7 @@ impl TerminalSnapshot {
             cols: meta.cols,
             viewport_rows: meta.viewport_rows,
             row_data,
+            logical_lines: None,
             cursor: meta.cursor,
             selection: meta.selection,
             scrollback_len: meta.scrollback_len,
@@ -490,12 +495,16 @@ impl TerminalSnapshotRowCache {
         self.generation
     }
 
-    fn prune(&mut self) {
-        if self.entries.len() <= TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT {
+    fn prune(&mut self, window_rows: usize) {
+        // A visible logical line may exceed the ordinary physical viewport
+        // cache. Keep enough weak entries to reuse its source row Arcs across
+        // frames instead of rebuilding the whole line on each appended cell.
+        let limit = TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT.max(window_rows.saturating_mul(2));
+        if self.entries.len() <= limit {
             return;
         }
         self.entries.retain(|_, entry| entry.row.strong_count() > 0);
-        if self.entries.len() <= TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT {
+        if self.entries.len() <= limit {
             return;
         }
         let mut oldest = self
@@ -504,9 +513,7 @@ impl TerminalSnapshotRowCache {
             .map(|(key, entry)| (*key, entry.last_used))
             .collect::<Vec<_>>();
         oldest.sort_unstable_by_key(|(_, last_used)| *last_used);
-        let remove = oldest
-            .len()
-            .saturating_sub(TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT);
+        let remove = oldest.len().saturating_sub(limit);
         for (key, _) in oldest.into_iter().take(remove) {
             self.entries.remove(&key);
         }
@@ -660,6 +667,7 @@ impl ScreenLineState {
 
 pub struct TerminalCore {
     parser: ansi::Processor,
+    scroll_region_tracker: scroll_region::ScrollRegionTracker,
     term: Term<NyaTermEventProxy>,
     term_config: Config,
     proxy: NyaTermEventProxy,
@@ -673,6 +681,8 @@ pub struct TerminalCore {
     snapshot_row_cache: Mutex<TerminalSnapshotRowCache>,
     search_cache: Mutex<TerminalSearchCache>,
     last_damage_summary: TerminalDamageSummary,
+    logical_line_snapshots: bool,
+    logical_line_index: logical_lines::LogicalLineIndexCache,
     rows: usize,
     cols: usize,
     scrollback_limit: usize,
@@ -843,6 +853,7 @@ impl TerminalCore {
         let consumed_reset_generation = term.reset_generation();
         Self {
             parser: ansi::Processor::new(),
+            scroll_region_tracker: scroll_region::ScrollRegionTracker::new(rows),
             term,
             term_config: config,
             proxy,
@@ -856,6 +867,8 @@ impl TerminalCore {
             snapshot_row_cache: Mutex::new(TerminalSnapshotRowCache::default()),
             search_cache: Mutex::new(TerminalSearchCache::default()),
             last_damage_summary: TerminalDamageSummary::default(),
+            logical_line_snapshots: false,
+            logical_line_index: logical_lines::LogicalLineIndexCache::default(),
             rows,
             cols,
             scrollback_limit,
@@ -871,6 +884,50 @@ impl TerminalCore {
             #[cfg(test)]
             last_shell_input_commit_count: 0,
         }
+    }
+
+    /// Enable richer frames without changing the protocol grid or VT modes.
+    pub fn set_logical_line_snapshots(&mut self, enabled: bool) {
+        if self.logical_line_snapshots == enabled {
+            return;
+        }
+        self.logical_line_snapshots = enabled;
+        self.logical_line_index = logical_lines::LogicalLineIndexCache::default();
+        if enabled {
+            self.refresh_logical_line_index();
+        }
+    }
+
+    fn refresh_logical_line_index(&mut self) {
+        if !self.logical_line_snapshots {
+            return;
+        }
+        let history = self.history_state();
+        let origin = self.active_line_state().logical_origin;
+        let term = &self.term;
+        let last_col = Column(self.cols - 1);
+        self.logical_line_index
+            .update(history, origin, &self.last_damage_summary.lines, |line| {
+                let cell = &term.grid()[Line(line)][last_col];
+                (
+                    cell.flags.contains(Flags::WRAPLINE),
+                    cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER),
+                )
+            });
+    }
+
+    /// Coordinate-sensitive protocols and graphics retain the standard grid.
+    pub fn logical_line_display_supported(&self) -> bool {
+        !self.term.mode().intersects(
+            TermMode::ALT_SCREEN
+                | TermMode::MOUSE_MODE
+                | TermMode::APP_CURSOR
+                | TermMode::APP_KEYPAD
+                | TermMode::KITTY_KEYBOARD_PROTOCOL,
+        ) && self.scroll_region() == (0, self.rows.saturating_sub(1))
+            && !self
+                .graphics
+                .has_placements_for_screen(self.active_graphics_screen())
     }
 
     pub fn set_cell_metrics(&mut self, cell_width_px: u16, cell_height_px: u16) {
@@ -897,6 +954,7 @@ impl TerminalCore {
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let old_cols = self.cols;
+        let old_rows = self.rows;
         let timestamps = (old_cols != usize::from(cols).max(1) && !self.alternate_screen())
             .then(|| reflow_timestamps::capture(&self.term, self.active_line_state()));
         if self.cols != usize::from(cols).max(1) || self.rows != usize::from(rows).max(1) {
@@ -910,6 +968,9 @@ impl TerminalCore {
             rows: self.rows,
         };
         self.term.resize(size);
+        if old_cols != self.cols || old_rows != self.rows {
+            self.scroll_region_tracker.resize(self.rows);
+        }
         self.sync_presentation_state();
         if self.cols != old_cols {
             self.primary_lines.metadata.clear();
@@ -985,6 +1046,7 @@ impl TerminalCore {
         let _ = self.proxy.drain();
         self.sync_presentation_state();
         self.retain_active_presentation_range();
+        self.refresh_logical_line_index();
     }
 
     pub fn cols(&self) -> usize {
@@ -1097,9 +1159,7 @@ impl TerminalCore {
     }
 
     pub fn scroll_region(&self) -> (usize, usize) {
-        // Alacritty does not expose the scroll region publicly. Keep a conservative
-        // full-screen report for legacy UI diagnostics.
-        (0, self.rows.saturating_sub(1))
+        self.scroll_region_tracker.bounds()
     }
 
     pub fn origin_mode(&self) -> bool {
@@ -1161,6 +1221,7 @@ impl TerminalCore {
     /// a skipped UTF-8/charset, ANSI, OSC, or graphics payload.
     pub fn reset_stream_state(&mut self) {
         self.parser = ansi::Processor::new();
+        self.scroll_region_tracker.reset_stream();
         self.graphics_ingress = GraphicsIngress::new();
         self.session_encoding.reset_decoder();
         self.sidecar.osc = None;
@@ -1216,11 +1277,13 @@ impl TerminalCore {
         config.scrolling_history = self.scrollback_limit;
         let session_encoding = self.session_encoding.clone();
         let cell_metrics = (self.cell_width_px, self.cell_height_px);
+        let logical_line_snapshots = self.logical_line_snapshots;
         *self = Self::new_with_config(cols, rows, config);
         self.primary_lines.epoch = next_epoch;
         self.alternate_lines.epoch = next_epoch;
         self.session_encoding = session_encoding;
         self.set_cell_metrics(cell_metrics.0, cell_metrics.1);
+        self.set_logical_line_snapshots(logical_line_snapshots);
     }
 
     /// Discard history and completed output while retaining the editable input rows.
@@ -1402,6 +1465,7 @@ impl TerminalCore {
     }
 
     fn advance_terminal_data_with_boundaries(&mut self, data: &[u8], boundaries: &[ShellBoundary]) {
+        self.scroll_region_tracker.advance(data);
         let mut start = 0usize;
         for boundary in boundaries {
             let end = boundary.offset.min(data.len());
@@ -1460,6 +1524,9 @@ impl TerminalCore {
     ) -> (TerminalSnapshot, TerminalSnapshotBuildStats) {
         let max_offset = self.scrollback_len();
         let offset = offset.min(max_offset);
+        if self.logical_line_snapshots && self.logical_line_display_supported() {
+            return self.viewport_snapshot_with_window_and_stats(offset, 0, 0);
+        }
         let (mut snapshot, stats) = snapshot_from_term(
             &self.term,
             offset,
@@ -1495,8 +1562,35 @@ impl TerminalCore {
     ) -> (TerminalSnapshot, TerminalSnapshotBuildStats) {
         let scrollback_len = self.scrollback_len();
         let offset = offset.min(scrollback_len);
-        let older_rows = older_rows.min(scrollback_len.saturating_sub(offset));
-        let newer_rows = newer_rows.min(offset);
+        let mut older_rows = older_rows.min(scrollback_len.saturating_sub(offset));
+        let mut newer_rows = newer_rows.min(offset);
+        let logical_lines = (self.logical_line_snapshots && self.logical_line_display_supported())
+            .then(|| self.logical_line_index.snapshot());
+        if let Some(index) = logical_lines.as_ref() {
+            let anchor = scrollback_len - offset;
+            let logical_top = if offset == 0 {
+                index.logical_rows().saturating_sub(self.rows)
+            } else {
+                index
+                    .logical_row(anchor)
+                    .min(index.logical_rows().saturating_sub(self.rows))
+            };
+            let start = index.physical_row(logical_top.saturating_sub(older_rows));
+            let end = index
+                .physical_row((logical_top + self.rows + newer_rows).min(index.logical_rows()));
+            older_rows = older_rows.max(anchor.saturating_sub(start));
+            newer_rows = newer_rows
+                .max(end.saturating_sub(anchor + self.rows))
+                .min(offset);
+            // The original raw viewport is still present for protocol consumers.
+            // Include whole groups at both edges for presentation and copying.
+            let start = index.group(anchor.saturating_sub(older_rows)).start;
+            let end = index
+                .group((anchor + self.rows + newer_rows).saturating_sub(1))
+                .end;
+            older_rows = anchor.saturating_sub(start);
+            newer_rows = end.saturating_sub(anchor + self.rows).min(offset);
+        }
         let (mut snapshot, stats) = snapshot_window_from_term(
             &self.term,
             TerminalSnapshotWindow {
@@ -1508,6 +1602,7 @@ impl TerminalCore {
             self.shell_integration_enabled(),
             &self.snapshot_row_cache,
         );
+        snapshot.logical_lines = logical_lines;
         snapshot.images = self
             .graphics
             .viewport_images_for_screen(
@@ -1588,13 +1683,16 @@ impl TerminalCore {
 
     /// Full buffer text, preserving hard breaks and joining soft-wrapped rows.
     pub fn all_text(&self) -> Option<String> {
-        let mut text = String::new();
-        for (index, (line, wrapped)) in self.all_text_rows().into_iter().enumerate() {
-            if index > 0 && !wrapped {
-                text.push('\n');
-            }
-            text.push_str(line.trim_end());
-        }
+        // Share selection extraction so select-all also retains spaces at a
+        // soft boundary. Snapshot row text is intentionally trimmed for display.
+        let selection = selection::TerminalSelection::from_range(
+            selection::TerminalBufferCellPos::new(0, 0),
+            selection::TerminalBufferCellPos::new(
+                self.total_rows().saturating_sub(1),
+                self.cols - 1,
+            ),
+        );
+        let mut text = self.text_for_selection(selection).ok().flatten()?;
         text.truncate(text.trim_end_matches('\n').len());
         (!text.is_empty()).then_some(text)
     }
@@ -1914,6 +2012,7 @@ impl TerminalCore {
         if history_changed {
             self.retain_active_presentation_range();
         }
+        self.refresh_logical_line_index();
     }
 
     fn discard_cleared_history(&mut self) {
@@ -2481,7 +2580,7 @@ fn snapshot_window_from_term(
         };
         row_data.push(snapshot_row);
     }
-    row_cache.prune();
+    row_cache.prune(rows);
     drop(row_cache);
 
     let cursor_point = content.cursor.point;

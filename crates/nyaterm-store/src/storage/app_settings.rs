@@ -5,6 +5,7 @@
 //! [`AppSettingsSummary`]; document keys, field names and defaults are
 //! unchanged.
 
+use nyaterm_core::models::settings::TerminalWrapMode;
 use nyaterm_core::models::window_decoration::WindowDecoration;
 use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
 use redb::ReadableTableMetadata;
@@ -220,6 +221,16 @@ impl ConnectionStore {
                 false,
             ),
             terminal_show_timestamps: json_bool(&value, &["terminal", "show_timestamps"], false),
+            terminal_wrap_mode: TerminalWrapMode::from_compat_value(
+                json_path(&value, &["terminal", "wrap_mode"])
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("character"),
+            ),
+            terminal_show_wrap_markers: json_bool(
+                &value,
+                &["terminal", "show_wrap_markers"],
+                false,
+            ),
             terminal_show_multi_line_paste_dialog: json_bool(
                 &value,
                 &["terminal", "show_multi_line_paste_dialog"],
@@ -1358,6 +1369,27 @@ impl ConnectionStore {
             &["terminal", "show_timestamps"],
             serde_json::Value::Bool(settings.terminal_show_timestamps),
         );
+        // Leave newer, unsupported values intact when their safe fallback has
+        // not been changed. An unrelated settings save must not downgrade them.
+        let raw_mode = json_path(&value, &["terminal", "wrap_mode"]);
+        let unsupported_mode =
+            raw_mode.is_some_and(|raw| !matches!(raw.as_str(), Some("character" | "none")));
+        if !unsupported_mode || settings.terminal_wrap_mode != TerminalWrapMode::Character {
+            set_nested_json_string(
+                &mut value,
+                &["terminal", "wrap_mode"],
+                settings.terminal_wrap_mode.compat_value().into(),
+            );
+        }
+        let unsupported_marker = json_path(&value, &["terminal", "show_wrap_markers"])
+            .is_some_and(|raw| !raw.is_boolean());
+        if !unsupported_marker || settings.terminal_show_wrap_markers {
+            set_nested_json_value(
+                &mut value,
+                &["terminal", "show_wrap_markers"],
+                settings.terminal_show_wrap_markers.into(),
+            );
+        }
         set_nested_json_value(
             &mut value,
             &["terminal", "show_multi_line_paste_dialog"],

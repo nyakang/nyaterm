@@ -1417,7 +1417,7 @@ fn snapshot_row_cache_prunes_to_limit() {
         );
     }
 
-    cache.prune();
+    cache.prune(0);
 
     assert!(cache.entries.len() <= TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT);
 }

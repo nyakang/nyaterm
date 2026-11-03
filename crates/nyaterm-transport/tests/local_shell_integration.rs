@@ -48,6 +48,61 @@ fn external_local_directory_with_chinese_and_spaces_is_used_without_a_startup_co
     assert!(manager.list_sessions().unwrap().is_empty());
 }
 
+#[test]
+#[ignore = "requires a working Windows ConPTY and CMD"]
+fn conpty_long_output_retains_soft_wraps_and_hard_newlines_for_logical_display() {
+    let directory = tempfile::tempdir().unwrap();
+    let long_line = format!("NYATERM_WRAP_BEGIN_{}_END", "0123456789".repeat(20));
+    let hard_line = "NYATERM_HARD_BREAK";
+    let manager = SessionManager::new();
+    let session = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some("cmd.exe".into()),
+            shell_args: vec![
+                "/D".into(),
+                "/Q".into(),
+                "/K".into(),
+                format!("echo {long_line}&echo {hard_line}"),
+            ],
+            working_dir: Some(directory.path().into()),
+            cols: 32,
+            rows: 12,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut terminal = TerminalCore::new(32, 12);
+    terminal.set_logical_line_snapshots(true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut matched = false;
+    while Instant::now() < deadline && !matched {
+        for event in manager.drain_events(64).unwrap().events {
+            if let SessionEvent::Output { data, .. } = event {
+                terminal.advance(&data);
+                for reply in terminal.take_effects().pty_write {
+                    manager.write_raw(&session.id, &reply).unwrap();
+                }
+            }
+        }
+        matched = terminal
+            .all_text()
+            .is_some_and(|text| text.contains(&format!("{long_line}\n{hard_line}")));
+        if !matched {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    manager.close(&session.id).unwrap();
+    assert!(
+        matched,
+        "ConPTY must retain the soft/hard break distinction"
+    );
+    let snapshot = terminal.snapshot();
+    let index = snapshot.logical_lines.as_ref().expect("logical display");
+    assert!(index.logical_rows() < index.physical_rows());
+    assert!(snapshot.rows().iter().any(|row| row.wraps_to_next));
+    assert_eq!((terminal.cols(), terminal.rows()), (32, 12));
+    assert!(manager.list_sessions().unwrap().is_empty());
+}
+
 fn observe(args: &[&str], input: Option<&[u8]>) -> (bool, bool) {
     let manager = SessionManager::new();
     let session = manager

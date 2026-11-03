@@ -1616,6 +1616,154 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
 }
 
 #[test]
+fn no_wrap_keeps_output_colors_and_layout_while_input_batch_is_pending() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let rules = vec![ResolvedKeywordHighlightRule {
+        id: "errors".into(),
+        name: "Errors".into(),
+        patterns: vec!["ERROR".into()],
+        color: "#ff2244".into(),
+        enabled: true,
+    }];
+    let highlighter = compile_terminal_keyword_highlighter(&rules);
+    let mut screen = TerminalScreen::new(8, 6);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(b"ERROR ERROR ERROR ERROR\r\nOK\r\n$ ");
+    let original = screen.snapshot();
+    let old = Arc::new(precompute_terminal_keyword_highlights(
+        &original,
+        &highlighter,
+        palette,
+        None,
+    ));
+    let mut previous_input = None;
+    for echo in [b"l".as_slice(), b"s", b" --color=auto", b"\x08 \x08"] {
+        screen.advance(echo);
+        let snapshot = Arc::new(screen.snapshot());
+        assert!(!Arc::ptr_eq(&original.row_data, &snapshot.row_data));
+        let input = Arc::new(
+            precompute_terminal_input_highlights_reusing(
+                &snapshot,
+                &highlighter,
+                previous_input.as_deref(),
+            )
+            .unwrap(),
+        );
+        previous_input = Some(input.clone());
+        let current = Arc::new(precompute_terminal_keyword_highlights(
+            &snapshot,
+            &highlighter,
+            palette,
+            Some(&old),
+        ));
+        for horizontal_offset in [0.0, 8.5] {
+            let layout = Arc::new(
+                crate::unwrapped::TerminalUnwrappedLayout::new(&snapshot, 0, 6, horizontal_offset)
+                    .unwrap(),
+            );
+            assert!(layout.width_cols > layout.viewport_cols);
+            let make_element = || {
+                NyaTerminalElement::new(
+                    snapshot.clone(),
+                    Arc::new(Vec::new()),
+                    Vec::new(),
+                    false,
+                    "block",
+                    8.0,
+                    16.0,
+                    palette,
+                    "monospace".into(),
+                    14.0,
+                    400.0,
+                    700.0,
+                )
+                .with_unwrapped_layout(Some(layout.clone()))
+            };
+            let pending = make_element()
+                .with_keyword_highlights(old.clone())
+                .with_input_keyword_highlights(input.clone());
+            let batch_only = make_element().with_keyword_highlights(old.clone());
+            let parsed = make_element().with_keyword_highlights(current.clone());
+            let style_key = pending.paint_style_key(pending.keyword_rules_key());
+            let empty_key = pending.paint_style_key(0);
+            for segment in layout
+                .segments
+                .iter()
+                .filter(|segment| segment.display_row == 0)
+            {
+                let row = segment.source_row;
+                // No-wrap painting deliberately supplies no per-history-row
+                // key. The same unchanged output must retain its parsed colors.
+                assert_eq!(
+                    pending
+                        .keyword_highlight_lookup(row, None)
+                        .unwrap()
+                        .ranges(),
+                    parsed.keyword_highlight_lookup(row, None).unwrap().ranges(),
+                );
+                assert_eq!(
+                    pending.row_layout_cache_keys(row, style_key, empty_key, None),
+                    parsed.row_layout_cache_keys(row, style_key, empty_key, None),
+                );
+                assert_eq!(
+                    batch_only
+                        .keyword_highlight_lookup(row, None)
+                        .unwrap()
+                        .ranges(),
+                    parsed.keyword_highlight_lookup(row, None).unwrap().ranges(),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let rules = vec![ResolvedKeywordHighlightRule {
+        id: "whole-error".into(),
+        name: "Whole error".into(),
+        patterns: vec!["^ERROR\\s*$".into()],
+        color: "#ff2244".into(),
+        enabled: true,
+    }];
+    let highlighter = compile_terminal_keyword_highlighter(&rules);
+    let mut screen = TerminalScreen::new(8, 4);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(b"ERROR       ");
+    let original = screen.snapshot();
+    let old = Arc::new(precompute_terminal_keyword_highlights(
+        &original,
+        &highlighter,
+        palette,
+        None,
+    ));
+    assert!(old.lookup(0, &original).unwrap().ranges().is_some());
+    screen.advance(b"x");
+    let snapshot = Arc::new(screen.snapshot());
+    assert_eq!(
+        original.row(0).unwrap().revision,
+        snapshot.row(0).unwrap().revision
+    );
+    let element = NyaTerminalElement::new(
+        snapshot,
+        Arc::new(Vec::new()),
+        Vec::new(),
+        false,
+        "block",
+        8.0,
+        16.0,
+        palette,
+        "monospace".into(),
+        14.0,
+        400.0,
+        700.0,
+    )
+    .with_keyword_highlights(old);
+    assert!(element.keyword_highlight_lookup(0, None).is_none());
+}
+
+#[test]
 fn paired_input_colors_override_late_batches_and_reuse_the_final_layout() {
     let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true);
     let highlighter = compile_terminal_keyword_highlighter(&rules);
@@ -2227,7 +2375,7 @@ fn multiline_selection_endpoint_inside_soft_wrap_does_not_extend_to_margin() {
 #[test]
 fn all_buffer_selection_trims_hard_lines_and_preserves_soft_wraps_and_spacers() {
     for (source, expected, copied) in [
-        ("ab  X", [Some((0, 4)), Some((0, 1)), None], "abX"),
+        ("ab  X", [Some((0, 4)), Some((0, 1)), None], "ab  X"),
         ("abc界", [Some((0, 4)), Some((0, 2)), None], "abc界"),
         ("ab\r\n\r\nx", [Some((0, 2)), None, Some((0, 1))], "ab\n\nx"),
     ] {

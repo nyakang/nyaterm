@@ -8273,3 +8273,36 @@ fn login_monitoring_setting_roundtrips_without_losing_unknown_fields() {
         assert_eq!(raw["future"]["version"], 99);
     }
 }
+
+#[test]
+fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unknown_values() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+    let dir = unique_temp_dir("terminal-wrapping-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_settings_value(&serde_json::json!({"terminal": {"future": {"keep": true}}}))
+        .unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert_eq!(settings.terminal_wrap_mode, TerminalWrapMode::Character);
+    assert!(!settings.terminal_show_wrap_markers);
+    settings.terminal_wrap_mode = TerminalWrapMode::None;
+    settings.terminal_show_wrap_markers = true;
+    let saved = store.save_terminal_settings(&settings).unwrap();
+    assert_eq!(saved.terminal_wrap_mode, TerminalWrapMode::None);
+    assert!(saved.terminal_show_wrap_markers);
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["terminal"]["wrap_mode"], "none");
+    assert_eq!(raw["terminal"]["future"]["keep"], true);
+    store.save_settings_value(&serde_json::json!({"terminal": {"wrap_mode": "future_mode", "show_wrap_markers": {"future": true}, "future": 42}})).unwrap();
+    let fallback = store.load_app_settings_summary().unwrap();
+    assert_eq!(fallback.terminal_wrap_mode, TerminalWrapMode::Character);
+    assert!(!fallback.terminal_show_wrap_markers);
+    store.save_terminal_settings(&fallback).unwrap();
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["terminal"]["wrap_mode"], "future_mode");
+    assert_eq!(
+        raw["terminal"]["show_wrap_markers"],
+        serde_json::json!({"future": true})
+    );
+    assert_eq!(raw["terminal"]["future"], 42);
+}

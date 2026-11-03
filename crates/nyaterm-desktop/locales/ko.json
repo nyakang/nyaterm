@@ -2320,6 +2320,13 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "terminalWrapMode": "줄 바꿈 모드",
+    "terminalWrapModeDesc": "줄 바꿈 없음은 자동 줄 바꿈을 합쳐 가로로 스크롤합니다. 대화형 화면은 표준 격자를 사용합니다.",
+    "terminalWrapCharacter": "문자 단위 줄 바꿈",
+    "terminalWrapNone": "줄 바꿈 없음",
+    "showWrapMarkers": "줄 바꿈 표시",
+    "showWrapMarkersDesc": "자동 줄 바꿈만 표시합니다. 줄 바꿈 없음에서는 숨깁니다.",
+    "terminalWrapGridFallback": "대화형 화면은 표준 격자를 사용합니다",
     "syncV3Description": "Cloud Sync V3 미리 보기는 로컬 디렉터리, WebDAV, S3를 지원합니다. 연결, 그룹, 명령, 노트, 사용자 테마를 필드별로 병합합니다. 모양, 단축키, AI 설정 동기화는 선택 사항입니다. 민감한 데이터 동기화는 기본적으로 꺼져 있습니다.",
     "syncV3Trust": "SSH / VNC 호스트 ID",
     "syncV3TrustDesc": "기본적으로 꺼져 있습니다. 수신한 각 호스트 ID 변경 또는 삭제는 이 기기에서 개별 확인 후 신뢰 기록에 적용됩니다.",

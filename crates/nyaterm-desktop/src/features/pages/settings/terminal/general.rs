@@ -129,6 +129,39 @@ impl SettingsPanel {
                     ))
                     .child(settings_form_row(
                         palette,
+                        t!("settings.terminalWrapMode"),
+                        Some(SharedString::from(t!("settings.terminalWrapModeDesc"))),
+                        self.settings_select_control(
+                            "settings.terminal.wrap-mode",
+                            vec![
+                                NyaSelectOption::new(
+                                    "character",
+                                    t!("settings.terminalWrapCharacter"),
+                                ),
+                                NyaSelectOption::new("none", t!("settings.terminalWrapNone")),
+                            ],
+                            self.settings
+                                .summary()
+                                .terminal_wrap_mode
+                                .compat_value()
+                                .to_string(),
+                            false,
+                            cx,
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.showWrapMarkers"),
+                        Some(SharedString::from(t!("settings.showWrapMarkersDesc"))),
+                        settings_switch(
+                            palette,
+                            "terminal-wrap-markers",
+                            self.settings.summary().terminal_show_wrap_markers,
+                            cx.listener(|this, _, _, cx| this.toggle_terminal_wrap_markers(cx)),
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
                         t!("settings.showLineNumbers"),
                         None,
                         settings_switch(
