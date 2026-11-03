@@ -952,6 +952,10 @@ impl NyaTermApp {
             );
         NyaHoverCard::new(hover_card_id, tab, hover_card)
             .anchor(Anchor::TopLeft)
+            .suspended(
+                self.session.dialog_tab_actions_target().is_some()
+                    || self.session.tab_drag_is_pending(),
+            )
             .into_any_element()
     }
 

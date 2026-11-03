@@ -878,15 +878,6 @@ impl NyaTermApp {
                                     t!("tabCtx.sessionInfo"),
                                     cx.listener(move |this, _, window, cx| {
                                         this.close_tab_actions(cx);
-                                        this.open_active_session_info(window, cx);
-                                    }),
-                                ))
-                                .child(tab_menu_item(
-                                    palette,
-                                    "tab-ctx-edit",
-                                    t!("tabCtx.editConnection"),
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.close_tab_actions(cx);
                                         let Some(connection_id) = this
                                             .tab_action_source_connection_id(&info_session_id)
                                             .map(ToOwned::to_owned)
