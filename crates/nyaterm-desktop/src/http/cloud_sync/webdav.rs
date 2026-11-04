@@ -342,7 +342,7 @@ pub(super) fn parse_webdav_file_names(body: &str) -> Result<Vec<String>, CloudSy
 /// Credentials and bodies stay within one origin, except for a same-host
 /// upgrade from HTTP's default port to HTTPS's default port. A 303 describes
 /// an indirect response, so it must never replay a WebDAV mutation there.
-fn redirect_target(
+pub(super) fn redirect_target(
     status: StatusCode,
     location: Option<&str>,
     current: &str,
