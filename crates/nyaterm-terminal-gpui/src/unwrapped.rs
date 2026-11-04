@@ -1,8 +1,8 @@
 //! Display geometry shared by painting, pointer input and IME positioning.
 use std::sync::Arc;
 
-use nyaterm_terminal::TerminalSnapshot;
 use nyaterm_terminal::logical_lines::TerminalLogicalLineIndex;
+use nyaterm_terminal::{TerminalLineId, TerminalSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalUnwrappedLayout {
@@ -123,6 +123,26 @@ impl TerminalUnwrappedLayout {
         self.index
             .physical_row(self.logical_top + display_row)
             .saturating_sub(self.source_start)
+    }
+
+    /// Resolve a target on any soft-wrapped source row to its displayed first row.
+    pub fn target_line_for_display_row(
+        &self,
+        snapshot: &TerminalSnapshot,
+        display_row: usize,
+        target: Option<TerminalLineId>,
+    ) -> Option<TerminalLineId> {
+        let target = target?;
+        let first = snapshot.rows().first()?.line_id?;
+        if first.epoch != target.epoch {
+            return None;
+        }
+        let source = usize::try_from(target.logical_line.checked_sub(first.logical_line)?).ok()?;
+        let (row, _) = self.display_position(source, 0)?;
+        if row != display_row {
+            return None;
+        }
+        snapshot.row(self.first_source_row(display_row))?.line_id
     }
 
     pub fn logical_rows(&self) -> usize {

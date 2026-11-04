@@ -564,6 +564,10 @@ impl SettingsFeatureState {
         self.summary.terminal_zebra_stripes_enabled = !self.summary.terminal_zebra_stripes_enabled;
     }
 
+    pub(in crate::features) fn toggle_terminal_zebra_stripes_by_row(&mut self) {
+        self.summary.terminal_zebra_stripes_by_row = !self.summary.terminal_zebra_stripes_by_row;
+    }
+
     pub(in crate::features) fn set_terminal_scrollback_lines(&mut self, value: u32) {
         self.summary.terminal_scrollback_lines = value.clamp(100, 100_000);
     }
@@ -1970,6 +1974,12 @@ mod tests {
         let zebra = state.summary().terminal_zebra_stripes_enabled;
         state.toggle_terminal_zebra_stripes();
         assert_eq!(state.summary().terminal_zebra_stripes_enabled, !zebra);
+        assert!(!state.summary().terminal_zebra_stripes_by_row);
+        state.toggle_terminal_zebra_stripes_by_row();
+        state.toggle_terminal_zebra_stripes();
+        assert!(state.summary().terminal_zebra_stripes_by_row);
+        state.toggle_terminal_zebra_stripes();
+        assert!(state.summary().terminal_zebra_stripes_by_row);
         assert!(state.toggle_terminal_action_link_matcher("ipv4"));
         assert!(state.summary().terminal_action_links_matchers.mac);
         assert!(state.toggle_terminal_action_link_matcher("mac"));

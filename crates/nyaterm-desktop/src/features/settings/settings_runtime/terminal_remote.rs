@@ -18,6 +18,19 @@ impl NyaTermApp {
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_terminal_zebra_stripes();
         self.save_terminal_settings(cx);
+        self.refresh_terminal_zebra_stripes(cx);
+    }
+
+    pub(in crate::features) fn toggle_terminal_zebra_stripes_by_row(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_terminal_zebra_stripes_by_row();
+        self.save_terminal_settings(cx);
+        self.refresh_terminal_zebra_stripes(cx);
+    }
+
+    fn refresh_terminal_zebra_stripes(&mut self, cx: &mut Context<Self>) {
         let session_ids = self
             .visible_terminal_session_ids()
             .into_iter()

@@ -219,6 +219,8 @@ pub struct TerminalSnapshotRow {
     /// Logical line number in retained history, rebased by a local clear.
     /// Soft-wrapped continuations share their first row's number.
     pub display_line_number: Option<usize>,
+    /// Stable row coordinate with soft wraps removed; independent of retained history numbering.
+    pub unwrapped_line_index: Option<i64>,
     pub line_id: Option<TerminalLineId>,
     pub revision: u64,
     pub cells: Box<[RenderCell]>,
@@ -464,6 +466,7 @@ const TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT: usize = 8_192;
 struct TerminalSnapshotRowCacheKey {
     cleared: bool,
     display_line_number: Option<usize>,
+    unwrapped_line_index: Option<i64>,
     cols: usize,
     revision: u64,
     signature: u64,
@@ -2482,6 +2485,8 @@ fn snapshot_window_from_term(
             epoch: line_state.epoch,
             logical_line: line_state.logical_line(line),
         });
+        let unwrapped_line_index =
+            line_id.map(|id| line_state.line_numbers.stable_coordinate(id.logical_line));
         let display_line_number = line_id.and_then(|id| {
             line_state
                 .line_numbers
@@ -2526,6 +2531,7 @@ fn snapshot_window_from_term(
         let key = TerminalSnapshotRowCacheKey {
             cleared,
             display_line_number,
+            unwrapped_line_index,
             cols,
             revision,
             signature,
@@ -2557,6 +2563,7 @@ fn snapshot_window_from_term(
                 SnapshotRowMetadata {
                     cleared,
                     display_line_number,
+                    unwrapped_line_index,
                     revision,
                     signature,
                     timestamp_ms,
@@ -2658,6 +2665,7 @@ fn history_state_from_term(
 struct SnapshotRowMetadata {
     cleared: bool,
     display_line_number: Option<usize>,
+    unwrapped_line_index: Option<i64>,
     revision: u64,
     signature: u64,
     timestamp_ms: Option<u64>,
@@ -2679,6 +2687,7 @@ fn snapshot_row_from_term(
     let SnapshotRowMetadata {
         cleared,
         display_line_number,
+        unwrapped_line_index,
         revision,
         signature,
         timestamp_ms,
@@ -2725,6 +2734,7 @@ fn snapshot_row_from_term(
     TerminalSnapshotRow {
         cleared,
         display_line_number,
+        unwrapped_line_index,
         line_id,
         revision,
         styled_spans: compress_render_row(&cells).into_boxed_slice(),
