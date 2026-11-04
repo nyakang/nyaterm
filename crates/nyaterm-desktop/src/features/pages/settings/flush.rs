@@ -33,9 +33,14 @@ impl NyaTermApp {
         let active_tab = self.shell.settings_active_tab();
         let backup_prompt = self.settings.snapshot_password_prompt();
         let draft_dirty = self.settings_draft_dirty() || self.settings.theme_designer().dirty();
+        let palette = self.theme_palette();
         SettingsSnapshot {
             chrome: SettingsChrome {
-                palette: self.theme_palette(),
+                palette,
+                surface: self.shell_surface_color(palette.bg),
+                transparent_bg: self.shell_transparent_color(palette.bg),
+                transparent_surface: self.shell_transparent_color(palette.surface),
+                transparent_section_header: self.shell_transparent_color(palette.section_header),
             },
             active_tab,
             settings: SettingsPresentation {
@@ -66,7 +71,6 @@ impl NyaTermApp {
                 snapshot_password_prompt_active: self.settings.snapshot_password_prompt_active(),
                 config_path_prompt_active: self.settings.config_path_prompt_active(),
                 terminal_theme_is_dark: self.terminal_theme_is_dark(),
-                panel_multi_open: self.shell.panel_multi_open(),
             },
             ai: AiSettingsPresentation {
                 providers: self.ai.provider_view().clone(),

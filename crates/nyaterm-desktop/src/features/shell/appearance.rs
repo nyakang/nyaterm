@@ -216,6 +216,7 @@ impl NyaTermApp {
         self.flush_connection_panel_snapshot(cx);
         self.flush_transfer_panel_snapshot(cx);
         self.flush_ai_panel_snapshot(cx);
+        self.request_settings_panel_refresh(cx);
         self.refresh_visible_terminal_surfaces(cx);
         cx.notify();
     }

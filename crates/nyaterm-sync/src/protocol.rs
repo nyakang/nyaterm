@@ -15,7 +15,11 @@ pub struct ProviderCapabilities {
 
 impl ProviderCapabilities {
     pub fn for_provider(provider: &str) -> Option<Self> {
-        matches!(provider, "local_directory" | "webdav" | "s3").then_some(Self {
+        matches!(
+            provider,
+            "local_directory" | "webdav" | "s3" | "google_drive" | "onedrive" | "aliyun_drive"
+        )
+        .then_some(Self {
             complete_listing: true,
             max_files: None,
             max_object_bytes: MAX_PUBLICATION_BYTES,

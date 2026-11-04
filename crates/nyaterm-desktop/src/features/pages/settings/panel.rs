@@ -36,9 +36,17 @@ use crate::models::{
 };
 use crate::theme::ThemePalette;
 
-#[derive(Clone, PartialEq)]
+/// Background colours are resolved by the app because the panel is cached: it
+/// only repaints when a new snapshot arrives, so wallpaper, window material, and
+/// content opacity must travel inside the snapshot to reach it.
+#[derive(Clone, Copy, PartialEq)]
 pub(in crate::features) struct SettingsChrome {
     pub palette: ThemePalette,
+    /// The page's single tinted layer, honouring content opacity.
+    pub surface: gpui::Rgba,
+    pub transparent_bg: gpui::Rgba,
+    pub transparent_surface: gpui::Rgba,
+    pub transparent_section_header: gpui::Rgba,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,7 +152,6 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) snapshot_password_prompt_active: bool,
     pub(in crate::features) config_path_prompt_active: bool,
     pub(in crate::features) terminal_theme_is_dark: bool,
-    pub(in crate::features) panel_multi_open: bool,
 }
 
 impl SettingsPresentation {
@@ -178,7 +185,6 @@ impl SettingsPresentation {
             snapshot_password_prompt_active: false,
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
-            panel_multi_open: false,
         }
     }
 }
@@ -274,10 +280,6 @@ impl SettingsPresentation {
 
     pub(in crate::features) fn terminal_theme_is_dark(&self) -> bool {
         self.terminal_theme_is_dark
-    }
-
-    pub(in crate::features) fn panel_multi_open(&self) -> bool {
-        self.panel_multi_open
     }
 }
 
@@ -849,9 +851,13 @@ impl SettingsPanel {
     }
 
     pub(in crate::features) fn theme_palette(&self) -> ThemePalette {
+        self.settings_chrome().palette
+    }
+
+    pub(in crate::features::pages::settings) fn settings_chrome(&self) -> SettingsChrome {
         self.snapshot
             .as_ref()
-            .map(|snapshot| snapshot.chrome.palette)
+            .map(|snapshot| snapshot.chrome)
             .expect("settings panel render requires a snapshot")
     }
 
@@ -1064,7 +1070,8 @@ impl Render for SettingsPanel {
             return self.theme_designer_section(cx);
         }
 
-        let palette = snapshot.chrome.palette;
+        let chrome = snapshot.chrome;
+        let palette = chrome.palette;
         let settings_title = t!("settings.title");
         let active_group = t!(snapshot.active_tab.group_i18n_key());
         let active_label = t!(snapshot.active_tab.i18n_key());
@@ -1074,7 +1081,7 @@ impl Render for SettingsPanel {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(palette.bg))
+            .bg(chrome.surface)
             .child(
                 div()
                     .h(px(36.))
@@ -1085,7 +1092,7 @@ impl Render for SettingsPanel {
                     .px_3()
                     .border_b_1()
                     .border_color(rgb(palette.border))
-                    .bg(rgb(palette.section_header))
+                    .bg(chrome.transparent_section_header)
                     .child(
                         div()
                             .flex()
@@ -1185,6 +1192,7 @@ impl SettingsPanel {
             content,
         )
         .palette(snapshot.chrome.palette)
+        .content_background(snapshot.chrome.transparent_bg)
         .active_title(active_label)
         .sidebar_title(t!("settings.title"))
         .content_scroll_handle(scroll_handle)
@@ -1322,7 +1330,7 @@ impl SettingsPanel {
             .py_3()
             .border_t_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(palette.section_header))
+            .bg(snapshot.chrome.transparent_section_header)
             .child(
                 div()
                     .min_w_0()
@@ -1961,7 +1969,6 @@ forward_app_action!(
     toggle_minimize_to_tray,
     toggle_multi_line_paste_dialog,
     toggle_osc52_clipboard_write,
-    toggle_panel_multi_open,
     toggle_paste_image_as_path,
     toggle_recording_auto_start,
     toggle_recording_binary_transfer_payloads,
@@ -2342,6 +2349,46 @@ mod tests {
             assert!(editor.right() <= px(width));
             assert!(editor.bottom() <= px(480.));
         }
+    }
+
+    #[test]
+    fn window_material_and_content_opacity_reach_the_cached_settings_panel() {
+        use nyaterm_core::models::window_material::WindowMaterial;
+        let dir = TestConfigDir::new("nyaterm-settings-panel-background");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.open_page(NavItem::Settings, cx);
+            app.begin_settings_draft(cx);
+        });
+        for material in [
+            WindowMaterial::Blurred,
+            WindowMaterial::Transparent,
+            WindowMaterial::Opaque,
+        ] {
+            cx.update_entity(&app, |app, cx| {
+                app.set_window_material(material, cx);
+                app.set_background_content_opacity(45, cx);
+            });
+            cx.run_until_parked();
+            cx.read_entity(&app, |app, cx| {
+                let native = app.shell_background().native_transparent;
+                let chrome = app.settings_panel.read(cx).snapshot().unwrap().chrome;
+                assert_eq!(chrome.surface, app.shell_surface_color(chrome.palette.bg));
+                assert_eq!(chrome.transparent_bg.a, if native { 0. } else { 1. });
+                assert_eq!(
+                    chrome.transparent_section_header.a,
+                    if native { 0. } else { 1. }
+                );
+                if native {
+                    assert!((chrome.surface.a - 0.45).abs() < 0.002);
+                } else {
+                    assert_eq!(chrome.surface.a, 1.);
+                }
+            });
+        }
+        cx.update_entity(&app, |app, cx| app.cancel_settings(cx));
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod cache;
 pub mod conflict;
 pub mod control;
 pub mod credentials;
+pub mod error;
 mod gc;
 mod heads;
 mod history;
@@ -57,6 +58,12 @@ pub const REMOTE_SYNC_POINTER_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum CloudSyncError {
+    #[error("{provider} {operation} failed ({kind})")]
+    Storage {
+        provider: String,
+        operation: String,
+        kind: error::CloudStorageErrorKind,
+    },
     #[error("{provider} {operation} failed (HTTP {status})")]
     Http {
         provider: String,
@@ -246,15 +253,20 @@ impl CloudSyncError {
 impl CloudSyncError {
     pub fn classification(&self) -> &'static str {
         match self {
+            Self::Storage { kind, .. } => kind.classification(),
             Self::Authentication { .. } => "authentication",
             Self::Http {
                 status: 403 | 429,
                 retry_after_seconds: Some(_),
                 ..
             } => "rate_limited",
+            Self::Http { status: 401, .. } => "authentication",
+            Self::Http { status: 403, .. } => "permission_denied",
+            Self::Http { status: 404, .. } => "not_found",
             Self::Http {
-                status: 401 | 403, ..
-            } => "authentication",
+                status: 409 | 412, ..
+            } => "conflict",
+            Self::Http { status: 501, .. } => "unsupported",
             Self::Http { status: 429, .. } => "rate_limited",
             Self::Http {
                 status: 500..=599, ..
