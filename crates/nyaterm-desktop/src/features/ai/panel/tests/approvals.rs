@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::{compact_draw, compact_host, edit_panel_snapshot, transcript_message};
 use crate::features::NyaTermApp;
+use crate::features::ai::panel::texts::TextOwner;
 use crate::features::ai::panel::transcript::{AiTranscriptRow, AiTranscriptUpdate};
 use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
 use crate::features::capability_runtime::{
@@ -105,6 +106,38 @@ fn respond(
             decision,
             cx,
         )
+    });
+}
+
+#[gpui::test]
+fn approval_selection_follows_display_order_and_excludes_hidden_parameters(
+    cx: &mut TestAppContext,
+) {
+    let root = TestConfigDir::new("nyaterm-ai-approval-selection-order");
+    let _cleanup = TestAppCleanup::new(cx);
+    let (app, vcx) = compact_host(cx, root.path());
+    let (view, _receiver) = vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            queue_native_approval(
+                app,
+                tool::TERMINAL_EXECUTE,
+                json!({"sessionId":"s","command":"printf '%s' 猫"}),
+                false,
+                cx,
+            )
+        })
+    });
+    compact_draw(&app, vcx);
+    vcx.update(|window, cx| {
+        let panel = app.read(cx).ai_panel.clone();
+        let owner = TextOwner::Approval(view.approval.request_id);
+        let target = panel.read(cx).text_state(owner.clone(), "target").unwrap();
+        let script = panel.read(cx).text_state(owner, "script").unwrap();
+        target.select_all(cx);
+        script.select_all(cx);
+        let expected = format!("{}\nprintf '%s' 猫", target.selected_text(cx));
+        let scope = panel.read(cx).texts.scope.clone();
+        assert_eq!(scope.selected_text(window, cx), expected);
     });
 }
 
