@@ -1,6 +1,8 @@
 //! Storage-only bridge; protocol, caches, credentials and cancellation stay in
 //! their existing owners. Construct/use/drop only inside desktop blocking jobs.
 
+mod drive;
+mod drive_http;
 mod error;
 mod transport;
 mod worker;
@@ -29,6 +31,10 @@ enum DirectoryAdapter {
     Webdav(NativeWebdavRemote),
     S3(NativeS3Remote),
 }
+
+pub(crate) use drive::OpenDalDriveRemote;
+#[cfg(test)]
+pub(crate) use drive::tests::fixture::DriveFixture;
 
 pub(crate) struct OpenDalRemote {
     operator: Operator,

@@ -2334,7 +2334,7 @@
     "showWrapMarkers": "折り返し記号を表示",
     "showWrapMarkersDesc": "自動折り返しのみ表示します。折り返しなしでは非表示です。",
     "terminalWrapGridFallback": "対話画面では標準グリッドを使用",
-    "syncV3Description": "Cloud Sync V3 プレビューはローカルディレクトリ、WebDAV、S3 に対応します。接続、グループ、コマンド、ノート、カスタムテーマをフィールドごとに統合します。外観、キーバインド、AI 設定は任意です。機密データの同期は既定で無効です。",
+    "syncV3Description": "Cloud Sync V3 プレビューはローカルディレクトリ、WebDAV、S3、Google Drive、OneDrive、Aliyun Drive に対応します。接続、グループ、コマンド、ノート、カスタムテーマをフィールドごとに統合します。外観、キーバインド、AI 設定は任意です。機密データの同期は既定で無効です。",
     "syncV3Trust": "SSH / VNC ホスト識別情報",
     "syncV3TrustDesc": "既定はオフです。受信した識別情報の変更や削除は、この端末で個別に確認するまで信頼情報に反映されません。",
     "syncV3Rotating": "新しい同期領域を公開・検証してからマスターパスワードを変更しています…",

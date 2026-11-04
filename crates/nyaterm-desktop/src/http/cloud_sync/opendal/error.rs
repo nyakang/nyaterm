@@ -9,6 +9,11 @@ use opendal::{Error, ErrorKind};
 #[derive(Debug, Clone)]
 pub(super) enum Failure {
     Transport(CloudStorageErrorKind),
+    Authentication {
+        status: u16,
+    },
+    CredentialPersistence,
+    CredentialsChanged,
     Http {
         status: u16,
         retry_after: Option<u64>,
@@ -27,6 +32,7 @@ impl Failure {
     pub(super) fn into_opendal(self) -> Error {
         let kind = match self {
             Self::Transport(CloudStorageErrorKind::Unsupported) => ErrorKind::Unsupported,
+            Self::Authentication { .. } => ErrorKind::PermissionDenied,
             Self::Http {
                 status: 304 | 412, ..
             } => ErrorKind::ConditionNotMatch,
@@ -76,6 +82,13 @@ pub(super) fn map_error(
     error: Error,
 ) -> CloudSyncError {
     match failure(&error) {
+        Some(Failure::Authentication { status }) => CloudSyncError::Authentication {
+            provider: provider.into(),
+            operation: "token refresh".into(),
+            status: *status,
+        },
+        Some(Failure::CredentialPersistence) => CloudSyncError::CredentialPersistence,
+        Some(Failure::CredentialsChanged) => CloudSyncError::CredentialsChanged,
         Some(Failure::Http { status: 401, .. }) => CloudSyncError::Authentication {
             provider: provider.into(),
             operation: operation.into(),

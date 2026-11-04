@@ -11,7 +11,7 @@ use std::time::Duration;
 use nyaterm_core::{S3SyncSettings, WebdavSyncSettings};
 use sha2::{Digest, Sha256};
 
-pub(super) struct Request {
+pub(crate) struct Request {
     pub method: String,
     pub target: String,
     pub headers: BTreeMap<String, String>,
@@ -54,7 +54,7 @@ impl Request {
     }
 }
 
-pub(super) struct Reply {
+pub(crate) struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -90,14 +90,14 @@ impl Reply {
 }
 
 pub(crate) struct Server {
-    pub(super) endpoint: String,
-    pub(super) requests: Arc<Mutex<Vec<Request>>>,
+    pub(crate) endpoint: String,
+    pub(crate) requests: Arc<Mutex<Vec<Request>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Server {
-    pub(super) fn new(mut respond: impl FnMut(&Request) -> Reply + Send + 'static) -> Self {
+    pub(crate) fn new(mut respond: impl FnMut(&Request) -> Reply + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());

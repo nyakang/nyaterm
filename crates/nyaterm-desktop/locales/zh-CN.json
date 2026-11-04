@@ -2327,7 +2327,7 @@
     "showWrapMarkers": "显示换行符",
     "showWrapMarkersDesc": "仅标记自动折行；不换行显示时隐藏。",
     "terminalWrapGridFallback": "交互界面使用标准网格",
-    "syncV3Description": "Cloud Sync V3 预览支持本地目录、WebDAV 和 S3。连接、分组、命令、笔记及自定义主题按字段合并，可选同步外观、快捷键和 AI 配置。敏感数据同步默认关闭。",
+    "syncV3Description": "Cloud Sync V3 预览支持本地目录、WebDAV、S3、Google Drive、OneDrive 和阿里云盘。连接、分组、命令、笔记及自定义主题按字段合并，可选同步外观、快捷键和 AI 配置。敏感数据同步默认关闭。",
     "syncV3Trust": "SSH／VNC 主机身份",
     "syncV3TrustDesc": "默认关闭。收到的每一项主机身份变更或删除，都需要在本机单独确认后才会改变信任记录。",
     "syncV3Rotating": "正在发布并验证新的同步空间，完成后更改主密码…",

@@ -662,6 +662,9 @@ name = "asyncband"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d2050892d4691cf110586070786712b504985a4d37ed64a9cd8a402718e1706"
+dependencies = [
+ "hashbrown 0.17.1",
+]
 
 [[package]]
 name = "atk"
@@ -7406,6 +7409,9 @@ dependencies = [
  "opendal-core",
  "opendal-layer-retry",
  "opendal-layer-timeout",
+ "opendal-service-aliyun-drive",
+ "opendal-service-gdrive",
+ "opendal-service-onedrive",
  "opendal-service-s3",
  "opendal-service-webdav",
 ]
@@ -7454,6 +7460,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afffa0cf8a6690b3b44cc510816ba675638eb236699a7d449e44ac3344bafd36"
 dependencies = [
  "opendal-core",
+ "tokio",
+]
+
+[[package]]
+name = "opendal-service-aliyun-drive"
+version = "0.59.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f33d4bbc77a88a97337153bf9cbe586e3a2046208eb4908cd936eddb7ec39f"
+dependencies = [
+ "asyncband",
+ "bytes",
+ "http",
+ "log",
+ "opendal-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "opendal-service-gdrive"
+version = "0.59.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "451769a355989f8e5695f5158a47833162fdb34a3d2c1db06ffad1fb21e85ec4"
+dependencies = [
+ "asyncband",
+ "bytes",
+ "http",
+ "log",
+ "opendal-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "opendal-service-onedrive"
+version = "0.59.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b229d9fcb8e1ea2a467ac8a14e056658f835e014756844801cb5284b469e15f8"
+dependencies = [
+ "asyncband",
+ "bytes",
+ "http",
+ "log",
+ "opendal-core",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

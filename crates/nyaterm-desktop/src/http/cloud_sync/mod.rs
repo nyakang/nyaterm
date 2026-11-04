@@ -15,8 +15,8 @@ pub(crate) use github_gist_auth::run_github_gist_device_flow;
 pub use google_drive::NativeGoogleDriveRemote;
 pub use onedrive::NativeOneDriveRemote;
 #[cfg(test)]
-pub(crate) use opendal::CloudStorageFixture;
-pub(crate) use opendal::OpenDalRemote;
+pub(crate) use opendal::{CloudStorageFixture, DriveFixture};
+pub(crate) use opendal::{OpenDalDriveRemote, OpenDalRemote};
 pub use s3::NativeS3Remote;
 pub use snippet::NativeSnippetHttpClient;
 pub use webdav::NativeWebdavRemote;

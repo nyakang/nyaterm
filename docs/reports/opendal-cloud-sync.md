@@ -42,7 +42,7 @@ commit.
 | TLS | Losing Windows/system roots or disabling certificate validation | Reuse zed-reqwest with rustls native roots; never accept invalid certificates |
 | S3 | Lost ETag/304 optimization, bad pagination interpreted as deletion | Explicit conditional reads; retain strict list-page validation, prefix, token and capacity guards |
 | Publication | Retry of an ambiguous mutation, overwriting immutable bytes | No automatic mutation retry; explicit immutable checks and read-back; keep protocol commit/recovery |
-| OAuth | Rotated refresh token retained only inside OpenDAL | Keep each Native backend until its Store token sink can be guaranteed |
+| OAuth | Rotated refresh token retained only inside OpenDAL | NyaTerm owns refresh; save via Store Token Sink before installing tokens or issuing another authenticated request |
 | Diagnostics | OpenDAL errors/spans expose URL, root, body or credentials | Controlled classifications and fixed operation labels; no raw OpenDAL Debug/Display in user diagnostics |
 | Compatibility | Provider root applied twice, snapshot/path/encryption drift | Preserve provider-root + remote-root composition and cross-backend tests |
 
@@ -54,7 +54,7 @@ Implementation and validation results are recorded below as each gate is checked
 Production call chain:
 
 `GPUI background job -> existing operation control/credential identity checks
--> provider facade -> ObservedRemote -> CachedMetadataRemote -> OpenDalRemote
+-> provider facade -> ObservedRemote -> CachedMetadataRemote -> OpenDalRemote / OpenDalDriveRemote
 -> bounded joined worker -> OpenDAL Operator / fixed compatibility adapter
 -> zed-reqwest HTTP transport -> remote service`.
 
@@ -74,18 +74,43 @@ switch and no error-triggered fallback to a second writer.
 | S3 write_sync_file | OpenDAL conditional PUT (If-None-Match: *), idempotent byte check and read-back verification | An explicit create race is accepted only when the existing bytes match |
 | S3 create_dir | Explicit no-op | S3 has object prefixes rather than directories |
 | S3 list_files/list_sync_files/list_metadata | Native strict paginated ListObjectsV2 adapter on the joined worker | Preserve optional metadata, prefix filtering, duplicate/token/capacity guards and malformed-page fail-closed behavior |
-| Google Drive | Native retained | No reliable external Store token sink in the audited OpenDAL signer; its refresh URL also includes refresh/client credentials in the query |
-| OneDrive | Native retained | OpenDAL rotates refresh tokens in private signer state without a persistence callback |
-| AliyunDrive | Native retained | OpenDAL replaces refresh tokens in private signer state without a persistence callback |
+| Google Drive | OpenDAL GDrive, NyaTerm OAuth and strict directory/publication adapters | Complete raw query pagination prevents OpenDAL's pageSize=1 resolver choosing an ambiguous name; move complete staged objects by ID and recheck uniqueness |
+| OneDrive | OpenDAL OneDrive, NyaTerm OAuth and strict directory/publication adapters | Fail-on-conflict publication; normalize only valid completed final-fragment HTTP 200 responses; validate signed URLs and nextLink |
+| AliyunDrive | OpenDAL AliyunDrive, NyaTerm OAuth and strict directory/publication adapters | Move completed staging objects with refuse; never enter destructive replacement; explicitly handle empty uploads |
 | GitHub Gist / Gitee snippet / local directory | Existing implementation | Explicitly outside the storage-backend migration |
 
-Thus WebDAV/S3 object access has migrated; directory/listing operations remain
-fixed compatibility adapters. The three OAuth providers have **not** migrated.
-The existing reliable token sink persists credentials before installing refreshed
-tokens and still rejects superseded accounts. Their OpenDAL service features are
-not enabled. Safely moving those providers requires a persistence-capable signer
-API or a separately validated external token manager; interception that persists
-only after refresh has already installed tokens is insufficient.
+All five storage services now use OpenDAL for ordinary object access. Fixed
+compatibility adapters provide directory traversal and immutable publication
+where stock service semantics are insufficient. Native Drive remotes remain as
+comparison oracles in tests, with no production fallback.
+
+Drive services receive only a non-secret placeholder access token. The HTTP
+boundary replaces it with the NyaTerm token for exact trusted provider API
+origins. OpenDAL receives no refresh token, client ID or client secret. A 401
+from an authenticated API request permits one refresh/replay; generic 403,
+rate limits, signed URL failures and ambiguous mutation failures do not refresh
+or replay mutations. Google and Microsoft refresh credentials are sent in form
+bodies, Aliyun credentials in JSON, never in URL queries. The synchronous Store
+sink runs on the joined storage worker with no await between persistence and
+installation. Superseded-account and persistence failures retain their exact
+CloudSyncError variants across the OpenDAL boundary.
+
+Drive publication uploads the final basename into an isolated
+`.sync-v4-staging/<random>/` subdirectory, verifies every byte, then moves by ID
+to the final parent and verifies again. Google permits duplicate names: complete
+query validation detects ambiguity before or after publication and stops without
+deleting either object. OneDrive and Aliyun request fail/refuse conflict modes.
+These narrow primitives use the same authenticated OpenDAL HTTP transport;
+stock rename implementations that replace or delete destinations are not used.
+Each operation uses fresh lightweight OpenDAL service/path caches while retaining
+the same HTTP client, authoritative token manager and joined runtime.
+
+**Accepted Aliyun limitation:** existing identical bytes are idempotent, but
+replacing different bytes (including a V3 mutable pointer or a damaged V4 pending
+object) fails closed. Old objects and durable pending remain intact; automatic
+repair requires a future verified safe replacement primitive. V3 reading/import
+and new V4 publications work without changing the old data. No backend fallback,
+remote reset or destructive overwrite is used to hide this limitation.
 
 ## Execution, publication and diagnostics
 
@@ -146,17 +171,17 @@ count partial received bodies and authentication/redirect attempts.
 ## Dependencies and platform scope
 
 OpenDAL is pinned to **=0.59.5**, default features disabled. Enabled features:
-`executors-tokio`, `services-webdav`, `services-s3`, `layers-timeout`,
-`layers-retry`. No stock reqwest transport, tracing layer, OAuth services or new
-fork patches are enabled. `http = 1` bridges its HTTP API to the existing
-zed-reqwest client. TLS continues to use the workspace's
+`executors-tokio`, `services-webdav`, `services-s3`, `services-gdrive`,
+`services-onedrive`, `services-aliyun-drive`, `layers-timeout`, `layers-retry`.
+No stock reqwest transport, tracing layer or new fork patches are enabled.
+`http = 1` bridges its HTTP API to the existing zed-reqwest client. TLS continues to use the workspace's
 `rustls-tls-native-roots` feature, including Windows system trust.
 `rcgen = 0.14` and `rustls = 0.23` are test-only dependencies for a generated
 localhost certificate; no private-key fixture is committed. OpenDAL's MSRV is
 Rust 1.91; this run uses Rust/Cargo 1.99 on Windows, and CI selects stable.
 Linux/macOS runtime behavior still needs their existing CI jobs.
 
-## Validation results
+## Previous WebDAV/S3 validation results
 
 Executed on Windows x86_64/MSVC, Rust/Cargo 1.99.0. Logs are untracked under
 `target/opendal-*.log`.
@@ -203,8 +228,7 @@ V3-to-V4 integration test that runs against both WebDAV and S3. Coverage:
   recovery and rotated-password compatibility.
 - Existing Drive parser/token-sink tests run in the full desktop suite, including
   Store-write failure before token installation and refresh-token retention.
-  This is not a claim of live OAuth refresh/pagination/throttling validation for
-  all three remote services; those remain Native and need the external checks.
+  Live OAuth service behavior still requires the external checks below.
 
 The initial local fixture inherited nonblocking sockets on Windows and produced
 spurious connection resets. Accepted sockets are now explicitly blocking with
@@ -225,19 +249,72 @@ configuration. Never use production snapshots for fault injection.
    region/session credentials, trusted TLS, >1 listing page, ETag/304, limits,
    offline interruption and recovery. Compare old/new object names and verify
    both clients can read their encrypted snapshots.
-3. Google Drive/OneDrive/AliyunDrive remain Native: test access expiry, refresh
-   success/failure, token rotation and Store-write failure, superseded accounts,
-   pagination, throttling, upload failure and directory operations. Do not switch
-   them until reliable credential persistence is demonstrated.
+3. Google Drive/OneDrive/AliyunDrive: use a disposable account and a fresh provider
+   root; configure existing OAuth settings and select V4 through the existing UI.
+   Test access expiry, optional refresh-token rotation, revoked access, account
+   replacement and Store-write failure. Verify that refreshed tokens survive an
+   application restart. Populate multiple pages, exercise empty/4 MiB/64 MiB
+   uploads, interrupt upload/final move, then recover durable pending on restart.
+   In OneDrive Personal and Business, verify fail-on-conflict moves and final
+   upload-session 200/201 responses. In Aliyun default/resource/backup drives,
+   verify refuse-on-conflict moves and that an existing different object is
+   preserved and reported as a conflict. In Google, inject a duplicate file or
+   folder in the disposable root and confirm synchronization stops without
+   deleting or merging either copy. Signed URL traffic must contain no Bearer.
+   Use only a test account for token revocation or refresh-rotation fault tests.
 4. For each migrated service, import existing V3 data, join two V4 devices,
    create offline edits/conflicts, cancel before commit, attempt cancel during
    commit, lose an upload acknowledgement and restart with pending recovery.
    Verify old revisions remain readable and the master password is unchanged.
 
 Snapshots remain buffered as required by the existing byte-vector trait; this
-change does not add streaming or resumable multipart uploads. Interrupted WebDAV
-staging objects can accumulate and are intentionally not auto-cleaned. S3
-compatible services must implement conditional PUT correctly; unsupported
+change does not introduce a persistent resumable-upload journal. OneDrive uses
+OpenDAL upload-session fragments and Aliyun uses its upload/complete protocol;
+interrupted work is recovered by the existing immutable pending bytes, not by
+blindly replaying unknown mutations. Interrupted WebDAV/Drive staging objects
+and empty staging directories can accumulate and are intentionally not
+auto-cleaned. S3-compatible services must implement conditional PUT correctly; unsupported
 publication fails closed. MOVE atomicity/Overwrite enforcement and correct TLS
 root installation must be verified on real services. No real external account or
 NAS was accessed, and no issue is claimed fixed solely from adopting OpenDAL.
+
+## Drive migration validation
+
+Drive read retries wrap individual read-only HTTP exchanges rather than entire
+OpenDAL operations. This prevents RetryLayer/TimeoutLayer interactions from
+replaying a refresh-token rotation whose response was lost. API 401 refresh is
+bounded to once per rejected request; refresh errors retain their safe category
+but are not automatically retried inside the operation.
+
+The additional local HTTP fixture executes real OpenDAL GDrive/OneDrive/
+AliyunDrive service requests and test-only routed Native requests against the
+same state. It covers all nine remote methods, multi-page listings, invalid
+cursors and nextLink origins, duplicate Google paths/incompleteSearch, refresh
+success/invalid grant/omitted rotation, Store persistence and account replacement,
+403/429 + Retry-After, empty/4 MiB/64 MiB uploads, failed upload without replay,
+OneDrive completed 200 versus incomplete 202, signed download redirects, immutable
+conflicts and lost publication acknowledgements. Production-factory tests import
+Native V3 snapshots, recover durable pending and synchronize conflicting offline
+edits between two V4 devices while retaining the original bytes.
+
+No real OAuth account has been accessed by these tests. The fixture validates
+client contracts, not undocumented server atomicity or real-account permissions.
+The external checks above remain necessary on Windows and Linux/macOS.
+
+Final validation on Windows x86_64/MSVC, Rust/Cargo 1.99.0:
+
+| Command | Result |
+| --- | --- |
+| `cargo check --workspace` | Passed on final source |
+| `cargo test --workspace` | 5192 passed, 43 ignored, 51 suites including doctests |
+| `cargo test -p nyaterm-desktop --lib` | Final rerun: 2639 passed, 12 ignored |
+| Core library tests (workspace run) | 582 passed, 1 ignored |
+| `cargo clippy --workspace --all-targets` | Final rerun passed without warnings |
+| `cargo fmt --all -- --check` | Passed |
+| Architecture check and `git diff --check` | Passed |
+
+The complete workspace run preceded the last retry/OAuth classification cleanup
+and two additional refresh-failure regressions. Final desktop tests, workspace
+check and Clippy were repeated after that cleanup. No unrelated production
+modules changed. Test-only URL routing is compiled out of production; it lets
+Native and OpenDAL execute their actual HTTP protocols against the same fixture.

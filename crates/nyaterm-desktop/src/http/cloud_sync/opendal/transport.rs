@@ -21,6 +21,9 @@ pub(super) struct Transport {
     client: zed_reqwest::Client,
     webdav: Option<(String, Option<SecretString>)>,
     stats: Arc<Mutex<CloudSyncIoStats>>,
+    pub(super) drive: Option<Arc<super::drive_http::DriveHttp>>,
+    #[cfg(test)]
+    pub(super) test_endpoint: Option<String>,
 }
 
 impl Transport {
@@ -57,10 +60,13 @@ impl Transport {
             webdav: webdav
                 .map(|settings| (settings.username.trim().into(), settings.password.clone())),
             stats,
+            drive: None,
+            #[cfg(test)]
+            test_endpoint: None,
         })
     }
 
-    fn record(&self, update: impl FnOnce(&mut CloudSyncIoStats)) {
+    pub(super) fn record(&self, update: impl FnOnce(&mut CloudSyncIoStats)) {
         update(
             &mut self
                 .stats
@@ -79,8 +85,61 @@ impl Transport {
     }
 }
 
+impl Transport {
+    /// One counted exchange, with neither credentials nor redirects added.
+    pub(super) async fn exchange(
+        &self,
+        request: Request<Buffer>,
+    ) -> opendal::Result<Response<Buffer>> {
+        let (parts, body) = request.into_parts();
+        let target = parts.uri.to_string();
+        #[cfg(test)]
+        let target = if let Some(endpoint) = &self.test_endpoint {
+            let parsed = url::Url::parse(&target).map_err(|_| super::drive_http::invalid())?;
+            format!(
+                "{endpoint}/{}{}{}",
+                parsed.host_str().unwrap_or_default(),
+                parsed.path(),
+                parsed.query().map(|q| format!("?{q}")).unwrap_or_default()
+            )
+        } else {
+            target
+        };
+        let body = body.to_bytes();
+        self.record(|stats| {
+            stats.requests += 1;
+            stats.uploaded_bytes += body.len() as u64;
+        });
+        let response = self
+            .client
+            .request(parts.method, target)
+            .headers(parts.headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = self.body(response).await?;
+        let mut result = Response::builder().status(status);
+        *result.headers_mut().expect("valid response") = headers;
+        result
+            .body(Buffer::from(body))
+            .map_err(|_| super::drive_http::invalid())
+    }
+}
+
 impl HttpTransport for Transport {
     async fn fetch(&self, request: Request<Buffer>) -> opendal::Result<Response<HttpBody>> {
+        if let Some(drive) = &self.drive {
+            let response = drive.fetch(self, request).await?;
+            let (parts, body) = response.into_parts();
+            let length = body.len() as u64;
+            return Ok(Response::from_parts(
+                parts,
+                HttpBody::new(futures::stream::iter([Ok(body)]), Some(length)),
+            ));
+        }
         let (parts, body) = request.into_parts();
         let method = parts.method;
         let mut current = parts.uri.to_string();
