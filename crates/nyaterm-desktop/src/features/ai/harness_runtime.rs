@@ -47,7 +47,7 @@ impl NyaTermApp {
         self.respond_to_mcp_approval(request_id, decision, cx);
     }
 
-    pub(in crate::features) fn cancel_native_run_for_closed_session(
+    pub(in crate::features) fn cancel_ai_run_for_closed_session(
         &mut self,
         session_id: &str,
         cx: &mut Context<Self>,
@@ -66,7 +66,9 @@ impl NyaTermApp {
         }
         self.defer_ai_panel_snapshot_flush(cx);
         let scope = format!("terminal:{session_id}");
-        if self.ai.native_owner_in_scope(&scope).is_none() {
+        if !self.ai.chat_or_agent_is_running_in_scope(&scope)
+            && self.ai.native_owner_in_scope(&scope).is_none()
+        {
             return;
         }
         let visible = self.ai.active_scope_key().to_string();
