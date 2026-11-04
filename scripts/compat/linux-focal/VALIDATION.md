@@ -4,7 +4,8 @@ Current source policy after the published 2.0.1 build: prefer the system GPU
 renderer by default; select the bundled CPU path with `--software` or
 `NYATERM_RENDERER=software`. The dated sections below retain the original CPU
 default's historical results. See the final GPU-default section for the new
-launcher's tests and hardware-validation boundary.
+launcher's tests and hardware-validation boundary. The latest upstream sync and
+release validation is recorded in the 2026-11-04 section at the end.
 
 Target from the supplied environment guide: customized Ubuntu 20.04, x86-64,
 glibc 2.31, GTK 3.24.23, GLib 2.64.6, Linux 5.4, isolated network; GT 1010
@@ -278,3 +279,80 @@ SHA-256 已重新读取，保持不变。本轮只提交本地源码，不推送
 旧便携包可先直接执行 `./nyaterm` 使用系统驱动；就地部署本修改仅需关闭应用、备份并
 以 0755 替换 `start-nyaterm.sh`，保留原二进制、`opengl/` 与 `data/`。安装版对应文件为
 `/opt/nyaterm-compat/start-nyaterm.sh`，桌面回退动作由新 deb 提供。
+
+
+## 上游再次同步与 GPU 默认兼容修订版（2026-11-04）
+
+本轮完整恢复上一轮尚未推送的 GPU 默认提交
+`9733e232a8d2351bf487c3a02c86c54a4423bebe`：重建后的 Git 对象 SHA 与原记录
+完全一致，保存已验证的独立 bundle，并推送至 fork 的安全备份分支
+`backup/gpu-default-9733e232a`。没有重写兼容分支历史。
+
+普通 merge `eefd9da9857521f6e72da224d3dde34557f2cb67` 合入本轮启动时实际抓取的
+上游 `a7f5382766e610f8d7943a4f767d5f820f1ced91`，相对上一发行基线新增 27 个提交。
+本轮没有内容冲突；`scripts/release/README.md` 自动合并。保留上游 GPUI
+`a755e55a`、gpui-kit 0.9／`9143df97`、wgpu 30、Windows RDP、WebDAV 和终端等更新，
+同时保留 GPU 默认、显式 CPU 回退、glibc 2.31、图标与权限兼容方案。
+已读取新锁定 GPUI 的 `sort_adapters`：用户／显示服务的显式选择之后，硬件类型
+仍优先于 CPU，后端优先级在设备类型之后。
+
+上游 workspace 仍为 2.0.1，因此使用新 tag `compat-glibc231-2.0.1-r2` 和独立打包版本
+`2.0.1+compat.2`，不覆盖旧 2.0.1。`19a48f8f2db83147c1358cc40928e7b0a498f16c`
+添加 `NYATERM_FOCAL_VERSION`，将兼容修订版本传给现有打包器；Debian 版本为
+`2.0.1+compat.2-1+glibc231`，`dpkg --compare-versions` 确认高于旧版。
+优化制品首先由该提交生成；最终文档提交后再执行相同正式构建命令并比对四个 ELF，
+确认最终源码与已实际测试制品对应，文档提交没有改变构建输入。
+
+| 本轮新树与实际制品检查 | 实测结果 |
+| --- | --- |
+| 标准调试工作区 | `RUST_TEST_THREADS=2 cargo test --workspace --locked --no-fail-fast`：**5070 通过、0 失败、28 项既有忽略**，51 个套件，退出 0 |
+| 调试配置 | Cargo 元数据确认 `debug_assertions=true`、`overflow_checks=true`；仅用 `CARGO_PROFILE_DEV_DEBUG=0`／`CARGO_PROFILE_TEST_DEBUG=0` 去除调试符号 |
+| 原生 X11 类名 | 从本轮调试二进制在 Xvfb 下另行运行 ignored 回归，**1 项通过** |
+| 严格源码检查 | `cargo clippy --workspace --all-targets --locked -- -D warnings`（4m09s）、`cargo check --workspace --locked`、格式、架构边界、Shell、actionlint 1.7.7 与差异空白检查通过 |
+| Python 全量 | **165 项：156 通过、9 项平台／工具跳过**，包括实际 Rust 编译的诊断模块回归；focal Python 3.8 ABI／打包／启动器专项 **16 项通过** |
+| 锁定依赖优化构建 | Ubuntu 20.04、glibc 2.31、Rust 1.99.1、普通 UID 1000、`CARGO_BUILD_JOBS=2`；四个默认发行程序构建成功，用时 **13m53s**，未发生 OOM |
+| 发行程序 ABI | 主程序、MCP、RDP、VNC 最高均为 **GLIBC 2.30**；解释器、SONAME、RPATH、GLIBCXX／CXXABI 和 focal `ldd -r` 门禁通过 |
+| 私有 OpenGL | **83 个 ELF 库**，最高要求 **GLIBC 2.17**；复用校验和锁定下载缓存，重新执行运行库整理和 EGL 适配层构建 |
+| 真实 tar 软件回退 | 新目录解压本轮归档，以普通用户运行 `start-nyaterm.sh --software`，绘制 1280×800 工作台并检查截图；llvmpipe／`backend=Gl`／`type=Cpu`，Vulkan ICD 禁用 |
+| 真实 deb 软件回退 | 独立一次性 focal 容器安装，普通 UID 1000 运行 `nyaterm-compat --software` 绘制工作台并检查截图；同为软件 OpenGL |
+| GPU 默认契约 | 启动器回归和真实安装入口的记录型可执行文件确认：参数原样转发、默认不注入七项软件渲染变量；随后恢复真实 ELF 并确认 SHA-256 不变 |
+| 窗口身份 | 实际 tar／deb 均为 `("nyaterm", "NyaTerm")`，与 `StartupWMClass=NyaTerm` 一致；实际 desktop 通过 `desktop-file-validate`，含显式 CPU 软件渲染动作 |
+| 归档、权限、图标 | tar **1339** 条目、deb **1363** 条目检查 root 元数据、目录／可执行文件 0755 与数据 0644；32／64／128／256／512 图标与原 PNG 逐字节一致 |
+| 安装图标 | 普通用户 GTK 主题查找和 GdkPixbuf 解码 128／256／512 均通过，root:root／0644；主动改为 0600 后重复 `postinst configure` 两次修复成功 |
+| 实际发行助手生命周期 | 直接复用本轮缓存测试二进制，调用与包内逐字节一致的正式 RDP／VNC 可执行文件，**22 通过、0 失败**；前后 SHA-256 相同 |
+| 制品完整性 | tar、deb 及各自校验文件的 SHA-256、包内二进制与 ABI 报告、tar／deb 相同载荷逐项核对通过；仅打包明确发行载荷，不含个人 data、凭据、日志或构建缓存 |
+
+制品复核首轮发现测试命令会改写共享 target 目录中的两个 helper 输出：正式发行包内
+RDP／VNC 摘要分别以 `f0b7197f826c`／`6c322b30bdf2` 开头，而
+`cargo test -p nyaterm-rdp-helper -p nyaterm-vnc-helper --test lifecycle` 后目录输出变为
+`3e4b41ac6d3d`／`4202723e8e41`。Cargo 指纹证据确认两组同为 release、helper 的
+features 均为空，但依赖图指纹不同。没有修改源码或归档；重新执行原正式构建命令，
+缓存命中用时 0.77 秒，四个 ELF 全部恢复为包内哈希，之后完整制品审计通过。
+再直接运行缓存生命周期套件（其 `CARGO_BIN_EXE` 指向已恢复的正式输出），取得上表的
+22 项实际发行助手通过结果；完整保留首轮失败及两组产物／指纹证据，没有跳过校验。
+
+Python 环境准备阶段曾缺少官方 `v2.0.1` tag，已抓取并核对真实上游对象后重新通过。
+Windows 诊断脚本的 `tomllib` 依赖使用外层 Python 3.12 验证，focal Python 3.8 仅执行
+其支持的兼容专项；诊断 Rust 回归通过已有 focal 编译器执行，转发公开构建元数据后通过，
+没有修改产品代码、测试断言或增加忽略项来绕过环境问题。
+
+| 新制品 | SHA-256 |
+| --- | --- |
+| `NyaTerm_2.0.1+compat.2_linux_x64_glibc231.tar.gz` | `0f02f995961051ffae7b030eb46c0b15658e696d6542b0c05e8d5141a8414a33` |
+| `NyaTerm_2.0.1+compat.2_linux_x64_glibc231.deb` | `b2950b36ad192d97ad08dfdf739b412cd4a5b38e14418282fb3d5a29582001c5` |
+
+本轮证据位于 `target/validation-20261104/`：`recovered-gpu-9733.bundle`、
+`workspace-summary.json`、`workspace-tests.log`、`debug-profile.json`、`x11-test.log`、
+`clippy.log`、`cargo-check.log`、`python-all-with-rust-final.log`、`python38-focused.log`、
+`release-build.log`、`artifact-audit-first.log`、`helper-build-variants.json`、
+`profile-restore-build.log`、`packaged-lifecycle.log`、`artifact-audit.json`、
+`deb-install.log`、`installed-default-contract.json`、`software-smoke/`、`deb-smoke/`
+及最终源码／制品和发布后下载核对记录。短暂连接重启后已先读取原进程日志并核对哈希，
+提交和制品未丢失，没有因此重复编译或发布。
+
+云环境没有可用硬件 GPU，本轮真实窗口仅验证显式 CPU 软件回退；GPU 默认通过环境／
+参数契约与安装入口核实，不能据此宣称新 GPUI／wgpu 已在用户内网设备完成硬件加速
+或性能验收。容器共享宿主内核 6.18.57；目标 Linux 5.4、定制安全策略、真实桌面壳层、
+驱动、中文输入、剪贴板、内部 SSH／SFTP／RDP／VNC 服务仍需真机验收。
+Windows／macOS 未在本轮 Linux 环境实测。上游 PR CI 若等待维护者批准，属于外部审批
+边界，本地验证不等于上游 CI 成功；不代审批、重跑或合并 PR。
