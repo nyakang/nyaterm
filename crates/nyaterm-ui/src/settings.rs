@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, FontWeight, IntoElement, RenderOnce, ScrollHandle, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg,
+    AnyElement, App, ClickEvent, FontWeight, IntoElement, RenderOnce, Rgba, ScrollHandle,
+    SharedString, Window, div, prelude::*, px, rgb, rgba, svg,
 };
 
 use gpui_kit::component::scroll::ScrollableElement;
@@ -107,6 +107,7 @@ pub struct NyaSettingsLayout {
     sidebar_title: SharedString,
     content: AnyElement,
     palette: ThemePalette,
+    content_background: Option<Rgba>,
     viewport_width: Option<f32>,
     content_scroll_handle: Option<ScrollHandle>,
     compact_breakpoint: f32,
@@ -140,6 +141,7 @@ impl NyaSettingsLayout {
             sidebar_title: SharedString::from("Settings"),
             content: content.into_any_element(),
             palette: theme_palette("github-dark"),
+            content_background: None,
             viewport_width: None,
             content_scroll_handle: None,
             compact_breakpoint: DEFAULT_COMPACT_BREAKPOINT,
@@ -151,6 +153,13 @@ impl NyaSettingsLayout {
 
     pub fn palette(mut self, palette: ThemePalette) -> Self {
         self.palette = palette;
+        self
+    }
+
+    /// Overrides the opaque `palette.bg` content fill, e.g. so a translucent
+    /// host surface shows through instead of being painted over.
+    pub fn content_background(mut self, background: impl Into<Rgba>) -> Self {
+        self.content_background = Some(background.into());
         self
     }
 
@@ -238,6 +247,7 @@ impl RenderOnce for NyaSettingsLayout {
             }))
             .child(settings_content_panel(
                 palette,
+                self.content_background.unwrap_or_else(|| rgb(palette.bg)),
                 compact,
                 wide,
                 self.active_title,
@@ -546,6 +556,7 @@ fn settings_nav_item(
 
 fn settings_content_panel(
     palette: ThemePalette,
+    background: Rgba,
     compact: bool,
     wide: bool,
     active_title: SharedString,
@@ -558,7 +569,7 @@ fn settings_content_panel(
         .min_w_0()
         .min_h_0()
         .overflow_hidden()
-        .bg(rgb(palette.bg))
+        .bg(background)
         .child(
             div()
                 .size_full()
