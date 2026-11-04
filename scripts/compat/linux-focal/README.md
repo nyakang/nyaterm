@@ -32,7 +32,11 @@ Never disable TLS or package-signature verification. Do not pass secret values
 as image build arguments.
 
 The build writes `dist/NyaTerm_<version>_linux_x64_glibc231.tar.gz` plus a SHA-256
-file. All four executables must pass the following **before** archive creation:
+file. `NYATERM_FOCAL_VERSION` optionally labels a compatibility packaging revision
+(for example, `2.0.1+compat.2` for tag `compat-glibc231-2.0.1-r2`) while the
+application keeps its upstream version. Pass this variable into the container;
+use an independent `NYATERM_FOCAL_DIST` so existing release assets remain intact.
+All four executables must pass the following **before** archive creation:
 
 - ELF64 x86-64 with the system `/lib64/ld-linux-x86-64.so.2` interpreter;
 - GLIBC ≤ 2.31, GLIBCXX ≤ 3.4.28, CXXABI ≤ 1.3.12, no private libc ABI;

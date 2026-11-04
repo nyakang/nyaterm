@@ -21,6 +21,9 @@ package_options=()
 if [[ "${NYATERM_FOCAL_DEB:-0}" == 1 ]]; then
   package_options+=(--deb)
 fi
+if [[ -n "${NYATERM_FOCAL_VERSION:-}" ]]; then
+  package_options+=(--version "$NYATERM_FOCAL_VERSION")
+fi
 python3 scripts/compat/linux-focal/package.py --binary-dir "$binary_dir" \
   --opengl "$CARGO_TARGET_DIR/opengl" --output "${NYATERM_FOCAL_DIST:-dist}" "${package_options[@]}"
 if [[ "${NYATERM_FOCAL_TESTS:-1}" == 1 ]]; then
