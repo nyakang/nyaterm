@@ -1,16 +1,16 @@
-//! Own the settings CLI process tree so inherited pipes cannot outlive cleanup.
+//! Own the Agent CLI process tree so inherited pipes cannot outlive cleanup.
 
 use std::io;
 use std::process::{Child, Command};
 
-pub(super) struct AgentChild {
+pub(crate) struct AgentChild {
     child: Child,
     #[cfg(windows)]
     job: windows::Job,
 }
 
 impl AgentChild {
-    pub(super) fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub(crate) fn spawn(command: &mut Command) -> io::Result<Self> {
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt as _;
@@ -33,11 +33,11 @@ impl AgentChild {
         Ok(owner)
     }
 
-    pub(super) fn child_mut(&mut self) -> &mut Child {
+    pub(crate) fn child_mut(&mut self) -> &mut Child {
         &mut self.child
     }
 
-    pub(super) fn terminate(&mut self) {
+    pub(crate) fn terminate(&mut self) {
         #[cfg(windows)]
         self.job.terminate();
         let _ = self.child.kill();
@@ -200,7 +200,7 @@ mod windows {
                 entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
                 found = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
             }
-            Err(io::Error::other("settings CLI primary thread not found"))
+            Err(io::Error::other("Agent CLI primary thread not found"))
         }
 
         pub(super) fn terminate(&self) {

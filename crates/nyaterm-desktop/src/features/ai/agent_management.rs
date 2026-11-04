@@ -14,8 +14,7 @@ use super::helper_resolver::resolve_codex_executable;
 use super::helper_resolver::resolve_mcp_helper;
 use crate::thread_owner::spawn_joinable;
 
-mod child_process;
-use child_process::AgentChild;
+use crate::external_process::child_process::AgentChild;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 

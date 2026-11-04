@@ -292,11 +292,7 @@ fn native_approval_allow_buttons_consume_requests_and_target_close_revokes_pendi
             )
         })
     });
-    vcx.update(|_, cx| {
-        app.update(cx, |app, cx| {
-            app.cancel_native_run_for_closed_session("s", cx)
-        })
-    });
+    vcx.update(|_, cx| app.update(cx, |app, cx| app.cancel_ai_run_for_closed_session("s", cx)));
     vcx.update(|_, cx| respond(&app, &view, AgentApprovalDecision::AllowOnce, cx));
     compact_draw(&app, vcx);
     assert_eq!(

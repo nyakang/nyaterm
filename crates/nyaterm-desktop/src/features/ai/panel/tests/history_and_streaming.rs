@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use gpui::{
     AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
     VisualTestContext, div, px,
 };
-use nyaterm_core::AiMode;
+use nyaterm_core::{AiAgentKind, AiMode};
 
 use super::{
     CompactAiHost, ai_snapshot_sets, app, compact_draw, compact_host, edit_panel_snapshot,
@@ -16,6 +17,36 @@ use crate::test_support::TestConfigDir;
 
 struct HistoryHost {
     app: Entity<NyaTermApp>,
+}
+
+#[test]
+fn closing_a_terminal_cancels_its_external_agent_without_cancelling_other_chats() {
+    for kind in [AiAgentKind::ClaudeCode, AiAgentKind::Codex] {
+        let root = TestConfigDir::new("nyaterm-ai-close-external-agent");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, root.path());
+        cx.update_entity(&app, |app, cx| {
+            app.ai.switch_visible_scope("terminal:closed");
+            app.ai.set_chat_run_mode(AiMode::Agent, kind);
+            let closed = app
+                .ai
+                .begin_chat_request("inspect".into(), AiMode::Agent, None);
+            app.ai.switch_visible_scope("terminal:other");
+            let other = app.ai.begin_chat_request("other".into(), AiMode::Ask, None);
+
+            app.remove_session_state("closed", cx);
+
+            assert!(closed.cancel.load(Ordering::Acquire));
+            assert!(!other.cancel.load(Ordering::Acquire));
+            assert_eq!(app.ai.active_scope_key(), "terminal:other");
+            app.ai.switch_scope("terminal:closed");
+            assert!(!app.ai.chat_or_agent_is_running());
+            assert!(!app.ai.apply_chat_delta(closed.job_id, "late", None));
+            app.ai.switch_scope("terminal:other");
+            app.ai.cancel_chat_and_agent();
+        });
+    }
 }
 
 #[test]

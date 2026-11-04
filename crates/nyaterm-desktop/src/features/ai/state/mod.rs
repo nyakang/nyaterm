@@ -557,6 +557,17 @@ impl AiFeatureState {
         self.chat.pending || self.agent.loop_state.is_some() || self.agent.task_prompt.is_some()
     }
 
+    pub(in crate::features) fn chat_or_agent_is_running_in_scope(&self, scope: &str) -> bool {
+        if scope == self.active_scope_key {
+            return self.chat_or_agent_is_running();
+        }
+        self.inactive_scopes.get(scope).is_some_and(|state| {
+            state.chat.pending
+                || state.agent.loop_state.is_some()
+                || state.agent.task_prompt.is_some()
+        })
+    }
+
     pub(in crate::features) fn agent_task_is_active(&self) -> bool {
         self.agent.task_prompt.is_some()
     }
@@ -884,6 +895,20 @@ impl AiFeatureState {
         };
         self.chat.prepared_request = None;
         launch
+    }
+
+    pub(in crate::features) fn cancel_all_chats_and_agents(&mut self) {
+        // Switching/closing a terminal keeps its running conversation in an
+        // inactive scope. Every worker must see cancellation before pool join.
+        // Archived conversations cannot contain running jobs.
+        let visible = self.active_scope_key.clone();
+        let scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        self.cancel_chat_and_agent();
+        for scope in scopes {
+            self.switch_scope(&scope);
+            self.cancel_chat_and_agent();
+        }
+        self.switch_scope(&visible);
     }
 
     pub(in crate::features) fn cancel_chat_and_agent(&mut self) {
