@@ -30,6 +30,35 @@ def gate(job: str, values: dict[str, object]) -> bool:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_windows_packaging_preserves_msvc_path_in_release_and_snapshot(self) -> None:
+        for workflow in (WORKFLOW, WORKFLOW.with_name("main-snapshot.yml")):
+            with self.subTest(workflow=workflow.name):
+                content = workflow.read_text(encoding="utf-8")
+                linux_macos = re.search(
+                    r"      - name: Package native application\n(.*?)(?=      - name:)",
+                    content, re.S,
+                ).group(1)
+                windows = re.search(
+                    r"      - name: Package native application \(Windows MSVC\)\n(.*?)(?=      - name:)",
+                    content, re.S,
+                ).group(1)
+                self.assertIn("if: runner.os != 'Windows'", linux_macos)
+                self.assertIn("shell: bash", linux_macos)
+                self.assertIn("if: runner.os == 'Windows'", windows)
+                self.assertIn("shell: pwsh", windows)
+                self.assertIn("Get-Command link.exe -CommandType Application", windows)
+                self.assertIn(r"\\VC\\Tools\\MSVC", windows)
+                linker_pattern = re.search(
+                    r"if \(\$linker -notmatch '([^']+)'\)", windows
+                ).group(1)
+                for arch in ("x64", "arm64"):
+                    with self.subTest(arch=arch):
+                        msvc = rf"C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\HostX64\{arch}\link.exe"
+                        self.assertRegex(msvc, re.compile(linker_pattern, re.I))
+                self.assertIsNone(re.search(linker_pattern, r"C:\Program Files\Git\usr\bin\link.exe", re.I))
+                self.assertIn('python scripts/release/package_native.py "$env:TARGET"', windows)
+                self.assertIn("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }", windows)
+
     def test_stable_windows_packages_install_pinned_wix_and_sign_msi(self) -> None:
         package = jobs()["package"]
         install = re.search(r"      - name: Install WiX\n(.*?)(?=      - name:)", package, re.S).group(1)
