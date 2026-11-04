@@ -8,6 +8,7 @@ mod claude_code_runtime;
 mod codex_runtime;
 mod harness_runtime;
 mod helper_resolver;
+mod native_jobs;
 mod panel;
 pub(in crate::features) mod presentation;
 mod provider_runtime;
