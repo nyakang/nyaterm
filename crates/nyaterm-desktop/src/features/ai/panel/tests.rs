@@ -277,6 +277,7 @@ fn ai_header_running_transition_notifies_root() {
                 launch.job_id,
                 launch.session_id,
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Ask,
                     text: "done".to_string(),
@@ -1238,6 +1239,7 @@ fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_scri
                     launch.job_id,
                     launch.session_id,
                     Ok(AiChatJobOutput {
+                        metadata: None,
                         native_call: None,
                         mode: AiMode::Agent,
                         text: "Inspect resources".into(),

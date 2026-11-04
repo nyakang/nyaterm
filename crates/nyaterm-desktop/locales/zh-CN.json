@@ -2637,7 +2637,9 @@
     "groupTransfer": "数据传输",
     "groupWorkspace": "工作区",
     "zebraStripes": "终端行斑马纹",
-    "zebraStripesDesc": "高亮 Shell 输入区域和鼠标点击的目标行。",
+    "zebraStripesDesc": "高亮 Shell 输入区域和鼠标点击的目标行，可切换为逐行交替底色。",
+    "zebraStripesByRow": "按行显示",
+    "zebraStripesByRowDesc": "按终端显示行交替显示背景色。",
     "syncHistory": {
       "push": "手动上传",
       "pull": "手动下载",

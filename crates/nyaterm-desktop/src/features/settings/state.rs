@@ -138,7 +138,6 @@ pub(in crate::features) struct UiLayoutSettingsUpdate {
 struct SearchEngineSettingsState {
     expanded_index: Option<usize>,
     icon_picker_index: Option<usize>,
-    actions_index: Option<usize>,
     focus: FocusHandle,
 }
 
@@ -169,7 +168,6 @@ struct KeybindingSettingsState {
 pub(in crate::features) struct SearchEnginePresentationState {
     pub expanded_index: Option<usize>,
     pub icon_picker_index: Option<usize>,
-    pub actions_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +187,6 @@ pub(in crate::features) struct KeybindingPresentationState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::features) enum SearchEngineMenu {
     Icon,
-    Actions,
 }
 
 impl SettingsFeatureState {
@@ -222,7 +219,6 @@ impl SettingsFeatureState {
             search_engines: SearchEngineSettingsState {
                 expanded_index: None,
                 icon_picker_index: None,
-                actions_index: None,
                 focus: focus.search_engine,
             },
             keyword_highlights: KeywordHighlightSettingsState {
@@ -562,6 +558,10 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self) {
         self.summary.terminal_zebra_stripes_enabled = !self.summary.terminal_zebra_stripes_enabled;
+    }
+
+    pub(in crate::features) fn toggle_terminal_zebra_stripes_by_row(&mut self) {
+        self.summary.terminal_zebra_stripes_by_row = !self.summary.terminal_zebra_stripes_by_row;
     }
 
     pub(in crate::features) fn set_terminal_scrollback_lines(&mut self, value: u32) {
@@ -1249,7 +1249,6 @@ impl SettingsFeatureState {
         SearchEnginePresentationState {
             expanded_index: self.search_engines.expanded_index,
             icon_picker_index: self.search_engines.icon_picker_index,
-            actions_index: self.search_engines.actions_index,
         }
     }
 
@@ -1281,6 +1280,8 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn add_search_engine(&mut self, engine: SearchEngineConfig) {
         self.summary.search_custom_engines.insert(0, engine);
+        // The new row opens for editing. Leaving the page collapses it, so a
+        // later visit starts from the summary rows.
         self.search_engines.expanded_index = Some(0);
         self.search_engines.close_menus();
     }
@@ -1344,16 +1345,11 @@ impl SettingsFeatureState {
         if index >= self.summary.search_custom_engines.len() {
             return false;
         }
-        let next = match menu {
-            SearchEngineMenu::Icon => self.search_engines.icon_picker_index != Some(index),
-            SearchEngineMenu::Actions => self.search_engines.actions_index != Some(index),
-        };
+        let SearchEngineMenu::Icon = menu;
+        let next = self.search_engines.icon_picker_index != Some(index);
         self.search_engines.close_menus();
         if next {
-            match menu {
-                SearchEngineMenu::Icon => self.search_engines.icon_picker_index = Some(index),
-                SearchEngineMenu::Actions => self.search_engines.actions_index = Some(index),
-            }
+            self.search_engines.icon_picker_index = Some(index);
         }
         true
     }
@@ -1692,7 +1688,6 @@ impl SettingsFeatureState {
 impl SearchEngineSettingsState {
     fn close_menus(&mut self) {
         self.icon_picker_index = None;
-        self.actions_index = None;
     }
 }
 
@@ -1970,6 +1965,12 @@ mod tests {
         let zebra = state.summary().terminal_zebra_stripes_enabled;
         state.toggle_terminal_zebra_stripes();
         assert_eq!(state.summary().terminal_zebra_stripes_enabled, !zebra);
+        assert!(!state.summary().terminal_zebra_stripes_by_row);
+        state.toggle_terminal_zebra_stripes_by_row();
+        state.toggle_terminal_zebra_stripes();
+        assert!(state.summary().terminal_zebra_stripes_by_row);
+        state.toggle_terminal_zebra_stripes();
+        assert!(state.summary().terminal_zebra_stripes_by_row);
         assert!(state.toggle_terminal_action_link_matcher("ipv4"));
         assert!(state.summary().terminal_action_links_matchers.mac);
         assert!(state.toggle_terminal_action_link_matcher("mac"));
@@ -2047,16 +2048,34 @@ mod tests {
 
         assert_eq!(state.toggle_search_engine_expanded(2), Some(false));
         assert!(state.toggle_search_engine_menu(SearchEngineMenu::Icon, 2));
-        assert!(state.toggle_search_engine_menu(SearchEngineMenu::Actions, 2));
         let interaction = state.search_engine_presentation();
         assert_eq!(interaction.expanded_index, Some(2));
-        assert_eq!(interaction.icon_picker_index, None);
-        assert_eq!(interaction.actions_index, Some(2));
+        assert_eq!(interaction.icon_picker_index, Some(2));
 
         assert!(state.remove_search_engine(0));
         assert_eq!(state.search_engine_presentation().expanded_index, Some(1));
+        assert_eq!(state.search_engine_presentation().icon_picker_index, None);
         assert!(state.remove_search_engine(1));
         assert_eq!(state.search_engine_presentation().expanded_index, None);
+    }
+
+    #[test]
+    fn settings_owner_adds_a_search_engine_open_for_editing() {
+        let mut state = settings_state();
+        assert_eq!(state.toggle_search_engine_expanded(0), Some(false));
+        let before = state.summary().search_custom_engines.len();
+
+        state.add_search_engine(SearchEngineConfig {
+            name: "baidu".to_string(),
+            url_template: "https://www.baidu.com/s?wd=%s".to_string(),
+            icon: Some("baidu".to_string()),
+            show_in_menu: true,
+        });
+
+        assert_eq!(state.summary().search_custom_engines.len(), before + 1);
+        assert_eq!(state.summary().search_custom_engines[0].name, "baidu");
+        assert_eq!(state.search_engine_presentation().expanded_index, Some(0));
+        assert_eq!(state.search_engine_presentation().icon_picker_index, None);
     }
 
     #[test]

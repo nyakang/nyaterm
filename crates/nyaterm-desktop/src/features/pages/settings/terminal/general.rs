@@ -114,6 +114,31 @@ impl SettingsPanel {
                             }),
                         ),
                     ))
+                    .when(
+                        self.settings.summary().terminal_zebra_stripes_enabled,
+                        |this| {
+                            this.child(
+                                div()
+                                    .pl_4()
+                                    .debug_selector(|| "terminal-row-stripes-setting".into())
+                                    .child(settings_form_row(
+                                        palette,
+                                        t!("settings.zebraStripesByRow"),
+                                        Some(SharedString::from(t!(
+                                            "settings.zebraStripesByRowDesc"
+                                        ))),
+                                        settings_switch(
+                                            palette,
+                                            "terminal-zebra-stripes-by-row",
+                                            self.settings.summary().terminal_zebra_stripes_by_row,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_terminal_zebra_stripes_by_row(cx);
+                                            }),
+                                        ),
+                                    )),
+                            )
+                        },
+                    )
                     .child(settings_form_row(
                         palette,
                         t!("settings.showWorkspacePadding"),

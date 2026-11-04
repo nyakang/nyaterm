@@ -2,7 +2,7 @@
 
 ## Source audit (2026-11-04)
 
-Base: origin/main, 9fed0698c. Worktree: ../nyaterm-opendal; branch:
+Initial audit base: origin/main, 9fed0698c. Worktree: ../nyaterm-opendal; branch:
 feat/opendal-cloud-sync. The original index and working files are untouched.
 
 The current source has a separate nyaterm-sync crate for V4 merge/publication
@@ -301,20 +301,24 @@ No real OAuth account has been accessed by these tests. The fixture validates
 client contracts, not undocumented server atomicity or real-account permissions.
 The external checks above remain necessary on Windows and Linux/macOS.
 
-Final validation on Windows x86_64/MSVC, Rust/Cargo 1.99.0:
+Final validation on Windows x86_64/MSVC, Rust/Cargo 1.99.0, after merging
+main cb3997d3e (including its AI dependency migration):
 
 | Command | Result |
 | --- | --- |
-| `cargo check --workspace` | Passed on final source |
-| `cargo test --workspace` | 5192 passed, 43 ignored, 51 suites including doctests |
-| `cargo test -p nyaterm-desktop --lib` | Final rerun: 2639 passed, 12 ignored |
-| Core library tests (workspace run) | 582 passed, 1 ignored |
-| `cargo clippy --workspace --all-targets` | Final rerun passed without warnings |
+| `cargo check --locked --workspace` | Passed |
+| `cargo test --locked --workspace` | 5230 passed, 43 ignored, 51 suites including doctests |
+| Desktop library tests (workspace run) | 2667 passed, 12 ignored |
+| Core library tests (workspace run) | 585 passed, 1 ignored |
+| `cargo clippy --locked --workspace --all-targets` | Passed without warnings |
 | `cargo fmt --all -- --check` | Passed |
 | Architecture check and `git diff --check` | Passed |
 
-The complete workspace run preceded the last retry/OAuth classification cleanup
-and two additional refresh-failure regressions. Final desktop tests, workspace
-check and Clippy were repeated after that cleanup. No unrelated production
-modules changed. Test-only URL routing is compiled out of production; it lets
-Native and OpenDAL execute their actual HTTP protocols against the same fixture.
+The final complete workspace run includes the read-retry/OAuth classification
+cleanup and both refresh-failure regressions. The Cargo.lock merge preserves
+both branches' dependency additions without adding versions outside their union;
+locked metadata, workspace check, tests and Clippy validate the resolved graph.
+Test-only URL routing is compiled out of production; it lets Native and OpenDAL
+execute their actual HTTP protocols against the same fixture. The merge retains
+main's unrelated changes; the PR diff contains the cloud-sync implementation and
+its tests and documentation.

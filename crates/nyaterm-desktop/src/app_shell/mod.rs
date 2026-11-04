@@ -664,6 +664,11 @@ impl AppShell {
             }
         }
         let started_at = Instant::now();
+        tracing::info!(
+            pid = std::process::id(),
+            stage = "workspace_jobs",
+            "shutdown stage started"
+        );
         let mut tasks = self.controller.update(cx, |controller, cx| {
             let mut tasks = controller.shutdown_other_workspaces(self.workspace_id, cx);
             tasks.push(controller.shutdown_plugins(cx));

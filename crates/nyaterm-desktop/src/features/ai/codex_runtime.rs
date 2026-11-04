@@ -82,12 +82,8 @@ fn run_codex_app_server_with_environment(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    hide_window(&mut command);
-    let mut child = ExternalAgentChild::new(
-        command
-            .spawn()
-            .map_err(|error| format!("failed to start Codex app-server: {error}"))?,
-    );
+    let mut child = ExternalAgentChild::spawn(&mut command)
+        .map_err(|error| format!("failed to start Codex app-server: {error}"))?;
     let stdin = child
         .take_stdin()
         .ok_or_else(|| "Codex app-server stdin is unavailable".to_string())?;
@@ -336,15 +332,6 @@ fn looks_like_command_plan(text: &str) -> bool {
         .and_then(|value| value.get("commands").and_then(Value::as_array).cloned())
         .is_some_and(|commands| !commands.is_empty())
 }
-
-#[cfg(windows)]
-fn hide_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x0800_0000);
-}
-
-#[cfg(not(windows))]
-fn hide_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

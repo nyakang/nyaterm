@@ -106,6 +106,9 @@ pub(in crate::features) struct AiSettingsPersistenceCompletion {
 
 /// Composer, in-flight request and the visible transcript.
 struct AiChatState {
+    native_task: Option<crate::ai_runtime::AiTask>,
+    response_metadata: HashMap<String, nyaterm_core::ai::completion::AiResponseMetadata>,
+    provider_session: Option<Arc<crate::http::ai::AiProviderSession>>,
     tx: UnboundedSender<AiChatWorkerEvent>,
     /// Taken once by `NyaTermApp::start_ai_chat_event_drain`, which owns
     /// delivery from then on. `None` afterwards, so a second start is a no-op.
@@ -154,6 +157,9 @@ impl AiChatState {
         Self {
             tx,
             rx: None,
+            native_task: None,
+            response_metadata: HashMap::new(),
+            provider_session: None,
             pending: false,
             job_id: 0,
             cancel: None,
@@ -281,6 +287,55 @@ fn non_empty(value: String) -> Option<String> {
 }
 
 impl AiFeatureState {
+    pub(in crate::features) fn cancel_removed_provider_runs(&mut self, config: &AiSettings) {
+        let visible = self.active_scope_key.clone();
+        let mut scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        scopes.push(visible.clone());
+        for scope in scopes {
+            self.switch_scope(&scope);
+            if self.chat.provider_session.as_ref().is_some_and(|session| {
+                !config.provider_credentials.iter().any(|credential| {
+                    credential.id == session.credential_id() && credential.enabled
+                })
+            }) {
+                self.cancel_chat_and_agent();
+                self.chat.provider_session = None;
+            }
+        }
+        self.switch_scope(&visible);
+    }
+    pub(in crate::features) fn run_settings(&self) -> &AiSettings {
+        self.chat
+            .provider_session
+            .as_ref()
+            .map(|session| &session.settings)
+            .unwrap_or(&self.settings.config)
+    }
+
+    pub(in crate::features) fn provider_session(
+        &mut self,
+        request: &nyaterm_core::ai::AiChatRequest,
+    ) -> Result<Arc<crate::http::ai::AiProviderSession>, String> {
+        if let Some(session) = &self.chat.provider_session {
+            return Ok(session.clone());
+        }
+        let session =
+            crate::http::ai::AiProviderSession::new(self.settings.config.clone(), request)
+                .map_err(|error| error.to_string())?;
+        self.chat.provider_session = Some(session.clone());
+        Ok(session)
+    }
+    pub(in crate::features) fn native_network_cancel(&self) -> tokio_util::sync::CancellationToken {
+        self.agent
+            .native
+            .as_ref()
+            .map(|native| native.cancellation.child_token())
+            .unwrap_or_default()
+    }
+    pub(in crate::features) fn own_native_task(&mut self, task: crate::ai_runtime::AiTask) {
+        self.chat.native_task = Some(task);
+    }
+
     pub(in crate::features) fn new(init: AiFeatureInit, focus: AiFeatureFocus) -> Self {
         let AiFeatureInit {
             settings,
@@ -315,6 +370,9 @@ impl AiFeatureState {
                 pending_full_access: None,
             },
             chat: AiChatState {
+                native_task: None,
+                response_metadata: HashMap::new(),
+                provider_session: None,
                 tx: chat_tx,
                 rx: Some(chat_rx),
                 pending: false,
@@ -555,6 +613,17 @@ impl AiFeatureState {
 
     pub(in crate::features) fn chat_or_agent_is_running(&self) -> bool {
         self.chat.pending || self.agent.loop_state.is_some() || self.agent.task_prompt.is_some()
+    }
+
+    pub(in crate::features) fn chat_or_agent_is_running_in_scope(&self, scope: &str) -> bool {
+        if scope == self.active_scope_key {
+            return self.chat_or_agent_is_running();
+        }
+        self.inactive_scopes.get(scope).is_some_and(|state| {
+            state.chat.pending
+                || state.agent.loop_state.is_some()
+                || state.agent.task_prompt.is_some()
+        })
     }
 
     pub(in crate::features) fn agent_task_is_active(&self) -> bool {
@@ -809,6 +878,7 @@ impl AiFeatureState {
         if let Some(previous) = self.agent.native.take() {
             previous.cancellation.cancel();
         }
+        self.chat.provider_session = None;
         let launch = self.begin_chat_job();
         if mode == AiMode::Agent {
             self.agent.task_prompt = Some(request_prompt.clone());
@@ -886,7 +956,22 @@ impl AiFeatureState {
         launch
     }
 
+    pub(in crate::features) fn cancel_all_chats_and_agents(&mut self) {
+        // Switching/closing a terminal keeps its running conversation in an
+        // inactive scope. Every worker must see cancellation before pool join.
+        // Archived conversations cannot contain running jobs.
+        let visible = self.active_scope_key.clone();
+        let scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        self.cancel_chat_and_agent();
+        for scope in scopes {
+            self.switch_scope(&scope);
+            self.cancel_chat_and_agent();
+        }
+        self.switch_scope(&visible);
+    }
+
     pub(in crate::features) fn cancel_chat_and_agent(&mut self) {
+        self.chat.native_task = None;
         if let Some(native) = &mut self.agent.native {
             native.cancellation.cancel();
             native.run.cancel();
@@ -1057,6 +1142,14 @@ impl AiFeatureState {
         self.chat.cancel = None;
         match result {
             Ok(output) => {
+                if let Some(metadata) = &output.metadata {
+                    let id = self
+                        .chat
+                        .streaming_assistant_id
+                        .clone()
+                        .unwrap_or_else(|| job_id.to_string());
+                    self.chat.response_metadata.insert(id, metadata.clone());
+                }
                 let has_native_call = output.native_call.is_some();
                 if output.mode == AiMode::Agent && !has_native_call {
                     self.agent.conversation.push(AiMessage {

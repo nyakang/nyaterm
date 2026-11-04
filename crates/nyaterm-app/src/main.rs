@@ -94,6 +94,27 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// SDK/HTTP traces may include bodies, authentication, URLs and terminal input.
+// This filter applies to every sink and cannot be relaxed by RUST_LOG.
+fn ai_log_target_allowed(metadata: &tracing::Metadata<'_>) -> bool {
+    ![
+        "genai",
+        "reqwest",
+        "hyper",
+        "hyper_util",
+        "h2",
+        "tower_http",
+    ]
+    .iter()
+    .any(|target| {
+        metadata.target() == *target
+            || metadata
+                .target()
+                .strip_prefix(target)
+                .is_some_and(|suffix| suffix.starts_with("::"))
+    })
+}
+
 fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
@@ -110,6 +131,7 @@ fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
         tracing_subscriber::registry()
             .with(filter)
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
             .with(tracing_subscriber::fmt::layer().compact())
             .with(
                 tracing_subscriber::fmt::layer()
@@ -120,9 +142,10 @@ fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
             .context("initialize tracing subscriber and log bridge")?;
         Ok(Some(guard))
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .finish()
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
+            .with(tracing_subscriber::fmt::layer())
             .try_init()
             .context("initialize tracing subscriber and log bridge")?;
         if let Err(error) = file_appender {
@@ -171,6 +194,8 @@ mod tests {
         log::debug!(target: "nyaterm", "debug-log-marker");
         tracing::error!(target: "nyaterm", "error-event-marker");
         log::error!(target: "nyaterm", "error-log-marker");
+        tracing::error!(target: "genai::adapter", "secret-body-marker");
+        log::error!(target: "reqwest::connect", "secret-body-marker");
         drop(guard);
     }
 
@@ -189,7 +214,7 @@ mod tests {
             command
                 .args(["--exact", "tests::logging_child", "--nocapture"])
                 .env("NYATERM_LOGGING_TEST_DIR", &root)
-                .env("RUST_LOG", filter);
+                .env("RUST_LOG", format!("{filter},genai=trace,reqwest=trace"));
             if fallback {
                 command.env("NYATERM_LOGGING_TEST_FALLBACK", "1");
             }
@@ -208,6 +233,8 @@ mod tests {
                     .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
                     .collect::<String>()
             };
+            assert!(!console.contains("secret-body-marker"));
+            assert!(!jsonl.contains("secret-body-marker"));
             for (level, expected) in [
                 ("trace", filter.ends_with("trace")),
                 ("debug", !filter.ends_with("error")),

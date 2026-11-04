@@ -486,6 +486,8 @@ pub struct AppSettingsSummary {
     pub terminal_low_latency_mode: bool,
     #[serde(default = "default_terminal_zebra_stripes_enabled")]
     pub terminal_zebra_stripes_enabled: bool,
+    #[serde(default)]
+    pub terminal_zebra_stripes_by_row: bool,
     /// Detect clickable entities (IP/MAC/host:port/archive) in terminal output (Tauri action_links_enabled).
     #[serde(default)]
     pub terminal_action_links_enabled: bool,
@@ -769,6 +771,7 @@ impl Default for AppSettingsSummary {
             terminal_reconnect_restore_cwd: false,
             terminal_low_latency_mode: false,
             terminal_zebra_stripes_enabled: default_terminal_zebra_stripes_enabled(),
+            terminal_zebra_stripes_by_row: false,
             terminal_action_links_enabled: false,
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
@@ -1290,6 +1293,22 @@ mod tests {
         assert_eq!(decoded.ui_start_workspace_mode, "assets");
         assert_eq!(decoded.ui_asset_sort_key.as_deref(), Some("hostname"));
         assert_eq!(decoded.ui_asset_sort_direction.as_deref(), Some("desc"));
+    }
+
+    #[test]
+    fn row_stripes_are_opt_in_for_current_and_legacy_settings() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        assert_eq!(value["terminal_zebra_stripes_by_row"], false);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_zebra_stripes_by_row");
+        let mut settings: AppSettingsSummary = serde_json::from_value(value).unwrap();
+        assert!(!settings.terminal_zebra_stripes_by_row);
+        settings.terminal_zebra_stripes_by_row = true;
+        let roundtrip: AppSettingsSummary =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(roundtrip.terminal_zebra_stripes_by_row);
     }
 
     #[test]

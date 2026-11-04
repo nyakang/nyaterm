@@ -42,6 +42,8 @@ impl AgentTool {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentToolCall {
+    #[serde(skip)]
+    pub assistant_turn: Option<crate::ai::completion::AiAssistantTurn>,
     pub id: String,
     pub tool: AgentTool,
     pub arguments: Value,
@@ -227,6 +229,7 @@ impl AgentToolRegistry {
                 json!({"status":"unverified","summary":"No explicit verification was supplied."});
         }
         let call = AgentToolCall {
+            assistant_turn: None,
             id,
             tool,
             arguments,

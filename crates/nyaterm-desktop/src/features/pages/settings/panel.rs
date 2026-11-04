@@ -158,7 +158,6 @@ impl SettingsPresentation {
             search_engine_presentation: SearchEnginePresentationState {
                 expanded_index: None,
                 icon_picker_index: None,
-                actions_index: None,
             },
             keyword_highlight_presentation: KeywordHighlightPresentationState {
                 expanded_id: None,
@@ -1984,6 +1983,7 @@ forward_app_action!(
     toggle_terminal_timestamps,
     toggle_terminal_workspace_padding,
     toggle_terminal_zebra_stripes,
+    toggle_terminal_zebra_stripes_by_row,
     toggle_terminal_zoom_enabled,
     toggle_file_manager_auto_collapse,
     toggle_transfer_ask_save_location,
@@ -2180,6 +2180,33 @@ mod tests {
                 assert!(!saved.has_master_password);
             });
         }
+    }
+
+    #[test]
+    fn row_stripes_subswitch_follows_main_switch_and_keeps_its_preference() {
+        let dir = TestConfigDir::new("nyaterm-settings-row-stripes");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+                app.toggle_terminal_zebra_stripes_by_row(cx);
+            })
+        });
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_some());
+        vcx.update(|_, cx| app.update(cx, |app, cx| app.toggle_terminal_zebra_stripes(cx)));
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_none());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.settings.summary().terminal_zebra_stripes_by_row);
+                app.toggle_terminal_zebra_stripes(cx);
+            })
+        });
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_some());
     }
 
     #[test]

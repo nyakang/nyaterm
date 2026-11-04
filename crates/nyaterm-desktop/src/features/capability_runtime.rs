@@ -399,7 +399,7 @@ impl NyaTermApp {
         success: bool,
         cx: &mut Context<Self>,
     ) {
-        let permission_mode = if self.ai.settings_config().agent_command_execution_mode
+        let permission_mode = if self.ai.run_settings().agent_command_execution_mode
             == nyaterm_core::AgentCommandExecutionMode::ConfirmEach
         {
             nyaterm_core::AiPermissionMode::Confirm
@@ -581,7 +581,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if matches!(request.caller, CapabilityCaller::Native { .. }) {
-            request.permission_mode = if self.ai.settings_config().agent_command_execution_mode
+            request.permission_mode = if self.ai.run_settings().agent_command_execution_mode
                 == nyaterm_core::AgentCommandExecutionMode::ConfirmEach
             {
                 nyaterm_core::AiPermissionMode::Confirm
@@ -670,7 +670,7 @@ impl NyaTermApp {
                 if let (Some(risk), Some(model)) = (assessment.as_mut(), model_risk) {
                     risk.level = risk.level.clone().max(model.clone());
                 }
-                let settings = self.ai.settings_config();
+                let settings = self.ai.run_settings();
                 decide_native_policy(
                     &settings.agent_command_execution_mode,
                     &settings.agent_smart_auto_execute_max_risk,
@@ -682,7 +682,7 @@ impl NyaTermApp {
         let single_approval = requires_single_approval(definition.access, assessment.as_ref());
         let confirm_each = matches!(request.caller, CapabilityCaller::Native { .. })
             && request.tool == tool::TERMINAL_EXECUTE
-            && self.ai.settings_config().agent_command_execution_mode
+            && self.ai.run_settings().agent_command_execution_mode
                 == nyaterm_core::AgentCommandExecutionMode::ConfirmEach;
         self.mcp.capabilities.owners.insert(
             request.connection_id.clone(),
