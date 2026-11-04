@@ -597,6 +597,17 @@ impl SettingsFeatureState {
         self.summary.terminal_show_line_numbers = !self.summary.terminal_show_line_numbers;
     }
 
+    pub(in crate::features) fn set_terminal_wrap_mode(
+        &mut self,
+        mode: nyaterm_core::models::settings::TerminalWrapMode,
+    ) {
+        self.summary.terminal_wrap_mode = mode;
+    }
+
+    pub(in crate::features) fn toggle_terminal_wrap_markers(&mut self) {
+        self.summary.terminal_show_wrap_markers = !self.summary.terminal_show_wrap_markers;
+    }
+
     pub(in crate::features) fn toggle_terminal_timestamps(&mut self) {
         self.summary.terminal_show_timestamps = !self.summary.terminal_show_timestamps;
     }

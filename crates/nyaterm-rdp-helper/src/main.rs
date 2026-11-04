@@ -634,15 +634,7 @@ fn build_config(
     } else {
         32
     };
-    let clipboard_enabled = !matches!(
-        config.clipboard.mode,
-        nyaterm_remote_desktop::RdpClipboardMode::Disabled
-    );
-    let clipboard = ClipboardBridge::new(
-        session_id.to_string(),
-        output_tx,
-        config.clipboard.mode == nyaterm_remote_desktop::RdpClipboardMode::TextAndFiles,
-    );
+    let clipboard = ClipboardBridge::new(session_id.to_string(), output_tx, true);
     let clipboard_factory = clipboard.clone();
     let use_credssp = config.use_nla && config.password.is_some();
     // The fork implements Progressive decoding, but this path has not been
@@ -697,12 +689,9 @@ fn build_config(
         .with_pointer_software_rendering(false)
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
         .with_certificate_validation_callback(verifier)
-        // Keep IronRDP's native clipboard backend disabled on every platform. When text
-        // redirection is enabled, the custom static channel below is the sole CLIPRDR backend.
+        // The custom static channel is the sole CLIPRDR backend on every platform.
         .with_clipboard(ClipboardType::Disable);
-    if clipboard_enabled {
-        builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
-    }
+    builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
     // Zero means the caller had no panel-derived scale to ask for, which is what
     // a fixed-size connection and every pre-existing saved connection send.
     // Negotiating the scale together with the size is what keeps the desktop from
@@ -1626,7 +1615,7 @@ mod tests {
         assert!(error.to_string().contains("session id mismatch"));
     }
 
-    fn helper_config() -> RdpSessionConfig {
+    pub(super) fn helper_config() -> RdpSessionConfig {
         RdpSessionConfig {
             relay: None,
             backend: Default::default(),

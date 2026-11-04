@@ -255,7 +255,8 @@ impl NyaTermApp {
             &self.settings.summary().terminal_action_links_matchers,
         );
         let offset = self.terminal_display_offset_for_session(session_id);
-        let snapshot = self.terminal_snapshot_for_session(session_id, offset);
+        let painted = self.terminal_hit_test_geometry_for_session(session_id, cx)?;
+        let snapshot = painted.snapshot.clone();
         let frame_action_links = if let Some(session_id) = session_id.filter(|id| !id.is_empty()) {
             let view = self.terminal.view.views.get(session_id)?;
             crate::features::terminal::terminal_surface::terminal_action_links_for_paint_snapshot(
@@ -267,12 +268,8 @@ impl NyaTermApp {
         } else {
             Vec::new()
         };
-        let snapshot_row = self.terminal_snapshot_row_for_session_viewport_row(
-            session_id,
-            snapshot.as_ref(),
-            offset,
-            cell.row,
-        )?;
+        let snapshot_row =
+            super::metrics::terminal_snapshot_row_for_visual_geometry(position, &painted);
         let line = snapshot.line(snapshot_row)?;
         if line.is_empty() {
             return None;
@@ -427,17 +424,13 @@ impl NyaTermApp {
             return false;
         };
         let session_id = self.session.active_id_owned().unwrap_or_default();
-        let display_offset = self.active_terminal_display_offset();
-        let snapshot =
-            self.terminal_snapshot_for_session(Some(session_id.as_str()), display_offset);
-        let Some(snapshot_row) = self.terminal_snapshot_row_for_session_viewport_row(
-            Some(session_id.as_str()),
-            snapshot.as_ref(),
-            display_offset,
-            pos.row,
-        ) else {
+        let Some(geometry) = self.terminal_hit_test_geometry_for_session(Some(&session_id), cx)
+        else {
             return false;
         };
+        let snapshot = geometry.snapshot.clone();
+        let snapshot_row =
+            super::metrics::terminal_snapshot_row_for_visual_geometry(event.position(), &geometry);
         let Some(spans) = snapshot.row(snapshot_row).map(|row| &row.hyperlinks) else {
             return false;
         };

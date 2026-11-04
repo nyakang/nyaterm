@@ -8,7 +8,7 @@ use gpui::{
     SharedString, Styled as _, Window, WindowId, div, px,
 };
 use gpui_kit::component::{
-    Disableable as _, WindowExt as _,
+    DialogHandle, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{Dialog, DialogAction, DialogButtonProps, DialogClose, DialogFooter},
 };
@@ -17,21 +17,22 @@ pub struct NyaDialog {
     inner: Dialog,
 }
 
-/// A weak identity: the component stack's builder owns the dialog's lifetime.
+/// A weak identity whose logical lifetime ends when the component closes it.
 #[derive(Clone)]
 pub struct NyaDialogHandle {
     window: WindowId,
     marker: Weak<()>,
+    lifecycle: DialogHandle,
 }
 
 #[derive(Default)]
-struct DialogIdentities(HashMap<WindowId, Vec<Weak<()>>>);
+struct DialogIdentities(HashMap<WindowId, Vec<(Weak<()>, DialogHandle)>>);
 
 impl Global for DialogIdentities {}
 
 impl NyaDialogHandle {
     pub fn is_active(&self) -> bool {
-        self.marker.strong_count() > 0
+        self.lifecycle.is_active() && self.marker.strong_count() > 0
     }
 
     pub fn is_top(&self, window: &Window, cx: &mut App) -> bool {
@@ -40,14 +41,14 @@ impl NyaDialogHandle {
         }
         let identities = cx.default_global::<DialogIdentities>();
         identities.0.retain(|_, stack| {
-            stack.retain(|marker| marker.strong_count() > 0);
+            stack.retain(|(marker, lifecycle)| lifecycle.is_active() && marker.strong_count() > 0);
             !stack.is_empty()
         });
         identities
             .0
             .get(&self.window)
             .and_then(|stack| stack.last())
-            .is_some_and(|marker| marker.ptr_eq(&self.marker))
+            .is_some_and(|(marker, _)| marker.ptr_eq(&self.marker))
     }
 }
 
@@ -333,26 +334,28 @@ impl NyaDialogWindowExt for Window {
         F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static,
     {
         let marker = Rc::new(());
+        let weak = Rc::downgrade(&marker);
+        let lifecycle = self.open_tracked_dialog(cx, move |dialog, window, cx| {
+            let _lifetime = &marker;
+            build(NyaDialog::from_component(dialog), window, cx)
+                .into_component()
+                .shadow(gpui_base::Theme::global(cx).tokens.shadow.lg)
+        });
         let handle = NyaDialogHandle {
             window: self.window_handle().window_id(),
-            marker: Rc::downgrade(&marker),
+            marker: weak,
+            lifecycle,
         };
         let identities = cx.default_global::<DialogIdentities>();
         identities.0.retain(|_, stack| {
-            stack.retain(|marker| marker.strong_count() > 0);
+            stack.retain(|(marker, lifecycle)| lifecycle.is_active() && marker.strong_count() > 0);
             !stack.is_empty()
         });
         identities
             .0
             .entry(handle.window)
             .or_default()
-            .push(handle.marker.clone());
-        self.open_dialog(cx, move |dialog, window, cx| {
-            let _lifetime = &marker;
-            build(NyaDialog::from_component(dialog), window, cx)
-                .into_component()
-                .shadow(gpui_base::Theme::global(cx).tokens.shadow.lg)
-        });
+            .push((handle.marker.clone(), handle.lifecycle.clone()));
         handle
     }
 

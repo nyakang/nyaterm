@@ -113,16 +113,11 @@ pub(in crate::features) fn compare_transfer_browser_entries(
     column: TransferBrowserSortColumn,
     direction: TransferBrowserSortDirection,
 ) -> Ordering {
-    if left.file_type != right.file_type {
-        let left_dir = left.is_directory();
-        let right_dir = right.is_directory();
-        if left_dir != right_dir {
-            return if left_dir {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            };
-        }
+    // Directory links and file links share a file type, but must still belong to
+    // different sort groups. Grouping cannot depend on the other entry's type.
+    let directory_order = right.is_directory().cmp(&left.is_directory());
+    if directory_order != Ordering::Equal {
+        return directory_order;
     }
 
     let result = match column {
@@ -228,4 +223,219 @@ pub(in crate::features) fn record_browser_history(
     history.push_front(path.to_string());
     *history_index = 0;
     true
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use std::cmp::Ordering;
+    use std::sync::Arc;
+
+    use nyaterm_transport::{SftpFileEntry, SftpFileType};
+
+    use super::{BrowserFilterCache, BrowserFilterKey, compare_transfer_browser_entries};
+    use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
+
+    fn entry(name: &str, file_type: SftpFileType, target_is_directory: bool) -> SftpFileEntry {
+        SftpFileEntry {
+            name: name.to_string(),
+            path: name.to_string(),
+            file_type,
+            size: None,
+            permissions: None,
+            owner: String::new(),
+            group: String::new(),
+            modified_at: None,
+            raw_path_token: None,
+            symlink_target_is_directory: target_is_directory,
+        }
+    }
+
+    #[test]
+    fn browser_sort_must_be_transitive() {
+        let a = entry("z", SftpFileType::Symlink, true);
+        let b = entry("m", SftpFileType::Symlink, false);
+        let c = entry("a", SftpFileType::File, false);
+
+        let before = |left: &SftpFileEntry, right: &SftpFileEntry| {
+            compare_transfer_browser_entries(
+                left,
+                right,
+                TransferBrowserSortColumn::Name,
+                TransferBrowserSortDirection::Ascending,
+            )
+            .is_lt()
+        };
+
+        // A strict ordering cannot contain a cycle.
+        assert!(
+            !(before(&b, &a) && before(&a, &c) && before(&c, &b)),
+            "browser sorting comparator is not transitive"
+        );
+    }
+
+    const COLUMNS: [TransferBrowserSortColumn; 6] = [
+        TransferBrowserSortColumn::Name,
+        TransferBrowserSortColumn::Size,
+        TransferBrowserSortColumn::Modified,
+        TransferBrowserSortColumn::Permissions,
+        TransferBrowserSortColumn::Owner,
+        TransferBrowserSortColumn::Group,
+    ];
+    const DIRECTIONS: [TransferBrowserSortDirection; 2] = [
+        TransferBrowserSortDirection::Ascending,
+        TransferBrowserSortDirection::Descending,
+    ];
+    const KINDS: [(SftpFileType, bool); 5] = [
+        (SftpFileType::Directory, false),
+        (SftpFileType::Symlink, true),
+        (SftpFileType::Symlink, false),
+        (SftpFileType::File, false),
+        (SftpFileType::Other, false),
+    ];
+
+    #[test]
+    fn all_browser_sort_modes_obey_ordering_laws_for_mixed_entries() {
+        let mut entries = Vec::new();
+        for (index, name) in ["", "a", "A", "m", "z", "file2", "file02", "file10", "文2"]
+            .into_iter()
+            .enumerate()
+        {
+            for (file_type, directory_link) in KINDS {
+                let mut item = entry(name, file_type, directory_link);
+                item.size = (index % 3 != 0).then_some((index % 4) as u64);
+                item.modified_at = (index % 3 != 0).then_some((index % 4) as u32);
+                item.permissions = (index % 3 != 0).then_some((index % 4) as u32);
+                item.owner = format!("owner{}", index % 3);
+                item.group = format!("group{}", index % 2);
+                entries.push(item);
+            }
+        }
+        // Missing metadata and explicit zero are intentionally equivalent.
+        let mut zero = entries[0].clone();
+        zero.size = Some(0);
+        zero.modified_at = Some(0);
+        zero.permissions = Some(0);
+        entries.push(zero);
+
+        for column in COLUMNS {
+            for direction in DIRECTIONS {
+                let orders: Vec<Vec<Ordering>> = entries
+                    .iter()
+                    .map(|left| {
+                        entries
+                            .iter()
+                            .map(|right| {
+                                compare_transfer_browser_entries(left, right, column, direction)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                for (a, left) in entries.iter().enumerate() {
+                    assert_eq!(orders[a][a], Ordering::Equal);
+                    for (b, right) in entries.iter().enumerate() {
+                        assert_eq!(orders[a][b], orders[b][a].reverse());
+                        if left.is_directory() != right.is_directory() {
+                            assert_eq!(orders[a][b].is_lt(), left.is_directory());
+                        }
+                        for c in 0..entries.len() {
+                            if orders[a][b].is_le() && orders[b][c].is_le() {
+                                assert!(
+                                    orders[a][c].is_le(),
+                                    "non-transitive: {column:?}, {direction:?}, {a}/{b}/{c}"
+                                );
+                            }
+                            if orders[a][b] == Ordering::Equal {
+                                assert_eq!(orders[a][c], orders[b][c]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn browser_cache_sorts_large_mixed_listings_and_reuses_each_result() {
+        let entries = Arc::new(
+            (0..128)
+                .map(|offset| {
+                    let index = (offset * 73) % 128;
+                    let (file_type, directory_link) = KINDS[index % KINDS.len()];
+                    let mut item = entry(&format!("entry{index}"), file_type, directory_link);
+                    item.size = Some(index as u64);
+                    item.modified_at = Some(index as u32);
+                    item.permissions = Some(index as u32);
+                    item.owner = format!("owner{index}");
+                    item.group = format!("group{index}");
+                    item
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut cache = BrowserFilterCache::default();
+        let mut recomputes = 0;
+        for column in COLUMNS {
+            for direction in DIRECTIONS {
+                let key = BrowserFilterKey::new(&entries, "", true, column, direction);
+                let sorted = cache.entries(key.clone(), &entries);
+                let mut expected = Vec::new();
+                for directory in [true, false] {
+                    let mut indices: Vec<_> = (0..128)
+                        .filter(|index| (*index % KINDS.len() < 2) == directory)
+                        .collect();
+                    if direction == TransferBrowserSortDirection::Descending {
+                        indices.reverse();
+                    }
+                    expected.extend(indices.into_iter().map(|index| format!("entry{index}")));
+                }
+                assert_eq!(
+                    sorted.iter().map(|item| &item.name).collect::<Vec<_>>(),
+                    expected.iter().collect::<Vec<_>>(),
+                    "{column:?}, {direction:?}",
+                );
+                recomputes += 1;
+                assert_eq!(cache.recomputes(), recomputes);
+                assert!(Arc::ptr_eq(&sorted, &cache.entries(key, &entries)));
+                assert_eq!(cache.recomputes(), recomputes);
+            }
+        }
+    }
+
+    #[test]
+    fn browser_sort_preserves_name_ties_and_missing_metadata_rules() {
+        let mut a = entry("file2", SftpFileType::File, false);
+        let mut b = entry("file10", SftpFileType::File, false);
+        for column in COLUMNS {
+            if column == TransferBrowserSortColumn::Name {
+                continue;
+            }
+            for direction in DIRECTIONS {
+                assert_eq!(
+                    compare_transfer_browser_entries(&a, &b, column, direction),
+                    Ordering::Less,
+                    "name fallback stays ascending: {column:?}, {direction:?}",
+                );
+            }
+        }
+        a.size = Some(1);
+        b.size = Some(0);
+        assert_eq!(
+            compare_transfer_browser_entries(
+                &a,
+                &b,
+                TransferBrowserSortColumn::Size,
+                TransferBrowserSortDirection::Ascending
+            ),
+            Ordering::Greater,
+        );
+        b.size = None;
+        assert_eq!(
+            compare_transfer_browser_entries(
+                &a,
+                &b,
+                TransferBrowserSortColumn::Size,
+                TransferBrowserSortDirection::Ascending
+            ),
+            Ordering::Greater,
+        );
+    }
 }

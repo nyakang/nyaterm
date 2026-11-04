@@ -13,8 +13,8 @@ use crate::terminal::{
 };
 use gpui::prelude::*;
 use gpui::{
-    AppContext, Context, Entity, Render, ScrollDelta, ScrollWheelEvent, TestAppContext, Window,
-    bounds, div, point, px, size,
+    AppContext, Context, Entity, Render, ScrollDelta, ScrollEvent, TestAppContext, Window, bounds,
+    div, point, px, size,
 };
 use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
 use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
@@ -184,14 +184,31 @@ impl Render for TerminalSurfaceLayoutTestView {
 }
 
 fn rendered_terminal_grid_bounds(show_line_numbers: bool) -> gpui::Bounds<gpui::Pixels> {
+    rendered_terminal_wrapping_grid_bounds(
+        show_line_numbers,
+        false,
+        nyaterm_core::models::settings::TerminalWrapMode::Character,
+    )
+}
+
+fn rendered_terminal_wrapping_grid_bounds(
+    show_line_numbers: bool,
+    show_markers: bool,
+    mode: nyaterm_core::models::settings::TerminalWrapMode,
+) -> gpui::Bounds<gpui::Pixels> {
     let mut cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let surface = cx.new(|_| TerminalSurface::new("session"));
-    let snapshot = Arc::new(TerminalScreen::default().viewport_snapshot(0));
+    let mut screen = TerminalScreen::default();
+    screen
+        .set_logical_line_snapshots(mode == nyaterm_core::models::settings::TerminalWrapMode::None);
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
     let rows = snapshot.row_count();
     let history = snapshot.history;
     cx.update_entity(&surface, |surface, _cx| {
         surface.show_line_numbers = show_line_numbers;
+        surface.show_wrap_markers = show_markers;
+        surface.wrap_mode = mode;
         surface.apply_frame_snapshot(
             TerminalSurfaceFrameSnapshot::new(
                 snapshot,
@@ -229,6 +246,170 @@ fn rendered_terminal_grid_bounds(show_line_numbers: bool) -> gpui::Bounds<gpui::
         let geometry = surface.painted_hit_test_geometry.expect("painted geometry");
         geometry.grid_bounds.expect("painted grid bounds")
     })
+}
+
+#[test]
+fn trailing_marker_lane_preserves_grid_origin_and_wrap_mode_keeps_the_same_grid_size() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+    let plain = rendered_terminal_wrapping_grid_bounds(false, false, TerminalWrapMode::Character);
+    let markers = rendered_terminal_wrapping_grid_bounds(false, true, TerminalWrapMode::Character);
+    let unwrapped = rendered_terminal_wrapping_grid_bounds(false, true, TerminalWrapMode::None);
+    assert_eq!(markers.left(), plain.left());
+    assert_eq!(plain.right() - markers.right(), px(8.0));
+    assert_eq!(plain.size.width - markers.size.width, px(8.0));
+    assert_eq!(markers, unwrapped);
+    let numbered = rendered_terminal_wrapping_grid_bounds(true, false, TerminalWrapMode::Character);
+    let numbered_markers =
+        rendered_terminal_wrapping_grid_bounds(true, true, TerminalWrapMode::Character);
+    assert_eq!(numbered.left(), numbered_markers.left());
+    assert_eq!(numbered.right() - numbered_markers.right(), px(8.0));
+}
+
+#[test]
+fn horizontal_offset_is_local_to_each_surface_and_history_preserves_manual_position() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+    let mut screen = TerminalScreen::new(4, 2);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(b"abcdefghijklmnop\r\na\r\nb\r\nc");
+    let mut first = TerminalSurface::new("first");
+    let second = TerminalSurface::new("second");
+    first.wrap_mode = TerminalWrapMode::None;
+    first.viewport_rows = 2;
+    first.scroll_offset = 1;
+    first.display_offset = 1;
+    first
+        .horizontal_scroll
+        .set_offset(point(px(-64.0), px(0.0)));
+    let snapshot = screen.viewport_snapshot(1);
+    let layout = first.unwrapped_layout(&snapshot).unwrap();
+    assert_eq!(layout.horizontal_offset, 8.0);
+    assert_eq!(f32::from(second.horizontal_scroll.offset().x), 0.0);
+    assert_eq!(f32::from(first.horizontal_scroll.offset().x), -64.0);
+}
+
+#[test]
+fn unwrapped_wheel_input_scrolls_only_the_requested_axis_once() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+
+    struct ScrollFixture {
+        surface: Entity<TerminalSurface>,
+    }
+
+    impl Render for ScrollFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let surface = self.surface.clone();
+            div()
+                .w(px(400.))
+                .h(px(64.))
+                .flex()
+                // Exercise the actual measuring layer and terminal handler
+                // without an app/transport worker replacing the test frames.
+                .on_scroll(move |event, _, cx| {
+                    surface.update(cx, |surface, cx| {
+                        surface.handle_unwrapped_scroll(event, cx);
+                    });
+                })
+                .child(self.surface.clone())
+        }
+    }
+
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut screen = TerminalScreen::new(40, 4);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(
+        format!("{}\r\n", "0123456789".repeat(20))
+            .repeat(20)
+            .as_bytes(),
+    );
+    let offset = screen.scrollback_len();
+    let snapshot = Arc::new(screen.viewport_snapshot_with_window(offset, 0, offset));
+    let surface = cx.new(|_| TerminalSurface::new("scroll-axes"));
+    surface.update(&mut cx, |surface, _| {
+        surface.wrap_mode = TerminalWrapMode::None;
+        surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+            snapshot,
+            TerminalScrollVisualState {
+                history: screen.history_state(),
+                session_id: "scroll-axes".into(),
+                scroll_offset: offset,
+                scroll_residual_lines: 0.0,
+                display_offset: offset,
+                scrollback_len: offset,
+                viewport_rows: 4,
+                has_new_while_scrolled: false,
+                performance_overlay: None,
+                skipped_output_chars: 0,
+            },
+        ));
+        surface
+            .horizontal_scroll
+            .set_offset(point(px(-32.), px(0.)));
+    });
+    let (_, vcx) = cx.add_window_view({
+        let surface = surface.clone();
+        move |_, _| ScrollFixture { surface }
+    });
+    vcx.update(|window, cx| {
+        _ = window.draw(cx);
+        let surface = surface.read(cx);
+        assert!(surface.painted_unwrapped.is_some());
+        assert!(surface.horizontal_scroll.max_offset().x > px(0.));
+    });
+    let mut scroll = |delta, shift| {
+        let before = vcx.update(|_, cx| {
+            let surface = surface.read(cx);
+            (surface.scroll_offset, surface.horizontal_scroll.offset().x)
+        });
+        vcx.simulate_event(ScrollEvent {
+            position: point(px(20.), px(20.)),
+            delta,
+            modifiers: gpui::Modifiers {
+                shift,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let after = vcx.update(|window, cx| {
+            _ = window.draw(cx);
+            let surface = surface.read(cx);
+            (surface.scroll_offset, surface.horizontal_scroll.offset().x)
+        });
+        (before, after)
+    };
+    for delta in [
+        ScrollDelta::Lines(point(0., -1.)),
+        ScrollDelta::Pixels(point(px(0.), px(-16.))),
+        ScrollDelta::Pixels(point(px(-1.), px(-16.))),
+    ] {
+        let (before, after) = scroll(delta, false);
+        assert!(after.0 < before.0, "vertical input must scroll history");
+        assert_eq!(after.1, before.1, "vertical input must preserve X");
+    }
+    let (before, after) = scroll(ScrollDelta::Pixels(point(px(-32.), px(0.))), false);
+    assert_eq!(after.0, before.0);
+    assert_eq!(after.1, before.1 - px(32.));
+    let (before, after) = scroll(ScrollDelta::Lines(point(0., -1.)), true);
+    assert_eq!(after.0, before.0);
+    assert_eq!(after.1, before.1 - px(16.));
+}
+
+#[test]
+fn switching_to_no_wrap_does_not_replay_cursor_reveals_from_character_mode() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+    let mut screen = TerminalScreen::new(4, 2);
+    screen.advance(b"abcdefghijk");
+    let mut surface = TerminalSurface::new("session");
+    surface.is_active = true;
+    surface.snapshot = Some(Arc::new(screen.snapshot()));
+    let input_at = Instant::now();
+    assert!(!surface.reveal_input_cursor(Some(input_at)));
+    assert!(surface.horizontal_reveal.is_none());
+    surface.wrap_mode = TerminalWrapMode::None;
+    assert!(!surface.reveal_input_cursor(Some(input_at)));
+    assert!(surface.horizontal_reveal.is_none());
+    assert!(surface.reveal_input_cursor(Some(input_at + Duration::from_millis(1))));
+    assert!(surface.horizontal_reveal.is_some());
 }
 
 #[test]
@@ -2343,10 +2524,10 @@ fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() 
     // must wait until the callback returns before reading the geometry.
     cx.update_entity(&surface, |surface, cx| {
         surface.handle_scroll_wheel(
-            &ScrollWheelEvent {
+            &ScrollEvent {
                 position: point(px(8.), px(8.)),
                 delta: ScrollDelta::Lines(point(0., 1.)),
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             },
             cx,
         );
@@ -2486,13 +2667,13 @@ fn assert_return_to_live_paints_latest_last_row(
     cx.update_entity(&surface, |surface, cx| {
         surface.set_app(app.clone());
         surface.handle_scroll_wheel(
-            &ScrollWheelEvent {
+            &ScrollEvent {
                 delta: if fractional {
                     ScrollDelta::Pixels(point(px(0.), px(-0.6 * surface.cell_height)))
                 } else {
                     ScrollDelta::Lines(point(0., -1.))
                 },
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             },
             cx,
         );
@@ -2614,9 +2795,9 @@ fn reversing_local_scroll_before_app_sync_keeps_the_latest_wheel_target() {
     let wheel = |cx: &mut TestAppContext, lines| {
         cx.update_entity(&surface, |surface, cx| {
             surface.handle_scroll_wheel(
-                &ScrollWheelEvent {
+                &ScrollEvent {
                     delta: ScrollDelta::Lines(point(0., lines)),
-                    ..ScrollWheelEvent::default()
+                    ..ScrollEvent::default()
                 },
                 cx,
             );

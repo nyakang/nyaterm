@@ -16,7 +16,7 @@ use nyaterm_terminal_gpui::{
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -921,6 +921,10 @@ impl TerminalViewState {
         self.scrollback_snapshots = self
             .scrollback_snapshots
             .drain()
+            // A logical frame indexes the whole retained buffer. Its row Arcs
+            // remain valid, but its rank/select mapping cannot be reanchored by
+            // adding a physical delta. Request a fresh worker frame instead.
+            .filter(|(_, snapshot)| snapshot.logical_lines.is_none())
             .map(|(offset, snapshot)| {
                 (
                     offset.saturating_add(delta),
@@ -1439,6 +1443,7 @@ impl KeywordHighlightEditorField {
 #[derive(Debug)]
 pub(crate) struct TerminalFramePipeline {
     keyword_rules: Arc<Mutex<Arc<Vec<ResolvedKeywordHighlightRule>>>>,
+    logical_line_snapshots: Arc<AtomicBool>,
     recording_writer: RecordingWriteHandle,
     command_tx: TerminalFrameCommandSender,
     event_queue: TerminalFrameEventQueue,
@@ -1516,12 +1521,22 @@ impl TerminalFramePipeline {
             .expect("failed to spawn terminal frame processor");
         Self {
             keyword_rules: Arc::new(Mutex::new(Arc::new(Vec::new()))),
+            logical_line_snapshots: Arc::new(AtomicBool::new(false)),
             recording_writer,
             command_tx,
             event_queue,
             event_wake_rx: Arc::new(Mutex::new(Some(event_wake_rx))),
             handle_count: Arc::new(AtomicUsize::new(1)),
             worker: Arc::new(Mutex::new(Some(worker))),
+        }
+    }
+
+    pub(crate) fn set_logical_line_snapshots(&self, enabled: bool) {
+        if self.logical_line_snapshots.swap(enabled, Ordering::Relaxed) != enabled {
+            self.arm_event_wakes();
+            let _ = self
+                .command_tx
+                .send(TerminalFrameCommand::SetLogicalLineSnapshots { enabled });
         }
     }
 
@@ -1957,6 +1972,7 @@ impl Clone for TerminalFramePipeline {
         self.handle_count.fetch_add(1, Ordering::Relaxed);
         Self {
             keyword_rules: self.keyword_rules.clone(),
+            logical_line_snapshots: self.logical_line_snapshots.clone(),
             recording_writer: self.recording_writer.clone(),
             command_tx: self.command_tx.clone(),
             event_queue: self.event_queue.clone(),
@@ -1986,6 +2002,9 @@ impl Default for TerminalFramePipeline {
 
 #[derive(Debug)]
 enum TerminalFrameCommand {
+    SetLogicalLineSnapshots {
+        enabled: bool,
+    },
     ExecutionRecording {
         session_id: String,
         event: ExecutionRecordingEvent,
@@ -3672,6 +3691,7 @@ fn run_terminal_frame_processor(
     let mut input_highlighter: Option<Arc<TerminalKeywordHighlighter>> = None;
     let mut input_highlight_cache = HashMap::new();
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
+    let mut logical_line_snapshots = false;
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
     let mut rekeyed_old_order = VecDeque::new();
     // Sessions that should include full live viewport snapshots on every output.
@@ -3737,6 +3757,25 @@ fn run_terminal_frame_processor(
             push_terminal_frame_worker_event(queue, event);
         };
         match command {
+            TerminalFrameCommand::SetLogicalLineSnapshots { enabled } => {
+                logical_line_snapshots = enabled;
+                for (session_id, session) in &mut sessions {
+                    session.screen.set_logical_line_snapshots(enabled);
+                    session.revision = session.revision.saturating_add(1);
+                    session.action_link_cache = None;
+                    if session.include_live_snapshot {
+                        push_event(
+                            &event_queue,
+                            TerminalFrameEvent::Snapshot(
+                                session.resized_live_snapshot_event(
+                                    session_id.clone(),
+                                    Instant::now(),
+                                ),
+                            ),
+                        );
+                    }
+                }
+            }
             TerminalFrameCommand::SetKeywordRules { rules } => {
                 input_highlighter = (!rules.is_empty())
                     .then(|| Arc::new(compile_terminal_keyword_highlighter(&rules)));
@@ -3753,6 +3792,9 @@ fn run_terminal_frame_processor(
                     .entry(session_id)
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
                 session.set_encoding_and_limit(&encoding, scrollback_limit);
+                session
+                    .screen
+                    .set_logical_line_snapshots(logical_line_snapshots);
                 session.include_live_snapshot = include;
             }
             TerminalFrameCommand::SeedSession {
@@ -3775,6 +3817,9 @@ fn run_terminal_frame_processor(
                     .entry(session_id.clone())
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
                 session.seed(output, &encoding, scrollback_limit);
+                session
+                    .screen
+                    .set_logical_line_snapshots(logical_line_snapshots);
                 session.include_live_snapshot = include;
             }
             TerminalFrameCommand::RemoveSession { session_id } => {
@@ -3941,6 +3986,9 @@ fn run_terminal_frame_processor(
                 sessions: transferred,
             } => {
                 for (session_id, mut session) in transferred {
+                    session
+                        .screen
+                        .set_logical_line_snapshots(logical_line_snapshots);
                     session.include_live_snapshot = terminal_frame_live_snapshot_enabled(
                         !priority_initialized || snapshot_priority.contains(&session_id),
                     );
@@ -3985,10 +4033,13 @@ fn run_terminal_frame_processor(
                 let include_live_snapshot = terminal_frame_live_snapshot_enabled(
                     !priority_initialized || snapshot_priority.contains(&session_id),
                 );
-                sessions
+                let session = sessions
                     .entry(session_id.clone())
-                    .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit))
-                    .include_live_snapshot = include_live_snapshot;
+                    .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
+                session
+                    .screen
+                    .set_logical_line_snapshots(logical_line_snapshots);
+                session.include_live_snapshot = include_live_snapshot;
                 process_terminal_frame_output_burst(
                     &command_rx,
                     &mut pending_commands,

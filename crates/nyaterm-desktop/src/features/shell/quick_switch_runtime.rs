@@ -1,14 +1,11 @@
 use rust_i18n::t;
 
-use std::collections::HashMap;
-
 use gpui::{AppContext as _, Context, Focusable as _, Window};
-use nyaterm_core::fuzzy_search_items;
 use nyaterm_ui::NyaCommandState;
 
 use crate::entities::{OverlayStore, QuickSwitchState};
 use crate::features::{NyaTermApp, formatting::session_kind_label, formatting::short_id};
-use crate::models::QuickSwitchItem;
+use crate::models::{QuickSwitchItem, SessionLaunchConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorkspaceSurfaceFocusTarget {
@@ -150,6 +147,16 @@ impl NyaTermApp {
                 title,
                 subtitle,
                 active,
+                endpoint: self.session.metadata(&session.id).and_then(|metadata| {
+                    match &metadata.launch_config {
+                        SessionLaunchConfig::Ssh(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Telnet(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Rdp(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Vnc(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Local(_) | SessionLaunchConfig::Serial(_) => None,
+                    }
+                    .map(|(host, port)| (host.clone(), port))
+                }),
             });
         }
 
@@ -162,6 +169,7 @@ impl NyaTermApp {
                             id: key,
                             title: document.name,
                             subtitle: document.remote_path,
+                            endpoint: None,
                         });
                     }
                 }
@@ -171,6 +179,7 @@ impl NyaTermApp {
                         id: key,
                         title: t!("fileManager.tabTitle").to_string(),
                         subtitle: id,
+                        endpoint: None,
                     });
                 }
                 crate::models::WorkspaceTabId::Settings => {
@@ -179,6 +188,7 @@ impl NyaTermApp {
                         id: key,
                         title: t!("settings.title").to_string(),
                         subtitle: t!("settings.title").to_string(),
+                        endpoint: None,
                     });
                 }
                 crate::models::WorkspaceTabId::Session(_) => {}
@@ -340,39 +350,8 @@ impl NyaTermApp {
     }
 }
 
-const QUICK_SWITCH_RESULT_LIMIT: usize = 50;
-
-fn filter_quick_switch_items(items: Vec<QuickSwitchItem>, query: &str) -> Vec<QuickSwitchItem> {
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return items.into_iter().take(QUICK_SWITCH_RESULT_LIMIT).collect();
-    }
-
-    let candidates = items
-        .iter()
-        .map(|item| (item.search_text(), item.id()))
-        .collect::<Vec<_>>();
-    let candidate_refs = candidates
-        .iter()
-        .map(|(display, id)| (display.as_str(), id.as_str()))
-        .collect::<Vec<_>>();
-    let matches = fuzzy_search_items(
-        &candidate_refs,
-        &query,
-        "sessionQuickSwitcher",
-        QUICK_SWITCH_RESULT_LIMIT,
-        None,
-        None,
-    );
-    let mut items_by_id = items
-        .into_iter()
-        .map(|item| (item.id(), item))
-        .collect::<HashMap<_, _>>();
-    matches
-        .into_iter()
-        .filter_map(|matched| items_by_id.remove(&matched.command))
-        .collect()
-}
+mod quick_switch_search;
+use quick_switch_search::filter_quick_switch_items;
 
 fn quick_switch_transient_insert_index(
     session_count: usize,
@@ -398,11 +377,17 @@ mod tests {
         title: impl Into<String>,
         subtitle: impl Into<String>,
     ) -> QuickSwitchItem {
+        let subtitle = subtitle.into();
+        let endpoint = subtitle
+            .parse::<std::net::Ipv4Addr>()
+            .ok()
+            .map(|_| (subtitle.clone(), 22));
         QuickSwitchItem::Session {
             id: format!("session-{index}"),
             title: title.into(),
-            subtitle: subtitle.into(),
+            subtitle,
             active: false,
+            endpoint,
         }
     }
 
@@ -440,6 +425,50 @@ mod tests {
                 .iter()
                 .all(|item| item.subtitle() == "needle target")
         );
+    }
+
+    #[test]
+    fn numeric_ip_fragment_matches_contiguous_digits_only() {
+        let items = vec![
+            session_item(0, "Alpha", "10.26.21.28"),
+            session_item(1, "Beta", "10.26.113.28"),
+            session_item(2, "Gamma", "192.168.1.28"),
+        ];
+
+        let matched: Vec<String> = filter_quick_switch_items(items, "2128")
+            .iter()
+            .map(|item| item.subtitle().to_string())
+            .collect();
+
+        assert_eq!(matched, vec!["10.26.21.28".to_string()]);
+    }
+
+    #[test]
+    fn numeric_ip_fragment_with_dots_also_matches() {
+        let items = vec![
+            session_item(0, "Alpha", "10.26.21.28"),
+            session_item(1, "Beta", "10.26.113.28"),
+        ];
+
+        let matched: Vec<String> = filter_quick_switch_items(items, "10.26.21")
+            .iter()
+            .map(|item| item.subtitle().to_string())
+            .collect();
+
+        assert_eq!(matched, vec!["10.26.21.28".to_string()]);
+    }
+
+    #[test]
+    fn numeric_query_matches_digits_anywhere_in_search_text() {
+        let items = vec![
+            session_item(0, "node2128", "Local"),
+            session_item(1, "other", "10.26.113.28"),
+        ];
+        let matched: Vec<String> = filter_quick_switch_items(items, "2128")
+            .iter()
+            .map(|item| item.title().to_string())
+            .collect();
+        assert_eq!(matched, vec!["node2128".to_string()]);
     }
 
     #[test]

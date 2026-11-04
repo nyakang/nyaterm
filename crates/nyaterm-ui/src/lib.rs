@@ -36,7 +36,10 @@ pub mod window_chrome;
 pub use app_menu_bar::{NyaAppMenu, NyaAppMenuBar};
 pub use button::{NyaButton, NyaButtonVariant, NyaIconButton};
 pub use child_window::{ChildWindowSlot, activate_child_window};
-pub use command::{NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState};
+pub use command::{
+    NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState, command_row_highlight_index,
+    command_row_selection_wash,
+};
 pub use dialog::{
     NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
 };

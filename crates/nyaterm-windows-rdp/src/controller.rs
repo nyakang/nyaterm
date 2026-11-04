@@ -77,7 +77,9 @@ impl NativeRdpControl {
         rect: NativeRdpRect,
         config: &RdpSessionConfig,
     ) -> Result<Self, String> {
-        nyaterm_remote_desktop::activex::validate_start(config, rect)
+        let mut config = config.clone();
+        config.normalize_backend_settings();
+        nyaterm_remote_desktop::activex::validate_start(&config, rect)
             .map_err(|error| error.to_string())?;
         if parent == 0 {
             return Err("Invalid native RDP parent window".into());

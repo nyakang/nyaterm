@@ -65,10 +65,10 @@ futures = "0.3"
 same-file = "1"
 tempfile = "3"
 glob = "0.3.4"
-gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "fa96acbd51d347ba7a4fff2053036a1559ef9387" }
-gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "e87ad22ca5590ed1c30e52113cfb09b1b87c6a77" }
-gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "e87ad22ca5590ed1c30e52113cfb09b1b87c6a77" }
-gpui_platform = { git = "https://github.com/nyakang/zed", rev = "fa96acbd51d347ba7a4fff2053036a1559ef9387" }
+gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "a755e55acb90229c687e64e6a84877fb70d21619" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "9143df9774d0190162053defc9b1faac3f8ab907" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "9143df9774d0190162053defc9b1faac3f8ab907" }
+gpui_platform = { git = "https://github.com/nyakang/zed", rev = "a755e55acb90229c687e64e6a84877fb70d21619" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
 # could pull in a breaking 0.8 without review. `embed-fonts` bundles the 14
@@ -77,7 +77,7 @@ gpui_platform = { git = "https://github.com/nyakang/zed", rev = "fa96acbd51d347b
 hayro = { version = "=0.7.1", features = ["embed-fonts"] }
 hex = "0.4"
 hmac = "0.13"
-ironrdp-input = "0.8.0"
+ironrdp-input = "0.9.0"
 jsonc-parser = { version = "0.34", features = ["serde"] }
 keyring = { version = "3.6", features = [
     "apple-native",
@@ -109,7 +109,7 @@ redb = "4.1.0"
 regex = "1.11.1"
 rmcp = "=3.1.4"
 rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
-russh = { git = "https://github.com/nyakang/russh", rev = "3092e06cc827fc0f8d4c991280478f6e53c121a3", features = ["des", "dsa"] }
+russh = { git = "https://github.com/nyakang/russh", rev = "831c8ddd2898f472fb88e80a93cbf9beb40a0fe2", features = ["des", "dsa"] }
 russh-sftp = { git = "https://github.com/nyakang/russh-sftp", rev = "b638b4896de6a0efd699e4c3833873221b3b3f01" }
 rusty-leveldb = "4.0"
 rust-embed = { version = "8.11", features = ["include-exclude", "debug-embed"] }
@@ -138,7 +138,7 @@ url = "=2.5.8"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "336ed94c9cce7cba93fa8cba33b5a5d01ef2c227" }
+vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "7f9f0e5b57eec212f0926c54cdc7ae579dfe322a" }
 vte = "0.14"
 zeroize = "1"
 zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "87a80216179f29d90e0b8c06ee5b4a6a0132c763" }
@@ -179,10 +179,10 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "3b60b2ed9544cad2cbba9e92fa0785e885cb4af1" }
-ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "d2b04e63ca9a72f2a70b456186e2472b27f0d45d" }
+alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "86ff089983b93700c065ae3ae57273addf561fe7" }
+ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "582bd37e355d710a0888faded5f4f6da4667c3c8" }
 # The published ironrdp-client and ironrdp-connector packages declare their
 # sibling crates as registry dependencies, but in the IronRDP repository those
 # are path dependencies, so patching the two above to git pulls the siblings
@@ -191,13 +191,13 @@ sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "d2b04e63ca9a72f2a70b
 # are identical on both sides. `ironrdp-tls` is here for the same reason:
 # `nyaterm-rdp-helper` names its certificate-validation types directly, because
 # ironrdp-client does not re-export them.
-ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
-ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
+ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
 
 # gpui-kit takes zed-reqwest from git while this workspace uses the
 # published crate; without this both end up in the graph.

@@ -937,7 +937,7 @@ mod tests {
                 });
                 cx.run_until_parked();
                 let contribution = service.snapshot().contributions[0].clone();
-                let (release, gate) = futures::channel::oneshot::channel();
+                let (mut release, gate) = futures::channel::oneshot::channel();
                 cx.update_entity(&panel, |panel, cx| {
                     panel.select(contribution.clone(), cx);
                     panel.completion_gate = Some(gate);
@@ -960,6 +960,16 @@ mod tests {
                 cx.run_until_parked();
                 cx.update_entity(&app, |app, cx| app.plugins.shutdown(cx));
                 cx.run_until_parked();
+                // Dropping a scheduler task cancels it; await disposal of its
+                // captured future before checking the completion receiver.
+                assert!(
+                    cx.foreground_executor()
+                        .block_with_timeout(
+                            std::time::Duration::from_secs(5),
+                            release.cancellation()
+                        )
+                        .is_ok()
+                );
                 assert!(release.send(()).is_err());
                 cx.update_entity(&panel, |panel, _| {
                     assert!(!panel.busy());

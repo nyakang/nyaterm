@@ -100,12 +100,14 @@ pub struct RdpSessionConfig {
 
 impl RdpSessionConfig {
     /// Apply backend policy to an ephemeral launch configuration, never stored data.
-    /// Selecting Windows uses system authentication; unknown modes remain errors.
+    /// RDP always enables text and file clipboard redirection. Legacy modes remain
+    /// serializable for saved sessions, backups, and sync compatibility.
+    /// Selecting Windows uses system authentication; unknown auth modes remain errors.
     pub fn normalize_backend_settings(&mut self) {
+        self.clipboard.mode = RdpClipboardMode::TextAndFiles;
         if self.backend == RdpBackend::Windows {
             self.windows_authentication
                 .get_or_insert_with(|| "system".into());
-            self.clipboard.mode = RdpClipboardMode::Disabled;
         }
     }
 }
@@ -290,7 +292,7 @@ pub struct RdpClipboardConfig {
 impl Default for RdpClipboardConfig {
     fn default() -> Self {
         Self {
-            mode: RdpClipboardMode::TextOnly,
+            mode: RdpClipboardMode::TextAndFiles,
         }
     }
 }
@@ -299,8 +301,8 @@ impl Default for RdpClipboardConfig {
 #[serde(rename_all = "snake_case")]
 pub enum RdpClipboardMode {
     Disabled,
-    #[default]
     TextOnly,
+    #[default]
     TextAndFiles,
 }
 
@@ -1141,12 +1143,6 @@ impl RdpBackend {
                 "Unsupported Windows system authentication mode for ActiveX RDP",
             ));
         }
-        if config.clipboard.mode != RdpClipboardMode::Disabled {
-            return Err(RdpError::new(
-                RdpErrorKind::Unsupported,
-                "ActiveX RDP clipboard redirection is currently disabled",
-            ));
-        }
         if config.reconnect.max_attempts > 200 {
             return Err(RdpError::new(
                 RdpErrorKind::Unsupported,
@@ -1300,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_mode_keeps_legacy_values_and_defaults_to_text() {
+    fn clipboard_mode_keeps_legacy_values_and_defaults_to_text_and_files() {
         assert_eq!(
             parse_rdp_clipboard_mode("disabled"),
             RdpClipboardMode::Disabled
@@ -1319,7 +1315,7 @@ mod tests {
         );
         assert_eq!(
             RdpClipboardConfig::default().mode,
-            RdpClipboardMode::TextOnly
+            RdpClipboardMode::TextAndFiles
         );
         assert_eq!(
             serde_json::to_string(&RdpClipboardMode::TextAndFiles).unwrap(),

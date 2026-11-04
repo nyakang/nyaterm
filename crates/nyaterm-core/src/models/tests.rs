@@ -253,7 +253,7 @@ fn rdp_connection_defaults_and_endpoint_match_tauri_shape() {
     assert!(display.disable_menu_animations);
     assert!(!display.disable_cursor_shadow);
     assert!(!display.disable_cursor_blinking);
-    assert_eq!(clipboard.mode, "text-only");
+    assert_eq!(clipboard.mode, "text-and-files");
     assert!(reconnect.enabled);
     assert_eq!(reconnect.max_attempts, 5);
 }

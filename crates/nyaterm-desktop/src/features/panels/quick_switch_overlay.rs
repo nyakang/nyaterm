@@ -7,7 +7,9 @@ use gpui::{
     prelude::*, px, rgb, rgba,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaCommand, NyaCommandItem};
+use nyaterm_ui::{
+    NyaCommand, NyaCommandItem, command_row_highlight_index, command_row_selection_wash,
+};
 
 use crate::features::NyaTermApp;
 use crate::models::QuickSwitchItem;
@@ -35,9 +37,15 @@ impl NyaTermApp {
         let catalog_empty = items.is_empty() && self.quick_switch_items().is_empty();
         let items: Arc<[QuickSwitchItem]> = items.into();
         let saved_badge_bg = self.shell_surface_color(palette.hover);
+        // Enter opens this row. The command list's own highlight is the theme
+        // accent, which is only a hover step away from the dialog surface.
+        let highlight =
+            command_row_highlight_index(command_state.read(cx).selected_index(cx), items.len());
         let command_items = items
             .iter()
-            .map(|item| {
+            .enumerate()
+            .map(|(row, item)| {
+                let selected = highlight == Some(row);
                 let title = item.title().to_string();
                 let subtitle = item.subtitle().to_string();
                 let search_text = item.search_text();
@@ -53,7 +61,7 @@ impl NyaTermApp {
                 NyaCommandItem::new()
                     .label(title)
                     .keywords([search_text])
-                    .child(move |_, _| {
+                    .child(move |window, _| {
                         let badge = match badge {
                             QuickSwitchBadge::None => div().into_any_element(),
                             QuickSwitchBadge::Active => status_pill(
@@ -70,36 +78,45 @@ impl NyaTermApp {
                             .into_any_element(),
                         };
                         div()
-                            .min_h(px(36.))
+                            .relative()
                             .w_full()
                             .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap_3()
+                            .when(selected, |this| {
+                                this.child(command_row_selection_wash(palette.primary, window))
+                            })
                             .child(
                                 div()
+                                    .min_h(px(36.))
+                                    .w_full()
                                     .min_w_0()
-                                    .flex_1()
                                     .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                    .items_center()
+                                    .gap_3()
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .font_weight(FontWeight(500.))
-                                            .text_color(rgb(palette.text))
-                                            .overflow_hidden()
-                                            .child(truncate_preview(&row_title, 54)),
+                                            .min_w_0()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight(500.))
+                                                    .text_color(rgb(palette.text))
+                                                    .overflow_hidden()
+                                                    .child(truncate_preview(&row_title, 54)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(palette.text_muted))
+                                                    .overflow_hidden()
+                                                    .child(truncate_preview(&subtitle, 78)),
+                                            ),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(palette.text_muted))
-                                            .overflow_hidden()
-                                            .child(truncate_preview(&subtitle, 78)),
-                                    ),
+                                    .child(badge),
                             )
-                            .child(badge)
                     })
             })
             .collect::<Vec<_>>();
@@ -141,7 +158,13 @@ impl NyaTermApp {
                 });
             })
             .on_select(move |_, _, cx| {
-                let _ = select_owner.update(cx, |this, _| this.mark_user_activity());
+                // The wash is captured when this overlay renders. Arrow keys and
+                // hover move the command selection without otherwise notifying
+                // the shell, so rebuild once that selection has changed.
+                let _ = select_owner.update(cx, |this, cx| {
+                    this.mark_user_activity();
+                    cx.notify();
+                });
             })
             .on_confirm(move |index, window, cx| {
                 if index.section != 0 {

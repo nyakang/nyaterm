@@ -308,7 +308,7 @@ mod tests {
 
     use gpui::{
         AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, ScrollDelta,
-        ScrollWheelEvent, Styled as _, TestAppContext, VisualTestContext, div, point, px,
+        ScrollEvent, Styled as _, TestAppContext, VisualTestContext, div, point, px,
     };
     use nyaterm_core::{AppRuntime, Group, RuntimeMode, SavedConnection};
     use nyaterm_ui::NyaInputEvent;
@@ -999,7 +999,7 @@ mod tests {
             "the long name must overflow horizontally instead of being ellipsized"
         );
 
-        vcx.simulate_event(ScrollWheelEvent {
+        vcx.simulate_event(ScrollEvent {
             position: point(list.left() + px(12.), row.center().y),
             delta: ScrollDelta::Pixels(point(px(-180.), px(0.))),
             ..Default::default()

@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Render, ScrollWheelEvent, Subscription, Window, div, prelude::*, px,
+    Render, ScrollEvent, Subscription, Window, div, prelude::*, px,
 };
 use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
 use nyaterm_ui::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
@@ -187,7 +187,7 @@ impl Render for RemoteTextEditor {
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
                 let _ = this.app.update(cx, |app, _| app.mark_user_activity());
             }))
-            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
                 let _ = this.app.update(cx, |app, _| app.mark_user_activity());
             }))
             .child(NyaDocumentEditor::new(&self.document))

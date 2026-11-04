@@ -46,6 +46,43 @@ impl ThemePalette {
         self.terminal_ansi[usize::from(index.min(15))]
     }
 
+    /// Text color for a solid accent fill such as a confirm button.
+    ///
+    /// White stays the default, so existing themes keep their look. It is only
+    /// replaced (by the darker of the theme's background and text color) when it
+    /// would be close to unreadable, as with the pale cyan and green of Dracula.
+    pub fn text_on_fill(self, fill: u32) -> u32 {
+        const WHITE: u32 = 0x00ff_ffff;
+        const MIN_WHITE_CONTRAST: f32 = 2.0;
+        if contrast_ratio(WHITE, fill) >= MIN_WHITE_CONTRAST {
+            return WHITE;
+        }
+        if relative_luminance(self.bg) <= relative_luminance(self.text) {
+            self.bg
+        } else {
+            self.text
+        }
+    }
+
+    /// Hover fill that improves contrast against the normal-state label color.
+    ///
+    /// Move a little toward white behind dark text, or toward black behind light
+    /// text, instead of swapping to a hard-coded green that may lose contrast.
+    pub fn hover_fill(self, fill: u32) -> u32 {
+        let text = self.text_on_fill(fill);
+        let toward = if relative_luminance(text) < relative_luminance(fill) {
+            0xffffff
+        } else {
+            0x000000
+        };
+        let mix = |shift: u32| {
+            let start = ((fill >> shift) & 0xff) as f32;
+            let end = ((toward >> shift) & 0xff) as f32;
+            (start + (end - start) * 0.12).round() as u32
+        };
+        (mix(16) << 16) | (mix(8) << 8) | mix(0)
+    }
+
     /// Keep the cursor visible without changing terminal foreground/background colors.
     pub fn apply_cursor_contrast_ratio(&mut self, ratio: f32) {
         if ratio <= 1.01 {
@@ -138,6 +175,7 @@ pub const APPEARANCE_THEME_IDS: &[&str] = &[
     "rose-pine-dawn",
     "nord-light",
     "one-light",
+    "dracula-light",
 ];
 
 /// Human label for Settings theme chips.
@@ -162,6 +200,7 @@ pub fn appearance_theme_label(theme: &str) -> &'static str {
         "rose-pine-dawn" => "Pine Dawn",
         "nord-light" => "Nord Light",
         "one-light" => "One Light",
+        "dracula-light" => "Dracula Light",
         "catppuccin" => "Catppuccin",
         _ => "Custom",
     }
@@ -278,43 +317,6 @@ fn builtin_palette(theme: &str) -> ThemePalette {
             terminal_ansi: [
                 0x111827, 0xb91c1c, 0x166534, 0x854d0e, 0x1d4ed8, 0x7e22ce, 0x0e7490, 0x4b5563,
                 0x374151, 0x991b1b, 0x14532d, 0x713f12, 0x1e40af, 0x6b21a8, 0x155e75, 0x111827,
-            ],
-        },
-        "dracula" => ThemePalette {
-            ui_terminal_bg: 0,
-            danger_hover: 0,
-            shadow: 0,
-            scroll_thumb: 0,
-            terminal_fg_intense: None,
-            terminal_line_highlight: 0,
-            terminal_find_bg: 0,
-            terminal_find_border: 0,
-            bg: 0x251b33,
-            surface: 0x1d1828,
-            surface_elevated: 0x342743,
-            section_header: 0x2b203a,
-            hover: 0x342743,
-            input: 0x1f1a2b,
-            border: 0x5a426e,
-            text: 0xf8f8f2,
-            text_muted: 0xbd93f9,
-            text_dimmed: 0x6272a4,
-            primary: 0xbd93f9,
-            primary_hover: 0xa77bfa,
-            on_primary: 0x282a36,
-            focus_ring: 0xbd93f9,
-            link: 0x8be9fd,
-            accent: 0xff79c6,
-            success: 0x50fa7b,
-            warning: 0xf1fa8c,
-            danger: 0xff5555,
-            terminal_bg: 0x24172f,
-            terminal_fg: 0xf8f8f2,
-            terminal_cursor: 0xf8f8f2,
-            terminal_selection: 0x4a3561,
-            terminal_ansi: [
-                0x21222c, 0xff5555, 0x50fa7b, 0xf1fa8c, 0xbd93f9, 0xff79c6, 0x8be9fd, 0xf8f8f2,
-                0x7f8fbd, 0xff6e6e, 0x69ff94, 0xffffa5, 0xd6acff, 0xff92df, 0xa4ffff, 0xffffff,
             ],
         },
         "nord" => ThemePalette {
@@ -866,9 +868,13 @@ pub fn available_themes(catalog: &nyaterm_core::themes::ThemeCatalog) -> Vec<(St
 }
 pub fn theme_palette(id: &str) -> ThemePalette {
     let theme = nyaterm_core::themes::resolve_theme(id, &Default::default());
-    // WindTerm uses the bundled JSON as its single color source; older built-ins
-    // retain their established RGB palettes.
-    if matches!(id, "windterm-dark" | "windterm-light") {
+    // WindTerm and Dracula take the bundled JSON as their single color source
+    // (Dracula follows the official palette); older built-ins retain their
+    // established RGB palettes.
+    if matches!(
+        id,
+        "windterm-dark" | "windterm-light" | "dracula" | "dracula-light"
+    ) {
         return palette_from_theme(&theme);
     }
     let mut palette = builtin_palette(id);
@@ -977,6 +983,96 @@ mod tests {
     }
 
     #[test]
+    fn dracula_palettes_follow_the_official_specification() {
+        // Dracula Classic follows https://draculatheme.com/spec; Alucard Classic
+        // uses its official palette, except for adapted ANSI black and white.
+        for (id, bg, panel, fg, selection, ansi) in [
+            (
+                "dracula",
+                0x282a36,
+                0x21222c,
+                0xf8f8f2,
+                0x44475a,
+                [
+                    0x21222c, 0xff5555, 0x50fa7b, 0xf1fa8c, 0xbd93f9, 0xff79c6, 0x8be9fd, 0xf8f8f2,
+                    0x6272a4, 0xff6e6e, 0x69ff94, 0xffffa5, 0xd6acff, 0xff92df, 0xa4ffff, 0xffffff,
+                ],
+            ),
+            (
+                "dracula-light",
+                0xfffbeb,
+                0xf5f1e2,
+                0x1f1f1f,
+                0xcfcfde,
+                [
+                    0x1f1f1f, 0xcb3a2a, 0x14710a, 0x846e15, 0x644ac9, 0xa3144d, 0x036a96, 0x6c664b,
+                    0x6c664b, 0xd74c3d, 0x198d0c, 0x9e841a, 0x7862d0, 0xbf185a, 0x047fb4, 0x2c2b31,
+                ],
+            ),
+        ] {
+            let palette = theme_palette(id);
+            assert_eq!(palette.bg, bg, "{id} background");
+            assert_eq!(palette.surface, panel, "{id} panel");
+            assert_eq!(palette.terminal_bg, bg, "{id} terminal background");
+            assert_eq!(palette.terminal_fg, fg, "{id} foreground");
+            assert_eq!(palette.terminal_selection, selection, "{id} selection");
+            assert_eq!(palette.terminal_ansi, ansi, "{id} ANSI colors");
+        }
+    }
+
+    #[test]
+    fn confirm_buttons_stay_readable_on_pale_accent_fills() {
+        // Dracula's link and success colors are pale: white text is ~1.4:1 there.
+        let dracula = theme_palette("dracula");
+        for fill in [dracula.link, dracula.success] {
+            let text = dracula.text_on_fill(fill);
+            assert_ne!(text, 0xffffff, "{fill:#08x} must not get white text");
+            assert!(super::contrast_ratio(text, fill) >= 4.5, "{fill:#08x}");
+        }
+        // Themes whose accents already take white keep it, so their look is unchanged.
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = theme_palette(id);
+            if super::contrast_ratio(0xffffff, palette.link) >= 2.0 {
+                assert_eq!(palette.text_on_fill(palette.link), 0xffffff, "{id}");
+            }
+        }
+    }
+
+    #[test]
+    fn success_button_hover_keeps_dracula_labels_readable() {
+        for id in ["dracula", "dracula-light"] {
+            let palette = theme_palette(id);
+            let fill = palette.success;
+            let hover_fill = palette.hover_fill(fill);
+            let text = palette.text_on_fill(fill);
+            assert_ne!(fill, hover_fill, "{id} should have a hover cue");
+            assert!(
+                super::contrast_ratio(text, fill) >= 4.5,
+                "{id} normal success label"
+            );
+            assert!(
+                super::contrast_ratio(text, hover_fill) >= 4.5,
+                "{id} hovered success label"
+            );
+            assert!(
+                super::contrast_ratio(text, hover_fill) >= super::contrast_ratio(text, fill),
+                "{id} hover should not reduce label contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn dracula_dark_interface_roles_follow_the_vscode_extension() {
+        // Source: dracula/visual-studio-code, src/dracula.yml.
+        let palette = theme_palette("dracula");
+        assert_eq!(palette.input, 0x282a36, "input.background");
+        assert_eq!(palette.section_header, 0x282a36, "sideBarSectionHeader");
+        assert_eq!(palette.hover, 0x343746, "list.hoverBackground over #282a36");
+        assert_eq!(palette.focus_ring, 0x6272a4, "focusBorder");
+        assert_eq!(palette.text_dimmed, 0x6272a4, "tab.inactiveForeground");
+    }
+
+    #[test]
     fn windterm_runtime_palettes_match_json_previews_and_original_ansi_colors() {
         let catalog = nyaterm_core::themes::ThemeCatalog::default();
         for (id, bg, fg, shadow, find_bg, ansi) in [
@@ -1046,7 +1142,7 @@ mod tests {
                 0x6d28d9,
             ),
             (
-                "dracula", 0xbd93f9, 0xa77bfa, 0x282a36, 0xbd93f9, 0x8be9fd, 0xff79c6,
+                "dracula", 0xbd93f9, 0xa77bfa, 0x282a36, 0x6272a4, 0x8be9fd, 0xff79c6,
             ),
             (
                 "nord", 0x88c0d0, 0x7bb8c9, 0x2e3440, 0x88c0d0, 0x81a1c1, 0x5e81ac,
@@ -1158,6 +1254,15 @@ mod tests {
                 0x4078f2,
                 0x4078f2,
                 0xa626a4,
+            ),
+            (
+                "dracula-light",
+                0x644ac9,
+                0x5238b0,
+                0xffffff,
+                0x644ac9,
+                0x036a96,
+                0xa3144d,
             ),
         ];
 

@@ -83,14 +83,14 @@ impl server::Handler for Peer {
     async fn auth_publickey_offered(
         &mut self,
         _: &str,
-        _: &russh::keys::PublicKey,
+        _: russh::server::PublicKeyOffer<'_>,
     ) -> Result<server::Auth, Self::Error> {
         Ok(server::Auth::Accept)
     }
     async fn auth_publickey(
         &mut self,
         _: &str,
-        _: &russh::keys::PublicKey,
+        _: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<server::Auth, Self::Error> {
         self.seen.lock().unwrap().push("key".into());
         Ok(

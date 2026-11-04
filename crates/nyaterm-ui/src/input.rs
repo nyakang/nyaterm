@@ -1772,7 +1772,8 @@ mod tests {
         });
         cx.run_until_parked();
         open_input_context_menu(cx);
-        cx.simulate_keystrokes("down enter");
+        // Initial confirmation must not invoke the disabled Cut row.
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         cx.update(|_, cx| {
             assert_eq!(
@@ -1781,7 +1782,8 @@ mod tests {
             );
         });
         open_input_context_menu(cx);
-        cx.simulate_keystrokes("down down enter");
+        // Keyboard navigation skips disabled Cut and moves straight to Copy.
+        cx.simulate_keystrokes("down enter");
         cx.run_until_parked();
         assert_eq!(
             field.read_with(cx, |field, cx| field.value(cx)),

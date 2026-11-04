@@ -400,6 +400,14 @@ impl NyaTermApp {
         .total_width()
     }
 
+    pub(in crate::features) fn terminal_wrap_marker_width_px(&self) -> f32 {
+        if self.settings.summary().terminal_show_wrap_markers {
+            self.terminal_cell_size().0
+        } else {
+            0.0
+        }
+    }
+
     pub(in crate::features) fn active_terminal_grid_size(&self) -> (usize, usize) {
         self.terminal_grid_size_for_session(self.session.active_id())
     }
@@ -469,22 +477,6 @@ impl NyaTermApp {
         self.terminal.view.screen.scrollback_len()
     }
 
-    pub(in crate::features) fn terminal_snapshot_row_for_session_viewport_row(
-        &self,
-        session_id: Option<&str>,
-        snapshot: &nyaterm_terminal::TerminalSnapshot,
-        display_offset: usize,
-        viewport_row: usize,
-    ) -> Option<usize> {
-        terminal_snapshot_row_for_viewport_row(
-            snapshot,
-            display_offset,
-            self.terminal_viewport_rows_for_session(session_id),
-            self.terminal_scrollback_len_for_session(session_id),
-            viewport_row,
-        )
-    }
-
     pub(in crate::features) fn point_to_terminal_cell(
         &self,
         position: Point<Pixels>,
@@ -539,6 +531,9 @@ impl NyaTermApp {
                 snapshot_rows: painted.snapshot_rows,
                 viewport_rows: painted.viewport_rows,
                 visual_y_offset: painted.visual_y_offset,
+                unwrapped: session_id
+                    .and_then(|id| self.terminal.view.surfaces.get(id))
+                    .and_then(|surface| surface.read(cx).painted_unwrapped_layout()),
             });
         }
         let target_display_offset = self.terminal_display_offset_for_session(session_id);
@@ -588,6 +583,7 @@ impl NyaTermApp {
             snapshot_rows: snapshot.row_count(),
             viewport_rows,
             visual_y_offset,
+            unwrapped: None,
         })
     }
 
@@ -658,6 +654,8 @@ pub(in crate::features) struct TerminalHitTestGeometry {
     pub(in crate::features) snapshot_rows: usize,
     pub(in crate::features) viewport_rows: usize,
     pub(in crate::features) visual_y_offset: f32,
+    pub(in crate::features) unwrapped:
+        Option<Arc<nyaterm_terminal_gpui::unwrapped::TerminalUnwrappedLayout>>,
 }
 
 fn terminal_hit_test_visual_y_offset_px(geometry: TerminalVisualScrollGeometry) -> f32 {
@@ -677,6 +675,14 @@ pub(in crate::features) fn terminal_cell_for_visual_geometry(
     let snapshot_row = ((local_y - geometry.visual_y_offset) / cell_h)
         .floor()
         .max(0.0) as usize;
+    if let Some(layout) = geometry.unwrapped.as_ref() {
+        let (source_row, source_col) =
+            layout.source_position(snapshot_row, local_x.max(0.0) / cell_w);
+        return TerminalCellPos::new(
+            source_row.saturating_sub(geometry.viewport_anchor_row),
+            source_col,
+        );
+    }
     let row = snapshot_row.saturating_sub(geometry.viewport_anchor_row);
     let col = (local_x / cell_w).floor().max(0.0) as usize;
     TerminalCellPos::new(
@@ -694,10 +700,17 @@ pub(super) fn terminal_cell_side_for_visual_geometry(
     let cell_w = geometry.cell_w.max(1.0);
     let local_x =
         f32::from(position.x - geometry.bounds.origin.x) - geometry.padding_left - geometry.gutter;
+    let local_x = local_x
+        + geometry
+            .unwrapped
+            .as_ref()
+            .map_or(0.0, |layout| layout.horizontal_offset * cell_w);
     if local_x <= 0.0 || geometry.cols == 0 {
         return TerminalCellSide::Left;
     }
-    if local_x >= geometry.cols as f32 * cell_w || local_x % cell_w >= cell_w * 0.5 {
+    if (geometry.unwrapped.is_none() && local_x >= geometry.cols as f32 * cell_w)
+        || local_x % cell_w >= cell_w * 0.5
+    {
         TerminalCellSide::Right
     } else {
         TerminalCellSide::Left
@@ -710,9 +723,19 @@ pub(in crate::features) fn terminal_snapshot_row_for_visual_geometry(
 ) -> usize {
     let cell_h = geometry.cell_h.max(1.0);
     let local_y = f32::from(position.y - geometry.bounds.origin.y) - geometry.padding_top;
-    ((local_y - geometry.visual_y_offset) / cell_h)
+    let row = ((local_y - geometry.visual_y_offset) / cell_h)
         .floor()
-        .max(0.0) as usize
+        .max(0.0) as usize;
+    if let Some(layout) = geometry.unwrapped.as_ref() {
+        let x = (f32::from(position.x - geometry.bounds.origin.x)
+            - geometry.padding_left
+            - geometry.gutter)
+            .max(0.0)
+            / geometry.cell_w.max(1.0);
+        layout.source_position(row, x).0
+    } else {
+        row
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -798,6 +821,7 @@ fn terminal_line_number_digits_for_end(visible_end: usize) -> usize {
     visible_end.max(1).to_string().len()
 }
 
+#[cfg(test)]
 pub(in crate::features) fn terminal_snapshot_row_for_viewport_row(
     snapshot: &nyaterm_terminal::TerminalSnapshot,
     display_offset: usize,
@@ -844,6 +868,7 @@ mod tests {
         let snapshot = Arc::new(TerminalScreen::new(4, 3).snapshot());
         for scale in [1.0, 1.25, 1.5] {
             let geometry = TerminalHitTestGeometry {
+                unwrapped: None,
                 bounds: gpui::bounds(
                     Point {
                         x: px(17.0),
@@ -1020,6 +1045,7 @@ mod tests {
         terminal.clear_except_input();
         let snapshot = std::sync::Arc::new(terminal.snapshot());
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1061,6 +1087,7 @@ mod tests {
     #[test]
     fn terminal_visual_hit_test_maps_through_snapshot_anchor() {
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(10.0),
@@ -1100,6 +1127,7 @@ mod tests {
     #[test]
     fn terminal_visual_hit_test_maps_address_from_the_painted_grid_origin() {
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(103.0),
@@ -1147,6 +1175,7 @@ mod tests {
     #[test]
     fn terminal_visual_hit_test_follows_fractional_visual_offset() {
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1189,6 +1218,7 @@ mod tests {
         screen.advance_decoded_text(&terminal_output_lines(180));
         let snapshot = Arc::new(screen.viewport_snapshot(100));
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1235,6 +1265,7 @@ mod tests {
     #[test]
     fn terminal_hit_test_uses_painted_geometry_when_model_offset_advances() {
         let mut geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1288,6 +1319,7 @@ mod tests {
             cell_height: cell_h,
         });
         let geometry = TerminalHitTestGeometry {
+            unwrapped: None,
             bounds: gpui::bounds(
                 Point {
                     x: px(0.0),
@@ -1335,6 +1367,7 @@ mod tests {
             let snapshot_row = viewport_anchor_row + viewport_row;
             let visual_y_offset = -3.25 * cell_h;
             let geometry = TerminalHitTestGeometry {
+                unwrapped: None,
                 bounds: gpui::bounds(
                     Point {
                         x: px(10.0),

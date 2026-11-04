@@ -3,7 +3,6 @@ use crate::models::TransferJobKind;
 use crate::models::TransferJobStatus;
 use gpui::Context;
 use nyaterm_remote_desktop::ClipboardOrigin;
-use nyaterm_remote_desktop::RdpClipboardMode;
 use nyaterm_remote_desktop::RemoteDesktopViewState;
 use std::time::Duration;
 use std::time::Instant;
@@ -53,9 +52,7 @@ impl NyaTermApp {
             self.session
                 .metadata(&session_id)
                 .and_then(|metadata| match &metadata.launch_config {
-                    crate::models::SessionLaunchConfig::Rdp(config)
-                        if config.clipboard.mode != RdpClipboardMode::Disabled =>
-                    {
+                    crate::models::SessionLaunchConfig::Rdp(_) => {
                         Some(RemoteDesktopClipboardTarget::Rdp)
                     }
                     crate::models::SessionLaunchConfig::Vnc(config) if config.clipboard.enabled => {

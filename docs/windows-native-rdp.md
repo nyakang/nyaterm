@@ -49,12 +49,11 @@ owner 的子窗口点击；不重放、不再分发 GPUI bubble。
 `windows_authentication` 在启动配置中补为 `system`，未知值仍拒绝使用。
 保存的 Builtin 证书策略保持不变，不转换为系统信任授权。
 
-当前 ActiveX 剪贴板固定禁用。编辑器禁用控件，启动/恢复/重连统一覆盖旧的
-剪贴板请求，原生宿主再次校验并将 `RedirectClipboard` 固定关闭。归一化
-不批量改写保存数据；用户保存编辑时才保存禁用值。不开放“仅文本”或完整重定向。
-本机离线回归测试创建隐藏父窗口和真实系统控件，覆盖 NLA/管理会话开关，
-读回确认系统验证级别、剪贴板和动态资源策略，再销毁宿主；不调用 Connect。
-该测试通过仅证明本机初始化可用，不代表服务器登录或实际会话验收通过。
+RDP 剪贴板始终开启，连接编辑器不再提供模式选项。Builtin 始终启用文本和文件／目录通道；Native 将 `RedirectClipboard` 设置为 true，由微软控件处理完整重定向，实际格式能力仍受控件及服务端策略限制。应用的剪贴板轮询继续跳过 Native，避免重复处理。
+
+保存字段与旧值继续兼容读写；只在临时启动配置中归一化为 `TextAndFiles`，覆盖启动、恢复、重连和后端切换，不批量改写旧连接。新连接默认保存完整模式。本机离线真实控件测试读回确认剪贴板已开启、动态资源仍关闭；该结果不能代替真实双向复制验收。
+
+光标诊断默认关闭；设置 `RUST_LOG=warn,gpui::native_cursor=trace,nyaterm_windows_rdp::presentation=trace` 可记录消息来源 HWND、命中窗口、焦点 HWND、光标句柄，以及实际视口／远程分辨率更新，不记录窗口标题、连接数据或剪贴板内容。GPUI 不覆盖原生子树的光标，owned popup 菜单仍使用 GPUI 光标。相同视口继续去重，动态分辨率继续防抖。
 
 动态驱动器和设备重定向通过 `IMsRdpClientNonScriptable3` 关闭；其他设置使用
 类型库的强类型接口，初始化失败返回具体属性和 HRESULT，不包含连接数据。
@@ -92,7 +91,7 @@ cargo run -p nyaterm-windows-rdp --example native_overlay_smoke -- <保存的连
 
 | 项目 | 验收要求 |
 | --- | --- |
-| 登录与安全 | 真实登录、失败认证、证书警告后的继续/取消、剪贴板双向不传输 |
+| 登录与安全 | 真实登录、失败认证、证书警告后的继续/取消、剪贴板双向文本及文件／目录传输 |
 | 输入 | 中文 IME、系统快捷键、Ctrl+Alt+Home、无双重输入 |
 | 浮层 | 菜单区域命中、外部点击只执行一次、tooltip 穿透、模态阻断；远程画面持续更新 |
 | 布局 | 连续切页签、分屏、最大化、跨 DPI 显示器、动态/固定分辨率 |
@@ -151,7 +150,7 @@ cargo run -p nyaterm-windows-rdp --example native_overlay_smoke -- <保存的连
 
 ## 系统证书提示模式修复验证（Windows x64）
 
-- `AuthenticationLevel = 2` 的真实控件离线读回测试通过；剪贴板及动态资源保持禁用。
+- `AuthenticationLevel = 2` 的真实控件离线读回测试通过；按当时策略，剪贴板及动态资源保持禁用（现行剪贴板策略见上文）。
 - workspace check、test、Clippy（`-D warnings`）、fmt 和 diff 检查均通过。
 - workspace 测试：5046 项通过、0 失败、42 项忽略。
 - `cargo build -p nyaterm-app --bin nyaterm --locked -j 1` 通过，调试版程序已更新。
@@ -276,3 +275,55 @@ cargo run -p nyaterm-windows-rdp --example native_overlay_smoke -- <保存的连
 - `cargo clippy --workspace --all-targets --locked -j1 -- -D warnings` 通过。
 - `cargo fmt --all -- --check` 和 `git diff --check` 通过。
 - 主仓库改动保持未提交；未修改 `temp/`。
+
+
+## 剪贴板默认全开与光标归属修复（Windows x64，2026-11-03）
+
+- 当前 Zed revision 为 `597ca983eb6facf1a8528a56204aeeb7c857eaf6`，
+  Kit revision 为 `7952df45d0f719525fe969b8991b39f7692f7f58`；均已推送到
+  `nyakang` fork 的 `nyaterm` 分支。主项目同步 manifest 和 lock，未修改
+  `temp/` 或 Cargo 缓存中的依赖源码。
+- 删除两个 RDP 后端的剪贴板选择器及旧禁用校验；磁盘、打印机和设备
+  重定向策略保持原样。Builtin 的完整能力仍限于文本和文件／目录，
+  本次未增加图片、HTML 或其他富文本协议。Native 交由微软控件协商格式。
+- 旧连接和编辑草稿的剪贴板值继续往返保存，临时启动配置统一全开；
+  没有数据库迁移或批量重写。helper 入口始终注册支持文件的 CLIPRDR，
+  Native 入口始终启用 RedirectClipboard。
+- 静态分析发现父窗口 WM_SETCURSOR 及异步样式／隐藏恢复路径可覆盖
+  原生子窗口光标。修复保留消息来源 HWND，并在原生子树拥有光标时跳过
+  SetCursor；真实 HWND 测试覆盖嵌套子窗口、父窗口、owned popup 和隐藏
+  光标。视口去重和动态分辨率防抖保持原样，尚无实机会话日志证明存在
+  重复缩放，也没有据此更改分辨率调用链。
+- 相关四个 crate 测试共 775 项通过、0 失败、1 项忽略；包含旧值兼容、
+  两个后端启动策略、Builtin 文件能力和取消／错误回归，以及 Windows
+  真实控件离线重定向策略读回。Zed Windows 测试 58 项通过、0 失败、
+  1 项忽略。这些离线结果不代表真实远程会话已验收。
+- 本次 computer-use 原生管道不可用（os error 2），浏览器宿主也不可用。
+  因此尚未完成新版真实会话的双向文本、文件／目录复制、光标形状和大小、
+  停留与移动、菜单开关、切换页签、缩放及跨 DPI 验收；无法确认用户报告
+  的闪变已完全消失。其他平台文件剪贴板和 ARM64 本次也未实测。
+
+- 最终依赖下 `cargo check --workspace -j 2`、
+  `cargo fmt --all -- --check`、`git diff --check` 通过；锁文件中 GPUI 和
+  GPUI Platform 各只有一个来源。首轮默认并行的 workspace test 在桌面
+  套件遇到四项失败：AI 模拟服务管道关闭、安全列表排序超时、壁纸加载
+  超时、凭据回调未完成。当时另有 workspace 构建并行运行；本次 RDP
+  启动／重连及旧配置兼容回归均通过。后续串行复跑结果另列，不将首轮
+  失败隐藏，也不据此修改无关模块。
+
+- 中间复跑发现共享 target 中的 core 测试产物缺少新增兼容回归，该轮已
+  中止且不计入最终结果。重新编译改动涉及的 crate 后，最终日志确认
+  core 兼容、两个后端启动／重连、helper 文件能力及 Native 策略读回
+  回归全部实际执行并通过。
+- 最终 `cargo test --workspace --locked -j 2 -- --test-threads=1` 通过：
+  5053 项通过、0 失败、42 项忽略；首轮失败的四项均在这轮通过。
+- 最终 `cargo check --workspace --locked -j 1` 通过。
+- `cargo build -p nyaterm-app -p nyaterm-rdp-helper -p nyaterm-vnc-helper
+  --locked -j 1` 通过，三个最新可执行文件均位于 `target/debug/`：
+  `nyaterm.exe`、`nyaterm-rdp-helper.exe`、`nyaterm-vnc-helper.exe`。
+- 最终 `cargo fmt --all -- --check` 和 `git diff --check` 通过。
+- 最终 `cargo clippy --workspace --all-targets --locked -j 1 -- -D warnings`
+  通过。两个 fork 工作区干净；主仓库保留未提交改动以供审阅。
+- 上述结果均为构建、单元／集成或离线真实控件验证；本次真实远程会话
+  验收仍受桌面控制服务不可用阻塞，不能据此确认用户报告的光标闪变已
+  完全消除，双向复制和跨 DPI 等待实机补验。

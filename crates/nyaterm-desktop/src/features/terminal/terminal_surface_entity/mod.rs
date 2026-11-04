@@ -1,6 +1,6 @@
 use gpui::{
-    Context, Entity, FontFallbacks, IntoElement, MouseButton, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
+    Context, Entity, FontFallbacks, IntoElement, MouseButton, Render, ScrollDelta, ScrollEvent,
+    SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
 };
 use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
 
@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod wheel_zoom;
+mod wrapping;
 
 use self::wheel_zoom::TerminalWheelZoom;
 
@@ -96,18 +97,26 @@ fn terminal_keyword_highlight_request_key(
     let row_start = rows.start.min(snapshot.row_count());
     let row_end = rows.end.min(snapshot.row_count()).max(row_start);
     let mut hasher = DefaultHasher::new();
-    let rows = snapshot.rows().get(row_start..row_end).unwrap_or_default();
-    rows.len().hash(&mut hasher);
-    for row in rows {
-        (
-            row.signature,
-            row.wrapped,
-            row.command_mark,
-            row.shell_input,
-            row.shell_input_columns,
-            row.shell_integration,
-        )
+    if snapshot.logical_lines.is_some() {
+        // The worker owns the full source range. Frame identity is sufficient
+        // here and keeps preparing a huge logical line off the UI thread.
+        Arc::as_ptr(&snapshot.row_data)
+            .cast::<()>()
             .hash(&mut hasher);
+    } else {
+        let rows = snapshot.rows().get(row_start..row_end).unwrap_or_default();
+        rows.len().hash(&mut hasher);
+        for row in rows {
+            (
+                row.signature,
+                row.wrapped,
+                row.command_mark,
+                row.shell_input,
+                row.shell_input_columns,
+                row.shell_integration,
+            )
+                .hash(&mut hasher);
+        }
     }
     TerminalKeywordHighlightRequestKey {
         rules_key,
@@ -226,6 +235,8 @@ pub(in crate::features) struct TerminalSurfacePaintChrome {
     pub show_line_numbers: bool,
     pub max_line_number_digits: usize,
     pub show_timestamps: bool,
+    pub wrap_mode: nyaterm_core::models::settings::TerminalWrapMode,
+    pub show_wrap_markers: bool,
     pub timestamp_format: String,
     pub is_active: bool,
 }
@@ -349,6 +360,15 @@ pub(in crate::features) struct TerminalSurface {
     show_line_numbers: bool,
     max_line_number_digits: usize,
     show_timestamps: bool,
+    wrap_mode: nyaterm_core::models::settings::TerminalWrapMode,
+    show_wrap_markers: bool,
+    horizontal_scroll: gpui::ScrollHandle,
+    horizontal_reveal: Option<(TerminalLineId, usize)>,
+    logical_scroll_residual_lines: f32,
+    last_horizontal_cursor: Option<(TerminalLineId, usize)>,
+    last_horizontal_input: Option<Instant>,
+    last_horizontal_search: Option<(TerminalLineId, usize)>,
+    painted_unwrapped: Option<Arc<nyaterm_terminal_gpui::unwrapped::TerminalUnwrappedLayout>>,
     timestamp_format: String,
     scroll_offset: usize,
     scroll_residual_lines: f32,
@@ -424,6 +444,15 @@ impl TerminalSurface {
             show_line_numbers: false,
             max_line_number_digits: 1,
             show_timestamps: false,
+            wrap_mode: nyaterm_core::models::settings::TerminalWrapMode::Character,
+            show_wrap_markers: false,
+            horizontal_scroll: gpui::ScrollHandle::default(),
+            horizontal_reveal: None,
+            logical_scroll_residual_lines: 0.0,
+            last_horizontal_cursor: None,
+            last_horizontal_input: None,
+            last_horizontal_search: None,
+            painted_unwrapped: None,
             timestamp_format: nyaterm_core::DEFAULT_TERMINAL_TIMESTAMP_FORMAT.to_string(),
             scroll_offset: 0,
             scroll_residual_lines: 0.0,
@@ -1053,7 +1082,12 @@ impl TerminalSurface {
         if snapshot.row_count() == 0 {
             return;
         }
-        self.remember_retained_snapshot_rows(snapshot.as_ref());
+        // Rich logical frames already share their source row Arcs. Retaining
+        // and estimating every cell here would scan a long line on the UI
+        // thread, even though physical-row synthesis cannot serve this mode.
+        if snapshot.logical_lines.is_none() {
+            self.remember_retained_snapshot_rows(snapshot.as_ref());
+        }
         self.retained_snapshots.retain(|retained| {
             !(retained.display_offset == snapshot.display_offset
                 && retained.total_rows == snapshot.total_rows
@@ -1163,6 +1197,9 @@ impl TerminalSurface {
         viewport_rows: usize,
         scrollback_len: usize,
     ) -> bool {
+        if self.wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None {
+            return false;
+        }
         let viewport_rows = viewport_rows.max(1);
         let real_total_rows = scrollback_len.saturating_add(viewport_rows);
         let desired_end = real_total_rows.saturating_sub(display_offset);
@@ -1232,6 +1269,12 @@ impl TerminalSurface {
         viewport_rows: usize,
         scrollback_len: usize,
     ) -> Option<Arc<TerminalSnapshot>> {
+        // Physical-row cache synthesis can split a logical line. Reuse a complete
+        // committed frame or request one from the worker instead.
+        if self.wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None {
+            return None;
+        }
+
         let viewport_rows = viewport_rows.max(1);
         let real_total_rows = scrollback_len.saturating_add(viewport_rows);
         let desired_end = real_total_rows.checked_sub(display_offset)?;
@@ -1399,6 +1442,8 @@ impl TerminalSurface {
             show_line_numbers,
             max_line_number_digits,
             show_timestamps,
+            wrap_mode,
+            show_wrap_markers,
             timestamp_format,
             is_active,
         } = chrome;
@@ -1416,6 +1461,8 @@ impl TerminalSurface {
             && (self.cell_height - cell_height).abs() < f32::EPSILON * 8.0
             && self.show_line_numbers == show_line_numbers
             && self.max_line_number_digits == max_line_number_digits
+            && self.wrap_mode == wrap_mode
+            && self.show_wrap_markers == show_wrap_markers
             && self.show_timestamps == show_timestamps
             && self.timestamp_format == timestamp_format
             && self.is_active == is_active;
@@ -1434,6 +1481,15 @@ impl TerminalSurface {
         self.cell_height = cell_height;
         self.show_line_numbers = show_line_numbers;
         self.max_line_number_digits = max_line_number_digits;
+        if self.wrap_mode != wrap_mode {
+            self.horizontal_scroll
+                .set_offset(gpui::point(px(0.), px(0.)));
+            self.horizontal_reveal = None;
+            self.painted_unwrapped = None;
+            self.logical_scroll_residual_lines = 0.0;
+        }
+        self.wrap_mode = wrap_mode;
+        self.show_wrap_markers = show_wrap_markers;
         self.show_timestamps = show_timestamps;
         self.timestamp_format = timestamp_format;
         self.is_active = is_active;
@@ -1581,6 +1637,25 @@ impl TerminalSurface {
         let rules_changed = !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
         let decorations_changed = !Arc::ptr_eq(&self.decorations, &decorations)
             && self.decorations.as_ref() != decorations.as_ref();
+        if decorations_changed
+            && self.wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None
+        {
+            let target = self.snapshot.as_ref().and_then(|snapshot| {
+                decorations
+                    .iter()
+                    .enumerate()
+                    .find_map(|(row, decoration)| {
+                        let &(col, _) = decoration.active_search_ranges.first()?;
+                        Some((snapshot.row(row)?.line_id?, col))
+                    })
+            });
+            if target != self.last_horizontal_search {
+                self.last_horizontal_search = target;
+                if target.is_some() {
+                    self.horizontal_reveal = target;
+                }
+            }
+        }
         let changed = decorations_changed
             || rules_changed
             || self.show_cursor != show_cursor
@@ -2006,7 +2081,7 @@ impl TerminalSurface {
         }
     }
 
-    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn handle_scroll_wheel(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let Some(app) = self.app.as_ref().and_then(WeakEntity::upgrade) else {
             self.wheel_zoom = TerminalWheelZoom::default();
             return;
@@ -2036,6 +2111,9 @@ impl TerminalSurface {
                     });
                 });
             }
+            return;
+        }
+        if self.handle_unwrapped_scroll(event, cx) {
             return;
         }
         let raw_lines = match event.delta {
@@ -2344,8 +2422,13 @@ impl TerminalSurface {
         let palette = self.palette;
         let session_id = self.session_id.clone();
         let is_active = self.is_active;
-        let scroll_offset = self.scroll_offset;
-        let max = self.scrollback_len;
+        let (scroll_offset, max) = self
+            .painted_unwrapped
+            .as_ref()
+            .and_then(|_| self.snapshot.as_ref()?.logical_lines.as_ref())
+            .map_or((self.scroll_offset, self.scrollback_len), |index| {
+                index.scroll_metrics(self.scroll_offset, self.viewport_rows)
+            });
         let viewport_rows = self.viewport_rows.max(1);
         let show = max > 0;
         let app = self.app.as_ref().and_then(WeakEntity::upgrade);
@@ -2442,9 +2525,14 @@ impl TerminalSurface {
                                     f32::from(bounds.origin.y),
                                     metrics,
                                     grab_offset_y,
-                                    this.terminal_scroll_max_for_session(
+                                    this.terminal_scrollbar_range_for_session(
                                         drag_session_id.as_deref(),
-                                    ),
+                                    )
+                                    .0,
+                                );
+                                let offset = this.terminal_grid_offset_for_scrollbar(
+                                    drag_session_id.as_deref(),
+                                    offset,
                                 );
                                 repaint_session_id = this
                                     .set_terminal_scroll_offset_for_session_state_only(
@@ -2570,6 +2658,19 @@ pub(in crate::features) fn terminal_snapshot_covers_display_offset(
     };
     let desired_end = real_total_rows.saturating_sub(display_offset);
     let desired_start = desired_end.saturating_sub(viewport_rows);
+    if let Some(index) = snapshot.logical_lines.as_ref() {
+        if index.physical_rows() != real_total_rows {
+            return false;
+        }
+        let max_top = index.logical_rows().saturating_sub(viewport_rows);
+        let top = if display_offset == 0 {
+            max_top
+        } else {
+            index.logical_row(desired_start).min(max_top)
+        };
+        return snapshot_start <= index.physical_row(top)
+            && index.physical_row((top + viewport_rows).min(index.logical_rows())) <= snapshot_end;
+    }
     snapshot_start <= desired_start && desired_end <= snapshot_end
 }
 
@@ -2594,6 +2695,10 @@ fn terminal_keyword_highlight_visible_rows(
     viewport_rows: usize,
     scrollback_len: usize,
 ) -> Range<usize> {
+    if let Some(rows) = terminal_logical_highlight_rows(snapshot, display_offset, viewport_rows, 0)
+    {
+        return rows;
+    }
     let anchor = terminal_snapshot_anchor_row_for_display_offset(
         snapshot,
         display_offset,
@@ -2616,6 +2721,11 @@ fn terminal_keyword_highlight_prefetch_rows(
     scrollback_len: usize,
     prefetch_viewports: usize,
 ) -> Range<usize> {
+    if let Some(rows) =
+        terminal_logical_highlight_rows(snapshot, display_offset, viewport_rows, prefetch_viewports)
+    {
+        return rows;
+    }
     let viewport_rows = viewport_rows.max(1);
     let anchor = terminal_snapshot_anchor_row_for_display_offset(
         snapshot,
@@ -2635,6 +2745,37 @@ fn terminal_keyword_highlight_prefetch_rows(
         .min(snapshot.row_count())
         .max(start);
     start..end
+}
+
+fn terminal_logical_highlight_rows(
+    snapshot: &TerminalSnapshot,
+    offset: usize,
+    viewport: usize,
+    prefetch: usize,
+) -> Option<Range<usize>> {
+    let index = snapshot.logical_lines.as_ref()?;
+    let max = index.logical_rows().saturating_sub(viewport);
+    let top = if offset == 0 {
+        max
+    } else {
+        index
+            .logical_row(snapshot.history.scrollback_len.saturating_sub(offset))
+            .min(max)
+    };
+    let source_start = snapshot
+        .total_rows
+        .saturating_sub(snapshot.display_offset)
+        .saturating_sub(snapshot.row_count());
+    let extra = viewport.saturating_mul(prefetch);
+    let start = index
+        .physical_row(top.saturating_sub(extra))
+        .saturating_sub(source_start)
+        .min(snapshot.row_count());
+    let end = index
+        .physical_row((top + viewport + extra).min(index.logical_rows()))
+        .saturating_sub(source_start)
+        .min(snapshot.row_count());
+    Some(start..end.max(start))
 }
 
 fn hidden_terminal_cursor_snapshot() -> nyaterm_terminal::CursorSnapshot {
@@ -2746,6 +2887,12 @@ impl Render for TerminalSurface {
                 cell_height: cell_h,
             }) - (viewport_anchor_row + snapshot.leading_cleared_rows(viewport_anchor_row)) as f32
                 * cell_h;
+        self.painted_unwrapped = self.unwrapped_layout(&snapshot);
+        let visual_y_offset = if self.painted_unwrapped.is_some() {
+            0.0
+        } else {
+            visual_y_offset
+        };
         let visual_y_offset = if self.scroll_snapshot_pending && !self.visual_scroll_active() {
             // A missing live frame must not move old bottom rows into view.
             // Keep the last painted geometry until live text can be committed.
@@ -2798,7 +2945,11 @@ impl Render for TerminalSurface {
             revision: self.revision,
         });
         self.painted_hit_test_snapshot = Some(snapshot.clone());
-        let line_count = snapshot.row_count();
+        let line_count = if self.painted_unwrapped.is_some() {
+            self.viewport_rows
+        } else {
+            snapshot.row_count()
+        };
         let visible_gutter_rows = terminal_surface_visible_rows_for_viewport(
             self.viewport_rows,
             line_count,
@@ -2843,6 +2994,7 @@ impl Render for TerminalSurface {
             .with_layout_cache(self.layout_cache.clone())
             .with_layout_rows(self.viewport_rows)
             .with_fill_height(true)
+            .with_unwrapped_layout(self.painted_unwrapped.clone())
             .with_visual_y_offset(visual_y_offset)
             .with_zebra_stripes(zebra_stripes_visible, target_line);
         if let Some(highlights) = self.keyword_highlights.clone() {
@@ -2880,7 +3032,14 @@ impl Render for TerminalSurface {
                 .flex()
                 .flex_col();
             let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
-            for line_index in visible_gutter_rows.take_while(|row| *row < gutter_row_count) {
+            for display_row in visible_gutter_rows
+                .clone()
+                .take_while(|row| *row < gutter_row_count)
+            {
+                let line_index = self
+                    .painted_unwrapped
+                    .as_ref()
+                    .map_or(display_row, |layout| layout.first_source_row(display_row));
                 let snapshot_row = snapshot.row(line_index);
                 let zebra_color = zebra_stripes_visible
                     .then(|| {
@@ -2942,6 +3101,8 @@ impl Render for TerminalSurface {
             None
         };
 
+        let wrap_markers = self.wrap_marker_gutter(&snapshot, visual_y_offset, cell_h);
+        let (horizontal, horizontal_bar) = self.horizontal_scroll_layer();
         let body = if let Some(gutter) = gutter {
             div()
                 .flex()
@@ -2956,19 +3117,33 @@ impl Render for TerminalSurface {
                         .flex_1()
                         .min_w_0()
                         .min_h_0()
+                        .children(horizontal)
+                        .overflow_hidden()
                         .child(grid)
+                        .children(horizontal_bar)
                         .child(terminal_surface_grid_bounds_tracker(surface.clone())),
                 )
+                .children(wrap_markers)
         } else {
-            div().flex().flex_row().flex_1().min_w_0().min_h_0().child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(grid)
-                    .child(terminal_surface_grid_bounds_tracker(surface)),
-            )
+            div()
+                .flex()
+                .flex_row()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .children(horizontal)
+                        .overflow_hidden()
+                        .child(grid)
+                        .children(horizontal_bar)
+                        .child(terminal_surface_grid_bounds_tracker(surface)),
+                )
+                .children(wrap_markers)
         };
 
         let scrollbar = self.scrollbar_element(cx).into_any_element();
@@ -2995,7 +3170,7 @@ impl Render for TerminalSurface {
             .when(!self.protocol_state.mouse_reporting, |this| {
                 this.cursor_text()
             })
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 this.handle_scroll_wheel(event, cx);
             }))
             .child(
@@ -3008,6 +3183,25 @@ impl Render for TerminalSurface {
                     .relative()
                     .overflow_hidden()
                     .child(body)
+                    .when(
+                        self.wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None
+                            && self.painted_unwrapped.is_none()
+                            && snapshot.logical_lines.is_none(),
+                        |this| {
+                            this.child(
+                                div()
+                                    .absolute()
+                                    .right_2()
+                                    .top_1()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_dimmed))
+                                    .child(
+                                        rust_i18n::t!("settings.terminalWrapGridFallback")
+                                            .to_string(),
+                                    ),
+                            )
+                        },
+                    )
                     .when_some(app, |this, app| {
                         this.child(terminal_bounds_tracker(
                             app,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use crate::models::{
@@ -708,6 +709,13 @@ impl NyaTermApp {
         if session_id.is_empty() {
             return false;
         }
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_logical_line_snapshots(
+                self.settings.summary().terminal_wrap_mode
+                    == nyaterm_core::models::settings::TerminalWrapMode::None,
+            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return false;
@@ -728,6 +736,9 @@ impl NyaTermApp {
         );
         let input_latency_active =
             terminal_input_latency_active(self.shell.last_terminal_input_at(), now);
+        // Echo over SSH can arrive after the short paint-priority window.
+        // Retain the input token so its cursor movement can still be revealed.
+        let horizontal_input_at = self.shell.last_terminal_input_at();
         let Some(snapshot) = terminal_paint_window_snapshot_for_view(
             Some(view),
             display_offset,
@@ -753,6 +764,8 @@ impl NyaTermApp {
         let show_line_numbers = self.settings.summary().terminal_show_line_numbers;
         let max_line_number_digits = view.max_line_number_digits;
         let show_timestamps = self.settings.summary().terminal_show_timestamps;
+        let wrap_mode = self.settings.summary().terminal_wrap_mode;
+        let show_wrap_markers = self.settings.summary().terminal_show_wrap_markers;
         let timestamp_format = self.settings.summary().terminal_timestamp_format.clone();
         let (cell_w, cell_h) = self
             .terminal
@@ -864,6 +877,8 @@ impl NyaTermApp {
                 show_line_numbers,
                 max_line_number_digits,
                 show_timestamps,
+                wrap_mode,
+                show_wrap_markers,
                 timestamp_format: timestamp_format.clone(),
                 is_active,
             });
@@ -901,6 +916,7 @@ impl NyaTermApp {
                 )
             };
             changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
+            changed |= surface.reveal_input_cursor(horizontal_input_at);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
@@ -1005,6 +1021,13 @@ impl NyaTermApp {
         let is_active = self.session.active_id() == Some(session_id);
         let paint_started_at = Instant::now();
         self.ensure_paint_theme_caches();
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_logical_line_snapshots(
+                self.settings.summary().terminal_wrap_mode
+                    == nyaterm_core::models::settings::TerminalWrapMode::None,
+            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         // Read only the lightweight row/column pair for the active surface; no
         // snapshot is cloned, and inactive surfaces do not need this check.
@@ -1093,6 +1116,7 @@ impl NyaTermApp {
         );
         let input_latency_active =
             terminal_input_latency_active(self.shell.last_terminal_input_at(), paint_started_at);
+        let horizontal_input_at = self.shell.last_terminal_input_at();
         let render_pressure = render_output_pressure
             || burst > 0
             || mode == TerminalPerformanceMode::Overloaded
@@ -1179,6 +1203,8 @@ impl NyaTermApp {
         let show_line_numbers = self.settings.summary().terminal_show_line_numbers;
         let max_line_number_digits = view.map_or(1, |view| view.max_line_number_digits);
         let show_timestamps = self.settings.summary().terminal_show_timestamps;
+        let wrap_mode = self.settings.summary().terminal_wrap_mode;
+        let show_wrap_markers = self.settings.summary().terminal_show_wrap_markers;
         let timestamp_format = self.settings.summary().terminal_timestamp_format.clone();
         let (cell_w, cell_h) = self
             .terminal
@@ -1247,6 +1273,8 @@ impl NyaTermApp {
                     show_line_numbers,
                     max_line_number_digits,
                     show_timestamps,
+                    wrap_mode,
+                    show_wrap_markers,
                     timestamp_format: timestamp_format.clone(),
                     is_active,
                 });
@@ -1476,13 +1504,29 @@ impl NyaTermApp {
                 session_id,
                 &selected_occurrence_matches,
             );
+        let logical_index = (self.settings.summary().terminal_wrap_mode
+            == nyaterm_core::models::settings::TerminalWrapMode::None)
+            .then_some(snapshot.logical_lines.as_ref())
+            .flatten();
+        let mut overview_hasher = std::collections::hash_map::DefaultHasher::new();
+        overview_marker_key.hash(&mut overview_hasher);
+        logical_index
+            .map(std::sync::Arc::as_ptr)
+            .hash(&mut overview_hasher);
+        let overview_marker_key = overview_hasher.finish();
         let overview_markers_dirty = surface.read(cx).overview_marker_key() != overview_marker_key;
         let (overview_markers, overview_total_rows) = if overview_markers_dirty {
-            let (markers, total_rows) = self
+            let (mut markers, mut total_rows) = self
                 .terminal_overview_markers_for_session_with_selected_matches(
                     session_id,
                     &selected_occurrence_matches,
                 );
+            if let Some(index) = logical_index {
+                for marker in &mut markers {
+                    marker.absolute_line = index.logical_row(marker.absolute_line);
+                }
+                total_rows = index.logical_rows();
+            }
             (Some(markers.into()), total_rows)
         } else {
             (None, 1)
@@ -1514,6 +1558,8 @@ impl NyaTermApp {
                 show_line_numbers,
                 max_line_number_digits,
                 show_timestamps,
+                wrap_mode,
+                show_wrap_markers,
                 timestamp_format,
                 is_active,
             });
@@ -1559,6 +1605,7 @@ impl NyaTermApp {
                 )
             };
             changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
+            changed |= surface.reveal_input_cursor(horizontal_input_at);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
@@ -1623,6 +1670,13 @@ impl NyaTermApp {
             return;
         }
         let notify_started_at = Instant::now();
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_logical_line_snapshots(
+                self.settings.summary().terminal_wrap_mode
+                    == nyaterm_core::models::settings::TerminalWrapMode::None,
+            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;
@@ -1764,6 +1818,13 @@ impl NyaTermApp {
             return;
         }
         let notify_started_at = Instant::now();
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_logical_line_snapshots(
+                self.settings.summary().terminal_wrap_mode
+                    == nyaterm_core::models::settings::TerminalWrapMode::None,
+            );
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;

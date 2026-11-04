@@ -676,6 +676,36 @@ mod tests {
     use nyaterm_remote_desktop::MAX_CLIPBOARD_TEXT_BYTES;
 
     #[test]
+    fn helper_factory_enables_file_capability_for_every_legacy_clipboard_mode() {
+        use crate::{CertificateGate, build_config};
+        use nyaterm_remote_desktop::RdpClipboardMode;
+        use std::sync::Arc;
+
+        for mode in [
+            RdpClipboardMode::Disabled,
+            RdpClipboardMode::TextOnly,
+            RdpClipboardMode::TextAndFiles,
+        ] {
+            let mut source = crate::tests::helper_config();
+            source.clipboard.mode = mode;
+            let (output_tx, _output_rx) = mpsc::sync_channel(1);
+            let (_config, bridge) = build_config(
+                "fixture",
+                &source,
+                output_tx,
+                Arc::new(CertificateGate::default()),
+            )
+            .unwrap();
+            let backend = TextClipboardBackend { bridge };
+            assert!(
+                backend
+                    .client_capabilities()
+                    .contains(ClipboardGeneralCapabilityFlags::STREAM_FILECLIP_ENABLED)
+            );
+        }
+    }
+
+    #[test]
     fn headless_clipboard_accepts_text_and_rejects_oversize_payloads() {
         let (output_tx, _output_rx) = mpsc::sync_channel(1);
         let bridge = ClipboardBridge::new("session".to_string(), output_tx, false);

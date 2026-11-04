@@ -115,16 +115,26 @@ impl NyaTermApp {
             let row = cursor
                 .row
                 .min(geometry.snapshot.row_count().saturating_sub(1));
+            let (display_row, display_col) = geometry
+                .unwrapped
+                .as_ref()
+                .and_then(|layout| layout.display_position(row, cursor.col))
+                .map_or(
+                    (
+                        row as f32,
+                        cursor.col.min(geometry.cols.saturating_sub(1)) as f32,
+                    ),
+                    |(row, col)| (row as f32, col),
+                );
             return bounds(
                 point(
                     geometry.bounds.left()
                         + px(geometry.padding_left
                             + geometry.gutter
-                            + cursor.col.min(geometry.cols.saturating_sub(1)) as f32
-                                * geometry.cell_w),
+                            + display_col * geometry.cell_w),
                     geometry.bounds.top()
                         + px(geometry.padding_top
-                            + row as f32 * geometry.cell_h
+                            + display_row * geometry.cell_h
                             + geometry.visual_y_offset),
                 ),
                 size(px(geometry.cell_w.max(1.)), px(geometry.cell_h.max(1.))),

@@ -1,5 +1,30 @@
 pub mod panel_visibility;
 
+/// Display policy only; applications retain control of the terminal's VT modes.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalWrapMode {
+    #[default]
+    Character,
+    None,
+}
+
+impl TerminalWrapMode {
+    pub fn from_compat_value(value: &str) -> Self {
+        match value {
+            "none" => Self::None,
+            _ => Self::Character,
+        }
+    }
+
+    pub const fn compat_value(self) -> &'static str {
+        match self {
+            Self::Character => "character",
+            Self::None => "none",
+        }
+    }
+}
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -448,6 +473,10 @@ pub struct AppSettingsSummary {
     pub terminal_show_workspace_padding: bool,
     pub terminal_show_line_numbers: bool,
     pub terminal_show_timestamps: bool,
+    #[serde(default)]
+    pub terminal_wrap_mode: TerminalWrapMode,
+    #[serde(default)]
+    pub terminal_show_wrap_markers: bool,
     pub terminal_show_multi_line_paste_dialog: bool,
     pub terminal_paste_image_as_path: bool,
     #[serde(default)]
@@ -733,6 +762,8 @@ impl Default for AppSettingsSummary {
             terminal_show_workspace_padding: false,
             terminal_show_line_numbers: false,
             terminal_show_timestamps: false,
+            terminal_wrap_mode: TerminalWrapMode::Character,
+            terminal_show_wrap_markers: false,
             terminal_show_multi_line_paste_dialog: true,
             terminal_paste_image_as_path: true,
             terminal_reconnect_restore_cwd: false,

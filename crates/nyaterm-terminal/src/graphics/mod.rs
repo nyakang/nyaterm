@@ -1524,6 +1524,12 @@ impl TerminalGraphicsState {
         self.pending_kitty.clear();
     }
 
+    pub(crate) fn has_placements_for_screen(&self, screen: GraphicsScreenKind) -> bool {
+        self.placements
+            .iter()
+            .any(|placement| placement.screen == screen)
+    }
+
     pub fn viewport_images(
         &self,
         display_offset: usize,

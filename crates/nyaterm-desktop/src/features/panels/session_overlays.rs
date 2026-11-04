@@ -718,11 +718,12 @@ mod tests {
             .expect("body frame");
         let scroll = vcx.update(|_, cx| app.read(cx).session.dialog_session_info_scroll());
         assert_eq!(scroll.offset().y, px(0.));
-        vcx.simulate_event(gpui::ScrollWheelEvent {
+        vcx.simulate_event(gpui::ScrollEvent {
             position: body.center(),
             delta: gpui::ScrollDelta::Lines(gpui::point(0., -3.)),
             modifiers: Modifiers::none(),
             touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
         });
         draw(vcx);
         assert!(

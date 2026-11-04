@@ -232,12 +232,6 @@ pub(super) fn set_connection_editor_select_value(
         ConnectionEditorSelect::RdpDisplayMode => {
             editor.rdp_display.mode = value.unwrap_or_else(|| "fit-window".to_string());
         }
-        ConnectionEditorSelect::RdpClipboardMode => {
-            if editor.uses_windows_rdp() {
-                return false;
-            }
-            editor.rdp_clipboard.mode = value.unwrap_or_else(|| "text-only".to_string());
-        }
         ConnectionEditorSelect::VncSecurityMode => {
             editor.vnc_security.mode = value.unwrap_or_else(|| "auto".to_string());
         }

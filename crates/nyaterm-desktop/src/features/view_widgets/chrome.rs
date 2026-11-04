@@ -548,7 +548,7 @@ mod tests {
                 .on_mouse_move(move |_, _, _| {
                     moved.fetch_add(1, Ordering::SeqCst);
                 })
-                .on_scroll_wheel(move |_, _, _| {
+                .on_scroll(move |_, _, _| {
                     scrolled.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(super::selectable_overlay_layer(
@@ -575,11 +575,12 @@ mod tests {
         let position = point(px(12.), px(12.));
         cx.simulate_mouse_move(position, None, Modifiers::none());
         cx.simulate_click(position, Modifiers::none());
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position,
             delta: gpui::ScrollDelta::Lines(point(0., -3.)),
             modifiers: Modifiers::none(),
             touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
         });
         assert_eq!(overlay_clicks.load(Ordering::SeqCst), 1);
         assert_eq!(background_events.load(Ordering::SeqCst), 0);

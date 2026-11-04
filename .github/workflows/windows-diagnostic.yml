@@ -1,0 +1,68 @@
+name: Windows Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Frozen application source ref
+        required: true
+        default: v2.0.1
+      toolchain:
+        description: Rust toolchain (1.99.1 matches issue 1065)
+        required: true
+        default: '1.99.1'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: windows-diagnostic
+          components: rustfmt
+      - name: Install frozen toolchain
+        shell: pwsh
+        env:
+          DIAGNOSTIC_TOOLCHAIN: ${{ inputs.toolchain }}
+        run: rustup toolchain install $env:DIAGNOSTIC_TOOLCHAIN --profile minimal --component rustfmt
+      - name: Test diagnostic instrumentation
+        run: python -m unittest scripts.tests.test_package_diagnostic -v
+      - name: Build and verify relocated diagnostic package
+        shell: pwsh
+        env:
+          DIAGNOSTIC_SOURCE_REF: ${{ inputs.source_ref }}
+          DIAGNOSTIC_TOOLCHAIN: ${{ inputs.toolchain }}
+          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+        run: >-
+          python scripts/release/package_diagnostic.py
+          --source-ref $env:DIAGNOSTIC_SOURCE_REF
+          --toolchain $env:DIAGNOSTIC_TOOLCHAIN
+          --id "issue1065-${{ github.run_id }}-${{ github.run_attempt }}"
+      - name: Retain diagnostic package and build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/diagnostic-*/*.zip
+            dist/diagnostic-*/*.sha256
+            dist/diagnostic-*/*.json
+            dist/diagnostic-*/*.patch
+            dist/diagnostic-*/symbol-self-test.log
+            dist/diagnostic-*/build.log
+          if-no-files-found: warn
+          retention-days: 14

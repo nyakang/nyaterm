@@ -95,8 +95,12 @@ pub(in crate::features) fn branch_details(
             div()
                 .debug_selector(|| "cloud-sync-branch-scroll".to_string())
                 .max_h(px(260.))
-                .overflow_y_scrollbar()
-                .child(branch_details),
+                .child(
+                    div()
+                        .max_h(px(260.))
+                        .overflow_y_scrollbar()
+                        .child(branch_details),
+                ),
         )
         .child(div().text_xs().child(t!("settings.syncResolveObserved")))
         .into_any_element()

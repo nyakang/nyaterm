@@ -38,12 +38,6 @@ impl ConnectionEditorValidationError {
                     ),
                 );
             }
-            Self::RdpClipboardUnsupported => {
-                return location(
-                    ConnectionEditorSection::Session,
-                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::RdpClipboardMode),
-                );
-            }
             Self::SshAgentEndpoint(_) => {
                 let target = match editor.agent_endpoint {
                     nyaterm_core::SshAgentEndpoint::Environment { .. } => {
@@ -147,7 +141,6 @@ impl ConnectionEditorValidationError {
             }
             ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
             | ConnectionEditorValidationError::RdpRelayUnsupported
-            | ConnectionEditorValidationError::RdpClipboardUnsupported
             | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }
             | ConnectionEditorValidationError::SshAlgorithms(_) => {

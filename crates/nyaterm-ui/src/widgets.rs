@@ -268,8 +268,8 @@ pub fn svg_icon_button(
 mod tests {
     use super::{NyaHorizontalScrollbar, NyaScrollArea};
     use gpui::{
-        Context, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent, TestAppContext,
-        VisualTestContext, Window, div, point, prelude::*, px,
+        Context, Render, ScrollDelta, ScrollEvent, ScrollHandle, TestAppContext, VisualTestContext,
+        Window, div, point, prelude::*, px,
     };
 
     struct MaxHeightScrollAreaFixture;
@@ -347,7 +347,7 @@ mod tests {
     }
 
     fn scroll(cx: &mut VisualTestContext, dy: f32) {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(10.), px(10.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
             ..Default::default()
@@ -356,7 +356,7 @@ mod tests {
     }
 
     fn scroll_xy(cx: &mut VisualTestContext, dx: f32, dy: f32) {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(10.), px(10.)),
             delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
             ..Default::default()

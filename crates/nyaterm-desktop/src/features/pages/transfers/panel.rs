@@ -833,11 +833,12 @@ mod tests {
                 Some("/remote")
             )
         });
-        vcx.simulate_event(gpui::ScrollWheelEvent {
+        vcx.simulate_event(gpui::ScrollEvent {
             position: viewport.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
             modifiers: Modifiers::none(),
             touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
         });
         vcx.run_until_parked();
         vcx.update(|window, cx| {

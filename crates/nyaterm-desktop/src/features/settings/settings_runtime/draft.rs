@@ -739,6 +739,49 @@ mod tests {
     }
 
     #[test]
+    fn terminal_wrapping_draft_cancel_and_save_preserve_committed_preferences() {
+        use nyaterm_core::models::settings::TerminalWrapMode;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_terminal_wrap_mode(TerminalWrapMode::None, cx);
+            app.toggle_terminal_wrap_markers(cx);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.summary().terminal_wrap_mode,
+                TerminalWrapMode::Character
+            );
+            assert!(!app.settings.summary().terminal_show_wrap_markers);
+            app.begin_settings_draft(cx);
+            app.set_terminal_wrap_mode(TerminalWrapMode::None, cx);
+            app.toggle_terminal_wrap_markers(cx);
+        });
+        let before_save = app.update(&mut cx, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert_eq!(before_save.terminal_wrap_mode, TerminalWrapMode::Character);
+        assert!(!before_save.terminal_show_wrap_markers);
+        app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+        cx.run_until_parked();
+        let saved = app.update(&mut cx, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert_eq!(saved.terminal_wrap_mode, TerminalWrapMode::None);
+        assert!(saved.terminal_show_wrap_markers);
+    }
+
+    #[test]
     fn scrollback_number_input_retains_business_bounds_and_draft_rollback() {
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
