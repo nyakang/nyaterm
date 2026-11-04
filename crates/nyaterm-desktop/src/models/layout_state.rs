@@ -36,5 +36,5 @@ pub(crate) struct PanelStackResizeState {
     pub(crate) start_y: Pixels,
     pub(crate) above_weight: f32,
     pub(crate) below_weight: f32,
-    pub(crate) container_height: f32,
+    pub(crate) pair_height: f64,
 }
