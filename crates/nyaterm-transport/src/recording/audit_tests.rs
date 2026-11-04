@@ -243,8 +243,14 @@ fn shutdown_finishes_partial_output_and_search_does_not_commit_it() {
             false,
         )
         .unwrap();
+    // The partial line stays in the pending output editor (still editable, so
+    // a later backspace could retract it) instead of `output_buffer`; the
+    // transcript export must not commit it either way.
+    assert_eq!(lock_recover(&manager.sessions)["audit"].output_buffer, "");
     assert_eq!(
-        lock_recover(&manager.sessions)["audit"].output_buffer,
+        lock_recover(&manager.sessions)["audit"]
+            .output_edit
+            .pending(),
         "partial"
     );
     manager.write_output("audit", " completion");
