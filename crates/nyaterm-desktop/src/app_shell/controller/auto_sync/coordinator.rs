@@ -359,9 +359,10 @@ impl AutoSyncCoordinator {
 
 fn permanent_auto_sync_error(error: &nyaterm_core::CloudSyncError) -> bool {
     match error {
+        nyaterm_core::CloudSyncError::Storage { kind, .. } => kind.is_permanent(),
         nyaterm_core::CloudSyncError::Authentication { .. }
         | nyaterm_core::CloudSyncError::Http {
-            status: 401 | 403,
+            status: 401 | 403 | 501,
             retry_after_seconds: None,
             ..
         }

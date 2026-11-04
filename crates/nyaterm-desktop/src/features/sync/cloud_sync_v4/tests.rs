@@ -63,6 +63,130 @@ fn save(store: &StoreBlockingClient, id: &str, name: &str) {
 }
 
 #[test]
+fn opendal_services_migrate_native_v3_and_preserve_v4_multi_device_conflicts_and_cancellation() {
+    use crate::http::cloud_sync::{
+        CloudStorageFixture, NativeS3Remote, NativeWebdavRemote, OpenDalRemote,
+    };
+    for webdav in [true, false] {
+        let server = CloudStorageFixture::storage();
+        let a = TestConfigDir::new("nyaterm-opendal-v4-a");
+        let b = TestConfigDir::new("nyaterm-opendal-v4-b");
+        let remote_dir = TestConfigDir::new("nyaterm-opendal-v4-unused");
+        let (sa, mut settings, oa) = setup(&a, &remote_dir);
+        let (sb, _, ob) = setup(&b, &remote_dir);
+        settings.provider = if webdav { "webdav" } else { "s3" }.into();
+        settings.remote_root = "space".into();
+        settings.webdav = server.webdav();
+        settings.s3 = server.s3();
+        for store in [&sa, &sb] {
+            let saved = settings.clone();
+            store
+                .request_fn(StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_settings(saved)
+                })
+                .unwrap();
+        }
+        save(&sa, "server", "Legacy saved");
+        let native: Box<dyn CloudSyncRemote> = if webdav {
+            Box::new(NativeWebdavRemote::new(&settings.webdav).unwrap())
+        } else {
+            Box::new(NativeS3Remote::new(&settings.s3).unwrap())
+        };
+        let legacy = nyaterm_core::cloud_sync::push_snapshot_with_remote(
+            &sa,
+            &oa,
+            native.as_ref(),
+            &Default::default(),
+            true,
+        )
+        .unwrap();
+        let legacy_path = format!(
+            "space/{}",
+            nyaterm_core::cloud_sync::legacy_sync_snapshot_file(
+                &legacy.pointer.unwrap().revision_id
+            )
+        );
+        let old_bytes = native.read_if_exists(&legacy_path).unwrap().unwrap();
+        let initial = preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+        assert!(initial.migration);
+        assert!(
+            apply_and_publish(
+                &sa,
+                &settings,
+                &oa,
+                initial,
+                &CloudSyncOperationControl::default()
+            )
+            .unwrap()
+            .verified
+        );
+        let joined = preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        assert!(
+            apply_and_publish(
+                &sb,
+                &settings,
+                &ob,
+                joined,
+                &CloudSyncOperationControl::default()
+            )
+            .unwrap()
+            .verified
+        );
+        save(&sa, "server", "A offline edit");
+        save(&sb, "server", "B offline edit");
+        let pa = preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+        let pb = preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        apply_and_publish(
+            &sa,
+            &settings,
+            &oa,
+            pa,
+            &CloudSyncOperationControl::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_and_publish(
+                &sb,
+                &settings,
+                &ob,
+                pb,
+                &CloudSyncOperationControl::default()
+            ),
+            Err(CloudSyncError::LocalChangedDuringSync)
+        ));
+        let conflicted =
+            preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        assert!(!conflicted.summary().conflicts.is_empty());
+        let cancelled = CloudSyncOperationControl::default();
+        cancelled.request_cancel();
+        assert!(matches!(
+            preview(&sb, &settings, &ob, &cancelled),
+            Err(CloudSyncError::Cancelled)
+        ));
+        assert_eq!(
+            native.read_if_exists(&legacy_path).unwrap().unwrap(),
+            old_bytes
+        );
+        let adapter = if webdav {
+            OpenDalRemote::webdav(&settings.webdav, Default::default())
+        } else {
+            OpenDalRemote::s3(&settings.s3, Default::default())
+        }
+        .unwrap();
+        assert!(
+            !native
+                .list_sync_files("space/sync/v4/registry")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            native.list_sync_files("space/sync/v4/registry").unwrap(),
+            adapter.list_sync_files("space/sync/v4/registry").unwrap()
+        );
+    }
+}
+
+#[test]
 fn rotated_password_publishes_a_new_space_preserves_credentials_and_leaves_old_objects_readable() {
     let a = TestConfigDir::new("nyaterm-v4-rotation-a");
     let b = TestConfigDir::new("nyaterm-v4-rotation-b");

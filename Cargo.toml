@@ -46,6 +46,8 @@ repository = "https://github.com/nyakang/nyaterm"
 [workspace.dependencies]
 automerge = "=0.12.0"
 httpdate = "1.0"
+http = "1"
+opendal = { version = "=0.59.5", default-features = false, features = ["executors-tokio", "services-webdav", "services-s3", "layers-timeout", "layers-retry"] }
 aes-gcm = "0.11"
 aes = { version = "0.8", features = ["zeroize"] }
 cbc = "0.1"

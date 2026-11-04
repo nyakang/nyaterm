@@ -26,6 +26,21 @@ pub(crate) fn end_scope() {
     CURRENT.with_borrow_mut(|current| *current = None);
 }
 
+/// Bind compatibility requests on a worker to the operation's existing counters.
+pub(super) fn with_stats<T>(
+    stats: Arc<Mutex<CloudSyncIoStats>>,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Arc<Mutex<CloudSyncIoStats>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT.with_borrow_mut(|current| *current = self.0.take());
+        }
+    }
+    let _restore = Restore(CURRENT.with_borrow_mut(|current| current.replace(stats)));
+    operation()
+}
+
 fn record(update: impl FnOnce(&mut CloudSyncIoStats)) {
     CURRENT.with_borrow(|current| {
         if let Some(stats) = current {

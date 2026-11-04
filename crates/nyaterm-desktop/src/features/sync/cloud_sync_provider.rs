@@ -1,6 +1,6 @@
 use crate::http::cloud_sync::{
-    NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote, NativeS3Remote,
-    NativeSnippetHttpClient, NativeWebdavRemote,
+    NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote,
+    NativeSnippetHttpClient, OpenDalRemote,
 };
 use nyaterm_core::cloud_sync::control::CloudSyncOperationControl;
 use nyaterm_core::cloud_sync::{self, CloudSyncRemote};
@@ -50,12 +50,12 @@ macro_rules! with_provider_remote {
                 }
             });
         let result = (|| {
-            let native: Box<dyn CloudSyncRemote> = match $settings.provider.as_str() {
-                "webdav" => Box::new(NativeWebdavRemote::new(&$settings.webdav)?),
-                "s3" => Box::new(NativeS3Remote::new_with_stats(
-                    &$settings.s3,
+            let backend: Box<dyn CloudSyncRemote> = match $settings.provider.as_str() {
+                "webdav" => Box::new(OpenDalRemote::webdav(
+                    &$settings.webdav,
                     io_scope.stats.clone(),
                 )?),
+                "s3" => Box::new(OpenDalRemote::s3(&$settings.s3, io_scope.stats.clone())?),
                 "google_drive" => Box::new(NativeGoogleDriveRemote::new_with_token_sink(
                     &$settings.google_drive,
                     token_sink.clone(),
@@ -84,12 +84,12 @@ macro_rules! with_provider_remote {
                 )),
                 provider => {
                     return Err(CloudSyncError::Remote(format!(
-                        "native cloud provider '{provider}' is not wired yet"
+                        "cloud provider '{provider}' is not wired yet"
                     )));
                 }
             };
             let observed = super::io_runtime::ObservedRemote {
-                inner: native.as_ref(),
+                inner: backend.as_ref(),
                 stats: io_scope.stats.clone(),
                 heads_checked: std::cell::Cell::new(false),
             };

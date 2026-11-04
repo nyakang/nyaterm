@@ -5,6 +5,7 @@ mod helpers;
 mod listing;
 pub(crate) mod metrics;
 mod onedrive;
+mod opendal;
 mod s3;
 mod snippet;
 mod webdav;
@@ -13,6 +14,9 @@ pub use aliyun::NativeAliyunDriveRemote;
 pub(crate) use github_gist_auth::run_github_gist_device_flow;
 pub use google_drive::NativeGoogleDriveRemote;
 pub use onedrive::NativeOneDriveRemote;
+#[cfg(test)]
+pub(crate) use opendal::CloudStorageFixture;
+pub(crate) use opendal::OpenDalRemote;
 pub use s3::NativeS3Remote;
 pub use snippet::NativeSnippetHttpClient;
 pub use webdav::NativeWebdavRemote;
