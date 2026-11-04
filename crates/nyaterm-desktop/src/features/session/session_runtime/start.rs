@@ -165,9 +165,13 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let external_rdp =
+            matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc");
         let focus_target = session_start_focus_target(&connection.config);
         self.continue_saved_connection_start(connection, options, cx);
-        self.focus_user_started_session_surface(focus_target, window, cx);
+        if !external_rdp {
+            self.focus_user_started_session_surface(focus_target, window, cx);
+        }
     }
 
     pub(in crate::features::session) fn focus_user_started_session_surface(
@@ -191,6 +195,39 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn continue_saved_connection_start(
+        &mut self,
+        connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        cx: &mut Context<Self>,
+    ) {
+        self.continue_saved_connection_start_with_launcher(
+            connection,
+            options,
+            crate::platform::mstsc::launch,
+            cx,
+        );
+    }
+
+    fn continue_saved_connection_start_with_launcher(
+        &mut self,
+        connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        launcher: impl FnOnce(
+            crate::platform::mstsc::MstscTarget,
+        ) -> Result<(), crate::platform::mstsc::MstscError>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        // External clients own no application tab, credential request, or Relay.
+        if matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc") {
+            self.start_mstsc_connection(connection, launcher, cx);
+            return;
+        }
+        self.continue_saved_connection_start_in_app(connection, options, cx);
+    }
+
+    fn continue_saved_connection_start_in_app(
         &mut self,
         connection: SavedConnection,
         options: SavedConnectionStartOptions,
@@ -1510,6 +1547,9 @@ fn load_proxy_jump_config_with_context(
     visited_proxy_jumps.pop();
     Ok(Some(Box::new(jump_config)))
 }
+
+#[cfg(test)]
+mod mstsc_tests;
 
 #[cfg(test)]
 mod tests {
