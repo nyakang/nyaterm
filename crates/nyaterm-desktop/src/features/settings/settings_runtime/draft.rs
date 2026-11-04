@@ -667,6 +667,7 @@ impl NyaTermApp {
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
         let browser_was_visible = self.transfer_browser_is_visible();
+        self.collapse_open_search_engine(cx);
         self.hide_secret_inputs(cx);
         self.settings.theme_designer_mut().reset();
         self.forget_text_inputs("theme.designer.");

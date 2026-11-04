@@ -12,7 +12,7 @@ use crate::features::{
     icons::SEARCH_ENGINE_ICON_IDS, icons::search_engine_icon, view_widgets::mono_icon,
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::NyaTooltip;
+use nyaterm_ui::{NyaDropdownMenu, NyaMenuAnchor, NyaMenuItem, NyaTooltip};
 
 use super::super::settings_switch;
 
@@ -33,7 +33,6 @@ impl SettingsPanel {
         let interaction = self.settings.search_engine_presentation();
         let expanded_index = interaction.expanded_index;
         let icon_picker_index = interaction.icon_picker_index;
-        let actions_index = interaction.actions_index;
         // Built before the row closure, which only has `&self`: the inputs are
         // entities the app has to create, and only the expanded row shows them.
         let mut editor_inputs = expanded_index.and_then(|index| {
@@ -105,7 +104,6 @@ impl SettingsPanel {
                                     (None, None)
                                 };
                                 let icon_picker_open = icon_picker_index == Some(index);
-                                let actions_open = actions_index == Some(index);
                                 let has_placeholder = engine.url_template.contains("%s");
                                 let icon_def = engine
                                     .icon
@@ -114,6 +112,7 @@ impl SettingsPanel {
                                 let select_icon_label = t!("settings.selectIcon");
                                 let show_menu_label = t!("settings.showInSearchMenu");
                                 let actions_label = t!("settings.searchEngineActions");
+                                let actions_panel = cx.entity().downgrade();
 
                                 div()
                                     .id(SharedString::from(format!(
@@ -260,24 +259,75 @@ impl SettingsPanel {
                                                                 ),
                                                             )),
                                                     )
-                                                    .child(search_engine_icon_button(
-                                                        palette,
-                                                        format!(
+                                                    .child(
+                                                        NyaDropdownMenu::new(format!(
                                                             "settings-search-engine-actions-{index}"
-                                                        ),
-                                                        "icons/session/more.svg",
-                                                        actions_label,
-                                                        actions_open,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            if this.toggle_search_engine_menu(
-                                                                SearchEngineMenu::Actions,
-                                                                index,
-                                                                cx,
-                                                            ) {
-                                                                cx.notify();
-                                                            }
+                                                        ))
+                                                        .icon("icons/session/more.svg")
+                                                        .icon_size(px(15.))
+                                                        .tooltip(actions_label)
+                                                        .anchor(NyaMenuAnchor::TopRight)
+                                                        .min_width(px(144.))
+                                                        .max_width(px(144.))
+                                                        .items_dynamic(move |_, _| {
+                                                            let edit_panel = actions_panel.clone();
+                                                            let test_panel = actions_panel.clone();
+                                                            let delete_panel = actions_panel.clone();
+                                                            vec![
+                                                                NyaMenuItem::action(t!(
+                                                                    "common.edit"
+                                                                ))
+                                                                .icon("icons/net/edit.svg")
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = edit_panel.update(
+                                                                        cx,
+                                                                        |panel, cx| {
+                                                                            panel
+                                                                                .expand_search_engine(
+                                                                                    index, cx,
+                                                                                );
+                                                                        },
+                                                                    );
+                                                                }),
+                                                                NyaMenuItem::action(t!(
+                                                                    "settings.testSearchEngine"
+                                                                ))
+                                                                .icon("icons/fe/forward.svg")
+                                                                .disabled(!has_placeholder)
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = test_panel.update(
+                                                                        cx,
+                                                                        |panel, cx| {
+                                                                            panel
+                                                                                .close_search_engine_menus(
+                                                                                    cx,
+                                                                                );
+                                                                            panel.test_search_engine(
+                                                                                index, cx,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                }),
+                                                                NyaMenuItem::separator(),
+                                                                NyaMenuItem::action(t!(
+                                                                    "common.delete"
+                                                                ))
+                                                                .icon("icons/fe/delete.svg")
+                                                                .danger()
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = delete_panel.update(
+                                                                        cx,
+                                                                        |panel, cx| {
+                                                                            panel
+                                                                                .remove_search_engine(
+                                                                                    index, cx,
+                                                                                );
+                                                                        },
+                                                                    );
+                                                                }),
+                                                            ]
                                                         }),
-                                                    )),
+                                                    ),
                                             ),
                                     )
                                     .when(icon_picker_open, |this| {
@@ -288,59 +338,6 @@ impl SettingsPanel {
                                             t!("common.remove"),
                                             cx,
                                         ))
-                                    })
-                                    .when(actions_open, |this| {
-                                        this.child(
-                                            div()
-                                                .border_t_1()
-                                                .border_color(rgb(palette.border))
-                                                .px_3()
-                                                .py_2()
-                                                .flex()
-                                                .items_center()
-                                                .justify_end()
-                                                .gap_1()
-                                                .child(search_engine_text_button(
-                                                    palette,
-                                                    format!(
-                                                        "settings-search-engine-edit-{index}"
-                                                    ),
-                                                    "icons/net/edit.svg",
-                                                    t!("common.edit"),
-                                                    false,
-                                                    true,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        this.expand_search_engine(index, cx);
-                                                    }),
-                                                ))
-                                                .child(search_engine_text_button(
-                                                    palette,
-                                                    format!(
-                                                        "settings-search-engine-test-{index}"
-                                                    ),
-                                                    "icons/fe/forward.svg",
-                                                    t!("settings.testSearchEngine"),
-                                                    false,
-                                                    has_placeholder,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        this.close_search_engine_menus(cx);
-                                                        this.test_search_engine(index, cx);
-                                                    }),
-                                                ))
-                                                .child(search_engine_text_button(
-                                                    palette,
-                                                    format!(
-                                                        "settings-search-engine-delete-{index}"
-                                                    ),
-                                                    "icons/fe/delete.svg",
-                                                    t!("common.delete"),
-                                                    true,
-                                                    true,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        this.remove_search_engine(index, cx);
-                                                    }),
-                                                )),
-                                        )
                                     })
                                     .when(is_open, |this| {
                                         this.child(
@@ -388,26 +385,18 @@ impl SettingsPanel {
                                                                 )),
                                                         )
                                                         .children(url_input)
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(10.))
-                                                                .text_color(rgb(
-                                                                    if has_placeholder {
-                                                                        palette.text_muted
-                                                                    } else {
-                                                                        palette.danger
-                                                                    },
-                                                                ))
-                                                                .child(if has_placeholder {
-                                                                    t!(
-                                                                        "settings.engineUrlHint",
-                                                                    )
-                                                                } else {
-                                                                    t!(
+                                                        .when(!has_placeholder, |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_size(px(10.))
+                                                                    .text_color(rgb(
+                                                                        palette.danger,
+                                                                    ))
+                                                                    .child(t!(
                                                                         "settings.engineUrlInvalid",
-                                                                    )
-                                                                }),
-                                                        ),
+                                                                    )),
+                                                            )
+                                                        }),
                                                 ),
                                         )
                                     })
@@ -544,40 +533,6 @@ fn search_engine_settings_section(
                 .child(action),
         )
         .child(div().px_4().py_4().child(content))
-}
-
-fn search_engine_icon_button(
-    palette: ThemePalette,
-    id: String,
-    icon_path: &'static str,
-    tooltip: impl Into<SharedString>,
-    active: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let tooltip: SharedString = tooltip.into();
-    div()
-        .id(SharedString::from(id))
-        .size(px(28.))
-        .rounded_sm()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(if active {
-            rgb(palette.hover)
-        } else {
-            rgb(0x00000000)
-        })
-        .text_color(rgb(palette.text_muted))
-        .cursor_pointer()
-        .hover(|this| this.bg(rgb(palette.hover)).text_color(rgb(palette.text)))
-        .tooltip(move |window, cx| NyaTooltip::new(tooltip.clone()).build(window, cx))
-        .child(
-            svg()
-                .size(px(15.))
-                .path(icon_path)
-                .text_color(rgb(palette.text_muted)),
-        )
-        .on_click(on_click)
 }
 
 fn search_engine_text_button(

@@ -158,7 +158,6 @@ impl SettingsPresentation {
             search_engine_presentation: SearchEnginePresentationState {
                 expanded_index: None,
                 icon_picker_index: None,
-                actions_index: None,
             },
             keyword_highlight_presentation: KeywordHighlightPresentationState {
                 expanded_id: None,
