@@ -3156,11 +3156,13 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     summary = saved;
     summary.diagnostics_level = "debug".to_string();
     summary.diagnostics_retention_days = 14;
+    summary.diagnostics_log_shard_bytes = 20 * 1024 * 1024;
     let saved = store
         .save_diagnostics_settings(&summary)
         .expect("save diagnostics");
     assert_eq!(saved.diagnostics_level, "debug");
     assert_eq!(saved.diagnostics_retention_days, 14);
+    assert_eq!(saved.diagnostics_log_shard_bytes, 20 * 1024 * 1024);
 
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(
@@ -3178,6 +3180,20 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     assert_eq!(
         raw["diagnostics"]["retention_days"],
         serde_json::Value::from(14)
+    );
+    assert_eq!(
+        raw["diagnostics"]["shard_bytes"],
+        serde_json::Value::from(20 * 1024 * 1024)
+    );
+
+    // An extreme persisted value is clamped instead of breaking logging.
+    summary.diagnostics_log_shard_bytes = 4096;
+    let saved = store
+        .save_diagnostics_settings(&summary)
+        .expect("save clamped diagnostics");
+    assert_eq!(
+        saved.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::MIN_LOG_SHARD_BYTES
     );
 
     std::fs::remove_dir_all(dir).ok();
@@ -3818,6 +3834,11 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(summary.recording_memory_limit_bytes, 1048576);
     assert_eq!(summary.diagnostics_level, "debug");
     assert_eq!(summary.diagnostics_retention_days, 3);
+    assert_eq!(
+        summary.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+        "legacy documents without diagnostics.shard_bytes keep the 10 MiB default"
+    );
     assert!(summary.startup_restore);
     assert!(summary.minimize_to_tray);
     assert!(!summary.confirm_on_close);

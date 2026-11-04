@@ -185,6 +185,22 @@ impl NyaTermApp {
         self.save_diagnostics_settings(cx);
     }
 
+    pub(in crate::features) fn set_diagnostics_log_shard_bytes(
+        &mut self,
+        bytes: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings.set_diagnostics_log_shard_bytes(bytes) {
+            return;
+        }
+        // The log layer reads this atomically, so new shards honour the new
+        // budget without restarting the process.
+        nyaterm_core::diagnostics::set_log_shard_bytes(
+            self.settings.summary().diagnostics_log_shard_bytes,
+        );
+        self.save_diagnostics_settings(cx);
+    }
+
     pub(in crate::features) fn save_diagnostics_settings(&mut self, cx: &mut Context<Self>) {
         if self.defer_settings_domain_persistence(SettingsPersistenceDomain::Diagnostics, cx) {
             return;

@@ -2816,6 +2816,8 @@
     "logLevelWarn": "Warn",
     "logRetention": "ログの保持期間",
     "logRetentionDesc": "この期間を超えた古いログは削除されます。",
+    "logShardSize": "ログファイルサイズ",
+    "logShardSizeDesc": "ログファイルがこのサイズに達すると新しい分割ファイルに切り替わります。",
     "manualSyncActions": "手動",
     "masterPassword": "マスターパスワード",
     "masterPasswordClear": "消去",

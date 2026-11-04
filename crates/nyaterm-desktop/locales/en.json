@@ -2809,6 +2809,8 @@
     "logLevelWarn": "Warn",
     "logRetention": "Log Retention",
     "logRetentionDesc": "Old logs beyond this window are removed.",
+    "logShardSize": "Log File Size",
+    "logShardSizeDesc": "A new shard file starts after a log reaches this size.",
     "manualSyncActions": "Manual",
     "masterPassword": "Master Pass",
     "masterPasswordClear": "Clear",

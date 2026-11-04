@@ -2816,6 +2816,8 @@
     "logLevelWarn": "Avertissement",
     "logRetention": "Conservation des journaux",
     "logRetentionDesc": "Les anciens journaux au-delà de cette période sont supprimés.",
+    "logShardSize": "Taille des fichiers journaux",
+    "logShardSizeDesc": "Un nouveau fichier journal est créé une fois cette taille atteinte.",
     "manualSyncActions": "Manuel",
     "masterPassword": "Mot de passe maître",
     "masterPasswordClear": "Effacer",

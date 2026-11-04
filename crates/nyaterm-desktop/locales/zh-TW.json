@@ -2816,6 +2816,8 @@
     "logLevelWarn": "警告",
     "logRetention": "日誌保留時長",
     "logRetentionDesc": "超過該時長的舊日誌會被自動清理。",
+    "logShardSize": "日誌分片大小",
+    "logShardSizeDesc": "單一日誌檔達到此大小後會自動切換到新分片。",
     "manualSyncActions": "手動操作",
     "masterPassword": "主密碼",
     "masterPasswordClear": "清除",
