@@ -2644,7 +2644,9 @@
     "groupTransfer": "Transfert",
     "groupWorkspace": "Espace de travail",
     "zebraStripes": "Bandes de lignes du terminal",
-    "zebraStripesDesc": "Mettre en évidence les lignes de saisie du shell et la ligne sélectionnée à la souris.",
+    "zebraStripesDesc": "Mettre en évidence la saisie du shell et la ligne cliquée, avec une option pour alterner les fonds par ligne.",
+    "zebraStripesByRow": "Alterner par ligne",
+    "zebraStripesByRowDesc": "Alterner la couleur de fond des lignes affichées du terminal.",
     "syncHistory": {
       "push": "Envoi manuel",
       "pull": "Téléchargement manuel",

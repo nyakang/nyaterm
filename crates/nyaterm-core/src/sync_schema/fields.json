@@ -319,6 +319,7 @@
       "terminal_reconnect_restore_cwd": "local",
       "terminal_low_latency_mode": "local",
       "terminal_zebra_stripes_enabled": "local",
+      "terminal_zebra_stripes_by_row": "local",
       "terminal_action_links_enabled": "local",
       "terminal_action_links_matchers": "local",
       "search_custom_engines": "local",

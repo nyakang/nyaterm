@@ -108,6 +108,13 @@ impl NyaTermApp {
         key: &str,
         cx: &mut Context<Self>,
     ) {
+        let leaving_settings = self
+            .active_workspace_tab()
+            .is_some_and(|active| WorkspaceTabId::from_layout_key(&active).is_settings())
+            && !WorkspaceTabId::from_layout_key(key).is_settings();
+        if leaving_settings {
+            self.collapse_open_search_engine(cx);
+        }
         match WorkspaceTabId::from_layout_key(key) {
             WorkspaceTabId::Session(id) => {
                 self.select_session(id, cx);

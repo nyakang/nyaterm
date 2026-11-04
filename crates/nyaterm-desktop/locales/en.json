@@ -2637,7 +2637,9 @@
     "groupTransfer": "Transfer",
     "groupWorkspace": "Workspace",
     "zebraStripes": "Terminal row stripes",
-    "zebraStripesDesc": "Highlight shell input rows and the row selected with the mouse.",
+    "zebraStripesDesc": "Highlight shell input rows and the clicked row, with an option to alternate backgrounds by row.",
+    "zebraStripesByRow": "Alternate by row",
+    "zebraStripesByRowDesc": "Alternate background colors for terminal display rows.",
     "syncHistory": {
       "push": "Manual upload",
       "pull": "Manual download",

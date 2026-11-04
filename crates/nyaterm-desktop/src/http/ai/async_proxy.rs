@@ -1,5 +1,5 @@
 use nyaterm_core::ai::proxy::{AiProxyMode, AiProxyProtocol, AiProxySettings};
-use zed_reqwest::{NoProxy, Proxy, Url, blocking::ClientBuilder};
+use reqwest::{ClientBuilder, NoProxy, Proxy, Url};
 
 pub(super) fn apply_proxy(
     builder: ClientBuilder,
@@ -77,7 +77,7 @@ fn proxy_url(settings: &AiProxySettings) -> Result<Url, String> {
 mod tests {
     use super::{apply_proxy, proxy_url};
     use nyaterm_core::ai::proxy::{AiProxyMode, AiProxyProtocol, AiProxySettings};
-    use zed_reqwest::blocking::Client;
+    use reqwest::Client;
 
     #[test]
     fn socks_uses_remote_dns_and_rejects_invalid_hosts_without_echoing_them() {
@@ -101,8 +101,8 @@ mod tests {
         assert!(apply_proxy(Client::builder(), &settings).is_err());
     }
 
-    #[test]
-    fn custom_bypass_and_direct_reach_the_origin_without_a_proxy() {
+    #[tokio::test]
+    async fn custom_bypass_and_direct_reach_the_origin_without_a_proxy() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::time::Duration;
@@ -146,9 +146,91 @@ mod tests {
                 .build()
                 .unwrap()
                 .get(format!("http://{address}/"))
-                .send();
+                .send()
+                .await;
             server.join().unwrap();
-            assert_eq!(result.unwrap().text().unwrap(), "ok");
+            assert_eq!(result.unwrap().text().await.unwrap(), "ok");
         }
+    }
+
+    #[tokio::test]
+    async fn socks_authenticates_and_resolves_the_origin_at_the_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let settings = AiProxySettings {
+                mode: AiProxyMode::Custom,
+                protocol: AiProxyProtocol::Socks5,
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                username: Some("proxy-user".into()),
+                password: Some("proxy-secret".into()),
+                no_proxy: String::new(),
+            };
+            let client = apply_proxy(Client::builder(), &settings)
+                .unwrap()
+                .build()
+                .unwrap();
+            let proxy = async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert_eq!(socket.read_u8().await.unwrap(), 5);
+                let count = socket.read_u8().await.unwrap();
+                let mut methods = vec![0; count as usize];
+                socket.read_exact(&mut methods).await.unwrap();
+                assert!(methods.contains(&2));
+                socket.write_all(&[5, 2]).await.unwrap();
+                assert_eq!(socket.read_u8().await.unwrap(), 1);
+                let count = socket.read_u8().await.unwrap();
+                let mut username = vec![0; count as usize];
+                socket.read_exact(&mut username).await.unwrap();
+                let count = socket.read_u8().await.unwrap();
+                let mut password = vec![0; count as usize];
+                socket.read_exact(&mut password).await.unwrap();
+                assert_eq!(username, b"proxy-user");
+                assert_eq!(password, b"proxy-secret");
+                socket.write_all(&[1, 0]).await.unwrap();
+                let mut header = [0; 4];
+                socket.read_exact(&mut header).await.unwrap();
+                assert_eq!(header, [5, 1, 0, 3]);
+                let count = socket.read_u8().await.unwrap();
+                let mut host = vec![0; count as usize];
+                socket.read_exact(&mut host).await.unwrap();
+                assert_eq!(host, b"nyaterm-proxy-fixture.invalid");
+                assert_eq!(socket.read_u16().await.unwrap(), 80);
+                socket
+                    .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                    .await
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                    assert!(request.len() < 8192);
+                }
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+            };
+            let request = async {
+                assert_eq!(
+                    client
+                        .get("http://nyaterm-proxy-fixture.invalid/")
+                        .send()
+                        .await
+                        .unwrap()
+                        .text()
+                        .await
+                        .unwrap(),
+                    "ok"
+                );
+            };
+            tokio::join!(proxy, request);
+        })
+        .await
+        .unwrap();
     }
 }

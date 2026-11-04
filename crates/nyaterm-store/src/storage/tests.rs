@@ -3715,6 +3715,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(summary.terminal_low_latency_mode);
     // Legacy settings omit the new field and must keep zebra stripes enabled.
     assert!(summary.terminal_zebra_stripes_enabled);
+    assert!(!summary.terminal_zebra_stripes_by_row);
     assert_eq!(
         summary.ui_file_manager,
         nyaterm_core::FileManagerUiSettings::default()
@@ -4115,6 +4116,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     terminal_update.terminal_show_multi_line_paste_dialog = true;
     terminal_update.terminal_low_latency_mode = true;
     terminal_update.terminal_zebra_stripes_enabled = false;
+    terminal_update.terminal_zebra_stripes_by_row = true;
     terminal_update.ui_remote_stats_interval = 4;
     terminal_update.ui_remote_stats_show_users = true;
     terminal_update.ui_gpu_monitor_interval = 10;
@@ -4129,6 +4131,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(saved_terminal.terminal_show_multi_line_paste_dialog);
     assert!(saved_terminal.terminal_low_latency_mode);
     assert!(!saved_terminal.terminal_zebra_stripes_enabled);
+    assert!(saved_terminal.terminal_zebra_stripes_by_row);
     assert_eq!(saved_terminal.ui_remote_stats_interval, 4);
     assert!(saved_terminal.ui_remote_stats_show_users);
     assert_eq!(saved_terminal.ui_gpu_monitor_interval, 10);
@@ -4169,6 +4172,12 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
             .and_then(|value| value.as_bool()),
         Some(false)
     );
+
+    assert_eq!(stored["terminal"]["zebra_stripes_by_row"], true);
+    assert_eq!(stored["unrelated"]["preserve"], true);
+    let reloaded = store.load_app_settings_summary().unwrap();
+    assert!(reloaded.terminal_zebra_stripes_by_row);
+    assert!(!reloaded.terminal_zebra_stripes_enabled);
 
     let mut quick_command_update = saved_terminal.clone();
     quick_command_update.ui_quick_cmd_view_mode = "list".to_string();
