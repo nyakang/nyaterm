@@ -45,6 +45,90 @@ struct TerminalSurfaceLayoutTestView {
 }
 
 #[test]
+fn row_stripes_repaint_grid_and_gutter_together_and_respect_protocol_modes() {
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"first\r\nsecond");
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let surface = cx.new(|_| TerminalSurface::new("row-stripes"));
+    cx.update_entity(&surface, |surface, _| {
+        surface.show_line_numbers = true;
+        surface.show_timestamps = true;
+        surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+            snapshot,
+            TerminalScrollVisualState {
+                history: screen.history_state(),
+                session_id: "row-stripes".into(),
+                scroll_offset: 0,
+                scroll_residual_lines: 0.0,
+                display_offset: 0,
+                scrollback_len: 0,
+                viewport_rows: 3,
+                has_new_while_scrolled: false,
+                performance_overlay: None,
+                skipped_output_chars: 0,
+            },
+        ));
+        assert!(surface.set_zebra_stripes(true, true, None));
+        assert!(!surface.set_zebra_stripes(true, true, None));
+    });
+    let window = cx.open_window(size(px(600.), px(240.)), {
+        let surface = surface.clone();
+        move |_, _| TerminalSurfaceLayoutTestView {
+            surface,
+            mounted: true,
+        }
+    });
+    for (protocol, enabled, by_row, expected) in [
+        (TerminalProtocolState::default(), true, true, 2),
+        (
+            TerminalProtocolState {
+                alternate_screen: true,
+                ..Default::default()
+            },
+            true,
+            true,
+            0,
+        ),
+        (
+            TerminalProtocolState {
+                mouse_reporting: true,
+                ..Default::default()
+            },
+            true,
+            true,
+            0,
+        ),
+        (TerminalProtocolState::default(), false, true, 0),
+        (TerminalProtocolState::default(), true, false, 0),
+        (TerminalProtocolState::default(), true, true, 2),
+    ] {
+        cx.update_entity(&surface, |surface, cx| {
+            surface.set_protocol_state(protocol);
+            surface.set_zebra_stripes(enabled, by_row, None);
+            cx.notify();
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let palette = crate::theme::theme_palette("github-dark");
+            let color = gpui::Background::from(gpui::rgba((palette.terminal_fg << 8) | 0x0f));
+            let stripes = window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| quad.background == color)
+                .collect::<Vec<_>>();
+            assert_eq!(stripes.len(), expected);
+            if expected == 2 {
+                assert_eq!(stripes[0].bounds.top(), stripes[1].bounds.top());
+                assert_eq!(stripes[0].bounds.size.height, stripes[1].bounds.size.height);
+            }
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn window_tint_and_transparent_surface_keep_explicit_and_inverse_ansi_backgrounds_opaque() {
     use crate::features::shell::window_material::ShellBackground;
 

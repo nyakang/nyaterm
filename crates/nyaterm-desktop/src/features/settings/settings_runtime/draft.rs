@@ -667,6 +667,7 @@ impl NyaTermApp {
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
         let browser_was_visible = self.transfer_browser_is_visible();
+        self.collapse_open_search_engine(cx);
         self.hide_secret_inputs(cx);
         self.settings.theme_designer_mut().reset();
         self.forget_text_inputs("theme.designer.");
@@ -779,6 +780,39 @@ mod tests {
         });
         assert_eq!(saved.terminal_wrap_mode, TerminalWrapMode::None);
         assert!(saved.terminal_show_wrap_markers);
+    }
+
+    #[test]
+    fn row_stripes_draft_cancel_and_apply_preserve_committed_preferences() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_zebra_stripes_by_row(cx);
+            app.toggle_terminal_zebra_stripes(cx);
+            assert!(app.settings.summary().terminal_zebra_stripes_by_row);
+            assert!(!app.settings.summary().terminal_zebra_stripes_enabled);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert!(!app.settings.summary().terminal_zebra_stripes_by_row);
+            assert!(app.settings.summary().terminal_zebra_stripes_enabled);
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_zebra_stripes_by_row(cx);
+        });
+        let load = |cx: &mut TestAppContext| {
+            app.update(cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            })
+        };
+        assert!(!load(&mut cx).terminal_zebra_stripes_by_row);
+        app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+        cx.run_until_parked();
+        assert!(load(&mut cx).terminal_zebra_stripes_by_row);
     }
 
     #[test]

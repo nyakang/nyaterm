@@ -23,7 +23,7 @@ impl LineNumbers {
         }
     }
 
-    fn coordinate(&self, line: i64) -> i64 {
+    pub(crate) fn stable_coordinate(&self, line: i64) -> i64 {
         line - self.discarded_wraps - self.wraps.partition_point(|end| *end < line) as i64
     }
 
@@ -36,7 +36,7 @@ impl LineNumbers {
     /// to its own absolute row counter.
     pub(crate) fn number(&self, line: i64) -> Option<usize> {
         let origin = self.origin?;
-        usize::try_from(self.coordinate(line) - origin + 1)
+        usize::try_from(self.stable_coordinate(line) - origin + 1)
             .ok()
             .filter(|number| *number > 0)
     }
@@ -74,7 +74,7 @@ impl LineNumbers {
     }
 
     pub(crate) fn restore_number(&mut self, line: i64, number: usize) {
-        self.origin = Some(self.coordinate(line) - number.saturating_sub(1) as i64);
+        self.origin = Some(self.stable_coordinate(line) - number.saturating_sub(1) as i64);
     }
 
     pub(crate) fn retain_from(&mut self, first: i64) {

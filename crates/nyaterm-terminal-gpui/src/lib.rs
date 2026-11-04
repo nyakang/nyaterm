@@ -107,4 +107,5 @@ pub use keywords::{
 #[cfg(test)]
 mod tests;
 
+pub mod stripes;
 pub mod unwrapped;

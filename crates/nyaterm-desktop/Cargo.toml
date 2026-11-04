@@ -15,6 +15,9 @@ bytemuck = "=1.25.2"
 dirs.workspace = true
 encoding_rs.workspace = true
 futures.workspace = true
+genai.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
 gpui.workspace = true
 hayro.workspace = true
 hex.workspace = true

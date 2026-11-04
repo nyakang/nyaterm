@@ -18,6 +18,44 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
 }
 
 #[test]
+fn unwrapped_line_indices_survive_soft_wraps_scroll_and_history_eviction() {
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.set_scrollback_limit(4);
+    screen.advance(b"aaaaBBBB\r\nccccDDDD\r\neeeeFFFF\r\nkeep");
+    let before = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert!(before.rows().windows(2).any(|pair| {
+        pair[1].wrapped && pair[0].unwrapped_line_index == pair[1].unwrapped_line_index
+    }));
+    screen.advance(b"\r\nnext\r\nlast");
+    let after = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    let mut shared = 0;
+    for row in after.rows() {
+        if let Some(old) = before.rows().iter().find(|old| old.line_id == row.line_id) {
+            assert_eq!(row.unwrapped_line_index, old.unwrapped_line_index);
+            shared += 1;
+        }
+    }
+    assert!(shared > 0);
+    assert!(!after.rows().iter().any(|row| row.text == "aaaa"));
+    for pair in after.rows().windows(2) {
+        let expected_delta = i64::from(!pair[1].wrapped);
+        assert_eq!(
+            pair[1].unwrapped_line_index.unwrap() - pair[0].unwrapped_line_index.unwrap(),
+            expected_delta,
+        );
+    }
+    let scrolled = screen.viewport_snapshot(2);
+    for row in scrolled.rows() {
+        let retained = after
+            .rows()
+            .iter()
+            .find(|old| old.line_id == row.line_id)
+            .unwrap();
+        assert_eq!(row.unwrapped_line_index, retained.unwrapped_line_index);
+    }
+}
+
+#[test]
 fn snapshot_distinguishes_delayed_soft_wraps_from_hard_breaks() {
     let mut screen = TerminalScreen::new(4, 3);
     screen.advance(b"ab  ");
@@ -2047,6 +2085,7 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
     let key = TerminalSnapshotRowCacheKey {
         cleared: original.cleared,
         display_line_number: original.display_line_number,
+        unwrapped_line_index: original.unwrapped_line_index,
         cols: screen.cols(),
         revision: original.revision,
         signature: original.signature,
@@ -2084,6 +2123,7 @@ fn snapshot_row_cache_prunes_to_limit() {
             TerminalSnapshotRowCacheKey {
                 cleared: false,
                 display_line_number: None,
+                unwrapped_line_index: None,
                 cols: 1,
                 revision: signature,
                 signature,

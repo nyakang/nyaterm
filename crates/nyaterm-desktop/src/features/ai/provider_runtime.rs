@@ -7,6 +7,33 @@ use nyaterm_core::ai::provider_settings::{
 use nyaterm_core::ai::{AiModelReasoningEffort, AiProviderKind};
 
 impl NyaTermApp {
+    fn spawn_ai_provider_job<T: Send + 'static>(
+        &mut self,
+        future: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> tokio::sync::oneshot::Receiver<Result<T, String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let runtime = cx
+            .try_global::<crate::app_shell::DesktopControllerGlobal>()
+            .ok_or_else(|| "AI runtime unavailable".to_string())
+            .and_then(|global| global.0.read(cx).ai_runtime.clone());
+        match runtime {
+            Ok(runtime) => {
+                let task = runtime.spawn(tokio_util::sync::CancellationToken::new(), async move {
+                    let _ = tx.send(future.await);
+                });
+                self.ai
+                    .provider_view_mut()
+                    .tasks
+                    .push(std::sync::Arc::new(task));
+            }
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
+        }
+        rx
+    }
+
     pub(in crate::features) fn select_ai_provider(&mut self, id: String, cx: &mut Context<Self>) {
         self.hide_ai_provider_secret(cx);
         self.ai.select_settings_provider(Some(id.clone()));
@@ -112,6 +139,8 @@ impl NyaTermApp {
                     } else {
                         app.ai.remove_settings_credential(&id);
                     }
+                    app.ai
+                        .cancel_removed_provider_runs(&app.ai.settings_config_cloned());
                     app.ai.prepare_provider_settings();
                     app.persist_ai_settings_now(cx);
                     true
@@ -178,40 +207,45 @@ impl NyaTermApp {
         self.request_settings_panel_refresh(cx);
         let jobs = self.blocking_jobs.clone();
         let store = self.store_blocking_client();
-        cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(jobs.submit_task("ai-provider-test", move |cancel| {
-                if cancel.is_cancelled() {
-                    return Err("AI provider test cancelled".to_string());
-                }
-                let current = store
-                    .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
-                        store.load_ai_settings()
+        let rx = self.spawn_ai_provider_job(
+            async move {
+                let settings = jobs
+                    .submit_task("ai-provider-prepare", move |_| {
+                        let current = store
+                            .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
+                                store.load_ai_settings()
+                            })
+                            .map_err(|error| error.to_string())?;
+                        Ok::<_, String>(nyaterm_core::merge_masked_ai_settings(&current, settings))
                     })
-                    .map_err(|error| error.to_string())?;
-                let settings = nyaterm_core::merge_masked_ai_settings(&current, settings);
-                Ok::<_, String>(
-                    ids.into_iter()
-                        .take_while(|_| !cancel.is_cancelled())
-                        .map(|id| {
-                            let result = settings
-                                .provider_credentials
-                                .iter()
-                                .find(|credential| credential.id == id)
-                                .ok_or_else(|| "Provider no longer exists".into())
-                                .and_then(|credential| {
-                                    crate::http::ai::discover_provider_models_cancellable(
-                                        &settings,
-                                        credential,
-                                        &|| cancel.is_cancelled(),
-                                    )
-                                });
-                            (id, result)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            }))
-            .await
-            .and_then(|result| result);
+                    .map_err(|error| error.to_string())?
+                    .await
+                    .map_err(|error| error.to_string())??;
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let mut results = Vec::new();
+                for id in ids {
+                    let result = match settings
+                        .provider_credentials
+                        .iter()
+                        .find(|credential| credential.id == id)
+                    {
+                        Some(credential) => crate::http::ai::discover_provider_models(
+                            &settings, credential, &cancel,
+                        )
+                        .await
+                        .map_err(|error| error.to_string()),
+                        None => Err("Provider no longer exists".into()),
+                    };
+                    results.push((id, result));
+                }
+                Ok(results)
+            },
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = rx
+                .await
+                .unwrap_or_else(|_| Err("AI provider test cancelled".into()));
             let _ = this.update(cx, |app, cx| {
                 if app.ai.provider_view().generation != generation {
                     return;
@@ -259,24 +293,35 @@ impl NyaTermApp {
         let jobs = self.blocking_jobs.clone();
         let store = self.store_blocking_client();
         self.request_settings_panel_refresh(cx);
-        cx.spawn(async move |this, cx| {
-            let test_id = id.clone();
-            let result = await_blocking_job(jobs.submit_task("ai-model-test", move |cancel| {
-                let current = store
-                    .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
-                        store.load_ai_settings()
+        let test_id = id.clone();
+        let rx = self.spawn_ai_provider_job(
+            async move {
+                let settings = jobs
+                    .submit_task("ai-model-prepare", move |_| {
+                        let current = store
+                            .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
+                                store.load_ai_settings()
+                            })
+                            .map_err(|error| error.to_string())?;
+                        Ok::<_, String>(nyaterm_core::merge_masked_ai_settings(&current, settings))
                     })
-                    .map_err(|error| error.to_string())?;
-                if cancel.is_cancelled() {
-                    return Err("AI model test cancelled".to_string());
-                }
+                    .map_err(|error| error.to_string())?
+                    .await
+                    .map_err(|error| error.to_string())??;
                 crate::http::ai::test_model_connection(
-                    &nyaterm_core::merge_masked_ai_settings(&current, settings),
+                    &settings,
                     &test_id,
+                    &tokio_util::sync::CancellationToken::new(),
                 )
-            }))
-            .await
-            .and_then(|result| result);
+                .await
+                .map_err(|error| error.to_string())
+            },
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = rx
+                .await
+                .unwrap_or_else(|_| Err("AI model test cancelled".into()));
             let _ = this.update(cx, |app, cx| {
                 if app.ai.provider_view().generation != generation {
                     return;

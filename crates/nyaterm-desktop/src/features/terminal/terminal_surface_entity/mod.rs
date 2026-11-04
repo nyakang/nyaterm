@@ -3,6 +3,7 @@ use gpui::{
     SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
 };
 use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
+use nyaterm_terminal_gpui::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
@@ -404,6 +405,7 @@ pub(in crate::features) struct TerminalSurface {
     is_active: bool,
     protocol_state: TerminalProtocolState,
     zebra_stripes_enabled: bool,
+    zebra_stripes_by_row: bool,
     target_line: Option<TerminalLineId>,
     scroll_interaction_generation: u64,
     pending_local_scroll_sync: Option<TerminalSurfacePendingScrollSync>,
@@ -488,6 +490,7 @@ impl TerminalSurface {
             is_active: false,
             protocol_state: TerminalProtocolState::default(),
             zebra_stripes_enabled: false,
+            zebra_stripes_by_row: false,
             target_line: None,
             scroll_interaction_generation: 0,
             pending_local_scroll_sync: None,
@@ -1566,12 +1569,17 @@ impl TerminalSurface {
     pub(in crate::features) fn set_zebra_stripes(
         &mut self,
         enabled: bool,
+        by_row: bool,
         target_line: Option<TerminalLineId>,
     ) -> bool {
-        if self.zebra_stripes_enabled == enabled && self.target_line == target_line {
+        if self.zebra_stripes_enabled == enabled
+            && self.zebra_stripes_by_row == by_row
+            && self.target_line == target_line
+        {
             return false;
         }
         self.zebra_stripes_enabled = enabled;
+        self.zebra_stripes_by_row = by_row;
         self.target_line = target_line;
         true
     }
@@ -3044,7 +3052,8 @@ impl Render for TerminalSurface {
             .with_fill_height(true)
             .with_unwrapped_layout(self.painted_unwrapped.clone())
             .with_visual_y_offset(visual_y_offset)
-            .with_zebra_stripes(zebra_stripes_visible, target_line);
+            .with_zebra_stripes(zebra_stripes_visible, target_line)
+            .with_zebra_stripes_by_row(self.zebra_stripes_by_row);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
         }
@@ -3079,7 +3088,18 @@ impl Render for TerminalSurface {
                 .top(px(gutter_y_offset))
                 .flex()
                 .flex_col();
-            let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            let labeled_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            let gutter_row_count = if zebra_stripes_visible && self.zebra_stripes_by_row {
+                self.painted_unwrapped
+                    .as_ref()
+                    .map_or(snapshot.row_count(), |layout| {
+                        layout
+                            .viewport_rows
+                            .min(layout.logical_rows().saturating_sub(layout.logical_top))
+                    })
+            } else {
+                labeled_row_count
+            };
             for display_row in visible_gutter_rows
                 .clone()
                 .take_while(|row| *row < gutter_row_count)
@@ -3089,24 +3109,33 @@ impl Render for TerminalSurface {
                     .as_ref()
                     .map_or(display_row, |layout| layout.first_source_row(display_row));
                 let snapshot_row = snapshot.row(line_index);
+                let row_target = self
+                    .painted_unwrapped
+                    .as_ref()
+                    .map_or(target_line, |layout| {
+                        layout.target_line_for_display_row(&snapshot, display_row, target_line)
+                    });
                 let zebra_color = zebra_stripes_visible
                     .then(|| {
                         snapshot_row.and_then(|row| {
-                            if row.line_id.is_some() && row.line_id == target_line {
-                                Some(rgba((palette.accent << 8) | 0x24))
-                            } else if row.shell_input.is_some() {
-                                Some(rgba((palette.terminal_fg << 8) | 0x0f))
-                            } else {
-                                None
-                            }
+                            terminal_row_stripe_color(
+                                row,
+                                TerminalStripeMode::new(
+                                    self.zebra_stripes_by_row,
+                                    self.painted_unwrapped.is_some(),
+                                ),
+                                row_target,
+                                palette,
+                            )
+                            .map(rgba)
                         })
                     })
                     .flatten();
                 let labels = terminal_gutter_labels(
                     snapshot_row,
                     abs_start + line_index + 1,
-                    self.show_timestamps,
-                    self.show_line_numbers,
+                    self.show_timestamps && line_index < labeled_row_count,
+                    self.show_line_numbers && line_index < labeled_row_count,
                     line_number_digits,
                     &timestamp_formatter,
                 );
