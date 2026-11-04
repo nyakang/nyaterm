@@ -412,7 +412,6 @@ impl NyaTermApp {
             mention_candidates,
             quoted_text: self.ai.chat_quote().map(str::to_string),
             detected_error: self.ai.panel_detected_error().cloned(),
-            message_menu: self.ai.chat_message_menu().cloned(),
             history_open: self.ai.history_is_open(),
             history_query: self.ai.history_query().to_string(),
             history_sessions: self.ai.history_sessions().to_vec().into(),

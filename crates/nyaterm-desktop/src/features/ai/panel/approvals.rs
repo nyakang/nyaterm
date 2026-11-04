@@ -4,6 +4,7 @@ use nyaterm_mcp_protocol::tool;
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
+use super::texts::TextOwner;
 use super::{AiPanel, AiPanelSnapshot};
 use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
 use crate::features::shell::gpui_code_font_family;
@@ -50,23 +51,34 @@ impl AiPanel {
                     .child(t!("ai.harness.approvalTitle")),
             )
             .child(div().child(format!("{}: {}", t!("ai.mcp.capability"), capability)))
-            .when_some(request.target.clone(), |card, target| {
-                card.child(div().child(format!("{}: {target}", t!("ai.mcp.target"))))
+            .when_some(request.target.clone(), |card, _target| {
+                card.child(div().child(self.selectable_text(
+                    TextOwner::Approval(request.request_id.clone()),
+                    "target",
+                    false,
+                    cx,
+                )))
             });
-        if let Some(command) = &view.command {
+        if let Some(_command) = &view.command {
             card = card.child(
                 div()
                     .debug_selector(|| "ai-native-approval-command".into())
                     .w_full()
                     .min_w_0()
                     .font_family(gpui_code_font_family())
-                    .child(self.highlighted_command(command)),
+                    .child(self.selectable_text(
+                        TextOwner::Approval(request.request_id.clone()),
+                        "script",
+                        false,
+                        cx,
+                    )),
             );
         } else {
-            card = card.child(div().min_w_0().child(format!(
-                "{}: {}",
-                t!("ai.mcp.parameters"),
-                request.parameter_summary
+            card = card.child(div().min_w_0().child(self.selectable_text(
+                TextOwner::Approval(request.request_id.clone()),
+                "parameters",
+                false,
+                cx,
             )));
         }
         let risk = match request.risk_level.as_str() {

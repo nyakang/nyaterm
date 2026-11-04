@@ -393,7 +393,7 @@ fn content_cache_parses_only_changed_messages_and_ignores_a_replaced_session() {
         assert!(panel.prepared_message("message-1999").is_none());
         assert_eq!(
             panel.prepared_message("message-1").unwrap().display,
-            "fixture output\n".repeat(6).trim()
+            "fixture output\n".repeat(6)
         );
     });
 }

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::{Context, HighlightStyle, IntoElement, StyledText};
+use gpui::{Context, HighlightStyle};
 
 use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
 use crate::theme::ThemePalette;
@@ -11,8 +11,10 @@ type CommandHighlights = Arc<[(Range<usize>, HighlightStyle)]>;
 
 #[derive(Default)]
 pub(super) struct CommandSyntaxCache {
+    context: Option<(String, Option<String>, Option<String>)>,
+    generation: u64,
     palette: Option<ThemePalette>,
-    highlights: HashMap<String, CommandHighlights>,
+    pub(super) highlights: HashMap<String, CommandHighlights>,
 }
 
 impl AiPanel {
@@ -22,8 +24,21 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) {
         let palette = snapshot.chrome.palette;
+        let context = (
+            snapshot.current_ai_session_id.clone(),
+            snapshot.owner_terminal_id.clone(),
+            snapshot.owner_connection_id.clone(),
+        );
+        if self.command_syntax.context.as_ref() != Some(&context) {
+            self.command_syntax.context = Some(context);
+            self.command_syntax.generation = self.command_syntax.generation.wrapping_add(1);
+            self.command_syntax.highlights.clear();
+        }
         if self.snapshot.as_ref().is_some_and(|previous| {
-            previous.chrome.palette == palette
+            previous.current_ai_session_id == snapshot.current_ai_session_id
+                && previous.owner_terminal_id == snapshot.owner_terminal_id
+                && previous.owner_connection_id == snapshot.owner_connection_id
+                && previous.chrome.palette == palette
                 && previous.messages.len() == snapshot.messages.len()
                 && previous
                     .messages
@@ -80,6 +95,7 @@ impl AiPanel {
                 .highlights
                 .insert(command.clone(), Arc::from([]));
         }
+        let generation = self.command_syntax.generation;
         let work = cx.background_executor().spawn(async move {
             missing
                 .into_iter()
@@ -93,7 +109,9 @@ impl AiPanel {
         cx.spawn(async move |panel, cx| {
             let highlights = work.await;
             let _ = panel.update(cx, |panel, cx| {
-                if panel.command_syntax.palette != Some(palette) {
+                if panel.command_syntax.palette != Some(palette)
+                    || panel.command_syntax.generation != generation
+                {
                     return;
                 }
                 for (command, highlights) in highlights {
@@ -106,16 +124,5 @@ impl AiPanel {
             });
         })
         .detach();
-    }
-
-    pub(super) fn highlighted_command(&self, command: &str) -> gpui::AnyElement {
-        let highlights = self.command_syntax.highlights.get(command);
-        StyledText::new(command.to_string())
-            .with_highlights(
-                highlights
-                    .into_iter()
-                    .flat_map(|styles| styles.iter().cloned()),
-            )
-            .into_any_element()
     }
 }

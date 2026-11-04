@@ -248,6 +248,12 @@ enum PendingKind {
         pane: String,
         generation: u64,
     },
+    /// Resume in the same command queue as capture/cursor. Earlier failures
+    /// skip this command, leaving the pane paused until its seed is retried.
+    SeedContinue {
+        pane: String,
+        generation: u64,
+    },
     /// `#{pane_current_path}` poll; a `cd` inside the pane emits no
     /// notification, so cwd is re-queried after each submitted command.
     PaneCwd {
@@ -468,9 +474,63 @@ impl<'a> ControlSession<'a> {
                 barrier: barrier.clone(),
             };
         }
-        self.pending_responses
+        let kind = self
+            .pending_responses
             .pop_front()
-            .unwrap_or(PendingKind::Ignore)
+            .unwrap_or(PendingKind::Ignore);
+        if failed {
+            match &kind {
+                PendingKind::CapturePane { pane, generation } => {
+                    // tmux stops a compound command at its first error. Its
+                    // skipped cursor/continue commands produce no blocks and
+                    // must not consume the next independent query's response.
+                    if matches!(self.pending_responses.front(),
+                        Some(PendingKind::SeedCursor { pane: next, generation: next_generation })
+                            if next == pane && next_generation == generation)
+                    {
+                        self.pending_responses.pop_front();
+                    }
+                    self.skip_seed_continue(pane, *generation);
+                    return PendingKind::SeedCursor {
+                        pane: pane.clone(),
+                        generation: *generation,
+                    };
+                }
+                PendingKind::SeedCursor { pane, generation } => {
+                    self.skip_seed_continue(pane, *generation);
+                }
+                PendingKind::SeedContinue { pane, generation } => {
+                    self.retry_paused_seed(pane, *generation);
+                }
+                _ => {}
+            }
+        }
+        kind
+    }
+
+    fn skip_seed_continue(&mut self, pane: &str, generation: u64) {
+        if matches!(self.pending_responses.front(),
+            Some(PendingKind::SeedContinue { pane: next, generation: next_generation })
+                if next == pane && *next_generation == generation)
+        {
+            self.pending_responses.pop_front();
+            self.retry_paused_seed(pane, generation);
+        }
+    }
+
+    fn retry_paused_seed(&mut self, pane: &str, generation: u64) {
+        if self
+            .panes
+            .get(pane)
+            .is_some_and(|current| current.seed_generation == generation)
+        {
+            self.paused_panes.insert(pane.to_string());
+            self.continue_deadline.get_or_insert_with(|| {
+                Box::pin(tokio::time::sleep(Duration::from_millis(
+                    PAUSE_CONTINUE_DELAY_MS,
+                )))
+            });
+        }
     }
 
     /// Queue an internal query whose block output should be parsed.
@@ -643,7 +703,10 @@ impl<'a> ControlSession<'a> {
         );
         if self.paused_panes.remove(pane_id) {
             command.push_str(&format!(" ; refresh-client -A '{pane_id}:continue'"));
-            responses.push(PendingKind::Ignore);
+            responses.push(PendingKind::SeedContinue {
+                pane: pane_id.into(),
+                generation,
+            });
         }
         self.queue_batch(&command, responses);
     }
@@ -1492,7 +1555,7 @@ impl<'a> ControlSession<'a> {
                     self.emit_visible_text(&text);
                 }
             }
-            PendingKind::Ignore => {}
+            PendingKind::SeedContinue { .. } | PendingKind::Ignore => {}
         }
     }
 
@@ -2108,6 +2171,71 @@ mod recovery_tests {
     use crate::session_event_queue::SessionEventQueue;
     use crate::tmux::mailbox;
     use crate::tmux::test_peer::connect;
+
+    #[tokio::test]
+    async fn failed_seed_commands_preserve_the_next_snapshot_and_retry_paused_panes() {
+        for (paused, capture_fails) in [(false, true), (true, true), (false, false), (true, false)]
+        {
+            let connection = connect().await;
+            let queue = SessionEventQueue::new();
+            let sessions = Arc::new(Mutex::new(HashMap::new()));
+            let (tx, _rx) = mailbox::channel();
+            let mut session = ControlSession::new(&queue, "host", &sessions, tx);
+            session.spawn_pane("%0").await;
+            if paused {
+                session.paused_panes.insert("%0".into());
+            }
+            session.seed_pane(&connection.tx, "%0").await;
+            assert!(session.start_send(&connection.tx).unwrap().await);
+            session.refresh_windows(&connection.tx).await;
+            assert!(session.start_send(&connection.tx).unwrap().await);
+
+            // A close can overtake either seed command. tmux stops the compound
+            // queue at that error, so subsequent commands produce no replies.
+            for line in [
+                "%begin 1 1 1",
+                if capture_fails {
+                    "can't find pane: %0"
+                } else {
+                    "fixture"
+                },
+                if capture_fails {
+                    "%error 1 1 1"
+                } else {
+                    "%end 1 1 1"
+                },
+            ] {
+                session
+                    .handle_message(&connection.tx, line.as_bytes().to_vec())
+                    .await;
+            }
+            if !capture_fails {
+                for line in ["%begin 1 2 1", "can't find pane: %0", "%error 1 2 1"] {
+                    session
+                        .handle_message(&connection.tx, line.as_bytes().to_vec())
+                        .await;
+                }
+            }
+            assert!(!session.panes["%0"].seeding);
+            assert_eq!(session.paused_panes.contains("%0"), paused);
+            assert_eq!(session.continue_deadline.is_some(), paused);
+
+            for line in [
+                "%begin 1 3 1",
+                "@0 0 1 aaaa,80x24,0,0,1 aaaa,80x24,0,0,1 * %1 test",
+                "%end 1 3 1",
+            ] {
+                session
+                    .handle_message(&connection.tx, line.as_bytes().to_vec())
+                    .await;
+            }
+            assert!(session.windows.contains_key("@0"));
+            assert_eq!(session.active_window.as_deref(), Some("@0"));
+            assert!(!session.panes.contains_key("%0"));
+            assert!(session.panes.contains_key("%1"));
+            assert_eq!(sessions.lock().unwrap().len(), 1);
+        }
+    }
 
     #[tokio::test]
     async fn pause_invalidates_inflight_seed_and_old_responses_cannot_paint() {

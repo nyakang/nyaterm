@@ -34,8 +34,7 @@ use crate::features::{
     runtime_jobs::AiDiscoveryJobResult,
 };
 use crate::models::{
-    AiActionEditorField, AiActionListKind, AiDetectedErrorState, AiInputField, AiMessageMenuState,
-    AiPreparedRequest,
+    AiActionEditorField, AiActionListKind, AiDetectedErrorState, AiInputField, AiPreparedRequest,
 };
 
 pub(in crate::features) struct AiFeatureState {
@@ -134,7 +133,6 @@ struct AiChatState {
     command_scripts_expanded: HashSet<String>,
     agent_history_expanded: bool,
     execution_groups_expanded: HashSet<String>,
-    message_menu: Option<AiMessageMenuState>,
     quoted_text: Option<String>,
     command_cards: Vec<AiCommandCard>,
     focus: FocusHandle,
@@ -181,7 +179,6 @@ impl AiChatState {
             command_scripts_expanded: HashSet::new(),
             agent_history_expanded: false,
             execution_groups_expanded: HashSet::new(),
-            message_menu: None,
             quoted_text: None,
             command_cards: Vec::new(),
             focus,
@@ -396,7 +393,6 @@ impl AiFeatureState {
                 command_scripts_expanded: HashSet::new(),
                 agent_history_expanded: false,
                 execution_groups_expanded: HashSet::new(),
-                message_menu: None,
                 quoted_text: None,
                 command_cards: Vec::new(),
                 focus: focus.chat,
@@ -942,7 +938,6 @@ impl AiFeatureState {
         }));
         self.chat.prompt_draft.clear();
         self.chat.quoted_text = None;
-        self.chat.message_menu = None;
         self.chat.close_mention();
         self.chat.streaming_assistant_id = Some(assistant_id);
         self.panel.status = if mode == AiMode::Agent {
@@ -1372,23 +1367,8 @@ impl AiFeatureState {
             })
     }
 
-    pub(in crate::features) fn chat_message_menu(&self) -> Option<&AiMessageMenuState> {
-        self.chat.message_menu.as_ref()
-    }
-
     pub(in crate::features) fn chat_quote(&self) -> Option<&str> {
         self.chat.quoted_text.as_deref()
-    }
-
-    pub(in crate::features) fn close_message_menu(&mut self) {
-        self.chat.close_message_menu();
-    }
-
-    pub(in crate::features) fn open_message_menu(&mut self, menu: AiMessageMenuState) {
-        self.chat.message_menu = Some(menu);
-        self.history.open = false;
-        self.panel.execution_menu_open = false;
-        self.discovery.menu_open = false;
     }
 
     pub(in crate::features) fn quote_message(&mut self, text: String) -> bool {
@@ -1400,17 +1380,7 @@ impl AiFeatureState {
         } else {
             self.panel.status = "AI message is empty".to_string();
         }
-        self.chat.message_menu = None;
         quoted
-    }
-
-    pub(in crate::features) fn finish_copy_message(&mut self, copied: bool) {
-        self.panel.status = if copied {
-            "AI message copied".to_string()
-        } else {
-            "AI message is empty".to_string()
-        };
-        self.chat.message_menu = None;
     }
 
     pub(in crate::features) fn prepare_external_request(
@@ -1517,7 +1487,6 @@ impl AiFeatureState {
         if self.history.sessions.is_empty() {
             return false;
         }
-        self.chat.message_menu = None;
         self.discovery.menu_open = false;
         self.panel.execution_menu_open = false;
         true
@@ -1541,7 +1510,6 @@ impl AiFeatureState {
         self.panel.execution_menu_open = false;
         self.history.open = !self.history.open;
         if self.history.open {
-            self.chat.message_menu = None;
             self.discovery.menu_open = false;
         } else {
             self.history.query.clear();
@@ -1620,7 +1588,6 @@ impl AiFeatureState {
                 self.chat.streaming_assistant_id = None;
                 self.chat.response_phase = AiResponsePhase::Ended;
                 self.history.open = false;
-                self.chat.message_menu = None;
                 self.chat.quoted_text = None;
                 self.chat.command_cards.clear();
                 if let Some(last) = self
@@ -1664,7 +1631,6 @@ impl AiFeatureState {
                     self.chat.command_cards.clear();
                     self.chat.streaming_assistant_id = None;
                     self.chat.response_phase = AiResponsePhase::Ended;
-                    self.chat.message_menu = None;
                     self.chat.quoted_text = None;
                     self.chat.session_id = format!("ai-session-{}", uuid());
                     self.chat.response_preview = "Ask mode ready".to_string();
@@ -1709,7 +1675,6 @@ impl AiFeatureState {
                     self.chat.command_cards.clear();
                     self.chat.streaming_assistant_id = None;
                     self.chat.response_phase = AiResponsePhase::Ended;
-                    self.chat.message_menu = None;
                     self.chat.quoted_text = None;
                     self.clear_detected_error();
                     self.chat.session_id = format!("ai-session-{}", uuid());
@@ -1791,7 +1756,6 @@ impl AiFeatureState {
             self.discovery.index = selected_index;
             self.history.open = false;
             self.panel.execution_menu_open = false;
-            self.chat.message_menu = None;
         } else {
             self.discovery.query.clear();
             self.discovery.index = 0;
@@ -2119,7 +2083,6 @@ impl AiFeatureState {
         self.history.query.clear();
         self.panel.execution_menu_open = !self.panel.execution_menu_open;
         if self.panel.execution_menu_open {
-            self.chat.message_menu = None;
             self.discovery.menu_open = false;
         }
         self.panel.execution_menu_open
@@ -2165,22 +2128,14 @@ impl AiFeatureState {
         self.history.open = false;
         self.discovery.menu_open = false;
         self.panel.execution_menu_open = false;
-        self.chat.message_menu = None;
     }
 
     pub(in crate::features) fn transient_menus_are_open(&self) -> bool {
-        self.history.open
-            || self.discovery.menu_open
-            || self.panel.execution_menu_open
-            || self.chat.message_menu.is_some()
+        self.history.open || self.discovery.menu_open || self.panel.execution_menu_open
     }
 }
 
 impl AiChatState {
-    fn close_message_menu(&mut self) {
-        self.message_menu = None;
-    }
-
     /// Tracks the trailing `@mention` the composer is currently completing.
     ///
     /// Only a trailing run with no whitespace counts, so the picker closes as
@@ -2263,7 +2218,7 @@ impl AiFeatureState {
         self.archive_current_session();
         self.chat.prompt_draft.clear();
         self.chat.target_session_ids.clear();
-        self.chat.message_menu = None;
+
         self.chat.quoted_text = None;
         self.chat.close_mention();
         self.chat.response_preview = if self.chat.run_mode == AiMode::Agent {

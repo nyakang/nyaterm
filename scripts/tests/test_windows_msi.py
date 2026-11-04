@@ -93,6 +93,50 @@ class WindowsMsiTests(unittest.TestCase):
             self.assertEqual(components[0], components[1])
 
 
+class WindowsMsiCleanupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.rows = [
+            {"FileKey": "RemoveLegacyActiveXHelper", "Component_": "ApplicationComponent",
+             "FileName": "nyaterm-activex-helper.exe", "DirProperty": "INSTALLDIR", "InstallMode": "1"},
+            {"FileKey": "RemoveStartMenuFolder", "Component_": "ApplicationComponent",
+             "FileName": "", "DirProperty": "ApplicationProgramsFolder", "InstallMode": "2"},
+        ]
+
+    def test_allows_legacy_helper_and_empty_start_menu_cleanup(self) -> None:
+        for name in ("nyaterm-activex-helper.exe", "NYATER~1.EXE|nyaterm-activex-helper.exe"):
+            for rows in (self.rows, list(reversed(self.rows))):
+                with self.subTest(name=name, order=[row["FileKey"] for row in rows]):
+                    self.rows[0]["FileName"] = name
+                    verify_native_package.verify_windows_msi_cleanup(rows, "ApplicationComponent")
+
+    def test_rejects_changed_cleanup_targets_owners_and_install_modes(self) -> None:
+        for index in range(len(self.rows)):
+            for field, value in (
+                ("FileKey", "UnexpectedCleanup"), ("Component_", "OtherComponent"),
+                ("DirProperty", "APPDATA"), ("InstallMode", "3"),
+                ("FileName", "*"), ("FileName", "*.exe"), ("FileName", "settings.json"),
+                ("FileName", "../nyaterm-activex-helper.exe"),
+                ("FileName", "*|nyaterm-activex-helper.exe"),
+                ("FileName", "../bad.exe|nyaterm-activex-helper.exe"),
+                ("FileName", "a|b|nyaterm-activex-helper.exe"),
+            ):
+                changed = copy.deepcopy(self.rows)
+                changed[index][field] = value
+                with self.subTest(rule=index, field=field, value=value), self.assertRaises(RuntimeError):
+                    verify_native_package.verify_windows_msi_cleanup(changed, "ApplicationComponent")
+        for index, name in ((0, ""), (1, "nyaterm-activex-helper.exe")):
+            changed = copy.deepcopy(self.rows)
+            changed[index]["FileName"] = name
+            with self.subTest(rule=index, name=name), self.assertRaises(RuntimeError):
+                verify_native_package.verify_windows_msi_cleanup(changed, "ApplicationComponent")
+
+    def test_requires_exactly_the_two_authorized_cleanup_rules(self) -> None:
+        for rows in ([], self.rows[:1], self.rows[1:], self.rows + [self.rows[0]],
+                     [self.rows[0], self.rows[0]], [self.rows[1], self.rows[1]]):
+            with self.subTest(rules=[row["FileKey"] for row in rows]), self.assertRaises(RuntimeError):
+                verify_native_package.verify_windows_msi_cleanup(rows, "ApplicationComponent")
+
+
 @unittest.skipUnless(sys.platform == "win32" and shutil.which("wix"), "requires Windows and WiX 6.0.2")
 class CompiledWindowsMsiTests(unittest.TestCase):
     @classmethod

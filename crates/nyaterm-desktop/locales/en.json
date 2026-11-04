@@ -2863,8 +2863,6 @@
     "openLogsFailed": "Failed to open log folder",
     "openSecuritySettings": "Open Security",
     "optionalField": "Optional",
-    "panelMultiOpen": "Multi-open Side Panels",
-    "panelMultiOpenDesc": "When enabled, clicking activity bar icons on either side can open multiple panels at once.",
     "panelModeFloating": "Floating Panels",
     "panelModeMulti": "Multi-open Panels",
     "panelModeSingle": "Single Panel",

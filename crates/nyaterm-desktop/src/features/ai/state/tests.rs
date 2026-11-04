@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use gpui::{TestAppContext, px};
+use gpui::TestAppContext;
 use nyaterm_core::{
     AiAction, AiAgentKind, AiContext, AiMessage, AiMessageRole, AiMode, AiModelConfigItem,
     AiModelSource, AiProviderCredential, AiProviderKind, AiSession, AiSettings,
@@ -12,7 +12,7 @@ use crate::features::{
     runtime_jobs::AiAgentLoopState, runtime_jobs::AiAgentStepStatus, runtime_jobs::AiChatJobOutput,
     runtime_jobs::AiChatWorkerEvent, runtime_jobs::AiDiscoveryJobResult,
 };
-use crate::models::{AiMessageMenuState, AiPreparedRequest};
+use crate::models::AiPreparedRequest;
 
 use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 
@@ -692,15 +692,6 @@ fn transient_ai_menus_are_mutually_exclusive() {
 
     assert!(state.toggle_history());
     assert!(!state.discovery_menu_is_open());
-    state.open_message_menu(AiMessageMenuState {
-        message_id: "message".to_string(),
-        text: "text".to_string(),
-        x: px(1.),
-        y: px(2.),
-    });
-    assert!(!state.history_is_open());
-    assert!(state.chat_message_menu().is_some());
-
     state.close_transient_menus();
     assert!(!state.transient_menus_are_open());
 }
