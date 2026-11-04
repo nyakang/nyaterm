@@ -2868,8 +2868,6 @@
     "openLogsFailed": "Échec de l'ouverture du dossier des journaux",
     "openSecuritySettings": "Ouvrir la sécurité",
     "optionalField": "Facultatif",
-    "panelMultiOpen": "Panneaux latéraux à ouverture multiple",
-    "panelMultiOpenDesc": "Lorsque cette option est activée, cliquer sur les icônes de la barre d'activité de chaque côté peut ouvrir plusieurs panneaux à la fois.",
     "panelModeFloating": "Panneaux flottants",
     "panelModeMulti": "Panneaux à ouverture multiple",
     "panelModeSingle": "Panneau unique",

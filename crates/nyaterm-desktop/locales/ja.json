@@ -2868,8 +2868,6 @@
     "openLogsFailed": "ログフォルダーを開けませんでした",
     "openSecuritySettings": "セキュリティを開く",
     "optionalField": "任意",
-    "panelMultiOpen": "サイドパネルの複数開き",
-    "panelMultiOpenDesc": "有効にすると、いずれかの側のアクティビティバーアイコンをクリックして複数のパネルを同時に開けます。",
     "panelModeFloating": "フローティングパネル",
     "panelModeMulti": "複数開きパネル",
     "panelModeSingle": "単一パネル",

@@ -152,7 +152,6 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) snapshot_password_prompt_active: bool,
     pub(in crate::features) config_path_prompt_active: bool,
     pub(in crate::features) terminal_theme_is_dark: bool,
-    pub(in crate::features) panel_multi_open: bool,
 }
 
 impl SettingsPresentation {
@@ -186,7 +185,6 @@ impl SettingsPresentation {
             snapshot_password_prompt_active: false,
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
-            panel_multi_open: false,
         }
     }
 }
@@ -282,10 +280,6 @@ impl SettingsPresentation {
 
     pub(in crate::features) fn terminal_theme_is_dark(&self) -> bool {
         self.terminal_theme_is_dark
-    }
-
-    pub(in crate::features) fn panel_multi_open(&self) -> bool {
-        self.panel_multi_open
     }
 }
 
@@ -1975,7 +1969,6 @@ forward_app_action!(
     toggle_minimize_to_tray,
     toggle_multi_line_paste_dialog,
     toggle_osc52_clipboard_write,
-    toggle_panel_multi_open,
     toggle_paste_image_as_path,
     toggle_recording_auto_start,
     toggle_recording_binary_transfer_payloads,

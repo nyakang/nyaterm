@@ -71,7 +71,6 @@ impl NyaTermApp {
                 snapshot_password_prompt_active: self.settings.snapshot_password_prompt_active(),
                 config_path_prompt_active: self.settings.config_path_prompt_active(),
                 terminal_theme_is_dark: self.terminal_theme_is_dark(),
-                panel_multi_open: self.shell.panel_multi_open(),
             },
             ai: AiSettingsPresentation {
                 providers: self.ai.provider_view().clone(),

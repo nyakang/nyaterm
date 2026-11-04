@@ -2868,8 +2868,6 @@
     "openLogsFailed": "開啟日誌目錄失敗",
     "openSecuritySettings": "開啟安全設定",
     "optionalField": "可選",
-    "panelMultiOpen": "側邊面板多開",
-    "panelMultiOpenDesc": "開啟後，點選兩側活動欄圖示可同時開啟多個面板。",
     "panelModeFloating": "浮動面板",
     "panelModeMulti": "多開面板",
     "panelModeSingle": "單面板",

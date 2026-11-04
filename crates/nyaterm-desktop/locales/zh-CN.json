@@ -2861,8 +2861,6 @@
     "openLogsFailed": "打开日志目录失败",
     "openSecuritySettings": "打开安全设置",
     "optionalField": "可选",
-    "panelMultiOpen": "侧边面板多开",
-    "panelMultiOpenDesc": "开启后，点击两侧活动栏图标可同时打开多个面板。",
     "panelModeFloating": "浮动面板",
     "panelModeMulti": "多开面板",
     "panelModeSingle": "单面板",
