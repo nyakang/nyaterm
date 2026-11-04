@@ -18,6 +18,7 @@ mod cells;
 pub mod command_navigation;
 pub mod editing;
 mod encoding;
+mod escape_state;
 mod graphics;
 mod kitty_payload;
 mod line_numbers;
@@ -300,6 +301,9 @@ pub struct TerminalSnapshotMeta {
     pub display_offset: usize,
     pub shell_input_anchor: Option<ShellInputAnchor>,
     pub images: Vec<GraphicsImageSnapshot>,
+    /// Pinned numbering origin the row `display_line_number`s were computed
+    /// against. Snapshots with different bases must never be stitched together.
+    pub line_number_base: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -335,6 +339,8 @@ pub struct TerminalSnapshot {
     pub shell_input_anchor: Option<ShellInputAnchor>,
     /// Inline graphics placements visible in this viewport (Kitty / iTerm2 / Sixel).
     pub images: Vec<GraphicsImageSnapshot>,
+    /// Pinned numbering origin behind every row's `display_line_number`.
+    pub line_number_base: Option<i64>,
 }
 
 impl TerminalSnapshot {
@@ -372,6 +378,7 @@ impl TerminalSnapshot {
             display_offset: meta.display_offset,
             shell_input_anchor: meta.shell_input_anchor,
             images: meta.images,
+            line_number_base: meta.line_number_base,
         }
     }
 
@@ -607,6 +614,10 @@ struct ScreenLineState {
     clear_line_origin: Option<i64>,
     line_numbers: line_numbers::LineNumbers,
     last_cursor_line: Option<i64>,
+    /// Pinned hard-line number of this screen's cursor row, captured before a
+    /// width reflow that ran while the screen was inactive. Re-anchors the
+    /// numbering origin when the screen becomes active again.
+    reflow_number_anchor: Option<usize>,
     command_navigation: command_navigation::CommandNavigationState,
     pending_command_prompt: Option<i64>,
     epoch: u64,
@@ -682,6 +693,10 @@ impl ScreenLineState {
 
 pub struct TerminalCore {
     parser: ansi::Processor,
+    /// Mirrors the parser escape state so one slice can be proven to contain
+    /// only plain text: no sequence may start in a later slice, and a
+    /// sequence straddling the boundary keeps this out of `Ground`.
+    escape_state: escape_state::EscapeState,
     scroll_region_tracker: scroll_region::ScrollRegionTracker,
     term: Term<NyaTermEventProxy>,
     term_config: Config,
@@ -868,6 +883,7 @@ impl TerminalCore {
         let consumed_reset_generation = term.reset_generation();
         Self {
             parser: ansi::Processor::new(),
+            escape_state: escape_state::EscapeState::default(),
             scroll_region_tracker: scroll_region::ScrollRegionTracker::new(rows),
             term,
             term_config: config,
@@ -970,30 +986,92 @@ impl TerminalCore {
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let old_cols = self.cols;
         let old_rows = self.rows;
-        let timestamps = (old_cols != usize::from(cols).max(1) && !self.alternate_screen())
+        let next_cols = usize::from(cols).max(1);
+        let next_rows = usize::from(rows).max(1);
+        if next_cols == old_cols && next_rows == old_rows {
+            return;
+        }
+        let cols_changed = old_cols != next_cols;
+        // Growing the viewport moves retained rows *down* in Alacritty grid
+        // coordinates (`grow_lines` pulls history rows into the taller view)
+        // without advancing the scroll epoch, so logical identities must be
+        // corrected below. Shrinking is already compensated by the epoch.
+        let rows_added = next_rows.saturating_sub(old_rows);
+        let timestamps = (cols_changed && !self.alternate_screen())
             .then(|| reflow_timestamps::capture(&self.term, self.active_line_state()));
-        if self.cols != usize::from(cols).max(1) || self.rows != usize::from(rows).max(1) {
+        // A width reflow rewrites grid coordinates arbitrarily and rebuilds the
+        // numbering indices, so remember the cursor's pinned number to re-anchor
+        // it afterwards. Row-only growth keeps logical identities instead (see
+        // `rows_added` below) and needs no number anchor.
+        let active_anchor = cols_changed
+            .then(|| {
+                self.active_line_state().line_numbers.pinned_number(
+                    self.active_line_state()
+                        .logical_line(self.term.grid().cursor.point.line),
+                )
+            })
+            .flatten();
+        if let Some(anchor) = active_anchor {
+            self.active_line_state_mut().reflow_number_anchor = Some(anchor);
+        }
+        if self.cols != next_cols || self.rows != next_rows {
             self.primary_lines.input_anchor = None;
             self.alternate_lines.input_anchor = None;
         }
-        self.cols = usize::from(cols).max(1);
-        self.rows = usize::from(rows).max(1);
+        self.cols = next_cols;
+        self.rows = next_rows;
         let size = TermSize {
             cols: self.cols,
             rows: self.rows,
         };
+        if cols_changed {
+            // Both grids reflow, so the inactive screen's rows move too.
+            // Remember its cursor's pinned number so its origin can be
+            // re-anchored when that screen becomes active again. Keep an
+            // existing anchor when the cursor is unknown or unnumbered.
+            let inactive = if self.alternate_screen() {
+                &mut self.primary_lines
+            } else {
+                &mut self.alternate_lines
+            };
+            if let Some(cursor) = inactive.last_cursor_line
+                && let Some(anchor) = inactive.line_numbers.pinned_number(cursor)
+            {
+                inactive.reflow_number_anchor = Some(anchor);
+            }
+        }
         self.term.resize(size);
         if old_cols != self.cols || old_rows != self.rows {
             self.scroll_region_tracker.resize(self.rows);
         }
         self.sync_presentation_state();
+        if rows_added > 0 {
+            // Row-count growth shifts every retained row by `rows_added` grid
+            // lines (and advances the scroll epoch by the rows that were not
+            // pulled from history), while the scroll epoch stays put when
+            // history covers the growth. Absorb that displacement into
+            // `logical_origin` so logical identities (and therefore the wrap
+            // index, metadata keys, and absolute gutter numbers) stay fixed.
+            //
+            // This must also run when the columns changed: the initial
+            // viewport resize happens before any output exists, so there is
+            // no pinned cursor anchor to re-anchor numbering. Without this
+            // compensation the empty rows Alacritty creates and immediately
+            // discards during `grow_lines` advanced the scroll epoch and made
+            // a brand-new session start at `rows_added + 1` instead of 1.
+            let shift = rows_added as i64;
+            self.primary_lines.logical_origin -= shift;
+            self.alternate_lines.logical_origin -= shift;
+        }
         if self.cols != old_cols {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
             // Width reflow rewrites grid coordinates (reflow scrolling does
             // not advance the scroll epoch), so the wrap index and numbering
             // origin must be rebuilt from scratch. Numbering continuity is
-            // restored from the captured `logical_line_number` metadata below.
+            // restored from the pinned cursor anchor in
+            // `initialize_line_numbers`; per-row captured display numbers only
+            // rebuild `clear_line_origin` below.
             self.primary_lines.line_numbers = Default::default();
             self.alternate_lines.line_numbers = Default::default();
             self.primary_lines.clear_line_origin = None;
@@ -1015,6 +1093,12 @@ impl TerminalCore {
             self.graphics.clear_screen(GraphicsScreenKind::Primary);
             self.graphics.clear_screen(GraphicsScreenKind::Alternate);
             self.clear_snapshot_row_cache();
+            // The width reflow above rebuilt both numbering indices. Re-arm
+            // the active screen's anchor for `initialize_line_numbers`, which
+            // runs below or when this screen becomes active again.
+            if let Some(anchor) = active_anchor {
+                self.active_line_state_mut().reflow_number_anchor = Some(anchor);
+            }
         }
         if let Some(timestamps) = timestamps {
             // Width reflow changes wrap positions throughout retained history.
@@ -1042,14 +1126,9 @@ impl TerminalCore {
                             .map_or(origin, |old| old.min(origin)),
                     );
                 }
-                if let Some(number) = metadata.logical_line_number {
-                    self.active_line_state_mut()
-                        .line_numbers
-                        .restore_number(logical_line, number);
-                }
             }
         }
-        self.stamp_changed_lines();
+        self.stamp_changed_lines(false);
     }
 
     pub fn set_scrollback_limit(&mut self, limit: usize) {
@@ -1240,6 +1319,7 @@ impl TerminalCore {
     /// a skipped UTF-8/charset, ANSI, OSC, or graphics payload.
     pub fn reset_stream_state(&mut self) {
         self.parser = ansi::Processor::new();
+        self.escape_state.reset();
         self.scroll_region_tracker.reset_stream();
         self.graphics_ingress = GraphicsIngress::new();
         self.session_encoding.reset_decoder();
@@ -1353,7 +1433,7 @@ impl TerminalCore {
         let origin = self.active_line_state().logical_origin;
         self.graphics.clear_screen(self.active_graphics_screen());
         self.clear_snapshot_row_cache();
-        self.stamp_changed_lines();
+        self.stamp_changed_lines(false);
         // Retain the cleared signatures so subsequent damage scans do not turn
         // erased rows into fresh output. A host rewrite restores normal metadata.
         for row in 0..self.rows {
@@ -1416,6 +1496,7 @@ impl TerminalCore {
 
     pub fn advance(&mut self, bytes: &[u8]) {
         let mut graphics_ingress = std::mem::take(&mut self.graphics_ingress);
+        let mut placed_image_moved_cursor = false;
         graphics_ingress.advance_segments(bytes, |segment| {
             match segment {
                 GraphicsSegmentRef::Terminal(data) => {
@@ -1454,9 +1535,11 @@ impl TerminalCore {
                         // Kitty C=1: move past image via relative CSI (CUD + CHA).
                         let ansi = motion.to_ansi();
                         self.sidecar.advance(&ansi);
+                        self.escape_state.advance_classified(&ansi);
                         self.parser.advance(&mut self.term, &ansi);
                         self.drain_alacritty_events();
                         self.sync_presentation_state();
+                        placed_image_moved_cursor = true;
                     }
                     for reply in result.pty_writes {
                         self.pending_effects.pty_write.push(reply);
@@ -1465,7 +1548,12 @@ impl TerminalCore {
             }
         });
         self.graphics_ingress = graphics_ingress;
-        self.stamp_changed_lines();
+        // Terminal slices stamp the rows they produced themselves. The kitty
+        // placement path is the only grid write outside a slice, so only it
+        // still needs a trailing stamp.
+        if placed_image_moved_cursor {
+            self.stamp_changed_lines(false);
+        }
     }
 
     /// Advance already-decoded UTF-8 terminal text.
@@ -1479,8 +1567,8 @@ impl TerminalCore {
         }
         let data = text.as_bytes();
         let boundaries = self.sidecar.advance(data);
+        // Slices stamp their own rows inside `advance_terminal_data_with_boundaries`.
         self.advance_terminal_data_with_boundaries(data, &boundaries);
-        self.stamp_changed_lines();
     }
 
     fn advance_terminal_data_with_boundaries(&mut self, data: &[u8], boundaries: &[ShellBoundary]) {
@@ -1489,20 +1577,56 @@ impl TerminalCore {
         for boundary in boundaries {
             let end = boundary.offset.min(data.len());
             if end > start {
-                self.parser.advance(&mut self.term, &data[start..end]);
-                self.drain_alacritty_events();
-                self.sync_presentation_state();
-                self.update_active_input_end();
+                self.advance_parser_chunks(&data[start..end]);
             }
             self.apply_shell_boundary(boundary.kind);
             start = end;
         }
         if start < data.len() {
-            self.parser.advance(&mut self.term, &data[start..]);
+            self.advance_parser_chunks(&data[start..]);
+        }
+    }
+
+    /// Feed the parser in slices that cannot overfill the scrollback buffer,
+    /// stamping after each slice.
+    ///
+    /// The grid drops a row as soon as it falls past `scrollback_limit + rows`,
+    /// and one parse step only exposes the surviving grid. A burst that
+    /// overflows the buffer between two stamps would therefore lose the
+    /// WRAPLINE flag of every dropped row; [`LineNumbers`] could no longer
+    /// count those wraps and later line numbers would drift above the real
+    /// line. One byte advances at most one row, so capping a slice to the
+    /// buffer capacity keeps every produced row visible to the next stamp.
+    /// Slices that can only append at the bottom row narrow the stamp to the
+    /// rows they touch, so repeated slices do not rescan the whole screen.
+    fn advance_parser_chunks(&mut self, data: &[u8]) {
+        let chunk = self.scrollback_limit.saturating_add(self.rows).max(1);
+        for part in data.chunks(chunk) {
+            let append_only = self.slice_is_append_only(part);
+            self.parser.advance(&mut self.term, part);
             self.drain_alacritty_events();
             self.sync_presentation_state();
             self.update_active_input_end();
+            self.stamp_changed_lines(append_only);
         }
+    }
+
+    /// Whether this slice can only append at the bottom row, advancing the
+    /// mirror of the parser's escape phase as a side effect.
+    ///
+    /// With the cursor on the last row, the scroll region covering the whole
+    /// screen and the parser in ground state, every byte either writes to the
+    /// last row, moves the cursor within it, or feeds a newline-style scroll.
+    /// No row above can be rewritten, so a scroll leaves their signatures
+    /// untouched. Text, SGR and OSC qualify; any other sequence marks the
+    /// slice risky and keeps the full-screen stamp.
+    fn slice_is_append_only(&mut self, part: &[u8]) -> bool {
+        let geometry = self.escape_state.is_ground()
+            && self.term.grid().cursor.point.line == self.term.bottommost_line()
+            && self.scroll_region_tracker.bounds()
+                == (0, self.term.screen_lines().saturating_sub(1));
+        let layout_safe = self.escape_state.advance_classified(part);
+        geometry && layout_safe
     }
 
     fn update_active_input_end(&mut self) {
@@ -1953,7 +2077,7 @@ impl TerminalCore {
         }
     }
 
-    fn stamp_changed_lines(&mut self) {
+    fn stamp_changed_lines(&mut self, append_only: bool) {
         self.sync_presentation_state();
         self.initialize_line_numbers();
         let cursor = self.term.grid().cursor.point.line;
@@ -1986,15 +2110,23 @@ impl TerminalCore {
             }
         };
         self.term.reset_damage();
-        let scan_start = if history_changed {
-            let scrolled = i32::try_from(scrolled_rows).unwrap_or(i32::MAX);
-            topmost.0.max(scrolled.saturating_neg())
-        } else {
-            0
-        };
         let scan_end = i32::try_from(self.term.screen_lines())
             .unwrap_or(i32::MAX)
             .saturating_sub(1);
+        let scan_start = if history_changed {
+            let scrolled = i32::try_from(scrolled_rows).unwrap_or(i32::MAX);
+            if append_only {
+                // The slice appended at the bottom row: that row plus the
+                // rows the scroll exposed are the only ones whose cells
+                // changed. Everything above merely shifted and its stored
+                // signature already matches the content.
+                topmost.0.max(scan_end.saturating_sub(scrolled))
+            } else {
+                topmost.0.max(scrolled.saturating_neg())
+            }
+        } else {
+            0
+        };
         let full_scan = history_changed || full_damage;
         #[cfg(test)]
         let scanned = if full_scan {
@@ -2139,17 +2271,37 @@ impl TerminalCore {
             return;
         }
         // An inactive primary grid can reflow while the alternate screen is
-        // visible. Rebuild its index once when it becomes active again.
-        for index in self.term.topmost_line().0..=self.term.bottommost_line().0 {
-            self.index_line_wrap(Line(index));
+        // visible. Rebuild its index once when it becomes active again by
+        // scanning the retained grid a single time; rows arrive in ascending
+        // logical order, so the wrap index can be appended directly instead
+        // of binary-searched per row.
+        let topmost = self.term.topmost_line();
+        let bottommost = self.term.bottommost_line();
+        let last_col = Column(self.term.columns() - 1);
+        let origin = self.active_line_state().logical_origin;
+        let mut wraps = Vec::new();
+        for index in topmost.0..=bottommost.0 {
+            if self.term.grid()[Line(index)][last_col]
+                .flags
+                .contains(Flags::WRAPLINE)
+            {
+                wraps.push(i64::from(index).saturating_add(origin));
+            }
         }
-        let topmost = self
+        let cursor = self
             .active_line_state()
-            .logical_line(self.term.topmost_line());
+            .logical_line(self.term.grid().cursor.point.line);
         let state = self.active_line_state_mut();
-        // Pin the numbering origin here so scrollback pruning does not rebase
-        // the gutter to the oldest retained row once history is full.
-        state.line_numbers.ensure_origin(topmost);
+        state.line_numbers.rebuild(wraps);
+        // A reflow or row-count resize that moved grid coordinates captured
+        // this screen's pinned cursor number beforehand. Re-anchor the origin
+        // onto the cursor row so the whole retained window keeps its absolute
+        // numbers. Only a screen that never had an anchor starts at the
+        // session's first hard line.
+        match state.reflow_number_anchor.take() {
+            Some(anchor) => state.line_numbers.restore_number(cursor, anchor),
+            None => state.line_numbers.ensure_origin(),
+        }
         state.line_numbers.initialized = true;
     }
 
@@ -2256,6 +2408,7 @@ impl TerminalCore {
         if generation != state.consumed_generation {
             state.clear_line_origin = None;
             state.last_cursor_line = None;
+            state.reflow_number_anchor = None;
             state.metadata.clear();
             state.line_numbers = Default::default();
             state.command_navigation = Default::default();
@@ -2508,11 +2661,8 @@ fn snapshot_window_from_term(
             epoch: line_state.epoch,
             logical_line: line_state.logical_line(line),
         });
-        let display_line_number = line_id.and_then(|id| {
-            line_state
-                .line_numbers
-                .number(id.logical_line, line_state.logical_line(topmost))
-        });
+        let display_line_number =
+            line_id.and_then(|id| line_state.line_numbers.number(id.logical_line));
         let shell_input = line_state.shell_input_kind(line_id.map(|id| id.logical_line));
         let shell_input_columns = shell_input.and_then(|kind| {
             if kind == ShellInputLineKind::Active
@@ -2652,6 +2802,7 @@ fn snapshot_window_from_term(
             display_offset,
             shell_input_anchor: line_state.input_anchor,
             images: Vec::new(),
+            line_number_base: line_state.line_numbers.base(),
         },
         row_data,
     );

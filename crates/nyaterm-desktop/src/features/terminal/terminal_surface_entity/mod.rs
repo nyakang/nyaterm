@@ -127,6 +127,25 @@ fn terminal_keyword_highlight_request_key(
     }
 }
 
+/// Distance from an absolute row to the retained snapshot's row window.
+///
+/// Eviction must drop the rows farthest from the text the surface is about to
+/// paint, not always the smallest absolute row. Scrolling upward inserts rows
+/// below the previous window; dropping the smallest key would evict exactly the
+/// rows being fetched and pin the cache to the bottom of the scrollback.
+fn terminal_retained_row_window_distance(
+    abs_row: usize,
+    window_start: usize,
+    window_end: usize,
+) -> usize {
+    let last_row = window_end.saturating_sub(1);
+    if abs_row < window_start {
+        window_start - abs_row
+    } else {
+        abs_row.saturating_sub(last_row)
+    }
+}
+
 fn terminal_snapshot_row_estimated_bytes(row: &nyaterm_terminal::TerminalSnapshotRow) -> usize {
     let mut bytes = std::mem::size_of_val(row)
         .saturating_add(std::mem::size_of_val(row.cells.as_ref()))
@@ -843,6 +862,9 @@ impl TerminalSurface {
             || self.viewport_rows != viewport_rows
             || scrollback_len < self.scrollback_len
             || snapshot.total_rows < previous.total_rows
+            // A rebased numbering origin makes cached `display_line_number`s
+            // incomparable with new rows; never stitch the two bases together.
+            || previous.line_number_base != snapshot.line_number_base
     }
 
     fn clear_retained_scroll_state(&mut self) {
@@ -1117,12 +1139,13 @@ impl TerminalSurface {
         max_rows: usize,
         max_bytes: usize,
     ) -> usize {
-        let Some((start, _)) = terminal_snapshot_absolute_window(snapshot) else {
+        let Some((window_start, _)) = terminal_snapshot_absolute_window(snapshot) else {
             return 0;
         };
+        let window_end = window_start.saturating_add(snapshot.row_count());
         let mut refreshed_rows = 0usize;
         for row in 0..snapshot.row_count() {
-            let Some(abs_row) = start.checked_add(row) else {
+            let Some(abs_row) = window_start.checked_add(row) else {
                 continue;
             };
             let Some(snapshot_row) = snapshot.rows().get(row) else {
@@ -1144,9 +1167,22 @@ impl TerminalSurface {
             refreshed_rows = refreshed_rows.saturating_add(1);
         }
         while self.retained_rows.len() > max_rows || self.retained_row_estimated_bytes > max_bytes {
-            let Some(drop_key) = self.retained_rows.keys().next().copied() else {
+            let Some(first_key) = self.retained_rows.keys().next().copied() else {
                 break;
             };
+            let Some(last_key) = self.retained_rows.keys().next_back().copied() else {
+                break;
+            };
+            // Equal keys and equal distances both keep the oldest key, so a
+            // single-entry cache still makes progress.
+            let drop_key =
+                if terminal_retained_row_window_distance(first_key, window_start, window_end)
+                    >= terminal_retained_row_window_distance(last_key, window_start, window_end)
+                {
+                    first_key
+                } else {
+                    last_key
+                };
             if let Some(removed) = self.retained_rows.remove(&drop_key) {
                 self.retained_row_estimated_bytes = self
                     .retained_row_estimated_bytes
@@ -1301,6 +1337,13 @@ impl TerminalSurface {
             sources.push(snapshot);
         }
         sources.extend(self.retained_snapshots.iter());
+        // Only rows numbered against the live origin may be stitched; a stale
+        // snapshot from before a rebase would restart the gutter mid-window.
+        let line_number_base = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.line_number_base);
+        sources.retain(|snapshot| snapshot.line_number_base == line_number_base);
 
         let cols = sources
             .iter()
@@ -1342,6 +1385,7 @@ impl TerminalSurface {
                 total_rows: real_total_rows,
                 display_offset,
                 images: Vec::new(),
+                line_number_base,
             },
             rows,
         )))
@@ -1383,6 +1427,10 @@ impl TerminalSurface {
                 total_rows: real_total_rows,
                 display_offset,
                 images: Vec::new(),
+                line_number_base: self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.line_number_base),
             },
             row_data,
         )))
