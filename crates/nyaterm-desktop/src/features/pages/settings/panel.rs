@@ -2384,7 +2384,10 @@ mod tests {
                 let chrome = app.settings_panel.read(cx).snapshot().unwrap().chrome;
                 assert_eq!(chrome.surface, app.shell_surface_color(chrome.palette.bg));
                 assert_eq!(chrome.transparent_bg.a, if native { 0. } else { 1. });
-                assert_eq!(chrome.transparent_section_header.a, if native { 0. } else { 1. });
+                assert_eq!(
+                    chrome.transparent_section_header.a,
+                    if native { 0. } else { 1. }
+                );
                 if native {
                     assert!((chrome.surface.a - 0.45).abs() < 0.002);
                 } else {
