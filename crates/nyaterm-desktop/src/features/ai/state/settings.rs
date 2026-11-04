@@ -402,6 +402,7 @@ impl AiFeatureState {
     ) {
         self.invalidate_provider_jobs();
         self.agent_management.invalidate();
+        self.cancel_removed_provider_runs(&config);
         self.settings.config = config;
         if clear_secret_draft {
             self.settings.credential_secret_drafts.clear();
@@ -421,6 +422,7 @@ impl AiFeatureState {
         self.agent_management.invalidate();
         self.settings.credential_secret_drafts.clear();
         self.settings.credential_header_secret_drafts.clear();
+        self.cancel_removed_provider_runs(&config);
         self.settings.config = config;
         self.settings.model_draft = model;
         self.settings.base_url_draft = base_url;
@@ -512,6 +514,7 @@ impl AiFeatureState {
         if self.pending_settings() != *submitted {
             return;
         }
+        self.cancel_removed_provider_runs(&saved);
         self.settings.config = saved;
         self.settings.credential_header_secret_drafts.clear();
     }

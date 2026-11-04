@@ -22,6 +22,7 @@ pub(in crate::features) enum ConnectionStatus {
 
 #[derive(Clone, Default)]
 pub(in crate::features) struct ProviderSettingsView {
+    pub tasks: Vec<std::sync::Arc<crate::ai_runtime::AiTask>>,
     pub selected_id: Option<String>,
     pub choices_open: bool,
     pub advanced_open: bool,
@@ -54,6 +55,10 @@ impl AiFeatureState {
     }
     pub(in crate::features) fn invalidate_provider_jobs(&mut self) {
         let view = self.provider_view_mut();
+        for task in &view.tasks {
+            task.cancel();
+        }
+        view.tasks.clear();
         view.generation = view.generation.wrapping_add(1);
         view.statuses.values_mut().for_each(|status| {
             if *status == ConnectionStatus::Testing {
