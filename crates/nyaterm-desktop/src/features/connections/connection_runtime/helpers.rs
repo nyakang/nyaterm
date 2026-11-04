@@ -30,6 +30,8 @@ pub(super) enum ConnectionEditorValidationError {
     RdpReconnectAttemptsInvalid,
     RdpWindowsAuthenticationRequired,
     RdpRelayUnsupported,
+    RdpMstscRelayUnsupported,
+    RdpMstscHostInvalid,
     VncReconnectAttemptsInvalid,
     VncPasswordTooLong,
     VncUsernameTooLong,
@@ -48,6 +50,9 @@ pub(super) fn validate_editor_account(
     editor: &ConnectionEditorState,
     accounts: &[nyaterm_core::SavedPassword],
 ) -> Result<(), ConnectionEditorValidationError> {
+    if editor.uses_mstsc_rdp() {
+        return Ok(());
+    }
     let identity = matches!(
         editor.kind,
         ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
@@ -606,17 +611,24 @@ pub(super) fn build_saved_connection_from_editor(
                 return Err(ConnectionEditorValidationError::HostRequired);
             }
             let port = parse_port(&editor.port)?;
-            if editor.username.trim().is_empty() {
+            if !editor.uses_mstsc_rdp() && editor.username.trim().is_empty() {
                 return Err(ConnectionEditorValidationError::UsernameRequired);
             }
-            if !(640..=7680).contains(&editor.rdp_display.width) {
+            if !editor.uses_mstsc_rdp() && !(640..=7680).contains(&editor.rdp_display.width) {
                 return Err(ConnectionEditorValidationError::RdpDisplayWidthInvalid);
             }
-            if !(480..=4320).contains(&editor.rdp_display.height) {
+            if !editor.uses_mstsc_rdp() && !(480..=4320).contains(&editor.rdp_display.height) {
                 return Err(ConnectionEditorValidationError::RdpDisplayHeightInvalid);
             }
-            if editor.rdp_reconnect.max_attempts > 20 {
+            if !editor.uses_mstsc_rdp() && editor.rdp_reconnect.max_attempts > 20 {
                 return Err(ConnectionEditorValidationError::RdpReconnectAttemptsInvalid);
+            }
+            if editor.uses_mstsc_rdp() {
+                if editor.proxy_id.is_some() || editor.proxy_jump_id.is_some() {
+                    return Err(ConnectionEditorValidationError::RdpMstscRelayUnsupported);
+                }
+                crate::platform::mstsc::MstscTarget::new(&host, port)
+                    .map_err(|_| ConnectionEditorValidationError::RdpMstscHostInvalid)?;
             }
             if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
                 if editor.proxy_id.is_some() || editor.proxy_jump_id.is_some() {
@@ -2179,6 +2191,60 @@ mod account_edit_tests {
             Some("existing")
         );
     }
+    #[test]
+    fn mstsc_saves_without_unused_credentials_display_or_reconnect_validation() {
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"mstsc", "name":"System RDP", "type":"rdp", "backend":"mstsc",
+            "host":"example.test", "username":"", "domain":"EXAMPLE",
+            "auth":{"mode":"password", "password_id":"missing-account"},
+            "security":{"use_nla":false, "certificate_policy":"future-policy", "windows_authentication":"future-auth"},
+            "display":{"width":1, "height":1}, "reconnect":{"enabled":true, "max_attempts":21}
+        })).unwrap();
+        let editor = connection_editor_from_saved(original.clone(), false);
+        assert!(super::validate_editor_account(&editor, &[]).is_ok());
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        assert_eq!(saved.config, original.config);
+        assert_eq!(saved.auth, original.auth);
+        let mut embedded = editor;
+        embedded.rdp_backend = "builtin".into();
+        assert_eq!(
+            build_saved_connection_from_editor(&embedded).unwrap_err(),
+            ConnectionEditorValidationError::UsernameRequired
+        );
+    }
+
+    #[test]
+    fn mstsc_requires_a_valid_direct_target_without_discarding_network_settings() {
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"mstsc", "name":"System RDP", "type":"rdp", "backend":"mstsc", "host":"example.test"
+        })).unwrap();
+        let mut editor = connection_editor_from_saved(original, false);
+        for (proxy, jump) in [(Some("proxy"), None), (None, Some("jump"))] {
+            editor.proxy_id = proxy.map(str::to_owned);
+            editor.proxy_jump_id = jump.map(str::to_owned);
+            assert_eq!(
+                build_saved_connection_from_editor(&editor).unwrap_err(),
+                ConnectionEditorValidationError::RdpMstscRelayUnsupported
+            );
+            assert_eq!(editor.proxy_id.as_deref(), proxy);
+            assert_eq!(editor.proxy_jump_id.as_deref(), jump);
+        }
+        editor.proxy_jump_id = None;
+        editor.host = "example.test:3390".into();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::RdpMstscHostInvalid
+        );
+        editor.host = "example.test".into();
+        for port in ["0", "65536", "invalid"] {
+            editor.port = port.into();
+            assert_eq!(
+                build_saved_connection_from_editor(&editor).unwrap_err(),
+                ConnectionEditorValidationError::PortInvalid
+            );
+        }
+    }
+
     #[test]
     fn editing_an_unrelated_field_preserves_an_unknown_rdp_backend() {
         let connection: SavedConnection = serde_json::from_value(serde_json::json!({

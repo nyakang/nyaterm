@@ -601,7 +601,7 @@ pub enum ConnectionType {
         username: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         domain: String,
-        /// Explicit implementation: `builtin` or `windows`; unknown names are retained.
+        /// Explicit client: `builtin`, `windows`, or external `mstsc`; unknown names are retained.
         #[serde(
             default = "default_rdp_backend",
             deserialize_with = "deserialize_rdp_backend",

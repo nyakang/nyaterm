@@ -24,7 +24,7 @@ impl ConnectionEditorValidationError {
             algorithm_tab: None,
         };
         match self {
-            Self::RdpRelayUnsupported => {
+            Self::RdpRelayUnsupported | Self::RdpMstscRelayUnsupported => {
                 return location(
                     ConnectionEditorSection::Network,
                     ConnectionEditorFocusTarget::Heading,
@@ -104,7 +104,8 @@ impl ConnectionEditorValidationError {
             _ => {}
         }
         let field = match self {
-            ConnectionEditorValidationError::HostRequired => ConnectionEditorField::Host,
+            ConnectionEditorValidationError::HostRequired
+            | ConnectionEditorValidationError::RdpMstscHostInvalid => ConnectionEditorField::Host,
             ConnectionEditorValidationError::PortInvalid => ConnectionEditorField::Port,
             ConnectionEditorValidationError::UsernameRequired
             | ConnectionEditorValidationError::MissingAccount => ConnectionEditorField::Username,
@@ -141,6 +142,7 @@ impl ConnectionEditorValidationError {
             }
             ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
             | ConnectionEditorValidationError::RdpRelayUnsupported
+            | ConnectionEditorValidationError::RdpMstscRelayUnsupported
             | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }
             | ConnectionEditorValidationError::SshAlgorithms(_) => {
