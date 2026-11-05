@@ -1,3 +1,6 @@
+#[cfg(feature = "benchmark")]
+mod throughput_matrix;
+
 use nyaterm_terminal::TerminalScreen;
 use std::time::{Duration, Instant};
 
@@ -289,6 +292,11 @@ fn run_scroll_burst_cost(name: &str, cols: u16, rows: u16, newlines: usize, iter
 }
 
 fn main() {
+    #[cfg(feature = "benchmark")]
+    if std::env::args().any(|arg| arg == "--matrix") {
+        throughput_matrix::run();
+        return;
+    }
     let p = plain(300_000);
     let c = colored(300_000);
     println!(
