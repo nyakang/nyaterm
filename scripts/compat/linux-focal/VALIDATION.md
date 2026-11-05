@@ -5,7 +5,8 @@ renderer by default; select the bundled CPU path with `--software` or
 `NYATERM_RENDERER=software`. The dated sections below retain the original CPU
 default's historical results. See the final GPU-default section for the new
 launcher's tests and hardware-validation boundary. The latest upstream sync and
-release validation is recorded in the 2026-11-04 section at the end.
+release validation is recorded in the 2026-11-04 section. The 2026-11-05 review
+follow-up below records lighter checks only, without a new release build.
 
 Target from the supplied environment guide: customized Ubuntu 20.04, x86-64,
 glibc 2.31, GTK 3.24.23, GLib 2.64.6, Linux 5.4, isolated network; GT 1010
@@ -356,3 +357,41 @@ Windows 诊断脚本的 `tomllib` 依赖使用外层 Python 3.12 验证，focal 
 驱动、中文输入、剪贴板、内部 SSH／SFTP／RDP／VNC 服务仍需真机验收。
 Windows／macOS 未在本轮 Linux 环境实测。上游 PR CI 若等待维护者批准，属于外部审批
 边界，本地验证不等于上游 CI 成功；不代审批、重跑或合并 PR。
+
+## Review follow-up (2026-11-05)
+
+PR #1106 was updated from `ff2ebcdf975e` and merged with upstream `main` at
+`2c8af4b41` (merge commit `1d5381a28`). The compatibility packaging now generates
+Debian dependencies from all four executables using `dpkg-shlibdeps`, isolates
+installed data by a compiled compatibility namespace, marks updates as externally
+managed, and keys Mesa/patchelf caches by their respective lock hashes.
+
+Checks after the upstream merge:
+
+| Check | Result / environment |
+| --- | --- |
+| Focal ABI, packaging, cache and launcher suites; native package and verifier suites | 73 tests run, 72 passed, 1 skipped (NSIS unavailable), WSL Linux / Python 3.12 |
+| Real dependency scanner regression | A compiled C++ helper contributes `libstdc++6` even when the application fixture does not need it |
+| Default installed/portable runtime paths | 5 passed, Windows / Rust 1.99.0, `cargo test -p nyaterm-core --lib runtime::tests --offline` |
+| Compatibility installed/portable paths | Same 5 passed with `NYATERM_LINUX_COMPAT=glibc231` and the compatibility `NYATERM_PACKAGE_MANAGER` value |
+| Packaging policy normalization; MCP discovery | 1 + 1 passed with the compatibility build variables, package-specific offline tests |
+| Formatting / architecture | `cargo fmt --all -- --check` and `python scripts/ci/check_architecture.py` passed; one upstream zmodem expression was reformatted |
+| Shell / Python baseline / whitespace | Focal shell scripts passed `bash -n`; `package.py` passed Python 3.8 syntax parsing; `git diff --check` passed |
+
+Permission-sensitive Python suites used a Git archive extracted onto WSL's native
+filesystem, preserving tracked Unix modes. Windows/DrvFS mode reporting cannot
+validate Unix archive/icon permissions. The dependency regression used the WSL
+package database, not focal's; it proves scanner coverage rather than focal ABI
+compatibility of a newly built application.
+
+No new focal Release build, Mesa download/preparation, full-workspace Rust
+check/test/clippy, clean-focal dependency-only install, Xvfb smoke, or real desktop
+GPU/software/network acceptance was performed in this follow-up. Historical
+artifact hashes and graphics results above apply only to their recorded source.
+Software mode retains the full private `LD_LIBRARY_PATH` inherited by children;
+the pending SSH/SFTP, shell, clipboard/IME and RDP/VNC matrix is in `README.md`.
+
+The persisted data and encryption formats are unchanged. New compatibility debs
+start with their own empty configuration directory; old shared configuration is
+left in place. Migration uses supported backup/restore, as documented in both
+operator readmes. No release assets were replaced by this follow-up.
