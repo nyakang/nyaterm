@@ -18,7 +18,6 @@ mod cells;
 pub mod command_navigation;
 pub mod editing;
 mod encoding;
-mod escape_state;
 mod graphics;
 mod kitty_payload;
 mod line_numbers;
@@ -631,6 +630,7 @@ struct ScreenLineState {
     active_input_end: Option<i64>,
     consumed_scroll_epoch: u64,
     consumed_generation: u64,
+    consumed_discarded_wraps: u64,
     pending_scroll_rows: u64,
 }
 
@@ -695,11 +695,9 @@ impl ScreenLineState {
 }
 
 pub struct TerminalCore {
+    #[cfg(feature = "benchmark")]
+    benchmark_counts: (u64, u64),
     parser: ansi::Processor,
-    /// Mirrors the parser escape state so one slice can be proven to contain
-    /// only plain text: no sequence may start in a later slice, and a
-    /// sequence straddling the boundary keeps this out of `Ground`.
-    escape_state: escape_state::EscapeState,
     scroll_region_tracker: scroll_region::ScrollRegionTracker,
     term: Term<NyaTermEventProxy>,
     term_config: Config,
@@ -870,7 +868,8 @@ impl TerminalCore {
         let proxy = NyaTermEventProxy::default();
         let size = TermSize { cols, rows };
         let scrollback_limit = config.scrolling_history;
-        let term = Term::new(config.clone(), &size, proxy.clone());
+        let mut term = Term::new(config.clone(), &size, proxy.clone());
+        term.set_presentation_tracking(true);
         let primary_lines = ScreenLineState {
             epoch: term.primary_screen_generation(),
             consumed_scroll_epoch: term.primary_grid_scroll_epoch(),
@@ -886,7 +885,8 @@ impl TerminalCore {
         let consumed_reset_generation = term.reset_generation();
         Self {
             parser: ansi::Processor::new(),
-            escape_state: escape_state::EscapeState::default(),
+            #[cfg(feature = "benchmark")]
+            benchmark_counts: (0, 0),
             scroll_region_tracker: scroll_region::ScrollRegionTracker::new(rows),
             term,
             term_config: config,
@@ -1131,7 +1131,7 @@ impl TerminalCore {
                 }
             }
         }
-        self.stamp_changed_lines(false);
+        self.stamp_changed_lines();
     }
 
     pub fn set_scrollback_limit(&mut self, limit: usize) {
@@ -1322,7 +1322,6 @@ impl TerminalCore {
     /// a skipped UTF-8/charset, ANSI, OSC, or graphics payload.
     pub fn reset_stream_state(&mut self) {
         self.parser = ansi::Processor::new();
-        self.escape_state.reset();
         self.scroll_region_tracker.reset_stream();
         self.graphics_ingress = GraphicsIngress::new();
         self.session_encoding.reset_decoder();
@@ -1436,7 +1435,7 @@ impl TerminalCore {
         let origin = self.active_line_state().logical_origin;
         self.graphics.clear_screen(self.active_graphics_screen());
         self.clear_snapshot_row_cache();
-        self.stamp_changed_lines(false);
+        self.stamp_changed_lines();
         // Retain the cleared signatures so subsequent damage scans do not turn
         // erased rows into fresh output. A host rewrite restores normal metadata.
         for row in 0..self.rows {
@@ -1497,6 +1496,13 @@ impl TerminalCore {
         self.session_encoding.encode_str(text)
     }
 
+    /// Cumulative parser synchronization batches and signature rows visited.
+    /// Available only for the opt-in throughput harness; disabled in normal builds.
+    #[cfg(feature = "benchmark")]
+    pub fn benchmark_counts(&self) -> (u64, u64) {
+        self.benchmark_counts
+    }
+
     pub fn advance(&mut self, bytes: &[u8]) {
         let mut graphics_ingress = std::mem::take(&mut self.graphics_ingress);
         let mut placed_image_moved_cursor = false;
@@ -1538,7 +1544,6 @@ impl TerminalCore {
                         // Kitty C=1: move past image via relative CSI (CUD + CHA).
                         let ansi = motion.to_ansi();
                         self.sidecar.advance(&ansi);
-                        self.escape_state.advance_classified(&ansi);
                         self.parser.advance(&mut self.term, &ansi);
                         self.drain_alacritty_events();
                         self.sync_presentation_state();
@@ -1555,7 +1560,7 @@ impl TerminalCore {
         // placement path is the only grid write outside a slice, so only it
         // still needs a trailing stamp.
         if placed_image_moved_cursor {
-            self.stamp_changed_lines(false);
+            self.stamp_changed_lines();
         }
     }
 
@@ -1590,46 +1595,16 @@ impl TerminalCore {
         }
     }
 
-    /// Feed the parser in slices that cannot overfill the scrollback buffer,
-    /// stamping after each slice.
-    ///
-    /// The grid drops a row as soon as it falls past `scrollback_limit + rows`,
-    /// and one parse step only exposes the surviving grid. A burst that
-    /// overflows the buffer between two stamps would therefore lose the
-    /// WRAPLINE flag of every dropped row; [`LineNumbers`] could no longer
-    /// count those wraps and later line numbers would drift above the real
-    /// line. One byte advances at most one row, so capping a slice to the
-    /// buffer capacity keeps every produced row visible to the next stamp.
-    /// Slices that can only append at the bottom row narrow the stamp to the
-    /// rows they touch, so repeated slices do not rescan the whole screen.
+    /// Eviction counters retain wrap endings even when a batch exceeds history.
+    /// Bound parser latency independently of the configured scrollback capacity.
     fn advance_parser_chunks(&mut self, data: &[u8]) {
-        let chunk = self.scrollback_limit.saturating_add(self.rows).max(1);
-        for part in data.chunks(chunk) {
-            let append_only = self.slice_is_append_only(part);
+        for part in data.chunks(16 * 1024) {
             self.parser.advance(&mut self.term, part);
             self.drain_alacritty_events();
             self.sync_presentation_state();
             self.update_active_input_end();
-            self.stamp_changed_lines(append_only);
+            self.stamp_changed_lines();
         }
-    }
-
-    /// Whether this slice can only append at the bottom row, advancing the
-    /// mirror of the parser's escape phase as a side effect.
-    ///
-    /// With the cursor on the last row, the scroll region covering the whole
-    /// screen and the parser in ground state, every byte either writes to the
-    /// last row, moves the cursor within it, or feeds a newline-style scroll.
-    /// No row above can be rewritten, so a scroll leaves their signatures
-    /// untouched. Text, SGR and OSC qualify; any other sequence marks the
-    /// slice risky and keeps the full-screen stamp.
-    fn slice_is_append_only(&mut self, part: &[u8]) -> bool {
-        let geometry = self.escape_state.is_ground()
-            && self.term.grid().cursor.point.line == self.term.bottommost_line()
-            && self.scroll_region_tracker.bounds()
-                == (0, self.term.screen_lines().saturating_sub(1));
-        let layout_safe = self.escape_state.advance_classified(part);
-        geometry && layout_safe
     }
 
     fn update_active_input_end(&mut self) {
@@ -2080,8 +2055,11 @@ impl TerminalCore {
         }
     }
 
-    fn stamp_changed_lines(&mut self, append_only: bool) {
-        self.sync_presentation_state();
+    fn stamp_changed_lines(&mut self) {
+        #[cfg(feature = "benchmark")]
+        {
+            self.benchmark_counts.0 += 1;
+        }
         self.initialize_line_numbers();
         let cursor = self.term.grid().cursor.point.line;
         let state = self.active_line_state_mut();
@@ -2113,47 +2091,28 @@ impl TerminalCore {
             }
         };
         self.term.reset_damage();
-        let scan_end = i32::try_from(self.term.screen_lines())
-            .unwrap_or(i32::MAX)
-            .saturating_sub(1);
-        let scan_start = if history_changed {
-            let scrolled = i32::try_from(scrolled_rows).unwrap_or(i32::MAX);
-            if append_only {
-                // The slice appended at the bottom row: that row plus the
-                // rows the scroll exposed are the only ones whose cells
-                // changed. Everything above merely shifted and its stored
-                // signature already matches the content.
-                topmost.0.max(scan_end.saturating_sub(scrolled))
-            } else {
-                topmost.0.max(scrolled.saturating_neg())
-            }
+        let changes = if self.alternate_screen() {
+            self.term.take_alternate_grid_presentation_changes()
         } else {
-            0
-        };
-        let full_scan = history_changed || full_damage;
-        #[cfg(test)]
-        let scanned = if full_scan {
-            (scan_start..=scan_end)
-                .filter(|line| *line >= topmost.0 && *line <= bottommost.0)
-                .count()
-        } else {
-            damaged_lines
-                .iter()
-                .filter(|line| **line >= topmost.0 && **line <= bottommost.0)
-                .count()
-        };
-        if full_scan {
-            for line_index in scan_start..=scan_end {
-                self.stamp_line_signature(line_index, cols, now_ms, topmost, bottommost);
-            }
-        } else {
-            for &line_index in &damaged_lines {
-                self.stamp_line_signature(line_index, cols, now_ms, topmost, bottommost);
-            }
+            self.term.take_primary_grid_presentation_changes()
         }
+        .expect("presentation tracking enabled");
+        let range = if changes.full_scan {
+            topmost.0..bottommost.0.saturating_add(1)
+        } else {
+            changes.rows.map_or(0..0, |rows| rows.start.0..rows.end.0)
+        };
         #[cfg(test)]
         {
-            self.last_signature_scan_count = scanned;
+            self.last_signature_scan_count = range.len();
+        }
+        for line_index in range {
+            self.stamp_line_signature(line_index, cols, now_ms, topmost, bottommost);
+            // Logical-line indexing must observe rewrites even when terminal
+            // rendering damage omits rows moved into history by this batch.
+            if self.logical_line_snapshots {
+                damaged_lines.push(line_index);
+            }
         }
         damaged_lines.sort_unstable();
         damaged_lines.dedup();
@@ -2190,6 +2149,7 @@ impl TerminalCore {
             self.term.grid_mut().update_history(history - discarded);
             self.term.grid_mut().update_history(self.scrollback_limit);
             self.last_damage_summary.history_changed = true;
+            self.sync_presentation_state();
             self.retain_active_presentation_range();
         }
     }
@@ -2205,6 +2165,10 @@ impl TerminalCore {
         let line = Line(line_index);
         if line < topmost || line > bottommost {
             return;
+        }
+        #[cfg(feature = "benchmark")]
+        {
+            self.benchmark_counts.1 += 1;
         }
         self.index_line_wrap(line);
         let signature = line_signature(&self.term, line, cols);
@@ -2365,8 +2329,6 @@ impl TerminalCore {
             self.alternate_lines.active_input_start = None;
             self.alternate_lines.input_anchor = None;
             self.alternate_lines.active_input_end = None;
-            self.primary_lines.epoch = self.primary_lines.epoch.saturating_add(1);
-            self.alternate_lines.epoch = self.alternate_lines.epoch.saturating_add(1);
             self.primary_lines.logical_origin = 0;
             self.alternate_lines.logical_origin = 0;
             self.primary_lines.pending_scroll_rows = 0;
@@ -2376,8 +2338,8 @@ impl TerminalCore {
             self.consumed_reset_generation = reset_generation;
         }
 
-        let primary_epoch = self.term.primary_grid_scroll_epoch();
-        let alternate_epoch = self.term.alternate_grid_scroll_epoch();
+        let primary_stats = self.term.primary_grid_presentation_stats().unwrap();
+        let alternate_stats = self.term.alternate_grid_presentation_stats().unwrap();
         let primary_generation = self.term.primary_screen_generation();
         let alternate_generation = self.term.alternate_screen_generation();
         // Entering and leaving alternate screen can occur in one parser chunk.
@@ -2387,14 +2349,14 @@ impl TerminalCore {
         }
         Self::sync_screen_line_state(
             &mut self.primary_lines,
-            primary_epoch,
+            primary_stats,
             primary_generation,
             GraphicsScreenKind::Primary,
             &mut self.graphics,
         );
         Self::sync_screen_line_state(
             &mut self.alternate_lines,
-            alternate_epoch,
+            alternate_stats,
             alternate_generation,
             GraphicsScreenKind::Alternate,
             &mut self.graphics,
@@ -2403,7 +2365,7 @@ impl TerminalCore {
 
     fn sync_screen_line_state(
         state: &mut ScreenLineState,
-        scroll_epoch: u64,
+        stats: alacritty_terminal::grid::GridPresentationStats,
         generation: u64,
         screen: GraphicsScreenKind,
         graphics: &mut TerminalGraphicsState,
@@ -2420,19 +2382,29 @@ impl TerminalCore {
             state.active_input_start = None;
             state.input_anchor = None;
             state.active_input_end = None;
-            state.epoch = state.epoch.saturating_add(1);
+            // Identity changes follow actual resets, independent of how many
+            // generations were consumed in one parser batch.
+            state.epoch = state
+                .epoch
+                .saturating_add(generation.wrapping_sub(state.consumed_generation));
             state.pending_scroll_rows = 0;
             state.consumed_generation = generation;
-            state.consumed_scroll_epoch = scroll_epoch;
+            state.consumed_scroll_epoch = stats.generation_scroll_epoch;
+            state.consumed_discarded_wraps = 0;
             graphics.clear_screen(screen);
-            return;
         }
-        let delta = scroll_epoch.wrapping_sub(state.consumed_scroll_epoch);
+        let delta = stats.scroll_epoch.wrapping_sub(state.consumed_scroll_epoch);
+        state.line_numbers.add_discarded_wraps(
+            stats
+                .discarded_wraps
+                .wrapping_sub(state.consumed_discarded_wraps),
+        );
+        state.consumed_discarded_wraps = stats.discarded_wraps;
         state.logical_origin = state
             .logical_origin
             .saturating_add(i64::try_from(delta).unwrap_or(i64::MAX));
         state.pending_scroll_rows = state.pending_scroll_rows.wrapping_add(delta);
-        state.consumed_scroll_epoch = scroll_epoch;
+        state.consumed_scroll_epoch = stats.scroll_epoch;
     }
 
     fn retain_active_presentation_range(&mut self) {
@@ -2948,14 +2920,21 @@ fn line_signature(term: &Term<NyaTermEventProxy>, line: Line, cols: usize) -> u6
         significant -= 1;
     }
     let mut hasher = signature::RowHasher::new(significant);
+    let mut style_key = None;
+    let mut packed_style = signature::PackedCellStyle::new(&CellStyle::default());
     for col in 0..significant {
         let cell = &row[Column(col)];
+        let key = (cell.fg, cell.bg, cell.flags);
+        if style_key != Some(key) {
+            style_key = Some(key);
+            packed_style = signature::PackedCellStyle::new(&cell_style(cell));
+        }
         let blank = cell_text_is_blank(cell);
         let extra = cell.zerowidth().unwrap_or(&[]).iter().copied();
-        hasher.cell(
+        hasher.cell_with_style(
             (!blank).then_some(cell.c),
             extra,
-            &cell_style(cell),
+            &packed_style,
             render_cell_width(cell),
             cell.hyperlink().as_ref().map(|link| link.uri()),
         );

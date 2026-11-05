@@ -181,7 +181,7 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/nyakang/alacritty?rev=86ff089983b93700c065ae3ae57273addf561fe7#86ff089983b93700c065ae3ae57273addf561fe7"
+source = "git+https://github.com/nyakang/alacritty?rev=6056cb4d0dc49a43a6542f3eb8a951c6d9220368#6056cb4d0dc49a43a6542f3eb8a951c6d9220368"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",

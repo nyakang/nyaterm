@@ -66,20 +66,24 @@ impl LineNumbers {
     /// Replace the wrap index with an ascending scan of the retained grid.
     ///
     /// Initialization visits rows in ascending logical order, so appending
-    /// beats a binary search per row; the index always describes the current
-    /// window, which starts with no discarded wraps.
+    /// beats a binary search per row. Evicted-wrap counts are supplied by the
+    /// grid and remain independent of the retained index.
     pub(crate) fn rebuild(&mut self, wraps: Vec<i64>) {
         self.wraps = wraps.into();
-        self.discarded_wraps = 0;
     }
 
     pub(crate) fn restore_number(&mut self, line: i64, number: usize) {
         self.origin = Some(self.stable_coordinate(line) - number.saturating_sub(1) as i64);
     }
 
+    pub(crate) fn add_discarded_wraps(&mut self, count: u64) {
+        self.discarded_wraps = self
+            .discarded_wraps
+            .saturating_add(i64::try_from(count).unwrap_or(i64::MAX));
+    }
+
     pub(crate) fn retain_from(&mut self, first: i64) {
         let discarded = self.wraps.partition_point(|end| *end < first);
-        self.discarded_wraps += discarded as i64;
         self.wraps.drain(..discarded);
     }
 

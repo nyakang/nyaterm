@@ -3889,3 +3889,182 @@ fn row_signature_ignores_trailing_default_blanks_but_not_styled_ones() {
     let erased_and_rewritten = screen.snapshot().row(0).unwrap().signature;
     assert_eq!(erased_and_rewritten, plain);
 }
+
+#[test]
+fn osc_interruptions_invalidate_rewritten_rows_at_every_slice_boundary() {
+    for interrupt in [b"\x1b".as_slice(), b"\x18\x1b", b"\x1a\x1b", b"\x1b\x1b"] {
+        let mut data = b"\x1b]0;title".to_vec();
+        data.extend_from_slice(interrupt);
+        data.extend_from_slice(b"[HREPLACED!!\x1b[4;1H\r\n");
+        for split in 0..=data.len() {
+            let mut screen = TerminalScreen::new(8, 4);
+            screen.advance(b"old\r\nb\r\nc\r\n");
+            let before = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+            screen.advance(&data[..split]);
+            screen.advance(&data[split..]);
+            let after = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+            assert_eq!(after.row(0).unwrap().text, "REPLACED");
+            assert_eq!(after.row(1).unwrap().text, "!!");
+            assert_eq!(after.row(0).unwrap().display_line_number, Some(1));
+            assert_eq!(after.row(1).unwrap().display_line_number, Some(1));
+            for row in after.rows().iter().take(2) {
+                let old = before
+                    .rows()
+                    .iter()
+                    .find(|old| old.line_id == row.line_id)
+                    .unwrap();
+                assert_ne!(row.revision, old.revision, "split {split}");
+            }
+        }
+    }
+}
+
+fn assert_same_retained_rows(expected: &TerminalScreen, actual: &TerminalScreen) {
+    let expected = expected.viewport_snapshot_with_window(0, expected.scrollback_len(), 0);
+    let actual = actual.viewport_snapshot_with_window(0, actual.scrollback_len(), 0);
+    assert_eq!(expected.rows().len(), actual.rows().len());
+    for (expected, actual) in expected.rows().iter().zip(actual.rows()) {
+        assert_eq!(expected.text, actual.text);
+        assert_eq!(expected.wrapped, actual.wrapped);
+        assert_eq!(expected.wraps_to_next, actual.wraps_to_next);
+        assert_eq!(expected.display_line_number, actual.display_line_number);
+        assert_eq!(expected.line_id, actual.line_id);
+        assert_eq!(expected.unwrapped_line_index, actual.unwrapped_line_index);
+    }
+}
+
+#[test]
+fn retained_rows_are_independent_of_parser_batch_boundaries() {
+    for history in [0, 2, 24, 10_000] {
+        for rows in [1, 2, 24, 200] {
+            for cols in [3, 17] {
+                let mut data = Vec::new();
+                for index in 0..240 {
+                    data.extend_from_slice(
+                        format!("{index}:日本語-long-soft-wrap\r\n\r\n").as_bytes(),
+                    );
+                }
+                for control in [
+                    b"\x1b[3S\x1b[2T".as_slice(),
+                    b"\x1b[1;2r\x1b[Hpartial\r\nscroll\r\n\x1b[r",
+                    b"\x1b[2J\x1b[Hnew\r\n",
+                    b"\x1b[?1049hALT\r\nwrap-wrap-wrap\x1b[?1049l",
+                    b"\x1b[?2026hsynchronized\r\n\x1b[?2026l",
+                ] {
+                    data.extend_from_slice(control);
+                }
+                let make = || {
+                    let mut screen = TerminalScreen::new(cols, rows);
+                    screen.set_scrollback_limit(history);
+                    screen.set_logical_line_snapshots(true);
+                    screen
+                };
+                let mut whole = make();
+                whole.advance(&data);
+                let mut bytewise = make();
+                for byte in &data {
+                    bytewise.advance(std::slice::from_ref(byte));
+                }
+                assert_same_retained_rows(&whole, &bytewise);
+                let mut random = make();
+                let mut offset = 0;
+                let mut seed = 7u32;
+                while offset < data.len() {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let end = (offset + 1 + seed as usize % 257).min(data.len());
+                    random.advance(&data[offset..end]);
+                    offset = end;
+                }
+                assert_same_retained_rows(&whole, &random);
+                for screen in [&mut whole, &mut bytewise, &mut random] {
+                    screen.set_scrollback_limit(2);
+                    screen.resize(cols + 2, rows + 1);
+                    screen.advance(b"resize-wrap-wrap\r\n");
+                }
+                assert_same_retained_rows(&whole, &bytewise);
+                assert_same_retained_rows(&whole, &random);
+            }
+        }
+    }
+}
+
+#[test]
+fn reset_and_alternate_generations_keep_output_from_the_same_batch() {
+    for history in [0, 2, 24] {
+        for reset in [b"\x1bc".as_slice(), b"\x1b[?1049h"] {
+            let mut screen = TerminalScreen::new(3, 2);
+            screen.set_scrollback_limit(history);
+            screen.advance(b"old\r\nold\r\n");
+            let mut data = reset.to_vec();
+            data.extend_from_slice(b"\x1b[H");
+            for _ in 0..100 {
+                data.extend_from_slice(b"abcdef\r\n");
+            }
+            screen.advance(&data);
+            assert_eq!(
+                screen.snapshot().rows().last().unwrap().display_line_number,
+                Some(101)
+            );
+            if reset != b"\x1bc" {
+                screen.advance(b"\x1b[?1049l");
+                assert_eq!(
+                    screen.snapshot().rows().last().unwrap().display_line_number,
+                    Some(3)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn non_grid_sequences_do_not_scan_signatures() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.advance(b"text");
+    screen.advance(b"\x1b[31m\x1b]0;title\x07\x1b[0m");
+    assert_eq!(screen.last_signature_scan_count, 0);
+}
+
+#[test]
+fn signature_style_runs_match_rendered_cells_across_attribute_changes() {
+    let mut screen = TerminalScreen::new(17, 3);
+    screen.set_scrollback_limit(24);
+    for style in [
+        "0",
+        "1;3;4;7;9",
+        "8",
+        "31;44",
+        "38;5;123;48;5;232",
+        "38;2;1;2;3;48;2;4;5;6",
+        "21",
+        "0",
+    ] {
+        screen.advance(format!("a\x1b[{style}m日本語e\u{301}  \x1b[0mz\r\n").as_bytes());
+    }
+    screen.advance(b"\x1b]8;;https://example.test\x1b\\linked\x1b]8;;\x1b\\ plain");
+    let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    for row in snapshot.rows() {
+        assert_eq!(row.signature, render_row_signature(&row.cells));
+    }
+}
+
+#[test]
+fn multiple_resets_and_alternate_entries_have_slice_independent_identities() {
+    for prefix in [
+        b"\x1bcfirst\r\n\x1bc".as_slice(),
+        b"\x1b[?1049hfirst\r\n\x1b[?1049l\x1b[?1049h",
+        b"\x1bc\x1b[?1049hfirst\x1b[?1049l\x1bc",
+    ] {
+        let mut data = prefix.to_vec();
+        data.extend_from_slice(b"\x1b[H");
+        data.extend_from_slice(&b"abcdef\r\n".repeat(100));
+        let mut whole = TerminalScreen::new(3, 2);
+        let mut sliced = TerminalScreen::new(3, 2);
+        whole.set_scrollback_limit(2);
+        sliced.set_scrollback_limit(2);
+        whole.advance(&data);
+        for byte in &data {
+            sliced.advance(std::slice::from_ref(byte));
+        }
+        assert_same_retained_rows(&whole, &sliced);
+    }
+}
