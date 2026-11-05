@@ -24,7 +24,9 @@ use crate::features::terminal::{
 };
 use crate::features::{FontResolutionSource, FontResolutionStatus, normalize_font_family};
 
-fn terminal_font_with_features(
+/// Terminal font carrying the font features the grid disables, so text shaped
+/// against it advances on the grid's cells instead of using ligatures.
+pub(in crate::features) fn terminal_font_with_features(
     descriptor: &ResolvedAppearanceFont,
     weight: FontWeight,
 ) -> gpui::Font {

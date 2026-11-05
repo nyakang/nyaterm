@@ -2,22 +2,38 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ContentMask, FontWeight, Hsla, Pixels, Point, ShapedLine, TextAlign, TextRun,
-    Window, bounds, fill, point, px, rgb, rgba, size,
+    Window, bounds, fill, point, px, rgb, size,
 };
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::ime_state::utf16_byte_range;
+use crate::features::terminal::terminal_selection_runtime::terminal_font_with_features;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 
-const PADDING: f32 = 4.;
 const CARET_WIDTH: f32 = 2.;
+const CARET_OUTLINE_WIDTH: f32 = 1.;
+const PREEDIT_MAX_WIDTH: f32 = 360.;
+/// Share of the cursor color (out of 255) mixed into the composition backdrop.
+const PREEDIT_TINT_STRENGTH: u8 = 0x33;
+
+/// Composition caret. A plain insertion point is a thin beam; while the IME
+/// replaces a range the caret becomes a hollow block spanning that range, the
+/// same distinction Alacritty draws over its preedit cells. Deliberately
+/// independent of the configured `cursor_style`: a solid block here would hide
+/// the glyph it sits on, and the composition already reads as uncommitted from
+/// its underline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ImeCaret {
+    Beam(Bounds<Pixels>),
+    Outline(Bounds<Pixels>),
+}
 
 /// One shaped line supplies both native IME geometry and the painted insertion point.
 pub(in crate::features) struct TerminalImeLayout {
     bounds: Bounds<Pixels>,
     line: ShapedLine,
     text_origin: Point<Pixels>,
-    caret: Bounds<Pixels>,
+    caret: ImeCaret,
     background: Hsla,
     foreground: Hsla,
     underline: Hsla,
@@ -69,20 +85,63 @@ impl TerminalImeLayout {
                     ),
                     self.underline,
                 ));
-                window.paint_quad(fill(self.caret, self.foreground));
+                match self.caret {
+                    ImeCaret::Beam(caret) => window.paint_quad(fill(caret, self.foreground)),
+                    ImeCaret::Outline(caret) => {
+                        let edge = px(CARET_OUTLINE_WIDTH);
+                        for quad in [
+                            bounds(caret.origin, size(caret.size.width, edge)),
+                            bounds(
+                                point(caret.left(), caret.bottom() - edge),
+                                size(caret.size.width, edge),
+                            ),
+                            bounds(caret.origin, size(edge, caret.size.height)),
+                            bounds(
+                                point(caret.right() - edge, caret.top()),
+                                size(edge, caret.size.height),
+                            ),
+                        ] {
+                            window.paint_quad(fill(quad, self.foreground));
+                        }
+                    }
+                }
             },
         );
     }
 }
 
+/// Compose an opaque backdrop for the composition by mixing the cursor color
+/// into the terminal background. The backdrop has to replace the cells: TUI
+/// clients (pi, Claude Code, ...) hide the hardware cursor and paint their own
+/// block caret into the grid at the insertion point, which is exactly where the
+/// composition is anchored, so a translucent fill leaves that block showing
+/// through the first composed glyph. Opaque theme colors are composited here
+/// rather than relying on paint-time alpha, the same way the theme derives
+/// `terminal_find_bg` from a translucent search color.
+fn preedit_backdrop(terminal_bg: u32, terminal_cursor: u32) -> u32 {
+    let channel = |shift: u32| {
+        let base = ((terminal_bg >> shift) & 0xff) as f32;
+        let tint = ((terminal_cursor >> shift) & 0xff) as f32;
+        let amount = PREEDIT_TINT_STRENGTH as f32 / 255.;
+        (base + (tint - base) * amount).round() as u32
+    };
+    channel(16) << 16 | channel(8) << 8 | channel(0)
+}
+
+/// Lay the composition out on the anchor cell itself. The text starts on the
+/// cell boundary, without extra leading padding, so it lands on the same cells
+/// the application would draw committed text on and never straddles the
+/// application's own caret cell with a partially covered glyph.
 fn preedit_geometry(
     viewport: Bounds<Pixels>,
     anchor: Bounds<Pixels>,
     text_width: Pixels,
     caret_x: Pixels,
 ) -> (Bounds<Pixels>, Point<Pixels>) {
-    let width = (text_width + px(2. * PADDING + CARET_WIDTH))
-        .min(px(360.))
+    // The box covers the text plus the trailing caret, and never grows past the
+    // terminal width: one line, scroll inside the box, no wrapping.
+    let width = (text_width + px(CARET_WIDTH))
+        .min(px(PREEDIT_MAX_WIDTH))
         .min(viewport.size.width)
         .max(px(CARET_WIDTH));
     let left = anchor
@@ -94,13 +153,20 @@ fn preedit_geometry(
         .top()
         .min(viewport.bottom() - height)
         .max(viewport.top());
-    let padding = px(PADDING).min((width - px(CARET_WIDTH)) / 2.);
-    let available = (width - padding * 2. - px(CARET_WIDTH)).max(px(0.));
-    let scroll = (caret_x - available).max(px(0.));
+    let scroll = (caret_x + px(CARET_WIDTH) - width).max(px(0.));
     (
         bounds(point(left, top), size(width, height)),
-        point(left + padding - scroll, top),
+        point(left - scroll, top),
     )
+}
+
+/// Caret geometry for the current composition selection.
+fn preedit_caret(layout: &TerminalImeLayout, selection: Range<usize>) -> ImeCaret {
+    if selection.is_empty() {
+        ImeCaret::Beam(layout.range_bounds(selection.end..selection.end))
+    } else {
+        ImeCaret::Outline(layout.range_bounds(selection))
+    }
 }
 
 impl NyaTermApp {
@@ -211,8 +277,10 @@ impl NyaTermApp {
             return None;
         }
         let palette = self.terminal_theme_palette();
-        let mut font = self.gpui_terminal_font().font();
-        font.weight = FontWeight(self.settings.summary().terminal_font_weight as f32);
+        let font = terminal_font_with_features(
+            &self.gpui_terminal_font(),
+            FontWeight(self.settings.summary().terminal_font_weight as f32),
+        );
         let text = ime.text();
         let line = window.text_system().shape_line(
             text.to_owned().into(),
@@ -228,7 +296,8 @@ impl NyaTermApp {
             None,
         );
         let anchor = self.terminal_ime_anchor_bounds(element_bounds, cx);
-        let selected_bytes = utf16_byte_range(text, ime.selection());
+        let selection = ime.selection();
+        let selected_bytes = utf16_byte_range(text, selection.clone());
         let (bounds, text_origin) = preedit_geometry(
             viewport,
             anchor,
@@ -239,13 +308,21 @@ impl NyaTermApp {
             bounds,
             line,
             text_origin,
-            caret: anchor,
-            background: rgba((palette.terminal_cursor << 8) | 0x33).into(),
+            caret: ImeCaret::Beam(anchor),
+            // Follow the terminal surface's own alpha so a wallpaper or a
+            // translucent window does not leave a solid patch behind the
+            // composition; opaque surfaces keep the backdrop opaque, which is
+            // what hides an application-painted caret.
+            background: self
+                .shell_terminal_surface_color(preedit_backdrop(
+                    palette.terminal_bg,
+                    palette.terminal_cursor,
+                ))
+                .into(),
             foreground: rgb(palette.terminal_fg).into(),
             underline: rgb(palette.link).into(),
         };
-        let end = ime.selection().end;
-        layout.caret = layout.range_bounds(end..end);
+        layout.caret = preedit_caret(&layout, selection);
         Some(layout)
     }
 }
@@ -260,11 +337,20 @@ mod tests {
     };
 
     use crate::features::NyaTermApp;
+    use crate::features::shell::window_material::ShellBackground;
     use crate::features::terminal::terminal_selection_runtime::terminal_bounds_tracker;
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestConfigDir;
+    use nyaterm_core::models::window_material::WindowMaterial;
 
-    use super::preedit_geometry;
+    use super::{ImeCaret, TerminalImeLayout, preedit_backdrop, preedit_geometry};
+
+    /// The caret rectangle as painted, independent of its shape.
+    fn caret_bounds(layout: &TerminalImeLayout) -> gpui::Bounds<gpui::Pixels> {
+        match layout.caret {
+            ImeCaret::Beam(caret) | ImeCaret::Outline(caret) => caret,
+        }
+    }
 
     struct ImeHost(Entity<NyaTermApp>);
 
@@ -337,13 +423,29 @@ mod tests {
                 assert!(!app.terminal.view.surfaces["s1"].read(cx).cursor_is_shown());
                 let native = app.bounds_for_range(2..2, bounds, window, cx).unwrap();
                 let layout = app.terminal_ime_layout(bounds, window, cx).unwrap();
-                assert_eq!(native, layout.caret);
+                assert_eq!(native, caret_bounds(&layout));
+                assert_eq!(layout.caret, ImeCaret::Beam(native));
                 let start = layout.range_bounds(0..0);
                 assert!(native.left() > start.left());
                 let selected = app.selected_text_range(false, window, cx).unwrap();
                 assert_eq!(selected.range, 2..2);
+                // Default settings are an opaque surface, so the composition
+                // replaces the cell an application-painted caret sits on.
+                assert_eq!(layout.background.a, 1.);
+
+                // Replacing a range draws a hollow block over it instead of a beam.
+                app.set_selected_text_range(1..3, window, cx);
+                let replacing = app.terminal_ime_layout(bounds, window, cx).unwrap();
+                assert_eq!(
+                    replacing.caret,
+                    ImeCaret::Outline(replacing.range_bounds(1..3))
+                );
 
                 app.set_selected_text_range(5..5, window, cx);
+                assert!(matches!(
+                    app.terminal_ime_layout(bounds, window, cx).unwrap().caret,
+                    ImeCaret::Beam(_)
+                ));
                 let end = app.bounds_for_range(5..5, bounds, window, cx).unwrap();
                 assert!(end.left() > native.left());
                 assert_eq!(end.top(), native.top());
@@ -417,5 +519,81 @@ mod tests {
         assert_eq!(bounds, viewport);
         assert!(origin.x + px(180.) >= bounds.left());
         assert!(origin.x + px(182.) <= bounds.right());
+    }
+
+    #[test]
+    fn ime_preedit_starts_on_the_anchor_cell() {
+        let viewport = bounds(point(px(20.), px(40.)), size(px(600.), px(300.)));
+        let anchor = bounds(point(px(120.), px(60.)), size(px(10.), px(20.)));
+        let (bounds, origin) = preedit_geometry(viewport, anchor, px(80.), px(80.));
+        // No leading padding: the first composed glyph covers the cell the
+        // application put its own caret in instead of straddling it.
+        assert_eq!(origin.x, anchor.left());
+        assert_eq!(bounds.left(), anchor.left());
+        assert_eq!(bounds.size.width, px(82.));
+        assert_eq!(bounds.top(), anchor.top());
+        assert_eq!(bounds.size.height, anchor.size.height);
+    }
+
+    #[test]
+    fn ime_preedit_backdrop_tracks_the_terminal_surface_alpha() {
+        for (bg, cursor) in [(0x0d1117_u32, 0xc9d1d9_u32), (0xffffff, 0x004e89)] {
+            let backdrop = preedit_backdrop(bg, cursor);
+            assert_ne!(backdrop, bg, "backdrop keeps a cursor tint");
+            assert_ne!(backdrop, cursor, "backdrop stays readable");
+
+            // Opaque windows must fully replace the cell so an
+            // application-painted caret cannot show through.
+            let opaque = ShellBackground {
+                native_transparent: false,
+                wallpaper: false,
+                content_opacity: 0,
+                window_opacity: 0,
+            };
+            assert_eq!(opaque.terminal_color(backdrop).a, 1.);
+
+            // Wallpapers and translucent windows keep the composition at the
+            // surface's own alpha instead of leaving a solid patch behind it.
+            for wallpaper in [false, true] {
+                let translucent = ShellBackground {
+                    native_transparent: true,
+                    wallpaper,
+                    content_opacity: 82,
+                    window_opacity: 100,
+                };
+                assert_eq!(
+                    translucent.terminal_color(backdrop).a,
+                    translucent.terminal_color(bg).a
+                );
+                assert!(translucent.terminal_color(backdrop).a < 1.);
+            }
+        }
+    }
+
+    #[test]
+    fn ime_preedit_backdrop_follows_a_translucent_window_material() {
+        let dir = TestConfigDir::new("nyaterm-ime-translucent-preedit");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        let (_, vcx) = cx.add_window_view(|_, _| ImeHost(app.clone()));
+        let translucent = crate::platform::window_material_capabilities().transparent;
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut settings = app.settings.summary().clone();
+                settings.window_material = WindowMaterial::Transparent;
+                settings.background_content_opacity = 82;
+                app.settings.replace_summary(settings);
+                window.focus(&app.terminal.input.focus, cx);
+                app.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
+                let bounds = bounds(point(px(30.), px(50.)), size(px(600.), px(300.)));
+                let layout = app.terminal_ime_layout(bounds, window, cx).unwrap();
+                let surface_alpha = app
+                    .shell_terminal_surface_color(app.terminal_theme_palette().terminal_bg)
+                    .a;
+                assert!((layout.background.a - surface_alpha).abs() < 0.001);
+                assert_eq!(layout.background.a < 1., translucent);
+            });
+        });
     }
 }

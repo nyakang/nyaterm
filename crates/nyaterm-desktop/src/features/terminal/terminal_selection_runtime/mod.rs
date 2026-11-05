@@ -10,7 +10,8 @@ pub(in crate::features) use helpers::terminal_bounds_tracker;
 mod action_links;
 mod metrics;
 pub(in crate::features) use metrics::{
-    measure_terminal_font, terminal_gutter_metrics, terminal_line_number_digits,
+    measure_terminal_font, terminal_font_with_features, terminal_gutter_metrics,
+    terminal_line_number_digits,
 };
 mod selection;
 mod smart_input;
