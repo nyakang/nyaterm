@@ -206,12 +206,12 @@ impl SettingsPanel {
         let state = self.settings.theme_designer.clone();
         let chrome = self.settings_chrome();
         let palette = chrome.palette;
-        let list_width = if self.viewport_width < NARROW_WIDTH {
+        let list_width = if self.pane_width < NARROW_WIDTH {
             COMPACT_LIST_WIDTH
         } else {
             LIST_WIDTH
         };
-        let editor_width = (self.viewport_width - list_width - 32.).max(0.);
+        let editor_width = (self.pane_width - list_width - 32.).max(0.);
 
         let list = self.theme_list(&state, palette, cx);
         let editor = self.theme_editor(&state, palette, editor_width, cx);

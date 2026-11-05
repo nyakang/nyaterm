@@ -18,7 +18,7 @@ use crate::theme::ThemePalette;
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, div, prelude::*, px, rgb,
+    Window, canvas, div, prelude::*, px, rgb,
 };
 use nyaterm_core::{
     AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
@@ -463,7 +463,8 @@ impl FontSelectOptionCache {
 
 pub(in crate::features) struct SettingsPanel {
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
-    pub(in crate::features::pages::settings) viewport_width: f32,
+    pub(in crate::features::pages::settings) pane_width: f32,
+    pub(in crate::features::pages::settings) content_width: f32,
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<SettingsSnapshot>,
     pub(in crate::features) settings: SettingsPresentation,
@@ -532,7 +533,8 @@ impl SettingsPanel {
         });
         Self {
             content_scroll_handles: HashMap::new(),
-            viewport_width: 800.,
+            pane_width: 0.,
+            content_width: 0.,
             app,
             snapshot: None,
             settings: SettingsPresentation::empty(cx),
@@ -1055,8 +1057,7 @@ impl SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.viewport_width = f32::from(window.viewport_size().width);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.paint_count += 1;
@@ -1066,8 +1067,40 @@ impl Render for SettingsPanel {
             return div().size_full().into_any_element();
         };
 
+        let panel = cx.weak_entity();
+        let measurement = canvas(
+            move |bounds, _, cx| {
+                let width = f32::from(bounds.size.width);
+                let Some(panel) = panel.upgrade() else { return };
+                if panel.read(cx).pane_width == width {
+                    return;
+                }
+                cx.defer(move |cx| {
+                    panel.update(cx, |panel, cx| {
+                        if panel.pane_width != width {
+                            panel.pane_width = width;
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+
+        let root = div()
+            .relative()
+            .min_w_0()
+            .min_h_0()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(measurement);
         if snapshot.settings.theme_designer.open {
-            return self.theme_designer_section(cx);
+            return root
+                .child(self.theme_designer_section(cx))
+                .into_any_element();
         }
 
         let chrome = snapshot.chrome;
@@ -1077,11 +1110,7 @@ impl Render for SettingsPanel {
         let active_label = t!(snapshot.active_tab.i18n_key());
         let back_label = t!("common.close");
 
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(chrome.surface)
+        root.bg(chrome.surface)
             .child(
                 div()
                     .h(px(36.))
@@ -1160,7 +1189,7 @@ impl Render for SettingsPanel {
                             })),
                     ),
             )
-            .child(self.settings_layout(&snapshot, window, cx))
+            .child(self.settings_layout(&snapshot, cx))
             .child(self.settings_action_footer(&snapshot, cx))
             .into_any_element()
     }
@@ -1170,10 +1199,8 @@ impl SettingsPanel {
     fn settings_layout(
         &mut self,
         snapshot: &SettingsSnapshot,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let viewport_width = f32::from(window.viewport_size().width);
         let active_item_id = settings_tab_nav_id(snapshot.active_tab);
         let active_label = t!(snapshot.active_tab.i18n_key());
         let scroll_handle = self
@@ -1184,6 +1211,7 @@ impl SettingsPanel {
         let content = self.settings_tab_content(snapshot, cx);
         let panel = cx.entity();
         let toggle_panel = panel.clone();
+        let measured_panel = panel.downgrade();
 
         NyaSettingsLayout::new(
             "settings-layout",
@@ -1196,7 +1224,15 @@ impl SettingsPanel {
         .active_title(active_label)
         .sidebar_title(t!("settings.title"))
         .content_scroll_handle(scroll_handle)
-        .viewport_width(viewport_width)
+        .viewport_width(self.pane_width)
+        .on_content_width_changed(move |width, _, cx| {
+            let _ = measured_panel.update(cx, |panel, cx| {
+                if panel.content_width != width {
+                    panel.content_width = width;
+                    cx.notify();
+                }
+            });
+        })
         .compact_breakpoint(640.)
         .wide_breakpoint(1024.)
         .on_select(move |item_id, _, cx| {
@@ -2073,6 +2109,190 @@ mod tests {
 
     struct PanelHost {
         panel: Entity<SettingsPanel>,
+    }
+
+    struct ResizablePanelHost {
+        app: Entity<NyaTermApp>,
+        width: f32,
+    }
+
+    struct SettingsBodyHost {
+        panel: Entity<SettingsPanel>,
+        width: f32,
+    }
+
+    impl Render for SettingsBodyHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let body = self.panel.update(cx, |panel, cx| {
+                panel.content_width = self.width;
+                // Exercise provider cards without opening the credential editor.
+                panel.ai.providers.selected_id = None;
+                let snapshot = panel.snapshot.clone().unwrap();
+                panel.settings_tab_content(&snapshot, cx)
+            });
+            div().w(px(self.width)).child(body)
+        }
+    }
+
+    #[test]
+    fn ai_settings_grids_follow_body_width_in_a_large_window() {
+        let dir = TestConfigDir::new("nyaterm-settings-grid-width");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            for _ in 0..3 {
+                app.add_ai_provider_preset(nyaterm_core::AiProviderKind::OpenaiCompatible, cx);
+            }
+            app.focus_settings_tab(SettingsTab::AiModels, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let panel = cx.update_entity(&app, |app, _| app.settings_panel.clone());
+        let provider_selectors: Vec<&'static str> = panel.read_with(&cx, |panel, _| {
+            panel
+                .ai
+                .config
+                .provider_credentials
+                .iter()
+                .map(|credential| {
+                    &*Box::leak(format!("ai-provider-card-{}", credential.id).into_boxed_str())
+                })
+                .collect()
+        });
+        let (host, vcx) = cx.add_window_view(|_, _| SettingsBodyHost {
+            panel: panel.clone(),
+            width: 519.,
+        });
+        vcx.simulate_resize(gpui::size(px(1420.), px(960.)));
+        for (width, columns) in [(519., 1), (520., 2), (799., 2), (800., 3)] {
+            host.update(vcx, |host, cx| {
+                host.width = width;
+                cx.notify();
+            });
+            vcx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            let first = vcx.debug_bounds(provider_selectors[0]).unwrap();
+            let second = vcx.debug_bounds(provider_selectors[1]).unwrap();
+            let third = vcx.debug_bounds(provider_selectors[2]).unwrap();
+            assert_eq!(first.top() == second.top(), columns >= 2);
+            assert_eq!(first.top() == third.top(), columns == 3);
+            assert!(third.right() <= px(width));
+        }
+        for (tab, first, second) in [
+            (
+                SettingsTab::AiGeneral,
+                "ai-general-context-field",
+                "ai-general-timeout-field",
+            ),
+            (
+                SettingsTab::AiAgents,
+                "ai-agent-thread-field",
+                "ai-agent-model-field",
+            ),
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.focus_settings_tab(tab, cx);
+                    app.flush_settings_panel_snapshots(cx);
+                });
+            });
+            for width in [1023., 1024., 519.] {
+                host.update(vcx, |host, cx| {
+                    host.width = width;
+                    cx.notify();
+                });
+                vcx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+                vcx.run_until_parked();
+                let first = vcx.debug_bounds(first).unwrap();
+                let second = vcx.debug_bounds(second).unwrap();
+                assert_eq!(
+                    first.top() == second.top(),
+                    width >= 1024.,
+                    "{tab:?} at {width}"
+                );
+                assert!(second.right() <= px(width));
+            }
+        }
+    }
+
+    impl Render for ResizablePanelHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(px(self.width)).h(px(720.)).flex().child(
+                self.app
+                    .read(cx)
+                    .settings_panel
+                    .clone()
+                    .cached(crate::features::layout::cached_panel_style()),
+            )
+        }
+    }
+
+    #[test]
+    fn cached_settings_responds_to_pane_resize_without_window_resize() {
+        let dir = TestConfigDir::new("nyaterm-settings-pane-resize");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let (host, vcx) = cx.add_window_view(|_, _| ResizablePanelHost {
+            app: app.clone(),
+            width: 395.,
+        });
+        for (window_width, window_height) in [(1271., 877.), (1289., 919.), (1420., 960.)] {
+            vcx.simulate_resize(gpui::size(px(window_width), px(window_height)));
+            for (width, sidebar, padding) in [
+                (395., 56., 32.),
+                (639., 56., 32.),
+                (640., 192., 48.),
+                (1023., 192., 48.),
+                (1024., 224., 64.),
+                (395., 56., 32.),
+            ] {
+                host.update(vcx, |host, cx| {
+                    host.width = width;
+                    cx.notify();
+                });
+                for _ in 0..4 {
+                    draw(&app, vcx);
+                }
+                assert_eq!(
+                    vcx.debug_bounds("settings-sidebar").unwrap().size.width,
+                    px(sidebar)
+                );
+                vcx.update(|_, cx| {
+                    let panel = app.read(cx).settings_panel.read(cx);
+                    assert_eq!(panel.pane_width, width);
+                    assert_eq!(panel.content_width, width - sidebar - padding);
+                });
+                let before = vcx.update(|_, cx| paints(&app, cx));
+                for _ in 0..3 {
+                    draw(&app, vcx);
+                }
+                assert_eq!(
+                    vcx.update(|_, cx| paints(&app, cx)),
+                    before,
+                    "stable measurements must not repaint the cached panel"
+                );
+            }
+        }
     }
 
     impl Render for PanelHost {
