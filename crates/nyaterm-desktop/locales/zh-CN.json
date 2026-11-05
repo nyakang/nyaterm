@@ -3213,6 +3213,7 @@
     "advanced": "高级设置"
   },
   "sshAuth": {
+    "additionalPasswordRequired": "服务器要求额外验证账户密码。此密码仅用于本次连接。",
     "keyPassphraseRejected": "上一次口令无法解锁此密钥，请重新输入。",
     "saveFailed": "已连接，但凭据未保存。",
     "credentialUnavailable": "无法读取或准备所选凭据。请刷新列表、解锁凭据库或选择其他凭据。",

@@ -282,6 +282,9 @@ impl NyaTermApp {
             SshCredentialPromptReason::MissingPassword => t!("sshAuth.missingPassword"),
             SshCredentialPromptReason::PublickeyRequired => t!("sshAuth.publickeyRequired"),
             SshCredentialPromptReason::PublickeyRejected => t!("sshAuth.publickeyRejected"),
+            SshCredentialPromptReason::AdditionalPasswordRequired => {
+                t!("sshAuth.additionalPasswordRequired")
+            }
             SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
             SshCredentialPromptReason::KeyPassphraseRequired => {
                 t!("sshAuth.keyPassphraseRequired")

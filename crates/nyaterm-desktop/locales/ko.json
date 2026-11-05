@@ -3220,6 +3220,7 @@
     "advanced": "고급 설정"
   },
   "sshAuth": {
+    "additionalPasswordRequired": "서버에서 추가 계정 비밀번호 인증을 요구합니다. 이 비밀번호는 이번 연결에만 사용됩니다.",
     "keyPassphraseRejected": "이전 암호문으로 키를 잠금 해제하지 못했습니다. 다시 입력하세요.",
     "saveFailed": "연결되었지만 자격 증명을 저장하지 못했습니다.",
     "credentialUnavailable": "선택한 자격 증명을 불러오거나 준비하지 못했습니다. 목록을 새로 고치거나 저장소 잠금을 해제하거나 다른 자격 증명을 선택하세요.",

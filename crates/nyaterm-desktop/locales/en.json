@@ -3213,6 +3213,7 @@
     "advanced": "Advanced settings"
   },
   "sshAuth": {
+    "additionalPasswordRequired": "The server requires an additional account password. This password is used for this connection only.",
     "keyPassphraseRejected": "The previous passphrase could not unlock this key. Please try again.",
     "saveFailed": "Connected, but credentials could not be saved.",
     "credentialUnavailable": "The selected credential could not be loaded or prepared. Refresh the list, unlock the vault, or choose another credential.",

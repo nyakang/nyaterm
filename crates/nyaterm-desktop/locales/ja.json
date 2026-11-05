@@ -3220,6 +3220,7 @@
     "unappliedChanges": "未適用の変更があります"
   },
   "sshAuth": {
+    "additionalPasswordRequired": "サーバーで追加のアカウントパスワード認証が必要です。このパスワードは今回の接続にのみ使用されます。",
     "keyPassphraseRejected": "前のパスフレーズではこの鍵を解除できませんでした。再入力してください。",
     "saveFailed": "接続しましたが、認証情報を保存できませんでした。",
     "credentialUnavailable": "選択した認証情報を読み込めません。リストを更新するか、保管庫のロックを解除するか、別の認証情報を選択してください。",

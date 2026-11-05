@@ -3220,6 +3220,7 @@
     "advanced": "進階設定"
   },
   "sshAuth": {
+    "additionalPasswordRequired": "伺服器要求額外驗證帳戶密碼。此密碼僅用於本次連線。",
     "keyPassphraseRejected": "上一次口令無法解鎖此金鑰，請重新輸入。",
     "saveFailed": "已連線，但憑證未儲存。",
     "credentialUnavailable": "無法讀取或準備所選憑證。請重新整理清單、解鎖憑證庫或選擇其他憑證。",
