@@ -6875,6 +6875,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "tray-icon",
  "url",
  "uuid",

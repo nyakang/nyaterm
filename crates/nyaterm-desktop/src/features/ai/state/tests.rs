@@ -206,6 +206,67 @@ fn native_provider_failure_preserves_the_previous_completed_tool_step() {
     );
 }
 
+#[test]
+fn protocol_repair_clears_only_the_active_response_and_keeps_completed_steps() {
+    use crate::features::ai::presentation::AiAgentStepKind;
+    use nyaterm_core::ai::harness::{AgentToolRegistry, AgentToolResult};
+    use serde_json::json;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.begin_native_run(
+        serde_json::from_value(
+            json!({"action":"generate_command","mode":"agent","userInput":"inspect"}),
+        )
+        .unwrap(),
+    );
+    let call =
+        AgentToolRegistry::parse(&[], r#"{"action":"get_environment","arguments":{}}"#).unwrap();
+    let call_id = call.id.clone();
+    let (run_id, _, _) = state.begin_native_call(call).unwrap();
+    state.upsert_agent_step(
+        0,
+        AiAgentStepStatus::Completed,
+        AiAgentStepKind::ToolProgress,
+        "Tool result",
+        "read completed",
+    );
+    assert!(state.complete_native_call(
+        &run_id,
+        AgentToolResult {
+            call_id,
+            value: json!({"previous":"result"}),
+            is_error: false
+        }
+    ));
+    let records = state.agent.native.as_ref().unwrap().run.records.clone();
+    let (launch, _) = state.begin_native_continuation().unwrap();
+    state.apply_chat_delta(launch.job_id, "rejected text", Some("rejected reasoning"));
+    let messages = state.chat.messages.clone();
+    assert!(!state.apply_agent_protocol_repair(launch.job_id + 1));
+    assert_eq!(state.chat.messages, messages);
+    let json_protocol = state.agent.json_protocol;
+    assert!(state.apply_agent_protocol_repair(launch.job_id));
+    let current_id = state.chat.streaming_assistant_id.as_ref().unwrap();
+    let current = state
+        .chat
+        .messages
+        .iter()
+        .find(|message| &message.id == current_id)
+        .unwrap();
+    assert!(current.content.is_empty());
+    assert!(current.reasoning_content.is_none());
+    assert!(state.chat.response_preview.is_empty());
+    assert!(state.chat.pending);
+    assert_eq!(state.agent.json_protocol, json_protocol);
+    assert_eq!(state.agent.native.as_ref().unwrap().run.records, records);
+    assert_eq!(state.agent_steps()[0].status, AiAgentStepStatus::Completed);
+    assert!(state.panel.status.contains("retry 1/1"));
+    state.cancel_chat_and_agent();
+    assert!(!state.apply_agent_protocol_repair(launch.job_id));
+}
+
 fn state(cx: &TestAppContext) -> AiFeatureState {
     let focus = cx.update(|cx| AiFeatureFocus {
         chat: cx.focus_handle(),

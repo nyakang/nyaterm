@@ -806,6 +806,9 @@ pub struct AiRequestOptions {
     pub history_turns: u16,
     #[serde(skip)]
     pub agent_json_protocol: bool,
+    /// Request-local correction after a response with no usable Agent action.
+    #[serde(skip)]
+    pub agent_protocol_repair: bool,
 }
 
 impl Default for AiRequestOptions {
@@ -819,6 +822,7 @@ impl Default for AiRequestOptions {
             safety_mode: default_safety_mode(),
             history_turns: default_history_turns(),
             agent_json_protocol: false,
+            agent_protocol_repair: false,
         }
     }
 }
@@ -995,6 +999,10 @@ pub enum AiModelError {
     InvalidModelsJson(String),
     #[error("invalid AI chat JSON: {0}")]
     InvalidChatJson(String),
+    #[error(
+        "AI agent response contained no tool calls and its text could not be parsed as valid JSON"
+    )]
+    InvalidAgentJsonFallback,
     #[error("Responses API error: {0}")]
     ResponsesError(String),
     #[error("AI chat response did not include assistant content")]

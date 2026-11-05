@@ -850,6 +850,9 @@ impl NyaTermApp {
             AiChatWorkerEvent::AgentProtocolFallback { job_id, .. } => {
                 dirty = self.ai.apply_agent_protocol_fallback(job_id);
             }
+            AiChatWorkerEvent::AgentProtocolRepair { job_id, .. } => {
+                dirty = self.ai.apply_agent_protocol_repair(job_id);
+            }
             AiChatWorkerEvent::Finished(event) => {
                 let native_call = event
                     .result

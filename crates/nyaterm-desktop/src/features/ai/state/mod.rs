@@ -1102,6 +1102,23 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn apply_agent_protocol_fallback(&mut self, job_id: u64) -> bool {
+        if !self.reset_agent_response_for_retry(job_id) {
+            return false;
+        }
+        self.panel.status = "AI Agent retrying with JSON protocol".to_string();
+        self.agent.json_protocol = true;
+        true
+    }
+
+    pub(in crate::features) fn apply_agent_protocol_repair(&mut self, job_id: u64) -> bool {
+        if !self.reset_agent_response_for_retry(job_id) {
+            return false;
+        }
+        self.panel.status = "AI Agent correcting an invalid response (retry 1/1)".to_string();
+        true
+    }
+
+    fn reset_agent_response_for_retry(&mut self, job_id: u64) -> bool {
         if job_id != self.chat.job_id || !self.chat.pending {
             return false;
         }
@@ -1118,8 +1135,7 @@ impl AiFeatureState {
             message.reasoning_content = None;
         }
         self.chat.response_phase = AiResponsePhase::Waiting;
-        self.panel.status = "AI Agent retrying with JSON protocol".to_string();
-        self.agent.json_protocol = true;
+        self.chat.response_preview.clear();
         true
     }
 

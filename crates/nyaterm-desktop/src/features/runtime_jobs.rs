@@ -226,6 +226,10 @@ pub(in crate::features) enum AiChatWorkerEvent {
         job_id: u64,
         session_id: String,
     },
+    AgentProtocolRepair {
+        job_id: u64,
+        session_id: String,
+    },
     Finished(Box<AiChatJobResult>),
 }
 
@@ -234,7 +238,8 @@ impl AiChatWorkerEvent {
         match self {
             Self::Delta { session_id, .. }
             | Self::AgentToolCallDelta { session_id, .. }
-            | Self::AgentProtocolFallback { session_id, .. } => session_id,
+            | Self::AgentProtocolFallback { session_id, .. }
+            | Self::AgentProtocolRepair { session_id, .. } => session_id,
             Self::Finished(result) => &result.session_id,
         }
     }
