@@ -34,17 +34,6 @@ impl NyaTermApp {
         path: RemoteFilePath,
         cx: &mut Context<Self>,
     ) {
-        self.navigate_file_manager_pane_selecting(manager_id, pane_id, path, None, cx);
-    }
-
-    pub(in crate::features) fn navigate_file_manager_pane_selecting(
-        &mut self,
-        manager_id: String,
-        pane_id: PaneId,
-        path: RemoteFilePath,
-        select_after_load: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
         let Some(workspace) = self.file_manager.workspace(&manager_id) else {
             return;
         };
@@ -52,22 +41,25 @@ impl NyaTermApp {
             let pane = workspace.pane_mut(pane_id);
             let snapshot = pane.capture_navigation();
             let generation = pane.begin_load(path.clone());
-            pane.select_after_load = select_after_load;
             cx.notify();
             (pane.endpoint.clone(), generation, snapshot)
         });
         let service = match self.file_browser_service_for_endpoint(&endpoint) {
             Ok(service) => service,
             Err(error) => {
+                let show_hidden = self.settings.summary().ui_file_explorer_show_hidden_files;
                 workspace.update(cx, |workspace, cx| {
-                    workspace.apply_list_result(FileManagerListResult {
-                        pane: pane_id,
-                        generation,
-                        endpoint,
-                        path,
-                        snapshot,
-                        result: Err(error.to_string()),
-                    });
+                    workspace.apply_list_result(
+                        FileManagerListResult {
+                            pane: pane_id,
+                            generation,
+                            endpoint,
+                            path,
+                            snapshot,
+                            result: Err(error.to_string()),
+                        },
+                        show_hidden,
+                    );
                     let pane = workspace.pane_mut(pane_id);
                     pane.disconnected = true;
                     cx.notify();
@@ -97,15 +89,19 @@ impl NyaTermApp {
             let missing = result.as_ref().err().is_some_and(|(missing, _)| *missing);
             let success = result.is_ok();
             let _ = this.update(cx, |app, cx| {
+                let show_hidden = app.settings.summary().ui_file_explorer_show_hidden_files;
                 let changed = workspace.update(cx, |workspace, cx| {
-                    let changed = workspace.apply_list_result(FileManagerListResult {
-                        pane: pane_id,
-                        generation,
-                        endpoint: endpoint.clone(),
-                        path: path.clone(),
-                        snapshot,
-                        result: result.map_err(|(_, message)| message),
-                    });
+                    let changed = workspace.apply_list_result(
+                        FileManagerListResult {
+                            pane: pane_id,
+                            generation,
+                            endpoint: endpoint.clone(),
+                            path: path.clone(),
+                            snapshot,
+                            result: result.map_err(|(_, message)| message),
+                        },
+                        show_hidden,
+                    );
                     if changed {
                         cx.notify();
                     }

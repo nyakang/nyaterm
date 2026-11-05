@@ -194,7 +194,11 @@ impl FileManagerWorkspace {
         self.right.restore_view_settings(&settings.right_view);
     }
 
-    pub(in crate::features) fn apply_list_result(&mut self, result: FileManagerListResult) -> bool {
+    pub(in crate::features) fn apply_list_result(
+        &mut self,
+        result: FileManagerListResult,
+        show_hidden: bool,
+    ) -> bool {
         let FileManagerListResult {
             pane,
             generation,
@@ -205,7 +209,7 @@ impl FileManagerWorkspace {
         } = result;
         let pane = self.pane_mut(pane);
         match result {
-            Ok(entries) => pane.apply_listing(generation, &endpoint, &path, entries),
+            Ok(entries) => pane.apply_listing(generation, &endpoint, &path, entries, show_hidden),
             Err(error) => pane.apply_error(generation, &endpoint, snapshot, error),
         }
     }

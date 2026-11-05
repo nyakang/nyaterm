@@ -205,6 +205,72 @@ fn draw_file_manager(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn parent_listing_reveals_selected_directory_after_list_layout(cx: &mut TestAppContext) {
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+
+    let root = TestTempDir::new("nyaterm-file-manager-parent-scroll");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, "/parent/item1500");
+    workspace.update(cx, |state, _| {
+        let pane = &mut state.left;
+        pane.endpoint = PaneEndpoint::Session("sftp".into());
+        let parent = RemoteFilePath::new("/parent");
+        let generation = pane.begin_load(parent.clone());
+        let entries = (0..2000)
+            .rev()
+            .map(|index| SftpFileEntry {
+                name: format!("item{index}"),
+                path: format!("/parent/item{index}"),
+                file_type: SftpFileType::Directory,
+                size: None,
+                permissions: None,
+                owner: String::new(),
+                group: String::new(),
+                modified_at: None,
+                raw_path_token: None,
+                symlink_target_is_directory: false,
+            })
+            .collect();
+        assert!(pane.apply_listing(generation, &pane.endpoint.clone(), &parent, entries, true));
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    let row = cx.debug_bounds("file-manager-row-left-item1500").unwrap();
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let pane = state.pane_bounds[0].unwrap();
+        assert!(row.origin.y >= pane.origin.y);
+        assert!(row.bottom() <= pane.bottom());
+        assert_eq!(
+            state.left.selected_path.as_deref(),
+            Some("/parent/item1500")
+        );
+        assert!(
+            state
+                .left
+                .list_scroll
+                .0
+                .borrow()
+                .deferred_scroll_to_item
+                .is_none()
+        );
+    });
+}
+
+#[gpui::test]
 fn measured_workspace_switches_to_single_pane_and_keeps_input_focus(cx: &mut TestAppContext) {
     let root = TestTempDir::new("nyaterm-file-manager-geometry");
     let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
@@ -337,7 +403,8 @@ fn frozen_workspace_intent_survives_source_selection_changes_and_swap(cx: &mut T
             left_generation,
             &PaneEndpoint::Session("original".into()),
             &RemoteFilePath::new("/pending"),
-            vec![]
+            vec![],
+            true
         ));
         cx.notify();
     });

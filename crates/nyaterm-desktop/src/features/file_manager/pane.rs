@@ -5,6 +5,7 @@ use crate::models::{
     TransferBrowserColumnWidths, TransferBrowserSortColumn, TransferBrowserSortDirection,
 };
 use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
+use nyaterm_files::file_browser::FileBrowserBackendKind;
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -77,7 +78,7 @@ pub(in crate::features) struct BrowserPaneState {
     pub source_history: HashMap<PaneEndpoint, PaneNavigationSnapshot>,
     pub remembered_directories: Vec<nyaterm_core::FileManagerPaneRestore>,
     pub history_target: Option<usize>,
-    pub select_after_load: Option<String>,
+    select_after_load: Option<String>,
     filter: BrowserFilterCache,
     visibility_filter: Option<(String, bool)>,
 }
@@ -184,7 +185,11 @@ impl BrowserPaneState {
 
     pub(in crate::features) fn begin_load(&mut self, path: RemoteFilePath) -> u64 {
         self.generation = self.generation.wrapping_add(1);
-        self.select_after_load = None;
+        // All navigation entry points share this intent, including breadcrumbs and history.
+        self.select_after_load = (self.endpoint.kind() == FileBrowserBackendKind::Remote
+            && self.path != path
+            && self.path.parent().is_ok_and(|parent| parent == path))
+        .then(|| self.path.identity_key());
         if self.path != path {
             self.clear_selection();
         }
@@ -203,6 +208,7 @@ impl BrowserPaneState {
         endpoint: &PaneEndpoint,
         path: &RemoteFilePath,
         entries: Vec<SftpFileEntry>,
+        show_hidden: bool,
     ) -> bool {
         if self.generation != generation || &self.endpoint != endpoint {
             return false;
@@ -222,14 +228,17 @@ impl BrowserPaneState {
         {
             self.selected_path = None;
         }
-        if let Some(identity) = self.select_after_load.take()
-            && let Some(identity) = self
-                .entries
+        if let Some(identity) = self.select_after_load.take() {
+            let visible = self.visible_entries(show_hidden);
+            if let Some(index) = visible
                 .iter()
-                .find(|entry| entry.matches_identity(&identity))
-                .map(SftpFileEntry::identity_key)
-        {
-            self.select_entry(identity);
+                .position(|entry| entry.matches_identity(&identity))
+            {
+                self.select_entry(visible[index].identity_key());
+                // The first list row is the parent-directory entry (`..`).
+                self.list_scroll
+                    .scroll_to_item(index + 1, gpui::ScrollStrategy::Nearest);
+            }
         }
         self.loading = false;
         self.error = None;
@@ -477,6 +486,7 @@ mod tests {
                 &PaneEndpoint::Local,
                 &RemoteFilePath::new("/one"),
                 vec![entry("stale", "/one/stale")],
+                true,
             ));
             let generation = pane.begin_load(RemoteFilePath::new("/two"));
             assert!(!pane.apply_listing(
@@ -484,12 +494,14 @@ mod tests {
                 &PaneEndpoint::Session("ssh-b".into()),
                 &RemoteFilePath::new("/two"),
                 vec![entry("old", "/two/old")],
+                true,
             ));
             assert!(pane.apply_listing(
                 generation,
                 &PaneEndpoint::Session("ssh-b".into()),
                 &RemoteFilePath::new("/two"),
                 vec![entry("fresh", "/two/fresh")],
+                true,
             ));
             assert_eq!(pane.entries.len(), 1);
             assert_eq!(pane.entries[0].name, "fresh");
@@ -504,8 +516,8 @@ mod tests {
             let mut pane = BrowserPaneState::new(endpoint.clone(), cx.focus_handle());
             let child = RemoteFilePath::new("/parent/child");
             let parent = RemoteFilePath::new("/parent");
+            pane.path = child.clone();
             let generation = pane.begin_load(parent.clone());
-            pane.select_after_load = Some(child.identity_key());
 
             assert!(pane.apply_listing(
                 generation,
@@ -523,12 +535,166 @@ mod tests {
                     raw_path_token: None,
                     symlink_target_is_directory: false,
                 }],
+                true,
             ));
 
             assert_eq!(pane.selected_path.as_deref(), Some("/parent/child"));
             assert_eq!(pane.selected_paths.len(), 1);
             assert!(pane.selected_paths.contains("/parent/child"));
             assert!(pane.select_after_load.is_none());
+            assert_eq!(
+                pane.list_scroll
+                    .0
+                    .borrow()
+                    .deferred_scroll_to_item
+                    .unwrap()
+                    .item_index,
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn parent_listing_does_not_select_filtered_or_missing_children() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            for (name, search, show_hidden, present) in [
+                ("child", "README", true, true),
+                (".child", "", false, true),
+                ("child", "", true, false),
+            ] {
+                let endpoint = PaneEndpoint::Session("sftp".into());
+                let mut pane = BrowserPaneState::new(endpoint.clone(), cx.focus_handle());
+                let child = format!("/parent/{name}");
+                pane.path = RemoteFilePath::new(&child);
+                // A filter change while loading must be applied before restoring selection.
+                pane.visible_entries(true);
+                let parent = RemoteFilePath::new("/parent");
+                let generation = pane.begin_load(parent.clone());
+                pane.search = search.into();
+                let mut entries = vec![entry("README", "/parent/README")];
+                if present {
+                    let mut directory = entry(name, &child);
+                    directory.file_type = SftpFileType::Directory;
+                    entries.push(directory);
+                }
+                assert!(pane.apply_listing(generation, &endpoint, &parent, entries, show_hidden));
+                assert!(pane.selected_path.is_none());
+                assert!(pane.selected_paths.is_empty());
+                assert!(pane.selection_anchor.is_none());
+                assert!(pane.selected_entries().is_empty());
+                assert!(pane.select_after_load.is_none());
+                assert!(
+                    pane.list_scroll
+                        .0
+                        .borrow()
+                        .deferred_scroll_to_item
+                        .is_none()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn parent_listing_scrolls_to_sorted_visible_row_and_preserves_raw_identity() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            for descending in [false, true] {
+                let endpoint = PaneEndpoint::Session("sftp".into());
+                let mut pane = BrowserPaneState::new(endpoint.clone(), cx.focus_handle());
+                let child = RemoteFilePath::from_raw("/parent/item1500", b"/parent/item1500\xff");
+                let parent = child.parent().unwrap();
+                pane.path = child.clone();
+                pane.visible_entries(true);
+                let generation = pane.begin_load(parent.clone());
+                pane.search = " ITEM ".into();
+                pane.sort_direction = if descending {
+                    crate::models::TransferBrowserSortDirection::Descending
+                } else {
+                    crate::models::TransferBrowserSortDirection::Ascending
+                };
+                let mut entries = (0..2000)
+                    .rev()
+                    .map(|index| {
+                        let name = format!("item{index}");
+                        let mut directory = entry(&name, &format!("/parent/{name}"));
+                        directory.file_type = SftpFileType::Directory;
+                        if index == 1500 {
+                            directory.raw_path_token = child.raw_path_token.clone();
+                        }
+                        directory
+                    })
+                    .collect::<Vec<_>>();
+                // These sort before the target but must not count toward its visible row.
+                for name in [".item", "another"] {
+                    let mut directory = entry(name, &format!("/parent/{name}"));
+                    directory.file_type = SftpFileType::Directory;
+                    entries.push(directory);
+                }
+                assert!(pane.apply_listing(generation, &endpoint, &parent, entries, false));
+                assert_eq!(pane.selected_path, Some(child.identity_key()));
+                assert_eq!(pane.selected_paths.len(), 1);
+                assert_eq!(pane.selection_anchor, Some(child.identity_key()));
+                let scroll = pane.list_scroll.0.borrow().deferred_scroll_to_item.unwrap();
+                assert_eq!(scroll.item_index, if descending { 500 } else { 1501 });
+                assert_eq!(scroll.strategy, gpui::ScrollStrategy::Nearest);
+                let visible = pane.visible_entries(false);
+                assert!(visible[scroll.item_index - 1].matches_identity(&child.identity_key()));
+                assert_eq!(pane.selected_path, Some(child.identity_key()));
+            }
+        });
+    }
+
+    #[test]
+    fn parent_selection_intent_is_replaced_by_new_navigation_and_cleared_on_failure() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let endpoint = PaneEndpoint::Session("sftp".into());
+            let mut pane = BrowserPaneState::new(endpoint.clone(), cx.focus_handle());
+            pane.path = RemoteFilePath::new("/parent/child");
+            pane.select_entry("/parent/child/file".into());
+            let snapshot = pane.capture_navigation();
+            let parent = RemoteFilePath::new("/parent");
+            let stale = pane.begin_load(parent.clone());
+            assert_eq!(pane.select_after_load.as_deref(), Some("/parent/child"));
+            let other = RemoteFilePath::new("/other");
+            let generation = pane.begin_load(other.clone());
+            assert!(pane.select_after_load.is_none());
+            assert!(!pane.apply_listing(stale, &endpoint, &parent, vec![], true));
+            assert!(pane.apply_listing(generation, &endpoint, &other, vec![], true));
+            assert!(pane.selected_paths.is_empty());
+            assert!(
+                pane.list_scroll
+                    .0
+                    .borrow()
+                    .deferred_scroll_to_item
+                    .is_none()
+            );
+
+            pane.restore_navigation(snapshot.clone());
+            let generation = pane.begin_load(parent);
+            assert!(pane.apply_error(generation, &endpoint, snapshot, "denied".into()));
+            assert_eq!(pane.path.display_path, "/parent/child");
+            assert_eq!(pane.selected_path.as_deref(), Some("/parent/child/file"));
+            assert!(pane.select_after_load.is_none());
+        });
+    }
+
+    #[test]
+    fn refresh_root_and_local_navigation_do_not_request_parent_selection() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            for (endpoint, current, target) in [
+                (PaneEndpoint::Local, "/parent/child", "/parent"),
+                (PaneEndpoint::Session("sftp".into()), "/", "/"),
+                (PaneEndpoint::Session("sftp".into()), "/parent", "/parent"),
+                (PaneEndpoint::Session("sftp".into()), "/parent/child", "/"),
+            ] {
+                let mut pane = BrowserPaneState::new(endpoint, cx.focus_handle());
+                pane.path = RemoteFilePath::new(current);
+                pane.begin_load(RemoteFilePath::new(target));
+                assert!(pane.select_after_load.is_none());
+            }
         });
     }
 
@@ -595,6 +761,7 @@ mod tests {
                 &PaneEndpoint::Local,
                 &path,
                 vec![entry("file", "/directory/file")],
+                true,
             );
             pane.select_entry("/directory/file".into());
             let snapshot = pane.capture_navigation();
@@ -605,6 +772,7 @@ mod tests {
                 &PaneEndpoint::Local,
                 &path,
                 vec![entry("file", "/directory/file")],
+                true,
             );
             assert!(pane.selected_paths.is_empty());
             let generation = pane.begin_load(path);
@@ -629,7 +797,7 @@ mod tests {
             let two = RemoteFilePath::from_raw("/lossy/two", b"/\xff/two");
             for path in [&one, &two] {
                 let generation = pane.begin_load(path.clone());
-                pane.apply_listing(generation, &endpoint, path, vec![]);
+                pane.apply_listing(generation, &endpoint, path, vec![], true);
             }
             pane.select_entry("old".into());
             pane.set_endpoint(PaneEndpoint::Local);
@@ -639,10 +807,10 @@ mod tests {
             assert!(pane.selected_paths.is_empty());
             assert_eq!(pane.history_path(-1), Some(one.clone()));
             let generation = pane.begin_load(one.clone());
-            pane.apply_listing(generation, &endpoint, &one, vec![]);
+            pane.apply_listing(generation, &endpoint, &one, vec![], true);
             assert_eq!(pane.history.len(), 2);
             assert_eq!(pane.history_index, 0);
-            assert!(!pane.apply_listing(stale, &endpoint, &one, vec![]));
+            assert!(!pane.apply_listing(stale, &endpoint, &one, vec![], true));
         });
     }
 }
