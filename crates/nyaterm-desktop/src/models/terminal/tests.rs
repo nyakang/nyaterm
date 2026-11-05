@@ -172,6 +172,24 @@ fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
     assert_eq!(view.max_line_number_digits, 4);
 }
 
+#[test]
+fn clear_all_resets_line_number_gutter_high_water_width() {
+    let mut view = TerminalViewState::new();
+    let mut snapshot = TerminalScreen::default().viewport_snapshot(0);
+    snapshot.total_rows = 100_000;
+    view.observe_line_number_digits(&snapshot);
+    assert_eq!(view.max_line_number_digits, 6);
+
+    let cleared = TerminalScreen::default().viewport_snapshot(0);
+    let expected = cleared.total_rows.max(1).to_string().len();
+    view.clear_presentation_except_input(2, &cleared);
+    assert_eq!(view.max_line_number_digits, expected);
+
+    // Output after the clear keeps numbering small; the width stays restored.
+    view.observe_line_number_digits(&cleared);
+    assert_eq!(view.max_line_number_digits, expected);
+}
+
 fn selected_occurrence_test_key(
     query: &str,
     limit: usize,

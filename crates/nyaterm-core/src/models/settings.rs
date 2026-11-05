@@ -662,6 +662,10 @@ pub struct AppSettingsSummary {
     pub recording_memory_limit_bytes: u64,
     pub diagnostics_level: String,
     pub diagnostics_retention_days: u32,
+    /// Per-file diagnostics log budget in bytes. Unset or invalid values fall
+    /// back to the 10 MiB default; the log layer clamps it to a supported range.
+    #[serde(default = "default_diagnostics_log_shard_bytes")]
+    pub diagnostics_log_shard_bytes: u64,
     pub startup_restore: bool,
     /// When true (default), restore multi-leaf tab window layout with sessions.
     #[serde(default = "default_true")]
@@ -866,6 +870,7 @@ impl Default for AppSettingsSummary {
             recording_memory_limit_bytes: 5 * 1024 * 1024,
             diagnostics_level: "info".to_string(),
             diagnostics_retention_days: 7,
+            diagnostics_log_shard_bytes: default_diagnostics_log_shard_bytes(),
             startup_restore: false,
             startup_restore_window_layout: true,
             minimize_to_tray: false,
@@ -938,6 +943,10 @@ fn default_quick_cmd_height() -> u32 {
 
 fn default_serial_send_height() -> u32 {
     180
+}
+
+fn default_diagnostics_log_shard_bytes() -> u64 {
+    crate::diagnostics::DEFAULT_LOG_SHARD_BYTES
 }
 
 fn default_quick_cmd_view_mode() -> String {
@@ -1223,6 +1232,11 @@ mod tests {
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);
+        assert_eq!(
+            summary.diagnostics_log_shard_bytes,
+            crate::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+            "legacy documents without a shard size must log into 10 MiB files"
+        );
     }
 
     #[test]

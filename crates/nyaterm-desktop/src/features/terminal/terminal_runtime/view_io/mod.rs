@@ -256,6 +256,7 @@ fn terminal_snapshot_with_newer_edge_row(
             total_rows: base.total_rows.saturating_add(1),
             display_offset: base.display_offset,
             images: base.images.clone(),
+            line_number_base: base.line_number_base,
         },
         rows,
     ))
@@ -317,6 +318,7 @@ fn terminal_snapshot_with_retained_scroll_window(
             total_rows: base.total_rows.saturating_add(newer_count),
             display_offset: base.display_offset,
             images,
+            line_number_base: base.line_number_base,
         },
         rows,
     ))

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,7 +31,8 @@ use super::{
     terminal_gutter_metrics, terminal_keyword_highlight_prefetch_rows,
     terminal_keyword_highlight_prefetch_viewports, terminal_keyword_highlight_pressure_delay,
     terminal_keyword_highlight_request_key, terminal_keyword_highlight_visible_rows,
-    terminal_line_number_digits, terminal_snapshot_anchor_row_for_display_offset,
+    terminal_line_number_digits, terminal_retained_row_window_distance,
+    terminal_snapshot_absolute_window, terminal_snapshot_anchor_row_for_display_offset,
     terminal_snapshot_covers_display_offset, terminal_snapshot_row_estimated_bytes,
     terminal_surface_fractional_prefetch_offset, terminal_surface_synthesized_window_extra_rows,
     terminal_surface_text_first_repaint_ready, terminal_surface_visible_rows_for_viewport,
@@ -950,6 +952,61 @@ fn retained_row_cache_refreshes_only_changed_snapshot_rows() {
 }
 
 #[test]
+fn retained_row_cache_resets_when_numbering_base_changes() {
+    // A reflow or local clear can repin the numbering origin. Rows cached
+    // against the old base must never be stitched into the new window, or the
+    // gutter restarts mid-screen while content keeps counting.
+    let mut screen = TerminalScreen::default();
+    screen.advance_decoded_text(&terminal_test_output_lines(80));
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let rows = snapshot.row_count();
+    let scrollback_len = snapshot.scrollback_len;
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        snapshot.clone(),
+        0,
+        0.0,
+        0,
+        scrollback_len,
+        rows,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block",
+    );
+    assert!(!surface.retained_snapshots.is_empty());
+
+    let mut rebased = (*snapshot).clone();
+    rebased.line_number_base = snapshot.line_number_base.map(|base| base + 1);
+    let rebased = Arc::new(rebased);
+    apply_test_frame_snapshot!(
+        surface,
+        rebased.clone(),
+        0,
+        0.0,
+        0,
+        scrollback_len,
+        rows,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block",
+    );
+
+    assert_eq!(surface.retained_snapshots.len(), 1);
+    assert!(Arc::ptr_eq(
+        surface.retained_snapshots.first().unwrap(),
+        &rebased
+    ));
+    assert_eq!(surface.retained_rows.len(), rows);
+}
+
+#[test]
 fn retained_row_cache_respects_estimated_byte_budget() {
     let mut screen = TerminalScreen::default();
     screen.advance_decoded_text(&terminal_test_output_lines(80));
@@ -965,6 +1022,120 @@ fn retained_row_cache_respects_estimated_byte_budget() {
 
     assert!(surface.retained_row_estimated_bytes <= max_bytes);
     assert!(surface.retained_rows.len() < snapshot.row_count());
+}
+
+#[test]
+fn retained_row_window_distance_prefers_rows_outside_the_target() {
+    assert_eq!(terminal_retained_row_window_distance(50, 60, 100), 10);
+    assert_eq!(terminal_retained_row_window_distance(59, 60, 100), 1);
+    assert_eq!(terminal_retained_row_window_distance(70, 60, 100), 0);
+    assert_eq!(terminal_retained_row_window_distance(99, 60, 100), 0);
+    assert_eq!(terminal_retained_row_window_distance(105, 60, 100), 6);
+}
+
+#[test]
+fn retained_row_cache_follows_upward_scroll_target() {
+    let mut screen = TerminalScreen::new(40, 8);
+    screen.set_scrollback_limit(400);
+    screen.advance_decoded_text(&terminal_test_output_lines(400));
+
+    let viewport_rows = 8;
+    let live = screen.viewport_snapshot_with_window(0, 16, 16);
+    let scrollback_len = live.scrollback_len;
+    let real_total_rows = scrollback_len.saturating_add(viewport_rows);
+
+    let mut surface = TerminalSurface::new("upward-scroll-retention");
+    // Keep fewer rows than the total scrollback so eviction is exercised on
+    // every upward step, as it is on a terminal with a long scrollback.
+    let max_rows = 48;
+    surface.remember_retained_snapshot_rows_with_limits(&live, max_rows, usize::MAX);
+
+    let mut covered = 0usize;
+    let mut total = 0usize;
+    let mut offset = 8usize;
+    while offset <= scrollback_len.min(320) {
+        let snapshot = screen.viewport_snapshot_with_window(offset, 16, 16);
+        surface.remember_retained_snapshot_rows_with_limits(&snapshot, max_rows, usize::MAX);
+        let desired_end = real_total_rows.saturating_sub(offset);
+        let desired_start = desired_end.saturating_sub(viewport_rows);
+        total += 1;
+        if surface.retained_rows_cover_absolute_range(desired_start, desired_end) {
+            covered += 1;
+        }
+        offset += 16;
+    }
+
+    println!("retained upward scroll coverage: {covered}/{total}");
+    assert_eq!(
+        covered, total,
+        "the retained row cache must keep the upward scroll target covered"
+    );
+}
+
+#[test]
+#[ignore = "measurement: run with --ignored --nocapture on a 12k-line scrollback"]
+fn large_scrollback_upward_scroll_coverage_measurement() {
+    const VIEWPORT_ROWS: usize = 50;
+    const MAX_RETAINED_ROWS: usize = 4096;
+    const EXTRA_ROWS: usize = 192;
+    const SCROLLBACK_LINES: usize = 12_000;
+
+    let mut screen = TerminalScreen::new(200, VIEWPORT_ROWS as u16);
+    screen.set_scrollback_limit(SCROLLBACK_LINES + VIEWPORT_ROWS);
+    screen.advance_decoded_text(&terminal_test_output_lines(SCROLLBACK_LINES));
+
+    let live = screen.viewport_snapshot_with_window(0, EXTRA_ROWS, EXTRA_ROWS);
+    let scrollback_len = live.scrollback_len;
+    let real_total_rows = scrollback_len.saturating_add(VIEWPORT_ROWS);
+    let mut surface = TerminalSurface::new("large-scrollback-measurement");
+    surface.remember_retained_snapshot_rows_with_limits(&live, MAX_RETAINED_ROWS, usize::MAX);
+
+    // Reference model of the previous eviction policy (always drop the smallest
+    // absolute row), used only to quantify the improvement.
+    let mut old_rows = BTreeMap::new();
+    if let Some((start, end)) = terminal_snapshot_absolute_window(&live) {
+        for abs_row in start..end {
+            old_rows.insert(abs_row, ());
+        }
+    }
+
+    let mut new_covered = 0usize;
+    let mut old_covered = 0usize;
+    let mut total = 0usize;
+    let mut offset = 0usize;
+    while offset.saturating_add(8) <= scrollback_len {
+        offset += 8;
+        let snapshot = screen.viewport_snapshot_with_window(offset, EXTRA_ROWS, EXTRA_ROWS);
+        surface.remember_retained_snapshot_rows_with_limits(
+            &snapshot,
+            MAX_RETAINED_ROWS,
+            usize::MAX,
+        );
+        if let Some((start, end)) = terminal_snapshot_absolute_window(&snapshot) {
+            for abs_row in start..end {
+                old_rows.insert(abs_row, ());
+            }
+        }
+        while old_rows.len() > MAX_RETAINED_ROWS {
+            let Some(oldest) = old_rows.keys().next().copied() else {
+                break;
+            };
+            old_rows.remove(&oldest);
+        }
+
+        let desired_end = real_total_rows.saturating_sub(offset);
+        let desired_start = desired_end.saturating_sub(VIEWPORT_ROWS);
+        total += 1;
+        if surface.retained_rows_cover_absolute_range(desired_start, desired_end) {
+            new_covered += 1;
+        }
+        if (desired_start..desired_end).all(|abs_row| old_rows.contains_key(&abs_row)) {
+            old_covered += 1;
+        }
+    }
+    println!(
+        "12k scrollback upward scroll coverage: old={old_covered}/{total} new={new_covered}/{total}"
+    );
 }
 
 #[test]

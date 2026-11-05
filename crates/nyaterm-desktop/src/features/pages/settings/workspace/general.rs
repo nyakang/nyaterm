@@ -20,6 +20,25 @@ impl SettingsPanel {
         let diagnostics_level = self.settings.summary().diagnostics_level.clone();
         let retention = self.settings.summary().diagnostics_retention_days;
         let days_unit = t!("common.days");
+        let mebibyte = 1024_u64 * 1024;
+        // Preset budgets plus the persisted value, so an off-preset size written
+        // by an older or hand-edited config still renders and stays selectable.
+        let mut shard_mebibytes = vec![5_u64, 10, 20, 50, 100];
+        let stored_mebibytes =
+            (self.settings.summary().diagnostics_log_shard_bytes / mebibyte).max(1);
+        if !shard_mebibytes.contains(&stored_mebibytes) {
+            shard_mebibytes.push(stored_mebibytes);
+            shard_mebibytes.sort_unstable();
+        }
+        let shard_options: Vec<NyaSelectOption> = shard_mebibytes
+            .into_iter()
+            .map(|megabytes| {
+                NyaSelectOption::new(
+                    (megabytes * mebibyte).to_string(),
+                    format!("{megabytes} MB"),
+                )
+            })
+            .collect();
         let header_status_mode =
             HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode);
         let header_status_visible = self.settings.summary().ui_header_status_visible;
@@ -185,6 +204,21 @@ impl SettingsPanel {
                                 })
                                 .collect(),
                             retention.to_string(),
+                            false,
+                            cx,
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.logShardSize"),
+                        Some(SharedString::from(t!("settings.logShardSizeDesc"))),
+                        self.settings_select_control(
+                            "settings.general.diagnostics-shard-size",
+                            shard_options,
+                            self.settings
+                                .summary()
+                                .diagnostics_log_shard_bytes
+                                .to_string(),
                             false,
                             cx,
                         ),

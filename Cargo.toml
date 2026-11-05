@@ -183,7 +183,7 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "86ff089983b93700c065ae3ae57273addf561fe7" }
+alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "6056cb4d0dc49a43a6542f3eb8a951c6d9220368" }
 ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
 ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
 sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "582bd37e355d710a0888faded5f4f6da4667c3c8" }

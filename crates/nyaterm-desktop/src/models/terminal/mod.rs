@@ -1162,6 +1162,11 @@ impl TerminalViewState {
         self.frame_action_links = None;
         self.clear_terminal_query_caches();
         self.render_cache.clear();
+        // A local clear restarts gutter numbering at 1 and drops scrollback, so
+        // the high-water digit count retained from before the clear no longer
+        // applies. Re-observe from the post-clear snapshot.
+        self.max_line_number_digits = 1;
+        self.observe_line_number_digits(snapshot);
         self.screen_revision = revision;
         self.last_screen_change_at = Instant::now();
         self.has_unread = false;

@@ -9,6 +9,14 @@ use zip::write::SimpleFileOptions;
 
 use crate::{AppRuntime, RuntimeMode};
 
+mod log_writer;
+
+pub use log_writer::{
+    DEFAULT_LOG_SHARD_BYTES, MAX_LOG_SHARD_BYTES, MIN_LOG_SHARD_BYTES, RotatingLogWriter,
+    apply_log_runtime_settings, local_now, log_retention_days, log_shard_bytes,
+    normalize_log_shard_bytes, set_log_retention_days, set_log_shard_bytes,
+};
+
 pub const LOG_FILE_PREFIX: &str = "nyaterm-diagnostics";
 pub const LOG_FILE_SUFFIX: &str = "jsonl";
 const DEFAULT_RETENTION_DAYS: u32 = 7;
