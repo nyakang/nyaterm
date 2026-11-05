@@ -439,7 +439,7 @@ impl ProcessPaneState {
 
 #[cfg(test)]
 mod search_key_tests {
-    use nyaterm_transport::RemoteProcess;
+    use nyaterm_remote_ops::remote_process::RemoteProcess;
 
     use super::ProcessPaneState;
 

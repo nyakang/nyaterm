@@ -645,7 +645,7 @@ mod natural_sort_equivalence_tests {
 
 #[cfg(test)]
 mod browser_filter_equivalence_tests {
-    use nyaterm_transport::{SftpFileEntry, SftpFileType};
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 
     use super::transfer_browser_entry_is_visible;
 
