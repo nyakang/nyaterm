@@ -154,6 +154,16 @@ impl NyaTermApp {
         if self.remote_desktop.native_shutting_down {
             return false;
         }
+        // Native children are hosted only by the main window. Any other window
+        // lacks `native_child_surfaces`, and failing to enable overlays there
+        // would fail every native session.
+        if self
+            .shell
+            .main_window()
+            .is_some_and(|main| gpui::AnyWindowHandle::from(main) != window.window_handle())
+        {
+            return false;
+        }
         let needs_native = self
             .remote_desktop
             .sessions

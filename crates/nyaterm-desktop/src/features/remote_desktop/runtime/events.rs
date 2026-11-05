@@ -84,7 +84,7 @@ impl NyaTermApp {
                 let drain_started_at = Instant::now();
                 // Arm before draining, so a frame enqueued in between still
                 // signals rather than waiting for the next one.
-                let drained = this.update_in(cx, |this, window, cx| {
+                let drained = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
                     this.remote_desktop.arm_event_wake();
                     // Any event means a session exists; the periodic clock is scoped
                     // to that, and every reconnect is scheduled from an event handler.
@@ -255,12 +255,14 @@ impl NyaTermApp {
                 };
                 cx.background_executor().timer(delay).await;
                 // `update_in`: keyboard-capture sync needs the window.
-                let Ok(keep_running) = this.update_in(cx, |this, window, cx| {
-                    if this.drive_remote_desktop_periodic(window, cx) {
-                        cx.notify();
-                    }
-                    this.remote_desktop.has_sessions()
-                }) else {
+                let Ok(keep_running) =
+                    NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                        if this.drive_remote_desktop_periodic(window, cx) {
+                            cx.notify();
+                        }
+                        this.remote_desktop.has_sessions()
+                    })
+                else {
                     break;
                 };
                 #[cfg(windows)]
