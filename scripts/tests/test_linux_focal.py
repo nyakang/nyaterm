@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -31,7 +32,12 @@ class FocalAbiTests(unittest.TestCase):
                 (stage / name).touch()
             output = root / "dist"
             output.mkdir()
-            deb = focal.create_deb(stage, output, "2.0.1")
+            with mock.patch.object(focal, "deb_dependencies", return_value="libc6 (>= 2.31), libudev1") as scan:
+                deb = focal.create_deb(stage, output, "2.0.1")
+                self.assertEqual([p.name for p in scan.call_args.args[0]], list(focal.BINARIES))
+            depends = subprocess.check_output(["dpkg-deb", "-f", str(deb), "Depends"], text=True)
+            self.assertIn("libudev1", depends)
+            self.assertIn("bash", depends)
             extracted = root / "extracted"
             subprocess.run(["dpkg-deb", "--extract", str(deb), str(extracted)], check=True)
             self.assertFalse((extracted / "opt/nyaterm-compat/nyaterm-portable").exists())
@@ -47,6 +53,35 @@ class FocalAbiTests(unittest.TestCase):
                 self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
                 self.assertEqual(struct.unpack(">II", icon.read_bytes()[16:24]), tuple(map(int, size.split("x"))))
             self.assertTrue(deb.with_name(deb.name + ".sha256").is_file())
+
+    def test_deb_dependency_scan_includes_helpers_and_fails_without_metadata(self):
+        binaries = [Path(name) for name in focal.BINARIES]
+        with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/private/mesa"}), \
+                mock.patch.object(focal.subprocess, "check_output", return_value="shlibs:Depends=libc6, libssl1.1\n") as scan:
+            self.assertEqual(focal.deb_dependencies(binaries), "libc6, libssl1.1")
+            args = scan.call_args.args[0]
+            self.assertEqual(args[:2], ["dpkg-shlibdeps", "-O"])
+            self.assertEqual(args[2:], [arg for p in binaries for arg in ("-e", str(p.resolve()))])
+            self.assertNotIn("LD_LIBRARY_PATH", scan.call_args.kwargs["env"])
+        for result in ("", "shlibs:Depends=\n"):
+            with mock.patch.object(focal.subprocess, "check_output", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "shlibs:Depends"):
+                    focal.deb_dependencies(binaries)
+        with mock.patch.object(focal.subprocess, "check_output", side_effect=subprocess.CalledProcessError(2, "dpkg-shlibdeps")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                focal.deb_dependencies(binaries)
+
+    @unittest.skipUnless(shutil.which("g++") and shutil.which("dpkg-shlibdeps"), "Debian ELF tools required")
+    def test_real_deb_dependency_scan_captures_helper_only_cpp_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "helper.cc"
+            source.write_text('#include <iostream>\nint main() { std::cout << "helper"; }\n')
+            binary = root / "nyaterm-rdp-helper"
+            subprocess.run(["g++", str(source), "-o", str(binary)], check=True)
+            depends = focal.deb_dependencies([Path("/bin/true"), binary])
+            self.assertIn("libstdc++6", depends)
+            self.assertIn("libc6", depends)
 
     @unittest.skipUnless(shutil.which("cc"), "C compiler required")
     def test_egl_adapter_changes_only_desktop_only_config_filter(self):
@@ -177,6 +212,79 @@ print(count.value)
         with mock.patch.object(focal.os, "confstr", return_value="glibc 2.41"):
             with self.assertRaisesRegex(ValueError, "glibc 2.31"):
                 focal.create_package(Path("missing"), Path("dist"), "2.0.0", Path("missing"))
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "POSIX bash required")
+class FocalOpenGLCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.scripts = self.root / "scripts/compat/linux-focal"
+        self.scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPT.with_name("prepare-opengl.sh"), self.scripts)
+        for name in ("opengl-lock.txt", "opengl-tools-lock.txt"):
+            (self.scripts / name).write_text("initial " + name)
+        tools = self.root / "target/linux-focal/opengl-tools"
+        tools.mkdir(parents=True)
+        mamba = tools / "micromamba"
+        mamba.write_text("#!" + sys.executable + "\n" + textwrap.dedent('''\
+            import os, pathlib, sys
+            args = sys.argv
+            prefix = pathlib.Path(args[args.index('-p') + 1])
+            lock = args[args.index('--file') + 1]
+            with open(os.environ['CREATE_LOG'], 'a') as log:
+                log.write(lock + '\\n')
+            (prefix / 'conda-meta').mkdir(parents=True)
+            (prefix / 'lib').mkdir()
+            (prefix / 'lib/libEGL.so.1').write_bytes(b'fixture')
+            (prefix / 'bin').mkdir()
+            tool = prefix / 'bin/patchelf'
+            tool.write_text('#!/bin/sh\\nexit 0\\n')
+            tool.chmod(0o755)
+            '''))
+        mamba.chmod(0o755)
+        (self.scripts / "prepare_opengl.py").write_text(textwrap.dedent('''\
+            import pathlib, shutil, sys
+            source, output = map(pathlib.Path, sys.argv[1:])
+            shutil.rmtree(output, ignore_errors=True)
+            shutil.copytree(source / 'lib', output / 'lib')
+            '''))
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        cc = fake_bin / "cc"
+        cc.write_text('#!/bin/sh\nfor arg do output="$arg"; done\ntouch "$output"\n')
+        cc.chmod(0o755)
+        self.log = self.root / "creates.log"
+        self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+                        CREATE_LOG=str(self.log))
+        for key in ("NYATERM_OPENGL_RUNTIME", "NYATERM_PATCHELF"):
+            self.env.pop(key, None)
+
+    def prepare(self, **settings):
+        return subprocess.run(["bash", str(self.scripts / "prepare-opengl.sh")],
+                              env=dict(self.env, **settings), text=True, capture_output=True)
+
+    def test_both_locks_invalidate_only_the_corresponding_cached_environment(self):
+        for changed, count in ((None, 2), (None, 2), ("opengl-lock.txt", 3),
+                               ("opengl-tools-lock.txt", 4)):
+            with self.subTest(changed=changed, count=count):
+                if changed:
+                    (self.scripts / changed).write_text("changed " + changed)
+                result = self.prepare()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.log.read_text().splitlines()), count)
+
+    def test_unverified_external_environment_is_rejected_without_modification(self):
+        external = self.root / "external"
+        (external / "conda-meta").mkdir(parents=True)
+        sentinel = external / "keep"
+        sentinel.write_text("untouched")
+        result = self.prepare(NYATERM_OPENGL_RUNTIME=str(external))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mismatched OpenGL cache", result.stderr)
+        self.assertEqual(sentinel.read_text(), "untouched")
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":

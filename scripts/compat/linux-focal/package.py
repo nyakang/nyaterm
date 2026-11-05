@@ -124,7 +124,7 @@ def create_deb(stage, output, version):
         root = Path(directory)
         app_root = root / "opt" / desktop_id
         shutil.copytree(stage, app_root, symlinks=True)
-        # Installed builds store user data in the normal per-user directory;
+        # The compatibility build uses its own per-user configuration namespace;
         # /opt is read-only to ordinary users. The tarball remains portable.
         (app_root / "nyaterm-portable").unlink()
         launcher = root / "usr/bin" / desktop_id
@@ -158,6 +158,7 @@ def create_deb(stage, output, version):
         control = root / "DEBIAN"
         control.mkdir()
         linux_icons.write_postinst(control / "postinst", desktop_id)
+        dependencies = deb_dependencies([app_root / name for name in BINARIES])
         (control / "control").write_text(textwrap.dedent("""\
             Package: nyaterm-compat
             Version: {}-1+glibc231
@@ -165,11 +166,12 @@ def create_deb(stage, output, version):
             Priority: optional
             Architecture: amd64
             Maintainer: NyaTerm compatibility packaging <noreply@github.com>
-            Depends: bash, libc6 (>= 2.31), libgcc-s1, libgtk-3-0 (>= 3.24), libglib2.0-0 (>= 2.64), libgdk-pixbuf2.0-0, libdbus-1-3, libxcb1, libxkbcommon0, libxkbcommon-x11-0
+            Depends: bash, {}
+            Recommends: libvulkan1 | mesa-vulkan-drivers
             Description: NyaTerm Ubuntu 20.04 compatibility build with GPU rendering and a CPU fallback
              Includes the application, MCP/RDP/VNC helpers and a checksum-pinned Mesa runtime.
              Requires X11. Does not replace libc or system graphics drivers.
-            """).format(version.replace("-", "~")), encoding="utf-8")
+            """).format(version.replace("-", "~"), dependencies), encoding="utf-8")
         linux_icons.normalize_permissions(root)
         artifact = output / ("NyaTerm_{}_linux_x64_glibc231.deb".format(version))
         subprocess.run(["dpkg-deb", "--build", "--root-owner-group", str(root), str(artifact)],
@@ -178,6 +180,32 @@ def create_deb(stage, output, version):
         sha256(artifact) + "  " + artifact.name + "\n", encoding="utf-8")
     print(artifact)
     return artifact
+
+
+def deb_dependencies(binaries):
+    """Resolve every shipped executable against focal's package database.
+
+    Like the standard native packager, fail on missing dependency metadata;
+    the ABI SONAME allowlist is not a substitute for Debian package ownership.
+    Private Mesa is opt-in and must not affect the system-mode dependency scan.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        scratch = Path(directory)
+        (scratch / "debian").mkdir()
+        (scratch / "debian/control").write_text(
+            "Source: nyaterm-compat\nPackage: nyaterm-compat\nArchitecture: any\n"
+            "Description: NyaTerm compatibility build\n", encoding="utf-8")
+        args = ["dpkg-shlibdeps", "-O"]
+        for binary in binaries:
+            args.extend(["-e", str(binary.resolve())])
+        environment = dict(os.environ, LC_ALL="C")
+        environment.pop("LD_LIBRARY_PATH", None)
+        output = subprocess.check_output(args, cwd=scratch, text=True, env=environment)
+    prefix = "shlibs:Depends="
+    for line in output.splitlines():
+        if line.startswith(prefix) and line[len(prefix):].strip():
+            return line[len(prefix):].strip()
+    raise RuntimeError("dpkg-shlibdeps did not report shlibs:Depends")
 
 
 def create_package(binary_dir, output, version, opengl, deb=False):

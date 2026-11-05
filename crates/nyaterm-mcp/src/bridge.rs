@@ -401,7 +401,7 @@ mod tests {
         for flavor in [AppFlavor::Stable, AppFlavor::Preview] {
             assert_eq!(
                 super::discovery_path_from(&executable, Some(&home), flavor).unwrap(),
-                home.join(flavor.config_directory_name())
+                nyaterm_core::runtime::AppRuntime::installed_config_dir(&home, flavor)
                     .join("mcp/discovery.json")
             );
         }

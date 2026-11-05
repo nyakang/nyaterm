@@ -24,6 +24,12 @@ flags and target cache are not used. Four build jobs are the default; set
 GB of disk; at least 16 GiB RAM is recommended for the optimized desktop build.
 The default command also runs the RDP/VNC lifecycle tests.
 
+`build.sh` sets `NYATERM_LINUX_COMPAT=glibc231` and
+`NYATERM_PACKAGE_MANAGER="NyaTerm glibc 2.31 compatibility packages"` at compile
+time for all executables. This isolates installed data and disables standard
+release update checks/downloads, including when a binary is launched directly.
+Upgrade manually using artifacts from this compatibility build process.
+
 On managed cloud builders, preserve their Docker proxy configuration. Supply a
 combined trusted CA bundle with `docker build --secret id=proxy_ca,src=<bundle>`.
 For Cargo downloads at runtime, mount that bundle read-only and set
@@ -67,10 +73,27 @@ python3 scripts/compat/linux-focal/package.py \
 
 Both formats pass the same ABI/runtime audits. The `nyaterm-compat` package
 installs the renderer-selecting launcher under `/opt/nyaterm-compat` and exposes
-`/usr/bin/nyaterm-compat`. Unlike the portable tarball, it stores data in the
-normal per-user NyaTerm directory, so `/opt` can stay root-owned. Review the
-declared dependencies against the target's package database before choosing the
-deb; continue using the tarball on customized systems that reject them.
+`/usr/bin/nyaterm-compat`. The installed build stores data in
+`~/.nyaterm-compat/` (`~/.nyaterm-compat-preview/` for prerelease binaries), so
+`/opt` stays root-owned. Its cache, logs, crash reports, single-instance lock and
+MCP discovery also use the compatibility namespace. Standard stable/preview
+installs retain their existing paths; the portable tarball retains local `data/`.
+
+Earlier compatibility debs shared the standard data directory. On upgrading,
+the new namespace initially has no connections or settings. Close both builds,
+export a backup from the old build and restore it through the application's
+supported backup UI. Nothing automatically copies or rewrites the old directory.
+Do not symlink the two directories, copy a live database, or point different
+versions at the same data. Separate namespaces allow standard and compatibility
+builds to run concurrently; multiple launches within one namespace still use the
+existing single-instance lock. Restore only backups supported by the destination
+version, and keep the original backup before testing an older compatibility build.
+
+Debian `Depends` is generated with focal's `dpkg-shlibdeps` over the application
+and all three helpers, plus `bash` for the launcher. Missing package ownership or
+dependency metadata fails packaging. The SONAME audit remains a separate ABI gate.
+Review the resulting dependencies against the target's package database before
+choosing the deb; continue using the tarball on customized systems that reject them.
 
 The generated desktop entry uses `StartupWMClass=NyaTerm`, matching the X11
 window class; Wayland keeps its lowercase desktop ID. Packages include the
@@ -105,6 +128,12 @@ the application. Other application arguments and the exit status are preserved.
 There is no application restart on an error: if graphics initialization fails,
 choose the explicit CPU fallback. Software mode uses only the application-private
 Mesa/EGL libraries, forces llvmpipe, and disables Vulkan as in the original build.
+Its `LD_LIBRARY_PATH` prepends the entire private runtime, including C++, X11 and
+XCB libraries, and is inherited by local shells, helpers and other subprocesses.
+It can therefore affect non-graphics code in those processes. This broad scope
+is retained because Mesa/LLVM requires the matching private dependency set; the
+default system/GPU path does not add these overrides. See the acceptance matrix
+below before deploying software mode to a new desktop environment.
 
 The already published `compat-glibc231-2.0.1` assets retain their original CPU
 launcher and SHA-256 values. For that existing portable package, `./nyaterm`
@@ -122,6 +151,14 @@ refresh or unpinned packages are used in the reusable build. The runtime comes
 from conda-forge's Mesa/llvmpipe and supporting libraries built for older glibc.
 Only runtime libraries/data, notices and source recipes are shipped, not Conda,
 Micromamba, compilers or Python. These libraries are not installed system-wide.
+
+Runtime and patchelf caches use separate prefixes containing the SHA-256 of their
+respective lock files. Changing either lock creates a new environment for that
+component. A successful runtime creation writes `.nyaterm-lock.sha256`; an
+incomplete or mismatched prefix is rejected. `NYATERM_OPENGL_RUNTIME` may select
+a fresh prefix; an existing custom prefix must have the matching stamp. Old
+unmarked caches must be removed or replaced explicitly. `NYATERM_PATCHELF` is
+an explicit external-tool override and must name an executable.
 
 The target's GCC 10 C++ runtime is insufficient for modern Mesa/LLVM, so the
 private directory also supplies its required C++ runtime. Every bundled ELF's
@@ -166,6 +203,23 @@ Evidence is retained in `target/linux-focal/smoke/`. See
 The dedicated `Linux glibc 2.31` Actions workflow builds, audits, tests, exercises
 the CPU fallback without Vulkan/NVIDIA, and uploads the archive. It does not publish a
 release or change the updater channel.
+
+### Target desktop acceptance (pending)
+
+Run both GPU and software modes with disposable accounts/data. The launcher
+environment tests and Xvfb rendering smoke do not establish these results:
+
+| Area | Acceptance check |
+| --- | --- |
+| Local terminal and children | Start the configured shell, run system commands and a C++ program; compare library resolution with the system path |
+| SSH / SFTP | Authenticate, open/close sessions, upload/download files and compare their hashes |
+| Clipboard / input method | Copy/paste Unicode in both directions and compose/commit Chinese input on the actual desktop |
+| RDP / VNC | Connect through each helper, exercise input/clipboard and verify disconnect/reaping |
+| Installed data | Alternate standard and compatibility launches, then run both together; verify each catalog and MCP discovery remain separate |
+| Clean focal deb | Install the generated deb using only declared dependencies, then launch both rendering modes; do not rely on the builder's development packages |
+
+These checks remain pending until performed on the target environment; historical
+validation records below do not cover changes made after their recorded revision.
 
 Containers share the host kernel. This validates the glibc 2.31 / GTK / GLib
 userspace, **not** the destination's Linux 5.4 kernel, custom security patches,

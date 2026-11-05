@@ -12,6 +12,11 @@ export CARGO_TARGET_DIR="$PWD/target/linux-focal"
 export CARGO_HOME="${NYATERM_FOCAL_CARGO_HOME:-$CARGO_TARGET_DIR/cargo}"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 export CARGO_PROFILE_RELEASE_STRIP=debuginfo
+# Compatibility artifacts are upgraded manually from this same build channel.
+# Bake both policy and installed-data isolation into every executable, including
+# direct binary launches and MCP discovery, rather than relying on the wrapper.
+export NYATERM_PACKAGE_MANAGER='NyaTerm glibc 2.31 compatibility packages'
+export NYATERM_LINUX_COMPAT=glibc231
 # Default members include the MCP bridge; the Windows-only RDP integration is
 # not shipped in the focal package.
 cargo build --release --locked --target x86_64-unknown-linux-gnu
