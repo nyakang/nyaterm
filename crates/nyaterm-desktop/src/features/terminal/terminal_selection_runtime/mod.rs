@@ -5,7 +5,9 @@ const CELL_WIDTH_RATIO: f32 = 0.62;
 const LINE_HEIGHT_RATIO: f32 = 1.25;
 
 mod helpers;
-pub(in crate::features) use helpers::terminal_bounds_tracker;
+pub(in crate::features) use helpers::{
+    terminal_bounds_tracker, terminal_bounds_tracker_with_exclusion,
+};
 
 mod action_links;
 mod metrics;

@@ -45,6 +45,67 @@ struct TerminalSurfaceLayoutTestView {
 }
 
 #[test]
+fn ime_native_bounds_follow_fractional_horizontal_scroll_on_soft_wrapped_lines() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+    use gpui::EntityInputHandler;
+    use nyaterm_terminal_gpui::unwrapped::TerminalUnwrappedLayout;
+
+    let dir = TestConfigDir::new("nyaterm-ime-horizontal-anchor");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    let surface = cx.update_entity(&app, |app, cx| app.ensure_terminal_surface("s1", cx));
+    let (_, vcx) = cx.add_window_view(|_, _| TerminalSurfaceLayoutTestView {
+        surface: surface.clone(),
+        mounted: true,
+    });
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(&[b'x'; 45]);
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let grid = bounds(point(px(30.), px(50.)), size(px(160.), px(72.)));
+    vcx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.terminal
+                .layout
+                .session_surface_bounds
+                .insert("s1".into(), grid);
+            window.focus(&app.terminal.input.focus, cx);
+            app.replace_and_mark_text_in_range(None, "中", Some(0..0), window, cx);
+        });
+        for offset in [29.5, 35., 40.] {
+            surface.update(cx, |surface, _| {
+                // The same painted mapping consumed by grid rendering and hit
+                // testing, including a cursor on the third physical segment.
+                surface.painted_hit_test_snapshot = Some(snapshot.clone());
+                surface.painted_hit_test_geometry = Some(TerminalPaintedHitTestGeometry {
+                    grid_bounds: Some(grid),
+                    display_offset: 0,
+                    viewport_anchor_row: 0,
+                    snapshot_rows: snapshot.row_count(),
+                    viewport_rows: 4,
+                    visual_y_offset: 0.,
+                    cell_width: 8.,
+                    cell_height: 18.,
+                    revision: 0,
+                });
+                surface.painted_unwrapped =
+                    TerminalUnwrappedLayout::new(&snapshot, 0, 4, offset).map(Arc::new);
+            });
+            app.update(cx, |app, cx| {
+                let anchor = app.terminal_ime_anchor_bounds(grid, cx);
+                assert_eq!(anchor.left(), grid.left() + px((45. - offset) * 8.));
+                assert_eq!(anchor.top(), grid.top());
+                let native = app.bounds_for_range(0..0, grid, window, cx).unwrap();
+                assert_eq!(native.left(), anchor.left());
+                assert_eq!(native.top(), anchor.top());
+            });
+        }
+    });
+}
+
+#[test]
 fn row_stripes_repaint_grid_and_gutter_together_and_respect_protocol_modes() {
     let mut screen = TerminalScreen::new(40, 3);
     screen.advance(b"first\r\nsecond");

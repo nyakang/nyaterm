@@ -13,8 +13,6 @@ use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor
 const CARET_WIDTH: f32 = 2.;
 const CARET_OUTLINE_WIDTH: f32 = 1.;
 const PREEDIT_MAX_WIDTH: f32 = 360.;
-/// Share of the cursor color (out of 255) mixed into the composition backdrop.
-const PREEDIT_TINT_STRENGTH: u8 = 0x33;
 
 /// Composition caret. A plain insertion point is a thin beam; while the IME
 /// replaces a range the caret becomes a hollow block spanning that range, the
@@ -30,11 +28,10 @@ enum ImeCaret {
 
 /// One shaped line supplies both native IME geometry and the painted insertion point.
 pub(in crate::features) struct TerminalImeLayout {
-    bounds: Bounds<Pixels>,
+    pub(in crate::features) bounds: Bounds<Pixels>,
     line: ShapedLine,
     text_origin: Point<Pixels>,
     caret: ImeCaret,
-    background: Hsla,
     foreground: Hsla,
     underline: Hsla,
 }
@@ -67,7 +64,9 @@ impl TerminalImeLayout {
                 bounds: self.bounds,
             }),
             |window| {
-                window.paint_quad(fill(self.bounds, self.background));
+                // The grid excludes these bounds before painting. Keep the
+                // existing surface/wallpaper beneath the composition: another
+                // translucent fill would accumulate alpha and reveal TUI carets.
                 if let Err(error) = self.line.paint(
                     self.text_origin,
                     self.bounds.size.height,
@@ -108,24 +107,6 @@ impl TerminalImeLayout {
             },
         );
     }
-}
-
-/// Compose an opaque backdrop for the composition by mixing the cursor color
-/// into the terminal background. The backdrop has to replace the cells: TUI
-/// clients (pi, Claude Code, ...) hide the hardware cursor and paint their own
-/// block caret into the grid at the insertion point, which is exactly where the
-/// composition is anchored, so a translucent fill leaves that block showing
-/// through the first composed glyph. Opaque theme colors are composited here
-/// rather than relying on paint-time alpha, the same way the theme derives
-/// `terminal_find_bg` from a translucent search color.
-fn preedit_backdrop(terminal_bg: u32, terminal_cursor: u32) -> u32 {
-    let channel = |shift: u32| {
-        let base = ((terminal_bg >> shift) & 0xff) as f32;
-        let tint = ((terminal_cursor >> shift) & 0xff) as f32;
-        let amount = PREEDIT_TINT_STRENGTH as f32 / 255.;
-        (base + (tint - base) * amount).round() as u32
-    };
-    channel(16) << 16 | channel(8) << 8 | channel(0)
 }
 
 /// Lay the composition out on the anchor cell itself. The text starts on the
@@ -309,16 +290,6 @@ impl NyaTermApp {
             line,
             text_origin,
             caret: ImeCaret::Beam(anchor),
-            // Follow the terminal surface's own alpha so a wallpaper or a
-            // translucent window does not leave a solid patch behind the
-            // composition; opaque surfaces keep the backdrop opaque, which is
-            // what hides an application-painted caret.
-            background: self
-                .shell_terminal_surface_color(preedit_backdrop(
-                    palette.terminal_bg,
-                    palette.terminal_cursor,
-                ))
-                .into(),
             foreground: rgb(palette.terminal_fg).into(),
             underline: rgb(palette.link).into(),
         };
@@ -339,11 +310,11 @@ mod tests {
     use crate::features::NyaTermApp;
     use crate::features::shell::window_material::ShellBackground;
     use crate::features::terminal::terminal_selection_runtime::terminal_bounds_tracker;
+    use crate::features::terminal::terminal_surface_entity::TerminalSurface;
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestConfigDir;
-    use nyaterm_core::models::window_material::WindowMaterial;
 
-    use super::{ImeCaret, TerminalImeLayout, preedit_backdrop, preedit_geometry};
+    use super::{ImeCaret, TerminalImeLayout, preedit_geometry};
 
     /// The caret rectangle as painted, independent of its shape.
     fn caret_bounds(layout: &TerminalImeLayout) -> gpui::Bounds<gpui::Pixels> {
@@ -353,6 +324,142 @@ mod tests {
     }
 
     struct ImeHost(Entity<NyaTermApp>);
+
+    struct ImeSurfaceHost {
+        surface: Entity<TerminalSurface>,
+        background: ShellBackground,
+        color: u32,
+    }
+
+    impl Render for ImeSurfaceHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .bg(if self.background.wallpaper {
+                    gpui::rgb(0x964e22)
+                } else {
+                    gpui::rgba(0)
+                })
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .bg(self.background.terminal_color(self.color))
+                        .child(self.surface.clone()),
+                )
+        }
+    }
+
+    /// Composite the actual submitted solid quads at a pixel, respecting the
+    /// renderer's content masks and draw order. Samples avoid text and borders.
+    fn background_pixel(window: &Window, position: gpui::Point<gpui::Pixels>) -> [f32; 4] {
+        let position = position.scale(window.scale_factor());
+        let mut quads = window.painted_quads();
+        quads.sort_by_key(|quad| quad.order);
+        let mut pixel = [0.; 4];
+        for quad in quads {
+            if !quad.bounds.contains(&position) || !quad.content_mask.bounds.contains(&position) {
+                continue;
+            }
+            let color = gpui::Rgba::from(quad.background.as_solid().unwrap());
+            for (destination, source) in pixel.iter_mut().zip([color.r, color.g, color.b, 1.]) {
+                *destination = source * color.a + *destination * (1. - color.a);
+            }
+        }
+        pixel
+    }
+
+    #[test]
+    fn terminal_ime_replaces_tui_background_without_accumulating_surface_alpha() {
+        let dir = TestConfigDir::new("nyaterm-ime-composited-background");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        let surface = cx.update_entity(&app, |app, cx| {
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.grid_resize_pending = false;
+            // An application-painted cursor and neighboring cells, with the
+            // hardware cursor hidden and repositioned onto the first cell.
+            view.screen
+                .advance(b"\x1b[?25l\x1b[48;2;255;0;255m        \x1b[0m\r");
+            view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+            app.sync_terminal_surface_paint("s1", cx);
+            app.ensure_terminal_surface("s1", cx)
+        });
+        let color = cx.update_entity(&app, |app, _| app.terminal_theme_palette().terminal_bg);
+        let (host, vcx) = cx.add_window_view(|_, _| ImeSurfaceHost {
+            surface: surface.clone(),
+            background: ShellBackground {
+                native_transparent: false,
+                wallpaper: false,
+                content_opacity: 100,
+                window_opacity: 100,
+            },
+            color,
+        });
+        vcx.run_until_parked();
+        for (native_transparent, wallpaper) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            for opacity in [0, 20, 82, 100] {
+                let background = ShellBackground {
+                    native_transparent,
+                    wallpaper,
+                    content_opacity: opacity,
+                    window_opacity: 100,
+                };
+                vcx.update(|window, cx| {
+                    app.update(cx, |app, cx| {
+                        window.focus(&app.terminal.input.focus, cx);
+                        app.replace_and_mark_text_in_range(None, "  ", None, window, cx);
+                    });
+                    surface.update(cx, |surface, cx| {
+                        surface.set_background_transparent(background.transparent_surfaces());
+                        cx.notify();
+                    });
+                    host.update(cx, |host, cx| {
+                        host.background = background;
+                        cx.notify();
+                    });
+                    let _ = window.draw(cx);
+                    let app = app.read(cx);
+                    let geometry = app
+                        .terminal_hit_test_geometry_for_session(Some("s1"), cx)
+                        .unwrap();
+                    let layout = app
+                        .terminal_ime_layout(geometry.bounds, window, cx)
+                        .unwrap();
+                    let sample = point(layout.bounds.left() + px(3.), layout.bounds.top() + px(3.));
+                    let plain = point(sample.x, sample.y + px(geometry.cell_h * 2.));
+                    assert_eq!(
+                        background_pixel(window, sample),
+                        background_pixel(window, plain),
+                        "composition must preserve material at opacity {opacity}"
+                    );
+                    // Keep adjacent application cells intact.
+                    let adjacent = point(layout.bounds.right() + px(3.), sample.y);
+                    let magenta = background_pixel(window, adjacent);
+                    assert!(
+                        magenta[0] > 0.99
+                            && magenta[1] < 0.01
+                            && magenta[2] > 0.99
+                            && magenta[3] > 0.99
+                    );
+                });
+            }
+        }
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| app.unmark_text(window, cx));
+            let _ = window.draw(cx);
+            let geometry = app
+                .read(cx)
+                .terminal_hit_test_geometry_for_session(Some("s1"), cx)
+                .unwrap();
+            let restored = background_pixel(window, geometry.bounds.origin + point(px(3.), px(3.)));
+            assert!(restored[0] > 0.99 && restored[1] < 0.01 && restored[2] > 0.99);
+        });
+    }
 
     struct ImeRepaintObserver {
         count: usize,
@@ -429,9 +536,6 @@ mod tests {
                 assert!(native.left() > start.left());
                 let selected = app.selected_text_range(false, window, cx).unwrap();
                 assert_eq!(selected.range, 2..2);
-                // Default settings are an opaque surface, so the composition
-                // replaces the cell an application-painted caret sits on.
-                assert_eq!(layout.background.a, 1.);
 
                 // Replacing a range draws a hollow block over it instead of a beam.
                 app.set_selected_text_range(1..3, window, cx);
@@ -533,67 +637,5 @@ mod tests {
         assert_eq!(bounds.size.width, px(82.));
         assert_eq!(bounds.top(), anchor.top());
         assert_eq!(bounds.size.height, anchor.size.height);
-    }
-
-    #[test]
-    fn ime_preedit_backdrop_tracks_the_terminal_surface_alpha() {
-        for (bg, cursor) in [(0x0d1117_u32, 0xc9d1d9_u32), (0xffffff, 0x004e89)] {
-            let backdrop = preedit_backdrop(bg, cursor);
-            assert_ne!(backdrop, bg, "backdrop keeps a cursor tint");
-            assert_ne!(backdrop, cursor, "backdrop stays readable");
-
-            // Opaque windows must fully replace the cell so an
-            // application-painted caret cannot show through.
-            let opaque = ShellBackground {
-                native_transparent: false,
-                wallpaper: false,
-                content_opacity: 0,
-                window_opacity: 0,
-            };
-            assert_eq!(opaque.terminal_color(backdrop).a, 1.);
-
-            // Wallpapers and translucent windows keep the composition at the
-            // surface's own alpha instead of leaving a solid patch behind it.
-            for wallpaper in [false, true] {
-                let translucent = ShellBackground {
-                    native_transparent: true,
-                    wallpaper,
-                    content_opacity: 82,
-                    window_opacity: 100,
-                };
-                assert_eq!(
-                    translucent.terminal_color(backdrop).a,
-                    translucent.terminal_color(bg).a
-                );
-                assert!(translucent.terminal_color(backdrop).a < 1.);
-            }
-        }
-    }
-
-    #[test]
-    fn ime_preedit_backdrop_follows_a_translucent_window_material() {
-        let dir = TestConfigDir::new("nyaterm-ime-translucent-preedit");
-        let mut cx = TestAppContext::single();
-        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
-        let (_, vcx) = cx.add_window_view(|_, _| ImeHost(app.clone()));
-        let translucent = crate::platform::window_material_capabilities().transparent;
-        vcx.update(|window, cx| {
-            app.update(cx, |app, cx| {
-                let mut settings = app.settings.summary().clone();
-                settings.window_material = WindowMaterial::Transparent;
-                settings.background_content_opacity = 82;
-                app.settings.replace_summary(settings);
-                window.focus(&app.terminal.input.focus, cx);
-                app.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
-                let bounds = bounds(point(px(30.), px(50.)), size(px(600.), px(300.)));
-                let layout = app.terminal_ime_layout(bounds, window, cx).unwrap();
-                let surface_alpha = app
-                    .shell_terminal_surface_color(app.terminal_theme_palette().terminal_bg)
-                    .a;
-                assert!((layout.background.a - surface_alpha).abs() < 0.001);
-                assert_eq!(layout.background.a < 1., translucent);
-            });
-        });
     }
 }

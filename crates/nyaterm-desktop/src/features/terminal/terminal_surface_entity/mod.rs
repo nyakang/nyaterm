@@ -16,7 +16,7 @@ use crate::features::terminal::terminal_runtime::{
     terminal_visual_scroll_active_for_state,
 };
 use crate::features::terminal::terminal_selection_runtime::{
-    terminal_bounds_tracker, terminal_gutter_metrics, terminal_line_number_digits,
+    terminal_bounds_tracker_with_exclusion, terminal_gutter_metrics, terminal_line_number_digits,
 };
 use crate::features::terminal::terminal_surface::{
     TERMINAL_SCROLLBAR_COLUMN_WIDTH, TERMINAL_SCROLLBAR_MIN_THUMB_HEIGHT,
@@ -3025,6 +3025,7 @@ impl Render for TerminalSurface {
             && !self.protocol_state.alternate_screen
             && !self.protocol_state.mouse_reporting;
         let target_line = self.target_line;
+        let composition_exclusion = std::rc::Rc::default();
         let mut grid = NyaTerminalElement::new(
             snapshot.clone(),
             empty_terminal_keyword_rules(),
@@ -3040,6 +3041,7 @@ impl Render for TerminalSurface {
             self.bold_weight,
         );
         grid = grid
+            .with_paint_exclusion(std::rc::Rc::clone(&composition_exclusion))
             .with_bold_default_foreground(self.bold_default_foreground)
             .with_minimum_contrast_ratio(self.minimum_contrast_ratio)
             .with_selection(
@@ -3280,10 +3282,11 @@ impl Render for TerminalSurface {
                         },
                     )
                     .when_some(app, |this, app| {
-                        this.child(terminal_bounds_tracker(
+                        this.child(terminal_bounds_tracker_with_exclusion(
                             app,
                             Some(session_id.clone()),
                             is_active,
+                            composition_exclusion,
                         ))
                     })
                     .when_some(performance_overlay, |this, overlay| {
