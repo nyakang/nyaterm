@@ -30,7 +30,7 @@ enum ConnectionImportResult {
     /// WindTerm files parsed with OneKey accounts; the import waits for the user
     /// to confirm the inferred accounts before anything is written.
     NeedsWindtermAccounts {
-        preview: WindtermPreview,
+        preview: Box<WindtermPreview>,
         path: PathBuf,
         master_password: Option<SecretString>,
     },
@@ -237,7 +237,7 @@ impl NyaTermApp {
                     }
                     Ok(PreparedConnectionImport::WindtermAccounts(preview)) => {
                         ConnectionImportResult::NeedsWindtermAccounts {
-                            preview,
+                            preview: Box::new(preview),
                             path: path.unwrap_or_default(),
                             master_password: retained_master_password,
                         }
@@ -500,7 +500,7 @@ impl NyaTermApp {
             } => {
                 let existing_passwords = self.security.passwords().to_vec();
                 self.connection_state.await_windterm_accounts(
-                    preview,
+                    *preview,
                     path,
                     master_password,
                     &existing_passwords,
