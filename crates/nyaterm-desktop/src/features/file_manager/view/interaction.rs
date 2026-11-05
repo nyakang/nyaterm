@@ -203,6 +203,17 @@ impl FileManagerWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.navigate_to_selecting(pane, path, None, window, cx);
+    }
+
+    fn navigate_to_selecting(
+        &mut self,
+        pane: PaneId,
+        path: RemoteFilePath,
+        select_after_load: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.focus_pane(pane, window, cx);
         self.pane_mut(pane).path_editing = false;
         let endpoint = self.pane(pane).endpoint.clone();
@@ -213,7 +224,7 @@ impl FileManagerWorkspace {
                 .workspace(&id)
                 .is_some_and(|workspace| workspace.read(cx).pane(pane).endpoint == endpoint)
             {
-                app.navigate_file_manager_pane(id, pane, path, cx);
+                app.navigate_file_manager_pane_selecting(id, pane, path, select_after_load, cx);
             }
         });
     }
@@ -238,7 +249,10 @@ impl FileManagerWorkspace {
                 &state.path.display_path,
             ))
         };
-        self.navigate_to(pane, path, window, cx);
+        let select_after_load = (state.endpoint.kind()
+            == nyaterm_transport::FileBrowserBackendKind::Remote)
+            .then(|| state.path.identity_key());
+        self.navigate_to_selecting(pane, path, select_after_load, window, cx);
     }
 
     fn open_current(&mut self, mode: FileOpenMode, window: &mut Window, cx: &mut Context<Self>) {
