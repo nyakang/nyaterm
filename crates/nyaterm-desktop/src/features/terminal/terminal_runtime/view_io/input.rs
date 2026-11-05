@@ -1578,9 +1578,7 @@ impl NyaTermApp {
             kitty_keyboard_report_alternate_keys,
             kitty_keyboard_report_all_keys_as_esc,
             kitty_keyboard_report_associated_text,
-            alt_arrows_word_jump: alt_arrows_send_word_motion(
-                self.settings.summary().interaction_alt_as_meta,
-            ),
+            alt_arrows_word_jump: self.settings.summary().interaction_alt_as_meta,
         }
     }
 
@@ -1613,13 +1611,6 @@ impl NyaTermApp {
     ) -> Option<Vec<u8>> {
         terminal_key_release_bytes_with_mode(event, self.terminal_key_mode_for_session(session_id))
     }
-}
-
-/// "Use Option as Meta/Alt" covers every Option shortcut, so the arrows follow it:
-/// `ESC b`/`ESC f` (word back/forward) instead of the xterm `ESC[1;3D`/`ESC[1;3C`,
-/// which zsh does not bind and would print as a stray `D`/`C`.
-pub(super) fn alt_arrows_send_word_motion(alt_as_meta: bool) -> bool {
-    alt_as_meta
 }
 
 pub(super) fn terminal_key_bytes_for_mode_and_settings(

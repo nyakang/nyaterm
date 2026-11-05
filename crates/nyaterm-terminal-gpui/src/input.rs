@@ -170,7 +170,8 @@ pub fn terminal_key_release_bytes_with_mode(
 /// would otherwise leave stray `D`/`C` characters on the prompt.
 ///
 /// Only a bare Alt qualifies: Shift or Ctrl keep their own xterm sequences, and
-/// the kitty protocol reports the key itself when an application asked for it.
+/// any Kitty flag (including independently negotiated reporting flags) preserves
+/// the arrow's identity for the application.
 fn alt_arrow_word_jump_bytes(
     key: &str,
     shift: bool,
@@ -185,7 +186,10 @@ fn alt_arrow_word_jump_bytes(
         || ctrl
         || keystroke.modifiers.platform
         || mode.kitty_keyboard_disambiguate
+        || mode.kitty_keyboard_report_event_types
+        || mode.kitty_keyboard_report_alternate_keys
         || mode.kitty_keyboard_report_all_keys_as_esc
+        || mode.kitty_keyboard_report_associated_text
     {
         return None;
     }

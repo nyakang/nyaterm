@@ -617,21 +617,29 @@ fn word_motion_only_replaces_a_bare_alt_arrow() {
 
 #[test]
 fn word_motion_yields_to_the_kitty_keyboard_protocol() {
-    let event = key_event("left", None, mods(false, true, false));
-    for mode in [
-        TerminalKeyMode {
-            kitty_keyboard_disambiguate: true,
-            ..word_jump_mode()
-        },
-        TerminalKeyMode {
-            kitty_keyboard_report_all_keys_as_esc: true,
-            ..word_jump_mode()
-        },
-    ] {
-        assert_ne!(
-            terminal_key_bytes_with_mode(&event, mode).unwrap(),
-            b"\x1bb",
-            "an application that asked for kitty reporting must see the arrow itself"
-        );
+    // Each flag can be negotiated independently; cover all nonempty combinations.
+    for flags in 1..=31 {
+        for application_cursor in [false, true] {
+            let mode = TerminalKeyMode {
+                application_cursor,
+                kitty_keyboard_disambiguate: flags & 1 != 0,
+                kitty_keyboard_report_event_types: flags & 2 != 0,
+                kitty_keyboard_report_alternate_keys: flags & 4 != 0,
+                kitty_keyboard_report_all_keys_as_esc: flags & 8 != 0,
+                kitty_keyboard_report_associated_text: flags & 16 != 0,
+                ..word_jump_mode()
+            };
+            for (key, expected) in [("left", b"\x1b[1;3D"), ("right", b"\x1b[1;3C")] {
+                for is_held in [false, true] {
+                    let mut event = key_event(key, None, mods(false, true, false));
+                    event.is_held = is_held;
+                    assert_eq!(
+                        terminal_key_bytes_with_mode(&event, mode).unwrap(),
+                        expected,
+                        "Alt+{key}, flags={flags}, application_cursor={application_cursor}, held={is_held}"
+                    );
+                }
+            }
+        }
     }
 }
