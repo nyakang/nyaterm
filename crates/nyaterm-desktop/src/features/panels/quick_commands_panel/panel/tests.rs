@@ -343,16 +343,22 @@ struct QuickCommandVariableFixture {
 
 impl Render for QuickCommandVariableFixture {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let overlay = self.app.update(cx, |app, cx| {
-            app.quick_command_variable_prompt_overlay(cx)
-                .into_any_element()
+        let (overlay, focus) = self.app.update(cx, |app, cx| {
+            let overlay = app.commands.quick_variable_prompt().is_some().then(|| {
+                crate::features::view_widgets::full_window_overlay_layer(
+                    "quick-command-variable-test-layer",
+                    app.quick_command_variable_prompt_overlay(cx)
+                        .into_any_element(),
+                )
+            });
+            (overlay, app.terminal.input_focus().clone())
         });
-        div().relative().w(px(800.)).h(px(600.)).child(
-            crate::features::view_widgets::full_window_overlay_layer(
-                "quick-command-variable-test-layer",
-                overlay,
-            ),
-        )
+        div()
+            .relative()
+            .track_focus(&focus)
+            .w(px(800.))
+            .h(px(600.))
+            .children(overlay)
     }
 }
 
@@ -363,12 +369,15 @@ fn variable_prompt_state() -> crate::models::QuickCommandVariablePromptState {
         command: "ssh {{host}}".into(),
         execute: true,
         send_to_all: false,
-        variables: vec![crate::models::QuickCommandVariableDef {
-            raw: "{{host}}".into(),
-            name: "host".into(),
-            options: Vec::new(),
-            value: String::new(),
-        }],
+        variables: ["host", "user"]
+            .into_iter()
+            .map(|name| crate::models::QuickCommandVariableDef {
+                raw: format!("{{{{{name}}}}}"),
+                name: name.into(),
+                options: Vec::new(),
+                value: String::new(),
+            })
+            .collect(),
     }
 }
 
@@ -415,6 +424,58 @@ fn quick_command_variable_field_keeps_focus_after_a_click() {
             "clicking the backdrop should still focus the prompt for the keyboard"
         );
     });
+    for (id, text) in [
+        ("quick-command.variable.0", "server"),
+        ("quick-command.variable.1", "deploy"),
+        ("quick-command.variable.0", ".example"),
+    ] {
+        let bounds = cx.debug_bounds(id).expect("field bounds");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        cx.simulate_input(text);
+        draw(cx);
+        let input = app.read_with(cx, |app, _| app.existing_text_input(id).unwrap());
+        cx.update(|window, cx| {
+            assert!(input.read(cx).component_focus_handle(cx).is_focused(window))
+        });
+    }
+    assert_eq!(
+        field.read_with(cx, |input, cx| input.value(cx)).len(),
+        "server.example".len()
+    );
+    let second = app.read_with(cx, |app, _| {
+        app.existing_text_input("quick-command.variable.1").unwrap()
+    });
+    assert_eq!(second.read_with(cx, |input, cx| input.value(cx)), "deploy");
+    let cancel = cx.debug_bounds("quick-command-variable-cancel").unwrap();
+    cx.simulate_click(cancel.center(), Modifiers::default());
+    draw(cx);
+    cx.update(|window, cx| {
+        assert!(app.read(cx).commands.quick_variable_prompt().is_none());
+        assert!(app.read(cx).terminal.input_focus().is_focused(window));
+    });
+    for key in ["escape", "enter"] {
+        app.update(cx, |app, _| {
+            app.commands
+                .request_quick_variable_prompt(variable_prompt_state())
+        });
+        draw(cx);
+        let bounds = cx.debug_bounds("quick-command.variable.0").unwrap();
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        cx.simulate_input("again");
+        draw(cx);
+        cx.simulate_keystrokes(key);
+        draw(cx);
+        cx.update(|window, cx| {
+            assert!(
+                app.read(cx).commands.quick_variable_prompt().is_none(),
+                "{key}"
+            );
+            assert!(
+                app.read(cx).terminal.input_focus().is_focused(window),
+                "{key}"
+            );
+        });
+    }
 }
 
 fn host<'a>(cx: &'a mut TestAppContext, app: &Entity<NyaTermApp>) -> &'a mut VisualTestContext {
