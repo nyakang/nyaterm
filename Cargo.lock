@@ -6895,6 +6895,7 @@ dependencies = [
  "dirs",
  "encoding_rs",
  "futures",
+ "libc",
  "nyaterm-core",
  "nyaterm-terminal",
  "nyaterm-transport",
