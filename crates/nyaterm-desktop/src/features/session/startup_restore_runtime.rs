@@ -587,6 +587,11 @@ impl NyaTermApp {
                 ));
                 return false;
             };
+            // A saved tab may predate a switch to an independent system client.
+            if matches!(&connection.config, nyaterm_core::ConnectionType::Rdp { backend, .. } if backend == "mstsc")
+            {
+                return false;
+            }
             if let nyaterm_core::ConnectionType::Rdp {
                 host,
                 port,
@@ -811,4 +816,41 @@ fn parse_restorable_tab_color(value: Option<&str>) -> Option<u32> {
         return None;
     }
     u32::from_str_radix(raw, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::features::test_support::{
+        app_with_visible_local_session, session_focus_test_window,
+    };
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::TestAppContext;
+    use nyaterm_core::{RestorableOpenTab, SavedConnection};
+
+    #[test]
+    fn startup_restore_skips_a_connection_changed_to_mstsc_without_creating_a_tab() {
+        let root = TestConfigDir::new("nyaterm-mstsc-skip-restore");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let saved: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"mstsc", "name":"External RDP", "type":"rdp", "host":"example.test", "backend":"mstsc"
+        })).unwrap();
+        let tab: RestorableOpenTab = serde_json::from_value(serde_json::json!({
+            "connection_id":"mstsc", "session_type":"RDP"
+        }))
+        .unwrap();
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.connection_state.replace_loaded(vec![saved], Vec::new());
+                let submitted = app.blocking_jobs.metrics().submitted;
+                assert!(!app.start_restorable_open_tab(&tab, window, cx));
+                assert_eq!(app.blocking_jobs.metrics().submitted, submitted);
+                assert_eq!(app.session.session_order(), &["existing"]);
+                assert!(!app.remote_desktop.has_sessions());
+                assert!(!app.session.start_has_pending());
+            });
+        });
+    }
 }

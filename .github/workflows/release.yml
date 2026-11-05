@@ -304,6 +304,7 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/release/prepare_conpty.py
       - name: Package native application
+        if: runner.os != 'Windows'
         shell: bash
         env:
           APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
@@ -312,6 +313,24 @@ jobs:
           NYATERM_VERSION: ${{ needs.preflight.outputs.version }}
           TARGET: ${{ matrix.target }}
         run: python scripts/release/package_native.py "${TARGET}"
+      - name: Package native application (Windows MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NYATERM_ARTIFACT_VERSION: ${{ needs.preflight.outputs.version }}
+          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+          NYATERM_VERSION: ${{ needs.preflight.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          # Git Bash prepends Git's /usr/bin/link.exe, shadowing MSVC's linker.
+          # Preserve the PATH configured by ilammy/msvc-dev-cmd for Rust builds.
+          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          if ($linker -notmatch '\\VC\\Tools\\MSVC\\[^\\]+\\bin\\HostX64\\(x64|arm64)\\link\.exe$') {
+            throw "Expected Visual Studio MSVC linker, got: $linker"
+          }
+          Write-Host "Using MSVC linker: $linker"
+          python scripts/release/package_native.py "$env:TARGET"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify native package
         shell: bash
         env:

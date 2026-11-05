@@ -4,21 +4,6 @@
 //! component entity owns focus and popup state, and emits only committed value
 //! changes back to the application.
 
-use std::collections::HashMap;
-
-use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Styled as _, Subscription, Window, div, px,
-};
-use nyaterm_core::{
-    AiAgentKind, AiPermissionMode, CodexThreadMode, ExistingFileBehavior, ExternalMcpSessionScope,
-    McpTerminalDisplayMode, RecordingMode, RecordingRotationPolicy, RiskLevel,
-};
-use nyaterm_transport::SftpDuplicatePolicy;
-use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaSelect, NyaSelectEvent, NyaSelectOption, NyaSelectState,
-};
-
 use super::NyaTermApp;
 use super::ai::AiFullAccessSetting;
 use crate::features::shell::TabMouseActionTarget;
@@ -27,6 +12,19 @@ use crate::send_command::{
     SendCommandDataType, SendCommandLineEnding, SendCommandMode, SendCommandTarget,
 };
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
+use gpui::{
+    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, Styled as _, Subscription, Window, div, px,
+};
+use nyaterm_core::{
+    AiAgentKind, AiPermissionMode, CodexThreadMode, ExistingFileBehavior, ExternalMcpSessionScope,
+    McpTerminalDisplayMode, RecordingMode, RecordingRotationPolicy, RiskLevel,
+};
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_ui::{
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaSelect, NyaSelectEvent, NyaSelectOption, NyaSelectState,
+};
+use std::collections::HashMap;
 
 pub(in crate::features) const FOLLOW_UI_THEME_VALUE: &str = "__nya_follow_ui_theme__";
 pub(in crate::features) const NO_SELECTION_VALUE: &str = "__nya_no_selection__";
@@ -288,6 +286,11 @@ impl NyaTermApp {
             "settings.general.diagnostics-retention" => {
                 if let Ok(days) = value.parse::<u32>() {
                     self.set_diagnostics_retention_days(days, cx);
+                }
+            }
+            "settings.general.diagnostics-shard-size" => {
+                if let Ok(bytes) = value.parse::<u64>() {
+                    self.set_diagnostics_log_shard_bytes(bytes, cx);
                 }
             }
             "settings.terminal.wrap-mode" => self.set_terminal_wrap_mode(

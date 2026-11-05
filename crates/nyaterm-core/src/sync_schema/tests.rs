@@ -113,6 +113,27 @@ fn settings_allowlist_excludes_unknown_security_and_device_values() {
 }
 
 #[test]
+fn terminal_row_stripes_remain_local_when_preferences_are_synced() {
+    let scope = SyncScope {
+        preferences: true,
+        ..Default::default()
+    };
+    let entities = |enabled| {
+        BTreeMap::from([(
+            "settings".into(),
+            json!({
+                "appearance": {"theme": "dark"},
+                "terminal": {"zebra_stripes_enabled": true, "zebra_stripes_by_row": enabled}
+            })
+            .to_string(),
+        )])
+    };
+    let before = project_entities(&entities(false), &scope).unwrap();
+    assert!(!before.values.is_empty());
+    assert_eq!(before, project_entities(&entities(true), &scope).unwrap());
+}
+
+#[test]
 fn applying_portable_fields_preserves_device_and_unknown_fields() {
     let original = json!({"type":"ssh","name":"old","host":"a","auth_agent_endpoint":"local","future":{"x":1},"asset":{"cpu_model":"local","tags":["old"]}});
     let mut projected = project_record("connection", &original).unwrap();

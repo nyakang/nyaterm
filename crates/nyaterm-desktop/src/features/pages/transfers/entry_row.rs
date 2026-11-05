@@ -1,19 +1,16 @@
+use super::{format_permissions_octal, format_sftp_modified};
+use crate::features::pages::transfers::panel::TransferPanel;
+use crate::features::{shell::gpui_code_font_family, view_widgets::transfer_entry_icon};
+use crate::models::{TransferBrowserColumnWidths, TransferRenameState};
+use crate::theme::ThemePalette;
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, div, prelude::*, px, rgb,
 };
-use nyaterm_transport::{SftpFileEntry, SftpFileType};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
-
 use std::collections::HashSet;
-
-use crate::features::{shell::gpui_code_font_family, view_widgets::transfer_entry_icon};
-use crate::models::{TransferBrowserColumnWidths, TransferRenameState};
-use crate::theme::ThemePalette;
-
-use super::{format_permissions_octal, format_sftp_modified};
-use crate::features::pages::transfers::panel::TransferPanel;
 
 pub(in crate::features) fn format_browser_file_size(size: Option<u64>) -> String {
     match size {

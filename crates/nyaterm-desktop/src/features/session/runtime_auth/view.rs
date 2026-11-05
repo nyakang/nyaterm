@@ -38,6 +38,9 @@ impl NyaTermApp {
         let body_height =
             (self.shell.viewport_size().1 - reserved_height).clamp(0., MAX_BODY_HEIGHT_PX);
         let reason = match state.prompt.reason {
+            SshCredentialPromptReason::AdditionalPasswordRequired => {
+                t!("sshAuth.additionalPasswordRequired")
+            }
             SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
             SshCredentialPromptReason::PublickeyRequired => t!("sshAuth.publickeyRequired"),
             SshCredentialPromptReason::PublickeyRejected => t!("sshAuth.publickeyRejected"),

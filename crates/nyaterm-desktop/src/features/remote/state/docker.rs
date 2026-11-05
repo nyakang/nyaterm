@@ -3,7 +3,7 @@ use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::{DockerJobResult, DockerResource};
 use crate::models::DockerTab;
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_transport::{
+use nyaterm_remote_ops::docker::{
     DockerComposeProject, DockerComposeService, DockerContainer, DockerContainerDetails,
     DockerImage, DockerNetwork, DockerVolume, RemoteDockerOverview,
 };

@@ -1,14 +1,5 @@
 //! Frozen file operations, shared by the workspace and the transfer queue.
 
-use gpui::Context;
-use nyaterm_transport::{
-    FileBrowserBackendKind, FileBrowserService, RemoteFilePath, SftpDuplicatePolicy,
-    SftpDuplicateResolver, SftpFileEntry, SftpPathTransferOptions, SftpTransferControl,
-    file_browser_copy_destination_invalid, file_browser_join, file_browser_name,
-    file_browser_parent, valid_file_browser_child_name,
-};
-use rust_i18n::t;
-
 use super::clipboard_copy::{ClipboardCopyRequest, run_clipboard_copy};
 use super::transfer_jobs::TransferProgressEventSender;
 use crate::features::NyaTermApp;
@@ -16,6 +7,16 @@ use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
 };
+use gpui::Context;
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, FileBrowserService, file_browser_copy_destination_invalid,
+    file_browser_join, file_browser_name, file_browser_parent, valid_file_browser_child_name,
+};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
+};
+use rust_i18n::t;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::features) enum FileOperationEndpoint {
@@ -382,7 +383,7 @@ fn execute_file_operation(
     target_service: FileBrowserService,
     control: SftpTransferControl,
     options: SftpPathTransferOptions,
-    progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
+    progress: impl FnMut(nyaterm_files::sftp_transfer_types::SftpTransferProgress) + Send + 'static,
 ) -> Result<TransferJobOutput, String> {
     control
         .wait_if_paused_blocking()
@@ -418,15 +419,16 @@ fn execute_file_operation(
                 .map_err(|error| error.to_string())?;
             if !matches!(
                 source_properties.file_type,
-                nyaterm_transport::SftpFileType::File | nyaterm_transport::SftpFileType::Directory
+                nyaterm_files::sftp::SftpFileType::File
+                    | nyaterm_files::sftp::SftpFileType::Directory
             ) {
                 return Err("copy and move do not support symbolic links or special files".into());
             }
             if entry.is_symlink()
                 || !matches!(
                     entry.file_type,
-                    nyaterm_transport::SftpFileType::File
-                        | nyaterm_transport::SftpFileType::Directory
+                    nyaterm_files::sftp::SftpFileType::File
+                        | nyaterm_files::sftp::SftpFileType::Directory
                 )
             {
                 return Err("copy and move do not support symbolic links or special files".into());
@@ -455,7 +457,7 @@ fn execute_file_operation(
                     .map_err(|error| error.to_string())?
                     .iter()
                     .any(|e| {
-                        nyaterm_transport::file_browser_path_eq(
+                        nyaterm_files::file_browser::file_browser_path_eq(
                             target_service.kind(),
                             &e.path,
                             &target,
@@ -503,7 +505,7 @@ fn execute_file_operation(
             let parent = &intent.directory.display_path;
             let result = match intent.mutation {
                 FileMutation::Delete(path) => {
-                    if nyaterm_transport::file_browser_path_is_root(
+                    if nyaterm_files::file_browser::file_browser_path_is_root(
                         source_service.kind(),
                         &path.display_path,
                     ) {
@@ -574,7 +576,9 @@ fn reject_existing(
         .list_dir_path(directory)
         .map_err(|error| error.to_string())?
         .iter()
-        .any(|entry| nyaterm_transport::file_browser_path_eq(service.kind(), &entry.path, target))
+        .any(|entry| {
+            nyaterm_files::file_browser::file_browser_path_eq(service.kind(), &entry.path, target)
+        })
     {
         Err("destination already exists; source was kept".into())
     } else {

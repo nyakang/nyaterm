@@ -1,19 +1,16 @@
-use nyaterm_core::QuickCommand;
-use std::io::Read;
-use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
-use std::time::Duration;
-
-use gpui::{AppContext as _, Entity, TestAppContext};
-use nyaterm_transport::{SessionManager, TelnetSessionConfig};
-
+use super::{quick_command_delivery_status, quick_command_executes};
 use crate::features::NyaTermApp;
 use crate::features::file_manager::{FileManagerSeed, PaneEndpoint};
 use crate::features::test_support::{app_with_visible_local_session, editor_document};
 use crate::models::{SessionLaunchConfig, WorkspaceTabId};
 use crate::test_support::{TestAppCleanup, TestConfigDir};
-
-use super::{quick_command_delivery_status, quick_command_executes};
+use gpui::{AppContext as _, Entity, TestAppContext};
+use nyaterm_core::QuickCommand;
+use nyaterm_transport::{SessionManager, TelnetSessionConfig};
+use std::io::Read;
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::time::Duration;
 
 fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
     QuickCommand {
@@ -191,9 +188,9 @@ impl WireFixture {
             app.open_file_manager_tab(
                 Some(FileManagerSeed {
                     left: PaneEndpoint::Local,
-                    left_path: Some(nyaterm_transport::RemoteFilePath::new(path.clone())),
+                    left_path: Some(nyaterm_files::sftp::RemoteFilePath::new(path.clone())),
                     right: PaneEndpoint::Local,
-                    right_path: Some(nyaterm_transport::RemoteFilePath::new(path)),
+                    right_path: Some(nyaterm_files::sftp::RemoteFilePath::new(path)),
                 }),
                 cx,
             );

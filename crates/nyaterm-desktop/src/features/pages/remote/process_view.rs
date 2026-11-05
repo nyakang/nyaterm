@@ -1,25 +1,19 @@
-use rust_i18n::t;
-
-use std::borrow::Cow;
-
-use gpui::{Context, IntoElement, ListState, SharedString, div, list, prelude::*, px, rgb};
-use nyaterm_transport::{PROCESS_LIST_UNSUPPORTED_ERROR, RemoteProcess};
-
-use std::sync::Arc;
-
 use super::panels::{PanelChrome, RemoteMonitorPanel};
-use crate::features::remote::ProcessPresentationState;
-use crate::features::text_inputs::number_input_box_from_state;
-use crate::models::RemoteProcessSortKey;
-use crate::widgets::empty_panel_with_icon;
-use gpui::Entity;
-use nyaterm_ui::{NyaInputState, NyaNumberInputState, NyaScrollable, NyaSearchInput};
-
 use super::process::{
     ProcessDetailLabels, ProcessDisplayMode, ProcessTableLabels, ProcessTableRowActions,
     ProcessTableRowPresentation, process_column, process_details, process_display_mode,
     process_sort_button, process_table_row,
 };
+use crate::features::remote::ProcessPresentationState;
+use crate::features::text_inputs::number_input_box_from_state;
+use crate::models::RemoteProcessSortKey;
+use crate::widgets::empty_panel_with_icon;
+use gpui::{Context, Entity, IntoElement, ListState, SharedString, div, list, prelude::*, px, rgb};
+use nyaterm_remote_ops::remote_process::{PROCESS_LIST_UNSUPPORTED_ERROR, RemoteProcess};
+use nyaterm_ui::{NyaInputState, NyaNumberInputState, NyaScrollable, NyaSearchInput};
+use rust_i18n::t;
+use std::borrow::Cow;
+use std::sync::Arc;
 
 /// The Processes panel, rendered from a snapshot.
 ///

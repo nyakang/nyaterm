@@ -100,8 +100,9 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .track_focus(self.commands.quick_variable_focus())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.handle_quick_command_variable_key_down(event, cx) {
+                    this.focus_terminal_input(window, cx);
                     cx.stop_propagation();
                 }
             }))
@@ -121,6 +122,11 @@ impl NyaTermApp {
             .child(
                 div()
                     .id(SharedString::from("quick-command-variable-dialog"))
+                    // Occlude the backdrop so its click handler cannot steal focus
+                    // from a variable field the pointer just landed on. GPUI reports
+                    // every hitbox under the pointer as hovered, even when another
+                    // element is painted on top.
+                    .occlude()
                     .w(px((self.shell.viewport_size().0 - 32.).clamp(280., 400.)))
                     .max_w_full()
                     .rounded_md()
@@ -191,14 +197,19 @@ impl NyaTermApp {
                             .items_center()
                             .justify_end()
                             .gap_2()
-                            .child(small_button(
-                                palette,
-                                "quick-command-variable-cancel",
-                                t!("common.cancel"),
-                                cx.listener(|this, _, _, cx| {
-                                    this.cancel_quick_command_variable_prompt(cx);
-                                }),
-                            ))
+                            .child(
+                                div()
+                                    .debug_selector(|| "quick-command-variable-cancel".into())
+                                    .child(small_button(
+                                        palette,
+                                        "quick-command-variable-cancel",
+                                        t!("common.cancel"),
+                                        cx.listener(|this, _, window, cx| {
+                                            this.cancel_quick_command_variable_prompt(cx);
+                                            this.focus_terminal_input(window, cx);
+                                        }),
+                                    )),
+                            )
                             .child(dialog_action_button(
                                 palette,
                                 "quick-command-variable-submit",
@@ -208,8 +219,9 @@ impl NyaTermApp {
                                     t!("quickCommands.appendOnly")
                                 },
                                 false,
-                                cx.listener(|this, _, _, cx| {
+                                cx.listener(|this, _, window, cx| {
                                     this.submit_quick_command_variable_prompt(cx);
+                                    this.focus_terminal_input(window, cx);
                                 }),
                             )),
                     ),

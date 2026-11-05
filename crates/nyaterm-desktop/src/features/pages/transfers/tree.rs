@@ -1,14 +1,12 @@
+use super::panel::TransferPanel;
+use crate::features::view_widgets::transfer_entry_icon;
 use gpui::{
     Context, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _,
     SharedString, Styled as _, div, prelude::*, px, rgb, uniform_list,
 };
-use nyaterm_transport::{SftpFileEntry, SftpFileType};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaContextMenu, NyaUniformListScrollbar};
 use rust_i18n::t;
-
-use crate::features::view_widgets::transfer_entry_icon;
-
-use super::panel::TransferPanel;
 
 pub(super) fn transfer_tree_view(
     panel: &TransferPanel,
@@ -366,9 +364,9 @@ fn transfer_tree_hover_details(entry: &SftpFileEntry) -> String {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{SftpFileEntry, SftpFileType};
 
     use super::transfer_tree_hover_details;
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 
     #[test]
     fn hover_details_use_only_cached_entry_metadata() {

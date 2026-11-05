@@ -1,13 +1,11 @@
-use futures::StreamExt as _;
-use rust_i18n::t;
-
-use gpui::{Context, Window};
-use nyaterm_transport::SshProcessService;
-
 use crate::features::NyaTermApp;
 use crate::features::remote::state::ProcessApplyOutcome;
 use crate::features::runtime_jobs::{ProcessJobOutput, ProcessJobResult};
 use crate::models::{DockerTab, RemoteProcessSortKey};
+use futures::StreamExt as _;
+use gpui::{Context, Window};
+use nyaterm_remote_ops::remote_process::SshProcessService;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn set_docker_tab(&mut self, tab: DockerTab, cx: &mut Context<Self>) {

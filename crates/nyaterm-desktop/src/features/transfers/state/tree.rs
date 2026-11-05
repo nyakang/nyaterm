@@ -1,13 +1,13 @@
 //! Session-local directory caches. No listing request is issued by presentation.
 
+use gpui::{FocusHandle, ScrollStrategy, UniformListScrollHandle};
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, file_browser_identity, file_browser_parent, file_browser_path_is_root,
+    file_browser_root,
+};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-use gpui::{FocusHandle, ScrollStrategy, UniformListScrollHandle};
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFilePath, SftpFileEntry, SftpFileType, file_browser_identity,
-    file_browser_parent, file_browser_path_is_root, file_browser_root,
-};
 
 #[derive(Clone)]
 pub(in crate::features) struct TransferTreeRow {
@@ -735,7 +735,8 @@ impl super::TransferFeatureState {
 #[cfg(test)]
 mod tests {
     use super::TransferTreeState;
-    use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath, SftpFileEntry, SftpFileType};
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
     use std::sync::Arc;
 
     fn directory(name: &str, path: &str) -> SftpFileEntry {

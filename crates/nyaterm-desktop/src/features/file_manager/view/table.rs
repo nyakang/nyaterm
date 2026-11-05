@@ -1,17 +1,3 @@
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
-
-use gpui::{
-    AnyElement, Context, CursorStyle, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
-    SharedString, div, prelude::*, px, rgb, uniform_list,
-};
-use nyaterm_transport::SftpFileEntry;
-use nyaterm_ui::{
-    NyaContextMenu, NyaHorizontalScrollbar, NyaMenuItem, NyaTooltip, NyaUniformListScrollbar,
-};
-use rust_i18n::t;
-
 use super::FileManagerNameKind;
 use super::interaction::{
     FileManagerDragPayload, FileManagerDragPreview, accepts_drop, drag_operation,
@@ -26,6 +12,18 @@ use crate::features::transfers::file_operations::FileTransferOperation;
 use crate::features::view_widgets::transfer_entry_icon;
 use crate::models::TransferBrowserSortColumn;
 use crate::theme::ThemePalette;
+use gpui::{
+    AnyElement, Context, CursorStyle, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
+    SharedString, div, prelude::*, px, rgb, uniform_list,
+};
+use nyaterm_files::sftp::SftpFileEntry;
+use nyaterm_ui::{
+    NyaContextMenu, NyaHorizontalScrollbar, NyaMenuItem, NyaTooltip, NyaUniformListScrollbar,
+};
+use rust_i18n::t;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
 
 impl FileManagerWorkspace {
     pub(super) fn pane_view(

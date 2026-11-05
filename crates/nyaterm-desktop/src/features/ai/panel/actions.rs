@@ -12,29 +12,12 @@ impl NyaTermApp {
         self.defer_ai_panel_snapshot_flush(cx);
     }
 
-    pub(in crate::features) fn close_ai_message_menu(&mut self, cx: &mut Context<Self>) {
-        self.ai.close_message_menu();
-        self.defer_ai_panel_snapshot_flush(cx);
-    }
-
     pub(in crate::features) fn quote_ai_message_text(
         &mut self,
         text: String,
         cx: &mut Context<Self>,
     ) {
         self.ai.quote_message(text);
-        self.defer_ai_panel_snapshot_flush(cx);
-    }
-
-    pub(in crate::features) fn copy_ai_message_text(
-        &mut self,
-        text: String,
-        cx: &mut Context<Self>,
-    ) {
-        let value = text.trim().to_string();
-        let copied = !value.is_empty();
-        self.copy_text_with_feedback("copy-ai-message", value, cx);
-        self.ai.finish_copy_message(copied);
         self.defer_ai_panel_snapshot_flush(cx);
     }
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use gpui::{TestAppContext, px};
+use gpui::TestAppContext;
 use nyaterm_core::{
     AiAction, AiAgentKind, AiContext, AiMessage, AiMessageRole, AiMode, AiModelConfigItem,
     AiModelSource, AiProviderCredential, AiProviderKind, AiSession, AiSettings,
@@ -12,7 +12,7 @@ use crate::features::{
     runtime_jobs::AiAgentLoopState, runtime_jobs::AiAgentStepStatus, runtime_jobs::AiChatJobOutput,
     runtime_jobs::AiChatWorkerEvent, runtime_jobs::AiDiscoveryJobResult,
 };
-use crate::models::{AiMessageMenuState, AiPreparedRequest};
+use crate::models::AiPreparedRequest;
 
 use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 
@@ -692,15 +692,6 @@ fn transient_ai_menus_are_mutually_exclusive() {
 
     assert!(state.toggle_history());
     assert!(!state.discovery_menu_is_open());
-    state.open_message_menu(AiMessageMenuState {
-        message_id: "message".to_string(),
-        text: "text".to_string(),
-        x: px(1.),
-        y: px(2.),
-    });
-    assert!(!state.history_is_open());
-    assert!(state.chat_message_menu().is_some());
-
     state.close_transient_menus();
     assert!(!state.transient_menus_are_open());
 }
@@ -923,6 +914,7 @@ fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
             launch.job_id,
             launch.session_id,
             Ok(AiChatJobOutput {
+                metadata: None,
                 native_call: None,
                 mode: AiMode::Agent,
                 text: "done".to_string(),
@@ -1017,6 +1009,7 @@ fn awaiting_agent_approval_remains_an_active_cancellable_run() {
                 launch.job_id,
                 launch.session_id.clone(),
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Agent,
                     text: "Run pwd".to_string(),
@@ -1097,6 +1090,7 @@ fn parallel_terminal_chats_isolate_cancel_and_late_results() {
                 second.job_id,
                 second.session_id,
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Ask,
                     text: "finished B".to_string(),
@@ -1150,6 +1144,7 @@ fn new_chat_preserves_idle_agent_steps_for_history_reload() {
             job_id,
             session_id.clone(),
             Ok(AiChatJobOutput {
+                metadata: None,
                 native_call: None,
                 mode: AiMode::Agent,
                 text: "done".to_string(),
@@ -1646,6 +1641,7 @@ fn agent_proposals_link_the_exact_message_and_card_before_execution() {
                 launch.job_id,
                 launch.session_id,
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Agent,
                     text: String::new(),
@@ -1695,6 +1691,7 @@ fn final_answers_are_not_classified_as_thoughts_commands_or_output() {
             launch.job_id,
             launch.session_id,
             Ok(AiChatJobOutput {
+                metadata: None,
                 native_call: None,
                 mode: AiMode::Agent,
                 text: "## Result\nAll good".into(),
@@ -1730,6 +1727,7 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                     launch.job_id,
                     launch.session_id.clone(),
                     Ok(AiChatJobOutput {
+                        metadata: None,
                         native_call: None,
                         mode: AiMode::Agent,
                         text: String::new(),
@@ -1786,6 +1784,7 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                 launch.job_id,
                 launch.session_id,
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Agent,
                     text: answer.clone(),
@@ -1948,6 +1947,7 @@ fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
             launch.job_id,
             launch.session_id,
             Ok(AiChatJobOutput {
+                metadata: None,
                 native_call: None,
                 mode: AiMode::Agent,
                 text: String::new(),
@@ -2062,4 +2062,77 @@ fn native_terminal_execution_policy_is_snapshotted_per_scope_and_run() {
     assert_eq!(state.native_terminal_policy(), Some(first));
     assert!(!first.background);
     assert_eq!(first.max_lines, 7);
+}
+
+#[test]
+fn provider_edits_keep_running_snapshot_and_deletion_cancels_inactive_run() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
+    state
+        .settings
+        .config
+        .provider_credentials
+        .iter_mut()
+        .find(|credential| credential.id == id)
+        .unwrap()
+        .base_url = Some("http://localhost:12345/v1".into());
+    state.add_settings_manual_model(&id, "test-model");
+    let mut request: nyaterm_core::ai::AiChatRequest = serde_json::from_value(
+        serde_json::json!({"mode":"ask","action":"explain_output","userInput":"test"}),
+    )
+    .unwrap();
+    request.model_id = state.settings.config.default_model_id.clone();
+    state.begin_chat_request("test".into(), AiMode::Ask, None);
+    let initial = state.provider_session(&request).unwrap();
+    let mut config = state.settings_config_cloned();
+    config.agent_command_execution_mode = nyaterm_core::AgentCommandExecutionMode::Auto;
+    config.agent_step_timeout_ms = Some(4321);
+    config
+        .provider_credentials
+        .iter_mut()
+        .find(|credential| credential.id == id)
+        .unwrap()
+        .base_url = Some("http://localhost:54321/v1".into());
+    state.replace_settings_config(config, false);
+    let still_running = state.provider_session(&request).unwrap();
+    assert!(Arc::ptr_eq(&initial, &still_running));
+    assert_eq!(
+        state.run_settings().agent_command_execution_mode,
+        initial.settings.agent_command_execution_mode
+    );
+    assert_eq!(
+        state.run_settings().agent_step_timeout_ms,
+        initial.settings.agent_step_timeout_ms
+    );
+    assert!(state.chat.pending);
+    state.begin_chat_request("new".into(), AiMode::Ask, None);
+    let next = state.provider_session(&request).unwrap();
+    assert!(!Arc::ptr_eq(&initial, &next));
+    assert_eq!(
+        state.run_settings().agent_command_execution_mode,
+        nyaterm_core::AgentCommandExecutionMode::Auto
+    );
+    assert_eq!(state.run_settings().agent_step_timeout_ms, Some(4321));
+    assert!(
+        next.settings
+            .provider_credentials
+            .iter()
+            .find(|credential| credential.id == id)
+            .unwrap()
+            .base_url
+            .as_deref()
+            .unwrap()
+            .contains("54321")
+    );
+    state.switch_visible_scope("terminal:other");
+    let mut config = state.settings_config_cloned();
+    config
+        .provider_credentials
+        .retain(|credential| credential.id != id);
+    state.replace_settings_config(config, false);
+    state.switch_visible_scope("unbound:");
+    assert!(!state.chat.pending);
+    assert!(state.chat.provider_session.is_none());
 }

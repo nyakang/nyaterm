@@ -1,13 +1,16 @@
 //! Built-in remote-editor workspace, tab lifecycle and window tracking.
 
+use crate::models::{TransferEditorState, TransferEditorWorkspaceState};
 use gpui::FocusHandle;
-use nyaterm_transport::{RemoteTextDocument, RemoteTextGeneration, RemoteTextWriteResult};
 #[cfg(test)]
-use nyaterm_transport::{RemoteTextMetadata, RemoteTextRevision, SftpWriteTextResult};
+use nyaterm_files::remote_file::RemoteTextMetadata;
+#[cfg(test)]
+use nyaterm_files::remote_file::RemoteTextRevision;
+use nyaterm_files::remote_file::{RemoteTextDocument, RemoteTextGeneration, RemoteTextWriteResult};
+#[cfg(test)]
+use nyaterm_files::sftp::SftpWriteTextResult;
 use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
-
-use crate::models::{TransferEditorState, TransferEditorWorkspaceState};
 
 #[cfg(test)]
 use super::{
@@ -44,7 +47,7 @@ impl TransferFeatureState {
             .as_mut()
             .and_then(|workspace| workspace.tabs.iter_mut().find(|tab| tab.id == id))
         {
-            tab.generation = nyaterm_transport::RemoteTextGeneration::next();
+            tab.generation = nyaterm_files::remote_file::RemoteTextGeneration::next();
             tab.loading = true;
             tab.reload_confirm = false;
             tab.error = None;

@@ -71,9 +71,9 @@ impl PreparedSshShellIntegration {
         let remote_dir = sh_single_quote(remote_dir);
         let source = match self.shell {
             ShellKind::Bash | ShellKind::Zsh => {
-                format!(". {remote_path}; rm -rf {remote_dir}")
+                format!(". {remote_path}; command rm -rf {remote_dir}")
             }
-            ShellKind::Fish => format!("source {remote_path}; rm -rf {remote_dir}"),
+            ShellKind::Fish => format!("source {remote_path}; command rm -rf {remote_dir}"),
             ShellKind::PosixSh | ShellKind::Unknown => {
                 unreachable!("prepared shell integration uses a supported shell")
             }

@@ -1,19 +1,16 @@
-use rust_i18n::t;
-
-use gpui::{Context, Window};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::{RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, SftpFileType};
-
+use super::{
+    format_permissions_octal, normalized_transfer_browser_path, parse_transfer_mode,
+    remote_file_name, remote_parent_path, transfer_properties_state_from_entry,
+};
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus, TransferPropertiesField,
 };
-
-use super::{
-    format_permissions_octal, normalized_transfer_browser_path, parse_transfer_mode,
-    remote_file_name, remote_parent_path, transfer_properties_state_from_entry,
-};
+use gpui::{Context, Window};
+use nyaterm_core::truncate_preview;
+use nyaterm_files::sftp::{RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, SftpFileType};
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(super) fn open_current_transfer_browser_properties(
@@ -114,7 +111,7 @@ impl NyaTermApp {
             .session_id
             .as_deref()
             .and_then(|session_id| self.session.file_browser_backend_for_session(session_id))
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
             t!("common.close").to_string()
         } else {
@@ -246,7 +243,7 @@ impl NyaTermApp {
             .session_id
             .as_deref()
             .and_then(|session_id| self.session.file_browser_backend_for_session(session_id))
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
             self.close_transfer_properties(cx);
             return true;
@@ -257,7 +254,7 @@ impl NyaTermApp {
             cx.notify();
             return false;
         };
-        if properties.file_type == nyaterm_transport::SftpFileType::Symlink {
+        if properties.file_type == nyaterm_files::sftp::SftpFileType::Symlink {
             if state.symlink_target_value.is_empty() || state.symlink_target_value.contains('\0') {
                 self.transfer
                     .set_properties_error(t!("fileExplorer.symlinkTargetRequired").to_string());
@@ -412,9 +409,8 @@ fn normalize_transfer_properties_input(field: TransferPropertiesField, text: &st
 
 #[cfg(test)]
 mod tests {
-    use crate::models::TransferPropertiesField;
-
     use super::normalize_transfer_properties_input;
+    use crate::models::TransferPropertiesField;
 
     #[test]
     fn properties_mode_input_keeps_four_octal_digits() {

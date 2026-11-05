@@ -24,6 +24,43 @@ fn edited(connection: SavedConnection) -> SavedConnection {
 }
 
 #[test]
+fn saving_mstsc_preserves_stored_authentication_and_unused_options() {
+    let root = TestTempDir::new("nyaterm-mstsc-preserve");
+    let store = ConnectionStore::open(&root).unwrap();
+    for mode in ["password", "future-auth"] {
+        let original: SavedConnection = serde_json::from_value(json!({
+            "id":"rdp", "name":"RDP", "type":"rdp", "host":"example.test", "backend":"windows",
+            "auth":{"mode":mode,"password":"sample","has_password":false,"password_id":"missing"},
+            "security":{"certificate_policy":"future-policy"},
+            "display":{"width":900,"height":700},
+            "clipboard":{"mode":"future-clipboard"}, "reconnect":{"enabled":false,"max_attempts":21}
+        }))
+        .unwrap();
+        store.save_connection(&original).unwrap();
+        let previous = store.get_connection("rdp").unwrap().unwrap();
+        let mut editor = connection_editor_from_saved(previous.clone(), false);
+        editor.rdp_backend = "mstsc".into();
+        editor.username.clear();
+        editor.name = "External RDP".into();
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(
+            &store,
+            built.clone(),
+            None,
+            Some(ConnectionPasswordEdit::Keep),
+        )
+        .unwrap();
+        let saved = store.get_connection("rdp").unwrap().unwrap();
+        assert!(
+            saved.auth == previous.auth,
+            "hidden authentication must be preserved"
+        );
+        assert_eq!(saved.config, built.config);
+        assert_eq!(saved.name, "External RDP");
+    }
+}
+
+#[test]
 fn editing_middle_connection_preserves_custom_order_after_reloading() {
     for group_id in [None, Some("group")] {
         let root = TestTempDir::new("nyaterm-editor-order");

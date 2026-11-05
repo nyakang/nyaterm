@@ -1,12 +1,9 @@
-use gpui::{Context, Window};
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
-
-use std::collections::VecDeque;
-
+use super::{normalized_transfer_browser_path, remote_file_name, remote_parent_path};
 use crate::features::NyaTermApp;
 use crate::models::{TransferBrowserNavigationSnapshot, TransferBrowserSessionCacheState};
-
-use super::{normalized_transfer_browser_path, remote_file_name, remote_parent_path};
+use gpui::{Context, Window};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
+use std::collections::VecDeque;
 
 impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn toggle_transfer_browser_view_mode(
@@ -29,8 +26,8 @@ impl NyaTermApp {
         let backend = self
             .session
             .active_file_browser_backend()
-            .unwrap_or(nyaterm_transport::FileBrowserBackendKind::Remote);
-        nyaterm_transport::valid_file_browser_child_name(backend, name)
+            .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
+        nyaterm_files::file_browser::valid_file_browser_child_name(backend, name)
     }
 
     pub(in crate::features) fn cache_transfer_browser_session(&mut self, session_id: &str) {
@@ -143,7 +140,7 @@ impl NyaTermApp {
         }
 
         if self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Remote)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
         {
             self.start_transfer_initial_directory_job(cx);
             return;

@@ -1,11 +1,9 @@
+use super::TransferBrowserSortColumn;
 use gpui::Pixels;
-use nyaterm_transport::{
-    RemoteTextGeneration, RemoteTextRevision, SftpFileEntry, SftpFileProperties,
-};
+use nyaterm_files::remote_file::{RemoteTextGeneration, RemoteTextRevision};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileProperties};
 use std::collections::HashSet;
 use std::path::PathBuf;
-
-use super::TransferBrowserSortColumn;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransferBrowserColumnResizeState {
@@ -216,7 +214,7 @@ impl TransferEditorState {
 
     pub(crate) fn tab_id_for_remote_path(
         session_id: Option<&str>,
-        remote_path: &nyaterm_transport::RemoteFilePath,
+        remote_path: &nyaterm_files::sftp::RemoteFilePath,
     ) -> String {
         format!(
             "{}\n{}",
@@ -225,8 +223,8 @@ impl TransferEditorState {
         )
     }
 
-    pub(crate) fn remote_file_path(&self) -> nyaterm_transport::RemoteFilePath {
-        nyaterm_transport::RemoteFilePath {
+    pub(crate) fn remote_file_path(&self) -> nyaterm_files::sftp::RemoteFilePath {
+        nyaterm_files::sftp::RemoteFilePath {
             display_path: self.remote_path.clone(),
             raw_path_token: self.raw_path_token.clone(),
         }
@@ -309,9 +307,10 @@ pub(crate) enum TransferEditorField {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{RemoteFilePath, RemoteTextGeneration};
 
     use super::{TransferEditorField, TransferEditorState, TransferEditorWorkspaceState};
+    use nyaterm_files::remote_file::RemoteTextGeneration;
+    use nyaterm_files::sftp::RemoteFilePath;
 
     fn editor_tab(session_id: &str, remote_path: &str) -> TransferEditorState {
         TransferEditorState {

@@ -304,6 +304,7 @@ fn application_cursor_arrows_use_ss3() {
         kitty_keyboard_report_alternate_keys: false,
         kitty_keyboard_report_all_keys_as_esc: false,
         kitty_keyboard_report_associated_text: false,
+        alt_arrows_word_jump: false,
     };
     let event = key_event("up", None, mods(false, false, false));
     assert_eq!(
@@ -358,6 +359,7 @@ fn application_keypad_numpad_uses_ss3() {
         kitty_keyboard_report_alternate_keys: false,
         kitty_keyboard_report_all_keys_as_esc: false,
         kitty_keyboard_report_associated_text: false,
+        alt_arrows_word_jump: false,
     };
     let event = key_event("numpad5", Some("5"), mods(false, false, false));
     assert_eq!(
@@ -387,6 +389,7 @@ fn kitty_keyboard_disambiguates_text_and_ambiguous_keys() {
         kitty_keyboard_report_alternate_keys: false,
         kitty_keyboard_report_all_keys_as_esc: false,
         kitty_keyboard_report_associated_text: false,
+        alt_arrows_word_jump: false,
     };
 
     let event = key_event("a", Some("a"), mods(false, false, true));
@@ -430,6 +433,7 @@ fn kitty_keyboard_reports_event_types_and_all_keys() {
         kitty_keyboard_report_alternate_keys: false,
         kitty_keyboard_report_all_keys_as_esc: true,
         kitty_keyboard_report_associated_text: false,
+        alt_arrows_word_jump: false,
     };
 
     let event = key_event("x", Some("x"), mods(false, false, false));
@@ -474,6 +478,7 @@ fn kitty_keyboard_reports_alternate_keys_and_associated_text() {
         kitty_keyboard_report_alternate_keys: true,
         kitty_keyboard_report_all_keys_as_esc: true,
         kitty_keyboard_report_associated_text: true,
+        alt_arrows_word_jump: false,
     };
 
     let event = key_event("a", Some("A"), mods(true, false, false));
@@ -541,4 +546,100 @@ fn ctrl_minus_and_ctrl_underscore_send_unit_separator() {
     assert_eq!(key_bytes("-", None, mods(false, false, true)), b"\x1f");
     assert_eq!(key_bytes("_", Some("_"), mods(true, false, true)), b"\x1f");
     assert_eq!(key_bytes("/", None, mods(false, false, true)), b"\x1f");
+}
+
+fn word_jump_mode() -> TerminalKeyMode {
+    TerminalKeyMode {
+        alt_arrows_word_jump: true,
+        ..TerminalKeyMode::default()
+    }
+}
+
+#[test]
+fn alt_arrows_send_word_motion_when_enabled() {
+    let left = key_event("left", None, mods(false, true, false));
+    let right = key_event("right", None, mods(false, true, false));
+    assert_eq!(
+        terminal_key_bytes_with_mode(&left, word_jump_mode()).unwrap(),
+        b"\x1bb"
+    );
+    assert_eq!(
+        terminal_key_bytes_with_mode(&right, word_jump_mode()).unwrap(),
+        b"\x1bf"
+    );
+}
+
+#[test]
+fn alt_arrows_keep_the_xterm_sequence_when_disabled() {
+    let left = key_event("left", None, mods(false, true, false));
+    let right = key_event("right", None, mods(false, true, false));
+    assert_eq!(
+        terminal_key_bytes_with_mode(&left, TerminalKeyMode::default()).unwrap(),
+        b"\x1b[1;3D"
+    );
+    assert_eq!(
+        terminal_key_bytes_with_mode(&right, TerminalKeyMode::default()).unwrap(),
+        b"\x1b[1;3C"
+    );
+}
+
+#[test]
+fn word_motion_only_replaces_a_bare_alt_arrow() {
+    let mode = word_jump_mode();
+    // Shift/Ctrl combinations keep their own xterm modifier codes.
+    let shift_alt = key_event("left", None, mods(true, true, false));
+    let ctrl_alt = key_event("left", None, mods(false, true, true));
+    let ctrl = key_event("left", None, mods(false, false, true));
+    assert_eq!(
+        terminal_key_bytes_with_mode(&shift_alt, mode).unwrap(),
+        b"\x1b[1;4D"
+    );
+    assert_eq!(
+        terminal_key_bytes_with_mode(&ctrl_alt, mode).unwrap(),
+        b"\x1b[1;7D"
+    );
+    assert_eq!(
+        terminal_key_bytes_with_mode(&ctrl, mode).unwrap(),
+        b"\x1b[1;5D"
+    );
+    // Vertical arrows and the unmodified left arrow are untouched.
+    let alt_up = key_event("up", None, mods(false, true, false));
+    let plain_left = key_event("left", None, mods(false, false, false));
+    assert_eq!(
+        terminal_key_bytes_with_mode(&alt_up, mode).unwrap(),
+        b"\x1b[1;3A"
+    );
+    assert_eq!(
+        terminal_key_bytes_with_mode(&plain_left, mode).unwrap(),
+        b"\x1b[D"
+    );
+}
+
+#[test]
+fn word_motion_yields_to_the_kitty_keyboard_protocol() {
+    // Each flag can be negotiated independently; cover all nonempty combinations.
+    for flags in 1..=31 {
+        for application_cursor in [false, true] {
+            let mode = TerminalKeyMode {
+                application_cursor,
+                kitty_keyboard_disambiguate: flags & 1 != 0,
+                kitty_keyboard_report_event_types: flags & 2 != 0,
+                kitty_keyboard_report_alternate_keys: flags & 4 != 0,
+                kitty_keyboard_report_all_keys_as_esc: flags & 8 != 0,
+                kitty_keyboard_report_associated_text: flags & 16 != 0,
+                ..word_jump_mode()
+            };
+            for (key, expected) in [("left", b"\x1b[1;3D"), ("right", b"\x1b[1;3C")] {
+                for is_held in [false, true] {
+                    let mut event = key_event(key, None, mods(false, true, false));
+                    event.is_held = is_held;
+                    assert_eq!(
+                        terminal_key_bytes_with_mode(&event, mode).unwrap(),
+                        expected,
+                        "Alt+{key}, flags={flags}, application_cursor={application_cursor}, held={is_held}"
+                    );
+                }
+            }
+        }
+    }
 }

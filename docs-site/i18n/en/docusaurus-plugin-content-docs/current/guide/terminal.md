@@ -112,7 +112,9 @@ Notes:
 
 ### Terminal row zebra stripes
 
-**Terminal row zebra stripes** is off by default. Enabling it highlights the shell input region and the row you click, which helps locate the current input position in dense output.
+**Terminal row zebra stripes** is on by default. Enabling it highlights the shell input region and the row you click, which helps locate the current input position in dense output.
+
+When enabled, the **Alternate by row** sub-switch (off by default) replaces shell input shading with alternating backgrounds across input and output display rows. Soft-wrapped rows alternate individually; with wrapping disabled, each complete line alternates. The clicked row still takes priority. Turning off the main switch preserves the sub-switch preference.
 
 ### Low latency mode
 

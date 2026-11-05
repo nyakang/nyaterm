@@ -1,13 +1,12 @@
+use super::remote_text_editor::RemoteTextEditor;
+use crate::features::NyaTermApp;
+use crate::models::WorkspaceTabId;
 use gpui::{
     AppContext as _, Context, Entity, IntoElement, Render, Subscription, Window, div, prelude::*,
     px, rgb,
 };
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
-
-use super::remote_text_editor::RemoteTextEditor;
-use crate::features::NyaTermApp;
-use crate::models::WorkspaceTabId;
 
 /// Retained per document, including while another tab hides its surface.
 pub(in crate::features) struct WorkspaceEditorView {
@@ -437,16 +436,15 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::{app_with_visible_local_session, editor_document};
+    use crate::models::{TabDockEdge, TabDockZone, WorkspaceTabId};
     use futures::StreamExt as _;
     use gpui::{
         AppContext as _, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
         Window, div, prelude::*,
     };
     use nyaterm_core::{InternalEditorDisplay, test_support::TestTempDir};
-
-    use crate::features::NyaTermApp;
-    use crate::features::test_support::{app_with_visible_local_session, editor_document};
-    use crate::models::{TabDockEdge, TabDockZone, WorkspaceTabId};
 
     struct WorkspaceHost {
         app: Entity<NyaTermApp>,
@@ -717,10 +715,10 @@ mod tests {
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 app.open_transfer_editor(
-                    nyaterm_transport::SftpFileEntry {
+                    nyaterm_files::sftp::SftpFileEntry {
                         name: "a.custom-extension".into(),
                         path: "/a.custom-extension".into(),
-                        file_type: nyaterm_transport::SftpFileType::File,
+                        file_type: nyaterm_files::sftp::SftpFileType::File,
                         size: Some(8),
                         permissions: None,
                         owner: String::new(),
@@ -780,9 +778,9 @@ mod tests {
         let path = root.path().join("document.txt");
         std::fs::create_dir_all(root.path()).unwrap();
         std::fs::write(&path, "original").unwrap();
-        let baseline = nyaterm_transport::FileBrowserService::local()
+        let baseline = nyaterm_files::file_browser::FileBrowserService::local()
             .read_text_document_path(
-                &nyaterm_transport::RemoteFilePath::new(path.to_str().unwrap()),
+                &nyaterm_files::sftp::RemoteFilePath::new(path.to_str().unwrap()),
                 1024,
             )
             .unwrap();

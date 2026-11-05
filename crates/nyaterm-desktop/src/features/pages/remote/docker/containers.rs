@@ -1,16 +1,5 @@
-use std::sync::Arc;
-
-use rust_i18n::t;
-
-use gpui::{
-    Context, FontWeight, IntoElement, MouseButton, SharedString, UniformListScrollHandle, div,
-    prelude::*, px, rgb, rgba, uniform_list,
-};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::DockerContainer;
-use nyaterm_ui::NyaScrollable;
-
 use super::super::panels::RemoteMonitorPanel;
+use super::{DockerRenderContext, docker_menu_layer};
 use crate::features::{
     formatting::compact_id, formatting::docker_state_color, formatting::docker_state_rank,
     shell::gpui_code_font_family,
@@ -18,8 +7,15 @@ use crate::features::{
 use crate::models::{DockerConfirmAction, DockerConfirmState};
 use crate::theme::ThemePalette;
 use crate::widgets::{empty_panel, status_pill, svg_icon_button};
-
-use super::{DockerRenderContext, docker_menu_layer};
+use gpui::{
+    Context, FontWeight, IntoElement, MouseButton, SharedString, UniformListScrollHandle, div,
+    prelude::*, px, rgb, rgba, uniform_list,
+};
+use nyaterm_core::truncate_preview;
+use nyaterm_remote_ops::docker::DockerContainer;
+use nyaterm_ui::NyaScrollable;
+use rust_i18n::t;
+use std::sync::Arc;
 
 pub(in crate::features::pages::remote) struct DockerContainersPanelState {
     pub has_snapshot: bool,

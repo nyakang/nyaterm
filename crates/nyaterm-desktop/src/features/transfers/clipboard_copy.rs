@@ -1,9 +1,11 @@
 //! Background copy and verified cross-endpoint move execution.
 use crate::models::TransferJobOutput;
-use nyaterm_transport::{
-    FileBrowserService, FileCopyRequest, RemoteFilePath, SftpFileType, SftpPathTransferOptions,
-    SftpTransferControl, file_browser_name, file_browser_path_is_root,
+use nyaterm_files::file_browser::{
+    FileBrowserService, file_browser_name, file_browser_path_is_root,
 };
+use nyaterm_files::remote_file::FileCopyRequest;
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileType, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
 use std::collections::BTreeMap;
 type FileInventory = BTreeMap<String, (SftpFileType, Option<u64>, Option<u32>)>;
 fn inventory(
@@ -101,7 +103,7 @@ pub(in crate::features) struct ClipboardCopyRequest {
 
 pub(in crate::features) fn run_clipboard_copy(
     request: ClipboardCopyRequest,
-    progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
+    progress: impl FnMut(nyaterm_files::sftp_transfer_types::SftpTransferProgress) + Send + 'static,
 ) -> Result<TransferJobOutput, String> {
     let ClipboardCopyRequest {
         source_service,
@@ -148,7 +150,7 @@ pub(in crate::features) fn run_clipboard_copy(
     }
     if !summary.copied {
         return Ok(TransferJobOutput::Summary(
-            nyaterm_transport::SftpTransferSummary {
+            nyaterm_files::sftp_transfer_types::SftpTransferSummary {
                 remote_path: summary.destination_path,
                 local_path: Default::default(),
                 bytes: 0,

@@ -1,8 +1,7 @@
 //! Synchronize remote monitoring demand after active-session changes.
 
-use gpui::Context;
-
 use crate::features::NyaTermApp;
+use gpui::Context;
 
 impl NyaTermApp {
     /// Re-sync the Remote panels' GPUI-facing state after the active session changed.
@@ -29,14 +28,13 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
-    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
-    use nyaterm_transport::RemoteProcess;
-
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::pages::remote::RemoteMonitorKind;
     use crate::models::{NavItem, RemoteProcessSortKey};
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
+    use nyaterm_remote_ops::remote_process::RemoteProcess;
 
     fn app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {
         // A uuid rather than a clock reading: these tests run in parallel and

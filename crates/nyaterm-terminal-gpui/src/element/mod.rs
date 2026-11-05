@@ -1,6 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -15,8 +16,8 @@ use nyaterm_terminal::selection::{
     expand_selection_range,
 };
 use nyaterm_terminal::{
-    ShellInputLineKind, TerminalLineId, TerminalSnapshot, terminal_cell_count,
-    terminal_char_cell_width, terminal_is_zero_width_mark,
+    TerminalLineId, TerminalSnapshot, terminal_cell_count, terminal_char_cell_width,
+    terminal_is_zero_width_mark,
 };
 
 use crate::contrast::{
@@ -35,6 +36,8 @@ use crate::paint::{
     terminal_highlight_spans_compiled, terminal_highlight_spans_with_keyword_ranges_and_options,
     terminal_keyword_exclusion_ranges, terminal_run_font,
 };
+use crate::paint_mask::paint_outside;
+use crate::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 use crate::terminal_font_features;
 use crate::types::{TerminalHighlightSpan, TerminalPaintGeometry};
 use crate::unwrapped::TerminalUnwrappedLayout;
@@ -433,7 +436,9 @@ pub struct NyaTerminalElement {
     layout_rows: Option<usize>,
     fill_height: bool,
     zebra_stripes_enabled: bool,
+    zebra_stripes_by_row: bool,
     target_line: Option<TerminalLineId>,
+    paint_exclusion: Option<Rc<Cell<Option<Bounds<Pixels>>>>>,
     #[cfg(feature = "renderer-bench")]
     cell_glyph_rendering: bool,
 }
@@ -533,7 +538,9 @@ impl NyaTerminalElement {
             layout_rows: None,
             fill_height: false,
             zebra_stripes_enabled: false,
+            zebra_stripes_by_row: false,
             target_line: None,
+            paint_exclusion: None,
             #[cfg(feature = "renderer-bench")]
             cell_glyph_rendering: true,
         }
@@ -541,6 +548,13 @@ impl NyaTerminalElement {
 
     pub fn with_layout_cache(mut self, cache: Arc<Mutex<NyaTerminalLayoutCache>>) -> Self {
         self.layout_cache = Some(cache);
+        self
+    }
+
+    /// The overlay resolves its frame-local bounds during prepaint. Exclude all
+    /// grid layers there, while leaving the parent's surface material intact.
+    pub fn with_paint_exclusion(mut self, exclusion: Rc<Cell<Option<Bounds<Pixels>>>>) -> Self {
+        self.paint_exclusion = Some(exclusion);
         self
     }
 
@@ -656,6 +670,11 @@ impl NyaTerminalElement {
     ) -> Self {
         self.zebra_stripes_enabled = enabled;
         self.target_line = target_line;
+        self
+    }
+
+    pub fn with_zebra_stripes_by_row(mut self, by_row: bool) -> Self {
+        self.zebra_stripes_by_row = by_row;
         self
     }
 
@@ -1336,6 +1355,7 @@ fn push_terminal_zebra_stripes(
     snapshot: &TerminalSnapshot,
     visible_rows: std::ops::Range<usize>,
     target_line: Option<TerminalLineId>,
+    mode: TerminalStripeMode,
     palette: nyaterm_ui::ThemePalette,
     geometry: TerminalPaintGeometry,
     out: &mut Vec<PaintQuad>,
@@ -1360,18 +1380,9 @@ fn push_terminal_zebra_stripes(
     };
 
     for row_index in visible_rows {
-        let color = snapshot.row(row_index).and_then(|row| {
-            if row.line_id.is_some() && row.line_id == target_line {
-                Some((palette.terminal_line_highlight << 8) | 0xff)
-            } else if matches!(
-                row.shell_input,
-                Some(ShellInputLineKind::Submitted | ShellInputLineKind::Active)
-            ) {
-                Some((palette.terminal_fg << 8) | 0x0f)
-            } else {
-                None
-            }
-        });
+        let color = snapshot
+            .row(row_index)
+            .and_then(|row| terminal_row_stripe_color(row, mode, target_line, palette));
         match (pending.as_mut(), color) {
             (Some((pending_color, _, end)), Some(color))
                 if *pending_color == color && *end == row_index =>
@@ -1729,6 +1740,7 @@ impl Element for NyaTerminalElement {
                 self.snapshot.as_ref(),
                 visible_rows.clone(),
                 self.target_line,
+                TerminalStripeMode::new(self.zebra_stripes_by_row, false),
                 self.palette,
                 paint_geometry,
                 &mut plan.zebra_stripes,
@@ -1742,21 +1754,16 @@ impl Element for NyaTerminalElement {
                 if row >= self.snapshot.row_count() {
                     break;
                 }
-                let target = self.target_line.and_then(|id| {
-                    let first = self.snapshot.rows().first()?.line_id?;
-                    if first.epoch != id.epoch {
-                        return None;
-                    }
-                    let source = usize::try_from(id.logical_line - first.logical_line).ok()?;
-                    layout
-                        .display_position(source, 0)
-                        .filter(|(target_row, _)| *target_row == display_row)?;
-                    self.snapshot.row(row)?.line_id
-                });
+                let target = layout.target_line_for_display_row(
+                    &self.snapshot,
+                    display_row,
+                    self.target_line,
+                );
                 push_terminal_zebra_stripes(
                     self.snapshot.as_ref(),
                     row..row + 1,
                     target,
+                    TerminalStripeMode::new(self.zebra_stripes_by_row, true),
                     self.palette,
                     TerminalPaintGeometry {
                         visual_y_offset: (display_row as f32 - row as f32) * cell_h,
@@ -2590,80 +2597,111 @@ impl Element for NyaTerminalElement {
         let viewport_mask = ContentMask {
             bounds: window.content_mask().bounds.intersect(&bounds),
         };
+        let exclusion = self.paint_exclusion.as_ref().and_then(|mask| mask.get());
         window.with_content_mask(Some(viewport_mask), |window| {
             // zebra → cell bg → under images → search/selection → marks → text → images → cursor
             for quad in prepaint.zebra_stripes.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for quad in prepaint.backgrounds.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for image in prepaint.images_under.drain(..) {
-                let _ = window.paint_image(
-                    image.bounds,
-                    image.bounds,
-                    gpui::Corners::default(),
-                    image.image,
-                    0,
-                    false,
-                );
+                paint_outside(exclusion, image.bounds, window, cx, |window, _| {
+                    let _ = window.paint_image(
+                        image.bounds,
+                        image.bounds,
+                        gpui::Corners::default(),
+                        image.image.clone(),
+                        0,
+                        false,
+                    );
+                });
             }
             for quad in prepaint.placeholders_under.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for quad in prepaint.decoration_backgrounds.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for quad in prepaint.active_markers.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for row in prepaint.rows.drain(..) {
-                let _ = row.line.paint(
-                    point(row.x, row.y),
-                    px(cell_height),
-                    gpui::TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+                paint_outside(exclusion, viewport_mask.bounds, window, cx, |window, cx| {
+                    let _ = row.line.paint(
+                        point(row.x, row.y),
+                        px(cell_height),
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                });
             }
-            prepaint.cell_glyphs.paint(window, cx);
+            prepaint
+                .cell_glyphs
+                .paint_with_exclusion(exclusion, window, cx);
             for strike in prepaint.strikethroughs.drain(..) {
-                window.paint_strikethrough(
-                    strike.origin,
-                    strike.width,
-                    &line_strike_color(rgb(strike.color).into()),
-                );
+                paint_outside(exclusion, viewport_mask.bounds, window, cx, |window, _| {
+                    window.paint_strikethrough(
+                        strike.origin,
+                        strike.width,
+                        &line_strike_color(rgb(strike.color).into()),
+                    );
+                });
             }
             for quad in prepaint.underlines.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             for image in prepaint.images_above.drain(..) {
-                let _ = window.paint_image(
-                    image.bounds,
-                    image.bounds,
-                    gpui::Corners::default(),
-                    image.image,
-                    0,
-                    false,
-                );
+                paint_outside(exclusion, image.bounds, window, cx, |window, _| {
+                    let _ = window.paint_image(
+                        image.bounds,
+                        image.bounds,
+                        gpui::Corners::default(),
+                        image.image.clone(),
+                        0,
+                        false,
+                    );
+                });
             }
             for quad in prepaint.placeholders_above.drain(..) {
-                window.paint_quad(quad);
+                paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                    window.paint_quad(quad.clone());
+                });
             }
             if let Some(cursor) = prepaint.cursor_background.take() {
-                window.paint_quad(cursor);
+                paint_outside(exclusion, cursor.bounds, window, cx, |window, _| {
+                    window.paint_quad(cursor.clone());
+                });
             }
-            prepaint.cursor_cell_glyphs.paint(window, cx);
+            prepaint
+                .cursor_cell_glyphs
+                .paint_with_exclusion(exclusion, window, cx);
             if let Some(cursor_glyph) = prepaint.cursor_glyph.take() {
-                let _ = cursor_glyph.line.paint(
-                    cursor_glyph.origin,
-                    px(cell_height),
-                    gpui::TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+                paint_outside(exclusion, viewport_mask.bounds, window, cx, |window, cx| {
+                    let _ = cursor_glyph.line.paint(
+                        cursor_glyph.origin,
+                        px(cell_height),
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                });
             }
         });
         let elapsed = started_at.elapsed();

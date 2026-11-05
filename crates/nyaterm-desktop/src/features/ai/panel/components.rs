@@ -1,9 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{
-    App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
-    rgb, svg,
-};
+use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_core::ai::AiCommandCard;
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
@@ -65,54 +62,6 @@ pub(super) fn ai_send_button(
         )
 }
 
-pub(super) fn ai_user_pre_wrap_text(palette: ThemePalette, text: &str) -> gpui::AnyElement {
-    let mut block = div()
-        .min_w_0()
-        .w_full()
-        .flex()
-        .flex_col()
-        .text_size(px(12.))
-        .text_color(rgb(palette.text))
-        .line_height(px(18.));
-    for line in text.split('\n') {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        let line_text = if line.is_empty() { " " } else { line }.to_string();
-        block = block.child(div().min_w_0().line_height(px(18.)).child(line_text));
-    }
-    block.into_any_element()
-}
-
-pub(super) fn ai_message_menu_button(
-    palette: ThemePalette,
-    id: &'static str,
-    icon: &'static str,
-    label: impl Into<SharedString>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let label: SharedString = label.into();
-    div()
-        .id(SharedString::from(id))
-        .h(px(28.))
-        .px_2()
-        .flex()
-        .items_center()
-        .gap_2()
-        .rounded_sm()
-        .text_size(px(12.))
-        .text_color(rgb(palette.text))
-        .cursor_pointer()
-        .hover(move |this| this.bg(rgb(palette.hover)))
-        .on_click(on_click)
-        .child(
-            svg()
-                .size(px(14.))
-                .flex_none()
-                .path(icon)
-                .text_color(rgb(palette.text_muted)),
-        )
-        .child(label)
-}
-
 pub(super) fn ai_setup_step(
     palette: ThemePalette,
     index: &'static str,
@@ -150,22 +99,6 @@ pub(super) fn ai_setup_step(
                 .text_color(rgb(palette.text))
                 .child(label),
         )
-}
-
-pub(super) fn ai_message_menu_position(
-    x: f32,
-    y: f32,
-    menu_width: f32,
-    menu_height: f32,
-    viewport_width: f32,
-    viewport_height: f32,
-) -> (f32, f32, f32) {
-    let margin = 8.;
-    let max_height = (viewport_height - margin * 2.).max(64.);
-    let height = menu_height.min(max_height);
-    let max_x = (viewport_width - menu_width - margin).max(margin);
-    let max_y = (viewport_height - height - margin).max(margin);
-    (x.clamp(margin, max_x), y.clamp(margin, max_y), max_height)
 }
 
 #[cfg(test)]

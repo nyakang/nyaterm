@@ -1,14 +1,13 @@
-use gpui::{
-    Context, Entity, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div,
-    prelude::*, px, rgb,
-};
-use nyaterm_transport::{DockerContainer, DockerContainerDetails};
-use nyaterm_ui::{NyaButton, NyaDialogHandle, NyaDialogWindowExt};
-
 use super::{DockerLabels, docker_labels};
 use crate::features::{NyaTermApp, formatting::docker_state_color, shell::gpui_code_font_family};
 use crate::theme::ThemePalette;
 use crate::widgets::{small_button, status_pill};
+use gpui::{
+    Context, Entity, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div,
+    prelude::*, px, rgb,
+};
+use nyaterm_remote_ops::docker::{DockerContainer, DockerContainerDetails};
+use nyaterm_ui::{NyaButton, NyaDialogHandle, NyaDialogWindowExt};
 
 /// Owns only the dialog lifetime. RemoteOps remains authoritative for its data.
 struct DockerDetailsView {
@@ -549,7 +548,7 @@ mod tests {
         Window, div, prelude::*, px, size,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
-    use nyaterm_transport::DockerContainerDetails;
+    use nyaterm_remote_ops::docker::DockerContainerDetails;
     use nyaterm_ui::NyaDialogWindowExt;
 
     struct Host {

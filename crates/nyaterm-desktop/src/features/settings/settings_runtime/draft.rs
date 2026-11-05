@@ -1,12 +1,10 @@
-use rust_i18n::t;
-
-use gpui::Context;
-use nyaterm_store::StoreDomain;
-use nyaterm_transport::SftpDuplicatePolicy;
-
 use crate::features::NyaTermApp;
 use crate::features::app_state::SettingsDraftSnapshot;
 use crate::models::TranslationSecretDraft;
+use gpui::Context;
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_store::StoreDomain;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn begin_settings_draft(&mut self, cx: &mut Context<Self>) {
@@ -667,6 +665,7 @@ impl NyaTermApp {
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
         let browser_was_visible = self.transfer_browser_is_visible();
+        self.collapse_open_search_engine(cx);
         self.hide_secret_inputs(cx);
         self.settings.theme_designer_mut().reset();
         self.forget_text_inputs("theme.designer.");
@@ -705,13 +704,12 @@ fn drive_validation_key(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
-    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
-
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::settings::SettingsSaveKind;
     use crate::models::HeaderStatusMode;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
 
     /// A real store runtime, because these tests are about what reaches disk.
     fn app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {
@@ -779,6 +777,39 @@ mod tests {
         });
         assert_eq!(saved.terminal_wrap_mode, TerminalWrapMode::None);
         assert!(saved.terminal_show_wrap_markers);
+    }
+
+    #[test]
+    fn row_stripes_draft_cancel_and_apply_preserve_committed_preferences() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_zebra_stripes_by_row(cx);
+            app.toggle_terminal_zebra_stripes(cx);
+            assert!(app.settings.summary().terminal_zebra_stripes_by_row);
+            assert!(!app.settings.summary().terminal_zebra_stripes_enabled);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert!(!app.settings.summary().terminal_zebra_stripes_by_row);
+            assert!(app.settings.summary().terminal_zebra_stripes_enabled);
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_zebra_stripes_by_row(cx);
+        });
+        let load = |cx: &mut TestAppContext| {
+            app.update(cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            })
+        };
+        assert!(!load(&mut cx).terminal_zebra_stripes_by_row);
+        app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+        cx.run_until_parked();
+        assert!(load(&mut cx).terminal_zebra_stripes_by_row);
     }
 
     #[test]
@@ -2154,6 +2185,86 @@ mod tests {
             assert_eq!(app.settings.summary().terminal_font_size, 28);
             app.cancel_settings(cx);
             assert!(app.settings.summary().custom_themes.available().is_empty());
+        });
+    }
+
+    /// Write settings straight into the store, the way a cloud pull does.
+    fn pull_terminal_scrollback_into_store(
+        app: &gpui::Entity<NyaTermApp>,
+        cx: &mut TestAppContext,
+    ) {
+        cx.update_entity(app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut settings = store.load_app_settings_summary()?;
+                    settings.terminal_scrollback_lines = 4242;
+                    store.save_terminal_settings(&settings)
+                })
+                .unwrap();
+        });
+    }
+
+    /// Store replies are delivered from another thread, so `run_until_parked`
+    /// alone does not wait for them (`applying_a_draft_persists_the_header_status_mode`).
+    fn wait_for_the_pulled_settings(app: &gpui::Entity<NyaTermApp>, cx: &mut TestAppContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if cx.update_entity(app, |app, _| {
+                app.settings.summary().terminal_scrollback_lines == 4242
+            }) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the store refresh never reached the in-memory settings"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn store_refresh_after_a_pull_rebases_an_untouched_settings_draft() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            assert!(!app.settings_draft_dirty());
+        });
+        pull_terminal_scrollback_into_store(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.refresh_store_from_runtime_and_sync_theme(cx)
+        });
+        wait_for_the_pulled_settings(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
+            assert!(
+                !app.settings_draft_dirty(),
+                "a pull must not turn an untouched draft into unsaved edits"
+            );
+        });
+    }
+
+    #[test]
+    fn store_refresh_keeps_a_draft_the_user_actually_edited() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_transfer_internal_editor_font_size(19, cx);
+            assert!(app.settings_draft_dirty());
+        });
+        pull_terminal_scrollback_into_store(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.refresh_store_from_runtime_and_sync_theme(cx)
+        });
+        wait_for_the_pulled_settings(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
+            assert!(
+                app.settings_draft_dirty(),
+                "refreshing must not silently drop the user's edit"
+            );
         });
     }
 }

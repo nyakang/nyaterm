@@ -7,12 +7,11 @@
 //! a slow load for a tab the user already refreshed or closed is dropped rather
 //! than shown.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use gpui::RenderImage;
 use nyaterm_core::PreviewCategory;
-use nyaterm_transport::RemoteTextGeneration;
+use nyaterm_files::remote_file::RemoteTextGeneration;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A single decoded page of a rasterized PDF, ready to paint.
 #[derive(Clone)]
@@ -478,7 +477,7 @@ pub(crate) struct TransferPreviewState {
 impl TransferPreviewState {
     pub(crate) fn tab_id_for_remote_path(
         session_id: Option<&str>,
-        remote_path: &nyaterm_transport::RemoteFilePath,
+        remote_path: &nyaterm_files::sftp::RemoteFilePath,
     ) -> String {
         format!(
             "{}\n{}",
@@ -487,8 +486,8 @@ impl TransferPreviewState {
         )
     }
 
-    pub(crate) fn remote_file_path(&self) -> nyaterm_transport::RemoteFilePath {
-        nyaterm_transport::RemoteFilePath {
+    pub(crate) fn remote_file_path(&self) -> nyaterm_files::sftp::RemoteFilePath {
+        nyaterm_files::sftp::RemoteFilePath {
             display_path: self.remote_path.clone(),
             raw_path_token: self.raw_path_token.clone(),
         }
@@ -587,13 +586,13 @@ fn disambiguated_label(name: &str, remote_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_core::PreviewCategory;
-    use nyaterm_transport::{RemoteFilePath, RemoteTextGeneration};
-
     use super::{
         DelimitedSort, PreviewContent, PreviewDelimited, PreviewViewport, TransferPreviewState,
         TransferPreviewWorkspaceState,
     };
+    use nyaterm_core::PreviewCategory;
+    use nyaterm_files::remote_file::RemoteTextGeneration;
+    use nyaterm_files::sftp::RemoteFilePath;
 
     fn preview_tab(session_id: &str, remote_path: &str) -> TransferPreviewState {
         TransferPreviewState {

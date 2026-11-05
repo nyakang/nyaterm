@@ -1,8 +1,7 @@
+use nyaterm_transport::SshMultiplexHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread::{self, JoinHandle};
-
-use nyaterm_transport::SshMultiplexHandle;
 
 /// Process-wide connection ownership. A lease belongs to a live session or a
 /// pending start, and travels with that owner when its window changes.
@@ -25,6 +24,7 @@ struct ManagedConnection {
     // Only test probes omit the live handle; they exercise the same lease and
     // disconnect queue without requiring an external SSH server.
     handle: Option<SshMultiplexHandle>,
+    docker_state: nyaterm_remote_ops::docker::DockerConnectionState,
     cleanup: Option<Box<dyn FnOnce() + Send + Sync>>,
     disconnects: Arc<DisconnectWorker>,
 }
@@ -95,6 +95,7 @@ impl SshConnectionPool {
     ) -> SshConnectionLease {
         let inner = Arc::new(ManagedConnection {
             handle,
+            docker_state: Default::default(),
             cleanup: Some(cleanup),
             disconnects: Arc::clone(&self.inner.disconnects),
         });
@@ -141,6 +142,10 @@ impl SshConnectionPool {
 }
 
 impl SshConnectionLease {
+    pub(crate) fn docker_state(&self) -> nyaterm_remote_ops::docker::DockerConnectionState {
+        self.inner.docker_state.clone()
+    }
+
     pub(crate) fn enqueue_cleanup(&self, cleanup: impl FnOnce() + Send + 'static) {
         self.inner.disconnects.submit(Box::new(cleanup));
     }

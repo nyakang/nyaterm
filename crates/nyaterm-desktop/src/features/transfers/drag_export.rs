@@ -5,12 +5,13 @@ use gpui::{
     PromisedFileDescriptor, PromisedFileDragPayload, VirtualFileDescriptor, VirtualFileDragPayload,
     VirtualFileProvider, VirtualFileStream, VirtualFileTreeProvider,
 };
-use nyaterm_transport::drag_export::{
+use nyaterm_files::drag_export::{
     DragExportSource, RemoteDragFile, SftpReadSource, SftpReadStream,
 };
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFileService, SftpFileEntry, SftpFileType, SftpTransferOptions,
-};
+use nyaterm_files::file_browser::FileBrowserBackendKind;
+use nyaterm_files::remote_file::RemoteFileService;
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
 use std::{
     cell::OnceCell,
     path::PathBuf,
@@ -130,9 +131,9 @@ impl TransferDragExportService {
             let controls: Vec<_> = selection
                 .entries
                 .iter()
-                .map(|_| nyaterm_transport::SftpTransferControl::new())
+                .map(|_| nyaterm_files::sftp::SftpTransferControl::new())
                 .collect();
-            let lifetime = Arc::new(nyaterm_transport::drag_export::DragSourceLifetime::new(
+            let lifetime = Arc::new(nyaterm_files::drag_export::DragSourceLifetime::new(
                 service.clone(),
                 controls.clone(),
             )?);
@@ -170,10 +171,10 @@ impl TransferDragExportService {
             sender.clone(),
         );
         let controls = aggregate.controls();
-        let enumeration_control = nyaterm_transport::SftpTransferControl::new();
+        let enumeration_control = nyaterm_files::sftp::SftpTransferControl::new();
         let mut watched = controls.clone();
         watched.push(enumeration_control.clone());
-        let lifetime = Arc::new(nyaterm_transport::drag_export::DragSourceLifetime::new(
+        let lifetime = Arc::new(nyaterm_files::drag_export::DragSourceLifetime::new(
             service.clone(),
             watched,
         )?);
@@ -218,8 +219,8 @@ impl TransferDragExportService {
         selection: &TransferSelection,
         service: Weak<RemoteFileService>,
         aggregate: Arc<super::drag_aggregate::DragAggregate>,
-        parent: nyaterm_transport::SftpTransferControl,
-        lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+        parent: nyaterm_files::sftp::SftpTransferControl,
+        lifetime: Arc<nyaterm_files::drag_export::DragSourceLifetime>,
         root_index: usize,
         file: RemoteDragFile,
     ) -> VirtualFileDescriptor {
@@ -244,9 +245,9 @@ struct RemoteTreeProvider {
     selection: TransferSelection,
     service: Weak<RemoteFileService>,
     aggregate: Arc<super::drag_aggregate::DragAggregate>,
-    controls: Vec<nyaterm_transport::SftpTransferControl>,
-    lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
-    control: nyaterm_transport::SftpTransferControl,
+    controls: Vec<nyaterm_files::sftp::SftpTransferControl>,
+    lifetime: Arc<nyaterm_files::drag_export::DragSourceLifetime>,
+    control: nyaterm_files::sftp::SftpTransferControl,
 }
 impl VirtualFileTreeProvider for RemoteTreeProvider {
     fn load(&self) -> std::io::Result<VirtualFileDragPayload> {
@@ -256,14 +257,13 @@ impl VirtualFileTreeProvider for RemoteTreeProvider {
             .ok_or_else(|| std::io::Error::other("source session is closed"))?;
         let source_snapshot = (*service).clone();
         drop(service);
-        let entries =
-            nyaterm_transport::drag_export::tree::enumerate_remote_drag_with_root_controls(
-                &source_snapshot,
-                self.selection.entries.clone(),
-                &self.control,
-                self.controls.clone(),
-            )
-            .map_err(std::io::Error::other)?;
+        let entries = nyaterm_files::drag_export::tree::enumerate_remote_drag_with_root_controls(
+            &source_snapshot,
+            self.selection.entries.clone(),
+            &self.control,
+            self.controls.clone(),
+        )
+        .map_err(std::io::Error::other)?;
         let mut files = Vec::with_capacity(entries.len());
         for entry in entries {
             if !entry.is_directory {
@@ -294,7 +294,7 @@ impl VirtualFileTreeProvider for RemoteTreeProvider {
 
 struct RemoteProvider {
     source: SftpReadSource,
-    _lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+    _lifetime: Arc<nyaterm_files::drag_export::DragSourceLifetime>,
 }
 impl VirtualFileProvider for RemoteProvider {
     fn open(&self) -> std::io::Result<Box<dyn VirtualFileStream>> {
@@ -352,7 +352,7 @@ impl NyaTermApp {
                 .cloned()
                 .collect()
         };
-        let entries = match nyaterm_transport::drag_export::tree::prune_nested_roots(entries) {
+        let entries = match nyaterm_files::drag_export::tree::prune_nested_roots(entries) {
             Ok(entries) => entries,
             Err(error) => {
                 self.shell.set_status(error.to_string());
@@ -384,7 +384,9 @@ impl NyaTermApp {
         self.session.metadata(&selection.session_id)?;
         if selection.backend == FileBrowserBackendKind::Remote {
             let service = selection.source_service.as_ref().and_then(Weak::upgrade)?;
-            if service.selected_backend() != Some(nyaterm_transport::RemoteFileBackendKind::Sftp) {
+            if service.selected_backend()
+                != Some(nyaterm_files::remote_file::RemoteFileBackendKind::Sftp)
+            {
                 self.shell
                     .set_status("Remote drag export requires SFTP; use Download".to_string());
                 cx.notify();
@@ -411,8 +413,9 @@ impl NyaTermApp {
 #[cfg(test)]
 mod tests {
     use super::{TransferDragExportService, TransferSelection};
-    use nyaterm_transport::drag_export::DragExportSource;
-    use nyaterm_transport::{FileBrowserBackendKind, SftpFileEntry, SftpFileType};
+    use nyaterm_files::drag_export::DragExportSource;
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
     fn entry(name: &str, kind: SftpFileType) -> SftpFileEntry {
         SftpFileEntry {
             name: name.into(),
@@ -457,7 +460,7 @@ mod tests {
         let selection = TransferSelection {
             session_id: "session".into(),
             source_service: None,
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Remote,
             entries: vec![entry("你好.txt", SftpFileType::File)],
         };
@@ -483,7 +486,8 @@ mod tests {
             let selection = TransferSelection {
                 session_id: "session".into(),
                 source_service: None,
-                transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+                transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(
+                ),
                 backend: FileBrowserBackendKind::Remote,
                 entries: vec![entry("file", SftpFileType::File), entry("other", kind)],
             };
@@ -496,7 +500,7 @@ mod tests {
         let selection = TransferSelection {
             session_id: "session".into(),
             source_service: None,
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Remote,
             entries: vec![
                 entry("folder", SftpFileType::Directory),
@@ -504,7 +508,7 @@ mod tests {
             ],
         };
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+        let service = std::sync::Arc::new(nyaterm_files::remote_file::RemoteFileService::new(
             nyaterm_transport::SshSessionConfig::default(),
         ));
         let gpui::ExternalDragPayload::VirtualFileTree(tree) = TransferDragExportService::resolve(
@@ -551,7 +555,7 @@ mod tests {
         let selection = TransferSelection {
             session_id: "session".into(),
             source_service: None,
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Local,
             entries: vec![entry("dir", SftpFileType::Directory)],
         };
@@ -573,7 +577,7 @@ mod tests {
         let selection = TransferSelection {
             session_id: "session".into(),
             source_service: None,
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Remote,
             entries: vec![
                 entry("你好.txt", SftpFileType::File),
@@ -581,7 +585,7 @@ mod tests {
             ],
         };
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+        let service = std::sync::Arc::new(nyaterm_files::remote_file::RemoteFileService::new(
             nyaterm_transport::SshSessionConfig::default(),
         ));
         let gpui::ExternalDragPayload::VirtualFiles(files) = TransferDragExportService::resolve(
@@ -611,7 +615,8 @@ mod tests {
             let selection = TransferSelection {
                 session_id: "session".into(),
                 source_service: None,
-                transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+                transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(
+                ),
                 backend: FileBrowserBackendKind::Remote,
                 entries: vec![entry(name, SftpFileType::File)],
             };
@@ -630,7 +635,7 @@ mod tests {
         let selection = TransferSelection {
             session_id: "session".into(),
             source_service: None,
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Remote,
             entries: vec![entry("file", SftpFileType::File)],
         };
@@ -643,13 +648,13 @@ mod tests {
     #[test]
     fn gesture_snapshot_cannot_be_redirected_after_capture() {
         let drag = super::DraggedSelection::new("anchor".into());
-        let service = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+        let service = std::sync::Arc::new(nyaterm_files::remote_file::RemoteFileService::new(
             nyaterm_transport::SshSessionConfig::default(),
         ));
         let selection = TransferSelection {
             session_id: "original".into(),
             source_service: Some(std::sync::Arc::downgrade(&service)),
-            transfer_options: nyaterm_transport::SftpTransferOptions::default(),
+            transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
             backend: FileBrowserBackendKind::Remote,
             entries: vec![entry("original", SftpFileType::File)],
         };

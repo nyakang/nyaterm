@@ -1,15 +1,13 @@
-use std::fs;
-use std::time::{Duration, Instant};
-
+use crate::features::NyaTermApp;
+use crate::features::test_support::app_with_visible_local_session;
 use gpui::{AppContext as _, Entity, TestAppContext};
 use nyaterm_core::test_support::TestTempDir;
 use nyaterm_core::{
     ConnectionRecordingSettings, RecordingMode as CoreRecordingMode, SavedConnection,
 };
-use nyaterm_transport::RecordingMode;
-
-use crate::features::NyaTermApp;
-use crate::features::test_support::app_with_visible_local_session;
+use nyaterm_recording::recording::RecordingMode;
+use std::fs;
+use std::time::{Duration, Instant};
 
 fn fixture(cx: &mut TestAppContext, root: &TestTempDir) -> Entity<NyaTermApp> {
     cx.executor().allow_parking();

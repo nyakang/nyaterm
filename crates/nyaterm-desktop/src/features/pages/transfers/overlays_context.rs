@@ -1,13 +1,10 @@
-use rust_i18n::t;
-
-use gpui::Context;
-use nyaterm_transport::SftpFileEntry;
-use nyaterm_ui::NyaMenuItem;
-
+use super::TransferPathPart;
 use crate::features::NyaTermApp;
 use crate::models::{TransferBrowserContextTarget, TransferPathPromptKind};
-
-use super::TransferPathPart;
+use gpui::Context;
+use nyaterm_files::sftp::SftpFileEntry;
+use nyaterm_ui::NyaMenuItem;
+use rust_i18n::t;
 
 impl NyaTermApp {
     fn transfer_context_action_bar(
@@ -110,16 +107,16 @@ impl NyaTermApp {
         );
         let target_directory = self.transfer_browser_operation_target_directory();
         let local_backend = self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local);
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local);
         let mut items = Vec::with_capacity(policy.len() + 2);
         if !local_backend {
             items.push(self.transfer_context_action_bar(false, cx));
             items.push(NyaMenuItem::separator());
         }
         let backend = if local_backend {
-            nyaterm_transport::FileBrowserBackendKind::Local
+            nyaterm_files::file_browser::FileBrowserBackendKind::Local
         } else {
-            nyaterm_transport::FileBrowserBackendKind::Remote
+            nyaterm_files::file_browser::FileBrowserBackendKind::Remote
         };
         for node in transfer_visible_context_menu_nodes(policy, backend) {
             let item = match node {
@@ -250,7 +247,7 @@ impl NyaTermApp {
 
         let policy = transfer_parent_directory_context_menu_policy();
         let remote_backend = self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Remote);
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         let mut items = Vec::with_capacity(policy.len() + 2);
         if remote_backend {
             items.push(self.transfer_context_action_bar(false, cx));
@@ -305,16 +302,16 @@ impl NyaTermApp {
             terminal_available,
         });
         let local_backend = self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local);
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local);
         let entry_backend = if local_backend {
-            nyaterm_transport::FileBrowserBackendKind::Local
+            nyaterm_files::file_browser::FileBrowserBackendKind::Local
         } else {
-            nyaterm_transport::FileBrowserBackendKind::Remote
+            nyaterm_files::file_browser::FileBrowserBackendKind::Remote
         };
         let target_directory = if entry.is_directory() {
             entry.path.clone()
         } else {
-            nyaterm_transport::file_browser_parent(entry_backend, &entry.path)
+            nyaterm_files::file_browser::file_browser_parent(entry_backend, &entry.path)
         };
         let mut items = Vec::with_capacity(policy.len() + 2);
         if !local_backend {
@@ -323,9 +320,9 @@ impl NyaTermApp {
         }
 
         let backend = if local_backend {
-            nyaterm_transport::FileBrowserBackendKind::Local
+            nyaterm_files::file_browser::FileBrowserBackendKind::Local
         } else {
-            nyaterm_transport::FileBrowserBackendKind::Remote
+            nyaterm_files::file_browser::FileBrowserBackendKind::Remote
         };
         for node in transfer_visible_context_menu_nodes(policy, backend) {
             let item = match node {

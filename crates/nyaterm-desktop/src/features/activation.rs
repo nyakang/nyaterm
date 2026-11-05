@@ -3,7 +3,7 @@ mod view;
 
 use std::time::Duration;
 
-use gpui::{Context, Window};
+use gpui::{AppContext as _, Context, Window};
 use nyaterm_core::activation::{
     ActivationAction, ExternalConnectionRequest, ParsedActivationRequest, normalize_external_host,
 };
@@ -62,8 +62,10 @@ impl NyaTermApp {
         self.activation.clock_armed = true;
         cx.spawn(async move |this, cx| {
             loop {
-                let keep_running = window
-                    .update(cx, |_, window, cx| {
+                // Dialog state reads the component root. Do not lease that
+                // root through the typed WindowHandle::update here.
+                let keep_running = cx
+                    .update_window(window.into(), |_, window, cx| {
                         this.update(cx, |app, cx| app.pump_external_activation(window, cx))
                             .unwrap_or(false)
                     })

@@ -1,18 +1,15 @@
-use std::collections::{HashMap, HashSet};
-
-use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::{DockerComposeProject, DockerComposeService};
-use rust_i18n::t;
-
 use super::super::super::panels::RemoteMonitorPanel;
-use crate::features::{formatting::docker_compose_project_key, shell::gpui_code_font_family};
-use crate::widgets::{empty_panel, status_pill, svg_icon_button};
-
 use super::super::{DockerRenderContext, resources::docker_resource_static_panel};
 use super::menus::docker_compose_project_action_menu;
 use super::service::docker_compose_services_panel;
 use super::status::{compose_status_color, compose_status_label};
+use crate::features::{formatting::docker_compose_project_key, shell::gpui_code_font_family};
+use crate::widgets::{empty_panel, status_pill, svg_icon_button};
+use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
+use nyaterm_core::truncate_preview;
+use nyaterm_remote_ops::docker::{DockerComposeProject, DockerComposeService};
+use rust_i18n::t;
+use std::collections::{HashMap, HashSet};
 
 pub(in crate::features::pages::remote) struct DockerComposePanelState<'a> {
     pub projects: &'a [DockerComposeProject],

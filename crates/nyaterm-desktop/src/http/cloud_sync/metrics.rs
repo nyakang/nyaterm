@@ -11,6 +11,28 @@ thread_local! {
     static CURRENT: RefCell<Option<Arc<Mutex<CloudSyncIoStats>>>> = const { RefCell::new(None) };
 }
 
+#[cfg(test)]
+thread_local! {
+    static DRIVE_ENDPOINT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_drive_endpoint() -> Option<String> {
+    DRIVE_ENDPOINT.with_borrow(Clone::clone)
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_drive_http<T>(endpoint: &str, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DRIVE_ENDPOINT.with_borrow_mut(|current| *current = self.0.take());
+        }
+    }
+    let _restore = Restore(DRIVE_ENDPOINT.with_borrow_mut(|v| v.replace(endpoint.into())));
+    operation()
+}
+
 pub(crate) fn begin_scope() -> (Arc<Mutex<CloudSyncIoStats>>, bool) {
     CURRENT.with_borrow_mut(|current| match current {
         Some(stats) => (stats.clone(), false),
@@ -24,6 +46,21 @@ pub(crate) fn begin_scope() -> (Arc<Mutex<CloudSyncIoStats>>, bool) {
 
 pub(crate) fn end_scope() {
     CURRENT.with_borrow_mut(|current| *current = None);
+}
+
+/// Bind compatibility requests on a worker to the operation's existing counters.
+pub(super) fn with_stats<T>(
+    stats: Arc<Mutex<CloudSyncIoStats>>,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Arc<Mutex<CloudSyncIoStats>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT.with_borrow_mut(|current| *current = self.0.take());
+        }
+    }
+    let _restore = Restore(CURRENT.with_borrow_mut(|current| current.replace(stats)));
+    operation()
 }
 
 fn record(update: impl FnOnce(&mut CloudSyncIoStats)) {
@@ -46,6 +83,21 @@ impl CountedRequest for zed_reqwest::blocking::RequestBuilder {
     fn send_counted(self) -> Result<zed_reqwest::blocking::Response, zed_reqwest::Error> {
         let (client, request) = self.build_split();
         let request = request?;
+        #[cfg(test)]
+        let request = {
+            let mut request = request;
+            if let Some(endpoint) = test_drive_endpoint() {
+                let url = request.url();
+                let rewritten = format!(
+                    "{endpoint}/{}{}{}",
+                    url.host_str().unwrap_or_default(),
+                    url.path(),
+                    url.query().map(|q| format!("?{q}")).unwrap_or_default()
+                );
+                *request.url_mut() = url::Url::parse(&rewritten).expect("fixture URL");
+            }
+            request
+        };
         // Cloud adapters submit buffered JSON, form and object bodies. Count each
         // submitted attempt, including a failed send; never inspect/log its data.
         let upload = request

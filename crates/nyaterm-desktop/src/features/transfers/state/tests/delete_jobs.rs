@@ -1,11 +1,3 @@
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
-
-use gpui::TestAppContext;
-use nyaterm_transport::{FileBrowserBackendKind, FileBrowserService, RemoteFilePath};
-
 use super::{transfer_job, transfer_state};
 use crate::features::transfers::file_operations::{
     FileMutation, FileMutationIntent, FileOperationContext, FileOperationEndpoint,
@@ -14,6 +6,13 @@ use crate::features::transfers::file_operations::{
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobStatus,
 };
+use gpui::TestAppContext;
+use nyaterm_files::file_browser::{FileBrowserBackendKind, FileBrowserService};
+use nyaterm_files::sftp::RemoteFilePath;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 #[test]
 fn thousand_deletes_from_both_entry_points_share_two_slots_and_complete_each_file_once() {
@@ -221,7 +220,7 @@ fn disconnect_cancels_waiting_deletes_but_preserves_results_of_running_deletes()
     let cancelled = rx.try_recv().unwrap();
     assert_eq!(cancelled.id, "delete-2");
     assert!(
-        matches!(cancelled.event, TransferJobEvent::Finished(Err(ref error)) if error == nyaterm_transport::SFTP_TRANSFER_CANCELLED)
+        matches!(cancelled.event, TransferJobEvent::Finished(Err(ref error)) if error == nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED)
     );
     state.take_transfer_job_for_event(&cancelled.id).unwrap();
     assert_eq!(

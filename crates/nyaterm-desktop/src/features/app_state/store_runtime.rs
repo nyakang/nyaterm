@@ -148,7 +148,7 @@ impl NyaTermApp {
     pub(crate) fn shutdown_blocking_jobs(&mut self, cx: &mut Context<Self>) -> Task<()> {
         self.plugins.shutdown(cx);
         self.ai.invalidate_provider_jobs();
-        self.ai.cancel_chat_and_agent();
+        self.ai.cancel_all_chats_and_agents();
         let agent_worker = self.ai.shutdown_agent_management_worker();
         let stop_jobs = self.blocking_jobs.begin_shutdown();
         let stop_transfers = self.transfer.begin_bulk_shutdown();
@@ -430,8 +430,48 @@ mod tests {
 
     use gpui::{AppContext as _, TestAppContext};
     use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_core::{AiAgentKind, AiMode};
 
     use crate::features::test_support::app_with_visible_local_session;
+
+    #[gpui::test]
+    fn workspace_shutdown_cancels_agents_in_inactive_terminal_scopes(cx: &mut TestAppContext) {
+        let directory = TestTempDir::new("nyaterm-workspace-agent-shutdown");
+        let app = app_with_visible_local_session(cx, directory.path(), "agent-shutdown");
+        let launches = cx.update_entity(&app, |app, _| {
+            let mut launches = Vec::new();
+            for (scope, kind) in [
+                ("terminal:claude", AiAgentKind::ClaudeCode),
+                ("terminal:codex", AiAgentKind::Codex),
+                ("unbound:", AiAgentKind::Nyaterm),
+            ] {
+                app.ai.switch_visible_scope(scope);
+                app.ai.set_chat_run_mode(AiMode::Agent, kind);
+                launches.push(
+                    app.ai
+                        .begin_chat_request("inspect".into(), AiMode::Agent, None),
+                );
+            }
+            launches
+        });
+
+        let cleanup = cx.update_entity(&app, |app, cx| app.shutdown_blocking_jobs(cx));
+
+        for launch in &launches {
+            assert!(launch.cancel.load(Ordering::Acquire));
+        }
+        cx.update_entity(&app, |app, _| {
+            assert_eq!(app.ai.active_scope_key(), "unbound:");
+            assert!(!app.ai.any_chat_or_agent_running());
+            for launch in launches {
+                let scope = app.ai.scope_for_ai_session(&launch.session_id).unwrap();
+                app.ai.switch_scope(&scope);
+                assert!(!app.ai.apply_chat_delta(launch.job_id, "late", None));
+            }
+        });
+        cleanup.detach();
+        cx.run_until_parked();
+    }
 
     #[gpui::test]
     fn workspace_shutdown_keeps_gpui_updates_responsive_while_a_request_finishes(

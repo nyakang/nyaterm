@@ -1,18 +1,18 @@
-use std::sync::Arc;
-use std::time::Instant;
-
-use futures::channel::mpsc::UnboundedSender;
-
-use nyaterm_core::{AiCommandCard, AiMode, AiModelDiscovery, CommandHistoryEntry};
-use nyaterm_transport::{
-    DockerComposeProject, DockerComposeService, DockerContainerDetails, RemoteDockerOverview,
-    RemoteGpuOverview, RemoteNpuOverview, RemoteProcess, RemoteStats, SessionInfo, SessionKind,
-    SessionManager, SshTunnelInfo,
-};
-
 use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;
 use crate::blocking_jobs::{BlockingJobScheduler, JobRejected, JobTask};
 use crate::models::SessionLaunchConfig;
+use futures::channel::mpsc::UnboundedSender;
+use nyaterm_core::{AiCommandCard, AiMode, AiModelDiscovery, CommandHistoryEntry};
+use nyaterm_remote_ops::ascend_npu::RemoteNpuOverview;
+use nyaterm_remote_ops::docker::{
+    DockerComposeProject, DockerComposeService, DockerContainerDetails, RemoteDockerOverview,
+};
+use nyaterm_remote_ops::gpu::RemoteGpuOverview;
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use nyaterm_remote_ops::stats::RemoteStats;
+use nyaterm_transport::{SessionInfo, SessionKind, SessionManager, SshTunnelInfo};
+use std::sync::Arc;
+use std::time::Instant;
 
 pub(in crate::features) async fn await_blocking_job<T>(
     task: Result<JobTask<T>, JobRejected>,
@@ -242,6 +242,7 @@ impl AiChatWorkerEvent {
 
 #[derive(Debug)]
 pub(in crate::features) struct AiChatJobOutput {
+    pub metadata: Option<nyaterm_core::ai::completion::AiResponseMetadata>,
     pub(in crate::features) native_call: Option<nyaterm_core::ai::harness::AgentToolCall>,
     pub(in crate::features) mode: AiMode,
     pub(in crate::features) text: String,
@@ -339,9 +340,9 @@ pub(in crate::features) enum DockerJobOutput {
 
 #[derive(Debug)]
 pub(in crate::features) enum DockerResource {
-    Images(Vec<nyaterm_transport::DockerImage>),
-    Volumes(Vec<nyaterm_transport::DockerVolume>),
-    Networks(Vec<nyaterm_transport::DockerNetwork>),
+    Images(Vec<nyaterm_remote_ops::docker::DockerImage>),
+    Volumes(Vec<nyaterm_remote_ops::docker::DockerVolume>),
+    Networks(Vec<nyaterm_remote_ops::docker::DockerNetwork>),
     Compose(Vec<DockerComposeProject>),
 }
 
@@ -353,17 +354,15 @@ pub(in crate::features) enum ActivitySide {
 
 #[cfg(test)]
 mod session_start_tests {
+    use super::{SessionStartResult, SessionStartSuccess};
+    use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
+    use futures::channel::mpsc::unbounded;
+    use nyaterm_transport::{LocalSessionConfig, SessionInfo, SessionKind, SessionManager};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
     use std::time::Instant;
-
-    use futures::channel::mpsc::unbounded;
-    use nyaterm_transport::{LocalSessionConfig, SessionInfo, SessionKind, SessionManager};
-
-    use super::{SessionStartResult, SessionStartSuccess};
-    use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
 
     fn live_channel(manager: &SessionManager) -> SessionInfo {
         manager

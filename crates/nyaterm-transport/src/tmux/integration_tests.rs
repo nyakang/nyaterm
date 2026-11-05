@@ -539,7 +539,7 @@ mod real {
         }
 
         async fn wait(&mut self, predicate: impl Fn(&Self) -> bool) {
-            tokio::time::timeout(Duration::from_secs(20), async {
+            let result = tokio::time::timeout(Duration::from_secs(20), async {
                 loop {
                     self.drain();
                     if predicate(self) {
@@ -552,8 +552,17 @@ mod real {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             })
-            .await
-            .expect("tmux state timeout");
+            .await;
+            if let Err(error) = result {
+                let remote = self
+                    .remote(&["list-panes", "-s", "-F", "#{pane_id}:#{window_id}"])
+                    .await;
+                panic!(
+                    "tmux state timeout ({error}); server panes: {remote}; last state: {:?}; registered sessions: {:?}",
+                    self.state,
+                    self.sessions.lock().unwrap().keys().collect::<Vec<_>>()
+                );
+            }
         }
 
         fn screen(&self, pane: &str) -> String {

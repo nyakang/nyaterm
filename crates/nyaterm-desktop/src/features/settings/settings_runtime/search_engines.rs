@@ -71,12 +71,33 @@ impl NyaTermApp {
             icon: None,
             show_in_menu: true,
         });
-        // The inputs are keyed by row index and every row just shifted down, so
-        // they have to be rebuilt from the engines they now stand for.
+        // The new row opens in the editor. Ids carry the row index, and every
+        // existing row just shifted down, so the previous inputs are dropped
+        // and rebuilt for the engine that is now open.
         self.forget_text_inputs("settings.search-engine.");
         self.ensure_expanded_search_engine_inputs(cx);
         self.save_terminal_settings(cx);
         self.shell.set_status("search engine added".to_string());
+    }
+
+    /// Close the engine editor so the list shows summary rows.
+    ///
+    /// A newly added engine opens for editing, but leaving this page must not
+    /// leave that editor open. The next visit starts from the summary rows.
+    pub(in crate::features) fn collapse_open_search_engine(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.settings.search_engine_presentation().expanded_index else {
+            let icon_open = self
+                .settings
+                .search_engine_presentation()
+                .icon_picker_index
+                .is_some();
+            self.settings.close_search_engine_menus();
+            if icon_open {
+                cx.notify();
+            }
+            return;
+        };
+        self.expand_search_engine(index, cx);
     }
 
     pub(in crate::features) fn remove_search_engine(

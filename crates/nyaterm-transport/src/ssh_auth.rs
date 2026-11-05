@@ -18,7 +18,7 @@ use super::{
 use crate::ssh_agent::connect_agent_client_with_environment_until;
 use crate::ssh_authentication::{
     SshAuthenticationMaterial, SshAuthenticationMethod, SshAuthenticationRequest,
-    SshAuthenticationResponse,
+    SshAuthenticationResponse, SshAuthenticationStage,
 };
 use crate::{ShellEnvironmentCache, ssh_agent::AGENT_CONNECTION_TIMEOUT};
 
@@ -66,6 +66,7 @@ impl Drop for AuthenticationFinishGuard {
 struct AuthenticationRejected {
     methods: Vec<MethodKind>,
     partial_success: bool,
+    password_accepted: bool,
 }
 
 pub(super) async fn authenticate_ssh(
@@ -101,6 +102,12 @@ fn offered_methods(methods: &[MethodKind]) -> Vec<SshAuthenticationMethod> {
         .collect()
 }
 
+#[derive(Default)]
+struct AuthenticationScope<'a> {
+    stage: SshAuthenticationStage,
+    accepted_response_ids: &'a [String],
+}
+
 fn request_authentication(
     config: &SshSessionConfig,
     kind: SshCredentialPromptKind,
@@ -108,6 +115,7 @@ fn request_authentication(
     attempt: u32,
     methods: Vec<SshAuthenticationMethod>,
     key_response_id: Option<String>,
+    scope: AuthenticationScope<'_>,
 ) -> anyhow::Result<SshAuthenticationResponse> {
     config.attempt.check().map_err(anyhow::Error::msg)?;
     let provider = config
@@ -128,6 +136,8 @@ fn request_authentication(
                 echo: false,
             },
             available_methods: methods,
+            stage: scope.stage,
+            accepted_response_ids: scope.accepted_response_ids.to_vec(),
             key_response_id,
         })
         .map_err(|error| anyhow::anyhow!("SSH credential prompt failed: {error}"))?
@@ -141,6 +151,7 @@ async fn authenticate_with_selection(
     config: &SshSessionConfig,
     successful_responses: &mut Vec<String>,
 ) -> anyhow::Result<()> {
+    let mut completed_factors = 0;
     let mut selection = config
         .key_auth
         .clone()
@@ -167,11 +178,28 @@ async fn authenticate_with_selection(
                 partial_success,
             } => {
                 methods = remaining_methods.iter().copied().collect();
-                if partial_success || config.allow_none_auth {
+                if partial_success {
+                    advance_authentication_factor(&mut completed_factors)?;
+                    return finish_additional_authentication(
+                        handle,
+                        config,
+                        methods,
+                        successful_responses,
+                        &mut completed_factors,
+                    )
+                    .await;
+                }
+                if config.allow_none_auth {
                     if methods.contains(&MethodKind::KeyboardInteractive) {
-                        return finish_keyboard_interactive(handle, config, None, partial_success)
-                            .await
-                            .map(|_| ());
+                        return finish_keyboard_interactive(
+                            handle,
+                            config,
+                            None,
+                            false,
+                            &mut completed_factors,
+                        )
+                        .await
+                        .map(|_| ());
                     }
                     anyhow::bail!("SSH none authentication rejected by server");
                 }
@@ -188,6 +216,7 @@ async fn authenticate_with_selection(
         SshCredentialPromptReason::MissingPassword
     };
     for attempt in 1..=3 {
+        config.attempt.check().map_err(anyhow::Error::msg)?;
         successful_responses.clear();
         let (material, response_id) = match selection.take() {
             Some(material) => (material, None),
@@ -203,6 +232,7 @@ async fn authenticate_with_selection(
                     attempt,
                     available.clone(),
                     None,
+                    AuthenticationScope::default(),
                 )?;
                 let allowed = match &response.material {
                     SshAuthenticationMaterial::Password(password) => {
@@ -238,25 +268,9 @@ async fn authenticate_with_selection(
             && methods.contains(&MethodKind::KeyboardInteractive)
             && !methods.contains(&MethodKind::Password);
         let result = match &material {
-            SshAuthenticationMaterial::Password(password) if interactive_only => {
-                match finish_keyboard_interactive(handle, config, Some(password), false).await {
-                    Ok(password_used) => {
-                        if !password_used {
-                            successful_responses.clear();
-                        }
-                        return Ok(());
-                    }
-                    Err(error) => match error.downcast::<AuthenticationRejected>() {
-                        Ok(rejection) => client::AuthResult::Failure {
-                            remaining_methods: russh::MethodSet::from(rejection.methods.as_slice()),
-                            partial_success: rejection.partial_success,
-                        },
-                        Err(error) => return Err(error),
-                    },
-                }
-            }
+            SshAuthenticationMaterial::Password(_) if interactive_only => None,
             SshAuthenticationMaterial::Password(password) => {
-                authenticate_password(handle, config, password).await?
+                Some(authenticate_password(handle, config, password).await?)
             }
             SshAuthenticationMaterial::Key(key) => {
                 let key = decode_ssh_key_with_prompt(
@@ -265,62 +279,83 @@ async fn authenticate_with_selection(
                     response_id.clone(),
                     successful_responses,
                 )?;
-                authenticate_ssh_key(
-                    handle,
-                    config,
-                    key,
-                    match &material {
-                        SshAuthenticationMaterial::Key(k) => k.cert_data.as_deref(),
-                        _ => None,
-                    },
+                Some(
+                    authenticate_ssh_key(
+                        handle,
+                        config,
+                        key,
+                        match &material {
+                            SshAuthenticationMaterial::Key(k) => k.cert_data.as_deref(),
+                            _ => None,
+                        },
+                    )
+                    .await?,
                 )
-                .await?
             }
             SshAuthenticationMaterial::KeyPassphrase(_) => {
                 anyhow::bail!("Expected password or SSH key")
             }
         };
-        let (mut remaining, mut partial) = match result {
-            client::AuthResult::Success => return Ok(()),
-            client::AuthResult::Failure {
+        let mut remaining = match result {
+            None => methods.clone(),
+            Some(client::AuthResult::Success) => return Ok(()),
+            Some(client::AuthResult::Failure {
                 remaining_methods,
                 partial_success,
-            } => (
-                remaining_methods.iter().copied().collect::<Vec<_>>(),
-                partial_success,
-            ),
+            }) => {
+                let remaining = remaining_methods.iter().copied().collect::<Vec<_>>();
+                if partial_success {
+                    advance_authentication_factor(&mut completed_factors)?;
+                    return finish_additional_authentication(
+                        handle,
+                        config,
+                        remaining,
+                        successful_responses,
+                        &mut completed_factors,
+                    )
+                    .await;
+                }
+                remaining
+            }
         };
-        if !interactive_only && remaining.contains(&MethodKind::KeyboardInteractive) {
+        if remaining.contains(&MethodKind::KeyboardInteractive) {
             match finish_keyboard_interactive(
                 handle,
                 config,
-                if partial { None } else { password },
-                partial,
+                password,
+                false,
+                &mut completed_factors,
             )
             .await
             {
                 Ok(password_used) => {
-                    // A rejected primary credential is eligible only if it was
-                    // actually used by the successful password fallback.
-                    if !partial && (used_key || !password_used) {
+                    // A rejected credential is eligible only if the successful
+                    // interactive fallback actually used it.
+                    if used_key || !password_used {
                         successful_responses.clear();
                     }
                     return Ok(());
                 }
                 Err(error) => match error.downcast::<AuthenticationRejected>() {
                     Ok(rejection) => {
+                        if used_key || !rejection.password_accepted {
+                            successful_responses.clear();
+                        }
                         remaining = rejection.methods;
-                        partial |= rejection.partial_success;
+                        if rejection.partial_success {
+                            return finish_additional_authentication(
+                                handle,
+                                config,
+                                remaining,
+                                successful_responses,
+                                &mut completed_factors,
+                            )
+                            .await;
+                        }
                     }
                     Err(error) => return Err(error),
                 },
             }
-        }
-        if partial {
-            if remaining.contains(&MethodKind::KeyboardInteractive) {
-                anyhow::bail!("SSH additional authentication factor rejected after three attempts");
-            }
-            anyhow::bail!("SSH requires an unsupported additional authentication factor");
         }
         methods = remaining;
         reason = if used_key {
@@ -345,14 +380,110 @@ async fn authenticate_ssh_agent(
         client::AuthResult::Failure {
             remaining_methods,
             partial_success: true,
-        } if remaining_methods.contains(&MethodKind::KeyboardInteractive) => {
-            finish_keyboard_interactive(handle, config, None, true)
-                .await
-                .map(|_| ())
+        } => {
+            let mut completed_factors = 0;
+            advance_authentication_factor(&mut completed_factors)?;
+            finish_additional_authentication(
+                handle,
+                config,
+                remaining_methods.iter().copied().collect(),
+                &[],
+                &mut completed_factors,
+            )
+            .await
         }
         client::AuthResult::Failure { .. } => {
-            anyhow::bail!("SSH requires an unsupported additional authentication factor")
+            anyhow::bail!("SSH Agent authentication rejected by server")
         }
+    }
+}
+
+const MAX_ADDITIONAL_AUTHENTICATION_STAGES: u32 = 8;
+
+fn advance_authentication_factor(completed_factors: &mut u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        *completed_factors < MAX_ADDITIONAL_AUTHENTICATION_STAGES,
+        "SSH additional authentication exceeded eight stage transitions"
+    );
+    *completed_factors += 1;
+    Ok(())
+}
+
+async fn finish_additional_authentication(
+    handle: &mut client::Handle<SshClientHandler>,
+    config: &SshSessionConfig,
+    mut methods: Vec<MethodKind>,
+    accepted_response_ids: &[String],
+    completed_factors: &mut u32,
+) -> anyhow::Result<()> {
+    let mut password_attempt = 0;
+    let mut interactive_attempted = false;
+    loop {
+        config.attempt.check().map_err(anyhow::Error::msg)?;
+        if !interactive_attempted && methods.contains(&MethodKind::KeyboardInteractive) {
+            let previous_factors = *completed_factors;
+            match finish_keyboard_interactive(handle, config, None, true, completed_factors).await {
+                Ok(_) => return Ok(()),
+                Err(error) => match error.downcast::<AuthenticationRejected>() {
+                    Ok(rejection) => methods = rejection.methods,
+                    Err(error) => return Err(error),
+                },
+            }
+            if *completed_factors != previous_factors {
+                password_attempt = 0;
+            }
+            interactive_attempted = true;
+        }
+        if !methods.contains(&MethodKind::Password) {
+            if methods.contains(&MethodKind::KeyboardInteractive) {
+                anyhow::bail!("SSH additional authentication factor rejected after three attempts");
+            }
+            anyhow::bail!("SSH requires an unsupported additional authentication factor");
+        }
+        anyhow::ensure!(
+            password_attempt < 3,
+            "SSH additional password authentication rejected after three attempts"
+        );
+        password_attempt += 1;
+        let response = request_authentication(
+            config,
+            SshCredentialPromptKind::Password,
+            if password_attempt == 1 {
+                SshCredentialPromptReason::AdditionalPasswordRequired
+            } else {
+                SshCredentialPromptReason::PasswordRejected
+            },
+            password_attempt,
+            vec![SshAuthenticationMethod::Password],
+            None,
+            AuthenticationScope {
+                stage: SshAuthenticationStage::AdditionalFactor,
+                accepted_response_ids,
+            },
+        )?;
+        let SshAuthenticationMaterial::Password(password) = response.material else {
+            anyhow::bail!("Expected additional SSH account password");
+        };
+        anyhow::ensure!(
+            !password.is_empty(),
+            "Additional SSH account password is empty"
+        );
+        match authenticate_password(handle, config, &password).await? {
+            client::AuthResult::Success => return Ok(()),
+            client::AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                methods = remaining_methods.iter().copied().collect();
+                if partial_success {
+                    advance_authentication_factor(completed_factors)?;
+                    password_attempt = 0;
+                    interactive_attempted = false;
+                }
+            }
+        }
+        // Additional passwords are session-only. Their response IDs never grant
+        // permission to rewrite the connection's primary authentication mode.
     }
 }
 
@@ -611,13 +742,12 @@ async fn authenticate_password(
     .map_err(anyhow::Error::from)
 }
 
-const MAX_KEYBOARD_INTERACTIVE_RESTARTS: u32 = 8;
-
 async fn finish_keyboard_interactive(
     handle: &mut client::Handle<SshClientHandler>,
     config: &SshSessionConfig,
     mut current_password: Option<&str>,
     mut primary_authenticated: bool,
+    completed_factors: &mut u32,
 ) -> anyhow::Result<bool> {
     let mut step = tokio::time::timeout(
         Duration::from_secs(30),
@@ -626,28 +756,34 @@ async fn finish_keyboard_interactive(
     .await
     .map_err(|_| anyhow::anyhow!("SSH keyboard-interactive authentication timed out"))??;
     let mut round = 0_u32;
-    let mut restart_count = 0_u32;
     let mut password_used = false;
+    let mut password_accepted = false;
     let mut rejection_count = 0_u32;
 
     loop {
+        config.attempt.check().map_err(anyhow::Error::msg)?;
         match step {
-            client::KeyboardInteractiveAuthResponse::Success => return Ok(password_used),
+            client::KeyboardInteractiveAuthResponse::Success => {
+                return Ok(password_accepted || password_used);
+            }
             client::KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods,
                 partial_success,
             } => {
+                if partial_success {
+                    advance_authentication_factor(completed_factors)?;
+                    password_accepted |= password_used;
+                }
                 primary_authenticated |= partial_success;
                 let retry_rejected_factor =
                     primary_authenticated && !partial_success && rejection_count < 2;
                 if (partial_success || retry_rejected_factor)
                     && remaining_methods.contains(&MethodKind::KeyboardInteractive)
-                    && (!partial_success || restart_count < MAX_KEYBOARD_INTERACTIVE_RESTARTS)
                 {
                     // A completed factor must never supply the next factor's answer.
                     current_password = None;
+                    password_used = false;
                     if partial_success {
-                        restart_count += 1;
                         rejection_count = 0;
                     } else {
                         rejection_count += 1;
@@ -665,6 +801,7 @@ async fn finish_keyboard_interactive(
                 return Err(AuthenticationRejected {
                     methods: remaining_methods.iter().copied().collect(),
                     partial_success: primary_authenticated,
+                    password_accepted,
                 }
                 .into());
             }
@@ -932,6 +1069,7 @@ fn decode_ssh_key_with_prompt(
             attempt,
             vec![SshAuthenticationMethod::Publickey],
             key_response_id.clone(),
+            AuthenticationScope::default(),
         )?;
         let SshAuthenticationMaterial::KeyPassphrase(passphrase) = response.material else {
             anyhow::bail!("Expected SSH key passphrase");

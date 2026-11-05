@@ -11,7 +11,13 @@ use russh::{ChannelMsg, client};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
 
-use super::{MIT_MAGIC_COOKIE, SessionEvent, SessionEventQueue, XAUTH_TIMEOUT};
+use std::time::Duration;
+
+use super::{SessionEvent, SessionEventQueue};
+
+pub(crate) const MIT_MAGIC_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
+
+pub(crate) const XAUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct X11ChannelOpen {
     pub(super) channel: russh::Channel<client::Msg>,

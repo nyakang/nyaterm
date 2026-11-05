@@ -167,7 +167,7 @@ impl NyaTermApp {
                     .map_err(|error| error.to_string())
             });
             let result = await_blocking_job(task).await.and_then(|result| result);
-            let _ = this.update_in(cx, |this, window, cx| {
+            let _ = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
                 this.finish_security_unlock(request_id, generation, origin, result, window, cx);
             });
         })
@@ -202,7 +202,7 @@ impl NyaTermApp {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(50))
                     .await;
-                let _ = this.update_in(cx, |app, window, cx| {
+                let _ = NyaTermApp::update_in_main_window(&this, cx, |app, window, cx| {
                     app.finish_security_unlock(request_id, generation, origin, result, window, cx);
                 });
             })
@@ -261,15 +261,6 @@ impl NyaTermApp {
                 revision,
             } => {
                 self.reveal_connection_password_after_unlock((editor_generation, revision), cx);
-            }
-            SecurityUnlockAction::SubmitSshAuthentication(id) => {
-                if self
-                    .session
-                    .prompt_active_credential()
-                    .is_some_and(|state| state.id == id)
-                {
-                    self.submit_runtime_authentication(window, cx);
-                }
             }
             SecurityUnlockAction::SavePasswordEditor(token) => {
                 if self.security.account_editor_token() == Some(token) {

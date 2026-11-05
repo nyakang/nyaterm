@@ -1,18 +1,15 @@
-use std::borrow::Cow;
-
+use super::super::panels::RemoteMonitorPanel;
+use super::data::ProcessDisplayMode;
+use super::resources::process_usage_color as usage_color;
+use crate::features::transfers::format_file_size;
+use crate::theme::ThemePalette;
+use crate::widgets::small_button;
 use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString, Window, div,
     prelude::*, px, rgb,
 };
-use nyaterm_transport::RemoteProcess;
-
-use super::super::panels::RemoteMonitorPanel;
-use crate::features::transfers::format_file_size;
-use crate::theme::ThemePalette;
-use crate::widgets::small_button;
-
-use super::data::ProcessDisplayMode;
-use super::resources::process_usage_color as usage_color;
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use std::borrow::Cow;
 
 #[derive(Clone)]
 pub(in crate::features::pages::remote) struct ProcessDetailLabels {

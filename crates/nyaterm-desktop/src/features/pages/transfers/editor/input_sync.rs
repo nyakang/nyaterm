@@ -1,11 +1,8 @@
-use std::path::PathBuf;
-
-use gpui::Context;
-
+use super::helpers::{external_editor_watch_key, upload_external_editor_file};
 use crate::features::NyaTermApp;
 use crate::models::TransferExternalSyncPromptState;
-
-use super::helpers::{external_editor_watch_key, upload_external_editor_file};
+use gpui::Context;
+use std::path::PathBuf;
 
 impl NyaTermApp {
     pub(in crate::features) fn upload_external_editor_sync(
@@ -70,7 +67,7 @@ impl NyaTermApp {
                 upload_external_editor_file(
                     service,
                     &job_id,
-                    nyaterm_transport::RemoteFilePath {
+                    nyaterm_files::sftp::RemoteFilePath {
                         display_path: remote_path,
                         raw_path_token,
                     },

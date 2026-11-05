@@ -764,9 +764,16 @@ impl NyaTermApp {
         );
         windows_backend.disabled = !cfg!(windows);
         rdp_backend_options.push(windows_backend);
+        let mut mstsc_backend = ConnectionEditorChoice::new(
+            Some("mstsc".into()),
+            t!("dialog.rdpBackendMstsc"),
+            editor.uses_mstsc_rdp(),
+        );
+        mstsc_backend.disabled = !cfg!(windows);
+        rdp_backend_options.push(mstsc_backend);
         if !matches!(
             editor.rdp_backend.as_str(),
-            "auto" | "builtin" | "internal" | "windows" | "active-x"
+            "auto" | "builtin" | "internal" | "windows" | "active-x" | "mstsc"
         ) {
             rdp_backend_options.push(ConnectionEditorChoice::new(
                 Some(editor.rdp_backend.clone()),
@@ -3094,6 +3101,63 @@ mod tests {
             window.simulate_next_frame(cx);
         });
         vcx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn mstsc_editor_hides_unused_controls_and_restores_them_when_switching_back(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::models::ConnectionEditorSection;
+        let test_dir = TestConfigDir::new("nyaterm-mstsc-editor-layout");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 680., 12.);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut draft = editor(None, None);
+                draft.kind = ConnectionKindTab::Rdp;
+                draft.host = "example.test".into();
+                draft.port = "3389".into();
+                draft.rdp_backend = "mstsc".into();
+                draft.rdp_display.mode = "fixed".into();
+                draft.rdp_reconnect.enabled = true;
+                app.connection_state.begin_editor(draft);
+                app.connection_state.build_editor_fields(cx);
+            })
+        });
+        for section in [
+            ConnectionEditorSection::Basic,
+            ConnectionEditorSection::Security,
+            ConnectionEditorSection::Display,
+            ConnectionEditorSection::Session,
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| app.set_connection_editor_section(section, cx))
+            });
+            draw_editor(&app, vcx);
+            for selector in [
+                "connection-editor-field-Username",
+                "connection-editor-field-Domain",
+                "connection-editor-field-Password",
+                "connection-editor-field-RdpDisplayWidth",
+                "connection-editor-field-RdpDisplayHeight",
+                "connection-editor-field-RdpReconnectAttempts",
+            ] {
+                assert!(
+                    vcx.debug_bounds(selector).is_none(),
+                    "{section:?}: {selector}"
+                );
+            }
+        }
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+                app.set_connection_editor_section(ConnectionEditorSection::Basic, cx);
+            })
+        });
+        draw_editor(&app, vcx);
+        assert!(
+            vcx.debug_bounds("connection-editor-field-Username")
+                .is_some()
+        );
     }
 
     #[test]

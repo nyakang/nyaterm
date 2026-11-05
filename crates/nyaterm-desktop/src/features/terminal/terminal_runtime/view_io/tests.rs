@@ -1,17 +1,3 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use gpui::{AppContext as _, KeyDownEvent, MouseButton, TestAppContext};
-use nyaterm_terminal::TerminalScreen;
-
-use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
-use crate::features::test_support::app_with_visible_local_session;
-use crate::models::{
-    TerminalBufferCellPos, TerminalFrameActionLinks, TerminalSelection, TerminalViewState,
-};
-use crate::terminal::{TerminalBufferMatch, TerminalKeyMode};
-use crate::test_support::TestConfigDir;
-
 use super::{
     TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
     lost_mouse_report_release_button, mouse_report_allowed_by_alt,
@@ -27,6 +13,17 @@ use super::{
     terminal_snapshot_with_newer_edge_row, terminal_snapshot_with_retained_scroll_window,
     terminal_status_changed, terminal_user_scroll_active, terminal_visual_display_offset,
 };
+use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
+use crate::features::test_support::app_with_visible_local_session;
+use crate::models::{
+    TerminalBufferCellPos, TerminalFrameActionLinks, TerminalSelection, TerminalViewState,
+};
+use crate::terminal::{TerminalBufferMatch, TerminalKeyMode};
+use crate::test_support::TestConfigDir;
+use gpui::{AppContext as _, KeyDownEvent, MouseButton, TestAppContext};
+use nyaterm_terminal::TerminalScreen;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[test]
 fn terminal_mouse_report_buttons_map_to_their_gpui_capture_button() {
@@ -1386,13 +1383,11 @@ fn paste_targets_use_their_own_charset_and_bracketed_mode() {
 
 #[test]
 fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
-    use std::io::Read;
-    use std::net::TcpListener;
-
+    use crate::models::SessionLaunchConfig;
     use nyaterm_core::character_encoding::CharacterEncoding;
     use nyaterm_transport::{TelnetEnterMode, TelnetSessionConfig};
-
-    use crate::models::SessionLaunchConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
 
     let root = TestConfigDir::new("nyaterm-telnet-local-input");
     let mut cx = TestAppContext::single();
@@ -1461,14 +1456,12 @@ fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
 
 #[test]
 fn reconnect_drops_old_enter_release_and_repeat_even_after_new_kitty_negotiation() {
-    use std::io::Read;
-    use std::net::TcpListener;
-
-    use gpui::KeyUpEvent;
-    use nyaterm_transport::TelnetSessionConfig;
-
     use crate::features::terminal::terminal_runtime::view_io::TerminalMouseReportRequest;
     use crate::models::{SessionLaunchConfig, TerminalProtocolState};
+    use gpui::KeyUpEvent;
+    use nyaterm_transport::TelnetSessionConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
 
     let root = TestConfigDir::new("nyaterm-reconnect-key-wire");
     let mut cx = TestAppContext::single();
@@ -1814,10 +1807,11 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
 #[test]
 fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw_input() {
     use crate::models::SessionLaunchConfig;
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
-        RecordingRotationPolicy, TelnetSessionConfig,
+        RecordingRotationPolicy,
     };
+    use nyaterm_transport::TelnetSessionConfig;
     use std::io::Read;
     use std::net::TcpListener;
 
@@ -2050,4 +2044,57 @@ fn cached_mouse_drag_targets_cannot_bypass_target_exclusion() {
     for id in ids {
         let _ = manager.close(&id);
     }
+}
+
+#[test]
+fn option_arrows_follow_meta_setting_and_target_session_kitty_flags() {
+    let root = TestConfigDir::new("nyaterm-option-arrow-encoding");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "option-arrows";
+    let app = app_with_visible_local_session(&mut cx, root.path(), session_id);
+    cx.update_entity(&app, |app, _| {
+        for alt_as_meta in [false, true] {
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_alt_as_meta = alt_as_meta;
+            app.settings.replace_summary(settings);
+
+            for flags in 0..=31 {
+                let output = format!("\x1b[={flags}u");
+                app.terminal.view.views.insert(
+                    session_id.to_string(),
+                    TerminalViewState::from_output(output),
+                );
+                // Give the fallback screen a different protocol state to ensure
+                // session encoding uses the target view's negotiated flags.
+                let fallback_flags = if flags == 0 { 2 } else { 0 };
+                app.terminal
+                    .view
+                    .screen
+                    .advance(format!("\x1b[={fallback_flags}u").as_bytes());
+                for (key, word_motion, arrow) in [
+                    ("left", b"\x1bb", b"\x1b[1;3D"),
+                    ("right", b"\x1bf", b"\x1b[1;3C"),
+                ] {
+                    let event = key_event(key, None, gpui::Modifiers::alt());
+                    for (target, target_flags) in [
+                        (Some(session_id), flags),
+                        (None, fallback_flags),
+                        (Some("missing-session"), 0),
+                    ] {
+                        let expected = if alt_as_meta && target_flags == 0 {
+                            word_motion.as_slice()
+                        } else {
+                            arrow.as_slice()
+                        };
+                        assert_eq!(
+                            app.terminal_key_bytes_for_event_for_session(target, &event),
+                            Some(expected.to_vec()),
+                            "Option+{key}, meta={alt_as_meta}, flags={target_flags}, target={target:?}"
+                        );
+                    }
+                }
+            }
+        }
+    });
 }

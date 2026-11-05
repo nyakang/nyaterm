@@ -1,22 +1,19 @@
-use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
-
-use gpui::{
-    Context, Entity, FocusHandle, IntoElement, Render, Rgba, ScrollHandle, UniformListScrollHandle,
-    WeakEntity, Window,
-};
-use nyaterm_core::TransferBrowserViewMode;
-use nyaterm_transport::SftpFileEntry;
-use nyaterm_ui::NyaInputState;
-
+use super::TransferBrowserAvailability;
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferBrowserColumnResizeState, TransferBrowserColumnWidths, TransferBrowserSortColumn,
     TransferBrowserSortDirection, TransferJobRowSnapshot, TransferRenameState,
 };
 use crate::theme::ThemePalette;
-
-use super::TransferBrowserAvailability;
+use gpui::{
+    Context, Entity, FocusHandle, IntoElement, Render, Rgba, ScrollHandle, UniformListScrollHandle,
+    WeakEntity, Window,
+};
+use nyaterm_core::TransferBrowserViewMode;
+use nyaterm_files::sftp::SftpFileEntry;
+use nyaterm_ui::NyaInputState;
+use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 /// Colours the transfers panel needs that are not on the palette itself.
 ///
@@ -210,20 +207,18 @@ impl Render for TransferPanel {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::time::{Duration, Instant};
-
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::models::NavItem;
+    use crate::test_support::TestConfigDir;
     use gpui::{
         AppContext as _, ClickEvent, Entity, IntoElement, Modifiers, MouseButton, MouseClickEvent,
         MouseDownEvent, MouseUpEvent, ParentElement as _, Render, Styled as _, TestAppContext,
         VisualTestContext, div, px,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
-
-    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
-    use crate::features::NyaTermApp;
-    use crate::models::NavItem;
-    use crate::test_support::TestConfigDir;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     fn app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
         // A uuid rather than a clock reading: these tests run in parallel and
@@ -392,9 +387,9 @@ mod tests {
                     assert_eq!(
                         app.session.active_file_browser_backend(),
                         Some(if remote {
-                            nyaterm_transport::FileBrowserBackendKind::Remote
+                            nyaterm_files::file_browser::FileBrowserBackendKind::Remote
                         } else {
-                            nyaterm_transport::FileBrowserBackendKind::Local
+                            nyaterm_files::file_browser::FileBrowserBackendKind::Local
                         })
                     );
                     app.flush_transfer_panel_snapshot(cx);
@@ -439,7 +434,7 @@ mod tests {
                         entries
                             .iter()
                             .take(2)
-                            .map(nyaterm_transport::SftpFileEntry::identity_key)
+                            .map(nyaterm_files::sftp::SftpFileEntry::identity_key)
                             .collect(),
                         Some(entries[0].identity_key()),
                     );
@@ -478,9 +473,9 @@ mod tests {
         let mut entries: Vec<_> = (0..2)
             .map(super::super::tests_support::browser_entry)
             .collect();
-        entries[1].file_type = nyaterm_transport::SftpFileType::Directory;
-        let root = nyaterm_transport::file_browser_root(
-            nyaterm_transport::FileBrowserBackendKind::Local,
+        entries[1].file_type = nyaterm_files::sftp::SftpFileType::Directory;
+        let root = nyaterm_files::file_browser::file_browser_root(
+            nyaterm_files::file_browser::FileBrowserBackendKind::Local,
             &test_dir.path().display().to_string(),
         );
         for entry in &mut entries {
@@ -491,16 +486,16 @@ mod tests {
                 let mut settings = app.settings.summary().clone();
                 settings.ui_file_explorer_view_mode = nyaterm_core::TransferBrowserViewMode::Tree;
                 app.settings.replace_summary(settings);
-                let path = nyaterm_transport::RemoteFilePath::new(root);
+                let path = nyaterm_files::sftp::RemoteFilePath::new(root);
                 app.transfer.seed_tree_listing(
                     "path-test",
-                    nyaterm_transport::FileBrowserBackendKind::Local,
+                    nyaterm_files::file_browser::FileBrowserBackendKind::Local,
                     path.clone(),
                     std::sync::Arc::new(entries.clone()),
                 );
                 app.transfer.reveal_tree_path(
                     "path-test",
-                    nyaterm_transport::FileBrowserBackendKind::Local,
+                    nyaterm_files::file_browser::FileBrowserBackendKind::Local,
                     path,
                 );
                 let rows = app.transfer.tree_presentation(Some("path-test"), true).rows;
@@ -791,7 +786,7 @@ mod tests {
         let entries = (0..80)
             .map(|index| {
                 let mut entry = super::super::tests_support::browser_entry(index);
-                entry.file_type = nyaterm_transport::SftpFileType::Directory;
+                entry.file_type = nyaterm_files::sftp::SftpFileType::Directory;
                 entry
             })
             .collect::<Vec<_>>();
@@ -1072,10 +1067,9 @@ mod tests {
 
     #[test]
     fn long_transfer_text_shrinks_without_displacing_status_when_panel_resizes() {
+        use crate::models::{TransferJobKind, TransferJobRowSnapshot, TransferJobStatus};
         use std::path::PathBuf;
         use std::sync::Arc;
-
-        use crate::models::{TransferJobKind, TransferJobRowSnapshot, TransferJobStatus};
 
         let test_dir = TestConfigDir::new("nyaterm-transfer-queue-layout");
         let mut cx = TestAppContext::single();
@@ -1169,7 +1163,7 @@ mod tests {
     /// 不发送鼠标事件，也不刷新侧栏快照，覆盖启动竞态和原先的悬浮依赖。
     #[test]
     fn duplicate_prompts_open_globally_without_panel_interaction_and_drain_in_order() {
-        use nyaterm_transport::{
+        use nyaterm_files::sftp_transfer_types::{
             SftpDuplicateDecision, SftpDuplicateRequest, SftpTransferDirection,
         };
         use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
@@ -1318,7 +1312,7 @@ mod tests {
     #[test]
     fn duplicate_batch_menu_overwrites_queued_siblings_and_leaves_other_batches_asking() {
         use crate::features::session::UploadBatchDuplicateResolver;
-        use nyaterm_transport::{
+        use nyaterm_files::sftp_transfer_types::{
             SftpDuplicateDecision, SftpDuplicateRequest, SftpTransferDirection,
         };
         use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};

@@ -61,6 +61,7 @@ pub fn build_claude_code_invocation(
 ) -> ClaudeCodeInvocation {
     let mut args = vec![
         "-p".to_string(),
+        "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--include-partial-messages".to_string(),

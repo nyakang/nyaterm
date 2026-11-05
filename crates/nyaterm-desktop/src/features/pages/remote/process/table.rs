@@ -1,17 +1,14 @@
-use std::borrow::Cow;
-
+use super::data::{ProcessDisplayMode, process_row_height_px};
+use super::resources::{compact_remote_svg_button, process_usage_color as usage_color};
+use crate::features::view_widgets::APP_OVERLAY_PRIORITY;
+use crate::models::RemoteProcessSortDirection;
+use crate::theme::ThemePalette;
 use gpui::{
     App, ClickEvent, FontWeight, IntoElement, SharedString, Window, deferred, div, prelude::*, px,
     rgb,
 };
-use nyaterm_transport::RemoteProcess;
-
-use crate::features::view_widgets::APP_OVERLAY_PRIORITY;
-use crate::models::RemoteProcessSortDirection;
-use crate::theme::ThemePalette;
-
-use super::data::{ProcessDisplayMode, process_row_height_px};
-use super::resources::{compact_remote_svg_button, process_usage_color as usage_color};
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use std::borrow::Cow;
 
 pub(in crate::features::pages::remote) fn process_sort_button(
     palette: ThemePalette,

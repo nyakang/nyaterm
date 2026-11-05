@@ -1,12 +1,15 @@
 use super::transfer_wire::TransferWire;
 use crate::features::NyaTermApp;
 use crate::features::formatting::short_id;
-use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
-use crate::models::{TransferPathPromptKind, TransferPathPromptResult};
+use crate::models::{
+    TransferJobKind, TransferJobState, TransferJobStatus, TransferPathPromptKind,
+    TransferPathPromptResult,
+};
 use gpui::{Context, PathPromptOptions, SharedString};
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 use nyaterm_transport::{
-    SftpTransferProgress, TrzszAction, TrzszDetector, TrzszDownloadEngine, TrzszDownloadEvent,
-    TrzszMode, TrzszOutputEvent, TrzszProtocolFrame, TrzszProtocolStream, TrzszTransferEvent,
+    TrzszAction, TrzszDetector, TrzszDownloadEngine, TrzszDownloadEvent, TrzszMode,
+    TrzszOutputEvent, TrzszProtocolFrame, TrzszProtocolStream, TrzszTransferEvent,
     TrzszTransferState, TrzszTrigger, TrzszUploadEngine, TrzszUploadEntry, TrzszUploadEvent,
     TrzszUploadPayload, TrzszUploadSource, build_trzsz_action_frame, build_trzsz_string_frame,
     trzsz_fail_response,
@@ -2473,16 +2476,6 @@ const TRZSZ_UPLOAD_WORKER_EVENT_DRAIN_BATCH: usize = 32;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::time::{Duration, Instant};
-
-    use gpui::{AppContext as _, TestAppContext};
-
-    use nyaterm_transport::{
-        TrzszDownloadEngine, TrzszProtocolFrame, TrzszProtocolPayload, TrzszTransferState,
-        TrzszUploadEngine, TrzszUploadEntry, TrzszUploadPayload,
-    };
-
     use super::{
         TrzszDownloadRuntime, TrzszDownloadWorker, TrzszDownloadWorkerEvent,
         TrzszUploadPrepareWorker, TrzszUploadRuntime, process_trzsz_download_worker_frame,
@@ -2490,6 +2483,13 @@ mod tests {
     };
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestConfigDir;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_transport::{
+        TrzszDownloadEngine, TrzszProtocolFrame, TrzszProtocolPayload, TrzszTransferState,
+        TrzszUploadEngine, TrzszUploadEntry, TrzszUploadPayload,
+    };
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn download_worker_reports_directory_preparation_failure_through_protocol() {

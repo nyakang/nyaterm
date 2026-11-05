@@ -5,13 +5,11 @@
 //! nothing to remember. These functions used to live in `pages/transfers`, which
 //! made the state layer unable to reach them without inverting the dependency.
 
+use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
+use nyaterm_files::sftp::SftpFileEntry;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::sync::Arc;
-
-use nyaterm_transport::SftpFileEntry;
-
-use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
 
 /// What the filtered, sorted listing is derived from.
 ///
@@ -292,13 +290,11 @@ pub(in crate::features) fn record_browser_history(
 
 #[cfg(test)]
 mod regression_tests {
-    use std::cmp::Ordering;
-    use std::sync::Arc;
-
-    use nyaterm_transport::{SftpFileEntry, SftpFileType};
-
     use super::{BrowserFilterCache, BrowserFilterKey, compare_transfer_browser_entries};
     use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+    use std::cmp::Ordering;
+    use std::sync::Arc;
 
     fn entry(name: &str, file_type: SftpFileType, target_is_directory: bool) -> SftpFileEntry {
         SftpFileEntry {

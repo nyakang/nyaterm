@@ -406,6 +406,10 @@ pub(crate) struct ConnectionEditorState {
 }
 
 impl ConnectionEditorState {
+    pub(crate) fn uses_mstsc_rdp(&self) -> bool {
+        self.kind == ConnectionKindTab::Rdp && self.rdp_backend == "mstsc"
+    }
+
     pub(crate) fn uses_windows_rdp(&self) -> bool {
         matches!(self.rdp_backend.as_str(), "windows" | "active-x")
     }

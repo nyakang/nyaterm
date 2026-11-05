@@ -1,11 +1,12 @@
 //! SFTP browser navigation, selection, menu and column-layout transitions.
 
+use gpui::{Pixels, ScrollHandle, ScrollStrategy};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
-use gpui::{Pixels, ScrollHandle, ScrollStrategy};
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
-
+use super::browser_logic::BrowserFilterKey;
+use super::{TransferBrowserState, TransferBrowserView, TransferFeatureState};
 #[cfg(test)]
 use crate::models::TransferBrowserPendingRenameState;
 use crate::models::{
@@ -14,9 +15,6 @@ use crate::models::{
     TransferBrowserNavigationSnapshot, TransferBrowserPathMenuState,
     TransferBrowserSessionCacheState, TransferBrowserSortColumn, TransferBrowserUploadMenuState,
 };
-
-use super::browser_logic::BrowserFilterKey;
-use super::{TransferBrowserState, TransferBrowserView, TransferFeatureState};
 
 pub(in crate::features) struct TransferSessionTransferBundle {
     caches: Vec<(String, TransferBrowserSessionCacheState)>,
@@ -852,7 +850,7 @@ impl TransferFeatureState {
     pub(in crate::features) fn invalidate_file_operation_directory(
         &mut self,
         session: &str,
-        path: &nyaterm_transport::RemoteFilePath,
+        path: &nyaterm_files::sftp::RemoteFilePath,
     ) {
         if let Some(cache) = self.browser.session_cache.get(session)
             && cache.current_path == path.display_path

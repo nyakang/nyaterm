@@ -2511,6 +2511,41 @@ fn account_dropdown_selection_reaches_the_connection_editor() {
 }
 
 #[test]
+fn mstsc_backend_selection_and_switching_preserve_other_rdp_settings() {
+    let mut draft = connection_editor_state_with_secret_draft();
+    draft.kind = ConnectionKindTab::Rdp;
+    draft.rdp_security.windows_authentication = Some("future-auth".into());
+    let security = draft.rdp_security.clone();
+    let display = draft.rdp_display.clone();
+    let reconnect = draft.rdp_reconnect.clone();
+    let password = draft.password.clone();
+    let mut editor = Some(draft);
+    set_connection_editor_select_value(
+        &mut editor,
+        ConnectionEditorSelect::RdpBackend,
+        Some("mstsc".into()),
+    );
+    assert_eq!(
+        editor.as_ref().unwrap().rdp_backend,
+        if cfg!(windows) { "mstsc" } else { "builtin" }
+    );
+    // Foreign-platform saved choices must remain editable without being reset.
+    editor.as_mut().unwrap().rdp_backend = "mstsc".into();
+    editor.as_mut().unwrap().normalize_rdp_backend_settings();
+    assert!(editor.as_ref().unwrap().uses_mstsc_rdp());
+    set_connection_editor_select_value(
+        &mut editor,
+        ConnectionEditorSelect::RdpBackend,
+        Some("builtin".into()),
+    );
+    let draft = editor.unwrap();
+    assert_eq!(draft.rdp_security, security);
+    assert_eq!(draft.rdp_display, display);
+    assert_eq!(draft.rdp_reconnect, reconnect);
+    assert!(draft.password == password);
+}
+
+#[test]
 fn rdp_backend_dropdown_selection_reaches_the_connection_editor() {
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

@@ -1,15 +1,13 @@
-use std::sync::{Arc, Barrier, mpsc};
-use std::time::Duration;
-
-use nyaterm_transport::{
-    SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
-    SftpPathTransferOptions, SftpTransferDirection, SftpTransferOptions,
-};
-
 use super::{
     DuplicatePromptAction, SftpDuplicatePromptBroker, SftpDuplicatePromptState,
     UploadBatchDuplicateContext, UploadBatchDuplicateResolver,
 };
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
+    SftpPathTransferOptions, SftpTransferDirection, SftpTransferOptions,
+};
+use std::sync::{Arc, Barrier, mpsc};
+use std::time::Duration;
 
 fn request(name: &str) -> SftpDuplicateRequest {
     SftpDuplicateRequest {

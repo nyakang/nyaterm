@@ -1,20 +1,23 @@
-use gpui::{Context, PathPromptOptions, SharedString};
-use nyaterm_transport::zmodem::runtime::{
-    ZmodemRuntime as ZmodemWorker, ZmodemRuntimeEvent as ZmodemWorkerEvent,
-};
-use nyaterm_transport::{
-    SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
-    SftpService, SftpTransferDirection, SftpTransferProgress, SshSessionConfig, ZmodemAction,
-    ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
-};
-use std::{collections::HashSet, path::PathBuf, time::Instant};
-
 use crate::features::NyaTermApp;
 use crate::features::formatting::short_id;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
 };
+use gpui::{Context, PathPromptOptions, SharedString};
+use nyaterm_files::sftp::SftpService;
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
+    SftpTransferDirection, SftpTransferProgress,
+};
+use nyaterm_transport::zmodem::runtime::{
+    ZmodemRuntime as ZmodemWorker, ZmodemRuntimeEvent as ZmodemWorkerEvent,
+};
+use nyaterm_transport::{
+    SshSessionConfig, ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection,
+    ZmodemEvent, ZmodemTransfer,
+};
+use std::{collections::HashSet, path::PathBuf, time::Instant};
 
 pub(super) struct ZmodemSessionState {
     detector: ZmodemDetector,
@@ -954,19 +957,16 @@ const ZMODEM_WORKER_EVENT_DRAIN_BATCH: usize = 32;
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
-    use gpui::{AppContext as _, Context, Subscription, TestAppContext};
-    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
-    use nyaterm_transport::{LocalSessionConfig, ZmodemDirection};
-
+    use super::ZmodemTransferJobUpdate;
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
     use crate::test_support::TestConfigDir;
-
-    use super::ZmodemTransferJobUpdate;
+    use gpui::{AppContext as _, Context, Subscription, TestAppContext};
+    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
+    use nyaterm_transport::{LocalSessionConfig, ZmodemDirection};
+    use std::time::{Duration, Instant};
 
     const SESSION_ID: &str = "zmodem-panel-session";
 

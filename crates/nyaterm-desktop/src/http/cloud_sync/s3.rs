@@ -37,6 +37,9 @@ impl NativeS3Remote {
             std::time::SystemTime::now(),
         )?;
         let client = zed_reqwest::blocking::Client::builder()
+            // Signed requests and session-token headers must stay on the
+            // configured endpoint, including the retained listing adapter.
+            .redirect(zed_reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .user_agent("NyaTerm")
             .build()

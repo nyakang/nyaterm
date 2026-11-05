@@ -217,7 +217,7 @@ pub(super) fn set_connection_editor_select_value(
         }
         ConnectionEditorSelect::RdpBackend => {
             let value = value.unwrap_or_else(|| "builtin".to_string());
-            if !cfg!(windows) && value == "windows" {
+            if !cfg!(windows) && matches!(value.as_str(), "windows" | "mstsc") {
                 return false;
             }
             editor.rdp_backend = value;

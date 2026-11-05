@@ -339,7 +339,7 @@ impl NyaTermApp {
         self.reconcile_bulk_transfer_jobs();
         self.commands.cancel_staged_quick_command(session_id);
         self.close_terminal_executions_for_session(session_id, cx);
-        self.cancel_native_run_for_closed_session(session_id, cx);
+        self.cancel_ai_run_for_closed_session(session_id, cx);
         self.flush_session_asset_monitoring(session_id, cx);
         self.remote_ops.clear_stats_sample(session_id);
         self.clear_terminal_selection_state_for_session(session_id);

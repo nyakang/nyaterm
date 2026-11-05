@@ -1,6 +1,7 @@
 mod approvals;
 mod history_and_streaming;
 mod pickers;
+mod text_selection;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -277,6 +278,7 @@ fn ai_header_running_transition_notifies_root() {
                 launch.job_id,
                 launch.session_id,
                 Ok(AiChatJobOutput {
+                    metadata: None,
                     native_call: None,
                     mode: AiMode::Ask,
                     text: "done".to_string(),
@@ -468,17 +470,6 @@ fn prompt_subscription_refreshes_snapshot_before_next_paint() {
     });
 }
 
-#[test]
-fn message_menu_position_stays_inside_viewport() {
-    assert_eq!(
-        super::components::ai_message_menu_position(1240., 780., 128., 64., 1280., 800.),
-        (1144., 728., 784.)
-    );
-    assert_eq!(
-        super::components::ai_message_menu_position(240., 180., 128., 64., 200., 120.),
-        (64., 48., 104.)
-    );
-}
 struct CompactAiHost {
     panel: Entity<AiPanel>,
     height: f32,
@@ -1238,6 +1229,7 @@ fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_scri
                     launch.job_id,
                     launch.session_id,
                     Ok(AiChatJobOutput {
+                        metadata: None,
                         native_call: None,
                         mode: AiMode::Agent,
                         text: "Inspect resources".into(),

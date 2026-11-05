@@ -6,15 +6,14 @@ use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 
-use crate::http::ai::{complete_native_chat, stream_native_chat};
 use nyaterm_core::{
     AgentApprovalDecision, AiAgentKind, AiBackendKind, AiChatCompletion, AiChatRequest,
-    AiChatStreamDelta, AiCommandCard, AiMessage, AiMessageRole, AiMode, AiSessionBackendMetadata,
-    AiSettings, AppendAiAuditRequest, CommandObservation, agent_response_action,
-    assess_agent_command_risk, bind_command_card_targets, decide_agent_command_execution,
-    now_rfc3339, parse_agent_model_output, parse_agent_tool_call, parse_model_output,
-    redact_context, redact_sensitive_text, resolve_ai_terminal_target, sanitize_ai_diagnostic,
-    truncate_preview, uuid,
+    AiCommandCard, AiMessage, AiMessageRole, AiMode, AiSessionBackendMetadata, AiSettings,
+    AppendAiAuditRequest, CommandObservation, agent_response_action, assess_agent_command_risk,
+    bind_command_card_targets, decide_agent_command_execution, now_rfc3339,
+    parse_agent_model_output, parse_agent_tool_call, parse_model_output, redact_context,
+    redact_sensitive_text, resolve_ai_terminal_target, sanitize_ai_diagnostic, truncate_preview,
+    uuid,
 };
 use nyaterm_store::{ConnectionStore, StoreBlockingClient, StoreDomain};
 
@@ -200,6 +199,7 @@ pub(in crate::features) fn run_ai_ask_job(
             Some(started_at.elapsed()),
         );
         let output = AiChatJobOutput {
+            metadata: None,
             native_call: None,
             mode: AiMode::Agent,
             text: completion.text,
@@ -351,6 +351,7 @@ pub(in crate::features) fn run_ai_ask_job(
             Some(started_at.elapsed()),
         );
         let output = AiChatJobOutput {
+            metadata: None,
             native_call: None,
             mode: AiMode::Agent,
             text: completion.text,
@@ -396,94 +397,76 @@ pub(in crate::features) fn run_ai_ask_job(
         return Ok(output);
     }
 
-    let model_history = agent_history.as_deref().unwrap_or(&history.messages);
-    let completion = match stream_ai_completion(
-        &settings,
-        &request,
-        model_history,
-        stream_tx.as_ref(),
-        &cancel,
-        job_id,
-        &session_id,
-    ) {
-        Ok(completion) => completion,
-        Err(error)
-            if request.mode == AiMode::Agent
-                && !request.options.agent_json_protocol
-                && !ai_job_cancelled(&cancel) =>
-        {
-            request.options.agent_json_protocol = true;
-            notify_agent_json_fallback(stream_tx.as_ref(), job_id, &session_id);
-            stream_ai_completion(
-                &settings,
-                &request,
-                model_history,
-                stream_tx.as_ref(),
-                &cancel,
-                job_id,
-                &session_id,
-            )
-            .map_err(|fallback| {
-                format!(
-                    "Agent tool protocol failed: {}; JSON fallback failed: {}",
-                    sanitize_ai_diagnostic(&error, 160),
-                    sanitize_ai_diagnostic(&fallback, 160)
-                )
-            })?
+    Err("Native AI requests require the asynchronous runtime".into())
+}
+
+pub(super) fn prepare_native_job(
+    store: &StoreBlockingClient,
+    settings: &AiSettings,
+    request: &mut AiChatRequest,
+    history: Option<Vec<AiMessage>>,
+    persist: bool,
+) -> Result<Vec<AiMessage>, String> {
+    if settings.redaction_enabled {
+        redact_context(&mut request.context);
+        for target in &mut request.target_contexts {
+            redact_context(&mut target.context);
         }
-        Err(error) => return Err(error),
-    };
-    if ai_job_cancelled(&cancel) {
-        return Err("AI request cancelled".to_string());
+        request.user_input = redact_sensitive_text(&request.user_input);
     }
+    let history = match history {
+        Some(history) => history,
+        None => {
+            store
+                .request_fn(StoreDomain::Ai, |database| database.load_ai_history())
+                .map_err(|error| error.to_string())?
+                .messages
+        }
+    };
+    if settings.record_history && persist {
+        let session_id = request.session_id.clone().ok_or("Missing AI session")?;
+        let request = request.clone();
+        store
+            .request_fn(StoreDomain::Ai, move |database| {
+                database.append_ai_user_message_scoped(
+                    &session_id,
+                    request.connection_id,
+                    request.user_input,
+                    request.agent_kind,
+                    request.owner_scope,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(history)
+}
+
+pub(super) fn finish_native_job(
+    store: &StoreBlockingClient,
+    settings: &AiSettings,
+    request: &AiChatRequest,
+    completion: AiChatCompletion,
+) -> Result<AiChatJobOutput, String> {
+    let metadata = completion.metadata.clone();
     let mut output = if request.mode == AiMode::Agent {
-        match ai_agent_job_output(
-            &settings,
-            &request,
+        let mut output = ai_agent_job_output(
+            settings,
+            request,
             completion.text,
             completion.reasoning_content,
             completion.tool_calls,
-        ) {
-            Ok(output) => output,
-            Err(error)
-                if request.options.agent_context.is_none()
-                    && !request.options.agent_json_protocol
-                    && !ai_job_cancelled(&cancel) =>
-            {
-                request.options.agent_json_protocol = true;
-                notify_agent_json_fallback(stream_tx.as_ref(), job_id, &session_id);
-                let fallback = stream_ai_completion(
-                    &settings,
-                    &request,
-                    model_history,
-                    stream_tx.as_ref(),
-                    &cancel,
-                    job_id,
-                    &session_id,
-                )?;
-                ai_agent_job_output(
-                    &settings,
-                    &request,
-                    fallback.text,
-                    fallback.reasoning_content,
-                    fallback.tool_calls,
-                )
-                .map_err(|fallback| {
-                    format!(
-                        "Agent tool call failed: {}; JSON fallback failed: {}",
-                        sanitize_ai_diagnostic(&error, 160),
-                        sanitize_ai_diagnostic(&fallback, 160)
-                    )
-                })?
-            }
-            Err(error) => return Err(error),
+        )?;
+        if let Some(call) = &mut output.native_call {
+            call.assistant_turn = Some(completion.metadata.assistant_turn);
         }
+        output
     } else {
         let (text, reasoning, command_cards) =
             parse_model_output(&completion.text, completion.reasoning_content);
         AiChatJobOutput {
+            metadata: None,
             native_call: None,
-            mode: AiMode::Ask,
+            mode: request.mode.clone(),
             text,
             reasoning,
             command_cards,
@@ -491,11 +474,12 @@ pub(in crate::features) fn run_ai_ask_job(
             approval_note: None,
         }
     };
-    bind_command_card_targets(&mut output.command_cards, &request);
+    output.metadata = Some(metadata);
+    bind_command_card_targets(&mut output.command_cards, request);
     if settings.record_history && request.options.agent_context.is_none() {
         let message = AiMessage {
             id: format!("msg-{}", uuid()),
-            session_id,
+            session_id: request.session_id.clone().ok_or("Missing AI session")?,
             role: AiMessageRole::Assistant,
             content: output.text.clone(),
             created_at: now_rfc3339(),
@@ -508,66 +492,7 @@ pub(in crate::features) fn run_ai_ask_job(
             })
             .map_err(|error| error.to_string())?;
     }
-
     Ok(output)
-}
-
-fn notify_agent_json_fallback(
-    tx: Option<&UnboundedSender<AiChatWorkerEvent>>,
-    job_id: u64,
-    session_id: &str,
-) {
-    if let Some(tx) = tx {
-        let _ = tx.unbounded_send(AiChatWorkerEvent::AgentProtocolFallback {
-            job_id,
-            session_id: session_id.to_string(),
-        });
-    }
-}
-
-fn stream_ai_completion(
-    settings: &AiSettings,
-    request: &AiChatRequest,
-    history: &[AiMessage],
-    stream_tx: Option<&UnboundedSender<AiChatWorkerEvent>>,
-    cancel: &Arc<AtomicBool>,
-    job_id: u64,
-    session_id: &str,
-) -> Result<AiChatCompletion, String> {
-    if request.mode != AiMode::Agent && request.mode != AiMode::Ask {
-        return complete_native_chat(settings, request, history);
-    }
-    stream_native_chat(settings, request, history, |delta| {
-        if ai_job_cancelled(cancel) || delta.done {
-            return;
-        }
-        if let Some(tx) = stream_tx {
-            let AiChatStreamDelta {
-                text_delta,
-                reasoning_delta,
-                tool_call_deltas,
-                done: _,
-            } = delta;
-            if !text_delta.is_empty() || reasoning_delta.is_some() {
-                let _ = tx.unbounded_send(AiChatWorkerEvent::Delta {
-                    job_id,
-                    session_id: session_id.to_string(),
-                    text_delta,
-                    reasoning_delta,
-                });
-            }
-            if request.mode == AiMode::Agent {
-                for tool_delta in tool_call_deltas {
-                    let _ = tx.unbounded_send(AiChatWorkerEvent::AgentToolCallDelta {
-                        job_id,
-                        session_id: session_id.to_string(),
-                        tool_name: tool_delta.name_delta,
-                        arguments_delta_len: tool_delta.arguments_delta.len(),
-                    });
-                }
-            }
-        }
-    })
 }
 
 pub(in crate::features) fn ai_job_cancelled(cancel: &Arc<AtomicBool>) -> bool {
@@ -634,6 +559,7 @@ fn ai_agent_job_output(
         let call = nyaterm_core::ai::harness::AgentToolRegistry::parse(&tool_calls, &text)
             .map_err(|error| error.to_string())?;
         return Ok(AiChatJobOutput {
+            metadata: None,
             text: call.thought.clone(),
             reasoning,
             native_call: Some(call),
@@ -660,6 +586,7 @@ fn ai_agent_job_output(
             .unwrap_or("Agent finished without a final answer")
             .to_string();
         return Ok(AiChatJobOutput {
+            metadata: None,
             native_call: None,
             mode: AiMode::Agent,
             text: answer,
@@ -709,6 +636,7 @@ fn ai_agent_job_output(
     let text = String::new();
 
     Ok(AiChatJobOutput {
+        metadata: None,
         native_call: None,
         mode: AiMode::Agent,
         text,
