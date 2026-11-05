@@ -566,7 +566,7 @@ impl NyaTermApp {
         self.session.dialogs.close_tab_actions();
         if let Some(restore_focus) = restore_focus {
             cx.spawn(async move |this, cx| {
-                let _ = this.update_in(cx, |_, window, cx| {
+                let _ = NyaTermApp::update_in_main_window(&this, cx, |_, window, cx| {
                     if window.focused(cx).as_ref() == Some(&menu_focus) {
                         window.focus(&restore_focus, cx);
                     }

@@ -8,6 +8,7 @@ mod event_pump;
 mod global_shortcut_runtime;
 mod idle_lock;
 mod keybinding_runtime;
+mod main_window;
 mod navigation_runtime;
 mod panel_resize_runtime;
 mod panel_stack_runtime;
