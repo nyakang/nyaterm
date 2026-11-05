@@ -241,8 +241,14 @@ fn shutdown_finishes_partial_output_and_search_does_not_commit_it() {
             false,
         )
         .unwrap();
+    // The partial line stays in the pending output editor (still editable, so
+    // a later backspace could retract it) instead of `output_buffer`; the
+    // transcript export must not commit it either way.
+    assert_eq!(lock_recover(&manager.sessions)["audit"].output_buffer, "");
     assert_eq!(
-        lock_recover(&manager.sessions)["audit"].output_buffer,
+        lock_recover(&manager.sessions)["audit"]
+            .output_edit
+            .pending(),
         "partial"
     );
     manager.write_output("audit", " completion");
@@ -511,4 +517,136 @@ fn transcript_preserves_empty_output_lines_and_finishes_each_rotation_segment() 
             .unwrap()
             .contains("Stopped")
     );
+}
+
+#[test]
+fn input_submission_separates_prompt_and_preserves_output_without_echo_evidence() {
+    let dir = TestTempDir::new("nyaterm-recording-no-echo");
+    for output in [
+        "fixture\n",
+        "echo fixture\n",
+        "result: echo fixture\n",
+        "other\necho fixture\n",
+        "\necho fixture\n",
+    ] {
+        let manager = RecordingManager::new();
+        manager.set_history_include_input(true);
+        manager.write_output("audit", "before>");
+        manager.write_input("audit", b"echo fixture\r");
+        for chunk in output.as_bytes().chunks(2) {
+            manager.write_output("audit", std::str::from_utf8(chunk).unwrap());
+        }
+        let path = dir.join("no-echo.log");
+        manager
+            .save_transcript("audit", path.to_str().unwrap(), true, false)
+            .unwrap();
+        let expected = format!(
+            "[OUTPUT] before>\n[INPUT] echo fixture\n{}",
+            output
+                .lines()
+                .map(|line| format!("[OUTPUT] {line}\n"))
+                .collect::<String>()
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), expected, "{output:?}");
+    }
+}
+
+#[test]
+fn observed_edited_echo_stays_editable_across_submission_and_split_crlf() {
+    let dir = TestTempDir::new("nyaterm-recording-observed-echo");
+    let manager = RecordingManager::new();
+    manager.set_history_include_input(true);
+    manager.write_output("audit", "PS> ");
+    manager.write_input("audit", b"pingng");
+    manager.write_output("audit", "pingng");
+    manager.write_input("audit", b"\x08\x08 qq.com\r");
+    for chunk in [
+        "\x08 ",
+        "\x08\x08",
+        " \x08 qq",
+        ".com\r",
+        "\n",
+        "result: ping qq.com\n",
+        "ping qq.com\n",
+    ] {
+        manager.write_output("audit", chunk);
+    }
+    let path = dir.join("edited.log");
+    manager
+        .save_transcript("audit", path.to_str().unwrap(), true, false)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "[INPUT] ping qq.com\n[OUTPUT] PS> \n[OUTPUT] result: ping qq.com\n[OUTPUT] ping qq.com\n"
+    );
+}
+
+#[test]
+fn submitted_echo_expectation_expires_on_the_first_unmatched_row() {
+    let dir = TestTempDir::new("nyaterm-recording-echo-expiry");
+    let manager = RecordingManager::new();
+    manager.set_history_include_input(true);
+    manager.write_input("audit", b"same");
+    manager.write_output("audit", "same");
+    manager.write_input("audit", b"\r");
+    manager.write_output("audit", " output\nsame\nresult: same\n");
+    let path = dir.join("expired.log");
+    manager
+        .save_transcript("audit", path.to_str().unwrap(), true, false)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "[INPUT] same\n[OUTPUT] same output\n[OUTPUT] same\n[OUTPUT] result: same\n"
+    );
+}
+
+#[test]
+fn extreme_cursor_gaps_and_unicode_fragments_respect_memory_budget() {
+    let dir = TestTempDir::new("nyaterm-recording-cursor-budget");
+    for budget in [1, 16, 1024] {
+        let manager = RecordingManager::new();
+        manager.set_memory_limit(budget);
+        manager.set_history_include_input(true);
+        for _ in 0..8 {
+            manager.write_output("audit", "界界\x1b[999999999CX\r\x1b[K");
+            manager.write_execution_output("audit", "界界\x1b[999999999CX\n");
+            let sessions = lock_recover(&manager.sessions);
+            let state = &sessions["audit"];
+            assert!(state.record_bytes + state.buffered_bytes() <= budget);
+        }
+        let path = dir.join(format!("{budget}.log"));
+        manager
+            .save_transcript("audit", path.to_str().unwrap(), false, false)
+            .unwrap();
+    }
+}
+
+#[test]
+fn snapshots_keep_background_and_interactive_partial_rows_separate() {
+    let dir = TestTempDir::new("nyaterm-recording-separate-rows");
+    let manager = RecordingManager::new();
+    manager.write_output("audit", "manual>");
+    manager.write_execution_output("audit", "background");
+    let path = dir.join("snapshot.log");
+    manager
+        .save_transcript("audit", path.to_str().unwrap(), true, false)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "[OUTPUT] manual>\n[OUTPUT] background\n"
+    );
+}
+
+#[test]
+fn ordering_boundary_resets_cursor_even_on_an_empty_row() {
+    let dir = TestTempDir::new("nyaterm-recording-empty-cursor");
+    let manager = RecordingManager::new();
+    manager.write_output("audit", "\x1b[999C");
+    manager.execution_boundary("audit", None);
+    manager.write_output("audit", "next\n");
+    let path = dir.join("cursor.log");
+    manager
+        .save_transcript("audit", path.to_str().unwrap(), false, false)
+        .unwrap();
+    assert_eq!(fs::read_to_string(path).unwrap(), "next\n");
 }

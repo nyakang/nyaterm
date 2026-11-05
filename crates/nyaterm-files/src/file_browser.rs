@@ -708,6 +708,7 @@ mod tests {
     use super::LocalShellPathStyle;
     #[cfg(windows)]
     use crate::file_browser::file_browser_identity;
+    #[cfg(windows)]
     use crate::file_browser::file_browser_path_eq;
     use crate::file_browser::{
         FileBrowserBackendKind, file_browser_copy_destination_invalid, file_browser_join,
