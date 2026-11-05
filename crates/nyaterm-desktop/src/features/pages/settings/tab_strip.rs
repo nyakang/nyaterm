@@ -178,9 +178,6 @@ impl NyaTermApp {
                     .text_ellipsis()
                     .child(title),
             )
-            .when(dirty, |this| {
-                this.child(div().size(px(7.)).rounded_full().bg(rgb(palette.warning)))
-            })
             .child(
                 NyaTabCloseButton::new("settings-tab-close", tab_group, palette, close_label)
                     .active(selected)

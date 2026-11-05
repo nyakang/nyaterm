@@ -1,24 +1,21 @@
-use rust_i18n::t;
-
-use std::collections::HashSet;
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
-
+use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
+use crate::models::SessionLaunchConfig;
 use gpui::Context;
 use nyaterm_core::{
     AppSettingsSummary, ExistingFileBehavior as CoreExistingFileBehavior, Group,
     RecordingMode as CoreRecordingMode, RecordingRotationPolicy as CoreRecordingRotationPolicy,
 };
-use nyaterm_transport::{
+use nyaterm_recording::recording::{
     ExistingFileBehavior as TransportExistingFileBehavior, RecordingContext, RecordingMode,
     RecordingProfile, RecordingRotationPolicy as TransportRecordingRotationPolicy,
 };
+use rust_i18n::t;
+use std::collections::HashSet;
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use time::OffsetDateTime;
 use time::macros::format_description;
-
-use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
-use crate::models::SessionLaunchConfig;
 
 impl NyaTermApp {
     pub(in crate::features) fn toggle_active_session_recording(&mut self, cx: &mut Context<Self>) {
@@ -422,7 +419,7 @@ fn session_transcript_file_path(
         .map_err(|error| format!("failed to format transcript timestamp: {error}"))?;
     let file_name = format!(
         "session-{}-{timestamp}.log",
-        nyaterm_transport::safe_recording_name(session_name)
+        nyaterm_recording::recording::safe_recording_name(session_name)
     );
     Ok(directory.join(file_name))
 }
@@ -544,13 +541,11 @@ fn map_recording_rotation(
 
 #[cfg(test)]
 mod tests {
+    use super::{first_available_path, recording_group_path, session_transcript_file_path};
+    use nyaterm_core::{AppSettingsSummary, Group};
     use std::fs;
     use std::path::PathBuf;
-
-    use nyaterm_core::{AppSettingsSummary, Group};
     use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
-
-    use super::{first_available_path, recording_group_path, session_transcript_file_path};
 
     fn group(id: &str, name: &str, parent_id: Option<&str>) -> Group {
         Group {

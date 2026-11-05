@@ -3,15 +3,20 @@ use rust_i18n::t;
 use gpui::{
     AnyElement, Context, IntoElement, KeyDownEvent, ListHorizontalSizingBehavior, MouseButton,
     MouseDownEvent, SharedString, UniformListScrollHandle, div,
-    prelude::{InteractiveElement, ParentElement, StatefulInteractiveElement, Styled},
+    prelude::{
+        FluentBuilder as _, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
+    },
     px, rgb, svg, uniform_list,
 };
 use nyaterm_ui::{
     NyaContextMenu, NyaDropdownMenu, NyaScrollable, NyaScrollbarAxis, NyaSearchInput,
 };
 
-use crate::features::connections::{ConnectionDragKind, ConnectionDragPayload};
+use crate::features::connections::{
+    ConnectionDragKind, ConnectionDragPayload, ConnectionImportReportView,
+};
 use crate::models::ConnectionSortMode;
+use crate::theme::ThemePalette;
 
 use super::super::list::{
     ConnectionListRow, connection_tree_indent_px, icon_action_button, icon_action_button_styled,
@@ -47,6 +52,7 @@ pub(in crate::features::pages::connections) fn connections_panel(
     let empty_group_label = t!("savedConnections.emptyGroup");
 
     let flat_rows = snapshot.rows.clone();
+    let import_report = snapshot.import_report.clone();
     let store_is_empty = snapshot.store_is_empty;
     let nothing_matched = flat_rows.is_empty();
     let widest_row = snapshot.widest_row;
@@ -261,7 +267,221 @@ pub(in crate::features::pages::connections) fn connections_panel(
         .overflow_hidden()
         .bg(chrome.transparent_surface)
         .child(connections_search_bar(panel, cx))
+        .children(import_report.map(|report| connection_import_report_banner(palette, report, cx)))
         .child(list)
+        .into_any_element()
+}
+
+/// Inline result banner shown above the list after an import. It reuses the
+/// panel snapshot rather than opening another dialog, and is dismissible without
+/// touching the imported data.
+fn connection_import_report_banner(
+    palette: ThemePalette,
+    report: ConnectionImportReportView,
+    cx: &mut Context<ConnectionPanel>,
+) -> AnyElement {
+    let mut parts = vec![
+        t!(
+            "savedConnections.windtermImportReportImported",
+            count = report.imported
+        )
+        .to_string(),
+    ];
+    if report.skipped > 0 {
+        parts.push(
+            t!(
+                "savedConnections.windtermImportReportSkipped",
+                count = report.skipped
+            )
+            .to_string(),
+        );
+    }
+    if report.failed > 0 {
+        parts.push(
+            t!(
+                "savedConnections.windtermImportReportCredentialWarning",
+                count = report.failed
+            )
+            .to_string(),
+        );
+    }
+    if !report.missing_one_key.is_empty() {
+        parts.push(
+            t!(
+                "savedConnections.windtermImportReportMissingOneKey",
+                count = report.missing_one_key.len()
+            )
+            .to_string(),
+        );
+    }
+    if !report.skipped_account_sessions.is_empty() {
+        parts.push(
+            t!(
+                "savedConnections.windtermImportReportSkippedAccounts",
+                count = report.skipped_account_sessions.len()
+            )
+            .to_string(),
+        );
+    }
+    if !report.unsupported_one_key_sessions.is_empty() {
+        parts.push(
+            t!(
+                "savedConnections.windtermImportReportUnsupported",
+                count = report.unsupported_one_key_sessions.len()
+            )
+            .to_string(),
+        );
+    }
+    let mut summary = parts.join(" · ");
+    if let Some(state) = report.one_key_state {
+        match state {
+            nyaterm_core::WindtermOneKeyConfigState::Absent => {
+                summary.push_str(" · ");
+                summary.push_str(&t!("savedConnections.windtermOneKeysConfigMissing"));
+            }
+            nyaterm_core::WindtermOneKeyConfigState::Unreadable => {
+                summary.push_str(" · ");
+                summary.push_str(&t!("savedConnections.windtermOneKeysConfigUnreadable"));
+            }
+            nyaterm_core::WindtermOneKeyConfigState::Readable => {}
+        }
+    }
+
+    let expanded = report.expanded;
+    let has_details = report.has_details();
+    let toggle_label = if expanded {
+        t!("savedConnections.windtermImportReportHideDetails")
+    } else {
+        t!("savedConnections.windtermImportReportShowDetails")
+    };
+
+    let toggle = div()
+        .id("connection-import-report-toggle")
+        .flex_none()
+        .cursor_pointer()
+        .text_size(px(10.))
+        .text_color(rgb(palette.link))
+        .child(toggle_label)
+        .on_click(cx.listener(|panel, _, _, cx| {
+            panel.with_app(cx, |app, cx| {
+                app.toggle_connection_import_report(cx);
+            });
+        }));
+
+    let close = div()
+        .id("connection-import-report-close")
+        .flex_none()
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(move |this| this.bg(rgb(palette.surface_elevated)))
+        .child(
+            svg()
+                .size(px(11.))
+                .path("icons/window/close.svg")
+                .text_color(rgb(palette.text_muted)),
+        )
+        .on_click(cx.listener(|panel, _, _, cx| {
+            panel.with_app(cx, |app, cx| {
+                app.dismiss_connection_import_report(cx);
+            });
+        }));
+
+    let details = expanded && has_details;
+
+    div()
+        .id("connection-import-report-banner")
+        .w_full()
+        .flex_none()
+        .px_2()
+        .py(px(6.))
+        .border_b_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.text))
+                        .child(summary),
+                )
+                .when(has_details, |this| this.child(toggle))
+                .child(close),
+        )
+        .when(details, |this| {
+            this.child(
+                div()
+                    .id("connection-import-report-details")
+                    .max_h(px(140.))
+                    .overflow_y_scrollbar()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(import_report_sections(palette, &report)),
+            )
+        })
+        .into_any_element()
+}
+
+fn import_report_sections(
+    palette: ThemePalette,
+    report: &ConnectionImportReportView,
+) -> Vec<AnyElement> {
+    let mut sections = Vec::new();
+    if !report.missing_one_key.is_empty() {
+        sections.push(import_report_section(
+            palette,
+            t!("savedConnections.windtermImportReportMissingOneKeyList").to_string(),
+            &report.missing_one_key,
+        ));
+    }
+    if !report.skipped_account_sessions.is_empty() {
+        sections.push(import_report_section(
+            palette,
+            t!("savedConnections.windtermImportReportSkippedAccountsList").to_string(),
+            &report.skipped_account_sessions,
+        ));
+    }
+    if !report.unsupported_one_key_sessions.is_empty() {
+        sections.push(import_report_section(
+            palette,
+            t!("savedConnections.windtermImportReportUnsupportedList").to_string(),
+            &report.unsupported_one_key_sessions,
+        ));
+    }
+    sections
+}
+
+fn import_report_section(palette: ThemePalette, label: String, names: &[String]) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(palette.text_muted))
+                .child(label),
+        )
+        .children(names.iter().map(|name| {
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(palette.text_dimmed))
+                .child(SharedString::from(name.clone()))
+                .into_any_element()
+        }))
         .into_any_element()
 }
 

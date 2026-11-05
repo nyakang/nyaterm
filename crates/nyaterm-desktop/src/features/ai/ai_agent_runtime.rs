@@ -13,11 +13,10 @@ use nyaterm_transport::SessionKind;
 
 use crate::features::{
     NyaTermApp, runtime_jobs::AiAgentLoopState, runtime_jobs::AiAgentStepStatus,
-    runtime_jobs::AiChatJobResult, runtime_jobs::AiChatWorkerEvent,
     runtime_jobs::await_blocking_job,
 };
 
-use super::ai_jobs::{AiJobRunOptions, observation_summary, run_ai_ask_job};
+use super::ai_jobs::observation_summary;
 use super::presentation::AiAgentStepKind;
 
 impl NyaTermApp {
@@ -140,10 +139,10 @@ impl NyaTermApp {
         }
         let (_, step_index) = self
             .ai
-            .begin_agent_step(self.ai.settings_max_agent_steps())?;
+            .begin_agent_step(self.ai.run_settings().max_agent_steps.unwrap_or(10).max(1))?;
         let timeout = Duration::from_millis(
             self.ai
-                .settings_config()
+                .run_settings()
                 .agent_step_timeout_ms
                 .unwrap_or(30_000),
         );
@@ -159,15 +158,15 @@ impl NyaTermApp {
             default_target_session_id: Some(terminal_session_id.into()),
             command: card.command.clone(),
             step_index,
-            max_steps: self.ai.settings_max_agent_steps(),
+            max_steps: self.ai.run_settings().max_agent_steps.unwrap_or(10).max(1),
         };
         self.ai.set_agent_loop(state);
         let (reply, result) = tokio::sync::oneshot::channel::<
             Result<serde_json::Value, nyaterm_mcp_protocol::RpcError>,
         >();
         let policy = TerminalExecutionPolicy {
-            background: self.ai.settings_config().agent_background_execution_enabled,
-            max_lines: self.ai.settings_config().terminal_output_lines,
+            background: self.ai.run_settings().agent_background_execution_enabled,
+            max_lines: self.ai.run_settings().terminal_output_lines,
         };
         let session_id = terminal_session_id.to_string();
         let callback_id = execution_id.clone();
@@ -313,7 +312,7 @@ impl NyaTermApp {
         else {
             return;
         };
-        let settings = self.ai.settings_config_cloned();
+        let settings = self.ai.run_settings().clone();
         let terminal_session_id = state.terminal_session_id.clone();
         let owner_terminal_id = self
             .ai
@@ -366,49 +365,7 @@ impl NyaTermApp {
                 ..Default::default()
             },
         };
-        let store = self.store_blocking_client();
-        let tx = launch.tx;
-        let session_id = launch.session_id;
-        let job_id = launch.job_id;
-        let cancel = launch.cancel;
-        let rejected_tx = tx.clone();
-        let rejected_session_id = session_id.clone();
-        if let Err(error) =
-            self.blocking_jobs
-                .submit_detached("ai-agent-continuation", move |scheduler_cancel| {
-                    let result = if scheduler_cancel.is_cancelled() {
-                        Err("AI Agent continuation cancelled".to_string())
-                    } else {
-                        run_ai_ask_job(
-                            store,
-                            settings,
-                            request,
-                            AiJobRunOptions {
-                                mcp_credential: None,
-                                stream_tx: Some(tx.clone()),
-                                cancel,
-                                job_id,
-                                agent_history: Some(conversation),
-                                persist_user_message: false,
-                            },
-                        )
-                    };
-                    let _ =
-                        tx.unbounded_send(AiChatWorkerEvent::Finished(Box::new(AiChatJobResult {
-                            job_id,
-                            session_id,
-                            result,
-                        })));
-                })
-        {
-            let _ = rejected_tx.unbounded_send(AiChatWorkerEvent::Finished(Box::new(
-                AiChatJobResult {
-                    job_id,
-                    session_id: rejected_session_id,
-                    result: Err(error.to_string()),
-                },
-            )));
-        }
+        self.launch_native_chat(request, launch, Some(conversation), false, cx);
         self.defer_ai_panel_snapshot_flush(cx);
     }
 
@@ -453,7 +410,7 @@ impl NyaTermApp {
         let Some(terminal_session_id) = card.target_terminal_session_id.clone() else {
             return;
         };
-        let max_steps = self.ai.settings_max_agent_steps();
+        let max_steps = self.ai.run_settings().max_agent_steps.unwrap_or(10).max(1);
         let Ok((_, step_index)) = self.ai.begin_agent_step(max_steps) else {
             self.ai
                 .set_panel_status("AI Agent reached its step limit".to_string());

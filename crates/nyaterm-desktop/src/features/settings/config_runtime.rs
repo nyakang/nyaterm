@@ -1,18 +1,16 @@
-use rust_i18n::t;
-
-use gpui::{
-    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
-    prelude::*, rgb,
-};
-use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
-use nyaterm_transport::SftpDuplicatePolicy;
-use nyaterm_ui::NyaDialogWindowExt;
-
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup};
 use crate::models::{
     ConfigPathPromptKind, ConfigPathPromptResult, SnapshotPasswordPromptKind,
     TranslationSecretDraft,
 };
+use gpui::{
+    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
+    prelude::*, rgb,
+};
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
+use nyaterm_ui::NyaDialogWindowExt;
+use rust_i18n::t;
 
 fn snapshot_password_prompt_title_key(kind: SnapshotPasswordPromptKind) -> &'static str {
     match kind {
@@ -499,6 +497,11 @@ impl NyaTermApp {
         );
     }
 
+    /// Reload the whole store after a pull or import.
+    ///
+    /// Rebases an untouched settings draft onto the refreshed values so the
+    /// panel does not read the pull as an unsaved edit; edited drafts keep the
+    /// normal conflict path.
     pub(in crate::features) fn refresh_store_from_runtime_and_sync_theme(
         &mut self,
         cx: &mut Context<Self>,
@@ -513,12 +516,18 @@ impl NyaTermApp {
             move |this, event, cx| {
                 match event.outcome {
                     Ok(snapshot) => {
+                        // Capture draft cleanliness before the baseline is replaced.
+                        let rebase_draft =
+                            this.shell.has_settings_draft() && !this.settings_draft_dirty();
                         this.apply_store_refresh(snapshot.clone(), cx);
                         this.replace_shared_snapshot(
                             snapshot,
                             crate::app_shell::SharedStateDomain::All,
                             cx,
                         );
+                        if rebase_draft {
+                            this.rebase_open_settings_draft(cx);
+                        }
                         cx.notify();
                     }
                     Err(error) => {

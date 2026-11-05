@@ -14,6 +14,7 @@ mod images;
 mod input;
 mod keywords;
 mod paint;
+mod paint_mask;
 mod semantic;
 
 static TERMINAL_FONT_FEATURES: OnceLock<FontFeatures> = OnceLock::new();
@@ -107,4 +108,5 @@ pub use keywords::{
 #[cfg(test)]
 mod tests;
 
+pub mod stripes;
 pub mod unwrapped;

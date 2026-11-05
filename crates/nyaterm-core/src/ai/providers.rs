@@ -344,6 +344,7 @@ pub fn parse_openai_compatible_chat_response(body: &str) -> Result<AiChatComplet
                 .and_then(|value| trim_string_to_option(value.to_string()))
         });
     Ok(AiChatCompletion {
+        metadata: Default::default(),
         text,
         reasoning_content,
         tool_calls,
@@ -357,6 +358,7 @@ pub fn parse_openai_compatible_stream_chunk(
     for data in sse_data_payloads(chunk) {
         if data.trim() == "[DONE]" {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 done: true,
                 ..Default::default()
             });
@@ -385,6 +387,7 @@ pub fn parse_openai_compatible_stream_chunk(
             .filter(|value| !value.is_empty());
         if !text_delta.is_empty() || reasoning_delta.is_some() || !tool_call_deltas.is_empty() {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 text_delta,
                 reasoning_delta,
                 tool_call_deltas,
@@ -406,6 +409,7 @@ pub fn parse_anthropic_stream_chunk(chunk: &str) -> Result<Vec<AiChatStreamDelta
             .is_some_and(|event_type| event_type == "message_stop")
         {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 done: true,
                 ..Default::default()
             });
@@ -437,6 +441,7 @@ pub fn parse_anthropic_stream_chunk(chunk: &str) -> Result<Vec<AiChatStreamDelta
             .filter(|value| !value.is_empty());
         if !text_delta.is_empty() || reasoning_delta.is_some() || !tool_call_deltas.is_empty() {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 text_delta,
                 reasoning_delta,
                 tool_call_deltas,
@@ -452,6 +457,7 @@ pub fn parse_gemini_stream_chunk(chunk: &str) -> Result<Vec<AiChatStreamDelta>, 
     for data in sse_data_payloads(chunk) {
         if data.trim() == "[DONE]" {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 done: true,
                 ..Default::default()
             });
@@ -513,6 +519,7 @@ pub fn parse_gemini_stream_chunk(chunk: &str) -> Result<Vec<AiChatStreamDelta>, 
         }
         if !text_delta.is_empty() || !reasoning_delta.is_empty() || !tool_call_deltas.is_empty() {
             deltas.push(AiChatStreamDelta {
+                metadata: None,
                 text_delta,
                 reasoning_delta: trim_string_to_option(reasoning_delta),
                 tool_call_deltas,
@@ -587,6 +594,7 @@ pub fn parse_anthropic_chat_response(body: &str) -> Result<AiChatCompletion, AiM
         return Err(AiModelError::MissingChatContent);
     }
     Ok(AiChatCompletion {
+        metadata: Default::default(),
         text,
         reasoning_content: trim_string_to_option(reasoning_parts.join("\n\n")),
         tool_calls,
@@ -658,6 +666,7 @@ pub fn parse_gemini_chat_response(body: &str) -> Result<AiChatCompletion, AiMode
         return Err(AiModelError::MissingChatContent);
     }
     Ok(AiChatCompletion {
+        metadata: Default::default(),
         text,
         reasoning_content: trim_string_to_option(reasoning_parts.join("\n\n")),
         tool_calls,

@@ -21,6 +21,8 @@ fn form(methods: Vec<SshAuthenticationMethod>) -> RuntimeAuthenticationForm {
                 echo: false,
             },
             available_methods: methods,
+            stage: Default::default(),
+            accepted_response_ids: Vec::new(),
             key_response_id: None,
         },
         Arc::new(RuntimeAuthenticationContext::default()),
@@ -89,7 +91,7 @@ fn retry_discards_failed_selections_and_passphrase_retains_only_its_key() {
     context
         .remember_selection("failed-password".into(), None, None, None)
         .unwrap();
-    context.begin_request(None);
+    context.begin_request(None, &[]);
     assert!(context.selections.lock().unwrap().entries.is_empty());
     context
         .remember_selection("key-response".into(), Some("key".into()), None, None)
@@ -97,7 +99,7 @@ fn retry_discards_failed_selections_and_passphrase_retains_only_its_key() {
     context
         .remember_selection("failed-passphrase".into(), None, None, None)
         .unwrap();
-    context.begin_request(Some("key-response"));
+    context.begin_request(Some("key-response"), &[]);
     assert_eq!(context.selections.lock().unwrap().entries.len(), 1);
     assert_eq!(
         context.selected_key(Some("key-response")).as_deref(),
@@ -141,4 +143,23 @@ fn each_attempt_and_jump_target_has_its_own_selection_state() {
     assert_eq!(second.selected_key(None).as_deref(), Some("jump-key"));
     first.attempt.cancel();
     assert!(!second.attempt.is_cancelled());
+}
+
+#[test]
+fn additional_requests_keep_completed_factors_and_discard_only_failed_candidates() {
+    let context = RuntimeAuthenticationContext::default();
+    for id in ["key", "passphrase", "wrong-password"] {
+        context
+            .remember_selection(id.into(), None, None, None)
+            .unwrap();
+    }
+    let accepted = vec!["key".into(), "passphrase".into()];
+    context.begin_request(None, &accepted);
+    let entries = context.selections.lock().unwrap();
+    assert_eq!(entries.entries.len(), 2);
+    assert!(entries.entries.contains_key("key"));
+    assert!(entries.entries.contains_key("passphrase"));
+    drop(entries);
+    context.finish(None);
+    assert!(context.selections.lock().unwrap().entries.is_empty());
 }

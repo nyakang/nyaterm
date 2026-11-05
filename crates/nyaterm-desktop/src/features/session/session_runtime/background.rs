@@ -633,19 +633,18 @@ impl NyaTermApp {
             while let Some(event) = rx.next().await {
                 // `update_in`: pumping the restore queue opens sessions, which needs
                 // the window.
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        this.apply_session_start_event(event, cx);
-                        // A start finishing is precisely when the next queued restore
-                        // may go; the idle plane used to poll for that.
-                        this.pump_startup_restore_queue_if_ready(window, cx);
-                        // A start settling is also when the layout restore and any
-                        // auto-recording become eligible -- though both still have to
-                        // wait out connect settle, which the clock handles.
-                        this.ensure_post_start_work_clock(cx);
-                        cx.notify();
-                    })
-                    .is_err()
+                if NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                    this.apply_session_start_event(event, cx);
+                    // A start finishing is precisely when the next queued restore
+                    // may go; the idle plane used to poll for that.
+                    this.pump_startup_restore_queue_if_ready(window, cx);
+                    // A start settling is also when the layout restore and any
+                    // auto-recording become eligible -- though both still have to
+                    // wait out connect settle, which the clock handles.
+                    this.ensure_post_start_work_clock(cx);
+                    cx.notify();
+                })
+                .is_err()
                 {
                     break;
                 }

@@ -1,8 +1,3 @@
-use std::time::{Duration, Instant};
-
-use gpui::Context;
-use nyaterm_transport::SessionEvent;
-
 use crate::features::shell::event_pump::helpers::{
     SESSION_EVENT_DRAIN_SLOW_CHUNK, SessionEventDrainBudget, SessionEventDrainTimings,
     connect_settle_active, session_event_backlog_active, session_event_drain_budget,
@@ -12,6 +7,9 @@ use crate::features::shell::event_pump::helpers::{
 };
 use crate::features::{NyaTermApp, formatting::short_id};
 use crate::models::recording::ExecutionRecordingEvent;
+use gpui::Context;
+use nyaterm_transport::SessionEvent;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 enum SessionOutputDrainStep {
@@ -829,7 +827,7 @@ mod recording_tests {
     use crate::features::test_support::app_with_visible_local_session;
     use gpui::{AppContext as _, TestAppContext};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
         RecordingRotationPolicy,
     };

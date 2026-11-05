@@ -5,6 +5,30 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[test]
+fn storage_errors_pause_only_when_configuration_or_access_must_change() {
+    use nyaterm_core::cloud_sync::error::CloudStorageErrorKind;
+    for (kind, permanent) in [
+        (CloudStorageErrorKind::Tls, true),
+        (CloudStorageErrorKind::PermissionDenied, true),
+        (CloudStorageErrorKind::InvalidConfiguration, true),
+        (CloudStorageErrorKind::Unsupported, true),
+        (CloudStorageErrorKind::Dns, false),
+        (CloudStorageErrorKind::Connect, false),
+        (CloudStorageErrorKind::Timeout, false),
+        (CloudStorageErrorKind::ConnectionReset, false),
+        (CloudStorageErrorKind::Conflict, false),
+    ] {
+        let error = CloudSyncError::Storage {
+            provider: "webdav".into(),
+            operation: "read".into(),
+            kind,
+        };
+        assert_eq!(permanent_auto_sync_error(&error), permanent);
+        assert_eq!(error.classification(), kind.classification());
+    }
+}
+
+#[test]
 fn completion_observes_changes_before_their_notifications_arrive() {
     let mut sync = AutoSyncCoordinator::new(4);
     let job = sync

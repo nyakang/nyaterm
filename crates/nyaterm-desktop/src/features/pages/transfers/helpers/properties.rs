@@ -1,13 +1,11 @@
+use super::format_permissions_octal;
+use crate::models::TransferPropertiesState;
+use crate::theme::ThemePalette;
 use gpui::{
     AnyElement, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _, div,
     prelude::FluentBuilder as _, px, rgb,
 };
-use nyaterm_transport::SftpFileEntry;
-
-use crate::models::TransferPropertiesState;
-use crate::theme::ThemePalette;
-
-use super::format_permissions_octal;
+use nyaterm_files::sftp::SftpFileEntry;
 
 pub(in crate::features::pages::transfers) fn symlink_input_row(
     palette: ThemePalette,

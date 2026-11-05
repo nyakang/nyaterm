@@ -1,14 +1,10 @@
-use std::env;
-use std::fs;
-use std::sync::Arc;
-
-use nyaterm_transport::{
-    RemoteFileBackendKind, RemoteFilePath, RemoteFileService, SftpAttributeUpdate,
-    SftpTransferControl, SftpTransferOptions, SshHostKey, SshHostKeyDecision, SshHostKeyVerifier,
-    SshSessionConfig,
-};
-
 use super::workspace::{external_edit_path, prepare_external_edit_workspace};
+use nyaterm_files::remote_file::{RemoteFileBackendKind, RemoteFileService};
+use nyaterm_files::sftp::{RemoteFilePath, SftpAttributeUpdate, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
+use nyaterm_transport::{SshHostKey, SshHostKeyDecision, SshHostKeyVerifier, SshSessionConfig};
+use std::sync::Arc;
+use std::{env, fs};
 
 struct AcceptDisposableServerKey;
 

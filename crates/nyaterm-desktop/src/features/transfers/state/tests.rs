@@ -1,15 +1,8 @@
-use futures::channel::mpsc::unbounded;
-use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use gpui::{ScrollHandle, ScrollStrategy, TestAppContext, UniformListScrollHandle, point, px};
-use nyaterm_transport::{
-    RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
-    RemoteTextWriteResult, SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpFileType,
-    SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions, SftpWriteTextResult,
+use super::{
+    TransferEditorCloseAfterSave, TransferEditorCloseOutcome, TransferEditorSaveOutcome,
+    TransferFeatureFocus, TransferFeatureState, TransferPanelState, TransferPathState,
+    TransferQueueState,
 };
-
 use crate::models::{
     TransferBrowserContextTarget, TransferBrowserNavigationSnapshot,
     TransferBrowserSessionCacheState, TransferBrowserSortColumn, TransferEditorField,
@@ -17,12 +10,21 @@ use crate::models::{
     TransferJobResult, TransferJobState, TransferJobStatus, TransferNewFolderState,
     TransferPathPromptKind, TransferPropertiesState, TransferRenameState,
 };
-
-use super::{
-    TransferEditorCloseAfterSave, TransferEditorCloseOutcome, TransferEditorSaveOutcome,
-    TransferFeatureFocus, TransferFeatureState, TransferPanelState, TransferPathState,
-    TransferQueueState,
+use futures::channel::mpsc::unbounded;
+use gpui::{ScrollHandle, ScrollStrategy, TestAppContext, UniformListScrollHandle, point, px};
+use nyaterm_files::remote_file::{
+    RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
+    RemoteTextWriteResult,
 };
+use nyaterm_files::sftp::{
+    SftpFileEntry, SftpFileProperties, SftpFileType, SftpTransferControl, SftpWriteTextResult,
+};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpPathTransferOptions, SftpTransferOptions,
+};
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 mod delete_jobs;
 
@@ -135,7 +137,8 @@ fn bulk_executor_is_lazy_and_shutdown_wakes_paused_transfers() {
 
 #[test]
 fn inactive_delete_invalidates_cached_directory_until_its_session_is_restored() {
-    use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath};
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::RemoteFilePath;
 
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -573,7 +576,7 @@ fn browser_session_restore_preserves_the_raw_directory_token() {
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut transfer = transfer_state(&cx);
     let remote =
-        nyaterm_transport::RemoteFilePath::from_raw("/srv/non-utf8-?", b"/srv/non-utf8-\xff");
+        nyaterm_files::sftp::RemoteFilePath::from_raw("/srv/non-utf8-?", b"/srv/non-utf8-\xff");
     transfer.store_browser_session_cache(
         "session-a".to_string(),
         TransferBrowserSessionCacheState {
@@ -1832,7 +1835,7 @@ fn preview_tab(session_id: &str, remote_path: &str) -> crate::models::TransferPr
     crate::models::TransferPreviewState {
         id: crate::models::TransferPreviewState::tab_id_for_remote_path(
             Some(session_id),
-            &nyaterm_transport::RemoteFilePath::new(remote_path),
+            &nyaterm_files::sftp::RemoteFilePath::new(remote_path),
         ),
         session_id: Some(session_id.to_string()),
         remote_path: remote_path.to_string(),
@@ -2070,14 +2073,14 @@ fn promised_retry_keeps_original_source_and_execution_contract_until_released() 
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut transfer = transfer_state(&cx);
-    let source = std::sync::Arc::new(nyaterm_transport::RemoteFileService::new(
+    let source = std::sync::Arc::new(nyaterm_files::remote_file::RemoteFileService::new(
         nyaterm_transport::SshSessionConfig::default(),
     ));
     transfer.bind_promised_download(
         "promise",
         SftpPathTransferOptions::for_promised_download(
             SftpTransferOptions::default().with_max_retries(2),
-            nyaterm_transport::SftpFileType::Directory,
+            nyaterm_files::sftp::SftpFileType::Directory,
         ),
         std::sync::Arc::downgrade(&source),
     );
@@ -2115,7 +2118,7 @@ fn file_operation_context_retains_both_sessions_and_migrates_retry_identity() {
         FileOperationContext, FileOperationEndpoint, FileOperationRequest, FileTransferIntent,
         FileTransferOperation,
     };
-    use nyaterm_transport::RemoteFilePath;
+    use nyaterm_files::sftp::RemoteFilePath;
     let cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = transfer_state(&cx);
@@ -2182,7 +2185,7 @@ fn metadata_file_operations_are_excluded_from_shared_pause() {
         FileMutation, FileMutationIntent, FileOperationContext, FileOperationEndpoint,
         FileOperationRequest,
     };
-    use nyaterm_transport::RemoteFilePath;
+    use nyaterm_files::sftp::RemoteFilePath;
     let cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = transfer_state(&cx);

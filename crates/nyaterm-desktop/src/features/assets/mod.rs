@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-
+use crate::features::NyaTermApp;
 use gpui::{AppContext as _, Context, Entity, ScrollHandle, Subscription, UniformListScrollHandle};
 use nyaterm_core::{
     AssetAcceleratorSnapshot, AssetAcceleratorType, AssetDiskSnapshot, AssetDisplayLabels,
@@ -11,10 +9,12 @@ use nyaterm_core::{
     build_asset_records, build_group_options, connection_matches_filters,
     normalize_asset_sort_state, parse_start_workspace_mode, records_in_group, sort_asset_records,
 };
-use nyaterm_transport::{RemoteGpuOverview, RemoteNpuOverview, RemoteStats};
+use nyaterm_remote_ops::ascend_npu::RemoteNpuOverview;
+use nyaterm_remote_ops::gpu::RemoteGpuOverview;
+use nyaterm_remote_ops::stats::RemoteStats;
 use nyaterm_ui::{NyaInputEvent, NyaInputState, NyaSelectEvent, NyaSelectOption, NyaSelectState};
-
-use crate::features::NyaTermApp;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 pub(in crate::features) const ASSET_TABLE_ROW_HEIGHT: f32 = 56.;
 // The Tauri table uses an 88px action column. GPUI scrollbars overlay their

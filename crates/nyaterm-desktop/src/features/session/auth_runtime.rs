@@ -720,7 +720,10 @@ impl SshCredentialProvider for CredentialPromptBroker {
     ) -> Result<Option<SshAuthenticationResponse>, String> {
         self.attempt.check()?;
         let context = self.auth_context.clone().unwrap_or_default();
-        context.begin_request(request.key_response_id.as_deref());
+        context.begin_request(
+            request.key_response_id.as_deref(),
+            &request.accepted_response_ids,
+        );
         let id = nyaterm_core::uuid();
         let (response_tx, response_rx) = mpsc::channel();
         self.pending

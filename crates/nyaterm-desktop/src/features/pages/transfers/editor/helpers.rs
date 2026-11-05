@@ -1,11 +1,9 @@
+use crate::models::{TransferJobEvent, TransferJobOutput, TransferJobResult};
+use nyaterm_files::remote_file::RemoteFileService;
+use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
 use std::path::Path;
 use std::process::Command;
-
-use nyaterm_transport::{
-    RemoteFilePath, RemoteFileService, SftpTransferControl, SftpTransferOptions,
-};
-
-use crate::models::{TransferJobEvent, TransferJobOutput, TransferJobResult};
 
 pub(super) fn sanitize_local_open_segment(input: &str) -> String {
     let sanitized: String = input
@@ -372,10 +370,9 @@ pub(super) fn upload_external_editor_file(
 
 #[cfg(test)]
 mod editor_process_tests {
+    use super::{RemoteFileTextKind, editor_process, remote_file_text_kind};
     use std::ffi::OsStr;
     use std::path::Path;
-
-    use super::{RemoteFileTextKind, editor_process, remote_file_text_kind};
 
     #[test]
     fn highlighted_files_open_as_text_while_binary_files_keep_the_external_route() {

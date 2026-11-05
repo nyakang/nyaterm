@@ -1,10 +1,8 @@
+use super::general_interaction::SettingsSaveKind;
+use crate::features::{NyaTermApp, transfers::duplicate_policy_label};
 use gpui::Context;
 use nyaterm_core::{ExistingFileBehavior, RecordingMode, RecordingRotationPolicy};
-use nyaterm_transport::SftpDuplicatePolicy;
-
-use crate::features::{NyaTermApp, transfers::duplicate_policy_label};
-
-use super::general_interaction::SettingsSaveKind;
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
 
 impl NyaTermApp {
     pub(in crate::features) fn update_host_key_policy(

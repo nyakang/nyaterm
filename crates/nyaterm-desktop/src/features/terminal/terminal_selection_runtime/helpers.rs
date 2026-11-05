@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::{
     Bounds, Context, ElementInputHandler, EntityInputHandler, IntoElement, Pixels, Point,
@@ -28,11 +30,23 @@ pub(in crate::features) fn terminal_bounds_tracker(
     session_id: Option<String>,
     active: bool,
 ) -> impl IntoElement {
+    terminal_bounds_tracker_with_exclusion(entity, session_id, active, Rc::default())
+}
+
+/// Frame-local geometry shared by the grid and its composition overlay. The
+/// overlay resolves it during prepaint, before either element starts painting.
+pub(in crate::features) fn terminal_bounds_tracker_with_exclusion(
+    entity: gpui::Entity<NyaTermApp>,
+    session_id: Option<String>,
+    active: bool,
+    exclusion: Rc<Cell<Option<Bounds<Pixels>>>>,
+) -> impl IntoElement {
     let input_entity = entity.clone();
     let bounds_entity = input_entity.clone();
     let tracked_session_id = session_id.clone();
     gpui::canvas(
         move |bounds, window, cx| {
+            exclusion.set(None);
             let bounds = terminal_visible_surface_bounds(bounds, window.content_mask().bounds)?;
             let ime = if active {
                 bounds_entity
@@ -41,6 +55,7 @@ pub(in crate::features) fn terminal_bounds_tracker(
             } else {
                 None
             };
+            exclusion.set(ime.as_ref().map(|layout| layout.bounds));
             let scale_factor = window.scale_factor();
             if bounds_entity
                 .read(cx)

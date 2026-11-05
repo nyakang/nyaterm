@@ -1,32 +1,25 @@
-use rust_i18n::t;
-
-use gpui::{
-    Context, FontWeight, IntoElement, ScrollDelta, ScrollEvent, SharedString, div, prelude::*, px,
-    rgb, rgba, svg,
-};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::{
-    CpuCoreUsage, RemoteGpu, RemoteGpuOverview, RemoteGpuProcess, RemoteNpu, RemoteNpuOverview,
-    RemoteNpuProcess,
-};
-use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement, NyaScrollable,
-    NyaTooltip,
-};
-
-use std::sync::Arc;
-
 use super::panels::{PanelChrome, RemoteMonitorKind, RemoteMonitorPanel};
-use crate::features::remote::StatsPresentationState;
+use super::process::usage_color;
 use crate::features::remote::{
-    ACCELERATOR_PROCESS_VIEWPORT_ROWS, GpuPresentationState, NpuPresentationState, max_list_offset,
+    ACCELERATOR_PROCESS_VIEWPORT_ROWS, GpuPresentationState, NpuPresentationState,
+    StatsPresentationState, max_list_offset,
 };
 use crate::features::{shell::gpui_code_font_family, view_widgets::stats_progress_bar};
-use gpui::Entity;
+use gpui::{
+    Context, Entity, FontWeight, IntoElement, ScrollDelta, ScrollEvent, SharedString, div,
+    prelude::*, px, rgb, rgba, svg,
+};
+use nyaterm_core::truncate_preview;
+use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview, RemoteNpuProcess};
+use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview, RemoteGpuProcess};
+use nyaterm_remote_ops::stats::CpuCoreUsage;
 use nyaterm_ui::plot::NyaRingGauge;
-use nyaterm_ui::{NyaInputState, NyaSearchInput, NyaSelectState};
-
-use super::process::usage_color;
+use nyaterm_ui::{
+    NyaButton, NyaButtonVariant, NyaInputState, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement,
+    NyaScrollable, NyaSearchInput, NyaSelectState, NyaTooltip,
+};
+use rust_i18n::t;
+use std::sync::Arc;
 
 mod network;
 use network::resource_network_card;
@@ -1640,10 +1633,10 @@ fn login_session_value(id: String, value: String) -> gpui::Stateful<gpui::Div> {
 }
 
 fn login_users_action(
-    stats: &nyaterm_transport::RemoteStats,
+    stats: &nyaterm_remote_ops::stats::RemoteStats,
     palette: crate::theme::ThemePalette,
 ) -> gpui::AnyElement {
-    use nyaterm_transport::LoggedInUsersStatus;
+    use nyaterm_remote_ops::stats::LoggedInUsersStatus;
     let available = stats.users_status == LoggedInUsersStatus::Available;
     let summary = if available {
         t!(
@@ -2159,12 +2152,13 @@ fn cpu_core_row(palette: crate::theme::ThemePalette, index: u32, usage: f64) -> 
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{RemoteGpu, RemoteGpuOverview, RemoteNpu, RemoteNpuOverview};
 
     use super::{
         build_gpu_summary, build_npu_summary, format_memory_mb, format_resource_bytes,
         format_resource_percent, format_resource_rate, format_temperature,
     };
+    use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview};
+    use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview};
 
     fn gpu(index: u32, used: u64, total: u64, temp: Option<f64>, util: Option<f64>) -> RemoteGpu {
         RemoteGpu {
@@ -2359,7 +2353,9 @@ mod login_users_view_tests {
         Context, IntoElement, Modifiers, Render, ScrollDelta, ScrollEvent, TestAppContext, Window,
         div, point, prelude::*, px, size,
     };
-    use nyaterm_transport::{LoggedInSession, LoggedInUser, LoggedInUsersStatus, RemoteStats};
+    use nyaterm_remote_ops::stats::{
+        LoggedInSession, LoggedInUser, LoggedInUsersStatus, RemoteStats,
+    };
 
     struct Host {
         theme: &'static str,

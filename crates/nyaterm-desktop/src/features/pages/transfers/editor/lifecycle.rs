@@ -1,13 +1,12 @@
-use gpui::{Context, Window};
-use nyaterm_transport::{RemoteFilePath, RemoteTextGeneration, RemoteTextRevision};
-
+use super::super::NATIVE_EDITOR_MAX_BYTES;
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
 };
-
-use super::super::NATIVE_EDITOR_MAX_BYTES;
+use gpui::{Context, Window};
+use nyaterm_files::remote_file::{RemoteTextGeneration, RemoteTextRevision};
+use nyaterm_files::sftp::RemoteFilePath;
 
 impl NyaTermApp {
     pub(in crate::features) fn activate_transfer_editor_tab(

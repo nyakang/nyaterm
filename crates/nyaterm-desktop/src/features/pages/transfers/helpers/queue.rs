@@ -1,12 +1,11 @@
+use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
+use crate::theme::ThemePalette;
 use gpui::{
     App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
     rgb, svg,
 };
-use nyaterm_transport::SftpTransferProgress;
-
-use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
-use crate::theme::ThemePalette;
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 use nyaterm_ui::NyaTooltip;
 
 pub(in crate::features::pages::transfers) fn queue_action_button(
@@ -99,9 +98,8 @@ pub(in crate::features::pages::transfers) fn transfer_progress_ratio(
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::SftpTransferProgress;
-
     use super::transfer_progress_ratio;
+    use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 
     #[test]
     fn drag_export_never_offers_an_invented_local_target_or_retry() {
@@ -118,7 +116,7 @@ mod tests {
             entries: Vec::new(),
             summary: None,
             progress: Some(progress(4, Some(8), None, None)),
-            control: Some(nyaterm_transport::SftpTransferControl::new()),
+            control: Some(nyaterm_files::sftp::SftpTransferControl::new()),
             speed: Default::default(),
         };
         assert!(job.is_user_transfer());

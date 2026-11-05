@@ -486,6 +486,8 @@ pub struct AppSettingsSummary {
     pub terminal_low_latency_mode: bool,
     #[serde(default = "default_terminal_zebra_stripes_enabled")]
     pub terminal_zebra_stripes_enabled: bool,
+    #[serde(default)]
+    pub terminal_zebra_stripes_by_row: bool,
     /// Detect clickable entities (IP/MAC/host:port/archive) in terminal output (Tauri action_links_enabled).
     #[serde(default)]
     pub terminal_action_links_enabled: bool,
@@ -660,6 +662,10 @@ pub struct AppSettingsSummary {
     pub recording_memory_limit_bytes: u64,
     pub diagnostics_level: String,
     pub diagnostics_retention_days: u32,
+    /// Per-file diagnostics log budget in bytes. Unset or invalid values fall
+    /// back to the 10 MiB default; the log layer clamps it to a supported range.
+    #[serde(default = "default_diagnostics_log_shard_bytes")]
+    pub diagnostics_log_shard_bytes: u64,
     pub startup_restore: bool,
     /// When true (default), restore multi-leaf tab window layout with sessions.
     #[serde(default = "default_true")]
@@ -769,6 +775,7 @@ impl Default for AppSettingsSummary {
             terminal_reconnect_restore_cwd: false,
             terminal_low_latency_mode: false,
             terminal_zebra_stripes_enabled: default_terminal_zebra_stripes_enabled(),
+            terminal_zebra_stripes_by_row: false,
             terminal_action_links_enabled: false,
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
@@ -863,6 +870,7 @@ impl Default for AppSettingsSummary {
             recording_memory_limit_bytes: 5 * 1024 * 1024,
             diagnostics_level: "info".to_string(),
             diagnostics_retention_days: 7,
+            diagnostics_log_shard_bytes: default_diagnostics_log_shard_bytes(),
             startup_restore: false,
             startup_restore_window_layout: true,
             minimize_to_tray: false,
@@ -935,6 +943,10 @@ fn default_quick_cmd_height() -> u32 {
 
 fn default_serial_send_height() -> u32 {
     180
+}
+
+fn default_diagnostics_log_shard_bytes() -> u64 {
+    crate::diagnostics::DEFAULT_LOG_SHARD_BYTES
 }
 
 fn default_quick_cmd_view_mode() -> String {
@@ -1220,6 +1232,11 @@ mod tests {
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);
+        assert_eq!(
+            summary.diagnostics_log_shard_bytes,
+            crate::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+            "legacy documents without a shard size must log into 10 MiB files"
+        );
     }
 
     #[test]
@@ -1290,6 +1307,22 @@ mod tests {
         assert_eq!(decoded.ui_start_workspace_mode, "assets");
         assert_eq!(decoded.ui_asset_sort_key.as_deref(), Some("hostname"));
         assert_eq!(decoded.ui_asset_sort_direction.as_deref(), Some("desc"));
+    }
+
+    #[test]
+    fn row_stripes_are_opt_in_for_current_and_legacy_settings() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        assert_eq!(value["terminal_zebra_stripes_by_row"], false);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_zebra_stripes_by_row");
+        let mut settings: AppSettingsSummary = serde_json::from_value(value).unwrap();
+        assert!(!settings.terminal_zebra_stripes_by_row);
+        settings.terminal_zebra_stripes_by_row = true;
+        let roundtrip: AppSettingsSummary =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(roundtrip.terminal_zebra_stripes_by_row);
     }
 
     #[test]

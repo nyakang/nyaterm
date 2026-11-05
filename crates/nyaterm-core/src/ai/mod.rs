@@ -1,3 +1,4 @@
+pub mod completion;
 pub mod proxy;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -788,6 +789,8 @@ pub enum AiAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiRequestOptions {
+    #[serde(skip)]
+    pub generation: completion::AiGenerationOptions,
     /// Ephemeral tool transcript; never part of settings or saved chat history.
     #[serde(skip)]
     pub agent_context: Option<harness::AgentRequestContext>,
@@ -808,6 +811,7 @@ pub struct AiRequestOptions {
 impl Default for AiRequestOptions {
     fn default() -> Self {
         Self {
+            generation: Default::default(),
             agent_context: None,
             connectivity_test: false,
             max_output_commands: default_max_output_commands(),
@@ -889,14 +893,15 @@ pub struct ResolvedAiModel {
     pub credential: Option<AiProviderCredential>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AiChatCompletion {
+    pub metadata: completion::AiResponseMetadata,
     pub text: String,
     pub reasoning_content: Option<String>,
     pub tool_calls: Vec<AiToolCall>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiToolCall {
     #[serde(skip)]
     pub thought_signature: Option<String>,
@@ -907,15 +912,16 @@ pub struct AiToolCall {
     pub arguments: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct AiChatStreamDelta {
+    pub metadata: Option<completion::AiResponseMetadata>,
     pub text_delta: String,
     pub reasoning_delta: Option<String>,
     pub tool_call_deltas: Vec<AiToolCallDelta>,
     pub done: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct AiToolCallDelta {
     pub thought_signature: Option<String>,
     pub index: usize,
@@ -1831,3 +1837,27 @@ fn resolve_prompt_language(language: &str) -> PromptLanguage {
 
 #[cfg(test)]
 mod tests;
+
+impl std::fmt::Debug for AiChatCompletion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiChatCompletion { [REDACTED] }")
+    }
+}
+
+impl std::fmt::Debug for AiToolCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiToolCall { [REDACTED] }")
+    }
+}
+
+impl std::fmt::Debug for AiChatStreamDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiChatStreamDelta { [REDACTED] }")
+    }
+}
+
+impl std::fmt::Debug for AiToolCallDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiToolCallDelta { [REDACTED] }")
+    }
+}

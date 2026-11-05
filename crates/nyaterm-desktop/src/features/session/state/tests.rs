@@ -1,16 +1,11 @@
-use std::path::Path;
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
-
-use gpui::{AppContext as _, TestAppContext};
-use nyaterm_core::AiExecutionProfile;
-use nyaterm_transport::{
-    LocalSessionConfig, RemoteFileBackendPreference, RemoteFileBackendPreferenceStore,
-    SessionEvent, SessionKind, SessionManager, SshAgentPrompt, SshAgentPromptPhase,
-    SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason, SshHostKey,
-    SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest, SshSessionConfig,
+use super::{
+    CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
+    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
+    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
+    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
+    SessionStartFeatureState,
 };
-
+use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::features::session::{HostKeyPromptChoice, HostKeyPromptIssue};
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
@@ -20,16 +15,17 @@ use crate::models::{
 };
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use crate::test_support::{TestConfigDir, blocking_test_store};
-
-use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
-
-use super::{
-    CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
-    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
-    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
-    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
-    SessionStartFeatureState,
+use gpui::{AppContext as _, TestAppContext};
+use nyaterm_core::AiExecutionProfile;
+use nyaterm_files::remote_file::{RemoteFileBackendPreference, RemoteFileBackendPreferenceStore};
+use nyaterm_transport::{
+    LocalSessionConfig, SessionEvent, SessionKind, SessionManager, SshAgentPrompt,
+    SshAgentPromptPhase, SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason,
+    SshHostKey, SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest, SshSessionConfig,
 };
+use std::path::Path;
+use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 #[test]
 fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
@@ -507,11 +503,10 @@ impl gpui::Render for FailureViewHost {
 
 #[test]
 fn selected_failed_and_retry_tabs_replace_the_previous_tab_highlight() {
-    use gpui::VisualTestContext;
-    use nyaterm_core::InternalEditorDisplay;
-
     use crate::features::test_support::editor_document;
     use crate::models::{QuickSwitchItem, WorkspaceTabId};
+    use gpui::VisualTestContext;
+    use nyaterm_core::InternalEditorDisplay;
 
     let draw_and_assert =
         |cx: &mut VisualTestContext, selected: &'static str, unselected: &[&'static str]| {

@@ -4,7 +4,8 @@ use crate::models::{
     TransferJobStatus,
 };
 use gpui::{Context, Image};
-use nyaterm_transport::{FileBrowserService, SftpTransferControl};
+use nyaterm_files::file_browser::FileBrowserService;
+use nyaterm_files::sftp::SftpTransferControl;
 
 impl NyaTermApp {
     pub(super) fn paste_clipboard_image(&mut self, image: Image, cx: &mut Context<Self>) {

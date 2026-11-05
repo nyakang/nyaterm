@@ -1,17 +1,3 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-
-use futures::{FutureExt as _, StreamExt as _, select_biased};
-use gpui::{Context, Window};
-use nyaterm_core::{AiAction, truncate_preview};
-use nyaterm_transport::{
-    SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferProgress,
-};
-use nyaterm_ui::NyaDialogWindowExt as _;
-use rust_i18n::t;
-
 use crate::features::NyaTermApp;
 use crate::features::formatting::format_permissions_octal;
 use crate::models::{
@@ -19,6 +5,17 @@ use crate::models::{
     TransferBrowserPathMenuState, TransferExternalSyncPromptState, TransferJobEvent,
     TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobStatus,
 };
+use futures::{FutureExt as _, StreamExt as _, select_biased};
+use gpui::{Context, Window};
+use nyaterm_core::{AiAction, truncate_preview};
+use nyaterm_files::sftp::{SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType};
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+use nyaterm_ui::NyaDialogWindowExt as _;
+use rust_i18n::t;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// How long the event drain holds a progress batch open before entering GPUI.
 ///
@@ -350,12 +347,13 @@ impl NyaTermApp {
                                 bytes, target_path, ..
                             } = output
                             {
-                                job.summary = Some(nyaterm_transport::SftpTransferSummary {
-                                    remote_path: target_path,
-                                    local_path: Default::default(),
-                                    bytes,
-                                    skipped: false,
-                                });
+                                job.summary =
+                                    Some(nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                                        remote_path: target_path,
+                                        local_path: Default::default(),
+                                        bytes,
+                                        skipped: false,
+                                    });
                             }
                         }
                         Err(error) => {
@@ -819,7 +817,7 @@ impl NyaTermApp {
                     target_parent_path: target_parent_path.clone(),
                 };
                 job.entries.clear();
-                job.summary = Some(nyaterm_transport::SftpTransferSummary {
+                job.summary = Some(nyaterm_files::sftp_transfer_types::SftpTransferSummary {
                     remote_path: target_path.clone(),
                     local_path: job
                         .progress
@@ -1595,19 +1593,10 @@ fn transfer_navigation_job_is_stale(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
-
-    use gpui::{
-        AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div,
+    use super::{
+        TRANSFER_UI_COALESCE_WINDOW, transfer_event_needs_browser_context,
+        transfer_event_needs_ui_refresh, transfer_navigation_job_is_stale,
     };
-    use nyaterm_core::{AppRuntime, RuntimeMode};
-    use nyaterm_transport::{
-        SFTP_TRANSFER_CANCELLED, SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary,
-    };
-
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::models::{
@@ -1615,11 +1604,18 @@ mod tests {
         TransferJobStatus,
     };
     use crate::test_support::TestConfigDir;
-
-    use super::{
-        TRANSFER_UI_COALESCE_WINDOW, transfer_event_needs_browser_context,
-        transfer_event_needs_ui_refresh, transfer_navigation_job_is_stale,
+    use gpui::{
+        AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, div,
     };
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED;
+    use nyaterm_files::sftp_transfer_types::{
+        SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary,
+    };
+    use std::collections::{HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     #[test]
     fn closing_shared_app_child_window_keeps_transfer_events_alive() {
@@ -1785,11 +1781,11 @@ mod tests {
         (app, vcx)
     }
 
-    fn browser_entry(name: &str) -> nyaterm_transport::SftpFileEntry {
-        nyaterm_transport::SftpFileEntry {
+    fn browser_entry(name: &str) -> nyaterm_files::sftp::SftpFileEntry {
+        nyaterm_files::sftp::SftpFileEntry {
             name: name.to_string(),
             path: format!("/remote/{name}"),
-            file_type: nyaterm_transport::SftpFileType::File,
+            file_type: nyaterm_files::sftp::SftpFileType::File,
             size: Some(1),
             permissions: None,
             owner: String::new(),
@@ -2422,7 +2418,7 @@ mod tests {
                 remote_path: "/tmp/file".to_string(),
             },
             &TransferJobEvent::Finished(Ok(TransferJobOutput::Uploaded {
-                summary: nyaterm_transport::SftpTransferSummary {
+                summary: nyaterm_files::sftp_transfer_types::SftpTransferSummary {
                     remote_path: "/tmp/file".to_string(),
                     local_path: PathBuf::from("/tmp/file"),
                     bytes: 2,

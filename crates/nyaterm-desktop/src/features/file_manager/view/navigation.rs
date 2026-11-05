@@ -1,12 +1,12 @@
-use gpui::{AnyElement, Context, IntoElement, SharedString, div, prelude::*, px, rgb};
-use nyaterm_transport::{RemoteFilePath, file_browser_name, file_browser_parent};
-use nyaterm_ui::{NyaDropdownMenu, NyaInput, NyaMenuItem, NyaTooltip};
-use rust_i18n::t;
-
 use super::small_button;
 use crate::features::file_manager::pane::{PaneEndpoint, PaneId};
 use crate::features::file_manager::workspace::FileManagerWorkspace;
 use crate::theme::ThemePalette;
+use gpui::{AnyElement, Context, IntoElement, SharedString, div, prelude::*, px, rgb};
+use nyaterm_files::file_browser::{file_browser_name, file_browser_parent};
+use nyaterm_files::sftp::RemoteFilePath;
+use nyaterm_ui::{NyaDropdownMenu, NyaInput, NyaMenuItem, NyaTooltip};
+use rust_i18n::t;
 
 impl FileManagerWorkspace {
     pub(super) fn navigation_view(
@@ -99,7 +99,9 @@ impl FileManagerWorkspace {
                 if parent == current.display_path {
                     break;
                 }
-                current = if endpoint.kind() == nyaterm_transport::FileBrowserBackendKind::Remote {
+                current = if endpoint.kind()
+                    == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+                {
                     match current.parent() {
                         Ok(parent) => parent,
                         Err(_) => break,

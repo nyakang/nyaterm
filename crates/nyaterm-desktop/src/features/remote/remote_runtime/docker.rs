@@ -1,20 +1,17 @@
-use futures::StreamExt as _;
-use rust_i18n::t;
-
-use gpui::{Context, Window};
-use nyaterm_transport::DockerService;
-
-use crate::blocking_jobs::BlockingJobScheduler;
-use crate::features::NyaTermApp;
-use crate::features::formatting::{compact_id, docker_compose_project_key};
-use crate::features::runtime_jobs::{DockerJobOutput, DockerJobResult, DockerResource};
-use crate::models::{DockerConfirmAction, DockerConfirmState, DockerTab, NavItem};
-
 use super::helpers::{
     ActiveSshRuntimeContext, DOCKER_SHELL_SELECTOR, docker_compose_terminal_base,
     docker_overview_status, shell_quote,
 };
+use crate::blocking_jobs::BlockingJobScheduler;
+use crate::features::NyaTermApp;
+use crate::features::formatting::{compact_id, docker_compose_project_key};
 use crate::features::remote::job_state::RemoteJobTicket;
+use crate::features::runtime_jobs::{DockerJobOutput, DockerJobResult, DockerResource};
+use crate::models::{DockerConfirmAction, DockerConfirmState, DockerTab, NavItem};
+use futures::StreamExt as _;
+use gpui::{Context, Window};
+use nyaterm_remote_ops::docker::DockerService;
+use rust_i18n::t;
 
 fn submit_docker_job(
     scheduler: &BlockingJobScheduler,
@@ -96,6 +93,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -118,7 +116,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let service = DockerService::with_multiplex(config, multiplex, docker_state)?;
                     let overview = service.overview()?;
                     let resource = overview
                         .available
@@ -166,7 +164,11 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    let service = DockerService::with_multiplex(context.config, context.multiplex)?;
+                    let service = DockerService::with_multiplex(
+                        context.config,
+                        context.multiplex,
+                        context.docker_state,
+                    )?;
                     fetch_docker_resource(&service, tab)
                         .expect("resource tab has a Docker command")
                         .map(DockerJobOutput::Resource)
@@ -189,6 +191,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -209,7 +212,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let service = DockerService::with_multiplex(config, multiplex, docker_state)?;
                     service.container_action(&container_id, action)?;
                     let overview = service.overview()?;
                     Ok(DockerJobOutput::RefreshedAfterAction {
@@ -233,6 +236,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -253,7 +257,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    DockerService::with_multiplex(config, multiplex)?
+                    DockerService::with_multiplex(config, multiplex, docker_state)?
                         .container_details(&container_id)
                         .map(|details| DockerJobOutput::Details {
                             container_id,
@@ -376,6 +380,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -396,7 +401,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    DockerService::with_multiplex(config, multiplex)?
+                    DockerService::with_multiplex(config, multiplex, docker_state)?
                         .compose_services(&project_name, config_files.as_deref())
                         .map(|services| DockerJobOutput::ComposeServices {
                             key,
@@ -425,6 +430,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -444,7 +450,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let service = DockerService::with_multiplex(config, multiplex, docker_state)?;
                     service.compose_service_action(
                         &project_name,
                         config_files.as_deref(),
@@ -482,6 +488,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -502,7 +509,7 @@ impl NyaTermApp {
             job_session_id,
             move || {
                 (|| {
-                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let service = DockerService::with_multiplex(config, multiplex, docker_state)?;
                     service.compose_action(&project_name, config_files.as_deref(), action)?;
                     let overview = service.overview()?;
                     let service_result =
@@ -562,6 +569,7 @@ impl NyaTermApp {
         };
         let config = context.config;
         let multiplex = context.multiplex;
+        let docker_state = context.docker_state;
         let job_session_id = context.session_id;
         if self.remote_ops.docker_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -581,7 +589,7 @@ impl NyaTermApp {
             move || {
                 (|| {
                     let label = confirm.title.clone();
-                    let service = DockerService::with_multiplex(config, multiplex)?;
+                    let service = DockerService::with_multiplex(config, multiplex, docker_state)?;
                     match confirm.action {
                         DockerConfirmAction::ContainerAction {
                             container_id,

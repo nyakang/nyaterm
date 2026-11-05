@@ -1,11 +1,10 @@
-use futures::channel::mpsc::UnboundedSender;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
-use nyaterm_transport::{SFTP_TRANSFER_CANCELLED, SftpTransferProgress};
-
 use crate::blocking_jobs::{BlockingJobScheduler, JobOutcome};
 use crate::models::{TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState};
+use futures::channel::mpsc::UnboundedSender;
+use nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED;
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const TRANSFER_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -143,7 +142,7 @@ mod tests {
     use super::{TransferProgressEventSender, submit_transfer_blocking_job};
     use crate::blocking_jobs::BlockingJobScheduler;
     use crate::models::TransferJobEvent;
-    use nyaterm_transport::SftpTransferProgress;
+    use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 
     #[test]
     fn occupied_bulk_executor_does_not_block_interactive_jobs() {
@@ -221,7 +220,7 @@ mod tests {
         cleanup();
         let result = receiver.try_recv().unwrap();
         assert!(
-            matches!(result.event, TransferJobEvent::Finished(Err(error)) if error == nyaterm_transport::SFTP_TRANSFER_CANCELLED)
+            matches!(result.event, TransferJobEvent::Finished(Err(error)) if error == nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED)
         );
         assert!(receiver.try_recv().is_err());
     }

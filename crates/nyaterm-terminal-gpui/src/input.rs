@@ -19,6 +19,9 @@ pub struct TerminalKeyMode {
     pub kitty_keyboard_report_all_keys_as_esc: bool,
     /// Kitty keyboard protocol: include generated text in CSI-u.
     pub kitty_keyboard_report_associated_text: bool,
+    /// Send `ESC b`/`ESC f` for Alt+Left/Right (word back/forward) instead of the
+    /// xterm `ESC[1;3D`/`ESC[1;3C`. Ignored while the kitty protocol is active.
+    pub alt_arrows_word_jump: bool,
 }
 
 pub fn terminal_key_bytes(event: &KeyDownEvent) -> Option<Vec<u8>> {
@@ -42,6 +45,10 @@ pub fn terminal_key_bytes_with_mode(
     let ctrl = keystroke.modifiers.control;
     let alt = keystroke.modifiers.alt;
     let shift = keystroke.modifiers.shift;
+
+    if let Some(bytes) = alt_arrow_word_jump_bytes(key, shift, alt, ctrl, keystroke, mode) {
+        return Some(bytes);
+    }
 
     if let Some(bytes) = modified_navigation_key_bytes(key, shift, alt, ctrl) {
         return Some(bytes);
@@ -156,6 +163,41 @@ pub fn terminal_key_release_bytes_with_mode(
     }
 
     kitty_key_bytes(&event.keystroke, mode, KittyKeyEvent::Release)
+}
+
+/// Option+Left/Right as readline word motion. Shells such as zsh bind `ESC b` and
+/// `ESC f` out of the box but not the xterm modified-arrow sequence, so the arrow
+/// would otherwise leave stray `D`/`C` characters on the prompt.
+///
+/// Only a bare Alt qualifies: Shift or Ctrl keep their own xterm sequences, and
+/// any Kitty flag (including independently negotiated reporting flags) preserves
+/// the arrow's identity for the application.
+fn alt_arrow_word_jump_bytes(
+    key: &str,
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+    keystroke: &gpui::Keystroke,
+    mode: TerminalKeyMode,
+) -> Option<Vec<u8>> {
+    if !mode.alt_arrows_word_jump
+        || !alt
+        || shift
+        || ctrl
+        || keystroke.modifiers.platform
+        || mode.kitty_keyboard_disambiguate
+        || mode.kitty_keyboard_report_event_types
+        || mode.kitty_keyboard_report_alternate_keys
+        || mode.kitty_keyboard_report_all_keys_as_esc
+        || mode.kitty_keyboard_report_associated_text
+    {
+        return None;
+    }
+    match key {
+        "left" => Some(b"\x1bb".to_vec()),
+        "right" => Some(b"\x1bf".to_vec()),
+        _ => None,
+    }
 }
 
 fn modified_navigation_key_bytes(key: &str, shift: bool, alt: bool, ctrl: bool) -> Option<Vec<u8>> {

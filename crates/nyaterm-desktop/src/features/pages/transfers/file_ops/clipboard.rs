@@ -1,14 +1,3 @@
-use rust_i18n::t;
-use std::path::PathBuf;
-
-use gpui::{Context, Window};
-use nyaterm_transport::{
-    FileBrowserBackendKind, FileBrowserService, RemoteFilePath, SftpDuplicatePolicy,
-    SftpDuplicateResolver, SftpFileEntry, SftpFileType, SftpPathTransferOptions,
-    SftpTransferControl, file_browser_copy_destination_invalid, file_browser_join,
-    file_browser_name, file_browser_path_is_root,
-};
-
 use crate::features::NyaTermApp;
 use crate::features::transfers::TransferFileClipboard;
 #[cfg(test)]
@@ -18,6 +7,17 @@ use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState, TransferJobStatus,
 };
+use gpui::{Context, Window};
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, FileBrowserService, file_browser_copy_destination_invalid,
+    file_browser_join, file_browser_name, file_browser_path_is_root,
+};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
+};
+use rust_i18n::t;
+use std::path::PathBuf;
 
 fn invalid_copy_destination(
     kind: FileBrowserBackendKind,
@@ -348,7 +348,8 @@ mod tests {
         TransferFileClipboard, copied_tree_matches, invalid_copy_destination,
         local_clipboard_entry, prefer_external_paths,
     };
-    use nyaterm_transport::{FileBrowserBackendKind, SftpFileType};
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::SftpFileType;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -356,9 +357,9 @@ mod tests {
     fn clipboard_copy_reports_partial_progress_before_the_finished_output() {
         use super::{ClipboardCopyRequest, run_clipboard_copy};
         use crate::models::TransferJobOutput;
-        use nyaterm_transport::{
-            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
-        };
+        use nyaterm_files::file_browser::FileBrowserService;
+        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
         use std::sync::{Arc, Mutex};
 
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-progress");
@@ -402,9 +403,9 @@ mod tests {
     #[test]
     fn local_cut_deletes_source_only_after_a_successful_copy() {
         use super::{ClipboardCopyRequest, run_clipboard_copy};
-        use nyaterm_transport::{
-            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
-        };
+        use nyaterm_files::file_browser::FileBrowserService;
+        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
 
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut");
         std::fs::create_dir_all(root.path()).unwrap();
@@ -434,9 +435,9 @@ mod tests {
     #[test]
     fn cancelled_cut_keeps_the_source() {
         use super::{ClipboardCopyRequest, run_clipboard_copy};
-        use nyaterm_transport::{
-            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
-        };
+        use nyaterm_files::file_browser::FileBrowserService;
+        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
 
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut-cancel");
         std::fs::create_dir_all(root.path()).unwrap();

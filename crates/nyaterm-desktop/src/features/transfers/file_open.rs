@@ -1,8 +1,7 @@
-use gpui::{Context, Window};
-use nyaterm_transport::SftpFileEntry;
-
 use super::file_operations::FileOperationEndpoint;
 use crate::features::NyaTermApp;
+use gpui::{Context, Window};
+use nyaterm_files::sftp::SftpFileEntry;
 
 #[derive(Clone, Copy)]
 pub(in crate::features) enum FileOpenMode {

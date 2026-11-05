@@ -7,7 +7,8 @@ use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::{MethodKind, MethodSet, server};
 
 use crate::ssh_authentication::{
-    SshAuthenticationMaterial, SshAuthenticationRequest, SshAuthenticationResponse,
+    SshAuthenticationMaterial, SshAuthenticationMethod, SshAuthenticationRequest,
+    SshAuthenticationResponse, SshAuthenticationStage,
 };
 use crate::{
     SshCredentialPrompt, SshCredentialPromptReason, SshCredentialProvider, SshHostKey,
@@ -28,12 +29,20 @@ enum Scenario {
     RestartFactor,
     IndependentInteractive,
     InteractiveOnly,
+    KeyPassword,
+    KeyInteractivePassword,
+    InteractivePassword,
+    RepeatedPassword,
+    AlternatingFactors,
+    UnsupportedFactor,
+    DisconnectPassword,
 }
 
 struct Peer {
     scenario: Scenario,
     seen: Arc<Mutex<Vec<String>>>,
     interactive_factor: u32,
+    key_authenticated: bool,
 }
 
 fn reject(methods: &[MethodKind], partial_success: bool) -> server::Auth {
@@ -48,11 +57,22 @@ impl server::Handler for Peer {
     async fn auth_none(&mut self, _: &str) -> Result<server::Auth, Self::Error> {
         self.seen.lock().unwrap().push("none".into());
         Ok(reject(
-            if matches!(self.scenario, Scenario::InteractiveOnly) {
+            if matches!(
+                self.scenario,
+                Scenario::InteractiveOnly | Scenario::InteractivePassword
+            ) {
                 &[MethodKind::KeyboardInteractive]
             } else if matches!(
                 self.scenario,
-                Scenario::KeyOnly | Scenario::KeyOtp | Scenario::KeyOtpReject
+                Scenario::KeyOnly
+                    | Scenario::KeyOtp
+                    | Scenario::KeyOtpReject
+                    | Scenario::KeyPassword
+                    | Scenario::KeyInteractivePassword
+                    | Scenario::RepeatedPassword
+                    | Scenario::AlternatingFactors
+                    | Scenario::UnsupportedFactor
+                    | Scenario::DisconnectPassword
             ) {
                 &[MethodKind::PublicKey]
             } else {
@@ -70,7 +90,22 @@ impl server::Handler for Peer {
             .lock()
             .unwrap()
             .push(format!("password:{password}"));
+        if matches!(self.scenario, Scenario::DisconnectPassword) {
+            return Err(russh::Error::Disconnect);
+        }
         Ok(match self.scenario {
+            Scenario::KeyPassword | Scenario::KeyInteractivePassword
+                if self.key_authenticated && password == "new" =>
+            {
+                server::Auth::Accept
+            }
+            Scenario::InteractivePassword
+                if self.interactive_factor > 0 && password == "second" =>
+            {
+                server::Auth::Accept
+            }
+            Scenario::RepeatedPassword => reject(&[MethodKind::Password], true),
+            Scenario::AlternatingFactors => reject(&[MethodKind::KeyboardInteractive], true),
             Scenario::Password if password == "new" => server::Auth::Accept,
             Scenario::SwitchKey => reject(&[MethodKind::PublicKey], false),
             Scenario::PasswordFallback
@@ -93,6 +128,18 @@ impl server::Handler for Peer {
         _: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<server::Auth, Self::Error> {
         self.seen.lock().unwrap().push("key".into());
+        self.key_authenticated = true;
+        match self.scenario {
+            Scenario::KeyPassword
+            | Scenario::RepeatedPassword
+            | Scenario::AlternatingFactors
+            | Scenario::DisconnectPassword => return Ok(reject(&[MethodKind::Password], true)),
+            Scenario::KeyInteractivePassword => {
+                return Ok(reject(&[MethodKind::KeyboardInteractive], true));
+            }
+            Scenario::UnsupportedFactor => return Ok(reject(&[], true)),
+            _ => {}
+        }
         Ok(
             if matches!(self.scenario, Scenario::KeyOtp | Scenario::KeyOtpReject) {
                 reject(
@@ -117,6 +164,18 @@ impl server::Handler for Peer {
                 .lock()
                 .unwrap()
                 .push(format!("interactive:{value}"));
+            if matches!(
+                self.scenario,
+                Scenario::KeyInteractivePassword | Scenario::AlternatingFactors
+            ) && self.key_authenticated
+                && value == "test-code"
+            {
+                return Ok(reject(&[MethodKind::Password], true));
+            }
+            if matches!(self.scenario, Scenario::InteractivePassword) && value == "new" {
+                self.interactive_factor += 1;
+                return Ok(reject(&[MethodKind::Password], true));
+            }
             if matches!(self.scenario, Scenario::RestartFactor)
                 && self.interactive_factor == 0
                 && value == "new"
@@ -171,6 +230,7 @@ struct Provider {
     answers: Mutex<VecDeque<SshAuthenticationMaterial>>,
     requests: Mutex<Vec<SshAuthenticationRequest>>,
     completions: Mutex<Vec<Option<Vec<String>>>>,
+    cancel_on_request: Option<(usize, crate::connection_attempt::ConnectionAttempt)>,
 }
 
 impl SshCredentialProvider for Provider {
@@ -183,6 +243,11 @@ impl SshCredentialProvider for Provider {
     ) -> Result<Option<SshAuthenticationResponse>, String> {
         let mut requests = self.requests.lock().unwrap();
         requests.push(request.clone());
+        if let Some((number, attempt)) = &self.cancel_on_request
+            && requests.len() == *number
+        {
+            attempt.cancel();
+        }
         Ok(self
             .answers
             .lock()
@@ -239,6 +304,26 @@ async fn run(
     initial: Option<&str>,
     answers: Vec<SshAuthenticationMaterial>,
 ) -> (bool, Arc<Provider>, Vec<String>) {
+    run_with_config(
+        scenario,
+        SshSessionConfig {
+            password: initial.map(Into::into),
+            ..Default::default()
+        },
+        answers,
+        true,
+        None,
+    )
+    .await
+}
+
+async fn run_with_config(
+    scenario: Scenario,
+    mut config: SshSessionConfig,
+    answers: Vec<SshAuthenticationMaterial>,
+    provide_credentials: bool,
+    environment: Option<Arc<crate::ShellEnvironmentCache>>,
+) -> (bool, Arc<Provider>, Vec<String>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -246,6 +331,7 @@ async fn run(
         scenario,
         seen: seen.clone(),
         interactive_factor: 0,
+        key_authenticated: false,
     };
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
@@ -271,22 +357,35 @@ async fn run(
         answers: Mutex::new(answers.into()),
         ..Default::default()
     });
-    let config = SshSessionConfig {
-        host: "127.0.0.1".into(),
-        port,
-        username: "test".into(),
-        password: initial.map(Into::into),
-        credential_provider: Some(provider.clone()),
-        host_key_verifier: Some(Arc::new(AcceptKey)),
-        ..Default::default()
+    config.host = "127.0.0.1".into();
+    config.port = port;
+    config.username = "test".into();
+    if provide_credentials && config.credential_provider.is_none() {
+        config.credential_provider = Some(provider.clone());
+    }
+    config.host_key_verifier = Some(Arc::new(AcceptKey));
+    let success = if let Some(environment) = environment {
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            crate::open_authenticated_ssh_handle_with_sender_registry(
+                &config,
+                None,
+                None,
+                environment,
+            ),
+        )
+        .await
+        .unwrap()
+        .is_ok()
+    } else {
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || crate::open_ssh_multiplex_handle(config).is_ok()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
     };
-    let success = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::task::spawn_blocking(move || crate::open_ssh_multiplex_handle(config).is_ok()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
     server.abort();
     let recorded = seen.lock().unwrap().clone();
     (success, provider, recorded)
@@ -541,6 +640,8 @@ fn legacy_secret_provider_adapts_to_structured_password_requests() {
                 echo: false,
             },
             available_methods: vec![crate::ssh_authentication::SshAuthenticationMethod::Password],
+            stage: Default::default(),
+            accepted_response_ids: Vec::new(),
             key_response_id: None,
         })
         .unwrap()
@@ -550,3 +651,296 @@ fn legacy_secret_provider_adapts_to_structured_password_requests() {
     );
     assert!(response.response_id.is_none());
 }
+
+fn configured_key() -> SshSessionConfig {
+    let SshAuthenticationMaterial::Key(key_auth) = key_material() else {
+        unreachable!()
+    };
+    SshSessionConfig {
+        key_auth: Some(key_auth),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn configured_key_continues_with_session_only_account_password() {
+    let (success, provider, seen) = run_with_config(
+        Scenario::KeyPassword,
+        configured_key(),
+        vec![password("new")],
+        true,
+        None,
+    )
+    .await;
+    assert!(success);
+    assert_eq!(seen, ["key", "password:new"]);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].stage, SshAuthenticationStage::AdditionalFactor);
+    assert_eq!(
+        requests[0].prompt.reason,
+        SshCredentialPromptReason::AdditionalPasswordRequired
+    );
+    assert_eq!(
+        requests[0].available_methods,
+        [SshAuthenticationMethod::Password]
+    );
+    assert_eq!(*provider.completions.lock().unwrap(), [Some(vec![])]);
+}
+
+#[tokio::test]
+async fn runtime_key_survives_wrong_password_without_resubmitting_publickey() {
+    let (success, provider, seen) = run(
+        Scenario::KeyPassword,
+        None,
+        vec![key_material(), password("wrong"), password("new")],
+    )
+    .await;
+    assert!(success);
+    assert_eq!(seen, ["none", "key", "password:wrong", "password:new"]);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests[1].prompt.attempt, 1);
+    assert_eq!(requests[2].prompt.attempt, 2);
+    assert_eq!(
+        requests[2].prompt.reason,
+        SshCredentialPromptReason::PasswordRejected
+    );
+    for request in &requests[1..] {
+        assert_eq!(request.stage, SshAuthenticationStage::AdditionalFactor);
+        assert_eq!(request.accepted_response_ids, ["response-1"]);
+        assert!(request.key_response_id.is_none());
+    }
+    assert_eq!(
+        *provider.completions.lock().unwrap(),
+        [Some(vec!["response-1".into()])]
+    );
+}
+
+#[tokio::test]
+async fn configured_password_is_not_reused_as_an_additional_factor() {
+    let mut config = configured_key();
+    config.password = Some("must-not-be-reused".into());
+    let (success, provider, seen) = run_with_config(
+        Scenario::KeyPassword,
+        config,
+        vec![password("new")],
+        true,
+        None,
+    )
+    .await;
+    assert!(success);
+    assert_eq!(seen, ["key", "password:new"]);
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn additional_password_rejection_stops_after_three_submissions_without_saving() {
+    let (success, provider, seen) = run_with_config(
+        Scenario::KeyPassword,
+        configured_key(),
+        vec![
+            password("wrong1"),
+            password("wrong2"),
+            password("wrong3"),
+            password("new"),
+        ],
+        true,
+        None,
+    )
+    .await;
+    assert!(!success);
+    assert_eq!(
+        seen,
+        [
+            "key",
+            "password:wrong1",
+            "password:wrong2",
+            "password:wrong3"
+        ]
+    );
+    assert_eq!(provider.requests.lock().unwrap().len(), 3);
+    assert_eq!(*provider.completions.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn cancelled_additional_password_never_saves_the_accepted_key() {
+    let (success, provider, seen) = run(Scenario::KeyPassword, None, vec![key_material()]).await;
+    assert!(!success);
+    assert_eq!(seen, ["none", "key"]);
+    assert_eq!(provider.requests.lock().unwrap().len(), 2);
+    assert_eq!(*provider.completions.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn cancellation_during_password_prompt_prevents_submission_and_late_saving() {
+    let mut config = configured_key();
+    let provider = Arc::new(Provider {
+        answers: Mutex::new(vec![password("new")].into()),
+        cancel_on_request: Some((1, config.attempt.clone())),
+        ..Default::default()
+    });
+    config.credential_provider = Some(provider.clone());
+    let (success, _, seen) =
+        run_with_config(Scenario::KeyPassword, config, vec![], true, None).await;
+    assert!(!success);
+    assert_eq!(seen, ["key"]);
+    assert_eq!(*provider.completions.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn additional_factor_cannot_switch_back_to_publickey_or_accept_empty_password() {
+    for material in [key_material(), password("")] {
+        let (success, provider, seen) = run_with_config(
+            Scenario::KeyPassword,
+            configured_key(),
+            vec![material],
+            true,
+            None,
+        )
+        .await;
+        assert!(!success);
+        assert_eq!(seen, ["key"]);
+        assert_eq!(*provider.completions.lock().unwrap(), [None]);
+    }
+}
+
+#[tokio::test]
+async fn missing_additional_password_provider_fails_without_resubmitting_key() {
+    let (success, provider, seen) =
+        run_with_config(Scenario::KeyPassword, configured_key(), vec![], false, None).await;
+    assert!(!success);
+    assert_eq!(seen, ["key"]);
+    assert!(provider.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn disconnect_during_additional_password_never_reports_success() {
+    let (success, provider, seen) = run_with_config(
+        Scenario::DisconnectPassword,
+        configured_key(),
+        vec![password("new")],
+        true,
+        None,
+    )
+    .await;
+    assert!(!success);
+    assert_eq!(seen, ["key", "password:new"]);
+    assert_eq!(*provider.completions.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn unsupported_additional_factor_does_not_request_or_save_credentials() {
+    let (success, provider, seen) = run_with_config(
+        Scenario::UnsupportedFactor,
+        configured_key(),
+        vec![password("new")],
+        true,
+        None,
+    )
+    .await;
+    assert!(!success);
+    assert_eq!(seen, ["key"]);
+    assert!(provider.requests.lock().unwrap().is_empty());
+    assert_eq!(*provider.completions.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn interactive_factor_can_continue_to_a_distinct_account_password() {
+    let (success, provider, seen) = run(
+        Scenario::InteractivePassword,
+        None,
+        vec![password("new"), password("second")],
+    )
+    .await;
+    assert!(success);
+    assert_eq!(seen, ["none", "interactive:new", "password:second"]);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests[1].accepted_response_ids, ["response-1"]);
+    assert_eq!(requests[1].stage, SshAuthenticationStage::AdditionalFactor);
+    assert_eq!(
+        *provider.completions.lock().unwrap(),
+        [Some(vec!["response-1".into()])]
+    );
+}
+
+#[tokio::test]
+async fn key_and_interactive_factors_can_continue_to_password_without_losing_key() {
+    let (success, provider, seen) = run(
+        Scenario::KeyInteractivePassword,
+        None,
+        vec![key_material(), password("new")],
+    )
+    .await;
+    assert!(success);
+    assert_eq!(
+        seen,
+        ["none", "key", "interactive:test-code", "password:new"]
+    );
+    assert_eq!(
+        provider.requests.lock().unwrap()[1].accepted_response_ids,
+        ["response-1"]
+    );
+    assert_eq!(
+        *provider.completions.lock().unwrap(),
+        [Some(vec!["response-1".into()])]
+    );
+}
+
+#[tokio::test]
+async fn password_and_interactive_factors_share_the_eight_transition_limit() {
+    for scenario in [Scenario::RepeatedPassword, Scenario::AlternatingFactors] {
+        let (success, provider, seen) = run_with_config(
+            scenario,
+            configured_key(),
+            (0..10).map(|_| password("new")).collect(),
+            true,
+            None,
+        )
+        .await;
+        assert!(!success);
+        assert_eq!(
+            seen.iter().filter(|event| event.as_str() == "key").count(),
+            1
+        );
+        assert_eq!(seen.len(), 9);
+        assert_eq!(*provider.completions.lock().unwrap(), [None]);
+    }
+}
+
+#[tokio::test]
+async fn unlocked_key_passphrase_remains_eligible_after_additional_password_retries() {
+    let encrypted = key().encrypt(&mut rand::rng(), "phrase").unwrap();
+    let material = SshAuthenticationMaterial::Key(SshKeyAuthConfig {
+        key_data: encrypted
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .to_string()
+            .into(),
+        cert_data: None,
+        passphrase: None,
+    });
+    let (success, provider, seen) = run(
+        Scenario::KeyPassword,
+        None,
+        vec![
+            material,
+            SshAuthenticationMaterial::KeyPassphrase("phrase".into()),
+            password("wrong"),
+            password("new"),
+        ],
+    )
+    .await;
+    assert!(success);
+    assert_eq!(seen, ["none", "key", "password:wrong", "password:new"]);
+    let requests = provider.requests.lock().unwrap();
+    for request in &requests[2..] {
+        assert_eq!(request.accepted_response_ids, ["response-1", "response-2"]);
+    }
+    assert_eq!(
+        *provider.completions.lock().unwrap(),
+        [Some(vec!["response-1".into(), "response-2".into()])]
+    );
+}
+
+#[cfg(any(unix, windows))]
+mod fake_agent;

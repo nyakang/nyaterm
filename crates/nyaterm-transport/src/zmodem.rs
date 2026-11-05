@@ -1209,7 +1209,8 @@ impl ZmodemTransfer {
             .map_err(|e| format!("Failed to read upload metadata: {e}"))?
             .len();
         let size_u32 = validate_file_size(size).map_err(|e| e.to_string())?;
-        let info = zmodem2::FileInfo::new(name.as_bytes(), Some(zmodem2::Position::new(size_u32)));
+        let info = zmodem2::FileInfo::new(name.as_bytes(), Some(zmodem2::Position::new(size_u32)))
+            .with_mode(0o100644);
         sender
             .start_file(info)
             .map_err(|e| format!("start_file error: {e}"))?;

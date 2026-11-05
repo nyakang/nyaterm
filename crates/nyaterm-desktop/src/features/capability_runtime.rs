@@ -15,7 +15,7 @@ use nyaterm_core::capabilities::{
 };
 use nyaterm_core::models::connection::{AiExecutionProfile, ConnectionType};
 use nyaterm_core::models::sessions::Group;
-
+use nyaterm_files::sftp::SftpFileEntry as TransportFileEntry;
 use nyaterm_mcp_protocol::{
     ConnectionListResult, ConnectionSummary, EnvironmentResult, MAX_INLINE_OUTPUT_BYTES,
     MutationResult, OutputReadArgs, PathArgs, RpcError, SessionArgs, SessionGetResult,
@@ -26,7 +26,7 @@ use nyaterm_mcp_protocol::{
     validate_tool_result,
 };
 use nyaterm_store::StoreDomain;
-use nyaterm_transport::{SessionKind, SftpFileEntry as TransportFileEntry};
+use nyaterm_transport::SessionKind;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -399,7 +399,7 @@ impl NyaTermApp {
         success: bool,
         cx: &mut Context<Self>,
     ) {
-        let permission_mode = if self.ai.settings_config().agent_command_execution_mode
+        let permission_mode = if self.ai.run_settings().agent_command_execution_mode
             == nyaterm_core::AgentCommandExecutionMode::ConfirmEach
         {
             nyaterm_core::AiPermissionMode::Confirm
@@ -581,7 +581,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if matches!(request.caller, CapabilityCaller::Native { .. }) {
-            request.permission_mode = if self.ai.settings_config().agent_command_execution_mode
+            request.permission_mode = if self.ai.run_settings().agent_command_execution_mode
                 == nyaterm_core::AgentCommandExecutionMode::ConfirmEach
             {
                 nyaterm_core::AiPermissionMode::Confirm
@@ -670,7 +670,7 @@ impl NyaTermApp {
                 if let (Some(risk), Some(model)) = (assessment.as_mut(), model_risk) {
                     risk.level = risk.level.clone().max(model.clone());
                 }
-                let settings = self.ai.settings_config();
+                let settings = self.ai.run_settings();
                 decide_native_policy(
                     &settings.agent_command_execution_mode,
                     &settings.agent_smart_auto_execute_max_risk,
@@ -682,7 +682,7 @@ impl NyaTermApp {
         let single_approval = requires_single_approval(definition.access, assessment.as_ref());
         let confirm_each = matches!(request.caller, CapabilityCaller::Native { .. })
             && request.tool == tool::TERMINAL_EXECUTE
-            && self.ai.settings_config().agent_command_execution_mode
+            && self.ai.run_settings().agent_command_execution_mode
                 == nyaterm_core::AgentCommandExecutionMode::ConfirmEach;
         self.mcp.capabilities.owners.insert(
             request.connection_id.clone(),
@@ -1133,7 +1133,7 @@ impl NyaTermApp {
                     to_value_string(SftpStatResult {
                         name: value.name,
                         is_dir,
-                        is_symlink: value.file_type == nyaterm_transport::SftpFileType::Symlink,
+                        is_symlink: value.file_type == nyaterm_files::sftp::SftpFileType::Symlink,
                         symlink_target: None,
                         size: value.size.unwrap_or(0),
                         permissions: permissions(value.permissions),
@@ -1319,18 +1319,18 @@ impl NyaTermApp {
                                         .is_none_or(|mtime| mtime == current.modified_at);
                             if !actual_hash.eq_ignore_ascii_case(expected_hash) || !metadata_matches
                             {
-                                nyaterm_transport::RemoteTextWriteResult::Conflict
+                                nyaterm_files::remote_file::RemoteTextWriteResult::Conflict
                             } else {
-                                let revision = nyaterm_transport::RemoteTextRevision::from_bytes(
+                                let revision = nyaterm_files::remote_file::RemoteTextRevision::from_bytes(
                                     current.content.as_bytes(),
-                                    nyaterm_transport::RemoteTextMetadata {
+                                    nyaterm_files::remote_file::RemoteTextMetadata {
                                         size: current.size,
                                         modified_at: Some(current.modified_at),
                                     },
                                 );
                                 service
                                     .write_text_document_path(
-                                        &nyaterm_transport::RemoteFilePath::new(&args.path),
+                                        &nyaterm_files::sftp::RemoteFilePath::new(&args.path),
                                         &args.content,
                                         Some(&revision),
                                         force,
@@ -1348,25 +1348,25 @@ impl NyaTermApp {
                                 )
                                 .map_err(|error| error.to_string())?
                             {
-                                nyaterm_transport::SftpWriteTextResult::Saved {
+                                nyaterm_files::sftp::SftpWriteTextResult::Saved {
                                     modified_at,
                                     size,
-                                } => nyaterm_transport::RemoteTextWriteResult::Saved {
-                                    revision: nyaterm_transport::RemoteTextRevision::from_bytes(
+                                } => nyaterm_files::remote_file::RemoteTextWriteResult::Saved {
+                                    revision: nyaterm_files::remote_file::RemoteTextRevision::from_bytes(
                                         args.content.as_bytes(),
-                                        nyaterm_transport::RemoteTextMetadata {
+                                        nyaterm_files::remote_file::RemoteTextMetadata {
                                             size,
                                             modified_at: Some(modified_at),
                                         },
                                     ),
                                 },
-                                nyaterm_transport::SftpWriteTextResult::Conflict { .. } => {
-                                    nyaterm_transport::RemoteTextWriteResult::Conflict
+                                nyaterm_files::sftp::SftpWriteTextResult::Conflict { .. } => {
+                                    nyaterm_files::remote_file::RemoteTextWriteResult::Conflict
                                 }
                             }
                         };
                         match result {
-                            nyaterm_transport::RemoteTextWriteResult::Saved { revision } => {
+                            nyaterm_files::remote_file::RemoteTextWriteResult::Saved { revision } => {
                                 to_value_string(SftpWriteTextResult {
                                     status: "saved".to_string(),
                                     mtime: revision.metadata.modified_at,
@@ -1376,7 +1376,7 @@ impl NyaTermApp {
                                     backup_path: None,
                                 })
                             }
-                            nyaterm_transport::RemoteTextWriteResult::SavedWithBackup {
+                            nyaterm_files::remote_file::RemoteTextWriteResult::SavedWithBackup {
                                 revision,
                                 backup_path,
                             } => to_value_string(SftpWriteTextResult {
@@ -1387,7 +1387,7 @@ impl NyaTermApp {
                                 content_hash: Some(hex::encode(revision.content_sha256)),
                                 backup_path: Some(backup_path),
                             }),
-                            nyaterm_transport::RemoteTextWriteResult::Conflict => {
+                            nyaterm_files::remote_file::RemoteTextWriteResult::Conflict => {
                                 to_value_string(SftpWriteTextResult {
                                     status: "conflict".to_string(),
                                     mtime: None,
@@ -1444,7 +1444,7 @@ impl NyaTermApp {
                         service
                             .update_path_attributes(
                                 &args.path,
-                                nyaterm_transport::SftpAttributeUpdate {
+                                nyaterm_files::sftp::SftpAttributeUpdate {
                                     symlink_target: None,
                                     mode: Some(
                                         parse_remote_mode(Some(&args.mode))?

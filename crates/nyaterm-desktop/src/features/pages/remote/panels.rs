@@ -27,19 +27,6 @@
 //! child view of the app is repainted by the app's own paint and a
 //! `cx.observe(&app, ..)` would buy nothing but coupling.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use gpui::{
-    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba,
-    ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
-};
-use nyaterm_transport::{RemoteGpuProcess, RemoteNpuProcess, RemoteProcess};
-use nyaterm_ui::{
-    NyaInputState, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSelectState,
-};
-use rust_i18n::t;
-
 use super::docker_view::docker_panel;
 use super::process::{process_display_mode, process_row_height_px};
 use super::process_view::processes_panel;
@@ -52,6 +39,19 @@ use crate::features::remote::{
 use crate::features::text_inputs::TextInputSetup;
 use crate::models::{DockerTab, NavItem};
 use crate::theme::ThemePalette;
+use gpui::{
+    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba,
+    ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
+};
+use nyaterm_remote_ops::ascend_npu::RemoteNpuProcess;
+use nyaterm_remote_ops::gpu::RemoteGpuProcess;
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use nyaterm_ui::{
+    NyaInputState, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSelectState,
+};
+use rust_i18n::t;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// How often a polling panel asks whether its own interval has come due.
 ///
@@ -838,18 +838,16 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
+    use super::{RemoteMonitorData, RemoteMonitorKind, RemoteMonitorPanel};
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::test_support::TestConfigDir;
     use gpui::{
         AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
         TestAppContext, VisualTestContext, div,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
-
-    use super::{RemoteMonitorData, RemoteMonitorKind, RemoteMonitorPanel};
-    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
-    use crate::features::NyaTermApp;
-    use crate::test_support::TestConfigDir;
+    use std::path::Path;
 
     const ALL_KINDS: [RemoteMonitorKind; 5] = [
         RemoteMonitorKind::Stats,
@@ -949,7 +947,7 @@ mod tests {
     #[test]
     fn network_select_events_refresh_the_stats_snapshot_and_reconcile_removed_interfaces() {
         use crate::features::runtime_jobs::StatsJobResult;
-        use nyaterm_transport::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
+        use nyaterm_remote_ops::stats::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
         use nyaterm_ui::NyaSelectEvent;
 
         fn stats(include_eth1: bool) -> RemoteStats {
@@ -1473,22 +1471,22 @@ mod tests {
 
 #[cfg(test)]
 mod isolation_tests {
-    use std::path::Path;
-
-    use gpui::{
-        AppContext as _, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
-        VisualTestContext, div,
-    };
-    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode};
-    use nyaterm_transport::{LocalSessionConfig, RemoteGpuOverview, RemoteStats, SshSessionConfig};
-    use nyaterm_ui::NyaInputEvent;
-
     use super::RemoteMonitorKind;
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::runtime_jobs::DockerResource;
     use crate::models::{DockerTab, NavItem, SessionLaunchConfig, SessionRuntimeMetadata};
     use crate::test_support::TestConfigDir;
+    use gpui::{
+        AppContext as _, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+        VisualTestContext, div,
+    };
+    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode};
+    use nyaterm_remote_ops::gpu::RemoteGpuOverview;
+    use nyaterm_remote_ops::stats::RemoteStats;
+    use nyaterm_transport::{LocalSessionConfig, SshSessionConfig};
+    use nyaterm_ui::NyaInputEvent;
+    use std::path::Path;
 
     fn app(cx: &mut TestAppContext, root: &Path) -> gpui::Entity<NyaTermApp> {
         // A uuid rather than a clock reading: these tests run in parallel and Windows'
@@ -1867,8 +1865,8 @@ mod isolation_tests {
             .paint_count()
     }
 
-    fn process(pid: u32) -> nyaterm_transport::RemoteProcess {
-        nyaterm_transport::RemoteProcess {
+    fn process(pid: u32) -> nyaterm_remote_ops::remote_process::RemoteProcess {
+        nyaterm_remote_ops::remote_process::RemoteProcess {
             pid,
             ppid: 1,
             user: "user".to_string(),
@@ -2214,12 +2212,12 @@ mod isolation_tests {
         (app, vcx)
     }
 
-    fn docker_overview(containers: usize) -> nyaterm_transport::RemoteDockerOverview {
-        nyaterm_transport::RemoteDockerOverview {
+    fn docker_overview(containers: usize) -> nyaterm_remote_ops::docker::RemoteDockerOverview {
+        nyaterm_remote_ops::docker::RemoteDockerOverview {
             available: true,
             compose_available: true,
             containers: (0..containers)
-                .map(|index| nyaterm_transport::DockerContainer {
+                .map(|index| nyaterm_remote_ops::docker::DockerContainer {
                     id: format!("c{index}"),
                     name: format!("name{index}"),
                     image: "image".to_string(),
@@ -2232,7 +2230,7 @@ mod isolation_tests {
                 })
                 .collect(),
             images: (0..30)
-                .map(|index| nyaterm_transport::DockerImage {
+                .map(|index| nyaterm_remote_ops::docker::DockerImage {
                     id: format!("i{index}"),
                     repository: "repo".to_string(),
                     tag: "latest".to_string(),
@@ -2451,7 +2449,7 @@ mod isolation_tests {
                 app.remote_ops.apply_docker_overview(docker_overview(2));
                 app.remote_ops.apply_docker_resource(DockerResource::Images(
                     (0..100)
-                        .map(|index| nyaterm_transport::DockerImage {
+                        .map(|index| nyaterm_remote_ops::docker::DockerImage {
                             id: format!("image-{index}"),
                             repository: format!("repo-{index}"),
                             tag: "latest".to_string(),
@@ -2506,7 +2504,7 @@ mod isolation_tests {
             app.update(cx, |app, cx| {
                 app.remote_ops
                     .apply_docker_resource(DockerResource::Images(vec![
-                        nyaterm_transport::DockerImage {
+                        nyaterm_remote_ops::docker::DockerImage {
                             id: "image-0".to_string(),
                             repository: "repo-0".to_string(),
                             tag: "latest".to_string(),

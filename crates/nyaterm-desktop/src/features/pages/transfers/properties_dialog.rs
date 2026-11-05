@@ -1,18 +1,15 @@
-use rust_i18n::t;
-
-use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::{SftpFileProperties, SftpFileType};
-use nyaterm_ui::{NyaCheckbox, NyaScrollable};
-
-use crate::features::{NyaTermApp, text_inputs::TextInputSetup, transfers::format_file_size};
-use crate::models::{TransferPermissionTarget, TransferPropertiesState};
-use crate::theme::ThemePalette;
-
 use super::{
     format_owner_group, format_sftp_modified, parse_transfer_mode, property_row,
     property_section_heading, remote_parent_path,
 };
+use crate::features::{NyaTermApp, text_inputs::TextInputSetup, transfers::format_file_size};
+use crate::models::{TransferPermissionTarget, TransferPropertiesState};
+use crate::theme::ThemePalette;
+use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px, rgb};
+use nyaterm_core::truncate_preview;
+use nyaterm_files::sftp::{SftpFileProperties, SftpFileType};
+use nyaterm_ui::{NyaCheckbox, NyaScrollable};
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn transfer_properties_dialog_content(
@@ -30,7 +27,7 @@ impl NyaTermApp {
             .session_id
             .as_deref()
             .and_then(|session_id| self.session.file_browser_backend_for_session(session_id))
-            == Some(nyaterm_transport::FileBrowserBackendKind::Remote);
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         let property_mode = parse_transfer_mode(&state.mode_value)
             .or(entry.permissions)
             .unwrap_or(0o644);

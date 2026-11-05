@@ -27,6 +27,7 @@ mod settings;
 mod sizing;
 pub mod tab_close;
 mod tabs;
+pub mod text;
 mod theme;
 mod theme_bridge;
 mod tooltip;
@@ -77,7 +78,7 @@ pub use number_input::{
     NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,
 };
 pub use popover::{NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
-pub use root::{NyaRoot, NyaWindowHandle, nya_root, set_nya_root_transparent};
+pub use root::{NyaRoot, NyaWindowHandle, init_components, nya_root, set_nya_root_transparent};
 pub use selectable_text::NyaSelectableText;
 pub use selection::{
     NyaCheckbox, NyaRadioGroup, NyaSelect, NyaSelectEvent, NyaSelectOption, NyaSelectState,

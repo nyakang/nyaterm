@@ -1,24 +1,20 @@
-use rust_i18n::t;
-
-use gpui::{
-    Context, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, SharedString,
-    StatefulInteractiveElement as _, Window, deferred, div, prelude::*, px, rgb, svg,
-};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::SftpFileEntry;
-use nyaterm_ui::{NyaInput, NyaScrollable};
-
+use super::helpers::{normalized_transfer_browser_path, remote_child_path};
+use super::panel::TransferPanel;
+use super::transfer_menu_position;
+use crate::features::transfers::natural_compare_ascii;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::{
     TransferBrowserBreadcrumbSegment, TransferBrowserChildrenMenuStatus,
     TransferBrowserPathMenuKind, TransferBrowserPathMenuState,
 };
-
-use super::helpers::{normalized_transfer_browser_path, remote_child_path};
-use super::transfer_menu_position;
-use crate::features::transfers::natural_compare_ascii;
-
-use super::panel::TransferPanel;
+use gpui::{
+    Context, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, SharedString,
+    StatefulInteractiveElement as _, Window, deferred, div, prelude::*, px, rgb, svg,
+};
+use nyaterm_core::truncate_preview;
+use nyaterm_files::sftp::SftpFileEntry;
+use nyaterm_ui::{NyaInput, NyaScrollable};
+use rust_i18n::t;
 
 /// The browser path bar.
 ///
@@ -1211,13 +1207,13 @@ fn expand_transfer_browser_home_path(path: &str, home_dir: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{SftpFileEntry, SftpFileType};
 
     use super::{
         TransferBrowserPathMetrics, build_transfer_browser_breadcrumbs,
         collapse_transfer_browser_breadcrumbs, expand_transfer_browser_home_path,
         transfer_browser_child_directories,
     };
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 
     fn entry(name: &str, path: &str, file_type: SftpFileType) -> SftpFileEntry {
         SftpFileEntry {

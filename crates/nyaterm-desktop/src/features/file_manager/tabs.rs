@@ -1,13 +1,12 @@
-use gpui::{Context, div, prelude::*};
-use nyaterm_core::{FileManagerPaneRestore, FileManagerPaneSide, FileManagerSourceRestore};
-use nyaterm_transport::RemoteFilePath;
-use rust_i18n::t;
-
 use super::pane::{PaneEndpoint, PaneId};
 use super::state::FileManagerSidebarRestore;
 use super::workspace::{FileManagerSeed, FileManagerWorkspace};
 use crate::features::NyaTermApp;
 use crate::models::{NavItem, PanelSide, WorkspaceTabId};
+use gpui::{Context, div, prelude::*};
+use nyaterm_core::{FileManagerPaneRestore, FileManagerPaneSide, FileManagerSourceRestore};
+use nyaterm_files::sftp::RemoteFilePath;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_file_manager_tab(
@@ -86,7 +85,7 @@ impl NyaTermApp {
         let endpoint = if self
             .session
             .file_browser_backend_support_for_session(session_id)
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
             PaneEndpoint::Local
         } else {
@@ -196,7 +195,7 @@ impl NyaTermApp {
         let endpoint = if self
             .session
             .file_browser_backend_support_for_session(session_id)
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
             PaneEndpoint::Local
         } else {
@@ -586,7 +585,7 @@ impl NyaTermApp {
             if self
                 .session
                 .file_browser_backend_support_for_session(session_id)
-                == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+                == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
             {
                 continue;
             }

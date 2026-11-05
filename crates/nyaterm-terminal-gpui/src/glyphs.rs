@@ -252,10 +252,17 @@ impl CellGlyphPaintPlan {
         self.previous_shade_cursor = 0;
     }
 
-    pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
+    pub fn paint_with_exclusion(
+        &mut self,
+        exclusion: Option<gpui::Bounds<gpui::Pixels>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         self.finish();
         for quad in self.quads.drain(..) {
-            window.paint_quad(quad);
+            crate::paint_mask::paint_outside(exclusion, quad.bounds, window, cx, |window, _| {
+                window.paint_quad(quad.clone());
+            });
         }
         for shade in self.shades.drain(..) {
             let (path, data) = shade_asset(shade.style.density);
@@ -263,13 +270,21 @@ impl CellGlyphPaintPlan {
                 bounds: window.content_mask().bounds.intersect(&shade.bounds),
             };
             window.with_content_mask(Some(clip), |window| {
-                let _ = window.paint_svg(
-                    shade.image_bounds,
-                    gpui::SharedString::new_static(path),
-                    Some(data),
-                    TransformationMatrix::unit(),
-                    rgb(shade.style.color).into(),
+                crate::paint_mask::paint_outside(
+                    exclusion,
+                    shade.bounds,
+                    window,
                     cx,
+                    |window, cx| {
+                        let _ = window.paint_svg(
+                            shade.image_bounds,
+                            gpui::SharedString::new_static(path),
+                            Some(data),
+                            TransformationMatrix::unit(),
+                            rgb(shade.style.color).into(),
+                            cx,
+                        );
+                    },
                 );
             });
         }

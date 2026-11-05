@@ -3156,11 +3156,13 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     summary = saved;
     summary.diagnostics_level = "debug".to_string();
     summary.diagnostics_retention_days = 14;
+    summary.diagnostics_log_shard_bytes = 20 * 1024 * 1024;
     let saved = store
         .save_diagnostics_settings(&summary)
         .expect("save diagnostics");
     assert_eq!(saved.diagnostics_level, "debug");
     assert_eq!(saved.diagnostics_retention_days, 14);
+    assert_eq!(saved.diagnostics_log_shard_bytes, 20 * 1024 * 1024);
 
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(
@@ -3178,6 +3180,20 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     assert_eq!(
         raw["diagnostics"]["retention_days"],
         serde_json::Value::from(14)
+    );
+    assert_eq!(
+        raw["diagnostics"]["shard_bytes"],
+        serde_json::Value::from(20 * 1024 * 1024)
+    );
+
+    // An extreme persisted value is clamped instead of breaking logging.
+    summary.diagnostics_log_shard_bytes = 4096;
+    let saved = store
+        .save_diagnostics_settings(&summary)
+        .expect("save clamped diagnostics");
+    assert_eq!(
+        saved.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::MIN_LOG_SHARD_BYTES
     );
 
     std::fs::remove_dir_all(dir).ok();
@@ -3715,6 +3731,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(summary.terminal_low_latency_mode);
     // Legacy settings omit the new field and must keep zebra stripes enabled.
     assert!(summary.terminal_zebra_stripes_enabled);
+    assert!(!summary.terminal_zebra_stripes_by_row);
     assert_eq!(
         summary.ui_file_manager,
         nyaterm_core::FileManagerUiSettings::default()
@@ -3817,6 +3834,11 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(summary.recording_memory_limit_bytes, 1048576);
     assert_eq!(summary.diagnostics_level, "debug");
     assert_eq!(summary.diagnostics_retention_days, 3);
+    assert_eq!(
+        summary.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+        "legacy documents without diagnostics.shard_bytes keep the 10 MiB default"
+    );
     assert!(summary.startup_restore);
     assert!(summary.minimize_to_tray);
     assert!(!summary.confirm_on_close);
@@ -4115,6 +4137,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     terminal_update.terminal_show_multi_line_paste_dialog = true;
     terminal_update.terminal_low_latency_mode = true;
     terminal_update.terminal_zebra_stripes_enabled = false;
+    terminal_update.terminal_zebra_stripes_by_row = true;
     terminal_update.ui_remote_stats_interval = 4;
     terminal_update.ui_remote_stats_show_users = true;
     terminal_update.ui_gpu_monitor_interval = 10;
@@ -4129,6 +4152,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(saved_terminal.terminal_show_multi_line_paste_dialog);
     assert!(saved_terminal.terminal_low_latency_mode);
     assert!(!saved_terminal.terminal_zebra_stripes_enabled);
+    assert!(saved_terminal.terminal_zebra_stripes_by_row);
     assert_eq!(saved_terminal.ui_remote_stats_interval, 4);
     assert!(saved_terminal.ui_remote_stats_show_users);
     assert_eq!(saved_terminal.ui_gpu_monitor_interval, 10);
@@ -4169,6 +4193,12 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
             .and_then(|value| value.as_bool()),
         Some(false)
     );
+
+    assert_eq!(stored["terminal"]["zebra_stripes_by_row"], true);
+    assert_eq!(stored["unrelated"]["preserve"], true);
+    let reloaded = store.load_app_settings_summary().unwrap();
+    assert!(reloaded.terminal_zebra_stripes_by_row);
+    assert!(!reloaded.terminal_zebra_stripes_enabled);
 
     let mut quick_command_update = saved_terminal.clone();
     quick_command_update.ui_quick_cmd_view_mode = "list".to_string();
