@@ -2190,4 +2190,84 @@ mod tests {
             assert!(app.settings.summary().custom_themes.available().is_empty());
         });
     }
+
+    /// Write settings straight into the store, the way a cloud pull does.
+    fn pull_terminal_scrollback_into_store(
+        app: &gpui::Entity<NyaTermApp>,
+        cx: &mut TestAppContext,
+    ) {
+        cx.update_entity(app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut settings = store.load_app_settings_summary()?;
+                    settings.terminal_scrollback_lines = 4242;
+                    store.save_terminal_settings(&settings)
+                })
+                .unwrap();
+        });
+    }
+
+    /// Store replies are delivered from another thread, so `run_until_parked`
+    /// alone does not wait for them (`applying_a_draft_persists_the_header_status_mode`).
+    fn wait_for_the_pulled_settings(app: &gpui::Entity<NyaTermApp>, cx: &mut TestAppContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if cx.update_entity(app, |app, _| {
+                app.settings.summary().terminal_scrollback_lines == 4242
+            }) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the store refresh never reached the in-memory settings"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn store_refresh_after_a_pull_rebases_an_untouched_settings_draft() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            assert!(!app.settings_draft_dirty());
+        });
+        pull_terminal_scrollback_into_store(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.refresh_store_from_runtime_and_sync_theme(cx)
+        });
+        wait_for_the_pulled_settings(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
+            assert!(
+                !app.settings_draft_dirty(),
+                "a pull must not turn an untouched draft into unsaved edits"
+            );
+        });
+    }
+
+    #[test]
+    fn store_refresh_keeps_a_draft_the_user_actually_edited() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_transfer_internal_editor_font_size(19, cx);
+            assert!(app.settings_draft_dirty());
+        });
+        pull_terminal_scrollback_into_store(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.refresh_store_from_runtime_and_sync_theme(cx)
+        });
+        wait_for_the_pulled_settings(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
+            assert!(
+                app.settings_draft_dirty(),
+                "refreshing must not silently drop the user's edit"
+            );
+        });
+    }
 }
