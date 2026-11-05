@@ -554,24 +554,24 @@ fn parse_content_full(
         let linked_account = one_key_uuid
             .as_deref()
             .and_then(|uuid| one_keys.iter().find(|account| account.one_key_uuid == uuid));
-        if let Some(uuid) = one_key_uuid.as_deref() {
-            if linked_account.is_none() {
-                let reason = if unsupported_uuids.contains(uuid) {
-                    WindtermUnlinkedReason::UnsupportedType
-                } else if skipped_uuids.contains(uuid) {
-                    WindtermUnlinkedReason::SkippedByUser
-                } else {
-                    missing_one_keys.push(WindtermMissingOneKey {
-                        session_name: name.clone(),
-                        one_key_uuid: uuid.to_owned(),
-                    });
-                    WindtermUnlinkedReason::MissingDefinition
-                };
-                unlinked_sessions.push(WindtermUnlinkedSession {
+        if let Some(uuid) = one_key_uuid.as_deref()
+            && linked_account.is_none()
+        {
+            let reason = if unsupported_uuids.contains(uuid) {
+                WindtermUnlinkedReason::UnsupportedType
+            } else if skipped_uuids.contains(uuid) {
+                WindtermUnlinkedReason::SkippedByUser
+            } else {
+                missing_one_keys.push(WindtermMissingOneKey {
                     session_name: name.clone(),
-                    reason,
+                    one_key_uuid: uuid.to_owned(),
                 });
-            }
+                WindtermUnlinkedReason::MissingDefinition
+            };
+            unlinked_sessions.push(WindtermUnlinkedSession {
+                session_name: name.clone(),
+                reason,
+            });
         }
         let (username, auth) = match linked_account {
             Some(account) => {
@@ -840,53 +840,104 @@ fn parse_one_key_auth(
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return (None, None, true);
     };
-    let payload = if raw.starts_with('{') {
-        serde_json::from_str::<serde_json::Value>(raw).ok()
+    let payload = if raw.starts_with('{') || raw.starts_with('"') {
+        parse_one_key_payload(raw)
     } else {
         match crypto {
-            ProfileCrypto::Ready(crypto) => decrypt_windterm_payload(raw, crypto)
-                .and_then(|plaintext| serde_json::from_slice(plaintext.as_slice()).ok()),
+            ProfileCrypto::Ready(crypto) => {
+                decrypt_windterm_payload(raw, crypto).and_then(|plaintext| {
+                    std::str::from_utf8(&plaintext)
+                        .ok()
+                        .and_then(parse_one_key_payload)
+                })
+            }
             ProfileCrypto::Unavailable(_) => None,
         }
     };
     let Some(payload) = payload else {
         return (None, None, false);
     };
-    let payload = nested_json(payload);
-    let username = one_key_string(
-        &payload,
-        &[
-            "username",
-            "user",
-            "session.user",
-            "login",
-            "account",
-            "userName",
-        ],
-    )
-    .map(str::to_owned);
-    let password = ["password", "Password", "pass", "secret"]
-        .iter()
-        .find_map(|key| payload.get(*key).and_then(serde_json::Value::as_str))
-        .filter(|value| !value.is_empty())
-        .map(|value| SecretString::from(value.to_owned()));
+    // Preserve priority before normalization: an empty preferred string blocks
+    // fallback to lower-priority aliases, just as the original Value lookup did.
+    let username = payload
+        .users
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let password = payload
+        .passwords
+        .into_iter()
+        .flatten()
+        .next()
+        .filter(|value| !value.is_empty());
     (username, password, true)
 }
 
-fn nested_json(value: serde_json::Value) -> serde_json::Value {
-    match &value {
-        serde_json::Value::String(text) if text.trim_start().starts_with('{') => {
-            serde_json::from_str(text).unwrap_or(value)
+#[derive(Default)]
+struct OneKeyPayload {
+    users: [Option<String>; 6],
+    passwords: [Option<SecretString>; 4],
+}
+
+impl<'de> Deserialize<'de> for OneKeyPayload {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PayloadVisitor;
+        impl<'de> serde::de::Visitor<'de> for PayloadVisitor {
+            type Value = OneKeyPayload;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a credential object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut payload = OneKeyPayload::default();
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    // Borrow every raw value, including unknown metadata. No
+                    // generic JSON tree ever owns decrypted password strings.
+                    let raw = map.next_value::<&RawValue>()?;
+                    if let Some(index) = [
+                        "username",
+                        "user",
+                        "session.user",
+                        "login",
+                        "account",
+                        "userName",
+                    ]
+                    .iter()
+                    .position(|name| *name == key)
+                    {
+                        payload.users[index] = serde_json::from_str(raw.get()).ok();
+                    } else if let Some(index) = ["password", "Password", "pass", "secret"]
+                        .iter()
+                        .position(|name| *name == key)
+                    {
+                        payload.passwords[index] = serde_json::from_str(raw.get()).ok();
+                    }
+                }
+                Ok(payload)
+            }
         }
-        _ => value,
+        deserializer.deserialize_map(PayloadVisitor)
     }
 }
 
-fn one_key_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+fn parse_one_key_payload(text: &str) -> Option<OneKeyPayload> {
+    let raw = serde_json::from_str::<&RawValue>(text).ok()?;
+    if raw.get().starts_with('{') {
+        serde_json::from_str(raw.get()).ok()
+    } else if raw.get().starts_with('"') {
+        let nested: SecretString = serde_json::from_str(raw.get()).ok()?;
+        // Historically valid outer JSON with an unrecognized inner payload was
+        // readable, but contained no usable credentials.
+        Some(serde_json::from_str(nested.expose_secret()).unwrap_or_default())
+    } else {
+        Some(OneKeyPayload::default())
+    }
 }
 
 fn decrypt_windterm_payload(raw: &str, crypto: &WindtermCrypto) -> Option<Zeroizing<Vec<u8>>> {

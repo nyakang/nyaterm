@@ -816,3 +816,77 @@ fn unsupported_optional_fields_do_not_abort_other_sessions_or_lose_readable_pass
         Some("readable")
     );
 }
+
+#[test]
+fn one_key_auth_preserves_alias_priority_tolerance_and_zeroizing_nested_strings() {
+    let crypto = super::ProfileCrypto::Unavailable(SessionImportWarningKind::MissingProfileConfig);
+    for (raw, user, password) in [
+        (
+            r#"{"username":" first ","user":"second","password":" primary ","Password":"secondary"}"#,
+            Some("first"),
+            Some(" primary "),
+        ),
+        (
+            r#"{"username":42,"user":"fallback","password":false,"pass":"fallback-secret"}"#,
+            Some("fallback"),
+            Some("fallback-secret"),
+        ),
+        (
+            r#"{"username":" ","user":"blocked","password":"","secret":"blocked"}"#,
+            None,
+            None,
+        ),
+        (
+            r#"{"session.user":"login","secret":"\u0061\"escaped"}"#,
+            Some("login"),
+            Some("a\"escaped"),
+        ),
+        (
+            r#"{"username":"old","username":"last","password":"old","password":12,"pass":"last"}"#,
+            Some("last"),
+            Some("last"),
+        ),
+    ] {
+        for payload in [raw.to_owned(), serde_json::to_string(raw).unwrap()] {
+            let (actual_user, actual_password, readable) =
+                super::parse_one_key_auth(Some(&payload), &crypto);
+            assert!(readable);
+            assert_eq!(actual_user.as_deref(), user);
+            assert_eq!(actual_password.as_deref(), password);
+            if let Some(secret) = actual_password {
+                assert_eq!(format!("{secret:?}"), "SecretString(<redacted>)");
+            }
+        }
+    }
+    for invalid in ["not ciphertext", "{broken", "AAAA"] {
+        let (user, password, readable) = super::parse_one_key_auth(Some(invalid), &crypto);
+        assert!(!readable);
+        assert!(user.is_none());
+        assert!(password.is_none());
+    }
+}
+
+#[test]
+fn encrypted_one_key_auth_handles_nested_json_wrong_password_and_corruption() {
+    use base64::Engine;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+    let crypto = super::derive_crypto("fingerprint-1", "master");
+    let payload =
+        serde_json::to_string(r#"{"userName":"deploy","Password":"sensitive-value"}"#).unwrap();
+    let mut buffer = zeroize::Zeroizing::new(vec![0u8; payload.len() + 16]);
+    buffer[..payload.len()].copy_from_slice(payload.as_bytes());
+    let ciphertext =
+        cbc::Encryptor::<aes::Aes256>::new_from_slices(&crypto.0[..32], &crypto.0[32..])
+            .unwrap()
+            .encrypt_padded_mut::<Pkcs7>(&mut buffer, payload.len())
+            .unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(ciphertext);
+    let ready = super::ProfileCrypto::Ready(crypto);
+    let (user, password, readable) = super::parse_one_key_auth(Some(&encoded), &ready);
+    assert!(readable);
+    assert_eq!(user.as_deref(), Some("deploy"));
+    assert_eq!(password.as_deref(), Some("sensitive-value"));
+    let wrong = super::ProfileCrypto::Ready(super::derive_crypto("fingerprint-1", "wrong"));
+    assert!(!super::parse_one_key_auth(Some(&encoded), &wrong).2);
+    assert!(!super::parse_one_key_auth(Some(&encoded[..encoded.len() - 4]), &ready).2);
+}
