@@ -2,9 +2,10 @@ use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use gpui::{Context, IntoElement};
+use gpui::{Context, IntoElement, div, prelude::*, rgb};
 use rust_i18n::t;
 
+use crate::features::ai::panel::activity::AiActivitySummary;
 use crate::features::ai::panel::execution::AiExecutionGroup;
 use crate::features::ai::panel::messages::disclosure;
 use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
@@ -82,7 +83,7 @@ impl AiTranscriptRow {
                     // Its current plan belongs to the last request's history.
                     if group.messages.end == snapshot.messages.len()
                         && let Some(view) = &snapshot.native_run
-                        && ((open && (!view.plan.tasks.is_empty() || view.verification.is_some()))
+                        && ((open && view.verification.is_some())
                             || view.status
                                 == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser)
                     {
@@ -327,6 +328,8 @@ impl AiTranscriptRow {
             }
             (Self::Execution { group: a }, Self::Execution { group: b }) => {
                 a != b
+                    || AiActivitySummary::project(previous, a)
+                        != AiActivitySummary::project(next, b)
                     || a.is_live(previous) != b.is_live(next)
                     || (b.is_live(next) && previous.response_phase != next.response_phase)
                     || previous.expanded_execution_groups.contains(&a.id)
@@ -456,6 +459,18 @@ impl AiTranscriptUpdate {
     }
 }
 
+/// Rows that belong to an expanded Activity section hang off its header.
+fn activity_indent(snapshot: &AiPanelSnapshot, row: gpui::AnyElement) -> gpui::AnyElement {
+    div()
+        .w_full()
+        .min_w_0()
+        .pl_2()
+        .border_l_2()
+        .border_color(rgb(snapshot.chrome.palette.border))
+        .child(row)
+        .into_any_element()
+}
+
 impl AiPanel {
     pub(super) fn ai_transcript_row(
         &self,
@@ -472,9 +487,10 @@ impl AiPanel {
                 index,
                 reasoning_only,
                 ..
-            } => {
-                self.ai_activity_message(snapshot, &snapshot.messages[*index], *reasoning_only, cx)
-            }
+            } => activity_indent(
+                snapshot,
+                self.ai_activity_message(snapshot, &snapshot.messages[*index], *reasoning_only, cx),
+            ),
             AiTranscriptRow::FinalMessage { index, .. } => {
                 self.ai_final_message(snapshot, &snapshot.messages[*index], cx)
             }
@@ -482,14 +498,21 @@ impl AiPanel {
             AiTranscriptRow::NativeApproval { index, .. } => self
                 .native_approval_card(snapshot, &snapshot.native_approvals[*index], cx)
                 .into_any_element(),
-            AiTranscriptRow::NativeRun { history, .. } => self
-                .native_run_card(
-                    snapshot,
-                    snapshot.native_run.clone().expect("projected native run"),
-                    *history,
-                    cx,
-                )
-                .into_any_element(),
+            AiTranscriptRow::NativeRun { history, .. } => {
+                let card = self
+                    .native_run_card(
+                        snapshot,
+                        snapshot.native_run.clone().expect("projected native run"),
+                        *history,
+                        cx,
+                    )
+                    .into_any_element();
+                if *history {
+                    activity_indent(snapshot, card)
+                } else {
+                    card
+                }
+            }
             AiTranscriptRow::PendingCommand {
                 message_index,
                 card_index,

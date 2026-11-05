@@ -37,6 +37,7 @@ pub(in crate::features) struct NativeRunView {
 
 impl AiFeatureState {
     pub(in crate::features) fn begin_native_run(&mut self, request: AiChatRequest) {
+        self.agent.task_language = None;
         let target_ids = request
             .targets
             .iter()

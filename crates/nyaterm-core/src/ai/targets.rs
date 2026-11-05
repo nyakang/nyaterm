@@ -171,9 +171,7 @@ pub(super) fn user_input_with_target_contexts(request: &AiChatRequest) -> String
             ));
         }
         if request.targets.len() > 1 {
-            result.push_str(
-                "Every target-specific operation must include a valid targetTerminalSessionId from this list. If the target is unclear, do not execute.\n",
-            );
+            result.push_str(&super::prompts::catalog(&request.options.language).targets);
         }
         result.push_str("</nyaterm-terminal-targets>\n");
     }

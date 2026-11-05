@@ -220,6 +220,8 @@ struct AiDiscoveryState {
 struct AiAgentState {
     native: Option<harness::NativeRunState>,
     task_prompt: Option<String>,
+    /// Legacy runs only; native runs own their language in NativeRunState::request.
+    task_language: Option<String>,
     conversation: Vec<AiMessage>,
     json_protocol: bool,
     step_index: u16,
@@ -234,6 +236,7 @@ impl AiAgentState {
         Self {
             native: None,
             task_prompt: None,
+            task_language: None,
             conversation: Vec::new(),
             json_protocol: false,
             step_index: 0,
@@ -270,6 +273,10 @@ pub(in crate::features) enum AiSettingsMutation {
 /// Panel chrome: status line, focus routing and the detected-error banner.
 struct AiPanelState {
     execution_menu_open: bool,
+    /// Agent runtime restored when the composer switches from Ask back to
+    /// Agent. Ask persists `Nyaterm` as the default kind, so this choice is
+    /// remembered for the process lifetime only.
+    last_agent_kind: AiAgentKind,
     status: String,
     focused_field: AiInputField,
     detected_error: Option<AiDetectedErrorState>,
@@ -347,6 +354,7 @@ impl AiFeatureState {
         let (_discovery_tx, discovery_rx) = unbounded();
         let default_mode = settings.default_mode.clone();
         let default_agent_kind = settings.default_agent_kind.clone();
+        let last_agent_kind_seed = default_agent_kind.clone();
         Self {
             settings: AiSettingsState {
                 providers: ProviderSettingsView::default(),
@@ -429,6 +437,7 @@ impl AiFeatureState {
             agent_management: AgentManagementState::new(),
             panel: AiPanelState {
                 execution_menu_open: false,
+                last_agent_kind: last_agent_kind_seed,
                 status: "AI settings ready".to_string(),
                 focused_field: AiInputField::Model,
                 detected_error: None,
@@ -682,6 +691,18 @@ impl AiFeatureState {
         }
     }
 
+    /// The agent runtime to restore when switching from Ask to Agent, falling
+    /// back to NyaTerm when the remembered external runtime was disabled.
+    pub(in crate::features) fn last_agent_kind(&self) -> AiAgentKind {
+        match self.panel.last_agent_kind {
+            AiAgentKind::Codex if !self.settings.config.codex.enabled => AiAgentKind::Nyaterm,
+            AiAgentKind::ClaudeCode if !self.settings.config.claude_code.enabled => {
+                AiAgentKind::Nyaterm
+            }
+            ref kind => kind.clone(),
+        }
+    }
+
     pub(in crate::features) fn set_chat_run_mode(
         &mut self,
         mode: AiMode,
@@ -699,6 +720,7 @@ impl AiFeatureState {
         let kind = if mode == AiMode::Ask {
             AiAgentKind::Nyaterm
         } else {
+            self.panel.last_agent_kind = kind.clone();
             kind
         };
         self.settings.config.default_mode = mode.clone();
@@ -865,12 +887,24 @@ impl AiFeatureState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn begin_chat_request(
         &mut self,
         request_prompt: String,
         mode: AiMode,
         source_label: Option<&str>,
     ) -> AiChatLaunch {
+        self.begin_chat_request_with_language(request_prompt, mode, source_label, "en".into())
+    }
+
+    pub(in crate::features) fn begin_chat_request_with_language(
+        &mut self,
+        request_prompt: String,
+        mode: AiMode,
+        source_label: Option<&str>,
+        language: String,
+    ) -> AiChatLaunch {
+        self.agent.task_language = Some(language);
         if let Some(previous) = self.agent.native.take() {
             previous.cancellation.cancel();
         }
@@ -1959,6 +1993,15 @@ impl AiFeatureState {
             "Continuing from the latest command observation",
         );
         Some(launch)
+    }
+
+    pub(in crate::features) fn agent_task_language(&self) -> &str {
+        self.agent
+            .native
+            .as_ref()
+            .map(|native| native.request.options.language.as_str())
+            .or(self.agent.task_language.as_deref())
+            .unwrap_or("en")
     }
 
     pub(in crate::features) fn agent_conversation_snapshot(&self) -> Vec<AiMessage> {

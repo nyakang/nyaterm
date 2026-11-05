@@ -17,6 +17,104 @@ use crate::models::AiPreparedRequest;
 use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 
 #[test]
+fn native_continuations_keep_task_language_until_a_new_user_task() {
+    use nyaterm_core::ai::harness::{AgentToolRegistry, AgentToolResult};
+    use serde_json::json;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let request = serde_json::from_value(json!({
+        "mode":"agent", "action":"generate_command", "userInput":"inspect",
+        "options":{"language":"zh-CN"}
+    }))
+    .unwrap();
+    state.begin_native_run(request);
+    let call =
+        AgentToolRegistry::parse(&[], r#"{"action":"get_environment","arguments":{}}"#).unwrap();
+    let call_id = call.id.clone();
+    let (run_id, _, _) = state.begin_native_call(call).unwrap();
+    state.complete_native_call(
+        &run_id,
+        AgentToolResult {
+            call_id,
+            value: json!({}),
+            is_error: false,
+        },
+    );
+    // A new UI selection is only consumed by the next user submission.
+    let next_language = crate::i18n::normalize_locale("ja-JP").into_owned();
+    state.switch_scope("terminal:other");
+    state.switch_scope("unbound:");
+    let (_, continuation) = state.begin_native_continuation().unwrap();
+    assert_eq!(continuation.options.language, "zh-CN");
+    assert_eq!(state.agent_task_language(), "zh-CN");
+    state.begin_chat_request_with_language("next task".into(), AiMode::Agent, None, next_language);
+    assert_eq!(state.agent_task_language(), "ja");
+}
+
+#[test]
+fn legacy_observation_and_rejection_continuations_keep_task_language() {
+    use nyaterm_core::ai::{build_agent_rejection_message, build_observation_message};
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.begin_chat_request_with_language("inspect".into(), AiMode::Agent, None, "zh-CN".into());
+    let execution = AiAgentLoopState {
+        execution_id: "fixture-execution".into(),
+        command_card_id: None,
+        ai_session_id: state.chat_session_id().into(),
+        terminal_session_id: "terminal-a".into(),
+        available_targets: Vec::new(),
+        default_target_session_id: None,
+        command: "pwd".into(),
+        step_index: 0,
+        max_steps: 4,
+    };
+    for rejected in [false, true] {
+        state.chat.pending = false;
+        let language = state.agent_task_language();
+        let message = if rejected {
+            build_agent_rejection_message("pwd", language)
+        } else {
+            build_observation_message(
+                &nyaterm_core::CommandObservation {
+                    output: "fixture output".into(),
+                    exit_code: Some(0),
+                    duration_ms: 1,
+                },
+                "pwd",
+                language,
+            )
+        };
+        state
+            .begin_agent_continuation(&execution, &message)
+            .unwrap();
+        assert_eq!(state.agent_task_language(), "zh-CN");
+        assert!(
+            state
+                .agent_conversation_snapshot()
+                .last()
+                .unwrap()
+                .content
+                .contains(if rejected {
+                    "用户拒绝"
+                } else {
+                    "执行完成"
+                })
+        );
+    }
+    state.begin_chat_request_with_language(
+        "next task".into(),
+        AiMode::Agent,
+        None,
+        crate::i18n::normalize_locale("ja_JP").into_owned(),
+    );
+    assert_eq!(state.agent_task_language(), "ja");
+}
+
+#[test]
 fn history_load_keeps_the_current_chat_on_failure_or_after_a_new_request() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -1188,6 +1286,29 @@ fn terminal_scopes_keep_run_mode_and_agent_protocol_independent() {
     state.cancel_chat_and_agent();
     assert!(!state.agent_uses_json_protocol());
     state.switch_scope("terminal:b");
+    assert_eq!(state.chat_agent_kind(), AiAgentKind::Codex);
+}
+
+#[test]
+fn switching_through_ask_remembers_the_agent_runtime_without_persisting_it() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.settings.config.codex.enabled = true;
+    assert!(state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex));
+    assert!(state.set_chat_run_mode(AiMode::Ask, AiAgentKind::Codex));
+    assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
+    assert_eq!(
+        state.settings.config.default_agent_kind,
+        AiAgentKind::Nyaterm
+    );
+    assert_eq!(state.last_agent_kind(), AiAgentKind::Codex);
+
+    state.settings.config.codex.enabled = false;
+    assert_eq!(state.last_agent_kind(), AiAgentKind::Nyaterm);
+    assert!(!state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex));
+    state.settings.config.codex.enabled = true;
+    assert!(state.set_chat_run_mode(AiMode::Agent, state.last_agent_kind()));
     assert_eq!(state.chat_agent_kind(), AiAgentKind::Codex);
 }
 

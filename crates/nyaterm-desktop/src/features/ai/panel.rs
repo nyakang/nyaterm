@@ -7,14 +7,11 @@ use gpui::{
     SharedString, WeakEntity, Window, deferred, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::{
-    AgentCommandExecutionMode, AiAgentKind, AiCommandCard, AiMessage, AiMode, AiModelConfigItem,
+    AgentCommandExecutionMode, AiAgentKind, AiCommandCard, AiMessage, AiModelConfigItem,
     AiProviderKind, AiReasoningEffort, AiSession, AiSessionScopeType, truncate_preview,
 };
 use nyaterm_ui::chat::{NyaMessageScroller, NyaMessageScrollerState};
-use nyaterm_ui::{
-    NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem, NyaScrollable, NyaSearchInput,
-    NyaTooltip,
-};
+use nyaterm_ui::{NyaScrollable, NyaSearchInput, NyaTooltip};
 
 use crate::features::NyaTermApp;
 use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
@@ -29,19 +26,33 @@ use super::presentation::AiResponsePhase;
 use crate::features::runtime_jobs::AiAgentStepView;
 
 mod actions;
+mod activity;
 mod approvals;
 mod command_syntax;
 mod components;
+mod composer;
 mod content;
+mod context_bar;
 mod execution;
 pub(super) mod harness;
 mod index;
+mod layout;
 mod messages;
 mod snapshot;
 mod texts;
+mod tool_call;
 mod transcript;
-use components::{ai_send_button, ai_setup_step};
+use components::ai_setup_step;
+use layout::AiPanelLayout;
 use transcript::{AiTranscriptRow, AiTranscriptUpdate};
+
+/// How the panel's owning terminal is reachable, shown beside its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) enum AiTerminalContextState {
+    Connected,
+    Disconnected,
+    Local,
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::features) struct AiPanelChrome {
@@ -136,7 +147,10 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub history_running_ids: Arc<[String]>,
     pub current_ai_session_id: String,
     pub owner_terminal_id: Option<String>,
+    pub owner_terminal_label: Option<String>,
+    pub owner_terminal_state: AiTerminalContextState,
     pub owner_connection_id: Option<String>,
+    pub last_agent_kind: AiAgentKind,
     pub history_pending: bool,
     pub history_error: Option<String>,
     pub history_actions_disabled: bool,
@@ -148,6 +162,8 @@ pub(in crate::features) struct AiPanelSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::features) struct AiHeaderPresentation {
     pub running: bool,
+    /// Work mode and agent runtime, shown beside the panel title.
+    pub mode_label: String,
     pub selected_model_id: Option<String>,
     pub model_label: String,
     pub execution_mode: AgentCommandExecutionMode,
@@ -167,6 +183,7 @@ pub(in crate::features) struct AiPanel {
     history_scroll: ScrollHandle,
     picker_reveal_pending: bool,
     focused_question: Option<(String, String)>,
+    layout: AiPanelLayout,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -192,6 +209,7 @@ impl AiPanel {
             history_scroll: ScrollHandle::new(),
             picker_reveal_pending: false,
             focused_question: None,
+            layout: AiPanelLayout::default(),
             #[cfg(test)]
             paint_count: 0,
             #[cfg(test)]
@@ -286,6 +304,11 @@ impl AiPanel {
         self.snapshot_set_count
     }
 
+    #[cfg(test)]
+    pub(super) fn layout(&self) -> AiPanelLayout {
+        self.layout
+    }
+
     pub(in crate::features) fn with_app<R: Default>(
         &self,
         cx: &mut Context<Self>,
@@ -317,28 +340,7 @@ impl AiPanel {
         let Some(snapshot) = self.snapshot.clone() else {
             return div().size_full().into_any_element();
         };
-        let palette = snapshot.chrome.palette;
-        let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
-            .multi_line()
-            .gpui_context_menu([
-                t!("menu.cut").into(),
-                t!("menu.copy").into(),
-                t!("menu.paste").into(),
-                t!("menu.selectAll").into(),
-            ])
-            .height(px(64.))
-            .into_any_element();
-        let model_search_input = snapshot
-            .model_search_input
-            .as_ref()
-            .map(|field| NyaSearchInput::new("ai-model-search", field).into_any_element());
         let panel_entity = cx.weak_entity();
-        let composer_disabled = snapshot.running || snapshot.history_pending || !snapshot.enabled;
-        let send_disabled = !snapshot.running
-            && (snapshot.history_pending
-                || !snapshot.enabled
-                || (!snapshot.external_agent && !snapshot.selected_model_exists)
-                || snapshot.prompt_draft.trim().is_empty());
 
         div()
             .tab_group()
@@ -349,11 +351,23 @@ impl AiPanel {
             .overflow_hidden()
             .bg(snapshot.chrome.transparent_surface)
             .relative()
-            .on_children_prepainted(move |_, _, cx| {
+            .on_children_prepainted(move |bounds, _, cx| {
                 let Some(panel) = panel_entity.upgrade() else {
                     return;
                 };
-                if !panel.read(cx).picker_reveal_pending {
+                // Every in-flow child spans the panel, so the widest child is
+                // the panel's own width regardless of the window viewport.
+                let width =
+                    bounds
+                        .iter()
+                        .map(|bounds| bounds.size.width)
+                        .fold(
+                            px(0.),
+                            |widest, width| if width > widest { width } else { widest },
+                        );
+                let layout = AiPanelLayout::from_width(width);
+                let relayout = width > px(0.) && panel.read(cx).layout != layout;
+                if !relayout && !panel.read(cx).picker_reveal_pending {
                     return;
                 }
                 // A mounted handle learns its viewport and overflow mode during
@@ -361,6 +375,13 @@ impl AiPanel {
                 // including when filtering moves a bottom-anchored popup.
                 cx.defer(move |cx| {
                     panel.update(cx, |panel, cx| {
+                        if relayout && panel.layout != layout {
+                            panel.layout = layout;
+                            panel
+                                .transcript_scroll
+                                .update(cx, |state, cx| state.remeasure(cx));
+                            cx.notify();
+                        }
                         if !std::mem::take(&mut panel.picker_reveal_pending) {
                             return;
                         }
@@ -385,6 +406,7 @@ impl AiPanel {
                     })
                 });
             })
+            .child(self.ai_context_bar(&snapshot, cx))
             .when_some(snapshot.detected_error.clone(), |this, detected| {
                 this.child(self.ai_detected_error_banner(&snapshot, detected, cx))
             })
@@ -405,86 +427,12 @@ impl AiPanel {
                             .child(self.ai_transcript_body(&snapshot, cx)),
                     ),
             )
-            .child(
-                div()
-                    .debug_selector(|| "ai-composer".to_string())
-                    .flex_none()
-                    .border_t_1()
-                    .border_color(rgb(palette.border))
-                    .bg(snapshot.chrome.transparent_section_header)
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .when_some(snapshot.quoted_text.clone(), |this, quoted_text| {
-                        this.child(self.ai_quote_bar(palette, quoted_text, cx))
-                    })
-                    .when(!snapshot.target_sessions.is_empty(), |this| {
-                        this.child(self.ai_target_sessions_row(&snapshot, cx))
-                    })
-                    .child(
-                        div()
-                            .debug_selector(|| "ai-prompt".to_string())
-                            .w_full()
-                            .relative()
-                            .flex()
-                            .when(composer_disabled, |this| this.opacity(0.56))
-                            .on_key_down(cx.listener(|panel, event: &gpui::KeyDownEvent, _, cx| {
-                                if panel.with_app(cx, |app, cx| {
-                                    app.handle_ai_prompt_key_down(event, cx)
-                                }) {
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .child(div().min_w_0().flex_1().child(prompt_input))
-                            .when(snapshot.mention_open, |this| {
-                                this.child(self.ai_mention_popover(&snapshot, cx))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(self.ai_mode_switch(&snapshot, cx))
-                                    .when(snapshot.external_agent, |this| {
-                                        this.child(ai_agent_status_badge(&snapshot))
-                                    })
-                                    .when(!snapshot.external_agent, |this| {
-                                        this.child(self.ai_model_selector(
-                                            &snapshot,
-                                            model_search_input,
-                                            cx,
-                                        ))
-                                    }),
-                            )
-                            .child(ai_send_button(palette, snapshot.running, send_disabled, cx)),
-                    )
-                    .when(snapshot.file_action_ready, |this| {
-                        this.child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette.warning))
-                                .child(t!("ai.fileActionReady")),
-                        )
-                    }),
-            )
+            .child(self.ai_composer(&snapshot, cx))
             // Absolute popovers must paint after the transcript and composer;
             // later siblings otherwise cover an open menu even though its
             // position is correct.
             .when(snapshot.history_open, |this| {
                 this.child(self.ai_history_popover(&snapshot, cx))
-            })
-            .when(snapshot.execution_menu_open, |this| {
-                this.child(self.ai_execution_mode_menu(&snapshot, cx))
             })
             .into_any_element()
     }
@@ -620,83 +568,6 @@ impl AiPanel {
             )
     }
 
-    fn ai_target_sessions_row(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = snapshot.chrome.palette;
-        let mut target_row = div().flex().flex_wrap().items_center().gap_1().child(
-            div()
-                .text_size(px(10.))
-                .font_weight(FontWeight(600.))
-                .text_color(rgb(palette.text_muted))
-                .child(format!("{}:", t!("ai.targetSession"))),
-        );
-        for target in snapshot.target_sessions.iter() {
-            let session_id = target.session_id.clone();
-            let label = target.label.clone();
-            target_row = target_row.child(
-                div()
-                    .min_w_0()
-                    .max_w(px(220.))
-                    .h(px(20.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgb(palette.link))
-                    .bg(rgb(palette.hover))
-                    .text_size(px(10.))
-                    .font_weight(FontWeight(600.))
-                    .text_color(rgb(palette.link))
-                    .child(
-                        div()
-                            .size(px(6.))
-                            .rounded_full()
-                            .flex_none()
-                            .bg(rgb(palette.link)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(truncate_preview(&label, 32)),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("ai-target-remove-{session_id}")))
-                            .size(px(14.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .cursor_pointer()
-                            .hover(move |this| {
-                                this.bg(rgb(palette.surface_elevated))
-                                    .text_color(rgb(palette.danger))
-                            })
-                            .on_click(cx.listener(move |panel, _, _, cx| {
-                                let session_id = session_id.clone();
-                                panel.with_app(cx, move |app, cx| {
-                                    app.remove_ai_target_session(session_id, cx);
-                                });
-                            }))
-                            .child(
-                                svg()
-                                    .size(px(11.))
-                                    .path("icons/window/close.svg")
-                                    .text_color(rgb(palette.text_muted)),
-                            ),
-                    ),
-            );
-        }
-        target_row
-    }
-
     fn ai_mention_popover(
         &self,
         snapshot: &AiPanelSnapshot,
@@ -803,96 +674,6 @@ impl AiPanel {
                     .vertical_scrollbar(&self.mention_scroll),
             )
             .into_any_element()
-    }
-
-    fn ai_mode_switch(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = snapshot.chrome.palette;
-        let modes = [
-            (AiMode::Ask, AiAgentKind::Nyaterm, t!("ai.modeAsk"), true),
-            (
-                AiMode::Agent,
-                AiAgentKind::Nyaterm,
-                t!("ai.modeNyatermAgent"),
-                true,
-            ),
-            (
-                AiMode::Agent,
-                AiAgentKind::Codex,
-                t!("ai.modeCodexAgent"),
-                snapshot.codex_enabled,
-            ),
-            (
-                AiMode::Agent,
-                AiAgentKind::ClaudeCode,
-                t!("ai.modeClaudeCodeAgent"),
-                snapshot.claude_code_enabled,
-            ),
-        ];
-        let mut items = Vec::new();
-        let mut selected_label = t!("ai.modeAsk");
-        for (mode, kind, label, enabled) in modes {
-            let selected = if mode == AiMode::Ask {
-                !snapshot.agent_mode
-            } else {
-                snapshot.agent_mode && snapshot.agent_kind == kind
-            };
-            if selected {
-                selected_label = label.clone();
-            }
-            items.push(
-                NyaMenuItem::action(label)
-                    .checked(selected)
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |panel, _, window, cx| {
-                        panel.with_app(cx, |app, cx| {
-                            app.set_ai_run_mode(mode.clone(), kind.clone(), cx);
-                            app.focus_text_input_if_present("ai.chat.prompt", window, cx);
-                        });
-                    })),
-            );
-        }
-        div()
-            .debug_selector(|| "ai-mode-control".to_string())
-            .w(px(108.))
-            .min_w_0()
-            .max_w(gpui::relative(0.45))
-            .flex_none()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.input))
-            .child(
-                NyaDropdownMenu::new("ai-mode-selector")
-                    .anchor(NyaMenuAnchor::BottomLeft)
-                    .min_width(px(170.))
-                    .content(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .text_size(px(11.))
-                                    .text_ellipsis()
-                                    .child(selected_label),
-                            )
-                            .child(
-                                svg()
-                                    .size(px(12.))
-                                    .flex_none()
-                                    .path("icons/chevron-down.svg"),
-                            ),
-                    )
-                    .items(items),
-            )
     }
 
     fn ai_model_selector(
@@ -1393,12 +1174,18 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
+        // Opens upward from the composer's execution chip and stays inside the
+        // panel: a fixed width at the trailing edge, both edges when compact.
         div()
             .id(SharedString::from("ai-execution-mode-menu"))
+            .debug_selector(|| "ai-execution-mode-menu".to_string())
+            .occlude()
             .absolute()
-            .top(px(4.))
+            .bottom(gpui::relative(1.))
+            .mb_1()
             .right(px(8.))
-            .w(px(260.))
+            .when(self.layout.is_compact(), |menu| menu.left(px(8.)))
+            .when(!self.layout.is_compact(), |menu| menu.w(px(260.)))
             .rounded_md()
             .border_1()
             .border_color(rgb(palette.border))

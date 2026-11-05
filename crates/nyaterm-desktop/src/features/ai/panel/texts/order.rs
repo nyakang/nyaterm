@@ -37,6 +37,7 @@ impl AiPanel {
                                         .command_cards
                                         .iter()
                                         .any(|card| card.explanation.trim() == thought.trim())
+                                    && snapshot.activity_thought_open(&message.id)
                             } else {
                                 !final_answer
                                     && snapshot.expanded_message_thoughts.contains(&message.id)
@@ -106,10 +107,6 @@ impl AiPanel {
                     if let Some(view) = &snapshot.native_run {
                         let owner = TextOwner::Run(view.run_id.clone());
                         if *history {
-                            for index in 0..view.plan.tasks.len() {
-                                keys.push((owner.clone(), format!("task-{index}")));
-                                keys.push((owner.clone(), format!("task-verification-{index}")));
-                            }
                             keys.push((owner.clone(), "verification".into()));
                         }
                         if view.status == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser

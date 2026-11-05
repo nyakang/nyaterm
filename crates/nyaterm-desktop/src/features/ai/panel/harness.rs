@@ -1,5 +1,5 @@
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb};
-use nyaterm_core::ai::harness::{AgentRunStatus, AgentTaskStatus, AgentVerificationStatus};
+use nyaterm_core::ai::harness::{AgentRunStatus, AgentVerificationStatus};
 use nyaterm_ui::{NyaButton, NyaInputShell};
 use rust_i18n::t;
 
@@ -36,46 +36,6 @@ impl AiPanel {
             .border_b_1()
             .border_color(rgb(palette.border))
             .text_size(px(12.));
-        if history && !view.plan.tasks.is_empty() {
-            card = card.child(
-                div()
-                    .font_weight(gpui::FontWeight(600.))
-                    .child(t!("ai.harness.plan")),
-            );
-            for (index, task) in view.plan.tasks.iter().enumerate() {
-                let marker = match task.status {
-                    AgentTaskStatus::Pending => "○",
-                    AgentTaskStatus::InProgress => "→",
-                    AgentTaskStatus::Completed => "✓",
-                    AgentTaskStatus::Blocked => "!",
-                };
-                card = card.child(
-                    div()
-                        .child(
-                            div()
-                                .flex()
-                                .gap_1()
-                                .child(marker)
-                                .child(self.selectable_text(
-                                    TextOwner::Run(view.run_id.clone()),
-                                    &format!("task-{index}"),
-                                    false,
-                                    cx,
-                                )),
-                        )
-                        .when_some(task.verification.clone(), |this, _verification| {
-                            this.child(div().text_color(rgb(palette.text_muted)).child(
-                                self.selectable_text(
-                                    TextOwner::Run(view.run_id.clone()),
-                                    &format!("task-verification-{index}"),
-                                    false,
-                                    cx,
-                                ),
-                            ))
-                        }),
-                );
-            }
-        }
         if history && let Some(verification) = &view.verification {
             let label = match verification.status {
                 AgentVerificationStatus::Verified => t!("ai.harness.verified"),

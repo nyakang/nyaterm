@@ -355,6 +355,31 @@
     "mentionSession": "세션 선택",
     "modeAgent": "Agent",
     "modeAsk": "Ask",
+    "stop": "중지",
+    "agentKind": "에이전트 런타임",
+    "agentKindDisabled": "(비활성화됨)",
+    "context": {
+      "noTerminal": "선택된 터미널 없음",
+      "currentTerminal": "터미널",
+      "connected": "연결됨",
+      "local": "로컬",
+      "disconnected": "연결 끊김",
+      "addTarget": "대상 터미널 추가"
+    },
+    "runStatus": {
+      "waiting": "모델 응답 대기 중",
+      "responding": "응답 중",
+      "working": "실행 중"
+    },
+    "activity": {
+      "title": "활동",
+      "progress": "%{completed}/%{total}",
+      "running": "실행 중",
+      "needsApproval": "승인 대기 중",
+      "waitingForUser": "응답 대기 중",
+      "failed": "오류와 함께 종료됨",
+      "completed": "완료"
+    },
     "model": "모델",
     "modelList": "이 공급자의 모델",
     "modelListDesc": "새로고침하면 rust-genai에서 알려진 모델을 가져옵니다. 새 모델은 기본적으로 비활성화됩니다.",

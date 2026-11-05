@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use gpui::{
     AnyElement, App, ClickEvent, ClipboardItem, Context, FontWeight, IntoElement, SharedString,
-    Window, div, prelude::*, px, rgb,
+    Window, div, prelude::*, px, relative, rgb,
 };
 use nyaterm_core::ai::{AiAgentStepStatus, AiCommandCard, AiMessage, AiMessageRole, RiskLevel};
 use nyaterm_ui::chat::{NyaDisclosure, NyaShimmerText, running_indicator};
@@ -11,8 +11,9 @@ use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use crate::features::ai::is_agent_command_card;
-use crate::features::ai::panel::components::ai_command_target_label;
+use crate::features::ai::panel::components::{agent_kind_display_name, ai_command_target_label};
 use crate::features::ai::panel::texts::TextOwner;
+use crate::features::ai::panel::tool_call::{AiToolCallView, tool_call_title};
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiAgentStepPresentation, AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
@@ -170,6 +171,17 @@ impl AiPanelSnapshot {
             });
         source.is_some_and(|id| self.index.message(self, id).is_some())
     }
+
+    /// Reasoning inside Activity stays open while it streams, then folds unless
+    /// the user opened it. Rendering and text order must agree on this.
+    pub(super) fn activity_thought_open(&self, message_id: &str) -> bool {
+        self.expanded_message_thoughts
+            .iter()
+            .any(|id| id == message_id)
+            || (self.running
+                && self.streaming_assistant_id.as_deref() == Some(message_id)
+                && self.response_phase.shows_thinking())
+    }
 }
 
 pub(super) fn disclosure(
@@ -303,7 +315,57 @@ impl AiPanel {
         reasoning_only: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx)
+        let palette = snapshot.chrome.palette;
+        div()
+            .w_full()
+            .min_w_0()
+            .pl_2()
+            .border_l_2()
+            .border_color(rgb(palette.border))
+            .child(self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx))
+            .into_any_element()
+    }
+
+    pub(super) fn ai_agent_turn_header(
+        &self,
+        snapshot: &AiPanelSnapshot,
+        live: bool,
+    ) -> AnyElement {
+        let palette = snapshot.chrome.palette;
+        let name = agent_kind_display_name(&snapshot.agent_kind);
+        let title = if snapshot.agent_mode {
+            format!("{name} {}", t!("ai.modeAgent"))
+        } else {
+            name.to_string()
+        };
+        let status = if live {
+            t!("ai.activity.running")
+        } else {
+            t!("ai.activity.completed")
+        };
+        div()
+            .debug_selector(|| "ai-agent-turn".to_string())
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(if live {
+                        palette.link
+                    } else {
+                        palette.text_muted
+                    }))
+                    .child(status),
+            )
+            .into_any_element()
     }
 
     pub(super) fn ai_final_message(
@@ -348,7 +410,7 @@ impl AiPanel {
                 move || format!("ai-message-{id}")
             })
             .min_w_0()
-            .w_full()
+            .when(!is_user, |body| body.w_full())
             .flex()
             .flex_col()
             .gap_2()
@@ -356,12 +418,16 @@ impl AiPanel {
             .line_height(px(18.))
             .text_color(rgb(palette.text))
             .when(is_user, |body| {
-                body.rounded_md()
+                body.max_w(relative(0.85))
+                    .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(rgb(palette.hover))
                     .p_2()
             });
+        if !is_user && !activity && !final_answer {
+            body = body.child(self.ai_agent_turn_header(snapshot, streaming && snapshot.running));
+        }
         if activity {
             if let Some(_reasoning) = reasoning.filter(|text| {
                 text.trim() != display.trim()
@@ -370,12 +436,44 @@ impl AiPanel {
                         .iter()
                         .any(|card| card.explanation.trim() == text.trim())
             }) {
-                body = body.child(self.selectable_text(
-                    TextOwner::Message(message.id.clone()),
-                    "thought",
-                    false,
-                    cx,
-                ));
+                let open = snapshot.activity_thought_open(&message.id);
+                let id = message.id.clone();
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_color(rgb(palette.text_muted))
+                        .child(disclosure(
+                            format!("ai-thought-toggle-{id}"),
+                            t!("ai.thoughtProcess"),
+                            open,
+                            cx.listener(move |panel, _, _, cx| {
+                                let id = id.clone();
+                                panel.with_app(cx, move |app, cx| {
+                                    app.ai.toggle_message_thought(id);
+                                    app.defer_ai_panel_snapshot_flush(cx);
+                                });
+                            }),
+                        ))
+                        .when(thinking, |header| {
+                            header.child(thinking_indicator(&message.id, activity_label.clone()))
+                        }),
+                );
+                if open {
+                    body = body.child(
+                        div()
+                            .min_w_0()
+                            .w_full()
+                            .text_color(rgb(palette.text_muted))
+                            .child(self.selectable_text(
+                                TextOwner::Message(message.id.clone()),
+                                "thought",
+                                false,
+                                cx,
+                            )),
+                    );
+                }
             }
         } else if let Some(_reasoning) = reasoning.filter(|_| !final_answer) {
             let open = snapshot.expanded_message_thoughts.contains(&message.id);
@@ -465,6 +563,15 @@ impl AiPanel {
         for step in snapshot.message_steps(&message.id) {
             body = body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
         }
+        if is_user {
+            return div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .justify_end()
+                .child(body)
+                .into_any_element();
+        }
         body.into_any_element()
     }
 
@@ -499,6 +606,9 @@ impl AiPanel {
             .gap_1()
             .text_size(px(12.))
             .line_height(px(18.));
+        if step.command.is_some() || step.observation.is_some() {
+            row = AiToolCallView::from_step(&step).apply_frame(row, palette);
+        }
         // Unlinked progress stays compact; commands and answers are explicit payload kinds.
         let mut title = div()
             .flex()
@@ -678,9 +788,12 @@ impl AiPanel {
         let key = card.id.clone();
         let phase = snapshot.command_phase(&card);
         let open = phase.offers_approval() || snapshot.expanded_command_scripts.contains(&key);
-        let mut row = div()
-            .min_w_0()
-            .w_full()
+        let mut row = AiToolCallView::from_phase(phase)
+            .frame(snapshot.chrome.palette)
+            .debug_selector({
+                let key = key.clone();
+                move || format!("ai-tool-call-{key}")
+            })
             .flex()
             .flex_col()
             .gap_2()
@@ -700,7 +813,11 @@ impl AiPanel {
         }
         row = row.child(command_header.child(disclosure(
             format!("ai-command-toggle-{key}"),
-            format!("{} · {}", t!("ai.terminalCommand"), t!(phase.label_key())),
+            format!(
+                "{} · {}",
+                tool_call_title(&ai_command_target_label(&card)),
+                t!(phase.label_key())
+            ),
             open,
             cx.listener(move |panel, _, _, cx| {
                 let anchor = panel.transcript_rows.iter().position(|row| {
@@ -737,13 +854,8 @@ impl AiPanel {
         let phase = snapshot.command_phase(&card);
         let linked = snapshot.command_step(&card.id);
         let key = card.id.clone();
-        let color = match phase {
-            AiCommandPhase::NeedsApproval => palette.warning,
-            AiCommandPhase::Failed => palette.danger,
-            AiCommandPhase::Running | AiCommandPhase::Preparing => palette.link,
-            AiCommandPhase::Completed => palette.success,
-            _ => palette.text_muted,
-        };
+        let tool = AiToolCallView::from_phase(phase);
+        let color = tool.status_color(palette);
         let target = ai_command_target_label(&card);
         let heading = command_heading(&card);
         let script_open = in_timeline
@@ -758,9 +870,7 @@ impl AiPanel {
             })
             .min_w_0()
             .w_full()
-            .when(!in_timeline, |block| {
-                block.rounded_md().bg(rgb(palette.surface)).p_2()
-            })
+            .when(!in_timeline, |block| tool.apply_frame(block, palette))
             .flex()
             .flex_col()
             .gap(px(6.))

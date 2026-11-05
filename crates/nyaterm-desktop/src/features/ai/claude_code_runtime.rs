@@ -200,6 +200,28 @@ mod tests {
     use super::run_claude_code_with_environment;
 
     #[test]
+    fn fake_claude_cli_accepts_localized_system_arguments_on_windows() {
+        let (_script_dir, script) = fake_claude_script(false);
+        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+            let (settings, mut request) = fixture_request(&script);
+            request.options.language = language.into();
+            let completion = run_claude_code_with_environment(
+                &settings,
+                &request,
+                None,
+                &Arc::new(AtomicBool::new(false)),
+                1,
+                "chat-1",
+                fixture_mcp_environment(),
+                &script,
+                &mut |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("{language}: {error}"));
+            assert_eq!(completion.text, "hello world");
+        }
+    }
+
+    #[test]
     fn fake_claude_cli_streams_resumes_and_cancels() {
         let (_script_dir, script) = fake_claude_script(false);
         let (settings, request) = fixture_request(&script);

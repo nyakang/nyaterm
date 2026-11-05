@@ -342,6 +342,31 @@
     "mentionSession": "选择会话",
     "modeAgent": "Agent",
     "modeAsk": "Ask",
+    "stop": "停止",
+    "agentKind": "Agent 运行时",
+    "agentKindDisabled": "（未启用）",
+    "context": {
+      "noTerminal": "未选择终端",
+      "currentTerminal": "终端",
+      "connected": "已连接",
+      "local": "本地",
+      "disconnected": "已断开",
+      "addTarget": "添加目标终端"
+    },
+    "runStatus": {
+      "waiting": "等待模型响应",
+      "responding": "正在回复",
+      "working": "执行中"
+    },
+    "activity": {
+      "title": "活动",
+      "progress": "%{completed}/%{total}",
+      "running": "执行中",
+      "needsApproval": "等待批准",
+      "waitingForUser": "等待你的回答",
+      "failed": "已结束（有错误）",
+      "completed": "已完成"
+    },
     "model": "模型名称",
     "modelList": "来自此供应商的模型",
     "modelListDesc": "刷新会从 rust-genai 获取已知模型；新模型默认不启用。",

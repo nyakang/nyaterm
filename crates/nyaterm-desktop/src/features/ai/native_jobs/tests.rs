@@ -31,6 +31,50 @@ fn request() -> AiChatRequest {
     request
 }
 
+#[tokio::test]
+async fn fallback_and_protocol_repair_preserve_the_original_task_language() {
+    // Fallback and correction intentionally share one additional POST, so exercise them separately.
+    for fallback in [false, true] {
+        let initial = if fallback {
+            http(
+                "400 Bad Request",
+                "application/json",
+                r#"{"error":{"code":"unsupported_tools"}}"#,
+            )
+        } else {
+            stream("not JSON", vec![])
+        };
+        let (base, server) = mock_provider(vec![
+            initial,
+            stream(r#"{"action":"get_environment","arguments":{}}"#, vec![]),
+        ]);
+        let mut request = request();
+        request.options.language = "zh-CN".into();
+        let session = AiProviderSession::new(settings(base), &request).unwrap();
+        let (result, _) = run(&session, &mut request, &CancellationToken::new()).await;
+        result.unwrap();
+        assert_eq!(request.options.language, "zh-CN");
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        for body in &requests {
+            assert!(
+                body["messages"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("使用简体中文")
+            );
+        }
+        if !fallback {
+            assert!(
+                requests[1]["messages"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("修正后的响应")
+            );
+        }
+    }
+}
+
 fn settings(base_url: String) -> AiSettings {
     let mut settings = AiSettings {
         default_model_id: Some("mock-model".into()),
