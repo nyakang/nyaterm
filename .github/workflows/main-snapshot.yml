@@ -156,7 +156,7 @@ jobs:
         run: |
           # Git Bash prepends Git's /usr/bin/link.exe, shadowing MSVC's linker.
           # Preserve the PATH configured by ilammy/msvc-dev-cmd for Rust builds.
-          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop).Source
+          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
           if ($linker -notmatch '\\VC\\Tools\\MSVC\\[^\\]+\\bin\\HostX64\\(x64|arm64)\\link\.exe$') {
             throw "Expected Visual Studio MSVC linker, got: $linker"
           }

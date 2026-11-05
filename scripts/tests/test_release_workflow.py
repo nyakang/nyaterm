@@ -47,6 +47,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("if: runner.os == 'Windows'", windows)
                 self.assertIn("shell: pwsh", windows)
                 self.assertIn("Get-Command link.exe -CommandType Application", windows)
+                self.assertIn("Select-Object -First 1).Source", windows)
+                self.assertNotIn("Application -ErrorAction Stop).Source", windows)
                 self.assertIn(r"\\VC\\Tools\\MSVC", windows)
                 linker_pattern = re.search(
                     r"if \(\$linker -notmatch '([^']+)'\)", windows
