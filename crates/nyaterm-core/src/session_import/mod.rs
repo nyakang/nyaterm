@@ -22,6 +22,13 @@ use mobaxterm::parse_mobaxterm;
 use windterm::parse_windterm;
 use xshell::parse_xshell;
 
+pub use windterm::{
+    WindtermAccountAction, WindtermAccountDecision, WindtermAccountPreview, WindtermImportOutcome,
+    WindtermImportReport, WindtermMissingOneKey, WindtermOneKeyConfigState, WindtermPreview,
+    WindtermUnlinkedReason, WindtermUnlinkedSession, prepare_windterm_import_with_decisions,
+    prepare_windterm_preview,
+};
+
 const SESSION_IMPORT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const XSHELL_ARCHIVE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const XSHELL_ENTRY_MAX_BYTES: u64 = 1024 * 1024;
