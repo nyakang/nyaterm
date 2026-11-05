@@ -1,9 +1,7 @@
-use std::path::Path;
-
-use portable_pty::CommandBuilder;
-
 use crate::environment::EnvironmentSnapshot;
 use crate::session_config::LocalSessionConfig;
+use portable_pty::CommandBuilder;
+use std::path::Path;
 
 #[cfg(windows)]
 mod windows_terminal;
@@ -131,11 +129,9 @@ impl ResolvedLocalShell {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use crate::session_config::LocalSessionConfig;
-
     use super::ResolvedLocalShell;
+    use crate::session_config::LocalSessionConfig;
+    use std::path::Path;
 
     #[test]
     fn validates_host_directories_before_spawning_a_terminal() {
@@ -201,6 +197,31 @@ mod tests {
             });
             assert_eq!(shell.program, program);
             assert_eq!(shell.args, expected);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LocalShellPathStyle {
+    #[default]
+    Native,
+    Wsl,
+    Msys,
+}
+
+impl LocalShellPathStyle {
+    pub fn from_program(program: &str) -> Self {
+        let program = program.replace('\\', "/").to_ascii_lowercase();
+        let name = program.rsplit('/').next().unwrap_or(&program);
+        if matches!(name, "wsl" | "wsl.exe") {
+            Self::Wsl
+        } else if program
+            .split('/')
+            .any(|part| matches!(part, "git" | "msys64" | "msys32" | "msys2"))
+        {
+            Self::Msys
+        } else {
+            Self::Native
         }
     }
 }

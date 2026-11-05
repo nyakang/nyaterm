@@ -1,18 +1,17 @@
 use super::transfer_wire::TransferWire;
+use crate::features::NyaTermApp;
+use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
+use gpui::{Context, PathPromptOptions, SharedString, Window};
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+use nyaterm_transport::SessionKind;
+use nyaterm_transport::xymodem::{
+    XymodemAction, XymodemError, XymodemOptions, XymodemProgress, XymodemProtocol, XymodemSender,
+};
+use rust_i18n::t;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-
-use gpui::{Context, PathPromptOptions, SharedString, Window};
-use nyaterm_transport::xymodem::{
-    XymodemAction, XymodemError, XymodemOptions, XymodemProgress, XymodemProtocol, XymodemSender,
-};
-use nyaterm_transport::{SessionKind, SftpTransferProgress};
-use rust_i18n::t;
-
-use crate::features::NyaTermApp;
-use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
 
 pub(super) struct XymodemSessionState {
     worker: XymodemWorker,
@@ -572,12 +571,10 @@ fn xymodem_job_failure(error: XymodemError) -> XymodemJobFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use nyaterm_transport::xymodem::{XymodemError, XymodemProtocol};
-
     use super::{XymodemWorker, xymodem_job_failure};
     use crate::test_support::TestConfigDir;
+    use nyaterm_transport::xymodem::{XymodemError, XymodemProtocol};
+    use std::fs;
 
     #[test]
     fn protocol_worker_can_stop_and_restart_without_retaining_file_handles() {

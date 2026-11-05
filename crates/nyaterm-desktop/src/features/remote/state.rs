@@ -7,15 +7,18 @@ use crate::features::runtime_jobs::{
 };
 use crate::models::{DockerTab, RemoteProcessSortKey};
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_transport::{
-    DockerComposeService, DockerContainerDetails, RemoteDockerOverview, RemoteGpuOverview,
-    RemoteGpuProcess, RemoteNpuOverview, RemoteNpuProcess, RemoteProcess, RemoteStatsSampler,
+use nyaterm_remote_ops::ascend_npu::{RemoteNpuOverview, RemoteNpuProcess};
+use nyaterm_remote_ops::docker::{
+    DockerComposeService, DockerContainerDetails, RemoteDockerOverview,
 };
+use nyaterm_remote_ops::gpu::{RemoteGpuOverview, RemoteGpuProcess};
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use nyaterm_remote_ops::stats::RemoteStatsSampler;
 use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(test)]
-use nyaterm_transport::RemoteStats;
+use nyaterm_remote_ops::stats::RemoteStats;
 
 mod accelerator;
 mod docker;
@@ -94,7 +97,7 @@ impl RemoteOpsFeatureState {
     pub(in crate::features) fn take_icon_probe_snapshot(
         &mut self,
         session_id: &str,
-    ) -> Option<nyaterm_transport::RemoteStats> {
+    ) -> Option<nyaterm_remote_ops::stats::RemoteStats> {
         self.stats.take_icon_probe_snapshot(session_id)
     }
 

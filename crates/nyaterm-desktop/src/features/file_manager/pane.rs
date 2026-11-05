@@ -1,15 +1,13 @@
 //! Independent file-manager pane state. Not shared with the sidebar browser.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-
-use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
-
 use crate::features::transfers::{BrowserFilterCache, BrowserFilterKey};
 use crate::models::{
     TransferBrowserColumnWidths, TransferBrowserSortColumn, TransferBrowserSortDirection,
 };
+use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::features) enum PaneId {
@@ -412,7 +410,7 @@ impl BrowserPaneState {
 mod tests {
     use super::{BrowserPaneState, PaneEndpoint};
     use gpui::TestAppContext;
-    use nyaterm_transport::{RemoteFilePath, SftpFileEntry, SftpFileType};
+    use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
 
     fn entry(name: &str, path: &str) -> SftpFileEntry {
         SftpFileEntry {

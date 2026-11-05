@@ -75,7 +75,12 @@ def apply_overlay(source: Path) -> list[str]:
     enter("crates/nyaterm-desktop/src/features/session/session_runtime/background.rs",
           "begin_background_session_start", "SessionStartRequested")
 
-    transport = "crates/nyaterm-transport/src/lib.rs"
+    anchor = "        let pair = pty_system\n            .openpty(local_pty_size("
+    candidates = [path for path in (source / "crates/nyaterm-transport/src").rglob("*.rs")
+                  if anchor in path.read_text(encoding="utf-8")]
+    if len(candidates) != 1:
+        raise ValueError(f"diagnostic PTY anchor changed: expected one implementation, got {len(candidates)}")
+    transport = candidates[0].relative_to(source).as_posix()
     replace(transport, "        let pair = pty_system\n            .openpty(local_pty_size(",
             "        " + record("LocalPtyOpening")
             + "\n        let pair = pty_system\n            .openpty(local_pty_size(")

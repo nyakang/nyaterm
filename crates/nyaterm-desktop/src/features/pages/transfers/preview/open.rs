@@ -5,17 +5,17 @@
 //! worker sends the finished [`PreviewContent`] back as a `TransferJobResult`,
 //! and the event drain applies it under the tab's generation guard.
 
-use gpui::{Context, Window};
-use nyaterm_core::{PreviewCategory, classify_preview, preview_within_limit};
-use nyaterm_transport::{RemoteFilePath, RemoteTextGeneration, SftpFileEntry};
-use rust_i18n::t;
-
 use crate::features::NyaTermApp;
 use crate::features::transfers::preview::decode::{decode_binary_content, decode_text_content};
 use crate::models::{
     PreviewContent, PreviewViewport, TransferJobEvent, TransferJobKind, TransferJobOutput,
     TransferJobResult, TransferJobState, TransferJobStatus, TransferPreviewState,
 };
+use gpui::{Context, Window};
+use nyaterm_core::{PreviewCategory, classify_preview, preview_within_limit};
+use nyaterm_files::remote_file::RemoteTextGeneration;
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
+use rust_i18n::t;
 
 impl NyaTermApp {
     /// Whether the entry menu should offer a Preview action for `entry`.
@@ -235,7 +235,7 @@ impl NyaTermApp {
         let entry = SftpFileEntry {
             name: tab.name,
             path: tab.remote_path,
-            file_type: nyaterm_transport::SftpFileType::File,
+            file_type: nyaterm_files::sftp::SftpFileType::File,
             size: tab.size,
             permissions: None,
             owner: String::new(),
@@ -392,7 +392,7 @@ impl NyaTermApp {
 /// length is not known until read). Failures return an error card rather than
 /// propagating, so the tab always resolves.
 fn load_preview_content(
-    service: &nyaterm_transport::FileBrowserService,
+    service: &nyaterm_files::file_browser::FileBrowserService,
     remote_file_path: &RemoteFilePath,
     category: PreviewCategory,
     max_bytes: u64,

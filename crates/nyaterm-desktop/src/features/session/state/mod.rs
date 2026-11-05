@@ -1,28 +1,3 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::time::Instant;
-
-use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle, point, px};
-use nyaterm_core::{AiExecutionProfile, SavedConnection};
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFileBackendPreferenceStore, RemoteFileService, SessionEvent,
-    SessionInfo, SessionKind, SessionManager, SshMultiplexHandle, SshSessionConfig,
-};
-
-use crate::features::runtime_jobs::SessionStartResult;
-use crate::features::shell::tab_mouse::TabActionTarget;
-use crate::models::event_wake::{ANY_INTEREST, EventWake};
-use crate::models::{
-    SessionEventBridge, SessionEventBridgeDrain, SessionEventBridgeStats, SessionLaunchConfig,
-    SessionRuntimeMetadata, StartupCommandAction, StartupCommandRequest, TabActionsSubmenu,
-    WorkspaceSplitDirection,
-};
-use crate::temporary_ssh_link::TemporaryLinkProtocol;
-
-use crate::app_shell::session_hub::ssh_connections::{SshConnectionLease, SshConnectionPool};
-
 use super::SessionProtocolRuntimeState;
 use super::auth_runtime::{
     AgentPromptBroker, AgentPromptRequest, CredentialPromptBroker, CredentialPromptRequest,
@@ -32,6 +7,27 @@ use super::auth_runtime::{
 use super::duplicate_prompts::{SftpDuplicatePromptBroker, SftpDuplicatePromptState};
 use super::trzsz_runtime::TrzszSessionState;
 use super::zmodem_runtime::ZmodemSessionState;
+use crate::app_shell::session_hub::ssh_connections::{SshConnectionLease, SshConnectionPool};
+use crate::features::runtime_jobs::SessionStartResult;
+use crate::features::shell::tab_mouse::TabActionTarget;
+use crate::models::event_wake::{ANY_INTEREST, EventWake};
+use crate::models::{
+    SessionEventBridge, SessionEventBridgeDrain, SessionEventBridgeStats, SessionLaunchConfig,
+    SessionRuntimeMetadata, StartupCommandAction, StartupCommandRequest, TabActionsSubmenu,
+    WorkspaceSplitDirection,
+};
+use crate::temporary_ssh_link::TemporaryLinkProtocol;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle, point, px};
+use nyaterm_core::{AiExecutionProfile, SavedConnection};
+use nyaterm_files::file_browser::FileBrowserBackendKind;
+use nyaterm_files::remote_file::{RemoteFileBackendPreferenceStore, RemoteFileService};
+use nyaterm_transport::{
+    SessionEvent, SessionInfo, SessionKind, SessionManager, SshMultiplexHandle, SshSessionConfig,
+};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Instant;
 
 const COMMAND_HISTORY_LIMIT: usize = 128;
 const DEFAULT_DUPLICATE_STARTUP_DELAY_MS: u64 = 500;

@@ -1,13 +1,10 @@
-use rust_i18n::t;
-
-use gpui::{Context, ParentElement as _, Styled as _, Window, div, rgb};
-use nyaterm_transport::{SftpFileEntry, SftpFileType};
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaDialogWindowExt};
-
+use super::{remote_file_name, transfer_dialog_width};
 use crate::features::NyaTermApp;
 use crate::models::TransferUnknownFileState;
-
-use super::{remote_file_name, transfer_dialog_width};
+use gpui::{Context, ParentElement as _, Styled as _, Window, div, rgb};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaDialogWindowExt};
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_transfer_unknown_file_component_dialog(

@@ -1,18 +1,16 @@
-use rust_i18n::t;
-
-use gpui::{
-    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
-    prelude::*, rgb,
-};
-use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
-use nyaterm_transport::SftpDuplicatePolicy;
-use nyaterm_ui::NyaDialogWindowExt;
-
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup};
 use crate::models::{
     ConfigPathPromptKind, ConfigPathPromptResult, SnapshotPasswordPromptKind,
     TranslationSecretDraft,
 };
+use gpui::{
+    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
+    prelude::*, rgb,
+};
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
+use nyaterm_ui::NyaDialogWindowExt;
+use rust_i18n::t;
 
 fn snapshot_password_prompt_title_key(kind: SnapshotPasswordPromptKind) -> &'static str {
     match kind {

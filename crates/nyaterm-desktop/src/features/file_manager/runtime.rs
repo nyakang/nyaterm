@@ -9,7 +9,8 @@ use crate::features::transfers::file_operations::{
     FileMutation, FileMutationIntent, FileTransferOperation,
 };
 use gpui::{Context, Window, prelude::*};
-use nyaterm_transport::{FileBrowserService, RemoteFilePath};
+use nyaterm_files::file_browser::FileBrowserService;
+use nyaterm_files::sftp::RemoteFilePath;
 use rust_i18n::t;
 
 impl NyaTermApp {
@@ -220,7 +221,7 @@ impl NyaTermApp {
                             && (pane.path.raw_path_token.is_none()
                                 || path.raw_path_token.is_none()
                                 || pane.path.raw_path_token == path.raw_path_token)
-                            && nyaterm_transport::file_browser_path_eq(
+                            && nyaterm_files::file_browser::file_browser_path_eq(
                                 endpoint.kind(),
                                 &pane.path.display_path,
                                 &path.display_path,
@@ -240,7 +241,7 @@ impl NyaTermApp {
                 PaneEndpoint::Local => {
                     self.session
                         .file_browser_backend_support_for_session(session)
-                        == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+                        == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
                 }
                 PaneEndpoint::Session(id) => *session == id,
                 PaneEndpoint::OfflineConnection(_) => false,
@@ -256,7 +257,7 @@ impl NyaTermApp {
         let matches_active = match endpoint {
             PaneEndpoint::Local => {
                 self.session.active_file_browser_backend()
-                    == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+                    == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
             }
             PaneEndpoint::Session(id) => active.as_ref() == Some(id),
             PaneEndpoint::OfflineConnection(_) => false,
@@ -394,7 +395,7 @@ impl NyaTermApp {
                         .existing_text_input("file-manager.name")
                         .map(|field| field.read(cx).value(cx))
                         .unwrap_or_default();
-                    if !nyaterm_transport::valid_file_browser_child_name(
+                    if !nyaterm_files::file_browser::valid_file_browser_child_name(
                         selection.endpoint.kind(),
                         &name,
                     ) {

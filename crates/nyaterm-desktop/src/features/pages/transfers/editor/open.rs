@@ -1,18 +1,17 @@
-use gpui::{Context, Window};
-use nyaterm_core::AiCustomActionConfig;
-use nyaterm_transport::{
-    RemoteTextGeneration, SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
-};
-
+use super::super::helpers::remote_file_name;
+use super::helpers::{RemoteFileTextKind, open_local_path_with_editor, remote_file_text_kind};
+use super::workspace::{external_edit_path, prepare_external_edit_workspace};
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferEditorField, TransferEditorState, TransferJobEvent, TransferJobKind, TransferJobOutput,
     TransferJobResult, TransferJobState, TransferJobStatus, TransferUnknownFileState,
 };
-
-use super::super::helpers::remote_file_name;
-use super::helpers::{RemoteFileTextKind, open_local_path_with_editor, remote_file_text_kind};
-use super::workspace::{external_edit_path, prepare_external_edit_workspace};
+use gpui::{Context, Window};
+use nyaterm_core::AiCustomActionConfig;
+use nyaterm_files::remote_file::RemoteTextGeneration;
+use nyaterm_files::sftp::{
+    SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
+};
 
 impl NyaTermApp {
     pub(in crate::features) fn enabled_transfer_file_ai_actions_for_entry(

@@ -1,29 +1,28 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
+use super::{CapabilityCaller, CapabilityRequest};
+use crate::features::NyaTermApp;
+use crate::features::mcp::server::rpc_failure;
+use crate::features::runtime_jobs::await_blocking_result;
+use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
+use crate::models::SessionLaunchConfig;
+use crate::models::recording::ExecutionRecordingEvent;
 use gpui::Context;
 use nyaterm_core::McpTerminalDisplayMode;
 use nyaterm_core::agent_capture::build_agent_capture_command;
 use nyaterm_core::models::connection::AiExecutionProfile;
 use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
 use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs, TerminalExecuteResult};
+use nyaterm_remote_ops::remote_process::SshProcessService;
 use nyaterm_terminal::agent_capture::{
     AgentCaptureProcessResult, AgentOutputCaptureProcessor, RetiredCaptureFilter,
 };
-use nyaterm_transport::{SessionKind, SshProcessService, SshSessionConfig, run_local_command};
+use nyaterm_transport::ssh_execution::run_local_command;
+use nyaterm_transport::{SessionKind, SshSessionConfig};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-
-use crate::features::NyaTermApp;
-use crate::features::runtime_jobs::await_blocking_result;
-use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
-use crate::models::SessionLaunchConfig;
-use crate::models::recording::ExecutionRecordingEvent;
-
-use super::{CapabilityCaller, CapabilityRequest};
-use crate::features::mcp::server::rpc_failure;
 
 enum BackgroundTerminalTarget {
     Ssh(Box<SshSessionConfig>),

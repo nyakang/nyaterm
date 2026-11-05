@@ -1,15 +1,12 @@
-use std::collections::HashMap;
-
-use nyaterm_transport::RemoteTextGeneration;
-use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
-
-use gpui::{AppContext as _, Context, Window, div, prelude::*};
-use nyaterm_core::InternalEditorDisplay;
-use nyaterm_ui::{NyaButton, NyaDialogWindowExt};
-use rust_i18n::t;
-
 use crate::features::{AppLifecycleEvent, NyaTermApp};
 use crate::models::{NavItem, WorkspaceTabId};
+use gpui::{AppContext as _, Context, Window, div, prelude::*};
+use nyaterm_core::InternalEditorDisplay;
+use nyaterm_files::remote_file::RemoteTextGeneration;
+use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
+use nyaterm_ui::{NyaButton, NyaDialogWindowExt};
+use rust_i18n::t;
+use std::collections::HashMap;
 
 pub(in crate::features) struct PendingWorkspaceClose {
     targets: Vec<String>,
@@ -633,18 +630,17 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{
-        Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window, div, prelude::*,
-    };
-    use nyaterm_core::{InternalEditorDisplay, test_support::TestTempDir};
-    use nyaterm_transport::RemoteTextWriteResult;
-    use nyaterm_ui::NyaDialogWindowExt as _;
-
     use crate::features::NyaTermApp;
     use crate::features::test_support::{
         app_with_visible_local_session, editor_document as document,
     };
     use crate::models::{SmartSplitMode, TabDockEdge, TabDockZone, WorkspaceTabId};
+    use gpui::{
+        Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window, div, prelude::*,
+    };
+    use nyaterm_core::{InternalEditorDisplay, test_support::TestTempDir};
+    use nyaterm_files::remote_file::RemoteTextWriteResult;
+    use nyaterm_ui::NyaDialogWindowExt as _;
 
     struct EditorCloseHost {
         app: Entity<NyaTermApp>,
@@ -1143,7 +1139,7 @@ mod tests {
                     request: crate::features::transfers::file_operations::FileOperationRequest::Mutation(
                         crate::features::transfers::file_operations::FileMutationIntent {
                             endpoint: crate::features::file_manager::PaneEndpoint::Local,
-                            directory: nyaterm_transport::RemoteFilePath::new("/tmp"),
+                            directory: nyaterm_files::sftp::RemoteFilePath::new("/tmp"),
                             mutation: crate::features::transfers::file_operations::FileMutation::CreateDirectory("out".into()),
                         }),
                     source_label: "local".into(), target_label: "local".into(),

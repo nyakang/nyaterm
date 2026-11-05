@@ -1,13 +1,12 @@
-use std::sync::Arc;
-
-use gpui::{Context, KeyDownEvent, Window};
-use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath, SftpFileEntry, file_browser_join};
-
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferBrowserContextTarget, TransferJobEvent, TransferJobKind, TransferJobOutput,
     TransferJobResult, TransferJobState, TransferJobStatus,
 };
+use gpui::{Context, KeyDownEvent, Window};
+use nyaterm_files::file_browser::{FileBrowserBackendKind, file_browser_join};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
+use std::sync::Arc;
 
 impl NyaTermApp {
     pub(super) fn request_missing_expanded_tree_listings(&mut self, cx: &mut Context<Self>) {
@@ -332,7 +331,7 @@ impl NyaTermApp {
             } => {
                 self.transfer
                     .invalidate_tree_path(session, &RemoteFilePath::new(old_path), true);
-                let parent = nyaterm_transport::file_browser_parent(backend, new_path);
+                let parent = nyaterm_files::file_browser::file_browser_parent(backend, new_path);
                 self.transfer
                     .invalidate_tree_path(session, &RemoteFilePath::new(parent), false);
                 seed(self, parent_path, entries);

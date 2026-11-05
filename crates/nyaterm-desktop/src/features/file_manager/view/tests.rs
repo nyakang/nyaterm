@@ -1,16 +1,14 @@
-use std::time::{Duration, Instant};
-
-use gpui::{
-    App, AppContext as _, Entity, KeyDownEvent, Keystroke, TestAppContext, VisualTestContext,
-};
-use nyaterm_core::test_support::TestTempDir;
-use nyaterm_transport::RemoteFilePath;
-
 use crate::features::NyaTermApp;
 use crate::features::file_manager::pane::{PaneEndpoint, PaneId};
 use crate::features::file_manager::workspace::{FileManagerSeed, FileManagerWorkspace};
 use crate::features::settings::SettingsPersistenceDomain;
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
+use gpui::{
+    App, AppContext as _, Entity, KeyDownEvent, Keystroke, TestAppContext, VisualTestContext,
+};
+use nyaterm_core::test_support::TestTempDir;
+use nyaterm_files::sftp::RemoteFilePath;
+use std::time::{Duration, Instant};
 
 fn workspace(
     cx: &mut TestAppContext,
@@ -300,11 +298,11 @@ fn frozen_workspace_intent_survives_source_selection_changes_and_swap(cx: &mut T
     let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
     let workspace = workspace(cx, &app, "/initial");
     workspace.update(cx, |state, cx| {
-        let entry = nyaterm_transport::SftpFileEntry {
+        let entry = nyaterm_files::sftp::SftpFileEntry {
             name: "�".into(),
             path: "/initial/�".into(),
             raw_path_token: RemoteFilePath::from_raw("", b"/initial/\xff").raw_path_token,
-            file_type: nyaterm_transport::SftpFileType::File,
+            file_type: nyaterm_files::sftp::SftpFileType::File,
             size: Some(3),
             permissions: None,
             owner: String::new(),
@@ -365,7 +363,7 @@ fn rendered_context_menu_keeps_multi_selection_and_activates_the_clicked_pane(
         )
     });
     let workspace = workspace(cx, &app, &root.join("data").to_string_lossy());
-    let entries = nyaterm_transport::FileBrowserService::local()
+    let entries = nyaterm_files::file_browser::FileBrowserService::local()
         .list_dir(root.join("data").to_string_lossy())
         .unwrap();
     workspace.update(cx, |state, _| {

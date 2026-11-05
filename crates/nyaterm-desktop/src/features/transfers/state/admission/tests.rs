@@ -1,15 +1,13 @@
-use std::collections::HashSet;
-use std::sync::mpsc;
-use std::time::Duration;
-
-use futures::channel::mpsc::unbounded;
-use nyaterm_transport::SftpTransferControl;
-
 use super::TransferAdmission;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
 };
+use futures::channel::mpsc::unbounded;
+use nyaterm_files::sftp::SftpTransferControl;
+use std::collections::HashSet;
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn job(id: &str, upload: bool) -> TransferJobState {
     TransferJobState {
@@ -369,7 +367,7 @@ fn delete_cancelled_after_admission_never_enters_the_operation() {
     let result = futures::executor::block_on(futures::StreamExt::next(&mut rx)).unwrap();
     assert!(
         matches!(result.event, TransferJobEvent::Finished(Err(ref error))
-        if error == nyaterm_transport::SFTP_TRANSFER_CANCELLED)
+        if error == nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED)
     );
     jobs[0].status = TransferJobStatus::Cancelled;
     retired.extend(scheduler.reconcile(&mut jobs, 1, 1));

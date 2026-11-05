@@ -2,7 +2,7 @@ use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::{ProcessJobOutput, ProcessJobResult};
 use crate::models::{RemoteProcessSortDirection, RemoteProcessSortKey};
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_transport::RemoteProcess;
+use nyaterm_remote_ops::remote_process::RemoteProcess;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -410,8 +410,9 @@ impl ProcessPaneState {
             }
             Err(error) => {
                 if was_list_refresh {
-                    let terminal =
-                        error.contains(nyaterm_transport::PROCESS_LIST_UNSUPPORTED_ERROR);
+                    let terminal = error.contains(
+                        nyaterm_remote_ops::remote_process::PROCESS_LIST_UNSUPPORTED_ERROR,
+                    );
                     if self.record_refresh_failure(terminal) >= 3 {
                         self.clear_data();
                     }
@@ -426,12 +427,10 @@ impl ProcessPaneState {
 
 #[cfg(test)]
 mod sort_tests {
-    use std::cmp::Ordering;
-
-    use nyaterm_transport::RemoteProcess;
-
     use super::{compare_processes, sort_processes};
     use crate::models::{RemoteProcessSortDirection, RemoteProcessSortKey};
+    use nyaterm_remote_ops::remote_process::RemoteProcess;
+    use std::cmp::Ordering;
 
     fn process(pid: u32, cpu: f64, memory: f64, rss: u64) -> RemoteProcess {
         RemoteProcess {

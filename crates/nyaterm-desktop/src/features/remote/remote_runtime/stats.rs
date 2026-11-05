@@ -1,10 +1,9 @@
-use futures::StreamExt as _;
-use gpui::Context;
-use nyaterm_transport::{RemoteStatsOptions, RemoteStatsService};
-
 use crate::features::NyaTermApp;
 use crate::features::remote::state::StatsApplyOutcome;
 use crate::features::runtime_jobs::StatsJobResult;
+use futures::StreamExt as _;
+use gpui::Context;
+use nyaterm_remote_ops::stats::{RemoteStatsOptions, RemoteStatsService};
 
 impl NyaTermApp {
     pub(in crate::features) fn remote_stats_users_setting_changed(

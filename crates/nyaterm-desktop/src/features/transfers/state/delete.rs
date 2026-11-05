@@ -1,10 +1,9 @@
-use std::collections::{HashMap, HashSet};
-
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFilePath, file_browser_identity, file_browser_parent,
-};
-
 use super::TransferFeatureState;
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, file_browser_identity, file_browser_parent,
+};
+use nyaterm_files::sftp::RemoteFilePath;
+use std::collections::{HashMap, HashSet};
 
 pub(super) struct TransferDeleteBatch {
     backend: FileBrowserBackendKind,
@@ -192,7 +191,8 @@ impl TransferFeatureState {
 #[cfg(test)]
 mod tests {
     use super::TransferDeleteBatch;
-    use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath};
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::RemoteFilePath;
 
     #[cfg(windows)]
     #[test]

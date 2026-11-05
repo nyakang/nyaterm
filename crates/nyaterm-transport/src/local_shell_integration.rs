@@ -1,13 +1,11 @@
 //! Local integration is installed through shell startup hooks, never PTY input.
 //! Unrecognized launch modes retain their original command and byte stream.
 
-use std::path::{Path, PathBuf};
-
-use crate::file_browser::LocalShellPathStyle;
-use crate::local_shell::ResolvedLocalShell;
+use crate::local_shell::{LocalShellPathStyle, ResolvedLocalShell};
 use crate::ssh_shell_integration::{
     SshIntegrationOutput, SshShellIntegrationState, build_ssh_ready_marker,
 };
+use std::path::{Path, PathBuf};
 
 #[cfg(all(test, windows))]
 mod lifecycle_tests;
@@ -112,7 +110,6 @@ fn wsl_distro_from_args(args: &[String]) -> Option<String> {
 fn wsl_default_distro() -> Option<String> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW,

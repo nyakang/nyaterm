@@ -1,16 +1,3 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use nyaterm_core::ActionLinksMatcherSettings;
-use nyaterm_terminal::{
-    TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
-    TerminalSearchQuery, TerminalSnapshot,
-};
-
-use crate::models::recording::RecordingWritePipeline;
-use crate::terminal::{TerminalLineDecorations, terminal_screen_from_output};
-
 use super::{
     FindSearchJob, SELECTED_OCCURRENCE_SEARCH_CHUNK_ROWS, SelectedOccurrenceSearchJob,
     TERMINAL_FRAME_COMMAND_QUEUE_CAP, TERMINAL_FRAME_EVENT_WAKE_ALL,
@@ -39,6 +26,16 @@ use super::{
     terminal_line_decorations_estimated_bytes, terminal_snapshot_matches_grid_geometry,
     try_next_terminal_frame_command,
 };
+use crate::models::recording::RecordingWritePipeline;
+use crate::terminal::{TerminalLineDecorations, terminal_screen_from_output};
+use nyaterm_core::ActionLinksMatcherSettings;
+use nyaterm_terminal::{
+    TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
+    TerminalSearchQuery, TerminalSnapshot,
+};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[test]
 fn frame_worker_wrap_preference_applies_to_created_seeded_and_transferred_sessions() {
@@ -1537,8 +1534,9 @@ fn terminal_ui_output_tail_is_bounded_and_utf8_safe() {
 #[test]
 fn terminal_frame_visible_text_event_keeps_only_tail_for_ui() {
     let mut session = TerminalFrameSession::new("UTF-8", 1000);
-    let mut recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let mut recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut recording_events = recording_pipeline
         .take_event_receiver()
         .expect("recording events should be available");
@@ -2598,8 +2596,9 @@ fn terminal_frame_worker_batches_output_burst_into_single_frame() {
     }));
     drop(tx);
 
-    let recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut pending = VecDeque::new();
     let mut sessions = HashMap::new();
     let event_queue = TerminalFrameEventQueue::new(8);
@@ -2652,8 +2651,9 @@ fn terminal_frame_worker_collects_trailing_output_before_emitting() {
         scrollback_limit: 1000,
     }));
     drop(tx);
-    let recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut pending = VecDeque::new();
     let mut sessions = HashMap::new();
     let mut events = Vec::new();
@@ -2688,8 +2688,9 @@ fn terminal_frame_worker_amortizes_snapshot_across_sixteen_pty_chunks() {
     }
     drop(tx);
 
-    let recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut pending = VecDeque::new();
     let mut sessions = HashMap::new();
     let mut events = Vec::new();
@@ -2734,8 +2735,9 @@ fn terminal_frame_worker_batch_stops_at_resize_boundary() {
     }));
     drop(tx);
 
-    let recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut pending = VecDeque::new();
     let mut sessions = HashMap::new();
     let mut events = Vec::new();
@@ -2770,8 +2772,9 @@ fn terminal_frame_worker_batch_stops_at_resize_boundary() {
 fn terminal_frame_output_burst_does_not_wait_for_a_live_sender() {
     let (tx, rx) = terminal_frame_command_channel();
 
-    let recording_pipeline =
-        super::super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES);
+    let recording_pipeline = super::super::RecordingWritePipeline::spawn(
+        nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+    );
     let mut pending = VecDeque::new();
     let mut sessions = HashMap::new();
     let mut events = Vec::new();
@@ -3937,7 +3940,7 @@ fn interleaved_frame_sessions_keep_their_own_output_and_recording_charsets() {
 
 #[test]
 fn synthetic_command_blocks_preserve_order_without_recording_or_output_observers() {
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
         RecordingRotationPolicy,
     };

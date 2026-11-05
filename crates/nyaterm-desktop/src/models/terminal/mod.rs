@@ -1998,9 +1998,10 @@ impl Drop for TerminalFramePipeline {
 
 impl Default for TerminalFramePipeline {
     fn default() -> Self {
-        let recording_writer =
-            super::RecordingWritePipeline::spawn(nyaterm_transport::DEFAULT_MEMORY_LIMIT_BYTES)
-                .writer();
+        let recording_writer = super::RecordingWritePipeline::spawn(
+            nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
+        )
+        .writer();
         Self::spawn(recording_writer)
     }
 }

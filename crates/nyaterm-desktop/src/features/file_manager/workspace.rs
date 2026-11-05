@@ -1,10 +1,9 @@
-use gpui::{Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, WeakEntity};
-use nyaterm_core::FileManagerPaneSide;
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
-
 use super::inputs::FileManagerPaneInputs;
 use super::pane::{BrowserPaneState, PaneEndpoint, PaneId, PaneNavigationSnapshot};
 use crate::features::NyaTermApp;
+use gpui::{Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, WeakEntity};
+use nyaterm_core::FileManagerPaneSide;
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 
 pub(in crate::features) struct FileManagerSeed {
     pub left: PaneEndpoint,

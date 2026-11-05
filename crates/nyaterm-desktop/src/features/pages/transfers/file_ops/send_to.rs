@@ -1,22 +1,22 @@
-use rust_i18n::t;
-
-use gpui::{Context, Window};
-use nyaterm_transport::{
-    FileBrowserService, FileCopyRequest, RemoteFilePath, SftpDuplicatePolicy,
-    SftpDuplicateResolver, SftpFileEntry, SftpPathTransferOptions, SftpTransferControl,
-    file_browser_join, file_browser_name, file_browser_parent,
+use super::super::context_menu_policy::{
+    SendToCandidate, send_to_candidate_is_eligible, send_to_target_directory,
 };
-
 use crate::features::NyaTermApp;
 use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
 };
-
-use super::super::context_menu_policy::{
-    SendToCandidate, send_to_candidate_is_eligible, send_to_target_directory,
+use gpui::{Context, Window};
+use nyaterm_files::file_browser::{
+    FileBrowserService, file_browser_join, file_browser_name, file_browser_parent,
 };
+use nyaterm_files::remote_file::FileCopyRequest;
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
+};
+use rust_i18n::t;
 
 /// A session the current selection can be sent to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +233,7 @@ struct SendToRequest {
 /// mixed backends stage through a local temp directory.
 fn run_send_to(
     request: SendToRequest,
-    progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
+    progress: impl FnMut(nyaterm_files::sftp_transfer_types::SftpTransferProgress) + Send + 'static,
 ) -> Result<TransferJobOutput, String> {
     let SendToRequest {
         source_service,
@@ -298,9 +298,9 @@ fn run_send_to(
 mod tests {
     use super::{SendToRequest, run_send_to};
     use crate::models::TransferJobOutput;
-    use nyaterm_transport::{
-        FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
-    };
+    use nyaterm_files::file_browser::FileBrowserService;
+    use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+    use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
     use std::sync::{Arc, Mutex};
 
     #[test]

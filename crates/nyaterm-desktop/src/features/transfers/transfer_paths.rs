@@ -1,20 +1,18 @@
-use rust_i18n::t;
-
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
-use gpui::{Context, PathPromptOptions, SharedString, Window};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::{
-    RemoteFilePath, SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
-    SshSessionConfig,
-};
-
 use crate::features::NyaTermApp;
 use crate::features::session::UploadBatchDuplicateResolver;
 use crate::features::transfers::SftpJobSession;
 use crate::models::{NavItem, TransferPathPromptKind, TransferPathPromptResult};
+use gpui::{Context, PathPromptOptions, SharedString, Window};
+use nyaterm_core::truncate_preview;
+use nyaterm_files::sftp::RemoteFilePath;
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
+};
+use nyaterm_transport::SshSessionConfig;
+use rust_i18n::t;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 struct PendingBrowserUpload {
     kind: TransferPathPromptKind,
@@ -435,7 +433,7 @@ impl NyaTermApp {
                 if self
                     .session
                     .file_browser_backend_for_session(service_session_id)
-                    != Some(nyaterm_transport::FileBrowserBackendKind::Remote)
+                    != Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
                 {
                     self.shell
                         .set_status("source session is unavailable".to_string());
@@ -577,7 +575,7 @@ impl NyaTermApp {
     ) {
         self.transfer.set_browser_external_drop_hover(false);
         if self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
             let status = "upload by dropping files is unavailable for local browsing".to_string();
             self.shell.set_status(status.clone());
@@ -732,9 +730,9 @@ fn transfer_download_targets(
     remote_paths
         .into_iter()
         .map(|remote_path| {
-            let name = nyaterm_transport::download_path::file_name(&remote_path.display_path)?;
+            let name = nyaterm_files::download_path::file_name(&remote_path.display_path)?;
             anyhow::ensure!(
-                names.insert(nyaterm_transport::download_path::target_key(name)),
+                names.insert(nyaterm_files::download_path::target_key(name)),
                 "selected remote items have conflicting local names"
             );
             let target = directory.join(name);
@@ -799,16 +797,14 @@ fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, Context, TestAppContext};
-    use nyaterm_core::{AppRuntime, AppSettingsSummary, RuntimeMode, test_support::TestTempDir};
-
-    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
-    use crate::features::NyaTermApp;
-    use crate::models::SettingsTab;
-
     use super::{
         local_directory_children, transfer_upload_local_name, transfer_upload_remote_child_path,
     };
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::models::SettingsTab;
+    use gpui::{AppContext as _, Context, TestAppContext};
+    use nyaterm_core::{AppRuntime, AppSettingsSummary, RuntimeMode, test_support::TestTempDir};
     use std::path::PathBuf;
 
     fn assert_settings_path_picker_updates_existing_input(
@@ -931,7 +927,7 @@ mod tests {
 
     #[test]
     fn download_targets_preserve_raw_identity_and_respect_explicit_single_target() {
-        use nyaterm_transport::RemoteFilePath;
+        use nyaterm_files::sftp::RemoteFilePath;
         let source = RemoteFilePath::from_raw("/remote/a\\b", b"/remote/a\\b");
         let explicit = PathBuf::from("chosen.txt");
         let targets = super::transfer_download_targets(

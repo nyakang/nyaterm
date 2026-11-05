@@ -1,12 +1,10 @@
-use rust_i18n::t;
-
-use gpui::Context;
-use nyaterm_store::StoreDomain;
-use nyaterm_transport::SftpDuplicatePolicy;
-
 use crate::features::NyaTermApp;
 use crate::features::app_state::SettingsDraftSnapshot;
 use crate::models::TranslationSecretDraft;
+use gpui::Context;
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_store::StoreDomain;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn begin_settings_draft(&mut self, cx: &mut Context<Self>) {
@@ -706,13 +704,12 @@ fn drive_validation_key(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
-    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
-
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::settings::SettingsSaveKind;
     use crate::models::HeaderStatusMode;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AppRuntime, RuntimeMode, uuid};
 
     /// A real store runtime, because these tests are about what reaches disk.
     fn app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {

@@ -1,18 +1,15 @@
-use std::collections::HashSet;
-
+use super::super::panels::RemoteMonitorPanel;
+use super::{DockerRenderContext, docker_tab_menu_layer};
+use crate::features::shell::gpui_code_font_family;
+use crate::models::DockerTab;
+use crate::theme::ThemePalette;
 use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, MouseButton, Window, div, prelude::*, px,
     rgb,
 };
-use nyaterm_transport::RemoteDockerOverview;
+use nyaterm_remote_ops::docker::RemoteDockerOverview;
 use nyaterm_ui::{NyaTabItem, NyaTabs};
-
-use super::super::panels::RemoteMonitorPanel;
-use crate::features::shell::gpui_code_font_family;
-use crate::models::DockerTab;
-use crate::theme::ThemePalette;
-
-use super::{DockerRenderContext, docker_tab_menu_layer};
+use std::collections::HashSet;
 
 fn tab_label(label: String, count: usize, loaded: bool) -> String {
     if loaded {

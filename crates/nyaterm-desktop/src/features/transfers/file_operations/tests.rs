@@ -1,15 +1,12 @@
-use std::fs;
-
-use nyaterm_core::test_support::TestTempDir;
-use nyaterm_transport::{
-    FileBrowserService, RemoteFilePath, SftpDuplicatePolicy, SftpPathTransferOptions,
-    SftpTransferControl,
-};
-
 use super::{
     FileMutation, FileMutationIntent, FileOperationEndpoint, FileOperationRequest,
     FileTransferIntent, FileTransferOperation, execute_file_operation,
 };
+use nyaterm_core::test_support::TestTempDir;
+use nyaterm_files::file_browser::FileBrowserService;
+use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{SftpDuplicatePolicy, SftpPathTransferOptions};
+use std::fs;
 
 fn run(
     root: &TestTempDir,
@@ -148,7 +145,7 @@ fn cancelled_delete_keeps_file_and_a_fresh_retry_deletes_it() {
             |_| {},
         )
         .unwrap_err(),
-        nyaterm_transport::SFTP_TRANSFER_CANCELLED,
+        nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED,
     );
     assert_eq!(fs::read(&path).unwrap(), b"keep until retry");
     execute_file_operation(

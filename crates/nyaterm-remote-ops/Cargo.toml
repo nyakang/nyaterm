@@ -1,0 +1,21 @@
+[package]
+name = "nyaterm-remote-ops"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nyaterm-core.workspace = true
+nyaterm-transport.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+nyaterm-core = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }

@@ -23,6 +23,9 @@ members = [
     "crates/nyaterm-sync",
     "crates/nyaterm-terminal",
     "crates/nyaterm-terminal-gpui",
+    "crates/nyaterm-recording",
+    "crates/nyaterm-remote-ops",
+    "crates/nyaterm-files",
     "crates/nyaterm-transport",
     "crates/nyaterm-ui",
     "crates/nyaterm-vnc-helper",
@@ -103,6 +106,9 @@ nyaterm-store = { path = "crates/nyaterm-store" }
 nyaterm-sync = { path = "crates/nyaterm-sync" }
 nyaterm-terminal = { path = "crates/nyaterm-terminal" }
 nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
+nyaterm-recording = { path = "crates/nyaterm-recording" }
+nyaterm-remote-ops = { path = "crates/nyaterm-remote-ops" }
+nyaterm-files = { path = "crates/nyaterm-files" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }
 nyaterm-ui = { path = "crates/nyaterm-ui" }
 percent-encoding = "=2.3.2"

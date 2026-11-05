@@ -1,16 +1,14 @@
-use std::time::{Duration, Instant};
-
-use gpui::{Context, KeyDownEvent, KeyUpEvent, MouseButton, MouseMoveEvent, MouseUpEvent, Window};
-use nyaterm_core::{
-    TerminalMouseReportEligibility, TerminalWireWriteKind, terminal_input_fanout_status,
-    terminal_mouse_report_should_send, terminal_wire_write_disposition,
-};
-
 use crate::features::NyaTermApp;
 use crate::models::recording::ExecutionRecordingEvent;
 use crate::terminal::{
     TerminalKeyMode, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
 };
+use gpui::{Context, KeyDownEvent, KeyUpEvent, MouseButton, MouseMoveEvent, MouseUpEvent, Window};
+use nyaterm_core::{
+    TerminalMouseReportEligibility, TerminalWireWriteKind, terminal_input_fanout_status,
+    terminal_mouse_report_should_send, terminal_wire_write_disposition,
+};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseReportWriteResult {
@@ -1040,7 +1038,7 @@ impl NyaTermApp {
         }
         if let Some(command) = command {
             if self.recording.writer().capture_policy(session_id).mode
-                == nyaterm_transport::RecordingMode::Raw
+                == nyaterm_recording::recording::RecordingMode::Raw
             {
                 if self
                     .recording
@@ -1065,7 +1063,7 @@ impl NyaTermApp {
             && !self.recording_input_is_sensitive(session_id)
         {
             let policy = self.recording.writer().capture_policy(session_id);
-            if policy.mode == nyaterm_transport::RecordingMode::Raw {
+            if policy.mode == nyaterm_recording::recording::RecordingMode::Raw {
                 self.recording.write_raw_input(session_id, encoded);
                 return Ok(());
             }
@@ -1232,7 +1230,7 @@ impl NyaTermApp {
         {
             let policy = self.recording.writer().capture_policy(session_id);
             if policy.include_input {
-                if policy.mode == nyaterm_transport::RecordingMode::Raw {
+                if policy.mode == nyaterm_recording::recording::RecordingMode::Raw {
                     self.recording
                         .write_raw_input(session_id, wire_bytes.to_vec());
                 } else {

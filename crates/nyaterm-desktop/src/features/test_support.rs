@@ -1,16 +1,13 @@
-use std::path::Path;
-
+use super::NyaTermApp;
+use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
 use gpui::{
     AppContext as _, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, div,
 };
 use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode};
 use nyaterm_transport::LocalSessionConfig;
-
-use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
-use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
-
-use super::NyaTermApp;
+use std::path::Path;
 
 struct SessionFocusHost {
     app: Entity<NyaTermApp>,
@@ -110,7 +107,7 @@ pub(crate) fn editor_document(
         search_query: String::new(),
         active_match: 0,
         revision: None,
-        generation: nyaterm_transport::RemoteTextGeneration::next(),
+        generation: nyaterm_files::remote_file::RemoteTextGeneration::next(),
         loading: false,
         saving: false,
         dirty: false,

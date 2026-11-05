@@ -1,13 +1,12 @@
+use crate::features::NyaTermApp;
+use crate::features::test_support::app_with_visible_local_session;
+use crate::models::SessionLaunchConfig;
 use gpui::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     TestAppContext, Window, div, px,
 };
 use nyaterm_core::test_support::TestTempDir;
-use nyaterm_transport::{RecordingMode, RecordingStatus, RecordingStatusState};
-
-use crate::features::NyaTermApp;
-use crate::features::test_support::app_with_visible_local_session;
-use crate::models::SessionLaunchConfig;
+use nyaterm_recording::recording::{RecordingMode, RecordingStatus, RecordingStatusState};
 
 struct RecordingPanelHost {
     app: Entity<NyaTermApp>,

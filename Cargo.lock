@@ -6841,10 +6841,13 @@ dependencies = [
  "md5",
  "minisign-verify",
  "nyaterm-core",
+ "nyaterm-files",
  "nyaterm-mcp-protocol",
  "nyaterm-otp",
  "nyaterm-plugin-host",
+ "nyaterm-recording",
  "nyaterm-remote-desktop",
+ "nyaterm-remote-ops",
  "nyaterm-store",
  "nyaterm-sync",
  "nyaterm-terminal",
@@ -6880,6 +6883,33 @@ dependencies = [
  "zed-reqwest",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "nyaterm-files"
+version = "2.0.2"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "dirs",
+ "encoding_rs",
+ "futures",
+ "nyaterm-core",
+ "nyaterm-terminal",
+ "nyaterm-transport",
+ "russh",
+ "russh-sftp",
+ "same-file",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6959,6 +6989,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-recording"
+version = "2.0.2"
+dependencies = [
+ "nyaterm-core",
+ "nyaterm-terminal",
+ "regex",
+ "same-file",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "nyaterm-remote-desktop"
 version = "2.0.2"
 dependencies = [
@@ -6970,6 +7014,20 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "nyaterm-remote-ops"
+version = "2.0.2"
+dependencies = [
+ "anyhow",
+ "nyaterm-core",
+ "nyaterm-transport",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -7052,7 +7110,6 @@ dependencies = [
  "async-http-proxy",
  "base64 0.22.1",
  "dirs",
- "encoding_rs",
  "flate2",
  "futures",
  "libc",
@@ -7063,8 +7120,6 @@ dependencies = [
  "rand 0.10.3",
  "regex",
  "russh",
- "russh-sftp",
- "same-file",
  "serde",
  "serde_json",
  "serialport",
@@ -7075,7 +7130,6 @@ dependencies = [
  "tokio",
  "tokio-socks",
  "tracing",
- "unicode-normalization",
  "uuid",
  "windows-sys 0.61.2",
  "zeroize",

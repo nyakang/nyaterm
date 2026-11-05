@@ -1,24 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use rust_i18n::t;
-
 use crate::features::ai::agent_management::AgentManagementView;
-use gpui::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, div, prelude::*, px, rgb,
-};
-use nyaterm_core::{
-    AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
-    KeywordHighlightConfig, TranslationSettings,
-};
-use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaInputShell, NyaNumberInputState, NyaSelect, NyaSelectOption,
-    NyaSelectState, NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem, NyaSliderState,
-    NyaSliderValue,
-};
-
 use crate::features::selects::SelectRegistry;
 use crate::features::settings::{
     KeybindingPresentationState, KeywordHighlightPresentationState, SearchEnginePresentationState,
@@ -35,6 +15,23 @@ use crate::models::{
     TranslationSecretDraft,
 };
 use crate::theme::ThemePalette;
+use gpui::{
+    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
+    Window, div, prelude::*, px, rgb,
+};
+use nyaterm_core::{
+    AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
+    KeywordHighlightConfig, TranslationSettings,
+};
+use nyaterm_ui::{
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaInputShell, NyaNumberInputState, NyaSelect, NyaSelectOption,
+    NyaSelectState, NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem, NyaSliderState,
+    NyaSliderValue,
+};
+use rust_i18n::t;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Background colours are resolved by the app because the panel is cached: it
 /// only repaints when a new snapshot arrives, so wallpaper, window material, and
@@ -408,11 +405,14 @@ impl TranslationPresentation {
 
 #[derive(Clone, Default, PartialEq)]
 pub(in crate::features) struct TransferSettingsPresentation {
-    pub(in crate::features) duplicate_policy: nyaterm_transport::SftpDuplicatePolicy,
+    pub(in crate::features) duplicate_policy:
+        nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy,
 }
 
 impl TransferSettingsPresentation {
-    pub(in crate::features) fn duplicate_policy(&self) -> nyaterm_transport::SftpDuplicatePolicy {
+    pub(in crate::features) fn duplicate_policy(
+        &self,
+    ) -> nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy {
         self.duplicate_policy
     }
 }
@@ -2000,21 +2000,18 @@ forward_app_action!(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use gpui::{
-        AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
-    };
-    use nyaterm_core::{AppRuntime, RuntimeMode};
-
+    use super::{FontSelectOptionCache, SettingsPanel};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::pages::settings::inputs::ALL_SETTINGS_TABS;
     use crate::features::{FontCatalogLoadState, NyaTermApp};
     use crate::models::{AiActionEditorField, AiActionListKind, NavItem, SettingsTab};
     use crate::test_support::TestConfigDir;
-
-    use super::{FontSelectOptionCache, SettingsPanel};
+    use gpui::{
+        AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
+    };
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use std::path::Path;
 
     #[test]
     fn font_select_option_cache_rebuilds_after_catalog_load() {

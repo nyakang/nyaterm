@@ -5,7 +5,8 @@ use futures::{
         oneshot,
     },
 };
-use nyaterm_transport::{
+
+use nyaterm_recording::recording::{
     RecordingCapturePolicy, RecordingCompletion, RecordingContext, RecordingManager, RecordingMode,
     RecordingProfile, RecordingStatus, TerminalHistorySearchRequest, TerminalHistorySearchResponse,
 };
@@ -1208,20 +1209,18 @@ fn remove_dropped_payloads(dropped: &Mutex<DroppedPayloads>, id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use nyaterm_transport::{
-        ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
-        RecordingRotationPolicy, RecordingStatusState,
-    };
-    use time::OffsetDateTime;
-
     use super::{
         RECORDING_WRITE_QUEUE_BYTE_LIMIT, RecordingHistorySearchKey, RecordingWriteEvent,
         RecordingWritePipeline,
     };
+    use nyaterm_recording::recording::{
+        ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
+        RecordingRotationPolicy, RecordingStatusState,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use time::OffsetDateTime;
 
     #[test]
     fn recording_pipeline_preserves_write_order_before_flush() {
@@ -1849,7 +1848,7 @@ mod tests {
         let mut recording = RecordingWritePipeline::spawn(4096);
         let writer = recording.writer();
         let mut profile = recording_profile(&path);
-        profile.mode = nyaterm_transport::RecordingMode::Raw;
+        profile.mode = nyaterm_recording::recording::RecordingMode::Raw;
         writer
             .start(
                 "raw".into(),

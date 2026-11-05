@@ -1,12 +1,10 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::thread::JoinHandle;
-
-use futures::channel::mpsc::UnboundedSender;
-
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState, TransferJobStatus,
 };
 use crate::thread_owner::spawn_joinable;
+use futures::channel::mpsc::UnboundedSender;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::thread::JoinHandle;
 
 #[cfg(test)]
 mod tests;
@@ -173,7 +171,7 @@ impl TransferAdmission {
                         let _ = task.tx.unbounded_send(TransferJobResult {
                             id: id.clone(),
                             event: TransferJobEvent::Finished(Err(
-                                nyaterm_transport::SFTP_TRANSFER_CANCELLED.into(),
+                                nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into(),
                             )),
                         });
                         remove.push(id.clone());
@@ -263,7 +261,7 @@ impl TransferAdmission {
                             let _ = tx.unbounded_send(TransferJobResult {
                                 id: failure_id,
                                 event: TransferJobEvent::Finished(Err(
-                                    nyaterm_transport::SFTP_TRANSFER_CANCELLED.into(),
+                                    nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into(),
                                 )),
                             });
                             return;

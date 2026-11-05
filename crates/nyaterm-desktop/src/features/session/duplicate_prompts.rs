@@ -1,16 +1,14 @@
 //! File conflict prompts and the scope of one multi-item upload operation.
 
+use super::sftp_duplicate_prompt_id;
+use crate::models::event_wake::{ANY_INTEREST, EventWake};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicateDecision, SftpDuplicateRequest, SftpDuplicateResolver, SftpTransferDirection,
+};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
-
-use nyaterm_transport::{
-    SftpDuplicateDecision, SftpDuplicateRequest, SftpDuplicateResolver, SftpTransferDirection,
-};
-
-use super::sftp_duplicate_prompt_id;
-use crate::models::event_wake::{ANY_INTEREST, EventWake};
 
 /// Only the broker changes this flag, under its pending-queue lock. The same
 /// lock serializes enqueueing with accepting all remaining conflicts.

@@ -1,17 +1,3 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use gpui::{AppContext as _, KeyDownEvent, MouseButton, TestAppContext};
-use nyaterm_terminal::TerminalScreen;
-
-use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
-use crate::features::test_support::app_with_visible_local_session;
-use crate::models::{
-    TerminalBufferCellPos, TerminalFrameActionLinks, TerminalSelection, TerminalViewState,
-};
-use crate::terminal::{TerminalBufferMatch, TerminalKeyMode};
-use crate::test_support::TestConfigDir;
-
 use super::{
     TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
     lost_mouse_report_release_button, mouse_report_allowed_by_alt,
@@ -27,6 +13,17 @@ use super::{
     terminal_snapshot_with_newer_edge_row, terminal_snapshot_with_retained_scroll_window,
     terminal_status_changed, terminal_user_scroll_active, terminal_visual_display_offset,
 };
+use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
+use crate::features::test_support::app_with_visible_local_session;
+use crate::models::{
+    TerminalBufferCellPos, TerminalFrameActionLinks, TerminalSelection, TerminalViewState,
+};
+use crate::terminal::{TerminalBufferMatch, TerminalKeyMode};
+use crate::test_support::TestConfigDir;
+use gpui::{AppContext as _, KeyDownEvent, MouseButton, TestAppContext};
+use nyaterm_terminal::TerminalScreen;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[test]
 fn terminal_mouse_report_buttons_map_to_their_gpui_capture_button() {
@@ -1386,13 +1383,11 @@ fn paste_targets_use_their_own_charset_and_bracketed_mode() {
 
 #[test]
 fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
-    use std::io::Read;
-    use std::net::TcpListener;
-
+    use crate::models::SessionLaunchConfig;
     use nyaterm_core::character_encoding::CharacterEncoding;
     use nyaterm_transport::{TelnetEnterMode, TelnetSessionConfig};
-
-    use crate::models::SessionLaunchConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
 
     let root = TestConfigDir::new("nyaterm-telnet-local-input");
     let mut cx = TestAppContext::single();
@@ -1461,14 +1456,12 @@ fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
 
 #[test]
 fn reconnect_drops_old_enter_release_and_repeat_even_after_new_kitty_negotiation() {
-    use std::io::Read;
-    use std::net::TcpListener;
-
-    use gpui::KeyUpEvent;
-    use nyaterm_transport::TelnetSessionConfig;
-
     use crate::features::terminal::terminal_runtime::view_io::TerminalMouseReportRequest;
     use crate::models::{SessionLaunchConfig, TerminalProtocolState};
+    use gpui::KeyUpEvent;
+    use nyaterm_transport::TelnetSessionConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
 
     let root = TestConfigDir::new("nyaterm-reconnect-key-wire");
     let mut cx = TestAppContext::single();
@@ -1814,10 +1807,11 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
 #[test]
 fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw_input() {
     use crate::models::SessionLaunchConfig;
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
-        RecordingRotationPolicy, TelnetSessionConfig,
+        RecordingRotationPolicy,
     };
+    use nyaterm_transport::TelnetSessionConfig;
     use std::io::Read;
     use std::net::TcpListener;
 

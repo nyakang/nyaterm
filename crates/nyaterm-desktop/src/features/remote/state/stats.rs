@@ -1,7 +1,9 @@
 use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::StatsJobResult;
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_transport::{CpuUsageSource, NetworkSummaryInfo, RemoteStats, RemoteStatsSampler};
+use nyaterm_remote_ops::stats::{
+    CpuUsageSource, NetworkSummaryInfo, RemoteStats, RemoteStatsSampler,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -117,7 +119,7 @@ impl StatsPaneState {
         for stats in self.snapshots.values_mut() {
             stats.users.clear();
             stats.login_sessions.clear();
-            stats.users_status = nyaterm_transport::LoggedInUsersStatus::NotCollected;
+            stats.users_status = nyaterm_remote_ops::stats::LoggedInUsersStatus::NotCollected;
         }
         self.touch();
     }
@@ -432,7 +434,7 @@ impl StatsPaneState {
         {
             stats.users.clear();
             stats.login_sessions.clear();
-            stats.users_status = nyaterm_transport::LoggedInUsersStatus::NotCollected;
+            stats.users_status = nyaterm_remote_ops::stats::LoggedInUsersStatus::NotCollected;
         }
         // A tab switch invalidates the presentation job, but a bounded icon
         // probe still belongs to its original connection. Reconnect/close removes
@@ -548,7 +550,7 @@ impl StatsPaneState {
 mod tests {
     use super::{StatsApplyOutcome, StatsPaneState};
     use crate::features::runtime_jobs::StatsJobResult;
-    use nyaterm_transport::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
+    use nyaterm_remote_ops::stats::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
     use std::time::Instant;
 
     #[test]
@@ -654,7 +656,7 @@ mod tests {
 
     #[test]
     fn toggling_users_clears_cache_and_discards_only_user_data_from_old_jobs() {
-        use nyaterm_transport::{LoggedInSession, LoggedInUser, LoggedInUsersStatus};
+        use nyaterm_remote_ops::stats::{LoggedInSession, LoggedInUser, LoggedInUsersStatus};
         let mut state = StatsPaneState::new();
         let mut snapshot = stats(&[("eth0", 10., 20.)]);
         snapshot.users = vec![LoggedInUser {

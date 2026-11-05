@@ -1,15 +1,11 @@
-use rust_i18n::t;
-
-use gpui::{Context, KeyDownEvent, Window};
-use nyaterm_transport::{SftpFileEntry, SftpFileType};
-
-use std::collections::HashSet;
-use std::sync::Arc;
-
+use super::helpers::transfer_browser_search_status;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::TransferBrowserSortColumn;
-
-use super::helpers::transfer_browser_search_status;
+use gpui::{Context, KeyDownEvent, Window};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+use rust_i18n::t;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 impl NyaTermApp {
     /// The filtered, sorted listing, from the state's memo.
@@ -168,12 +164,11 @@ pub(super) fn transfer_browser_footer_stats(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::{transfer_browser_footer_stats, transfer_browser_search_text_for_key};
     use crate::features::transfers::transfer_browser_entry_is_visible;
     use gpui::{KeyDownEvent, Keystroke, Modifiers};
-    use nyaterm_transport::{SftpFileEntry, SftpFileType};
+    use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+    use std::collections::HashSet;
 
     fn entry(name: &str) -> SftpFileEntry {
         sized_entry(name, SftpFileType::File, 0)

@@ -1,17 +1,15 @@
-use gpui::AppContext as _;
-use std::time::Duration;
-
-use nyaterm_mcp_protocol::{RpcError, TerminalExecuteResult};
-use nyaterm_terminal::agent_capture::AgentOutputCaptureProcessor;
-use serde_json::Value;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
-
 use super::{
     TerminalExecutionPolicy, TerminalExecutionRequest, TerminalExecutionState,
     external_mcp_terminal_policy,
 };
 use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
+use gpui::AppContext as _;
+use nyaterm_mcp_protocol::{RpcError, TerminalExecuteResult};
+use nyaterm_terminal::agent_capture::AgentOutputCaptureProcessor;
+use serde_json::Value;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn external_mcp_terminal_display_mode_only_changes_regular_presentation() {
@@ -100,10 +98,10 @@ fn start_execution_recording(
     app: &crate::features::NyaTermApp,
     session_id: &str,
     path: &std::path::Path,
-    mode: nyaterm_transport::RecordingMode,
+    mode: nyaterm_recording::recording::RecordingMode,
     include_input: bool,
 ) {
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingProfile, RecordingRotationPolicy,
     };
     app.recording
@@ -149,7 +147,8 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
     use crate::test_support::TestConfigDir;
     use nyaterm_core::agent_capture::build_agent_capture_command;
     use nyaterm_core::models::connection::AiExecutionProfile;
-    use nyaterm_transport::{RecordingMode, SessionEvent, TelnetSessionConfig};
+    use nyaterm_recording::recording::RecordingMode;
+    use nyaterm_transport::{SessionEvent, TelnetSessionConfig};
     use std::io::Read;
     use std::net::TcpListener;
     cx.executor().allow_parking();
@@ -415,7 +414,7 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
             app,
             &session.id,
             &directory.path().join("execution.log"),
-            nyaterm_transport::RecordingMode::Transcript,
+            nyaterm_recording::recording::RecordingMode::Transcript,
             true,
         );
     });
@@ -1167,6 +1166,7 @@ fn network_session_profile_and_background_policy_are_shared(cx: &mut gpui::TestA
     use crate::test_support::TestConfigDir;
     use nyaterm_core::AiExecutionProfile;
     use nyaterm_transport::{SshSessionConfig, SshSessionProfile};
+
     let directory = TestConfigDir::new("nyaterm-network-policy");
     let app = app_with_visible_local_session(cx, directory.path(), "ssh");
     cx.update_entity(&app, |app, cx| {

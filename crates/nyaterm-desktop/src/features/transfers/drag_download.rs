@@ -1,10 +1,9 @@
 use crate::models::{TransferJobEvent, TransferJobOutput, TransferJobResult};
 use futures::channel::mpsc::UnboundedSender;
 use gpui::PromisedFileProvider;
-use nyaterm_transport::{
-    RemoteFileService, SftpFileEntry, SftpPathTransferOptions, SftpTransferControl,
-    SftpTransferOptions,
-};
+use nyaterm_files::remote_file::RemoteFileService;
+use nyaterm_files::sftp::{SftpFileEntry, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{SftpPathTransferOptions, SftpTransferOptions};
 use std::{
     io,
     path::Path,
@@ -16,7 +15,7 @@ pub(super) struct RemoteDownloadProvider {
     service: Weak<RemoteFileService>,
     entry: SftpFileEntry,
     options: SftpPathTransferOptions,
-    _lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+    _lifetime: Arc<nyaterm_files::drag_export::DragSourceLifetime>,
     sender: UnboundedSender<TransferJobResult>,
     control: SftpTransferControl,
 }
@@ -28,7 +27,7 @@ impl RemoteDownloadProvider {
         options: SftpTransferOptions,
         sender: UnboundedSender<TransferJobResult>,
         control: SftpTransferControl,
-        lifetime: Arc<nyaterm_transport::drag_export::DragSourceLifetime>,
+        lifetime: Arc<nyaterm_files::drag_export::DragSourceLifetime>,
     ) -> Self {
         Self {
             session_id,
@@ -83,7 +82,7 @@ impl PromisedFileProvider for RemoteDownloadProvider {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .ok_or_else(|| anyhow::anyhow!("invalid promised destination"))?;
-                nyaterm_transport::download_path::validate_name(name)?;
+                nyaterm_files::download_path::validate_name(name)?;
                 // Finder resolves top-level naming conflicts. A race must never turn
                 // its negotiated promise into an overwrite of another user's file.
                 let summary = service.download_remote_path_with_progress_and_path_options(

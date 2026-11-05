@@ -78,6 +78,9 @@ def dependency_errors() -> list[str]:
     low_level = (
         "nyaterm-core",
         "nyaterm-transport",
+        "nyaterm-files",
+        "nyaterm-recording",
+        "nyaterm-remote-ops",
         "nyaterm-terminal",
         "nyaterm-store",
         "nyaterm-sync",
@@ -97,7 +100,11 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
-        ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop"}),
+        ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
+        ("nyaterm-transport", {"nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-files", {"nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-remote-ops", {"nyaterm-files", "nyaterm-recording", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-recording", {"nyaterm-files", "nyaterm-remote-ops", "nyaterm-transport", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-sync", {
             "nyaterm-store", "nyaterm-desktop", "nyaterm-transport", "nyaterm-ui",
             "reqwest", "zed-reqwest", "hyper", "ureq", "isahc", "surf",
@@ -106,8 +113,9 @@ def dependency_errors() -> list[str]:
         ("nyaterm-plugin-api", {
             "nyaterm-core", "nyaterm-desktop", "nyaterm-store", "nyaterm-transport",
             "nyaterm-plugin-host", "nyaterm-ui", "nyaterm-terminal-gpui",
+            "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
         }),
-        ("nyaterm-plugin-host", {"nyaterm-desktop", "nyaterm-transport", "nyaterm-ui", "nyaterm-terminal-gpui"}),
+        ("nyaterm-plugin-host", {"nyaterm-desktop", "nyaterm-transport", "nyaterm-ui", "nyaterm-terminal-gpui", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops"}),
     ):
         document = tomllib.loads((ROOT / "crates" / crate / "Cargo.toml").read_text(encoding="utf-8"))
         for package in dependency_packages(document, workspace_dependencies):

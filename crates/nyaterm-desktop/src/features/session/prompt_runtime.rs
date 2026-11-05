@@ -1,13 +1,3 @@
-use std::hash::{Hash, Hasher};
-use std::time::Duration;
-
-use futures::StreamExt as _;
-use gpui::{Context, KeyDownEvent, Window};
-use nyaterm_transport::{
-    SftpDuplicateDecision, SftpDuplicateRequest, SshAgentPromptAction, SshCredentialPrompt,
-    SshHostKey, SshKeyboardInteractiveRequest,
-};
-
 use super::state::PromptResolution;
 use super::{
     CredentialPromptRequest, CredentialPromptState, DuplicatePromptAction, HostKeyPromptChoice,
@@ -17,6 +7,14 @@ use crate::features::{
     NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup,
     transfers::duplicate_decision_label,
 };
+use futures::StreamExt as _;
+use gpui::{Context, KeyDownEvent, Window};
+use nyaterm_files::sftp_transfer_types::{SftpDuplicateDecision, SftpDuplicateRequest};
+use nyaterm_transport::{
+    SshAgentPromptAction, SshCredentialPrompt, SshHostKey, SshKeyboardInteractiveRequest,
+};
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 #[derive(Clone, Copy)]
 enum KeyboardInteractiveOtpPreview {

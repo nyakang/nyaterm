@@ -1,11 +1,12 @@
-use nyaterm_transport::{RemoteDockerOverview, SshMultiplexHandle, SshSessionConfig};
-
 use crate::features::NyaTermApp;
+use nyaterm_remote_ops::docker::RemoteDockerOverview;
+use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 
 pub(in crate::features) struct ActiveSshRuntimeContext {
     pub(in crate::features) session_id: String,
     pub(in crate::features) config: SshSessionConfig,
     pub(in crate::features) multiplex: SshMultiplexHandle,
+    pub(in crate::features) docker_state: nyaterm_remote_ops::docker::DockerConnectionState,
 }
 
 impl NyaTermApp {
@@ -30,14 +31,15 @@ impl NyaTermApp {
             .metadata(&connection_session_id)
             .and_then(|metadata| metadata.ssh_multiplex_key.as_ref())
             .is_some();
-        if let Some(multiplex) = self
+        if let Some(connection) = self
             .session
-            .ssh_multiplex_handle_for_session(&connection_session_id)
+            .ssh_connection_for_session(&connection_session_id)
         {
             return Ok(ActiveSshRuntimeContext {
                 session_id,
                 config,
-                multiplex,
+                multiplex: connection.handle(),
+                docker_state: connection.docker_state(),
             });
         }
         if has_multiplex_key {

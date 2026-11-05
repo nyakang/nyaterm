@@ -5,16 +5,15 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gpui::{Context, IntoElement, Render, Subscription, Window, div, prelude::*, px, rgb};
-use nyaterm_transport::SftpDuplicateDecision;
-use nyaterm_ui::{NyaDialogWindowExt as _, NyaDropdownMenu, NyaMenuItem};
-use rust_i18n::t;
-
 use crate::features::NyaTermApp;
 use crate::features::formatting::download_file_name_from_remote_path;
 use crate::features::session::{DuplicatePromptAction, SftpDuplicatePromptState};
 use crate::features::view_widgets::bounded_dialog_width;
 use crate::theme::ThemePalette;
+use gpui::{Context, IntoElement, Render, Subscription, Window, div, prelude::*, px, rgb};
+use nyaterm_files::sftp_transfer_types::SftpDuplicateDecision;
+use nyaterm_ui::{NyaDialogWindowExt as _, NyaDropdownMenu, NyaMenuItem};
+use rust_i18n::t;
 
 struct DuplicatePromptDialogContent {
     app: gpui::WeakEntity<NyaTermApp>,
