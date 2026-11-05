@@ -79,11 +79,11 @@ pub fn set_log_retention_days(days: u32) -> u32 {
 pub fn apply_log_runtime_settings(shard_bytes: u64, retention_days: u32) {
     set_log_shard_bytes(shard_bytes);
     set_log_retention_days(retention_days);
-    LOG_SETTINGS_LOADED.store(true, Ordering::Relaxed);
+    LOG_SETTINGS_LOADED.store(true, Ordering::Release);
 }
 
 fn log_settings_loaded() -> bool {
-    LOG_SETTINGS_LOADED.load(Ordering::Relaxed)
+    LOG_SETTINGS_LOADED.load(Ordering::Acquire)
 }
 
 /// Local wall clock with a UTC fallback on platforms that refuse to guess.
@@ -95,8 +95,8 @@ pub fn local_now() -> OffsetDateTime {
 ///
 /// Only files whose name parses as a diagnostics day/shard file are considered,
 /// so cloud-sync history and unrelated JSONL files survive. Returns the number
-/// of removed files; individual removal failures are ignored so a locked file
-/// cannot break logging.
+/// of removed files. Failures are returned for a deferred retry by the writer;
+/// pruning errors never prevent logging.
 fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::Result<usize> {
     let cutoff = today - Duration::days(i64::from(normalize_retention_days(retention_days)));
     let entries = match fs::read_dir(log_dir) {
@@ -105,10 +105,14 @@ fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::R
         Err(error) => return Err(error),
     };
     let mut removed = 0;
+    let mut failure = None;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => continue,
+            Err(error) => {
+                failure = Some(error);
+                continue;
+            }
         };
         let Some((file_date, _)) = entry.file_name().to_str().and_then(parse_log_file_name) else {
             continue;
@@ -116,11 +120,12 @@ fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::R
         if file_date >= cutoff {
             continue;
         }
-        if fs::remove_file(entry.path()).is_ok() {
-            removed += 1;
+        match fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(error) => failure = Some(error),
         }
     }
-    Ok(removed)
+    failure.map_or(Ok(removed), Err)
 }
 
 /// File name for a given local date and shard index (`0` is the base file).
@@ -181,6 +186,7 @@ pub struct RotatingLogWriter {
     pending: Vec<u8>,
     current: Option<CurrentShard>,
     prune_due: bool,
+    prune_retry_at: Option<OffsetDateTime>,
     #[cfg(test)]
     test_limits: Option<TestLimits>,
 }
@@ -190,6 +196,7 @@ struct TestLimits {
     shard_bytes: u64,
     retention_days: u32,
     clock: Box<dyn Fn() -> OffsetDateTime + Send>,
+    ready: Box<dyn Fn() -> bool + Send>,
 }
 
 impl RotatingLogWriter {
@@ -203,6 +210,7 @@ impl RotatingLogWriter {
             pending: Vec::new(),
             current: None,
             prune_due: true,
+            prune_retry_at: None,
             #[cfg(test)]
             test_limits: None,
         })
@@ -222,10 +230,12 @@ impl RotatingLogWriter {
             pending: Vec::new(),
             current: None,
             prune_due: true,
+            prune_retry_at: None,
             test_limits: Some(TestLimits {
                 shard_bytes,
                 retention_days,
                 clock: Box::new(clock),
+                ready: Box::new(|| true),
             }),
         };
         Ok(writer)
@@ -233,8 +243,8 @@ impl RotatingLogWriter {
 
     fn settings_ready(&self) -> bool {
         #[cfg(test)]
-        if self.test_limits.is_some() {
-            return true;
+        if let Some(limits) = self.test_limits.as_ref() {
+            return (limits.ready)();
         }
         log_settings_loaded()
     }
@@ -264,7 +274,10 @@ impl RotatingLogWriter {
     }
 
     fn commit(&mut self, chunk: &[u8]) -> io::Result<()> {
-        let today = self.now().date();
+        let now = self.now();
+        let today = now.date();
+        // Acquire the settings publication before reading the effective limits.
+        let settings_ready = self.settings_ready();
         let limit = self.shard_limit();
         let day_changed = self
             .current
@@ -272,10 +285,17 @@ impl RotatingLogWriter {
             .is_some_and(|shard| shard.date != today);
         if day_changed {
             self.current = None;
+            self.prune_due = true;
         }
-        if self.current.is_none() && (self.prune_due || day_changed) && self.settings_ready() {
-            let _ = prune_log_files_at(&self.dir, self.retention_days(), today);
-            self.prune_due = false;
+        if self.prune_due && settings_ready && self.prune_retry_at.is_none_or(|retry| now >= retry)
+        {
+            match prune_log_files_at(&self.dir, self.retention_days(), today) {
+                Ok(_) => {
+                    self.prune_due = false;
+                    self.prune_retry_at = None;
+                }
+                Err(_) => self.prune_retry_at = Some(now + Duration::seconds(60)),
+            }
         }
         if self
             .current
@@ -306,7 +326,9 @@ impl Write for RotatingLogWriter {
         };
         let remainder = self.pending.split_off(newline + 1);
         let ready = std::mem::replace(&mut self.pending, remainder);
-        self.commit(&ready)?;
+        for record in ready.split_inclusive(|byte| *byte == b'\n') {
+            self.commit(record)?;
+        }
         Ok(buf.len())
     }
 

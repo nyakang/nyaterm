@@ -6,8 +6,7 @@ use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use super::{
     DEFAULT_LOG_SHARD_BYTES, MAX_LOG_SHARD_BYTES, MIN_LOG_SHARD_BYTES, RotatingLogWriter,
-    log_file_name, log_shard_bytes, normalize_log_shard_bytes, parse_log_file_name,
-    prune_log_files_at, set_log_shard_bytes,
+    log_file_name, normalize_log_shard_bytes, parse_log_file_name, prune_log_files_at,
 };
 
 const SHARD_BUDGET: u64 = 64;
@@ -245,11 +244,14 @@ fn prune_keeps_files_inside_the_retention_window() {
 fn live_shard_budget_reconfiguration_applies_without_restart() {
     let dir = temp_dir("live-budget");
     let line = format!("{}\n", "x".repeat(600 * 1024));
-    let mut writer = RotatingLogWriter::new(dir.path()).expect("writer");
+    let mut writer = writer_with_budget(
+        dir.path(),
+        Arc::new(Mutex::new(local_day(4))),
+        DEFAULT_LOG_SHARD_BYTES,
+    );
     writer.write_all(line.as_bytes()).expect("first line");
     writer.flush().expect("flush");
-    set_log_shard_bytes(MIN_LOG_SHARD_BYTES);
-    assert_eq!(log_shard_bytes(), MIN_LOG_SHARD_BYTES);
+    writer.test_limits.as_mut().unwrap().shard_bytes = MIN_LOG_SHARD_BYTES;
     writer.write_all(line.as_bytes()).expect("second line");
     writer.write_all(line.as_bytes()).expect("third line");
     writer.flush().expect("flush");
@@ -260,7 +262,6 @@ fn live_shard_budget_reconfiguration_applies_without_restart() {
         2,
         "the open writer must honour the new 1 MiB budget on the next line"
     );
-    set_log_shard_bytes(DEFAULT_LOG_SHARD_BYTES);
 }
 
 #[test]
@@ -280,4 +281,103 @@ fn shard_size_normalization_clamps_extremes_and_keeps_the_default() {
         DEFAULT_LOG_SHARD_BYTES + 1024 * 1024,
         "values round up to whole MiB"
     );
+}
+
+#[test]
+fn delayed_settings_prune_even_with_an_open_startup_shard() {
+    let dir = temp_dir("delayed-settings");
+    std::fs::create_dir_all(dir.path()).unwrap();
+    let expired = dir.path().join("nyaterm-diagnostics.2020-01-01.jsonl");
+    std::fs::write(&expired, b"{}\n").unwrap();
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut sink = writer(&dir, Arc::new(Mutex::new(local_day(4))));
+    let published = Arc::clone(&ready);
+    sink.test_limits.as_mut().unwrap().ready =
+        Box::new(move || published.load(std::sync::atomic::Ordering::Acquire));
+    sink.write_all(b"startup\n").unwrap();
+    assert!(expired.exists());
+    assert!(sink.current.is_some());
+    ready.store(true, std::sync::atomic::Ordering::Release);
+    sink.write_all(b"configured\n").unwrap();
+    assert!(!expired.exists());
+    assert!(!sink.prune_due);
+}
+
+#[test]
+fn failed_cleanup_retries_after_sixty_seconds_without_blocking_writes() {
+    let dir = temp_dir("prune-retry");
+    std::fs::create_dir_all(dir.path()).unwrap();
+    // An expired-name directory deterministically fails remove_file on all OSes.
+    let expired = dir.path().join("nyaterm-diagnostics.2020-01-01.jsonl");
+    std::fs::create_dir(&expired).unwrap();
+    let clock = Arc::new(Mutex::new(local_day(4)));
+    let mut sink = writer(&dir, Arc::clone(&clock));
+    sink.write_all(b"first\n").unwrap();
+    assert!(sink.prune_due);
+    let retry = sink.prune_retry_at;
+    std::fs::remove_dir(&expired).unwrap();
+    std::fs::write(&expired, b"{}\n").unwrap();
+    *clock.lock().unwrap() += time::Duration::seconds(59);
+    sink.write_all(b"second\n").unwrap();
+    assert!(expired.exists());
+    assert_eq!(sink.prune_retry_at, retry);
+    *clock.lock().unwrap() += time::Duration::seconds(1);
+    sink.write_all(b"third\n").unwrap();
+    assert!(!expired.exists());
+    assert!(!sink.prune_due);
+}
+
+#[test]
+fn batched_and_split_writes_produce_identical_shards_and_keep_partial_tail() {
+    let batch_dir = temp_dir("batch");
+    let split_dir = temp_dir("split");
+    let data = (0..100)
+        .map(|index| format!("{{\"event\":{index}}}\n"))
+        .collect::<String>();
+    let mut batch = writer(&batch_dir, Arc::new(Mutex::new(local_day(4))));
+    batch.write_all(data.as_bytes()).unwrap();
+    batch.write_all(b"unfinished").unwrap();
+    assert_eq!(batch.pending, b"unfinished");
+    let mut split = writer(&split_dir, Arc::new(Mutex::new(local_day(4))));
+    for part in data.as_bytes().chunks(7) {
+        split.write_all(part).unwrap();
+    }
+    let contents = |dir: &Path| {
+        written_files(dir)
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let shards = contents(&batch_dir);
+    assert!(shards.len() > 10);
+    assert!(
+        shards
+            .iter()
+            .all(|bytes| bytes.len() <= SHARD_BUDGET as usize + 20)
+    );
+    assert_eq!(shards, contents(&split_dir));
+    assert_eq!(shards.concat(), data.as_bytes());
+}
+
+#[test]
+fn restart_appends_to_the_unfilled_shard_and_oversized_records_stay_whole() {
+    let dir = temp_dir("append-oversized");
+    let clock = Arc::new(Mutex::new(local_day(4)));
+    {
+        let mut sink = writer(&dir, Arc::clone(&clock));
+        sink.write_all(b"first\n").unwrap();
+        sink.flush().unwrap();
+    }
+    let mut sink = writer(&dir, clock);
+    let oversized = format!("{}\n", "x".repeat(200));
+    sink.write_all(oversized.as_bytes()).unwrap();
+    sink.write_all(b"next\n").unwrap();
+    sink.flush().unwrap();
+    let files = written_files(&dir);
+    assert_eq!(files.len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(&files[0]).unwrap(),
+        format!("first\n{oversized}")
+    );
+    assert_eq!(std::fs::read(&files[1]).unwrap(), b"next\n");
 }
