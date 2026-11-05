@@ -1220,6 +1220,692 @@ fn logical_line_numbers_keep_local_clear_origin_when_wrapped_history_is_pruned()
 }
 
 #[test]
+fn line_numbers_keep_increasing_after_scrollback_reaches_its_limit() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_scrollback_limit(8);
+    for _ in 0..40 {
+        screen.advance(b"line\r\n");
+    }
+    let numbers = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .collect::<Vec<_>>();
+    // The visible rows are the newest lines of the session, so their numbers
+    // must keep growing past the retained scrollback size instead of being
+    // rebased and frozen at `scrollback_limit + screen rows`.
+    let max = numbers.iter().copied().max().unwrap_or(0);
+    assert!(
+        max > 8 + 4,
+        "line numbers stopped growing at the scrollback limit: {numbers:?}"
+    );
+}
+
+#[test]
+fn wrapped_rows_overflowing_scrollback_inside_one_burst_keep_exact_numbers() {
+    // A single `advance` large enough to push rows past the limit used to drop
+    // those rows before they were stamped, so their WRAPLINE flags never
+    // reached the wrap index. Every source line here occupies two rows, so a
+    // lost wrap would make the numbers climb faster than the real lines.
+    let mut screen = TerminalScreen::new(7, 24);
+    screen.set_scrollback_limit(100);
+    let mut burst = Vec::new();
+    for i in 0..100_000usize {
+        burst.extend_from_slice(format!("{i:07}abcde\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let bottom = screen.snapshot();
+    let newest = bottom
+        .rows()
+        .iter()
+        .rev()
+        .find(|row| !row.text.is_empty())
+        .and_then(|row| row.display_line_number);
+    assert_eq!(newest, Some(100_000), "newest line number must be absolute");
+    assert_eq!(
+        bottom.rows().last().unwrap().display_line_number,
+        Some(100_001),
+        "the trailing cursor row continues the session numbering"
+    );
+    for pair in bottom.rows().windows(2) {
+        if pair[1].wrapped {
+            assert_eq!(
+                pair[0].display_line_number, pair[1].display_line_number,
+                "a soft-wrapped row must share its first row's number"
+            );
+        }
+    }
+
+    // Back at the top of the pruned scrollback, hard rows still match their
+    // text, so numbering and content correspond one to one.
+    let top = screen.viewport_snapshot(screen.scrollback_len());
+    let mut checked = 0;
+    for row in top.rows() {
+        let Some(number) = row.display_line_number else {
+            continue;
+        };
+        if row.text == "abcde" {
+            continue;
+        }
+        assert_eq!(
+            row.text,
+            format!("{:07}", number - 1),
+            "line {number} does not hold its own content"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 5,
+        "too few hard rows checked at the scrollback top"
+    );
+}
+
+#[test]
+fn colored_wrapped_burst_past_scrollback_keeps_exact_numbers() {
+    // SGR makes every slice layout-safe but not plain, and the chunk boundary
+    // can fall inside a sequence. Wrapped rows must still be indexed before
+    // eviction, so a regressed narrow scan would inflate the numbers here.
+    let mut screen = TerminalScreen::new(7, 24);
+    screen.set_scrollback_limit(100);
+    let mut burst = Vec::new();
+    for i in 0..20_000usize {
+        burst.extend_from_slice(format!("\x1b[3{}m{i:07}abcde\x1b[0m\r\n", i % 8).as_bytes());
+    }
+    screen.advance(&burst);
+
+    let newest = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .rev()
+        .find(|row| !row.text.is_empty())
+        .and_then(|row| row.display_line_number);
+    assert_eq!(newest, Some(20_000), "newest line number must be absolute");
+
+    let top = screen.viewport_snapshot(screen.scrollback_len());
+    let mut checked = 0;
+    for row in top.rows() {
+        let Some(number) = row.display_line_number else {
+            continue;
+        };
+        if row.text == "abcde" {
+            continue;
+        }
+        assert_eq!(
+            row.text,
+            format!("{:07}", number - 1),
+            "line {number} does not hold its own content"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 5,
+        "too few hard rows checked at the scrollback top"
+    );
+}
+
+#[test]
+fn fifteen_lines_then_a_hundred_thousand_report_the_absolute_line() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(5_000);
+    for i in 0..15 {
+        screen.advance(format!("line {i}\r\n").as_bytes());
+    }
+    let mut burst = Vec::new();
+    for i in 0..100_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+    let newest = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .rev()
+        .find(|row| !row.text.is_empty())
+        .and_then(|row| row.display_line_number);
+    assert_eq!(newest, Some(100_015));
+}
+
+#[test]
+fn line_numbers_survive_resizing_an_inactive_primary_past_the_scrollback_limit() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(5_000);
+    let mut early = String::new();
+    for i in 0..15 {
+        early.push_str(&format!("line {i}\r\n"));
+    }
+    screen.advance(early.as_bytes());
+    // Fill and overflow the scrollback first: by the time the gutter gains a
+    // digit the retained window is already pruned and its top no longer holds
+    // the session origin.
+    let mut fill = Vec::new();
+    for i in 0..5_100usize {
+        fill.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&fill);
+    screen.advance(b"\x1b[?1049h");
+    screen.resize(79, 24);
+    screen.advance(b"\x1b[?1049l");
+
+    let mut tail = Vec::new();
+    for i in 0..100_000usize {
+        tail.extend_from_slice(format!("tail {i}\r\n").as_bytes());
+    }
+    screen.advance(&tail);
+
+    let newest = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .rev()
+        .find(|row| !row.text.is_empty())
+        .and_then(|row| row.display_line_number);
+    assert_eq!(newest, Some(15 + 5_100 + 100_000));
+}
+
+#[test]
+fn single_burst_past_scrollback_limit_keeps_session_line_numbers() {
+    // `scrollback_limit + rows` (10000 + 97 = 10097) is the retained window,
+    // not the numbering origin. A first burst that overflows the buffer
+    // before numbering initializes must not rebase the gutter onto that
+    // window, otherwise the newest line reports 10097 and every number
+    // afterwards is off by the pruned amount.
+    for lines in [10_000usize, 10_097, 10_098, 100_000] {
+        let mut screen = TerminalScreen::new(80, 97);
+        screen.set_scrollback_limit(10_000);
+        let mut burst = Vec::with_capacity(lines * 8);
+        for i in 0..lines {
+            burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        screen.advance(&burst);
+
+        let retention = 10_000 + 97;
+        let global_rows = lines + 1;
+        let expected_top = global_rows.saturating_sub(retention) + 1;
+        let expected_top = expected_top.max(1);
+
+        let top = screen.viewport_snapshot(screen.scrollback_len());
+        let top_row = top.row(0).unwrap();
+        assert_eq!(
+            top_row.display_line_number,
+            Some(expected_top),
+            "lines={lines}: top of scrollback should be line {expected_top}"
+        );
+        assert_eq!(
+            top_row.text,
+            format!("line {}", expected_top - 1),
+            "lines={lines}: top row text does not match its line number"
+        );
+        for (offset, row) in top.rows().iter().enumerate() {
+            let number = row.display_line_number.unwrap();
+            assert_eq!(number, expected_top + offset, "lines={lines}: {offset}");
+            assert_eq!(row.text, format!("line {}", number - 1));
+        }
+
+        let newest = screen
+            .snapshot()
+            .rows()
+            .iter()
+            .rev()
+            .find(|row| !row.text.is_empty())
+            .and_then(|row| row.display_line_number);
+        assert_eq!(
+            newest,
+            Some(lines),
+            "lines={lines}: newest line number must stay absolute"
+        );
+    }
+}
+
+#[test]
+fn trimming_past_a_hundred_thousand_lines_keeps_absolute_numbers() {
+    // Trimming the buffer must never rebase the gutter onto the retained
+    // window: surviving rows keep their session line number and the newest
+    // row is still `lines`.
+    for lines in [99_999usize, 100_000, 100_001, 150_000] {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.set_scrollback_limit(10_000);
+        let mut burst = Vec::with_capacity(lines * 10);
+        for i in 0..lines {
+            burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        screen.advance(&burst);
+
+        let retention = 10_000 + 24;
+        let expected_top = (lines + 1).saturating_sub(retention) + 1;
+        let expected_top = expected_top.max(1);
+        let top = screen.viewport_snapshot(screen.scrollback_len());
+        for (offset, row) in top.rows().iter().enumerate() {
+            let number = row
+                .display_line_number
+                .unwrap_or_else(|| panic!("lines={lines}: row {offset} lost its number"));
+            assert_eq!(
+                number,
+                expected_top + offset,
+                "lines={lines}: row {offset} is not absolute"
+            );
+            if row.text.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                row.text,
+                format!("line {}", number - 1),
+                "lines={lines}: row {offset} does not hold its own content"
+            );
+        }
+
+        let newest = screen
+            .snapshot()
+            .rows()
+            .iter()
+            .rev()
+            .find(|row| !row.text.is_empty())
+            .and_then(|row| row.display_line_number);
+        assert_eq!(newest, Some(lines), "lines={lines}: newest line rebased");
+    }
+}
+
+#[test]
+fn reflow_resize_after_trimming_keeps_numbers_continuous() {
+    // A width reflow rewrites grid coordinates without advancing the scroll
+    // epoch. The active screen must re-anchor numbering from its cursor, or
+    // history rows lose their numbers and the screen restarts at 1.
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::with_capacity(150_000 * 10);
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let newest_number = |screen: &TerminalScreen| {
+        screen
+            .snapshot()
+            .rows()
+            .iter()
+            .rev()
+            .find(|row| !row.text.is_empty())
+            .and_then(|row| row.display_line_number)
+    };
+    assert_eq!(newest_number(&screen), Some(150_000));
+
+    for cols in [100u16, 80] {
+        screen.resize(cols, 24);
+        let snapshot = screen.snapshot();
+        let cursor_row = snapshot
+            .rows()
+            .iter()
+            .find(|row| row.text == "line 149999")
+            .expect("the cursor row survives a width reflow");
+        assert_eq!(
+            cursor_row.display_line_number,
+            Some(150_000),
+            "cols={cols}: cursor row number must stay absolute"
+        );
+        for (offset, row) in snapshot.rows().iter().enumerate() {
+            let number = row
+                .display_line_number
+                .unwrap_or_else(|| panic!("cols={cols}: row {offset} lost its number"));
+            assert!(
+                number >= 140_000,
+                "cols={cols}: row {offset} rebased to {number}"
+            );
+        }
+    }
+}
+
+#[test]
+fn switching_alternate_screen_after_trimming_restores_primary_numbers() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::with_capacity(150_000 * 10);
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let before: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+
+    screen.advance(b"\x1b[?1049h");
+    screen.advance(b"alternate\r\n");
+    screen.advance(b"\x1b[?1049l");
+
+    let after: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+    assert_eq!(after, before, "primary numbering changed after alt screen");
+}
+
+#[test]
+fn width_reflow_preserves_absolute_numbers_with_wrapped_lines() {
+    // Reflow only moves soft wraps; it must never change a logical line's
+    // number. Tag each logical line with its index and check every hard row.
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::new();
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("L{i} {}\r\n", "x".repeat(90)).as_bytes());
+    }
+    screen.advance(&burst);
+
+    let check = |screen: &TerminalScreen, cols: u16| {
+        let snapshot = screen.snapshot();
+        let mut seen = Vec::new();
+        for (offset, row) in snapshot.rows().iter().enumerate() {
+            if row.text.is_empty() || row.wrapped {
+                continue;
+            }
+            let Some(index) = row
+                .text
+                .split_whitespace()
+                .next()
+                .and_then(|tag| tag.strip_prefix('L'))
+                .and_then(|digits| digits.parse::<usize>().ok())
+            else {
+                panic!("cols={cols}: row {offset} lost its tag: {:?}", row.text);
+            };
+            let number = row
+                .display_line_number
+                .unwrap_or_else(|| panic!("cols={cols}: row {offset} (L{index}) lost its number"));
+            assert_eq!(
+                number,
+                index + 1,
+                "cols={cols}: row {offset} (L{index}) misnumbered as {number}"
+            );
+            seen.push(number);
+        }
+        assert!(
+            seen.windows(2).all(|window| window[0] < window[1]),
+            "cols={cols}: numbers are not monotonic"
+        );
+    };
+
+    check(&screen, 80);
+    for cols in [100u16, 64, 80] {
+        screen.resize(cols, 24);
+        check(&screen, cols);
+    }
+}
+
+#[test]
+fn changing_scrollback_limit_keeps_absolute_numbers() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::new();
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let check = |screen: &TerminalScreen, label: &str| {
+        let snapshot = screen.snapshot();
+        for (offset, row) in snapshot.rows().iter().enumerate() {
+            if row.text.is_empty() || row.wrapped {
+                continue;
+            }
+            let index = row
+                .text
+                .strip_prefix("line ")
+                .and_then(|digits| digits.parse::<usize>().ok())
+                .unwrap_or_else(|| {
+                    panic!("{label}: row {offset} lost its content: {:?}", row.text)
+                });
+            let number = row
+                .display_line_number
+                .unwrap_or_else(|| panic!("{label}: row {offset} (line {index}) lost its number"));
+            assert_eq!(
+                number,
+                index + 1,
+                "{label}: row {offset} (line {index}) misnumbered as {number}"
+            );
+        }
+    };
+
+    check(&screen, "before shrink");
+    for limit in [5_000usize, 20_000] {
+        screen.set_scrollback_limit(limit);
+        check(&screen, &format!("limit {limit}"));
+    }
+}
+
+#[test]
+fn resizing_on_the_alternate_screen_keeps_primary_numbers() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::new();
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let before: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+
+    screen.advance(b"\x1b[?1049h");
+    screen.advance(b"alternate\r\n");
+    for cols in [100u16, 80] {
+        screen.resize(cols, 24);
+    }
+    screen.advance(b"\x1b[?1049l");
+
+    let after: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+    assert_eq!(
+        after, before,
+        "primary numbering changed after an alt resize"
+    );
+}
+
+#[test]
+fn resizing_rows_on_the_alternate_screen_after_trimming_keeps_primary_numbers() {
+    // Row-count growth moves both grids in coordinate space, including the
+    // inactive primary screen. Switching back must restore its exact numbers.
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.set_scrollback_limit(10_000);
+    let mut burst = Vec::new();
+    for i in 0..150_000usize {
+        burst.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    screen.advance(&burst);
+
+    let before: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+
+    screen.advance(b"\x1b[?1049h");
+    screen.advance(b"alternate\r\n");
+    for rows in [30u16, 18, 24] {
+        screen.resize(80, rows);
+    }
+    screen.advance(b"\x1b[?1049l");
+
+    let after: Vec<(String, Option<usize>)> = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .map(|row| (row.text.clone(), row.display_line_number))
+        .collect();
+    assert_eq!(
+        after, before,
+        "primary numbering changed after a rows-only alt resize"
+    );
+}
+
+#[test]
+fn snapshot_reports_the_numbering_base_its_rows_use() {
+    let mut screen = TerminalScreen::new(80, 24);
+    for i in 0..200 {
+        screen.advance(format!("line {i}\r\n").as_bytes());
+    }
+    let first = screen.snapshot();
+    assert!(
+        first.line_number_base.is_some(),
+        "initialized numbering exposes its base"
+    );
+    let numbered = first
+        .rows()
+        .iter()
+        .find(|row| row.text == "line 199")
+        .expect("newest row is visible");
+    assert_eq!(numbered.display_line_number, Some(200));
+
+    screen.resize(100, 24);
+    let second = screen.snapshot();
+    assert!(
+        second.line_number_base.is_some(),
+        "a reflow rebuilds numbering with an explicit base"
+    );
+    let numbered = second
+        .rows()
+        .iter()
+        .find(|row| row.text == "line 199")
+        .expect("newest row survives the reflow");
+    assert_eq!(numbered.display_line_number, Some(200));
+}
+
+#[test]
+fn plain_scroll_stamps_only_the_rows_it_exposes() {
+    // Streamed plain text leaves the cursor on the last row, so each scroll
+    // only rewrites that row and the rows the scroll exposed. Restamping the
+    // whole screen per output line is wasted work.
+    let mut screen = TerminalScreen::new(80, 200);
+    for i in 0..400 {
+        screen.advance(b"x\r\n");
+        if i >= 250 {
+            assert!(
+                screen.last_signature_scan_count <= 3,
+                "line {i} restamped {} rows",
+                screen.last_signature_scan_count
+            );
+        }
+    }
+    assert!(
+        screen
+            .snapshot()
+            .rows()
+            .iter()
+            .rev()
+            .any(|row| row.text == "x")
+    );
+}
+
+#[test]
+fn split_cursor_sequence_forces_a_full_stamp_before_scrolling() {
+    // The cursor-up sequence starts in one advance and ends in the next, so
+    // the following slice contains no ESC but can still rewrite a row above
+    // the bottom. The stamp must cover it even though a scroll follows.
+    let mut screen = TerminalScreen::new(20, 6);
+    screen.advance(b"\x1b[");
+    let mut data = Vec::new();
+    data.extend_from_slice(b"2A");
+    data.extend_from_slice(b"MARK");
+    data.extend_from_slice(b"\r\n\r\n\r\n\r\n\r\n\r\n");
+    screen.advance(&data);
+    assert!(
+        screen.last_signature_scan_count > 6,
+        "full stamp expected, scanned {}",
+        screen.last_signature_scan_count
+    );
+    let top = screen.viewport_snapshot(screen.scrollback_len());
+    assert!(top.rows().iter().any(|row| row.text.contains("MARK")));
+}
+
+#[test]
+fn sgr_only_output_keeps_the_narrow_stamp() {
+    // Colored output carries SGR before every line. Those sequences set the
+    // pen but never move the cursor, so the slice can still only touch the
+    // bottom row and must not pull the whole screen back into the scan.
+    // The CJK glyph also covers UTF-8 bytes in the C1 range, which are text
+    // rather than controls and must not be mistaken for cursor motion.
+    let mut screen = TerminalScreen::new(40, 60);
+    screen.set_scrollback_limit(80);
+    for i in 0..800 {
+        let line = format!("\x1b[3{}mline {i} 日本語\x1b[0m\r\n", i % 8);
+        screen.advance(line.as_bytes());
+        if i >= 70 {
+            assert!(
+                screen.last_signature_scan_count <= 3,
+                "line {i} restamped {} rows",
+                screen.last_signature_scan_count
+            );
+        }
+    }
+    assert!(
+        screen
+            .snapshot()
+            .rows()
+            .iter()
+            .rev()
+            .any(|row| row.text.starts_with("line 799"))
+    );
+}
+
+#[test]
+fn line_numbers_survive_width_reflow_from_gutter_growth() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_scrollback_limit(8);
+    for _ in 0..40 {
+        screen.advance(b"line\r\n");
+    }
+    let before = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    // The gutter grows a digit when the count crosses a power of ten, which
+    // steals one column from the grid. That width reflow must not rebase the
+    // numbering to the retained window.
+    screen.resize(19, 4);
+    let after = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        after, before,
+        "width reflow rebased the line numbers (before={before}, after={after})"
+    );
+    screen.advance(b"next\r\n");
+    let continued = screen
+        .snapshot()
+        .rows()
+        .iter()
+        .filter_map(|row| row.display_line_number)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        continued,
+        before + 1,
+        "line numbers did not continue after the reflow (before={before}, continued={continued})"
+    );
+}
+
+#[test]
 fn logical_line_numbers_rebuild_primary_history_after_resizing_an_alternate_screen() {
     let mut screen = TerminalScreen::new(4, 3);
     screen.advance(b"abcdefghijkl\r\nnext\r\nlast");
@@ -3008,6 +3694,186 @@ fn history_scroll_counter_wrap_preserves_a_continuous_observation() {
 }
 
 #[test]
+fn rows_resize_after_trimming_keeps_absolute_numbers() {
+    let mut screen = TerminalScreen::new(80, 22);
+    screen.set_scrollback_limit(40);
+    for i in 1..=200 {
+        screen.advance(format!("L{i}\r\n").as_bytes());
+    }
+    let check = |screen: &TerminalScreen, label: &str| {
+        for offset in 0..=screen.scrollback_len() {
+            let snapshot = screen.viewport_snapshot(offset);
+            for row in snapshot.rows() {
+                let Some(n) = row
+                    .text
+                    .trim()
+                    .strip_prefix('L')
+                    .and_then(|text| text.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                assert_eq!(
+                    row.display_line_number,
+                    Some(n),
+                    "{label} offset {offset}: L{n} (scrollback {})",
+                    screen.scrollback_len()
+                );
+            }
+        }
+    };
+    check(&screen, "before");
+    screen.resize(80, 30);
+    check(&screen, "after grow");
+    screen.resize(80, 18);
+    check(&screen, "after shrink");
+    for i in 201..=260 {
+        screen.advance(format!("L{i}\r\n").as_bytes());
+    }
+    check(&screen, "after more output");
+}
+
+#[test]
+fn mixed_resizes_trims_and_wraps_keep_every_line_number() {
+    // Deterministic mixed workload: width reflow, row-count resize, scrollback
+    // limit changes, plain text, and whitespace lines that soft-wrap. Every
+    // tagged hard line must keep its absolute session number at every scroll
+    // offset.
+    let mut seed: u64 = 0x5eed;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as u32
+    };
+
+    for round in 0..4 {
+        let mut screen = TerminalScreen::new(80, 22);
+        let mut produced = 0usize;
+        for step in 0..44 {
+            let action = next() % 8;
+            match action {
+                0 => {
+                    let cols = [80, 100, 60, 120][(next() as usize) % 4];
+                    screen.resize(cols, 22)
+                }
+                1 => {
+                    let rows = [22, 18, 30][(next() as usize) % 3];
+                    screen.resize(80, rows)
+                }
+                2 => {
+                    let limit = [10000, 200, 40, 5000][(next() as usize) % 4];
+                    screen.set_scrollback_limit(limit)
+                }
+                _ => {
+                    let count = 1 + (next() as usize) % 40;
+                    for _ in 0..count {
+                        produced += 1;
+                        let text = match next() % 6 {
+                            0 => " ".repeat(10 + (next() as usize) % 200),
+                            _ => format!("L{produced}"),
+                        };
+                        screen.advance(format!("{text}\r\n").as_bytes());
+                    }
+                }
+            }
+            for offset in 0..=screen.scrollback_len() {
+                let snapshot = screen.viewport_snapshot(offset);
+                for row in snapshot.rows() {
+                    let Some(label) = row.text.trim().strip_prefix('L') else {
+                        continue;
+                    };
+                    let Some(n) = label.parse::<usize>().ok() else {
+                        panic!("round {round} step {step}: label {label}");
+                    };
+                    assert_eq!(
+                        row.display_line_number,
+                        Some(n),
+                        "round {round} step {step} offset {offset}: content L{n} misnumbered"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn new_session_numbers_start_at_one_after_the_initial_viewport_resize() {
+    // The host creates the terminal at 80x24 and immediately adopts the real
+    // grid size. Row growth makes Alacritty create blank history rows and drop
+    // them again, advancing the scroll epoch in the process; numbering must
+    // still start at the session's first row.
+    for &(cols, rows) in &[(100u16, 30u16), (100, 39), (120, 40), (80, 60), (80, 15)] {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.resize(cols, rows);
+        let snapshot = screen.snapshot();
+        assert_eq!(snapshot.line_number_base, Some(0), "{cols}x{rows}");
+        assert_eq!(snapshot.cursor.row, 0, "{cols}x{rows}: cursor row");
+        for (index, row) in snapshot.rows().iter().enumerate() {
+            assert_eq!(
+                row.display_line_number,
+                Some(index + 1),
+                "{cols}x{rows}: blank row {index}"
+            );
+        }
+
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.resize(cols, rows);
+        for i in 1..=10 {
+            screen.advance(format!("banner {i}\r\n").as_bytes());
+        }
+        let full = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+        for row in full.rows() {
+            let Some(label) = row.text.strip_prefix("banner ") else {
+                continue;
+            };
+            let n = label.trim().parse::<usize>().unwrap();
+            assert_eq!(
+                row.display_line_number,
+                Some(n),
+                "{cols}x{rows}: first-screen {label} misnumbered"
+            );
+        }
+    }
+}
+
+#[test]
+fn new_session_banner_numbers_survive_subsequent_resizes() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.resize(100, 39);
+    for i in 1..=5 {
+        screen.advance(format!("banner {i}\r\n").as_bytes());
+    }
+    let check = |screen: &TerminalScreen, label: &str| {
+        let snapshot = screen.snapshot();
+        for row in snapshot.rows() {
+            let Some(number) = row.text.strip_prefix("banner ") else {
+                continue;
+            };
+            let number = number.trim().parse::<usize>().unwrap();
+            assert_eq!(
+                row.display_line_number,
+                Some(number),
+                "{label}: banner {number} misnumbered"
+            );
+        }
+        assert_eq!(
+            snapshot.row(0).and_then(|row| row.display_line_number),
+            Some(1),
+            "{label}: first row"
+        );
+    };
+    check(&screen, "after banner");
+    screen.resize(120, 40);
+    check(&screen, "after columns and rows grow");
+    screen.resize(80, 30);
+    check(&screen, "after columns shrink and rows shrink");
+    screen.resize(80, 24);
+    check(&screen, "after rows shrink");
+    screen.advance(b"banner 6\r\n");
+    check(&screen, "after more output");
+}
+
+#[test]
 fn row_signature_ignores_trailing_default_blanks_but_not_styled_ones() {
     let mut screen = TerminalScreen::new(40, 3);
     screen.advance(b"ab");
@@ -3022,4 +3888,183 @@ fn row_signature_ignores_trailing_default_blanks_but_not_styled_ones() {
     screen.advance(b"\x1b[2K\rab\x1b[0m");
     let erased_and_rewritten = screen.snapshot().row(0).unwrap().signature;
     assert_eq!(erased_and_rewritten, plain);
+}
+
+#[test]
+fn osc_interruptions_invalidate_rewritten_rows_at_every_slice_boundary() {
+    for interrupt in [b"\x1b".as_slice(), b"\x18\x1b", b"\x1a\x1b", b"\x1b\x1b"] {
+        let mut data = b"\x1b]0;title".to_vec();
+        data.extend_from_slice(interrupt);
+        data.extend_from_slice(b"[HREPLACED!!\x1b[4;1H\r\n");
+        for split in 0..=data.len() {
+            let mut screen = TerminalScreen::new(8, 4);
+            screen.advance(b"old\r\nb\r\nc\r\n");
+            let before = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+            screen.advance(&data[..split]);
+            screen.advance(&data[split..]);
+            let after = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+            assert_eq!(after.row(0).unwrap().text, "REPLACED");
+            assert_eq!(after.row(1).unwrap().text, "!!");
+            assert_eq!(after.row(0).unwrap().display_line_number, Some(1));
+            assert_eq!(after.row(1).unwrap().display_line_number, Some(1));
+            for row in after.rows().iter().take(2) {
+                let old = before
+                    .rows()
+                    .iter()
+                    .find(|old| old.line_id == row.line_id)
+                    .unwrap();
+                assert_ne!(row.revision, old.revision, "split {split}");
+            }
+        }
+    }
+}
+
+fn assert_same_retained_rows(expected: &TerminalScreen, actual: &TerminalScreen) {
+    let expected = expected.viewport_snapshot_with_window(0, expected.scrollback_len(), 0);
+    let actual = actual.viewport_snapshot_with_window(0, actual.scrollback_len(), 0);
+    assert_eq!(expected.rows().len(), actual.rows().len());
+    for (expected, actual) in expected.rows().iter().zip(actual.rows()) {
+        assert_eq!(expected.text, actual.text);
+        assert_eq!(expected.wrapped, actual.wrapped);
+        assert_eq!(expected.wraps_to_next, actual.wraps_to_next);
+        assert_eq!(expected.display_line_number, actual.display_line_number);
+        assert_eq!(expected.line_id, actual.line_id);
+        assert_eq!(expected.unwrapped_line_index, actual.unwrapped_line_index);
+    }
+}
+
+#[test]
+fn retained_rows_are_independent_of_parser_batch_boundaries() {
+    for history in [0, 2, 24, 10_000] {
+        for rows in [1, 2, 24, 200] {
+            for cols in [3, 17] {
+                let mut data = Vec::new();
+                for index in 0..240 {
+                    data.extend_from_slice(
+                        format!("{index}:日本語-long-soft-wrap\r\n\r\n").as_bytes(),
+                    );
+                }
+                for control in [
+                    b"\x1b[3S\x1b[2T".as_slice(),
+                    b"\x1b[1;2r\x1b[Hpartial\r\nscroll\r\n\x1b[r",
+                    b"\x1b[2J\x1b[Hnew\r\n",
+                    b"\x1b[?1049hALT\r\nwrap-wrap-wrap\x1b[?1049l",
+                    b"\x1b[?2026hsynchronized\r\n\x1b[?2026l",
+                ] {
+                    data.extend_from_slice(control);
+                }
+                let make = || {
+                    let mut screen = TerminalScreen::new(cols, rows);
+                    screen.set_scrollback_limit(history);
+                    screen.set_logical_line_snapshots(true);
+                    screen
+                };
+                let mut whole = make();
+                whole.advance(&data);
+                let mut bytewise = make();
+                for byte in &data {
+                    bytewise.advance(std::slice::from_ref(byte));
+                }
+                assert_same_retained_rows(&whole, &bytewise);
+                let mut random = make();
+                let mut offset = 0;
+                let mut seed = 7u32;
+                while offset < data.len() {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let end = (offset + 1 + seed as usize % 257).min(data.len());
+                    random.advance(&data[offset..end]);
+                    offset = end;
+                }
+                assert_same_retained_rows(&whole, &random);
+                for screen in [&mut whole, &mut bytewise, &mut random] {
+                    screen.set_scrollback_limit(2);
+                    screen.resize(cols + 2, rows + 1);
+                    screen.advance(b"resize-wrap-wrap\r\n");
+                }
+                assert_same_retained_rows(&whole, &bytewise);
+                assert_same_retained_rows(&whole, &random);
+            }
+        }
+    }
+}
+
+#[test]
+fn reset_and_alternate_generations_keep_output_from_the_same_batch() {
+    for history in [0, 2, 24] {
+        for reset in [b"\x1bc".as_slice(), b"\x1b[?1049h"] {
+            let mut screen = TerminalScreen::new(3, 2);
+            screen.set_scrollback_limit(history);
+            screen.advance(b"old\r\nold\r\n");
+            let mut data = reset.to_vec();
+            data.extend_from_slice(b"\x1b[H");
+            for _ in 0..100 {
+                data.extend_from_slice(b"abcdef\r\n");
+            }
+            screen.advance(&data);
+            assert_eq!(
+                screen.snapshot().rows().last().unwrap().display_line_number,
+                Some(101)
+            );
+            if reset != b"\x1bc" {
+                screen.advance(b"\x1b[?1049l");
+                assert_eq!(
+                    screen.snapshot().rows().last().unwrap().display_line_number,
+                    Some(3)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn non_grid_sequences_do_not_scan_signatures() {
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.advance(b"text");
+    screen.advance(b"\x1b[31m\x1b]0;title\x07\x1b[0m");
+    assert_eq!(screen.last_signature_scan_count, 0);
+}
+
+#[test]
+fn signature_style_runs_match_rendered_cells_across_attribute_changes() {
+    let mut screen = TerminalScreen::new(17, 3);
+    screen.set_scrollback_limit(24);
+    for style in [
+        "0",
+        "1;3;4;7;9",
+        "8",
+        "31;44",
+        "38;5;123;48;5;232",
+        "38;2;1;2;3;48;2;4;5;6",
+        "21",
+        "0",
+    ] {
+        screen.advance(format!("a\x1b[{style}m日本語e\u{301}  \x1b[0mz\r\n").as_bytes());
+    }
+    screen.advance(b"\x1b]8;;https://example.test\x1b\\linked\x1b]8;;\x1b\\ plain");
+    let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    for row in snapshot.rows() {
+        assert_eq!(row.signature, render_row_signature(&row.cells));
+    }
+}
+
+#[test]
+fn multiple_resets_and_alternate_entries_have_slice_independent_identities() {
+    for prefix in [
+        b"\x1bcfirst\r\n\x1bc".as_slice(),
+        b"\x1b[?1049hfirst\r\n\x1b[?1049l\x1b[?1049h",
+        b"\x1bc\x1b[?1049hfirst\x1b[?1049l\x1bc",
+    ] {
+        let mut data = prefix.to_vec();
+        data.extend_from_slice(b"\x1b[H");
+        data.extend_from_slice(&b"abcdef\r\n".repeat(100));
+        let mut whole = TerminalScreen::new(3, 2);
+        let mut sliced = TerminalScreen::new(3, 2);
+        whole.set_scrollback_limit(2);
+        sliced.set_scrollback_limit(2);
+        whole.advance(&data);
+        for byte in &data {
+            sliced.advance(std::slice::from_ref(byte));
+        }
+        assert_same_retained_rows(&whole, &sliced);
+    }
 }

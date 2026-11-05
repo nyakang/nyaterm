@@ -470,6 +470,15 @@ impl SettingsFeatureState {
         true
     }
 
+    pub(in crate::features) fn set_diagnostics_log_shard_bytes(&mut self, bytes: u64) -> bool {
+        let bytes = nyaterm_core::diagnostics::normalize_log_shard_bytes(bytes);
+        if self.summary.diagnostics_log_shard_bytes == bytes {
+            return false;
+        }
+        self.summary.diagnostics_log_shard_bytes = bytes;
+        true
+    }
+
     pub(in crate::features) fn toggle_interaction_copy_on_select(&mut self) {
         self.summary.interaction_copy_on_select = !self.summary.interaction_copy_on_select;
     }
@@ -1847,6 +1856,22 @@ mod tests {
         assert!(state.set_diagnostics_retention_days(30));
         assert!(state.set_diagnostics_retention_days(99));
         assert_eq!(state.summary().diagnostics_retention_days, 7);
+
+        state.summary.diagnostics_log_shard_bytes =
+            nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES;
+        assert!(state.set_diagnostics_log_shard_bytes(20 * 1024 * 1024));
+        assert!(!state.set_diagnostics_log_shard_bytes(20 * 1024 * 1024));
+        assert!(state.set_diagnostics_log_shard_bytes(0));
+        assert_eq!(
+            state.summary().diagnostics_log_shard_bytes,
+            nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+            "zero bytes must fall back to the default instead of disabling sharding"
+        );
+        assert!(state.set_diagnostics_log_shard_bytes(1024));
+        assert_eq!(
+            state.summary().diagnostics_log_shard_bytes,
+            nyaterm_core::diagnostics::MIN_LOG_SHARD_BYTES
+        );
 
         state.set_command_suggestion_min_chars(50);
         assert_eq!(state.summary().interaction_command_suggestion_min_chars, 10);

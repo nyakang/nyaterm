@@ -39,6 +39,12 @@ impl NyaTermApp {
                 || current.bold_default_foreground != settings.bold_default_foreground
         };
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
+        // Keep the runtime log layer aligned with persisted diagnostics
+        // settings, both on startup load and on every later save.
+        nyaterm_core::diagnostics::apply_log_runtime_settings(
+            settings.diagnostics_log_shard_bytes,
+            settings.diagnostics_retention_days,
+        );
         self.settings.replace_summary(settings);
         if users_changed {
             self.remote_stats_users_setting_changed(cx);
