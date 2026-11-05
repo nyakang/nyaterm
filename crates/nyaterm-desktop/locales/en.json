@@ -2471,7 +2471,7 @@
     "allowOsc52ClipboardWrite": "Allow OSC 52 Clipboard Writes",
     "allowOsc52ClipboardWriteDesc": "Allow terminal output from remote apps to write to the local clipboard.",
     "altAsMeta": "Use Option as Meta/Alt",
-    "altAsMetaDesc": "On macOS, send ESC + key for Option shortcuts like Option+f instead of entering special characters such as ƒ.",
+    "altAsMetaDesc": "On macOS, send ESC + key for Option shortcuts like Option+f instead of entering special characters such as ƒ. Option+←/→ also sends ESC b/f for word motion unless Kitty keyboard reporting is active, which may change shortcuts in terminal applications.",
     "apiKey": "API Key",
     "appId": "App ID",
     "appKey": "App Key",

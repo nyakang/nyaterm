@@ -2478,7 +2478,7 @@
     "allowOsc52ClipboardWrite": "OSC 52 クリップボード書き込みを許可",
     "allowOsc52ClipboardWriteDesc": "リモートアプリのターミナル出力がローカルクリップボードへ書き込むのを許可します。",
     "altAsMeta": "Option を Meta/Alt として使用",
-    "altAsMetaDesc": "macOS で、Option+f のような Option ショートカット時に ƒ などの特殊文字を入力する代わりに ESC + キーを送信します。",
+    "altAsMetaDesc": "macOS で、Option+f のような Option ショートカット時に ƒ などの特殊文字を入力する代わりに ESC + キーを送信します。Kitty キーボード報告が無効な場合、Option+←/→ も単語移動用の ESC b/f を送信するため、ターミナルアプリのショートカット動作が変わる場合があります。",
     "apiKey": "API キー",
     "appId": "アプリ ID",
     "appKey": "アプリキー",

@@ -2478,7 +2478,7 @@
     "allowOsc52ClipboardWrite": "Autoriser les écritures OSC 52 dans le presse-papiers",
     "allowOsc52ClipboardWriteDesc": "Autoriser la sortie de terminal des applications distantes à écrire dans le presse-papiers local.",
     "altAsMeta": "Utiliser Option comme Meta/Alt",
-    "altAsMetaDesc": "Sur macOS, envoyer ÉCHAP + touche pour les raccourcis Option comme Option+f au lieu de saisir des caractères spéciaux comme ƒ.",
+    "altAsMetaDesc": "Sur macOS, envoyer ÉCHAP + touche pour les raccourcis Option comme Option+f au lieu de saisir des caractères spéciaux comme ƒ. Lorsque le protocole clavier Kitty est inactif, Option+←/→ envoie aussi ÉCHAP b/f pour se déplacer par mot, ce qui peut modifier les raccourcis des applications du terminal.",
     "apiKey": "Clé API",
     "appId": "ID d'application",
     "appKey": "Clé d'application",
