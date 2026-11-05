@@ -37,7 +37,7 @@ resolver = "3"
 exclude = ["temp", "examples/plugins/guests"]
 
 [workspace.package]
-version = "2.0.1"
+version = "2.0.2"
 edition = "2024"
 authors = ["Kang"]
 license = "Apache-2.0"
@@ -46,6 +46,8 @@ repository = "https://github.com/nyakang/nyaterm"
 [workspace.dependencies]
 automerge = "=0.12.0"
 httpdate = "1.0"
+http = "1"
+opendal = { version = "=0.59.5", default-features = false, features = ["executors-tokio", "services-webdav", "services-s3", "services-gdrive", "services-onedrive", "services-aliyun-drive", "layers-timeout", "layers-retry"] }
 aes-gcm = "0.11"
 aes = { version = "0.8", features = ["zeroize"] }
 cbc = "0.1"
@@ -62,13 +64,15 @@ digest = "0.11.0-rc.5"
 dirs = "6"
 encoding_rs = "0.8"
 futures = "0.3"
+genai = { version = "=0.7.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "stream", "socks", "system-proxy"] }
 same-file = "1"
 tempfile = "3"
 glob = "0.3.4"
-gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "a755e55acb90229c687e64e6a84877fb70d21619" }
-gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "9143df9774d0190162053defc9b1faac3f8ab907" }
-gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "9143df9774d0190162053defc9b1faac3f8ab907" }
-gpui_platform = { git = "https://github.com/nyakang/zed", rev = "a755e55acb90229c687e64e6a84877fb70d21619" }
+gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "6cda7bc3f0e0ab64be33627851f56f8d908fe844" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "25631f56a0d0c7c1baf6606de64c30874816b676" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "25631f56a0d0c7c1baf6606de64c30874816b676" }
+gpui_platform = { git = "https://github.com/nyakang/zed", rev = "6cda7bc3f0e0ab64be33627851f56f8d908fe844" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
 # could pull in a breaking 0.8 without review. `embed-fonts` bundles the 14
@@ -179,7 +183,7 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "86ff089983b93700c065ae3ae57273addf561fe7" }
+alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "6056cb4d0dc49a43a6542f3eb8a951c6d9220368" }
 ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
 ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "a15d5faa54192ad0eb2a1f9f4c9d8e1f06295970" }
 sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "582bd37e355d710a0888faded5f4f6da4667c3c8" }

@@ -10,6 +10,7 @@ pub(in crate::features) use interaction::{
     ConnectionDragKind, ConnectionDragPayload, ConnectionDragPreview, ConnectionDropPosition,
     ConnectionDropTarget,
 };
+pub(in crate::features) use state::import::{ConnectionImportReportView, WindtermAccountDraft};
 pub(in crate::features) use state::{
     ConnectionFeatureFocus, ConnectionFeatureState, ConnectionListModelSnapshot,
     ConnectionListRowsKey,

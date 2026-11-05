@@ -6,6 +6,7 @@ use nyaterm_transport::SshCredentialPromptKind;
 use nyaterm_transport::connection_attempt::ConnectionAttempt;
 use nyaterm_transport::ssh_authentication::{
     SshAuthenticationMethod, SshAuthenticationRequest, SshAuthenticationResponse,
+    SshAuthenticationStage,
 };
 
 #[derive(Debug, Default)]
@@ -111,11 +112,11 @@ impl RuntimeAuthenticationContext {
         }
     }
 
-    pub fn begin_request(&self, key_response_id: Option<&str>) {
+    pub fn begin_request(&self, key_response_id: Option<&str>, accepted_response_ids: &[String]) {
         if let Ok(mut pending) = self.selections.lock() {
-            pending
-                .entries
-                .retain(|id, _| Some(id.as_str()) == key_response_id);
+            pending.entries.retain(|id, _| {
+                Some(id.as_str()) == key_response_id || accepted_response_ids.contains(id)
+            });
         }
     }
 
@@ -249,6 +250,9 @@ impl RuntimeAuthenticationForm {
         }
     }
     pub fn can_remember(&self) -> bool {
+        if self.request.stage == SshAuthenticationStage::AdditionalFactor && !self.is_passphrase() {
+            return false;
+        }
         if self.is_passphrase() {
             self.context
                 .selected_key(self.request.key_response_id.as_deref())

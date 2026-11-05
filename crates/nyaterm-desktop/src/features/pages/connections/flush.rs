@@ -81,6 +81,7 @@ impl NyaTermApp {
             self.connection_state.list_hovered_group_id(),
             self.connection_state.list_drop_target(),
             self.connection_state.list_search_is_expanded(),
+            self.connection_state.import_report().cloned(),
             self.connection_chrome(),
         );
 
@@ -136,6 +137,7 @@ impl NyaTermApp {
             search_expanded: self.connection_state.list_search_is_expanded(),
             sort_mode: self.connection_state.list_sort_mode(),
             store_is_empty,
+            import_report: self.connection_state.import_report().cloned(),
             key,
         }
     }

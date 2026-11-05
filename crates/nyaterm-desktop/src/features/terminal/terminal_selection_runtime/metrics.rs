@@ -24,7 +24,9 @@ use crate::features::terminal::{
 };
 use crate::features::{FontResolutionSource, FontResolutionStatus, normalize_font_family};
 
-fn terminal_font_with_features(
+/// Terminal font carrying the font features the grid disables, so text shaped
+/// against it advances on the grid's cells instead of using ligatures.
+pub(in crate::features) fn terminal_font_with_features(
     descriptor: &ResolvedAppearanceFont,
     weight: FontWeight,
 ) -> gpui::Font {
@@ -810,11 +812,19 @@ impl NyaTermApp {
 pub(in crate::features) fn terminal_line_number_digits(
     snapshot: &nyaterm_terminal::TerminalSnapshot,
 ) -> usize {
-    let visible_end = snapshot
+    // `total_rows - display_offset` is the standard upper bound assuming
+    // consecutive numbering from the top. However line numbers can exceed
+    // that when `LineNumbers` retains its origin across reflows, local
+    // clears, and scrollback prunes — e.g. a 2-row viewport with scrollback
+    // limited to 2 can still carry row numbers well above 4 when older
+    // wrapped lines were discarded from scrollback. Use whichever bound is
+    // larger to keep the gutter wide enough.
+    let from_rows = snapshot
         .total_rows
         .saturating_sub(snapshot.display_offset)
         .max(1);
-    terminal_line_number_digits_for_end(visible_end)
+    let from_display_line_number = snapshot.max_display_line_number().unwrap_or(1);
+    terminal_line_number_digits_for_end(from_rows.max(from_display_line_number))
 }
 
 fn terminal_line_number_digits_for_end(visible_end: usize) -> usize {
@@ -1036,6 +1046,124 @@ mod tests {
         assert_eq!(terminal_line_number_digits_for_end(10), 2);
         assert_eq!(terminal_line_number_digits_for_end(99_999), 5);
         assert_eq!(terminal_line_number_digits_for_end(100_000), 6);
+    }
+
+    #[test]
+    fn gutter_line_number_digits_match_actual_max_display_line_number() {
+        let mut screen = nyaterm_terminal::TerminalScreen::new(80, 24);
+        screen.set_scrollback_limit(500_000);
+        for _ in 0..20_000 {
+            screen.advance(b"x\r\n");
+        }
+        // Live viewport snapshot at offset 0
+        let snapshot = screen.snapshot();
+        let max_ln = snapshot
+            .rows()
+            .iter()
+            .filter_map(|r| r.display_line_number)
+            .max()
+            .unwrap_or(1);
+        let digits = super::terminal_line_number_digits(&snapshot);
+        let actual_digits = max_ln.to_string().len();
+        eprintln!(
+            "offset=0: max_ln={}, total_rows={}, digits={}, actual_digits={}",
+            max_ln, snapshot.total_rows, digits, actual_digits
+        );
+        assert!(
+            digits >= actual_digits,
+            "offset=0: computed digits {} should be >= actual {}",
+            digits,
+            actual_digits
+        );
+
+        // Now test a snapshot scrolled back into history.
+        let offset = 2_000;
+        let scrolled = screen.viewport_snapshot_with_window(offset, 32, 32);
+        let scrolled_max = scrolled
+            .rows()
+            .iter()
+            .filter_map(|r| r.display_line_number)
+            .max()
+            .unwrap_or(1);
+        let scrolled_min = scrolled
+            .rows()
+            .iter()
+            .filter_map(|r| r.display_line_number)
+            .min()
+            .unwrap_or(1);
+        let scrolled_digits = super::terminal_line_number_digits(&scrolled);
+        let scrolled_actual_digits = scrolled_max.to_string().len();
+        eprintln!(
+            "offset={}: display_range=[{}, {}], total_rows={}, display_offset_in_snap={}, digits={}, actual_digits={}",
+            offset,
+            scrolled_min,
+            scrolled_max,
+            scrolled.total_rows,
+            scrolled.display_offset,
+            scrolled_digits,
+            scrolled_actual_digits
+        );
+        assert!(
+            scrolled_digits >= scrolled_actual_digits,
+            "offset={}: computed digits {} should be >= actual {}",
+            offset,
+            scrolled_digits,
+            scrolled_actual_digits
+        );
+
+        // Test after clear_except_input - line numbers should keep their origin
+        screen.clear_except_input();
+        for _ in 0..10 {
+            screen.advance(b"x\r\n");
+        }
+        let after_clear = screen.snapshot();
+        let clear_max = after_clear
+            .rows()
+            .iter()
+            .filter_map(|r| r.display_line_number)
+            .max()
+            .unwrap_or(1);
+        let clear_min = after_clear
+            .rows()
+            .iter()
+            .filter_map(|r| r.display_line_number)
+            .min()
+            .unwrap_or(1);
+        let clear_digits = super::terminal_line_number_digits(&after_clear);
+        let clear_actual_digits = clear_max.to_string().len();
+        eprintln!(
+            "after clear: display_range=[{}, {}], total_rows={}, digits={}, actual_digits={}",
+            clear_min, clear_max, after_clear.total_rows, clear_digits, clear_actual_digits
+        );
+        assert!(
+            clear_digits >= clear_actual_digits,
+            "after clear: computed digits {} should be >= actual {}",
+            clear_digits,
+            clear_actual_digits
+        );
+
+        // Reproduce the scenario from logical_line_numbers_keep_local_clear_origin_when_wrapped_history_is_pruned:
+        // display_line_number can exceed total_rows after wrap + scrollback prune + clear
+        let mut small = nyaterm_terminal::TerminalScreen::new(4, 2);
+        small.set_scrollback_limit(2);
+        small.clear_except_input();
+        for _ in 0..10 {
+            small.advance(b"abcdefghijkl\r\n");
+        }
+        let snap = small.snapshot();
+        let ln = snap.row(1).and_then(|r| r.display_line_number).unwrap_or(0);
+        let snap_digits = super::terminal_line_number_digits(&snap);
+        let snap_actual = ln.to_string().len();
+        eprintln!(
+            "wrap+prune: row[1].display_line_number={}, total_rows={}, digits={}, actual_digits={}",
+            ln, snap.total_rows, snap_digits, snap_actual
+        );
+        assert!(
+            snap_digits >= snap_actual,
+            "wrap+prune: computed digits {} should be >= actual {}",
+            snap_digits,
+            snap_actual
+        );
     }
 
     #[test]

@@ -1578,6 +1578,7 @@ impl NyaTermApp {
             kitty_keyboard_report_alternate_keys,
             kitty_keyboard_report_all_keys_as_esc,
             kitty_keyboard_report_associated_text,
+            alt_arrows_word_jump: self.settings.summary().interaction_alt_as_meta,
         }
     }
 

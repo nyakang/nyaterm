@@ -20,10 +20,8 @@ use crate::features::NyaTermApp;
 use crate::features::capability_runtime::approvals::NativeCapabilityApproval;
 use crate::features::formatting::{group_ai_sessions_by_date, short_id};
 use crate::features::text_inputs::TextInputSetup;
-use crate::features::view_widgets::{
-    APP_OVERLAY_PRIORITY, full_window_input_layer, tab_menu_separator,
-};
-use crate::models::{AiDetectedErrorState, AiMessageMenuState, NavItem, SettingsTab};
+use crate::features::view_widgets::{APP_OVERLAY_PRIORITY, tab_menu_separator};
+use crate::models::{AiDetectedErrorState, NavItem, SettingsTab};
 use crate::theme::ThemePalette;
 use crate::widgets::{small_button, svg_icon_button};
 
@@ -40,8 +38,9 @@ pub(super) mod harness;
 mod index;
 mod messages;
 mod snapshot;
+mod texts;
 mod transcript;
-use components::{ai_message_menu_button, ai_message_menu_position, ai_send_button, ai_setup_step};
+use components::{ai_send_button, ai_setup_step};
 use transcript::{AiTranscriptRow, AiTranscriptUpdate};
 
 #[derive(Clone, Copy)]
@@ -131,7 +130,6 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub mention_candidates: Arc<[AiMentionCandidate]>,
     pub quoted_text: Option<String>,
     pub detected_error: Option<AiDetectedErrorState>,
-    pub message_menu: Option<AiMessageMenuState>,
     pub history_open: bool,
     pub history_query: String,
     pub history_sessions: Arc<[AiSession]>,
@@ -163,6 +161,7 @@ pub(in crate::features) struct AiPanel {
     transcript_text_style: Option<(gpui::TextStyle, gpui::Pixels, String)>,
     command_syntax: command_syntax::CommandSyntaxCache,
     content: content::ContentCache,
+    texts: texts::TranscriptTextCache,
     mention_scroll: ScrollHandle,
     model_scroll: ScrollHandle,
     history_scroll: ScrollHandle,
@@ -187,6 +186,7 @@ impl AiPanel {
             transcript_text_style: None,
             command_syntax: command_syntax::CommandSyntaxCache::default(),
             content: content::ContentCache::default(),
+            texts: texts::TranscriptTextCache::default(),
             mention_scroll: ScrollHandle::new(),
             model_scroll: ScrollHandle::new(),
             history_scroll: ScrollHandle::new(),
@@ -207,6 +207,7 @@ impl AiPanel {
         snapshot.index = Arc::new(index::AiSnapshotIndex::build(&snapshot));
         self.refresh_content(&snapshot, cx);
         self.refresh_command_syntax(&snapshot, cx);
+        self.refresh_texts(&snapshot, cx);
         let rows = AiTranscriptRow::project(&snapshot);
         let update = AiTranscriptUpdate::between(
             self.snapshot.as_ref(),
@@ -484,9 +485,6 @@ impl AiPanel {
             })
             .when(snapshot.execution_menu_open, |this| {
                 this.child(self.ai_execution_mode_menu(&snapshot, cx))
-            })
-            .when_some(snapshot.message_menu.clone(), |this, menu| {
-                this.child(self.ai_message_context_menu_overlay(&snapshot, menu, cx))
             })
             .into_any_element()
     }
@@ -1249,21 +1247,25 @@ impl AiPanel {
         let rows = Arc::clone(&self.transcript_rows);
         let mut row_style = gpui::StyleRefinement::default();
         row_style.padding.bottom = Some(px(8.).into());
-        NyaMessageScroller::new(
-            "ai-transcript",
-            self.transcript_scroll.clone(),
-            move |index, _, cx| {
-                panel
-                    .update(cx, |panel, cx| {
-                        panel.ai_transcript_row(&snapshot, &rows[index], cx)
-                    })
-                    .unwrap_or_else(|_| div().into_any_element())
-            },
-        )
-        .size_full()
-        .with_row_style(row_style)
-        .with_jump_button_label(t!("ai.jumpToLatest"))
-        .into_any_element()
+        self.texts
+            .scope
+            .retain_selection(
+                NyaMessageScroller::new(
+                    "ai-transcript",
+                    self.transcript_scroll.clone(),
+                    move |index, _, cx| {
+                        panel
+                            .update(cx, |panel, cx| {
+                                panel.ai_transcript_row(&snapshot, &rows[index], cx)
+                            })
+                            .unwrap_or_else(|_| div().into_any_element())
+                    },
+                )
+                .size_full()
+                .with_row_style(row_style)
+                .with_jump_button_label(t!("ai.jumpToLatest")),
+            )
+            .into_any_element()
     }
 
     fn ai_empty_transcript(
@@ -1958,77 +1960,6 @@ impl AiPanel {
                     .vertical_scrollbar(&self.history_scroll),
             )
     }
-
-    fn ai_message_context_menu_overlay(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        state: AiMessageMenuState,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = snapshot.chrome.palette;
-        let quote_text = state.text.clone();
-        let copy_text = state.text.clone();
-        let (menu_x, menu_y, menu_max_h) = ai_message_menu_position(
-            f32::from(state.x),
-            f32::from(state.y),
-            128.,
-            64.,
-            snapshot.chrome.viewport_width,
-            snapshot.chrome.viewport_height,
-        );
-        full_window_input_layer("ai-message-context-menu-overlay")
-            .on_click(cx.listener(|panel, _, _, cx| {
-                panel.with_app(cx, |app, cx| {
-                    app.close_ai_message_menu(cx);
-                });
-            }))
-            .child(
-                div()
-                    .id(SharedString::from("ai-message-context-menu"))
-                    .absolute()
-                    .top(px(menu_y))
-                    .left(px(menu_x))
-                    .w(px(128.))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .bg(snapshot.chrome.surface)
-                    .shadow_lg()
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(
-                        div()
-                            .max_h(px(menu_max_h))
-                            .overflow_y_scrollbar()
-                            .py_1()
-                            .flex()
-                            .flex_col()
-                            .child(ai_message_menu_button(
-                                palette,
-                                "ai-message-menu-quote",
-                                "icons/quote.svg",
-                                t!("ai.quote"),
-                                cx.listener(move |panel, _, _, cx| {
-                                    let quote_text = quote_text.clone();
-                                    panel.with_app(cx, move |app, cx| {
-                                        app.quote_ai_message_text(quote_text, cx);
-                                    });
-                                }),
-                            ))
-                            .child(ai_message_menu_button(
-                                palette,
-                                "ai-message-menu-copy",
-                                "icons/copy.svg",
-                                t!("ai.copy"),
-                                cx.listener(move |panel, _, _, cx| {
-                                    let copy_text = copy_text.clone();
-                                    panel.with_app(cx, move |app, cx| {
-                                        app.copy_ai_message_text(copy_text, cx);
-                                    });
-                                }),
-                            )),
-                    ),
-            )
-    }
 }
 
 impl gpui::Render for AiPanel {
@@ -2082,6 +2013,9 @@ impl gpui::Render for AiPanel {
         }
         // The virtual list detects width changes itself. Font metrics and
         // translated labels also invalidate heights of off-screen rows.
+        if std::mem::take(&mut self.texts.reset_selection) {
+            self.texts.scope.clear(window, cx);
+        }
         let text_style = (
             window.text_style(),
             window.rem_size(),

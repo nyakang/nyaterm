@@ -152,6 +152,9 @@ impl NyaTermApp {
         tab: SettingsTab,
         cx: &mut Context<Self>,
     ) {
+        if tab != SettingsTab::Search {
+            self.collapse_open_search_engine(cx);
+        }
         self.hide_secret_inputs(cx);
         self.ai.invalidate_provider_jobs();
         self.ensure_settings_tab_inputs(tab, cx);
@@ -1164,8 +1167,10 @@ mod tests {
         let (_, vcx) = cx.add_window_view(|_, _| BareHost);
         let vcx: &mut VisualTestContext = vcx;
 
-        // A custom engine row. The ids carry the row index, so adding or removing an
-        // engine forgets the whole prefix and whatever row is open must be rebuilt.
+        // A custom engine row. Adding opens the editor, which builds the two
+        // fields. The ids carry the row index, so adding or removing an engine
+        // forgets the whole prefix and whatever row is open must be rebuilt.
+        // Leaving the Search tab closes the editor.
         let engine_ids = [
             "settings.search-engine.0.name",
             "settings.search-engine.0.url",
@@ -1182,6 +1187,18 @@ mod tests {
         assert_released(&app, vcx, &engine_ids);
         vcx.update(|_, cx| app.update(cx, |app, cx| app.expand_search_engine(0, cx)));
         assert_built(&app, vcx, &engine_ids, &[]);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx)
+            });
+        });
+        assert_released(&app, vcx, &engine_ids);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::Search, cx)
+            });
+        });
+        assert_released(&app, vcx, &engine_ids);
 
         // A freshly added provider credential draws three fields.
         vcx.update(|_, cx| {

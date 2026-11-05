@@ -523,6 +523,7 @@ fn performance_flags(display: &RdpDisplayConfig) -> u32 {
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use nyaterm_remote_desktop::RdpSessionConfig;
@@ -541,6 +542,11 @@ mod tests {
         fn nya_rdp_verify_connection_policy(owner: *mut std::ffi::c_void) -> i32;
     }
 
+    // Match the application's single UI STA: independent test apartments must
+    // not race system-control initialization against another apartment's teardown.
+    // Hold this through the STA thread's join, including its OleUninitialize.
+    static SYSTEM_CONTROL_TEST: Mutex<()> = Mutex::new(());
+
     struct Parent(HWND);
 
     impl Drop for Parent {
@@ -554,6 +560,7 @@ mod tests {
 
     #[test]
     fn system_control_initializes_with_clipboard_enabled_and_other_resources_disabled() {
+        let _system_control = SYSTEM_CONTROL_TEST.lock().unwrap();
         // A dedicated thread supplies a fresh apartment; no GPUI or remote server.
         std::thread::spawn(|| unsafe {
             let parent = Parent(
@@ -573,6 +580,7 @@ mod tests {
                 )
                 .unwrap(),
             );
+            let mut hosts = Vec::new();
             for nla in [false, true] {
                 let config: RdpSessionConfig = serde_json::from_value(serde_json::json!({
                     "backend":"windows", "windows_authentication":"system",
@@ -605,7 +613,19 @@ mod tests {
                 assert_ne!(status.drawing_ready, 0);
                 assert_eq!((status.surface_width, status.surface_height), (800, 600));
                 assert_eq!(status.surface_visible, 0);
+                hosts.push(host);
+            }
+            // Multiple application sessions share the UI STA. Releasing one
+            // control must leave the other control and its apartment usable.
+            while let Some(host) = hosts.pop() {
                 assert_eq!(host.try_destroy().err().map(|(_, error)| error), None);
+                for remaining in &mut hosts {
+                    assert_eq!(
+                        nya_rdp_verify_connection_policy(remaining.owner.as_ptr()),
+                        0
+                    );
+                    assert_ne!(remaining.status().unwrap().drawing_ready, 0);
+                }
             }
         })
         .join()
@@ -614,6 +634,7 @@ mod tests {
 
     #[test]
     fn system_control_delivers_connecting_and_disconnect_events_for_loopback_peer() {
+        let _system_control = SYSTEM_CONTROL_TEST.lock().unwrap();
         // The peer only accepts and closes TCP: no credentials, certificate, or
         // remote server. This exercises the actual COM connection point and STA pump.
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();

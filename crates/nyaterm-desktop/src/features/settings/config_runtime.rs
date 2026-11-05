@@ -499,6 +499,11 @@ impl NyaTermApp {
         );
     }
 
+    /// Reload the whole store after a pull or import.
+    ///
+    /// Rebases an untouched settings draft onto the refreshed values so the
+    /// panel does not read the pull as an unsaved edit; edited drafts keep the
+    /// normal conflict path.
     pub(in crate::features) fn refresh_store_from_runtime_and_sync_theme(
         &mut self,
         cx: &mut Context<Self>,
@@ -513,12 +518,18 @@ impl NyaTermApp {
             move |this, event, cx| {
                 match event.outcome {
                     Ok(snapshot) => {
+                        // Capture draft cleanliness before the baseline is replaced.
+                        let rebase_draft =
+                            this.shell.has_settings_draft() && !this.settings_draft_dirty();
                         this.apply_store_refresh(snapshot.clone(), cx);
                         this.replace_shared_snapshot(
                             snapshot,
                             crate::app_shell::SharedStateDomain::All,
                             cx,
                         );
+                        if rebase_draft {
+                            this.rebase_open_settings_draft(cx);
+                        }
                         cx.notify();
                     }
                     Err(error) => {

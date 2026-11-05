@@ -28,6 +28,14 @@ fn save_editor_connection(
     // Read metadata in the store job so edits cannot restore stale usage or
     // ordering values captured when the editor was opened.
     let previous = store.get_connection(&persisted.id)?;
+    if matches!(&persisted.config, nyaterm_core::ConnectionType::Rdp { backend, .. } if backend == "mstsc")
+    {
+        // Authentication is hidden and unused for an external client. Preserve
+        // the stored contract verbatim, including locked and future auth modes.
+        if let Some(previous) = previous.as_ref() {
+            persisted.auth = previous.auth.clone();
+        }
+    }
     if password_edit == Some(crate::models::ConnectionPasswordEdit::Keep)
         && let Some(auth) = persisted.auth.as_mut()
         && auth.mode == "password"
@@ -116,6 +124,12 @@ impl NyaTermApp {
             }
             ConnectionEditorValidationError::RdpRelayUnsupported => {
                 t!("dialog.rdpActiveXRelayUnsupported").into()
+            }
+            ConnectionEditorValidationError::RdpMstscRelayUnsupported => {
+                t!("dialog.rdpMstscRelayUnsupported").into()
+            }
+            ConnectionEditorValidationError::RdpMstscHostInvalid => {
+                t!("dialog.rdpMstscHostInvalid").into()
             }
             ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
                 t!("dialog.rdpDisplayWidthInvalid").into()
@@ -1214,11 +1228,15 @@ impl NyaTermApp {
         let mut persisted = built.clone();
         let password_edit = (editor.password_source == ConnectionEditorPasswordSource::Direct)
             .then_some(editor.password_edit);
-        let account_id = built
-            .auth
-            .as_ref()
-            .and_then(|auth| auth.saved_account_id())
-            .map(str::to_owned);
+        let account_id = (!editor.uses_mstsc_rdp())
+            .then(|| {
+                built
+                    .auth
+                    .as_ref()
+                    .and_then(|auth| auth.saved_account_id())
+                    .map(str::to_owned)
+            })
+            .flatten();
         let account_password = built
             .auth
             .as_ref()

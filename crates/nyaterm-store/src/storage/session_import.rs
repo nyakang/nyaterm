@@ -299,8 +299,9 @@ fn ensure_group_path(
 mod tests {
     use nyaterm_core::session_import::{SessionImportError, prepare_session_import};
     use nyaterm_core::{
-        AiExecutionProfile, ConnectionAuth, ConnectionNetwork, ConnectionType,
-        PreparedSessionConnection, PreparedSessionImport, SavedConnection, SavedPassword,
+        AiExecutionProfile, ConnectionAuth, ConnectionNetwork, ConnectionPasswordSource,
+        ConnectionType, ConnectionUsernameSource, PreparedSessionConnection, PreparedSessionImport,
+        SavedConnection, SavedPassword,
     };
 
     use super::{ConnectionStore, META_MASTER_KEY, META_TABLE};
@@ -421,6 +422,54 @@ mod tests {
         let passwords = store.list_passwords().expect("passwords");
         assert_eq!(passwords.len(), 1);
         assert!(passwords[0].has_password);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn commit_session_import_keeps_imported_account_references() {
+        let dir = crate::storage::tests::unique_temp_dir("session-import-account-link");
+        let store = ConnectionStore::open(&dir).expect("open store");
+        let mut connection = prepared_saved_ssh("source-account", "Linked", None);
+        connection.auth = Some(ConnectionAuth {
+            mode: "password".to_string(),
+            account_id: Some("account-1".to_string()),
+            password_source: Some(ConnectionPasswordSource::Account),
+            username_source: Some(ConnectionUsernameSource::Account),
+            ..ConnectionAuth::default()
+        });
+        let prepared = PreparedSessionImport {
+            warnings: Vec::new(),
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            passwords: vec![SavedPassword {
+                sort_order: 0,
+                username: "deploy".to_string(),
+                id: "account-1".to_string(),
+                name: "jump-host".to_string(),
+                password: Some("account-secret".to_string().into()),
+                has_password: false,
+            }],
+            ssh_keys: Vec::new(),
+            connections: vec![connection],
+        };
+
+        store
+            .commit_session_import(prepared)
+            .expect("commit account import");
+
+        let loaded = store.load_sessions().expect("load sessions");
+        let auth = loaded.connections[0].auth.as_ref().expect("auth");
+        assert_eq!(auth.account_id.as_deref(), Some("account-1"));
+        assert_eq!(
+            auth.password_source,
+            Some(ConnectionPasswordSource::Account)
+        );
+        let account = store
+            .load_decrypted_password_by_id("account-1")
+            .expect("load account")
+            .expect("account exists");
+        assert_eq!(account.username, "deploy");
+        assert_eq!(account.password.as_deref(), Some("account-secret"));
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -154,24 +154,50 @@ impl NyaTermApp {
         if self.remote_desktop.native_shutting_down {
             return false;
         }
-        let needs_native = self
-            .remote_desktop
-            .sessions
-            .values()
-            .any(|session| session.native_rdp_config.is_some() || session.native_rdp.is_some());
-        if needs_native && let Err(error) = nyaterm_ui::enable_native_child_overlays(window) {
-            for session in self.remote_desktop.sessions.values_mut() {
-                if session.native_rdp_config.take().is_some() || session.native_rdp.is_some() {
-                    session.native_rdp = None;
-                    session.state = RemoteDesktopViewState::Failed;
-                    session.error = Some(RdpError::new(RdpErrorKind::Unsupported,
-                        format!("Windows Native presentation unavailable: {error}. Switch to Builtin manually.")).into());
+        // Native children are hosted only by the main window. Any other window
+        // lacks `native_child_surfaces`, and failing to enable overlays there
+        // would fail every native session.
+        if self
+            .shell
+            .main_window()
+            .is_some_and(|main| gpui::AnyWindowHandle::from(main) != window.window_handle())
+        {
+            return false;
+        }
+        let needs_native = self.remote_desktop.sessions.values().any(|session| {
+            native_surface_needed(
+                session.native_rdp_config.is_some(),
+                session.native_rdp.is_some(),
+                session.state,
+            )
+        });
+        if needs_native {
+            if let Err(error) = nyaterm_ui::enable_native_child_overlays(window) {
+                for session in self.remote_desktop.sessions.values_mut() {
+                    if session.native_rdp_config.take().is_some() || session.native_rdp.is_some() {
+                        session.native_rdp = None;
+                        session.state = RemoteDesktopViewState::Failed;
+                        session.error = Some(RdpError::new(RdpErrorKind::Unsupported,
+                            format!("Windows Native presentation unavailable: {error}. Switch to Builtin manually.")).into());
+                    }
                 }
+                // Builtin and ordinary GPUI presentation remain usable after a
+                // composition failure. Native owners are retired outside this borrow.
+                let _ = window.set_native_child_surface_mode(false);
+                return true;
             }
-            // Builtin and ordinary GPUI presentation remain usable after a
-            // composition failure. Native owners are retired outside this borrow.
+        } else {
+            // A native presentation scope must not outlive the surfaces that need
+            // it. Left on, it keeps the owned input popup (raised to `HWND_TOP` on
+            // every frame) and its low-level mouse hook above every other
+            // top-level window. A later modal child window - for example the
+            // connection editor opened after the remote session was closed -
+            // would then never receive input: the popup forwards its clicks to
+            // the disabled owner window and takes foreground focus back, which
+            // makes the whole application look unresponsive. Disabling the scope
+            // drops the popup and the hook and restores ordinary GPUI
+            // composition for the next session.
             let _ = window.set_native_child_surface_mode(false);
-            return true;
         }
         let visible: HashSet<String> = self
             .remote_desktop
@@ -303,6 +329,20 @@ fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
     )
 }
 
+/// Whether a native presentation scope is still required.
+///
+/// The scope exists so application overlays can be painted above the ActiveX
+/// child window. Once a native session reaches a non-displayable state its
+/// surface is hidden, so keeping the scope alive only leaves an input popup and
+/// a global mouse hook behind.
+fn native_surface_needed(
+    config_pending: bool,
+    control_present: bool,
+    state: RemoteDesktopViewState,
+) -> bool {
+    config_pending || (control_present && native_rdp_state_is_displayable(state))
+}
+
 fn native_rdp_surface_visible(
     window_visible: bool,
     tab_visible: bool,
@@ -384,6 +424,24 @@ mod tests {
         assert!(!native_rdp_surface_visible(true, false, Connected));
         assert!(!native_rdp_surface_visible(false, true, Connected));
         assert!(!native_rdp_surface_visible(true, true, Failed));
+    }
+
+    #[test]
+    fn native_surface_scope_ends_with_its_last_visible_session() {
+        use super::native_surface_needed;
+        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Failed};
+
+        // Nothing native left: the owned input popup and mouse hook must go,
+        // otherwise they cover later modal child windows.
+        assert!(!native_surface_needed(false, false, Connected));
+        assert!(!native_surface_needed(false, false, Disconnected));
+        assert!(!native_surface_needed(false, true, Failed));
+        assert!(!native_surface_needed(false, true, Disconnected));
+
+        // A pending config or a still-displayable control keeps the scope.
+        assert!(native_surface_needed(true, false, Failed));
+        assert!(native_surface_needed(false, true, Connecting));
+        assert!(native_surface_needed(false, true, Connected));
     }
 
     #[test]

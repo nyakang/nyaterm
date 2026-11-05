@@ -290,6 +290,11 @@ impl NyaTermApp {
                     self.set_diagnostics_retention_days(days, cx);
                 }
             }
+            "settings.general.diagnostics-shard-size" => {
+                if let Ok(bytes) = value.parse::<u64>() {
+                    self.set_diagnostics_log_shard_bytes(bytes, cx);
+                }
+            }
             "settings.terminal.wrap-mode" => self.set_terminal_wrap_mode(
                 nyaterm_core::models::settings::TerminalWrapMode::from_compat_value(value),
                 cx,

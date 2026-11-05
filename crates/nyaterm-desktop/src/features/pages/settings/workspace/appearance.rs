@@ -98,28 +98,6 @@ impl SettingsPanel {
             })
             .child(settings_form_section(
                 palette,
-                None,
-                None,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.panelMultiOpen"),
-                        Some(SharedString::from(t!("settings.panelMultiOpenDesc"))),
-                        settings_switch(
-                            palette,
-                            "appearance-panel-multi-open",
-                            self.settings.panel_multi_open(),
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_panel_multi_open(cx);
-                            }),
-                        ),
-                    )),
-            ))
-            .child(settings_form_section(
-                palette,
                 Some(t!("settings.backgroundImage")),
                 Some(t!("settings.backgroundImageDesc")),
                 {

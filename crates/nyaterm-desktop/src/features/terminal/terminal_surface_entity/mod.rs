@@ -3,6 +3,7 @@ use gpui::{
     SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
 };
 use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
+use nyaterm_terminal_gpui::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
@@ -124,6 +125,25 @@ fn terminal_keyword_highlight_request_key(
         row_start,
         row_end,
         line_signatures_key: hasher.finish(),
+    }
+}
+
+/// Distance from an absolute row to the retained snapshot's row window.
+///
+/// Eviction must drop the rows farthest from the text the surface is about to
+/// paint, not always the smallest absolute row. Scrolling upward inserts rows
+/// below the previous window; dropping the smallest key would evict exactly the
+/// rows being fetched and pin the cache to the bottom of the scrollback.
+fn terminal_retained_row_window_distance(
+    abs_row: usize,
+    window_start: usize,
+    window_end: usize,
+) -> usize {
+    let last_row = window_end.saturating_sub(1);
+    if abs_row < window_start {
+        window_start - abs_row
+    } else {
+        abs_row.saturating_sub(last_row)
     }
 }
 
@@ -385,6 +405,7 @@ pub(in crate::features) struct TerminalSurface {
     is_active: bool,
     protocol_state: TerminalProtocolState,
     zebra_stripes_enabled: bool,
+    zebra_stripes_by_row: bool,
     target_line: Option<TerminalLineId>,
     scroll_interaction_generation: u64,
     pending_local_scroll_sync: Option<TerminalSurfacePendingScrollSync>,
@@ -469,6 +490,7 @@ impl TerminalSurface {
             is_active: false,
             protocol_state: TerminalProtocolState::default(),
             zebra_stripes_enabled: false,
+            zebra_stripes_by_row: false,
             target_line: None,
             scroll_interaction_generation: 0,
             pending_local_scroll_sync: None,
@@ -843,6 +865,9 @@ impl TerminalSurface {
             || self.viewport_rows != viewport_rows
             || scrollback_len < self.scrollback_len
             || snapshot.total_rows < previous.total_rows
+            // A rebased numbering origin makes cached `display_line_number`s
+            // incomparable with new rows; never stitch the two bases together.
+            || previous.line_number_base != snapshot.line_number_base
     }
 
     fn clear_retained_scroll_state(&mut self) {
@@ -1117,12 +1142,13 @@ impl TerminalSurface {
         max_rows: usize,
         max_bytes: usize,
     ) -> usize {
-        let Some((start, _)) = terminal_snapshot_absolute_window(snapshot) else {
+        let Some((window_start, _)) = terminal_snapshot_absolute_window(snapshot) else {
             return 0;
         };
+        let window_end = window_start.saturating_add(snapshot.row_count());
         let mut refreshed_rows = 0usize;
         for row in 0..snapshot.row_count() {
-            let Some(abs_row) = start.checked_add(row) else {
+            let Some(abs_row) = window_start.checked_add(row) else {
                 continue;
             };
             let Some(snapshot_row) = snapshot.rows().get(row) else {
@@ -1144,9 +1170,22 @@ impl TerminalSurface {
             refreshed_rows = refreshed_rows.saturating_add(1);
         }
         while self.retained_rows.len() > max_rows || self.retained_row_estimated_bytes > max_bytes {
-            let Some(drop_key) = self.retained_rows.keys().next().copied() else {
+            let Some(first_key) = self.retained_rows.keys().next().copied() else {
                 break;
             };
+            let Some(last_key) = self.retained_rows.keys().next_back().copied() else {
+                break;
+            };
+            // Equal keys and equal distances both keep the oldest key, so a
+            // single-entry cache still makes progress.
+            let drop_key =
+                if terminal_retained_row_window_distance(first_key, window_start, window_end)
+                    >= terminal_retained_row_window_distance(last_key, window_start, window_end)
+                {
+                    first_key
+                } else {
+                    last_key
+                };
             if let Some(removed) = self.retained_rows.remove(&drop_key) {
                 self.retained_row_estimated_bytes = self
                     .retained_row_estimated_bytes
@@ -1301,6 +1340,13 @@ impl TerminalSurface {
             sources.push(snapshot);
         }
         sources.extend(self.retained_snapshots.iter());
+        // Only rows numbered against the live origin may be stitched; a stale
+        // snapshot from before a rebase would restart the gutter mid-window.
+        let line_number_base = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.line_number_base);
+        sources.retain(|snapshot| snapshot.line_number_base == line_number_base);
 
         let cols = sources
             .iter()
@@ -1342,6 +1388,7 @@ impl TerminalSurface {
                 total_rows: real_total_rows,
                 display_offset,
                 images: Vec::new(),
+                line_number_base,
             },
             rows,
         )))
@@ -1383,6 +1430,10 @@ impl TerminalSurface {
                 total_rows: real_total_rows,
                 display_offset,
                 images: Vec::new(),
+                line_number_base: self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.line_number_base),
             },
             row_data,
         )))
@@ -1518,12 +1569,17 @@ impl TerminalSurface {
     pub(in crate::features) fn set_zebra_stripes(
         &mut self,
         enabled: bool,
+        by_row: bool,
         target_line: Option<TerminalLineId>,
     ) -> bool {
-        if self.zebra_stripes_enabled == enabled && self.target_line == target_line {
+        if self.zebra_stripes_enabled == enabled
+            && self.zebra_stripes_by_row == by_row
+            && self.target_line == target_line
+        {
             return false;
         }
         self.zebra_stripes_enabled = enabled;
+        self.zebra_stripes_by_row = by_row;
         self.target_line = target_line;
         true
     }
@@ -2996,7 +3052,8 @@ impl Render for TerminalSurface {
             .with_fill_height(true)
             .with_unwrapped_layout(self.painted_unwrapped.clone())
             .with_visual_y_offset(visual_y_offset)
-            .with_zebra_stripes(zebra_stripes_visible, target_line);
+            .with_zebra_stripes(zebra_stripes_visible, target_line)
+            .with_zebra_stripes_by_row(self.zebra_stripes_by_row);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
         }
@@ -3031,7 +3088,18 @@ impl Render for TerminalSurface {
                 .top(px(gutter_y_offset))
                 .flex()
                 .flex_col();
-            let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            let labeled_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            let gutter_row_count = if zebra_stripes_visible && self.zebra_stripes_by_row {
+                self.painted_unwrapped
+                    .as_ref()
+                    .map_or(snapshot.row_count(), |layout| {
+                        layout
+                            .viewport_rows
+                            .min(layout.logical_rows().saturating_sub(layout.logical_top))
+                    })
+            } else {
+                labeled_row_count
+            };
             for display_row in visible_gutter_rows
                 .clone()
                 .take_while(|row| *row < gutter_row_count)
@@ -3041,24 +3109,33 @@ impl Render for TerminalSurface {
                     .as_ref()
                     .map_or(display_row, |layout| layout.first_source_row(display_row));
                 let snapshot_row = snapshot.row(line_index);
+                let row_target = self
+                    .painted_unwrapped
+                    .as_ref()
+                    .map_or(target_line, |layout| {
+                        layout.target_line_for_display_row(&snapshot, display_row, target_line)
+                    });
                 let zebra_color = zebra_stripes_visible
                     .then(|| {
                         snapshot_row.and_then(|row| {
-                            if row.line_id.is_some() && row.line_id == target_line {
-                                Some(rgba((palette.accent << 8) | 0x24))
-                            } else if row.shell_input.is_some() {
-                                Some(rgba((palette.terminal_fg << 8) | 0x0f))
-                            } else {
-                                None
-                            }
+                            terminal_row_stripe_color(
+                                row,
+                                TerminalStripeMode::new(
+                                    self.zebra_stripes_by_row,
+                                    self.painted_unwrapped.is_some(),
+                                ),
+                                row_target,
+                                palette,
+                            )
+                            .map(rgba)
                         })
                     })
                     .flatten();
                 let labels = terminal_gutter_labels(
                     snapshot_row,
                     abs_start + line_index + 1,
-                    self.show_timestamps,
-                    self.show_line_numbers,
+                    self.show_timestamps && line_index < labeled_row_count,
+                    self.show_line_numbers && line_index < labeled_row_count,
                     line_number_digits,
                     &timestamp_formatter,
                 );

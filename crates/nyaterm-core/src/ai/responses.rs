@@ -107,6 +107,7 @@ pub fn parse_openai_responses_response(body: &str) -> Result<AiChatCompletion, A
         return Err(AiModelError::MissingChatContent);
     }
     Ok(AiChatCompletion {
+        metadata: Default::default(),
         text,
         reasoning_content,
         tool_calls,

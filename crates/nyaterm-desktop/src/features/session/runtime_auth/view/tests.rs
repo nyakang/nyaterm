@@ -82,6 +82,8 @@ fn authentication(root: &Path) -> CredentialPromptState {
             SshAuthenticationMethod::Password,
             SshAuthenticationMethod::Publickey,
         ],
+        stage: Default::default(),
+        accepted_response_ids: Vec::new(),
         key_response_id: None,
     };
     let (sender, _) = mpsc::channel();
@@ -179,6 +181,28 @@ fn password_prompt_grows_with_its_fields_at_each_windows_scale() {
         assert_contains(body, bounds(cx, "ssh-auth-remember-section"));
         assert_contains(card, body);
     }
+}
+
+#[test]
+fn additional_password_prompt_keeps_input_and_hides_all_save_controls() {
+    let root = TestConfigDir::new("nyaterm-auth-layout-additional-password");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let mut state = authentication(root.path());
+    state.prompt.reason = SshCredentialPromptReason::AdditionalPasswordRequired;
+    let form = state.authentication.as_mut().unwrap();
+    form.request.prompt = state.prompt.clone();
+    form.request.stage =
+        nyaterm_transport::ssh_authentication::SshAuthenticationStage::AdditionalFactor;
+    form.request.available_methods = vec![SshAuthenticationMethod::Password];
+    form.remember = true;
+    form.destination = SaveDestination::NewAccount;
+    let (app, cx) = hosted(&mut cx, root.path(), state, (600., 400.));
+    draw(&app, cx);
+    assert_card_fits(cx);
+    assert!(cx.debug_bounds("ssh-auth-secret-field").is_some());
+    assert!(cx.debug_bounds("ssh-auth-remember-section").is_none());
+    assert!(cx.debug_bounds("ssh-auth-save").is_none());
 }
 
 #[test]

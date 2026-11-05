@@ -2051,3 +2051,56 @@ fn cached_mouse_drag_targets_cannot_bypass_target_exclusion() {
         let _ = manager.close(&id);
     }
 }
+
+#[test]
+fn option_arrows_follow_meta_setting_and_target_session_kitty_flags() {
+    let root = TestConfigDir::new("nyaterm-option-arrow-encoding");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "option-arrows";
+    let app = app_with_visible_local_session(&mut cx, root.path(), session_id);
+    cx.update_entity(&app, |app, _| {
+        for alt_as_meta in [false, true] {
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_alt_as_meta = alt_as_meta;
+            app.settings.replace_summary(settings);
+
+            for flags in 0..=31 {
+                let output = format!("\x1b[={flags}u");
+                app.terminal.view.views.insert(
+                    session_id.to_string(),
+                    TerminalViewState::from_output(output),
+                );
+                // Give the fallback screen a different protocol state to ensure
+                // session encoding uses the target view's negotiated flags.
+                let fallback_flags = if flags == 0 { 2 } else { 0 };
+                app.terminal
+                    .view
+                    .screen
+                    .advance(format!("\x1b[={fallback_flags}u").as_bytes());
+                for (key, word_motion, arrow) in [
+                    ("left", b"\x1bb", b"\x1b[1;3D"),
+                    ("right", b"\x1bf", b"\x1b[1;3C"),
+                ] {
+                    let event = key_event(key, None, gpui::Modifiers::alt());
+                    for (target, target_flags) in [
+                        (Some(session_id), flags),
+                        (None, fallback_flags),
+                        (Some("missing-session"), 0),
+                    ] {
+                        let expected = if alt_as_meta && target_flags == 0 {
+                            word_motion.as_slice()
+                        } else {
+                            arrow.as_slice()
+                        };
+                        assert_eq!(
+                            app.terminal_key_bytes_for_event_for_session(target, &event),
+                            Some(expected.to_vec()),
+                            "Option+{key}, meta={alt_as_meta}, flags={target_flags}, target={target:?}"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}

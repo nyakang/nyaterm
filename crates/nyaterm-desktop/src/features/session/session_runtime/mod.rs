@@ -45,5 +45,6 @@ pub(in crate::features) struct PendingSessionStartRegistration {
 }
 
 mod background;
+mod mstsc;
 mod retry;
 mod start;

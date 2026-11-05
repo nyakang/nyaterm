@@ -400,8 +400,8 @@ impl NyaTermApp {
                 self.ai
                     .native_terminal_policy()
                     .unwrap_or(TerminalExecutionPolicy {
-                        background: self.ai.settings_config().agent_background_execution_enabled,
-                        max_lines: self.ai.settings_config().terminal_output_lines,
+                        background: self.ai.run_settings().agent_background_execution_enabled,
+                        max_lines: self.ai.run_settings().terminal_output_lines,
                     })
             }
             CapabilityCaller::Mcp => external_mcp_terminal_policy(
@@ -412,7 +412,7 @@ impl NyaTermApp {
         };
         let default_timeout = if matches!(&request.caller, CapabilityCaller::Native { .. }) {
             self.ai
-                .settings_config()
+                .run_settings()
                 .agent_step_timeout_ms
                 .unwrap_or(30_000)
         } else {

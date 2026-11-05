@@ -136,14 +136,6 @@ pub(crate) struct QuickCommandDetailsState {
     pub(crate) y: Pixels,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AiMessageMenuState {
-    pub(crate) message_id: String,
-    pub(crate) text: String,
-    pub(crate) x: Pixels,
-    pub(crate) y: Pixels,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AiDetectedErrorState {
     pub(crate) session_id: String,

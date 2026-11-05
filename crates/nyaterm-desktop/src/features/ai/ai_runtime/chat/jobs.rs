@@ -204,6 +204,12 @@ impl NyaTermApp {
             request.options.agent_context = self.ai.native_request_context();
             agent_history = self.ai.native_initial_history();
         }
+        if request.agent_kind == AiAgentKind::Nyaterm {
+            self.launch_native_chat(request, launch, agent_history, true, cx);
+            self.defer_ai_panel_snapshot_flush(cx);
+            self.notify_root_if_ai_header_changed(before, cx);
+            return;
+        }
         let job_id = launch.job_id;
         let cancel = launch.cancel;
         let tx = launch.tx;
@@ -747,29 +753,9 @@ impl NyaTermApp {
         };
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.next().await {
-                let stream_event = matches!(
-                    &event,
-                    AiChatWorkerEvent::Delta { .. } | AiChatWorkerEvent::AgentToolCallDelta { .. }
-                );
                 if this
                     .update(cx, |this, cx| {
-                        let before = this.ai_header_presentation();
-                        let Some(scope) = this.ai.scope_for_ai_session(event.session_id()) else {
-                            return;
-                        };
-                        let visible_scope = this.ai.active_scope_key().to_string();
-                        this.ai.switch_scope(&scope);
-                        let dirty =
-                            this.ai.chat_event_is_wanted() && this.apply_ai_chat_event(event, cx);
-                        this.ai.switch_scope(&visible_scope);
-                        if dirty && scope == visible_scope {
-                            if stream_event {
-                                this.schedule_ai_stream_refresh(cx);
-                            } else {
-                                this.flush_ai_panel_snapshot(cx);
-                            }
-                            this.notify_root_if_ai_header_changed(before, cx);
-                        }
+                        this.dispatch_ai_chat_event(event, cx);
                     })
                     .is_err()
                 {
@@ -778,6 +764,33 @@ impl NyaTermApp {
             }
         })
         .detach();
+    }
+
+    pub(in crate::features) fn dispatch_ai_chat_event(
+        &mut self,
+        event: AiChatWorkerEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let stream_event = matches!(
+            &event,
+            AiChatWorkerEvent::Delta { .. } | AiChatWorkerEvent::AgentToolCallDelta { .. }
+        );
+        let before = self.ai_header_presentation();
+        let Some(scope) = self.ai.scope_for_ai_session(event.session_id()) else {
+            return;
+        };
+        let visible_scope = self.ai.active_scope_key().to_string();
+        self.ai.switch_scope(&scope);
+        let dirty = self.ai.chat_event_is_wanted() && self.apply_ai_chat_event(event, cx);
+        self.ai.switch_scope(&visible_scope);
+        if dirty && scope == visible_scope {
+            if stream_event {
+                self.schedule_ai_stream_refresh(cx);
+            } else {
+                self.flush_ai_panel_snapshot(cx);
+            }
+            self.notify_root_if_ai_header_changed(before, cx);
+        }
     }
 
     pub(in crate::features) fn schedule_ai_stream_refresh(&mut self, cx: &mut Context<Self>) {

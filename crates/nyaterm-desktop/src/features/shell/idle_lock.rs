@@ -68,9 +68,9 @@ impl NyaTermApp {
                 cx.background_executor().timer(delay).await;
                 // `update_in` rather than `update`: locking focuses the password
                 // field, which needs the window.
-                let Ok(next) =
-                    this.update_in(cx, |this, window, cx| this.tick_idle_lock(window, cx))
-                else {
+                let Ok(next) = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                    this.tick_idle_lock(window, cx)
+                }) else {
                     break;
                 };
                 match next {

@@ -32,7 +32,7 @@ use nyaterm_ui::{
 };
 
 mod editor_logic;
-mod import;
+pub(in crate::features) mod import;
 mod list_logic;
 mod network_logic;
 mod password;
