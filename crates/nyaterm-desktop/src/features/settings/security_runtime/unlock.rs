@@ -262,15 +262,6 @@ impl NyaTermApp {
             } => {
                 self.reveal_connection_password_after_unlock((editor_generation, revision), cx);
             }
-            SecurityUnlockAction::SubmitSshAuthentication(id) => {
-                if self
-                    .session
-                    .prompt_active_credential()
-                    .is_some_and(|state| state.id == id)
-                {
-                    self.submit_runtime_authentication(window, cx);
-                }
-            }
             SecurityUnlockAction::SavePasswordEditor(token) => {
                 if self.security.account_editor_token() == Some(token) {
                     self.save_security_password_editor(window, cx);

@@ -309,6 +309,108 @@ fn accepted_passphrase_survives_password_retries_and_is_saved_only_after_full_su
 }
 
 #[gpui::test]
+fn authentication_uses_and_remembers_credentials_without_unlocking_plaintext(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use nyaterm_store::StoreDomain;
+
+    use crate::features::session::CredentialPromptState;
+    use crate::features::session::runtime_auth::state::CredentialResponseSender;
+    use crate::features::test_support::{
+        app_with_visible_local_session, session_focus_test_window,
+    };
+
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-auth-without-plaintext-unlock");
+    let app = app_with_visible_local_session(cx, root.path(), "terminal");
+    let (snapshot, account_id) = app.update(cx, |app, _| {
+        let mut summary = app.settings.summary().clone();
+        summary.has_master_password = true;
+        app.settings.replace_summary(summary);
+        app.security.lock_secrets();
+        app.store_blocking_client()
+            .request_mutation_fn(StoreDomain::Security, |store| {
+                let connection: SavedConnection = serde_json::from_value(json!({
+                    "id":"fixture", "name":"fixture", "type":"ssh", "host":"localhost",
+                    "username":"actual-user", "auth":{"mode":"password"}
+                }))?;
+                store.save_connection(&connection)?;
+                let account_id = store.save_password(SavedPassword {
+                    id: String::new(),
+                    name: "account".into(),
+                    username: "actual-user".into(),
+                    password: Some("saved secret".into()),
+                    sort_order: 0,
+                    has_password: false,
+                })?;
+                Ok((store.runtime_connection_snapshot("fixture")?, account_id))
+            })
+            .unwrap()
+    });
+    let cx = session_focus_test_window(cx, &app);
+    for (saved_password, remember) in [(false, false), (false, true), (true, false), (true, true)] {
+        let context = Arc::new(RuntimeAuthenticationContext::new(
+            Some(snapshot.clone()),
+            None,
+            None,
+            None,
+            ConnectionAttempt::default(),
+        ));
+        let mut form = RuntimeAuthenticationForm::new(request(), context.clone());
+        form.saved_password = saved_password;
+        form.password_id = saved_password.then(|| account_id.clone());
+        form.remember = remember;
+        let (sender, submitted) = mpsc::channel();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.security_secrets_locked());
+                app.session
+                    .prompts
+                    .activate_credential(CredentialPromptState {
+                        id: "without-unlock".into(),
+                        prompt: form.request.prompt.clone(),
+                        response_tx: CredentialResponseSender::Authentication(sender),
+                        authentication: Some(form),
+                        value: if saved_password { "" } else { "entered secret" }.into(),
+                    });
+                app.submit_runtime_authentication(window, cx);
+                assert!(!app.security.unlock_prompt_open());
+            });
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let response = loop {
+            cx.run_until_parked();
+            if let Ok(response) = submitted.try_recv() {
+                break response.unwrap();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "authentication was not submitted"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let expected = if saved_password {
+            "saved secret"
+        } else {
+            "entered secret"
+        };
+        assert!(
+            matches!(response.material, SshAuthenticationMaterial::Password(ref p) if p == expected)
+        );
+        let saves = context.finish(Some(&[response.response_id.unwrap()]));
+        assert_eq!(saves.len(), usize::from(remember));
+        app.read_with(cx, |app, _| {
+            assert!(app.session.prompt_active_credential().is_none());
+            assert!(app.security_secrets_locked());
+            assert!(!app.security.unlock_prompt_open());
+        });
+    }
+}
+
+#[gpui::test]
 fn credential_save_failure_keeps_the_session_and_reports_a_warning(cx: &mut gpui::TestAppContext) {
     use std::time::{Duration, Instant};
 
