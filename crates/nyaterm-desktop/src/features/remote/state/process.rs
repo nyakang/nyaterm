@@ -15,6 +15,10 @@ pub(in crate::features) enum ProcessApplyOutcome {
 pub(super) struct ProcessPaneState {
     job: RemoteJobState<ProcessJobResult>,
     items: Arc<[RemoteProcess]>,
+    /// Lowercased text each process is searched by, parallel to `items`. Built on the
+    /// first non-empty query after a new list arrives and dropped with the list, so a
+    /// panel nobody searches never pays for it.
+    search_keys: Option<Arc<[String]>>,
     /// Bumped by every mutation that changes what `process_presentation` returns.
     revision: u64,
     data_generation: u64,
@@ -171,6 +175,7 @@ impl ProcessPaneState {
             self.menu_pid = None;
         }
         self.items = processes.into();
+        self.search_keys = None;
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.snapshot_loaded = true;
@@ -179,6 +184,7 @@ impl ProcessPaneState {
 
     fn clear_data(&mut self) {
         self.items = Arc::from([]);
+        self.search_keys = None;
         self.data_generation = self.data_generation.wrapping_add(1);
         self.derived = None;
         self.snapshot_loaded = false;
@@ -246,12 +252,21 @@ impl ProcessPaneState {
         {
             return cache.items.clone();
         }
-        let mut items = self
-            .items
-            .iter()
-            .filter(|process| process_matches(process, &key.normalized_query))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut items = if key.normalized_query.is_empty() {
+            self.items.to_vec()
+        } else {
+            let items = &self.items;
+            let search_keys = self
+                .search_keys
+                .get_or_insert_with(|| items.iter().map(process_search_key).collect());
+            debug_assert_eq!(items.len(), search_keys.len());
+            items
+                .iter()
+                .zip(search_keys.iter())
+                .filter(|(_, search_key)| search_key.contains(&key.normalized_query))
+                .map(|(process, _)| process.clone())
+                .collect::<Vec<_>>()
+        };
         sort_processes(&mut items, key.sort_key, key.sort_direction);
         let items: Arc<[RemoteProcess]> = items.into();
         self.derived = Some(ProcessDerivedCache {
@@ -268,10 +283,7 @@ impl ProcessPaneState {
     }
 }
 
-fn process_matches(process: &RemoteProcess, normalized_query: &str) -> bool {
-    if normalized_query.is_empty() {
-        return true;
-    }
+fn process_search_key(process: &RemoteProcess) -> String {
     format!(
         "{} {} {} {} {} {}",
         process.pid,
@@ -282,7 +294,6 @@ fn process_matches(process: &RemoteProcess, normalized_query: &str) -> bool {
         process.command_line
     )
     .to_ascii_lowercase()
-    .contains(normalized_query)
 }
 
 fn sort_processes(
@@ -334,6 +345,7 @@ impl ProcessPaneState {
         Self {
             job: RemoteJobState::new(),
             items: Arc::from([]),
+            search_keys: None,
             revision: 0,
             data_generation: 0,
             derived: None,
@@ -422,6 +434,151 @@ impl ProcessPaneState {
         };
         self.set_status(status.clone());
         ProcessApplyOutcome::Applied { status }
+    }
+}
+
+#[cfg(test)]
+mod search_key_tests {
+    use nyaterm_remote_ops::remote_process::RemoteProcess;
+
+    use super::ProcessPaneState;
+
+    fn process(pid: u32, user: &str, command: &str, command_line: &str) -> RemoteProcess {
+        RemoteProcess {
+            pid,
+            ppid: 1,
+            user: user.to_string(),
+            state: "S".to_string(),
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            rss_kb: 0,
+            vsz_kb: 0,
+            elapsed: String::new(),
+            command: command.to_string(),
+            command_line: command_line.to_string(),
+        }
+    }
+
+    fn sample() -> Vec<RemoteProcess> {
+        vec![
+            process(100, "root", "sshd", "/usr/sbin/sshd -D"),
+            process(2001, "www-data", "nginx", "nginx: worker process"),
+            process(31337, "Dev", "Python3", "python3 -m http.server 8000"),
+            process(4, "root", "kworker", "[kworker/0:1-events]"),
+        ]
+    }
+
+    /// The matching rule from before the keys were cached.
+    fn reference_matches(process: &RemoteProcess, normalized_query: &str) -> bool {
+        if normalized_query.is_empty() {
+            return true;
+        }
+        format!(
+            "{} {} {} {} {} {}",
+            process.pid,
+            process.ppid,
+            process.user,
+            process.state,
+            process.command,
+            process.command_line
+        )
+        .to_ascii_lowercase()
+        .contains(normalized_query)
+    }
+
+    fn pids(items: &[RemoteProcess]) -> Vec<u32> {
+        let mut pids: Vec<u32> = items.iter().map(|item| item.pid).collect();
+        pids.sort_unstable();
+        pids
+    }
+
+    #[test]
+    fn search_keys_are_built_only_for_a_non_empty_query_and_dropped_with_the_list() {
+        let mut state = ProcessPaneState::new();
+        state.apply_processes(sample());
+        assert!(
+            state.search_keys.is_none(),
+            "an unused panel must not pay for the keys"
+        );
+        state.derived_items();
+        assert!(state.search_keys.is_none(), "an empty query needs no keys");
+
+        state.apply_search("ssh".to_string());
+        assert_eq!(state.search_keys.as_ref().map(|keys| keys.len()), Some(4));
+
+        // While a query is active a fresh list is searched at once, so its keys are
+        // rebuilt immediately and must describe the new list, never the old one.
+        state.apply_processes(vec![process(7, "alice", "sshd", "sshd: alice")]);
+        assert_eq!(state.search_keys.as_ref().map(|keys| keys.len()), Some(1));
+
+        // With the query cleared, a fresh list drops the keys again.
+        state.apply_search(String::new());
+        state.apply_processes(sample());
+        assert!(
+            state.search_keys.is_none(),
+            "a fresh list with no query must not build keys"
+        );
+        state.apply_search("ssh".to_string());
+        assert!(state.search_keys.is_some());
+        // Clearing the data leaves no stale keys behind: with the query still active
+        // the empty list is searched at once, so at most an empty key set remains.
+        state.clear_data();
+        assert!(
+            state
+                .search_keys
+                .as_ref()
+                .is_none_or(|keys| keys.is_empty())
+        );
+    }
+
+    #[test]
+    fn filtering_matches_the_original_rule_for_every_query() {
+        let processes = sample();
+        for query in [
+            "",
+            "ssh",
+            "SSH",
+            "root",
+            "www",
+            "dev",
+            "python3",
+            "8000",
+            "1",
+            "31337",
+            "worker",
+            "[kworker",
+            "-d",
+            "no such thing",
+            " ",
+            "nginx: w",
+        ] {
+            let mut state = ProcessPaneState::new();
+            state.apply_processes(processes.clone());
+            state.apply_search(query.to_string());
+            let normalized = query.trim().to_ascii_lowercase();
+            let expected: Vec<u32> = {
+                let matching: Vec<RemoteProcess> = processes
+                    .iter()
+                    .filter(|process| reference_matches(process, &normalized))
+                    .cloned()
+                    .collect();
+                pids(&matching)
+            };
+            assert_eq!(pids(&state.derived_items()), expected, "query {query:?}");
+        }
+    }
+
+    #[test]
+    fn a_second_list_is_searched_with_its_own_keys() {
+        let mut state = ProcessPaneState::new();
+        state.apply_processes(sample());
+        state.apply_search("sshd".to_string());
+        assert_eq!(pids(&state.derived_items()), [100]);
+
+        state.apply_processes(vec![process(7, "alice", "bash", "-bash")]);
+        assert!(pids(&state.derived_items()).is_empty());
+        state.apply_search("bash".to_string());
+        assert_eq!(pids(&state.derived_items()), [7]);
     }
 }
 
