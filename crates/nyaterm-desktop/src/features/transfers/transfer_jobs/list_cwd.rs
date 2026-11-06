@@ -1,4 +1,4 @@
-use super::helpers::submit_transfer_blocking_job;
+use super::helpers::{submit_transfer_blocking_job, submit_transfer_cancellable_blocking_job};
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferBrowserChildrenMenuStatus, TransferBrowserNavigationSnapshot,
@@ -34,6 +34,10 @@ impl NyaTermApp {
             .browser
             .navigation_jobs
             .insert(session_id.clone(), id.clone());
+        if let Some(backend) = self.session.active_file_browser_backend() {
+            self.transfer
+                .begin_tree_navigation(&session_id, backend, id.clone());
+        }
         self.transfer.begin_browser_directory_load("/".to_string());
         self.transfer.set_remote_path("/");
         self.transfer.enqueue_transfer_job(TransferJobState {
@@ -57,7 +61,8 @@ impl NyaTermApp {
             return;
         }
         let transfer_tx = self.transfer.transfer_event_sender();
-        submit_transfer_blocking_job(
+        let handle_id = id.clone();
+        let handle = submit_transfer_cancellable_blocking_job(
             &self.blocking_jobs,
             "sftp-initial-directory",
             id.clone(),
@@ -73,6 +78,12 @@ impl NyaTermApp {
                 });
             },
         );
+        if let Some(handle) = handle {
+            self.transfer
+                .browser
+                .navigation_handles
+                .insert(handle_id, handle);
+        }
         cx.notify();
     }
 
@@ -191,6 +202,13 @@ impl NyaTermApp {
             .browser
             .pending_navigations
             .insert(id.clone(), rollback);
+        if let (Some(session_id), Some(backend)) = (
+            job_session_id.as_deref(),
+            self.session.active_file_browser_backend(),
+        ) {
+            self.transfer
+                .begin_tree_navigation(session_id, backend, id.clone());
+        }
         self.transfer.enqueue_transfer_job(TransferJobState {
             id: id.clone(),
             session_id: job_session_id,
@@ -220,7 +238,8 @@ impl NyaTermApp {
             return;
         }
         let transfer_tx = self.transfer.transfer_event_sender();
-        submit_transfer_blocking_job(
+        let handle_id = id.clone();
+        let handle = submit_transfer_cancellable_blocking_job(
             &self.blocking_jobs,
             "sftp-list-directory",
             id.clone(),
@@ -242,6 +261,12 @@ impl NyaTermApp {
                 });
             },
         );
+        if let Some(handle) = handle {
+            self.transfer
+                .browser
+                .navigation_handles
+                .insert(handle_id, handle);
+        }
         cx.notify();
     }
 

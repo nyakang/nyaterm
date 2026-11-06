@@ -392,9 +392,8 @@ impl BlockingJobScheduler {
         name: &'static str,
         run: impl FnOnce(CancellationToken) + Send + 'static,
         on_outcome: impl FnOnce(JobOutcome) + Send + 'static,
-    ) -> Result<(), JobRejected> {
+    ) -> Result<JobHandle, JobRejected> {
         self.submit_inner(name, Box::new(run), Some(Box::new(on_outcome)))
-            .map(drop)
     }
 
     pub fn submit_task<T: Send + 'static>(

@@ -325,6 +325,7 @@ impl NyaTermApp {
             self.clear_terminal_composition(cx);
             if let Some(previous_id) = previous_session_id.as_deref() {
                 self.transfer.cancel_browser_auto_cwd_sync(previous_id);
+                self.transfer.cancel_tree_session_requests(previous_id);
             }
             self.transfer.clear_pending_cwd_sync();
         }
@@ -400,6 +401,9 @@ impl NyaTermApp {
                 .sync_transfer_browser_to_cwd(crate::models::TransferCwdSyncReason::Automatic, cx)
         {
             self.load_transfer_browser_for_active_session_if_needed(cx);
+        }
+        if switching_sessions && self.transfer_browser_is_visible() {
+            self.request_missing_expanded_tree_listings(cx);
         }
         // Transfer browser state is rendered by a separate entity, so an App notify
         // alone cannot publish session-switch changes to its snapshot.

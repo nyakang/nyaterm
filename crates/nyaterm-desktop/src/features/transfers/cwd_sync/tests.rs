@@ -17,6 +17,8 @@ use std::time::Duration;
 
 const SESSION: &str = "cwd-session";
 
+mod tree_navigation;
+
 fn with_browser(test: impl FnOnce(&Entity<NyaTermApp>, &mut VisualTestContext, &Path)) {
     let root = TestConfigDir::new("nyaterm-cwd-events");
     let mut cx = TestAppContext::single();

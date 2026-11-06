@@ -292,6 +292,7 @@ impl NyaTermApp {
         self.terminal.clear_session_pressed_keys(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);
         let rollback = self.transfer.invalidate_browser_navigation(session_id);
+        self.transfer.cancel_tree_session_requests(session_id);
         if self.session.active_id() == Some(session_id) {
             if let Some(snapshot) = rollback {
                 self.restore_transfer_browser_navigation(snapshot);

@@ -30,9 +30,8 @@ impl TransferFeatureState {
             if let Some(cache) = self.browser.session_cache.remove(id) {
                 caches.push((id.clone(), cache));
             }
-            if let Some(job_id) = self.browser.navigation_jobs.remove(id) {
-                self.browser.pending_navigations.remove(&job_id);
-            }
+            self.invalidate_browser_navigation(id);
+            self.tree.remove_session(id);
         }
         TransferSessionTransferBundle { caches }
     }
@@ -169,6 +168,10 @@ impl TransferFeatureState {
         session_id: &str,
     ) -> Option<TransferBrowserNavigationSnapshot> {
         let id = self.browser.navigation_jobs.remove(session_id)?;
+        if let Some(handle) = self.browser.navigation_handles.remove(&id) {
+            handle.cancel();
+        }
+        self.settle_tree_navigation(session_id, &id, false);
         self.browser.pending_navigations.remove(&id)
     }
 
@@ -181,17 +184,15 @@ impl TransferFeatureState {
         {
             *reason = crate::models::TransferCwdSyncReason::Explicit;
         }
+        self.renew_tree_navigation(session_id);
     }
 
     pub(in crate::features) fn remove_browser_session_cache(&mut self, session_id: &str) {
+        // Retiring the latest job rejects late replies from the closed session.
+        self.invalidate_browser_navigation(session_id);
         self.tree.remove_session(session_id);
         self.browser.session_cache.remove(session_id);
         self.file_ops.delete_refresh_pending.remove(session_id);
-        // Dropping the latest-job entry makes the closed session's in-flight
-        // navigation reply stale instead of letting it swap browser context.
-        if let Some(job_id) = self.browser.navigation_jobs.remove(session_id) {
-            self.browser.pending_navigations.remove(&job_id);
-        }
     }
 
     pub(in crate::features) fn has_browser_session_cache(&self, session_id: &str) -> bool {
@@ -708,10 +709,7 @@ impl TransferFeatureState {
         remote_path: String,
     ) -> TransferBrowserNavigationSnapshot {
         self.clear_pending_cwd_sync();
-        let pending_job_id = self.browser.navigation_jobs.remove(session_key);
-        if let Some(snapshot) =
-            pending_job_id.and_then(|job_id| self.browser.pending_navigations.remove(&job_id))
-        {
+        if let Some(snapshot) = self.invalidate_browser_navigation(session_key) {
             self.browser.restore_navigation(snapshot.clone());
             return snapshot;
         }

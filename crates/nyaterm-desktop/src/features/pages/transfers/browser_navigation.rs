@@ -14,6 +14,8 @@ impl NyaTermApp {
         self.persist_transfer_browser_ui_settings(cx);
         if mode == nyaterm_core::TransferBrowserViewMode::Tree {
             self.reveal_transfer_tree_current_path(cx);
+        } else if let Some(session) = self.session.active_id_owned() {
+            self.transfer.cancel_tree_session_requests(&session);
         }
         self.defer_transfer_panel_snapshot_flush(cx);
         cx.notify();
