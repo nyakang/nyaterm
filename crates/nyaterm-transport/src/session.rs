@@ -304,6 +304,35 @@ impl SessionManager {
             .map(|integration| integration.path_style)
             .unwrap_or_else(|| LocalShellPathStyle::from_program(&shell.program));
         let wsl_distro = local_shell_integration::wsl_distro(&shell);
+        let dialect = if shell.program.to_ascii_lowercase().contains("wsl") && integration.is_some()
+        {
+            shell
+                .args
+                .iter()
+                .map(|arg| nyaterm_core::completion::types::ShellDialect::from_program(arg))
+                .find(|kind| *kind != nyaterm_core::completion::types::ShellDialect::Unknown)
+                .unwrap_or(nyaterm_core::completion::types::ShellDialect::Unknown)
+        } else {
+            nyaterm_core::completion::types::ShellDialect::from_program(&shell.program)
+        };
+        let user = std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_default();
+        let scope = nyaterm_core::completion::types::CompletionScope::new(&[
+            "local",
+            &user,
+            &shell.program,
+            wsl_distro.as_deref().unwrap_or(""),
+            &format!("{dialect:?}"),
+        ]);
+        let command_context = nyaterm_core::completion::types::ShellCommandContext {
+            scope,
+            dialect,
+            command_events: integration.is_some(),
+        };
+        if let Some(integration) = &mut integration {
+            integration.completion_distro = wsl_distro.clone();
+        }
         let startup_files = integration
             .as_mut()
             .and_then(|integration| integration.startup_files.take());
@@ -364,6 +393,10 @@ impl SessionManager {
                 return Err(SessionError::Worker(error));
             }
         };
+        self.event_queue.push(SessionEvent::CommandContext {
+            session_id: session_id.clone(),
+            context: command_context,
+        });
         let reader_thread = match spawn_reader_thread(
             session_id.clone(),
             reader,

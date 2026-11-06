@@ -10,6 +10,7 @@ pub mod cloud_sync;
 pub mod command_draft;
 pub mod command_search;
 pub mod command_suggestion_suppression;
+pub mod completion;
 pub mod connection_route;
 pub mod credential_autofill;
 pub mod credentials_crypto;

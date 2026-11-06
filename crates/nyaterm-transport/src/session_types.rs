@@ -51,6 +51,10 @@ pub enum SessionEvent {
         session_id: String,
         cwd: String,
     },
+    CommandContext {
+        session_id: String,
+        context: nyaterm_core::completion::types::ShellCommandContext,
+    },
     CommandAccepted {
         session_id: String,
         command: String,

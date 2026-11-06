@@ -116,11 +116,13 @@ fn startup_prompts_errors_and_terminal_queries_are_visible_without_ready_marker(
 }
 
 #[test]
-fn startup_script_fits_windows_command_line_and_enables_only_cwd() {
+fn startup_script_fits_windows_command_line_and_sources_owned_command_hooks() {
     let script = startup_script();
     assert!(script.len() < 12_000);
-    assert!(!script.contains("133;"));
-    assert!(!script.contains("NyaTermCommand"));
+    assert!(script.contains("full.bash"));
+    assert!(script.contains("full.zsh"));
+    assert!(script.contains("full.fish"));
+    assert!(script.contains("NyaTermShell"));
     assert!(!script.contains('\r'));
 }
 
@@ -162,4 +164,205 @@ fn wsl_distro_uses_explicit_selectors_then_the_host_default() {
         wsl_distro(&shell("wsl.exe", &["-d", "Ubuntu"])),
         Some("Ubuntu".into())
     );
+}
+
+#[test]
+fn guest_identity_is_bounded_redacted_and_isolates_users_shells_and_distributions() {
+    use base64::Engine;
+    let (_, mut integration) =
+        LocalShellIntegration::prepare(&shell("wsl.exe", &[]), "identity").unwrap();
+    let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+    let marker = format!(
+        "\x1b]7777;NyaTermShell:{}:{}\x07",
+        encode("/bin/zsh"),
+        encode("guest-user")
+    );
+    let output = integration.filter(marker.as_bytes());
+    assert!(output.visible.is_empty());
+    let identity = output.shell_identities[0].clone();
+    assert!(!format!("{identity:?}").contains("guest-user"));
+    integration.completion_distro = Some("Distro A".into());
+    let first = integration.completion_context(identity.clone());
+    assert_eq!(
+        first.dialect,
+        nyaterm_core::completion::types::ShellDialect::Zsh
+    );
+    integration.completion_distro = Some("Distro B".into());
+    assert_ne!(
+        first.scope,
+        integration.completion_context(identity.clone()).scope
+    );
+    let mut other = identity.clone();
+    other.user = "other-user".into();
+    assert_ne!(
+        integration.completion_context(identity.clone()).scope,
+        integration.completion_context(other).scope
+    );
+    let mut other = identity.clone();
+    other.program = "/bin/fish".into();
+    assert_ne!(
+        integration.completion_context(identity).scope,
+        integration.completion_context(other).scope
+    );
+    let bad = format!(
+        "\x1b]7777;NyaTermShell:{}:{}\x07",
+        encode("/bin/zsh\n"),
+        encode("user")
+    );
+    let output = integration.filter(bad.as_bytes());
+    assert!(output.visible.is_empty());
+    assert!(output.shell_identities.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn real_local_bash_reports_actual_context_and_one_accepted_command() {
+    assert_real_local_shell_context(
+        "/bin/bash",
+        &["--noprofile", "-i"],
+        nyaterm_core::completion::types::ShellDialect::Bash,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn real_local_zsh_reports_actual_context_and_one_accepted_command() {
+    assert_real_local_shell_context(
+        "/bin/zsh",
+        &["-i"],
+        nyaterm_core::completion::types::ShellDialect::Zsh,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn real_local_fish_reports_actual_context_and_one_accepted_command() {
+    assert_real_local_shell_context(
+        "/usr/bin/fish",
+        &["-i"],
+        nyaterm_core::completion::types::ShellDialect::Fish,
+    );
+}
+
+#[cfg(unix)]
+fn assert_real_local_shell_context(
+    program: &str,
+    args: &[&str],
+    dialect: nyaterm_core::completion::types::ShellDialect,
+) {
+    use crate::environment::{EnvironmentValue, ShellEnvironmentCache};
+    use crate::{LocalSessionConfig, SessionEvent, SessionManager};
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    if !std::path::Path::new(program).is_file() {
+        eprintln!("skipping live {dialect:?} fixture: shell not installed");
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".bashrc"), "PS1='fixture> '\n").unwrap();
+    std::fs::write(home.path().join(".zshrc"), "PROMPT='fixture> '\n").unwrap();
+    let fish_config = home.path().join(".config/fish");
+    std::fs::create_dir_all(&fish_config).unwrap();
+    std::fs::write(
+        fish_config.join("config.fish"),
+        "function fish_prompt; printf 'fixture> '; end\n",
+    )
+    .unwrap();
+    let mut manager = SessionManager::new();
+    manager.shell_environment = ShellEnvironmentCache::with_values_for_test(
+        program.into(),
+        HashMap::from([
+            (
+                "HOME".into(),
+                EnvironmentValue::new(home.path().to_string_lossy().into_owned()),
+            ),
+            ("BASH_ENV".into(), EnvironmentValue::new(String::new())),
+            (
+                "XDG_CONFIG_HOME".into(),
+                EnvironmentValue::new(home.path().join(".config").to_string_lossy().into_owned()),
+            ),
+            (
+                "ZDOTDIR".into(),
+                EnvironmentValue::new(home.path().to_string_lossy().into_owned()),
+            ),
+            (
+                "PROMPT_COMMAND".into(),
+                EnvironmentValue::new(String::new()),
+            ),
+        ]),
+    );
+    let session = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some(program.into()),
+            shell_args: args.iter().map(|arg| (*arg).into()).collect(),
+            working_dir: Some(home.path().into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut ready = false;
+    let mut contexts = 0;
+    let mut anchors = 0;
+    let mut any_context = 0;
+    let mut cwds = 0;
+    let mut fixture_prompt = false;
+    let mut errors = false;
+    let mut terminal = nyaterm_terminal::TerminalCore::new(80, 24);
+    while Instant::now() < deadline && !ready {
+        for event in manager.drain_events(64).unwrap().events {
+            match &event {
+                SessionEvent::CommandContext { .. } => any_context += 1,
+                SessionEvent::CwdChanged { .. } => cwds += 1,
+                SessionEvent::Output { data, .. } => {
+                    terminal.advance(data);
+                    for reply in terminal.take_effects().pty_write {
+                        manager.write_raw(&session.id, &reply).unwrap();
+                    }
+                    anchors += usize::from(data.windows(5).any(|w| w == b"133;A"));
+                    fixture_prompt |= data.windows(8).any(|w| w == b"fixture>");
+                    errors |= data.windows(12).any(|w| w == b"syntax error")
+                        || data.windows(12).any(|w| w == b"No such file");
+                }
+                _ => {}
+            }
+            if let SessionEvent::CommandContext { context, .. } = event
+                && context.command_events
+                && context.dialect == dialect
+            {
+                contexts += 1;
+            }
+        }
+        // Initial launch metadata is followed by the installed guest identity.
+        ready = contexts >= 2;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready,
+        "installed {dialect:?} identity missing: contexts={contexts}, any={any_context}, cwd={cwds}, anchor={anchors}, fixture_prompt={fixture_prompt}, errors={errors}"
+    );
+    manager
+        .write_raw(&session.id, b"printf fixture-command\r")
+        .unwrap();
+    let mut accepted = 0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        for event in manager.drain_events(64).unwrap().events {
+            if let SessionEvent::Output { data, .. } = &event {
+                terminal.advance(data);
+                for reply in terminal.take_effects().pty_write {
+                    manager.write_raw(&session.id, &reply).unwrap();
+                }
+            }
+            if let SessionEvent::CommandAccepted { command, .. } = event {
+                assert_eq!(command.trim(), "printf fixture-command");
+                accepted += 1;
+            }
+        }
+        if accepted > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    manager.close(&session.id).unwrap();
+    assert_eq!(accepted, 1);
 }

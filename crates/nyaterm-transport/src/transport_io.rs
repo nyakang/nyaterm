@@ -700,6 +700,14 @@ pub(crate) fn spawn_reader_thread(
                             ..SshIntegrationOutput::default()
                         },
                     };
+                    if let Some(integration) = &integration {
+                        for identity in output.shell_identities {
+                            event_queue.push(SessionEvent::CommandContext {
+                                session_id: session_id.clone(),
+                                context: integration.completion_context(identity),
+                            });
+                        }
+                    }
                     for cwd in output.cwd_paths {
                         event_queue.push(SessionEvent::CwdChanged {
                             session_id: session_id.clone(),

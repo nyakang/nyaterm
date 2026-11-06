@@ -1,0 +1,10 @@
+NyaTerm command completion includes declaration data from carapace-bin v1.8.1,
+revision 6bc2b8d69a2474b6eeb626a85ef83254c2ab7d82, under the MIT license.
+Source: https://github.com/carapace-sh/carapace-bin
+See LICENSE.carapace for the original copyright and license text.
+
+Matching uses the unchanged nucleo-matcher 0.3.1 library under MPL-2.0.
+Source: https://static.crates.io/crates/nucleo-matcher/nucleo-matcher-0.3.1.crate
+Project: https://github.com/helix-editor/nucleo
+See LICENSE.nucleo for the license text. Corresponding covered source files are
+available in the immutable source archive linked above.

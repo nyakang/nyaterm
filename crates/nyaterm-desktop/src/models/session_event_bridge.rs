@@ -525,6 +525,7 @@ fn bridge_event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
+        | SessionEvent::CommandContext { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
         | SessionEvent::Exited { session_id, .. }
         | SessionEvent::CleanupFailed { session_id, .. }
@@ -550,6 +551,7 @@ impl SessionEventBridgeQueue {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
@@ -657,6 +659,7 @@ impl SessionEventBridgeQueueInner {
             SessionEvent::OutputBoundary { .. }
             | SessionEvent::OutputDropped { .. }
             | SessionEvent::CwdChanged { .. }
+            | SessionEvent::CommandContext { .. }
             | SessionEvent::CommandAccepted { .. }
             | SessionEvent::Exited { .. }
             | SessionEvent::CleanupFailed { .. }
@@ -715,6 +718,7 @@ impl SessionEventBridgeQueueInner {
                 }
                 SessionEvent::OutputBoundary { .. }
                 | SessionEvent::CwdChanged { .. }
+                | SessionEvent::CommandContext { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
@@ -888,6 +892,10 @@ fn bridge_route_event(
             );
         }
         event @ SessionEvent::OutputBoundary { .. } => {
+            flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
+            state.push_ui_event(&mut control, event);
+        }
+        event @ SessionEvent::CommandContext { .. } => {
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             state.push_ui_event(&mut control, event);
         }

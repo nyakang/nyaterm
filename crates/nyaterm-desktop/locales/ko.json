@@ -3302,6 +3302,8 @@
     "memUsage": "메모리 사용량"
   },
   "suggestions": {
+    "legacyHistory": "이전 전역 기록",
+    "unsafeSuffix": "안전하게 추가할 수 없습니다. 직접 편집하세요",
     "deleteHistory": "기록 명령 삭제",
     "dismiss": "닫기",
     "execute": "실행",

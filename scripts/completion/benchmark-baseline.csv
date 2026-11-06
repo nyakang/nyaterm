@@ -1,0 +1,65 @@
+engine,candidates,query,p50_ms,p95_ms,allocations,peak_increment_bytes
+search_adapter,64,dcr,0.272,0.299,75,136900
+legacy,64,d,0.099,0.114,832,576
+nucleo,64,d,0.147,0.188,0,0
+legacy,64,doc,0.108,0.128,832,576
+nucleo,64,doc,0.180,0.215,0,0
+legacy,64,dcr,0.115,0.160,832,576
+nucleo,64,dcr,0.187,0.247,0,0
+legacy,64,dockerco,0.129,0.144,1024,592
+nucleo,64,dockerco,0.199,0.210,0,0
+legacy,64,docker compose run service-000001,0.167,0.179,1280,880
+nucleo,64,docker compose run service-000001,0.181,0.187,0,0
+legacy,64,zzzz,0.089,0.095,640,576
+nucleo,64,zzzz,0.187,0.194,0,0
+legacy,64,工具,0.115,0.134,832,576
+nucleo,64,工具,0.206,0.211,0,0
+search_adapter,1000,dcr,2.916,3.274,80,165784
+legacy,1000,d,1.500,1.596,13000,576
+nucleo,1000,d,2.050,2.158,0,0
+legacy,1000,doc,1.615,1.639,13000,576
+nucleo,1000,doc,3.009,3.025,0,0
+legacy,1000,dcr,1.683,1.700,13000,576
+nucleo,1000,dcr,2.982,3.057,0,0
+legacy,1000,dockerco,2.026,2.043,16000,592
+nucleo,1000,dockerco,3.198,5.066,0,0
+legacy,1000,docker compose run service-000001,2.616,2.621,20000,880
+nucleo,1000,docker compose run service-000001,2.781,2.798,0,0
+legacy,1000,zzzz,1.342,1.452,10000,576
+nucleo,1000,zzzz,2.767,2.804,0,0
+legacy,1000,工具,1.715,1.776,13000,576
+nucleo,1000,工具,3.187,3.433,0,0
+search_adapter,10000,dcr,31.024,63.343,84,555544
+legacy,10000,d,15.522,18.898,130000,576
+nucleo,10000,d,20.944,21.788,0,0
+legacy,10000,doc,15.952,16.339,130000,576
+nucleo,10000,doc,27.758,28.538,0,0
+legacy,10000,dcr,16.715,17.501,130000,576
+nucleo,10000,dcr,29.678,56.994,0,0
+legacy,10000,dockerco,19.947,20.643,160000,592
+nucleo,10000,dockerco,28.795,32.463,0,0
+legacy,10000,docker compose run service-000001,23.859,30.359,200000,880
+nucleo,10000,docker compose run service-000001,25.659,31.723,0,0
+legacy,10000,zzzz,12.852,14.008,100000,576
+nucleo,10000,zzzz,26.987,30.296,0,0
+legacy,10000,工具,17.219,22.658,130000,576
+nucleo,10000,工具,31.077,39.085,0,0
+search_adapter,50000,dcr,144.271,151.635,86,1981976
+legacy,50000,d,76.278,84.829,650000,576
+nucleo,50000,d,104.153,117.003,0,0
+legacy,50000,doc,79.434,92.023,650000,576
+nucleo,50000,doc,141.217,156.282,0,0
+legacy,50000,dcr,79.930,93.051,650000,576
+nucleo,50000,dcr,141.183,221.595,0,0
+legacy,50000,dockerco,94.778,105.011,800000,592
+nucleo,50000,dockerco,152.711,161.804,0,0
+legacy,50000,docker compose run service-000001,125.041,144.697,1000000,880
+nucleo,50000,docker compose run service-000001,125.027,143.089,0,0
+legacy,50000,zzzz,67.014,81.982,500000,576
+nucleo,50000,zzzz,135.528,146.376,0,0
+legacy,50000,工具,89.020,96.575,650000,576
+nucleo,50000,工具,159.929,182.159,0,0
+context,5000,dock,0.251,0.267,2274,109005
+context,5000,docker r,0.046,0.050,255,9889
+context,5000,docker run --na,0.385,0.396,691,16924
+context,5000,docker run im,3.391,4.529,5134,1035211

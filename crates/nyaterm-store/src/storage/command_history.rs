@@ -77,24 +77,26 @@ impl ConnectionStore {
         let Some(command) = sanitize_history_command(command) else {
             return Ok(());
         };
-        let keys = self
-            .list_keyed_json_by_prefix::<CommandHistoryEntry>(
-                COMMAND_HISTORY_TABLE,
-                COMMAND_HISTORY_PREFIX,
-            )?
-            .into_iter()
-            .filter_map(|(key, entry)| {
-                (sanitize_history_command(&entry.command).as_deref() == Some(command.as_str()))
-                    .then_some(key)
-            })
-            .collect::<Vec<_>>();
         let txn = self.db.begin_write()?;
         let mut table = txn.open_table(COMMAND_HISTORY_TABLE)?;
+        let mut keys = Vec::new();
+        for row in table.iter()? {
+            let (key, value) = row?;
+            if !key.value().starts_with(COMMAND_HISTORY_PREFIX) {
+                continue;
+            }
+            let entry: CommandHistoryEntry = serde_json::from_slice(value.value())?;
+            if sanitize_history_command(&entry.command).as_deref() == Some(command.as_str()) {
+                keys.push(key.value().to_string());
+            }
+        }
         for key in keys {
             table.remove(key.as_str())?;
         }
         drop(table);
+        super::completion_history::delete_completion_command_in_txn(&txn, &command)?;
         txn.commit()?;
+        self.invalidate_completion();
         Ok(())
     }
 
@@ -105,6 +107,7 @@ impl ConnectionStore {
         let txn = self.db.begin_write()?;
         replace_command_history_in_txn(&txn, entries)?;
         txn.commit()?;
+        self.invalidate_completion();
         Ok(())
     }
 
@@ -120,6 +123,7 @@ pub(super) fn replace_command_history_in_txn(
     txn: &redb::WriteTransaction,
     entries: &[CommandHistoryEntry],
 ) -> Result<(), StorageError> {
+    super::completion_history::reset_completion_history_in_txn(txn, entries)?;
     clear_prefix_in_txn(txn, COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)?;
     let mut normalized = Vec::new();
     for entry in entries {
@@ -223,7 +227,7 @@ fn command_history_id(command: &str) -> String {
     lower_hex(&digest[..16])
 }
 
-fn sanitize_history_command(input: &str) -> Option<String> {
+pub(super) fn sanitize_history_command(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
@@ -312,4 +316,45 @@ fn strip_windows_prompt(input: &str) -> Option<&str> {
         return None;
     }
     Some(input[marker_idx + 1..].trim_start_matches([' ', '\t']))
+}
+
+/// Update the canonical global document without discarding extension fields.
+pub(super) fn append_global_history_in_txn(
+    txn: &redb::WriteTransaction,
+    command: &str,
+    now: u64,
+) -> Result<(), StorageError> {
+    let table = txn.open_table(COMMAND_HISTORY_TABLE)?;
+    let mut document =
+        serde_json::json!({"command": command, "use_count": 0, "last_used_at_ms": 0});
+    for row in table.iter()? {
+        let (_, value) = row?;
+        let raw: serde_json::Value = serde_json::from_slice(value.value())?;
+        if raw.get("command").and_then(serde_json::Value::as_str) == Some(command) {
+            document = raw;
+            break;
+        }
+    }
+    drop(table);
+    let count = document
+        .get("use_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default()
+        .saturating_add(1)
+        .min(u32::MAX as u64) as u32;
+    document["use_count"] = serde_json::json!(count);
+    document["last_used_at_ms"] = serde_json::json!(now);
+    let id = command_history_id(command);
+    remove_command_history_id_in_txn(txn, &id)?;
+    let entry = CommandHistoryEntry {
+        command: command.into(),
+        use_count: count,
+        last_used_at_ms: now,
+    };
+    write_json_in_txn(
+        txn,
+        COMMAND_HISTORY_TABLE,
+        &command_history_key(&entry, &id),
+        &document,
+    )
 }

@@ -3295,6 +3295,8 @@
     "memUsage": "Memory Usage"
   },
   "suggestions": {
+    "legacyHistory": "Legacy global history",
+    "unsafeSuffix": "Cannot safely append; edit manually",
     "deleteHistory": "Delete history command",
     "dismiss": "dismiss",
     "execute": "execute",

@@ -856,6 +856,9 @@ impl ConnectionStore {
             }
         }
         txn.commit()?;
+        if snapshot.meta.snapshot_kind == PortableSnapshotKind::Backup {
+            self.invalidate_completion();
+        }
         bump_ssh_key_revision();
         Ok(())
     }

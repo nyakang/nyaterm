@@ -136,11 +136,16 @@ fn echo(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>, id: &str, value: &st
 fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
     let state = app.terminal.editing.state().unwrap();
     app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
+        mode: nyaterm_core::completion::types::CompletionMode::History,
+        completion_revision: 0,
+        scope: None,
         session_id: id.into(),
         input_version: state.model.version,
         sync_revision: app.sync_input.revision(),
         draft: state.model.input.value.clone(),
         items: vec![CommandSuggestionItem {
+            fillable: true,
+            description: String::new(),
             command: target.into(),
             display: target.into(),
             source: "history".into(),
@@ -496,20 +501,22 @@ fn search_results_cannot_reuse_a_pattern_after_its_input_version_changes() {
         app.terminal.assist.command_suggestions = None;
         let generation = app.terminal.assist.command_suggestion_search_gen;
         let request = app
-            .prepare_command_suggestion_search(generation, cx)
+            .prepare_command_suggestion_search(
+                generation,
+                nyaterm_core::completion::types::CompletionMode::Token,
+                cx,
+            )
             .unwrap();
         let model = &mut app.terminal.editing.state_mut().model;
         model.note_input("\x1b[D", Instant::now());
         model.note_input("\x1b[C", Instant::now());
         app.publish_command_suggestion_search(
             request,
-            vec![nyaterm_core::FuzzyResult {
-                command: "display version".into(),
-                display: "display version".into(),
-                source: "history".into(),
-                score: 1,
-                indices: Vec::new(),
-            }],
+            super::tests::history_search_fixture(
+                "display version",
+                "display ver",
+                app.commands.completion_runtime().revision(),
+            ),
             Duration::ZERO,
             cx,
         );
@@ -612,4 +619,64 @@ fn a_different_echo_cancels_the_request_without_sending_recovery_keys() {
     });
     f.receive(b"sion");
     f.assert_quiet();
+}
+
+#[test]
+fn token_enter_fills_without_requesting_execution() {
+    let mut fixture = Fixture::new();
+    fixture.suggest("dock", "docker");
+    fixture.update(|app, cx, id| {
+        app.terminal
+            .assist
+            .command_suggestions
+            .as_mut()
+            .unwrap()
+            .mode = nyaterm_core::completion::types::CompletionMode::Token;
+        app.terminal
+            .assist
+            .command_suggestions
+            .as_mut()
+            .unwrap()
+            .selected_index = None;
+        assert!(app.handle_command_suggestion_key(&key("enter"), cx));
+        assert!(
+            !app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .as_ref()
+                .unwrap()
+                .execute_requested
+        );
+        echo(app, cx, id, "docker");
+        assert!(app.session.command_history_for(id).is_none());
+    });
+    fixture.receive(b"er");
+    fixture.assert_quiet();
+}
+
+#[test]
+fn disabled_fuzzy_candidate_never_writes_editing_keys() {
+    let mut fixture = Fixture::new();
+    fixture.suggest("dkr", "docker");
+    fixture.update(|app, cx, _| {
+        app.terminal
+            .assist
+            .command_suggestions
+            .as_mut()
+            .unwrap()
+            .items[0]
+            .fillable = false;
+        assert!(app.handle_command_suggestion_key(&key("tab"), cx));
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+    });
+    fixture.assert_quiet();
 }

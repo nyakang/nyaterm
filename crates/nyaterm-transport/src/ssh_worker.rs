@@ -83,6 +83,7 @@ pub(crate) struct OpenSshShellSession {
     pub(crate) ready_marker: String,
     pub(crate) legacy_ready_marker: Option<String>,
     pub(crate) shell_kind: Option<ShellKind>,
+    pub(crate) command_context: nyaterm_core::completion::types::ShellCommandContext,
 }
 
 pub(crate) enum SshShellHandle {
@@ -465,7 +466,14 @@ pub(crate) async fn run_open_ssh_shell_session(
         ready_marker,
         legacy_ready_marker,
         shell_kind: _shell_kind,
+        command_context,
     } = open_session;
+    event_queue
+        .push_async(SessionEvent::CommandContext {
+            session_id: session_id.clone(),
+            context: command_context,
+        })
+        .await;
     let handle = Arc::new(handle);
     let (mut channel_rx, channel) = channel.split();
     let channel = Arc::new(channel);
@@ -1239,6 +1247,31 @@ pub(crate) async fn open_ssh_shell_from_pending(
         prepared_shell_integration,
         ready_marker,
         legacy_ready_marker,
+        command_context: {
+            let dialect = match shell_kind {
+                Some(ShellKind::Bash) => nyaterm_core::completion::types::ShellDialect::Bash,
+                Some(ShellKind::Zsh) => nyaterm_core::completion::types::ShellDialect::Zsh,
+                Some(ShellKind::Fish) => nyaterm_core::completion::types::ShellDialect::Fish,
+                _ => nyaterm_core::completion::types::ShellDialect::Unknown,
+            };
+            nyaterm_core::completion::types::ShellCommandContext {
+                scope: nyaterm_core::completion::types::CompletionScope::new(&[
+                    "ssh",
+                    &config.host.to_ascii_lowercase(),
+                    &config.port.to_string(),
+                    &config.username,
+                    &format!("{dialect:?}"),
+                ]),
+                dialect,
+                command_events: terminal_shell_integration
+                    && matches!(
+                        dialect,
+                        nyaterm_core::completion::types::ShellDialect::Bash
+                            | nyaterm_core::completion::types::ShellDialect::Zsh
+                            | nyaterm_core::completion::types::ShellDialect::Fish
+                    ),
+            }
+        },
         shell_kind,
     })
 }

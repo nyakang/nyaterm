@@ -313,6 +313,7 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
@@ -958,6 +959,7 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
@@ -1000,6 +1002,7 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }

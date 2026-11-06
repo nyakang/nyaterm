@@ -263,6 +263,16 @@ impl NyaTermApp {
                         );
                         self.apply_session_cwd(&session_id, cwd, cx);
                     }
+                    SessionEvent::CommandContext {
+                        session_id,
+                        context,
+                    } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        self.commands.set_command_context(session_id, context);
+                    }
                     SessionEvent::CommandAccepted {
                         session_id,
                         command,
@@ -271,8 +281,22 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
+                        self.commands.take_completion_confirmed(&session_id);
+                        let sensitive = self.commands.take_completion_sensitive(&session_id)
+                            || self.recording_input_is_sensitive(&session_id);
+                        if !nyaterm_core::completion::privacy::command_may_be_learned(
+                            &command, sensitive,
+                        ) {
+                            continue;
+                        }
                         self.session.record_command_history(&session_id, &command);
-                        if !self.commands.queue_command_history(vec![command]) {
+                        let context = self.commands.command_context(&session_id).cloned();
+                        let queued = if let Some(context) = context {
+                            self.commands.observe_completion_command(context, command)
+                        } else {
+                            self.commands.queue_command_history(vec![command])
+                        };
+                        if !queued {
                             self.settings.update_store_status(
                                 "command history worker is unavailable",
                                 false,

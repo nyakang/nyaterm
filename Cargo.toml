@@ -47,6 +47,7 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nucleo-matcher = "0.3.1"
 automerge = "=0.12.0"
 httpdate = "1.0"
 http = "1"

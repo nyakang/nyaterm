@@ -4,17 +4,17 @@ use nyaterm_ui::{NyaScrollable, NyaTooltip};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::features::commands::completion_runtime::{CompletionQuery, CompletionRuntime};
 use gpui::{
     Bounds, Context, FontWeight, IntoElement, KeyDownEvent, Pixels, SharedString, div, prelude::*,
     px, rgb, rgba, svg,
 };
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
-use nyaterm_core::{
-    CommandHistoryEntry, QuickCommand, TerminalInputState, can_suggest_from_tracked_command,
-    get_tracked_command, manual_empty_command_suggestions, search_command_sources,
-    terminal_input_tracker_below_min_chars,
+use nyaterm_core::completion::types::{
+    CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
+    CompletionScope, ShellCommandContext, ShellDialect,
 };
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
+use nyaterm_core::{QuickCommand, TerminalInputState, terminal_input_tracker_below_min_chars};
 use nyaterm_terminal::editing::resolve_input;
 
 use crate::features::NyaTermApp;
@@ -96,7 +96,9 @@ struct CommandSuggestionSearchRequest {
     pattern_chars: usize,
     min_chars: usize,
     max_chars: usize,
-    history: Arc<[CommandHistoryEntry]>,
+    mode: CompletionMode,
+    context: ShellCommandContext,
+    completion: CompletionRuntime,
     quick_commands: Arc<[QuickCommand]>,
     started_at: Instant,
     popup_visible_at_start: bool,
@@ -155,6 +157,14 @@ fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> O
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn completion_has_marked_shell(&self, session_id: &str) -> bool {
+        self.terminal
+            .editing
+            .sessions
+            .get(session_id)
+            .is_some_and(|state| state.observed_anchor.flatten().is_some())
+    }
+
     /// Whether the active session's program is driving the alternate screen.
     ///
     /// Full-screen programs such as vim, less, top and nano own the keyboard
@@ -172,6 +182,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn dismiss_command_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.terminal.assist.command_suggestion_mode = CompletionMode::Token;
         self.terminal.assist.command_suggestion_search_gen = self
             .terminal
             .assist
@@ -189,6 +200,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn clear_command_suggestion_draft(&mut self, cx: &mut Context<Self>) {
+        self.terminal.assist.command_suggestion_mode = CompletionMode::Token;
         self.terminal.assist.command_suggestion_search_gen = self
             .terminal
             .assist
@@ -285,8 +297,17 @@ impl NyaTermApp {
             .summary()
             .interaction_command_suggestion_min_chars
             .max(1) as usize;
-        let below_min_chars =
-            terminal_input_tracker_below_min_chars(self.terminal.editing.assist_input(), min_chars);
+        let below_min_chars = self.terminal.assist.command_suggestion_mode == CompletionMode::Token
+            && terminal_input_tracker_below_min_chars(
+                self.terminal.editing.assist_input(),
+                min_chars,
+            )
+            && !self
+                .terminal
+                .editing
+                .assist_input()
+                .value
+                .contains(char::is_whitespace);
         timing.min_chars = min_chars_started_at.elapsed();
         if below_min_chars {
             let hide_started_at = Instant::now();
@@ -311,7 +332,7 @@ impl NyaTermApp {
         let pager_input =
             command_suggestion_input_obvious_pager_prefix(self.terminal.editing.assist_input());
         timing.pager = pager_started_at.elapsed();
-        if pager_input {
+        if pager_input && self.terminal.assist.command_suggestion_mode == CompletionMode::Token {
             let hide_started_at = Instant::now();
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal
@@ -361,6 +382,16 @@ impl NyaTermApp {
         delay: Duration,
         cx: &mut Context<Self>,
     ) {
+        let mode = self.terminal.assist.command_suggestion_mode;
+        self.schedule_command_suggestion_search_mode(delay, mode, cx);
+    }
+
+    fn schedule_command_suggestion_search_mode(
+        &mut self,
+        delay: Duration,
+        mode: CompletionMode,
+        cx: &mut Context<Self>,
+    ) {
         self.terminal.assist.command_suggestion_search_gen = self
             .terminal
             .assist
@@ -390,28 +421,23 @@ impl NyaTermApp {
                         );
                         return None;
                     }
-                    this.prepare_command_suggestion_search(request_id, cx)
+                    this.prepare_command_suggestion_search(request_id, mode, cx)
                 });
                 let Ok(Some(request)) = request else {
                     return;
                 };
                 let search_started_at = Instant::now();
-                let pattern = request.pattern.clone();
-                let min_chars = request.min_chars;
-                let max_chars = request.max_chars;
-                let history = request.history.clone();
-                let quick_commands = request.quick_commands.clone();
-                let search_task = cx.background_spawn(async move {
-                    search_command_sources(
-                        &history,
-                        &quick_commands,
-                        &pattern,
-                        12,
-                        Some(min_chars),
-                        Some(max_chars),
-                    )
-                });
-                let results = search_task.await;
+                let results = request
+                    .completion
+                    .search(CompletionQuery {
+                        context: request.context.clone(),
+                        input: request.pattern.clone(),
+                        mode: request.mode,
+                        quick: request.quick_commands.clone(),
+                        min: request.min_chars,
+                        max: request.max_chars,
+                    })
+                    .await;
                 let search_duration = search_started_at.elapsed();
                 let _ = this.update(cx, |this, cx| {
                     this.publish_command_suggestion_search(request, results, search_duration, cx);
@@ -447,7 +473,7 @@ impl NyaTermApp {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
-        let Some(session_id) = self
+        let Some(_session_id) = self
             .session
             .active_id()
             .filter(|session_id| !session_id.is_empty())
@@ -465,81 +491,29 @@ impl NyaTermApp {
             return;
         }
 
-        self.terminal.assist.command_suggestion_search_gen = self
-            .terminal
-            .assist
-            .command_suggestion_search_gen
-            .saturating_add(1);
-        self.terminal.assist.command_suggestion_refresh_task = None;
-        let min_chars = self
-            .settings
-            .summary()
-            .interaction_command_suggestion_min_chars
-            .max(1) as usize;
-        let max_chars = self
-            .settings
-            .summary()
-            .interaction_command_suggestion_max_chars
-            .max(min_chars as u32) as usize;
-        let pattern = get_tracked_command(self.terminal.editing.assist_input());
-        let pattern_chars = pattern.chars().count();
-        let results = if pattern.trim().is_empty() {
-            manual_empty_command_suggestions(
-                &self.commands.command_history_snapshot(),
-                &self.commands.quick_commands_snapshot(),
-                12,
-                Some(min_chars),
-                Some(max_chars),
-            )
-        } else if can_suggest_from_tracked_command(self.terminal.editing.assist_input(), &pattern) {
-            search_command_sources(
-                &self.commands.command_history_snapshot(),
-                &self.commands.quick_commands_snapshot(),
-                &pattern,
-                12,
-                Some(min_chars),
-                Some(max_chars),
-            )
-        } else {
-            Vec::new()
-        };
-        if results.is_empty() {
-            self.hide_command_suggestions_if_present(cx);
-            return;
-        }
+        self.terminal.assist.command_suggestion_mode = CompletionMode::History;
+        self.schedule_command_suggestion_search_mode(
+            COMMAND_SUGGESTION_REFRESH_DEBOUNCE,
+            CompletionMode::History,
+            cx,
+        );
+    }
 
-        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
-        self.terminal.assist.command_suggestions = Some(CommandSuggestionState {
-            session_id,
-            input_version: self
-                .terminal
-                .editing
-                .state()
-                .map_or(0, |state| state.model.version),
-            sync_revision: self.sync_input.revision(),
-            draft: pattern,
-            items: results
-                .into_iter()
-                .map(|item| CommandSuggestionItem {
-                    command: item.command,
-                    display: item.display,
-                    source: item.source,
-                    score: item.score,
-                    indices: item.indices,
-                })
-                .collect(),
-            selected_index: None,
-            cursor_row,
-            cursor_col,
-        });
-        self.shell
-            .set_status(format!("showing {pattern_chars}-char command suggestions"));
-        cx.notify();
+    fn command_suggestion_context(&self, session: &str) -> ShellCommandContext {
+        self.commands
+            .command_context(session)
+            .cloned()
+            .unwrap_or(ShellCommandContext {
+                scope: CompletionScope::legacy(),
+                dialect: ShellDialect::Unknown,
+                command_events: false,
+            })
     }
 
     fn prepare_command_suggestion_search(
         &mut self,
         request_id: u64,
+        mode: CompletionMode,
         cx: &mut Context<Self>,
     ) -> Option<CommandSuggestionSearchRequest> {
         let started_at = Instant::now();
@@ -608,23 +582,30 @@ impl NyaTermApp {
             .interaction_command_suggestion_max_chars
             .max(min_chars as u32) as usize;
         let pattern_started_at = Instant::now();
-        let pattern = get_tracked_command(self.terminal.editing.assist_input());
+        let pattern = self.terminal.editing.assist_input().value.clone();
         let pattern_chars = pattern.chars().count();
         timing.pattern = pattern_started_at.elapsed();
-        if !can_suggest_from_tracked_command(self.terminal.editing.assist_input(), &pattern) {
+        if !command_suggestion_input_can_defer_refresh(self.terminal.editing.assist_input())
+            || (mode == CompletionMode::Token && pattern.is_empty())
+        {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("not_eligible", pattern_chars, 0);
         }
-        if pattern_chars < min_chars {
+        if mode == CompletionMode::Token
+            && pattern_chars < min_chars
+            && !pattern.contains(char::is_whitespace)
+        {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("below_min_chars", pattern_chars, 0);
         }
         // Pager/search-like prefixes: hide suggestions.
-        if pattern.starts_with('/') || pattern.starts_with('?') || pattern.starts_with(':') {
+        if mode == CompletionMode::Token
+            && (pattern.starts_with('/') || pattern.starts_with('?') || pattern.starts_with(':'))
+        {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
             timing.hide_popup = hide_started_at.elapsed();
@@ -632,14 +613,16 @@ impl NyaTermApp {
         }
         Some(CommandSuggestionSearchRequest {
             request_id,
-            session_id,
+            session_id: session_id.clone(),
             input_version: self.terminal.editing.state()?.model.version,
             sync_revision: self.sync_input.revision(),
             pattern,
             pattern_chars,
             min_chars,
             max_chars,
-            history: self.commands.command_history_snapshot(),
+            mode,
+            context: self.command_suggestion_context(&session_id),
+            completion: self.commands.completion_runtime(),
             quick_commands: self.commands.quick_commands_snapshot(),
             started_at,
             popup_visible_at_start,
@@ -650,11 +633,13 @@ impl NyaTermApp {
     fn publish_command_suggestion_search(
         &mut self,
         request: CommandSuggestionSearchRequest,
-        results: Vec<nyaterm_core::FuzzyResult>,
+        result: CompletionResult,
         search_duration: Duration,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.assist.command_suggestion_search_gen != request.request_id
+        if self.commands.completion_runtime().revision() != result.revision
+            || self.command_suggestion_context(&request.session_id).scope != request.context.scope
+            || self.terminal.assist.command_suggestion_search_gen != request.request_id
             || self.session.active_id() != Some(request.session_id.as_str())
             || self
                 .terminal
@@ -670,7 +655,7 @@ impl NyaTermApp {
                 .settings
                 .summary()
                 .interaction_command_suggestions_enabled
-            || get_tracked_command(self.terminal.editing.assist_input()) != request.pattern
+            || self.terminal.editing.assist_input().value != request.pattern
         {
             return;
         }
@@ -680,6 +665,10 @@ impl NyaTermApp {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
+        let results = result.candidates;
+        let completion_revision = result.revision;
+        let scope = Some(request.context.scope.clone());
+        let mode = request.mode;
         let CommandSuggestionSearchRequest {
             session_id,
             input_version,
@@ -712,21 +701,18 @@ impl NyaTermApp {
         timing.cursor = cursor_started_at.elapsed();
         let update_started_at = Instant::now();
         let next_state = CommandSuggestionState {
+            mode,
+            completion_revision,
+            scope,
             session_id,
             input_version,
             sync_revision,
-            draft: pattern,
+            draft: pattern.clone(),
             items: results
                 .into_iter()
-                .map(|item| CommandSuggestionItem {
-                    command: item.command,
-                    display: item.display,
-                    source: item.source,
-                    score: item.score,
-                    indices: item.indices,
-                })
+                .map(|item| completion_suggestion_item(item, &pattern, mode))
                 .collect(),
-            selected_index: None,
+            selected_index: (mode == CompletionMode::Token).then_some(0),
             cursor_row,
             cursor_col,
         };
@@ -891,8 +877,13 @@ impl NyaTermApp {
             return false;
         }
         let session_id = state.session_id.clone();
-        let accepting = command_suggestion_item_for_selection(&state.items, state.selected_index)
-            .is_some()
+        let accepting = command_suggestion_item_for_selection(
+            &state.items,
+            state
+                .selected_index
+                .or_else(|| (state.mode == CompletionMode::Token).then_some(0)),
+        )
+        .is_some()
             && matches!(event.keystroke.key.as_str(), "tab" | "enter")
             && !event.keystroke.modifiers.modified();
         if self.session.active_id() != Some(session_id.as_str())
@@ -1002,10 +993,30 @@ impl NyaTermApp {
         let Some(popup) = self.terminal.assist.command_suggestions.clone() else {
             return SuggestionSubmitResult::NotHandled;
         };
-        let Some(item) = command_suggestion_item_for_selection(&popup.items, popup.selected_index)
-        else {
+        let execute_requested = execute_requested && popup.mode == CompletionMode::History;
+        let Some(item) = command_suggestion_item_for_selection(
+            &popup.items,
+            popup
+                .selected_index
+                .or_else(|| (popup.mode == CompletionMode::Token).then_some(0)),
+        ) else {
             return SuggestionSubmitResult::NotHandled;
         };
+        if !item.fillable {
+            return self.reject_command_suggestion(
+                "Cannot safely append this match; edit the command manually",
+                cx,
+            );
+        }
+        if popup.scope.as_ref().is_some_and(|scope| {
+            *scope != self.command_suggestion_context(&popup.session_id).scope
+                || self.commands.completion_runtime().revision() != popup.completion_revision
+        }) {
+            return self.reject_command_suggestion(
+                "Completion context changed; select a current suggestion",
+                cx,
+            );
+        }
         if self.session.active_id() != Some(popup.session_id.as_str())
             || self.session.is_disconnected(&popup.session_id)
             || self.active_terminal_input_blocked()
@@ -1107,44 +1118,26 @@ impl NyaTermApp {
         if command.is_empty() {
             return;
         }
-        let request_command = command.clone();
-        self.submit_store_request(
-            0,
-            store_request(StoreDomain::Commands, move |store| {
-                store.delete_command_history(&request_command)?;
-                store.list_command_history(64)
-            }),
-            move |this, event, cx| {
-                match event.outcome {
+        self.dismiss_command_suggestions(cx);
+        let runtime = self.commands.completion_runtime();
+        cx.spawn(async move |this, cx| {
+            let outcome = runtime.delete(command.clone()).await;
+            let _ = this.update(cx, |this, cx| {
+                match outcome {
                     Ok(history) => {
                         this.commands.replace_command_history(history);
                         this.session.remove_command_from_all_history(&command);
-                        if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
-                            state.items.retain(|item| {
-                                !(item.source == "history" && item.command == command)
-                            });
-                            if state.items.is_empty() {
-                                this.terminal.assist.command_suggestions = None;
-                            } else {
-                                state.selected_index = command_suggestion_clamp_selection(
-                                    state.selected_index,
-                                    state.items.len(),
-                                );
-                            }
-                        } else {
-                            this.refresh_command_suggestions(cx);
-                        }
-                        this.shell
-                            .set_status(format!("deleted history command '{command}'"));
+                        this.shell.set_status("History command deleted");
+                        this.refresh_command_suggestions(cx);
                     }
                     Err(error) => this
                         .shell
                         .set_status(format!("failed to delete history: {error}")),
                 }
                 cx.notify();
-            },
-            cx,
-        );
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn command_suggestions_overlay(
@@ -1203,7 +1196,7 @@ impl NyaTermApp {
         for (index, item) in state.items.iter().enumerate() {
             let selected = state.selected_index == Some(index);
             let source_icon = match item.source.as_str() {
-                "history" => "icons/history.svg",
+                "history" | "legacyHistory" | "tokenHistory" => "icons/history.svg",
                 _ => "icons/commands.svg",
             };
             let label = if item.display.trim().is_empty() {
@@ -1213,7 +1206,9 @@ impl NyaTermApp {
             };
             let show_full_command = label.chars().count() > 48;
             let full_command = item.command.clone();
-            let is_history = item.source == "history";
+            let is_history = matches!(item.source.as_str(), "history" | "legacyHistory");
+            let description = item.description.clone();
+            let fillable = item.fillable;
             let delete_command = item.command.clone();
             let mut row = div()
                 .id(SharedString::from(format!("command-suggestion-{index}")))
@@ -1236,6 +1231,7 @@ impl NyaTermApp {
                 }))
                 .text_size(px(11.))
                 .text_color(rgb(palette.text))
+                .opacity(if fillable { 1.0 } else { 0.5 })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
@@ -1269,10 +1265,26 @@ impl NyaTermApp {
                             selected,
                         )),
                 );
-            if show_full_command {
+            if show_full_command || !description.is_empty() || !fillable {
                 row = row.tooltip(move |window, cx| {
-                    NyaTooltip::new(full_command.clone()).build(window, cx)
+                    let label = if !fillable {
+                        t!("suggestions.unsafeSuffix").to_string()
+                    } else if !description.is_empty() {
+                        description.clone()
+                    } else {
+                        full_command.clone()
+                    };
+                    NyaTooltip::new(label).build(window, cx)
                 });
+            }
+            if item.source == "legacyHistory" {
+                row = row.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(9.))
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("suggestions.legacyHistory").to_string()),
+                );
             }
             if is_history {
                 row = row.child(
@@ -1424,6 +1436,44 @@ impl NyaTermApp {
                 menu_size: (menu_w, menu_h),
             },
         )
+    }
+}
+
+fn completion_suggestion_item(
+    item: CompletionCandidate,
+    input: &str,
+    mode: CompletionMode,
+) -> CommandSuggestionItem {
+    let source = if mode == CompletionMode::History {
+        if item.kind == CandidateKind::QuickCommand {
+            "quickCommand"
+        } else if item.sources.contains(&CandidateSource::History) {
+            "history"
+        } else if item.sources.contains(&CandidateSource::LegacyHistory) {
+            "legacyHistory"
+        } else {
+            "history"
+        }
+    } else if item.sources.contains(&CandidateSource::Catalog) {
+        "static"
+    } else if item.sources.contains(&CandidateSource::History) {
+        "tokenHistory"
+    } else {
+        "quickToken"
+    };
+    let description = if source == "legacyHistory" {
+        t!("suggestions.legacyHistory").to_string()
+    } else {
+        item.description.clone()
+    };
+    CommandSuggestionItem {
+        command: item.target_line(input).unwrap_or_default(),
+        display: item.display,
+        source: source.into(),
+        score: item.score,
+        indices: item.indices,
+        fillable: item.fillable,
+        description,
     }
 }
 
@@ -1694,6 +1744,32 @@ fn terminal_line_prefix_for_cell_col(line: &str, cell_col: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    pub(super) fn history_search_fixture(
+        command: &str,
+        input: &str,
+        revision: u64,
+    ) -> nyaterm_core::completion::types::CompletionResult {
+        use nyaterm_core::completion::types::{
+            CandidateKind, CandidateSource, CompletionCandidate, CompletionResult,
+        };
+        CompletionResult {
+            revision,
+            candidates: vec![CompletionCandidate {
+                display: command.into(),
+                insert_text: command.into(),
+                description: String::new(),
+                range: 0..input.len(),
+                kind: CandidateKind::History,
+                sources: vec![CandidateSource::History],
+                use_count: 1,
+                last_used_at_ms: 1,
+                score: 1,
+                indices: vec![],
+                fillable: command.starts_with(input),
+                context_priority: 1,
+            }],
+        }
+    }
     use std::time::{Duration, Instant};
 
     use gpui::{AppContext as _, KeyDownEvent, TestAppContext};
@@ -1727,17 +1803,38 @@ mod tests {
             app.terminal
                 .seed_session_view("s1".into(), "$ echo abc".into(), "UTF-8");
             app.reconcile_shell_editing("s1", cx);
-            assert!(app.prepare_command_suggestion_search(1, cx).is_some());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
             assert!(app.can_use_smart_cursor_selection());
             app.terminal.assist.credential_prompt_input_until_ms = u64::MAX;
             assert!(app.is_credential_prompt_input_mode());
-            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
             assert!(!app.can_use_smart_cursor_selection());
 
             // The toggle must release these gates without waiting for output or a timeout.
             app.toggle_credential_autofill(cx);
             assert!(!app.is_credential_prompt_input_mode());
-            assert!(app.prepare_command_suggestion_search(1, cx).is_some());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
             assert!(app.can_use_smart_cursor_selection());
         });
     }
@@ -1755,19 +1852,28 @@ mod tests {
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"echo", cx);
             let request = app
-                .prepare_command_suggestion_search(1, cx)
+                .prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx,
+                )
                 .expect("ordinary typing predictions can request suggestions");
             app.terminal.editing.state_mut().model.invalidate();
-            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
             app.publish_command_suggestion_search(
                 request,
-                vec![nyaterm_core::FuzzyResult {
-                    command: "echo example".into(),
-                    source: "history".into(),
-                    score: 1,
-                    indices: vec![],
-                    display: "echo example".into(),
-                }],
+                history_search_fixture(
+                    "echo example",
+                    "echo ex",
+                    app.commands.completion_runtime().revision(),
+                ),
                 Duration::ZERO,
                 cx,
             );
@@ -1849,11 +1955,16 @@ mod tests {
     #[test]
     fn command_suggestion_state_change_skips_identical_overlay() {
         let state = CommandSuggestionState {
+            mode: nyaterm_core::completion::types::CompletionMode::History,
+            completion_revision: 0,
+            scope: None,
             session_id: "session".to_string(),
             input_version: 0,
             sync_revision: 0,
             draft: "git".to_string(),
             items: vec![CommandSuggestionItem {
+                fillable: true,
+                description: String::new(),
                 command: "git status".to_string(),
                 display: "git status".to_string(),
                 source: "history".to_string(),
@@ -1899,6 +2010,8 @@ mod tests {
     #[test]
     fn command_suggestion_accept_requires_selected_item() {
         let items = vec![CommandSuggestionItem {
+            fillable: true,
+            description: String::new(),
             command: "git status".to_string(),
             display: "git status".to_string(),
             source: "history".to_string(),
@@ -1951,11 +2064,16 @@ mod tests {
 
     fn open_suggestions_popup(session_id: &str) -> CommandSuggestionState {
         CommandSuggestionState {
+            mode: nyaterm_core::completion::types::CompletionMode::History,
+            completion_revision: 0,
+            scope: None,
             session_id: session_id.to_string(),
             input_version: 0,
             sync_revision: 0,
             draft: "1".to_string(),
             items: vec![CommandSuggestionItem {
+                fillable: true,
+                description: String::new(),
                 command: "1111".to_string(),
                 display: "1111".to_string(),
                 source: "history".to_string(),
@@ -2140,7 +2258,14 @@ mod tests {
 
             // A search deferred on the shell line would otherwise land after the
             // program has taken the screen; the request must be dropped.
-            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
             assert!(app.terminal.assist.command_suggestions.is_none());
         });
     }
@@ -2162,8 +2287,12 @@ mod tests {
             *app.terminal.editing.input_mut() =
                 apply_terminal_input_data(&TerminalInputState::new(), "vim 1");
             app.terminal.editing.state_mut().model.confirm();
-            app.prepare_command_suggestion_search(1, cx)
-                .expect("shell line should still build a request")
+            app.prepare_command_suggestion_search(
+                1,
+                nyaterm_core::completion::types::CompletionMode::Token,
+                cx,
+            )
+            .expect("shell line should still build a request")
         });
 
         // The user starts a full-screen program while the search is running.
@@ -2178,13 +2307,11 @@ mod tests {
 
         cx.update_entity(&app, |app, cx| {
             assert!(app.active_terminal_uses_alternate_screen());
-            let results = vec![nyaterm_core::FuzzyResult {
-                command: "vim 1111".to_string(),
-                score: 1,
-                indices: Vec::new(),
-                source: "history".to_string(),
-                display: "vim 1111".to_string(),
-            }];
+            let results = history_search_fixture(
+                "vim 1111",
+                "vim 1",
+                app.commands.completion_runtime().revision(),
+            );
             app.publish_command_suggestion_search(request, results, Duration::ZERO, cx);
             assert!(app.terminal.assist.command_suggestions.is_none());
         });

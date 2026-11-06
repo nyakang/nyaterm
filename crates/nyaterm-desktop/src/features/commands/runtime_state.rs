@@ -73,6 +73,12 @@ impl CommandRuntimeState {
         true
     }
 
+    pub(super) fn result_sender(&self) -> UnboundedSender<CommandPersistenceResult> {
+        self.result_tx.clone()
+    }
+    pub(super) fn note_queued(&mut self) {
+        self.pending = self.pending.saturating_add(1);
+    }
     pub(in crate::features) fn take_event_receiver(
         &mut self,
     ) -> Option<UnboundedReceiver<CommandPersistenceResult>> {

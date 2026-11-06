@@ -641,6 +641,7 @@ impl SessionEventQueueInner {
                     stats.dropped_output_bytes = stats.dropped_output_bytes.saturating_add(*bytes);
                 }
                 SessionEvent::CwdChanged { .. }
+                | SessionEvent::CommandContext { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
@@ -711,6 +712,7 @@ impl SessionEventQueueInner {
                     stats.dropped_output_bytes = stats.dropped_output_bytes.saturating_add(*bytes);
                 }
                 SessionEvent::CwdChanged { .. }
+                | SessionEvent::CommandContext { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
@@ -744,6 +746,7 @@ fn event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
+        | SessionEvent::CommandContext { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
         | SessionEvent::Exited { session_id, .. }
         | SessionEvent::CleanupFailed { session_id, .. }

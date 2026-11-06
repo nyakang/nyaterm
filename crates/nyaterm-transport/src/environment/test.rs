@@ -51,7 +51,6 @@ use std::{fs, path::PathBuf};
 
 #[cfg(any(unix, windows))]
 impl super::ShellEnvironmentCache {
-    #[cfg(windows)]
     pub(crate) fn with_values_for_test(
         program: PathBuf,
         values: std::collections::HashMap<String, EnvironmentValue>,

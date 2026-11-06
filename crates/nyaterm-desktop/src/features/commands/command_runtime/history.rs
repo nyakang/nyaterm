@@ -263,12 +263,50 @@ impl NyaTermApp {
         if submitted.is_empty() {
             return;
         }
+        let mut recorded = std::collections::HashSet::new();
+        let mut fallback = std::collections::HashSet::new();
         for session_id in session_ids {
+            let context = self.commands.command_context(session_id).cloned();
+            // The marked shell owns the observation. Do not consume its secret
+            // latch until CommandAccepted arrives from that same submission.
+            if self.completion_has_marked_shell(session_id)
+                && context
+                    .as_ref()
+                    .is_some_and(|context| context.command_events)
+            {
+                continue;
+            }
+            let sensitive = self.commands.take_completion_sensitive(session_id)
+                || self.recording_input_is_sensitive(session_id);
+            let confirmed = self.commands.take_completion_confirmed(session_id);
             for command in &submitted {
+                if !nyaterm_core::completion::privacy::command_may_be_learned(command, sensitive) {
+                    continue;
+                }
                 self.session.record_command_history(session_id, command);
+                if let Some(context) = context.clone().filter(|_| confirmed) {
+                    let include_global = !recorded.contains(command);
+                    if self.commands.observe_completion_submission(
+                        context,
+                        command.clone(),
+                        include_global,
+                    ) {
+                        recorded.insert(command.clone());
+                    } else {
+                        self.settings
+                            .update_store_status("completion worker is unavailable", false);
+                    }
+                } else {
+                    fallback.insert(command.clone());
+                }
             }
         }
-        if !self.commands.queue_command_history(submitted) {
+        let mut fallback: Vec<_> = fallback
+            .into_iter()
+            .filter(|command| !recorded.contains(command))
+            .collect();
+        fallback.sort();
+        if !fallback.is_empty() && !self.commands.queue_command_history(fallback) {
             self.settings
                 .update_store_status("command history worker is unavailable", false);
         }

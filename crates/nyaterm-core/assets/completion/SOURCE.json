@@ -1,0 +1,18 @@
+{
+  "source": "carapace-bin",
+  "release": "v1.8.1",
+  "commit": "6bc2b8d69a2474b6eeb626a85ef83254c2ab7d82",
+  "license": "MIT",
+  "archive_sha256": "2a3838b27dcd56e9ee6a4f1008a260a1ff55422f6b726a559e29a2fafda8b393",
+  "catalog_sha256": "18a99bebbbc3b38723ca52e6954f05a505cd64237cc4508afc0bda074e57f7e3",
+  "statistics": {
+    "files": 6573,
+    "roots": 741,
+    "nodes": 6610,
+    "flags": 48685,
+    "skipped_files": 1,
+    "skipped_flags": 360,
+    "skipped_commands": 48,
+    "skipped_values": 427
+  }
+}

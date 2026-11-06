@@ -27,6 +27,7 @@ mod app_settings;
 mod cloud_sync;
 mod cloud_sync_v4;
 mod command_history;
+mod completion_history;
 mod config_backup;
 mod keyword_highlights;
 mod known_hosts;
@@ -145,6 +146,8 @@ pub enum StorageError {
     Transaction(#[from] redb::TransactionError),
     #[error("redb commit error: {0}")]
     Commit(#[from] redb::CommitError),
+    #[error("completion history error: {0}")]
+    CompletionHistory(&'static str),
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("portable snapshot error: {0}")]
@@ -196,6 +199,7 @@ pub struct ConnectionStore {
     db: Database,
     db_path: PathBuf,
     portable_key_path: Option<PathBuf>,
+    completion_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -232,8 +236,10 @@ impl ConnectionStore {
             db,
             db_path,
             portable_key_path,
+            completion_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         store.ensure_tables()?;
+        store.initialize_completion_history()?;
         store.ensure_portable_key()?;
         store.migrate_legacy_panel_visibility()?;
         store.migrate_legacy_rdp_known_hosts()?;
@@ -910,6 +916,7 @@ impl ConnectionStore {
         txn.open_table(VNC_KNOWN_HOSTS_TABLE)?;
         txn.open_table(PORTABLE_OPAQUE_ENTITIES_TABLE)?;
         txn.open_table(COMMAND_HISTORY_TABLE)?;
+        txn.open_table(completion_history::COMPLETION_HISTORY_TABLE)?;
         txn.open_table(NOTE_FOLDERS_TABLE)?;
         txn.open_table(NOTES_TABLE)?;
         txn.open_table(NOTE_SUMMARIES_TABLE)?;
