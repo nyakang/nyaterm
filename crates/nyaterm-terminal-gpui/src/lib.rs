@@ -16,6 +16,7 @@ mod keywords;
 mod paint;
 mod paint_mask;
 mod semantic;
+mod semantic_roles;
 
 static TERMINAL_FONT_FEATURES: OnceLock<FontFeatures> = OnceLock::new();
 
@@ -96,13 +97,14 @@ pub use input::{
 };
 pub use keywords::terminal_buffer_matches;
 pub use keywords::{
-    TerminalKeywordHighlightPrecomputeStats, TerminalKeywordHighlightSnapshot,
-    TerminalKeywordHighlighter, compile_terminal_keyword_highlighter,
-    precompute_terminal_input_highlights, precompute_terminal_input_highlights_reusing,
-    precompute_terminal_keyword_highlights, precompute_terminal_keyword_highlights_for_rows,
+    TerminalKeywordHighlightConfig, TerminalKeywordHighlightPrecomputeStats,
+    TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter,
+    compile_terminal_keyword_highlighter, precompute_terminal_keyword_highlights,
+    precompute_terminal_keyword_highlights_for_rows,
     precompute_terminal_keyword_highlights_for_rows_with_stats,
     precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel,
-    terminal_keyword_highlight_expanded_rows, terminal_keyword_rules_key,
+    terminal_keyword_highlight_config_key, terminal_keyword_highlight_expanded_rows,
+    terminal_keyword_rules_key,
 };
 
 #[cfg(test)]

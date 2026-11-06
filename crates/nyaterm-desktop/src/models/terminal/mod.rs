@@ -9,10 +9,6 @@ use nyaterm_terminal::{
     TerminalSearchDirection, TerminalSearchQuery, TerminalSearchRangeMode, TerminalSnapshot,
     TerminalSnapshotBuildStats, terminal_cell_col_for_byte_index, terminal_cell_count,
 };
-use nyaterm_terminal_gpui::{
-    TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter,
-    compile_terminal_keyword_highlighter, precompute_terminal_input_highlights_reusing,
-};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -717,7 +713,6 @@ pub(crate) struct TerminalViewState {
     detached_history: Option<nyaterm_terminal::TerminalHistoryState>,
     /// Immutable input colors paired with frame_snapshot, independent of the
     /// input-idle output batch scheduler. Cleared whenever that snapshot changes.
-    pub(crate) frame_input_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
     pub(crate) frame_action_links: Option<TerminalFrameActionLinks>,
     pub(crate) scrollback_snapshots: HashMap<usize, Arc<TerminalSnapshot>>,
     pub(crate) scrollback_action_links: HashMap<usize, TerminalFrameActionLinks>,
@@ -785,7 +780,6 @@ impl TerminalViewState {
             max_line_number_digits: 1,
             frame_snapshot: None,
             detached_history: None,
-            frame_input_highlights: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
             scrollback_action_links: HashMap::new(),
@@ -839,7 +833,6 @@ impl TerminalViewState {
             max_line_number_digits: 1,
             frame_snapshot: None,
             detached_history: None,
-            frame_input_highlights: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
             scrollback_action_links: HashMap::new(),
@@ -1146,7 +1139,6 @@ impl TerminalViewState {
             }
             append_terminal_ui_output_tail(&mut self.output, &row.text);
         }
-        self.frame_input_highlights = None;
         self.frame_snapshot = None;
         self.frame_action_links = None;
         self.clear_terminal_query_caches();
@@ -1188,7 +1180,6 @@ impl TerminalViewState {
                 .take()
                 .filter(|links| links.has_matching_decorated_snapshot_rows(snapshot.as_ref()))
         });
-        self.frame_input_highlights = None;
         self.detached_history = None;
         self.frame_snapshot = Some(snapshot);
         self.frame_action_links = preserved_action_links;
@@ -1219,7 +1210,6 @@ impl TerminalViewState {
                 .take()
                 .filter(|links| links.has_matching_decorated_snapshot_rows(snapshot.as_ref()))
         });
-        self.frame_input_highlights = None;
         self.detached_history = None;
         self.frame_snapshot = Some(snapshot);
         self.frame_action_links = preserved_action_links;
@@ -1249,14 +1239,12 @@ impl TerminalViewState {
         // viewport snapshot until the surface becomes visible again.
         if let Some(snapshot) = snapshot {
             self.observe_line_number_digits(&snapshot);
-            self.frame_input_highlights = None;
             self.detached_history = None;
             self.frame_snapshot = Some(snapshot);
             self.frame_action_links = action_links;
             self.grid_resize_pending = false;
         } else {
             // Drop heavy paint state while backgrounded under pressure.
-            self.frame_input_highlights = None;
             self.detached_history = Some(previous_history);
             self.frame_snapshot = None;
             self.clear_scrollback_query_caches();
@@ -1321,7 +1309,6 @@ impl TerminalViewState {
         }
         self.observe_line_number_digits(&snapshot);
         if offset == 0 {
-            self.frame_input_highlights = None;
             self.detached_history = None;
             self.frame_snapshot = Some(snapshot);
             return;
@@ -1483,11 +1470,7 @@ impl TerminalFramePipeline {
         if Arc::ptr_eq(&current, &rules) || current.as_ref() == rules.as_ref() {
             return;
         }
-        if self.command_tx.send(TerminalFrameCommand::SetKeywordRules {
-            rules: rules.clone(),
-        }) {
-            *current = rules;
-        }
+        *current = rules;
     }
 
     pub(crate) fn take_events_for_transfer(
@@ -2072,9 +2055,6 @@ enum TerminalFrameCommand {
         session_id: String,
         event: ExecutionRecordingEvent,
     },
-    SetKeywordRules {
-        rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
-    },
     DecodedOutput {
         session_id: String,
         text: String,
@@ -2454,48 +2434,6 @@ fn terminal_frame_event_wake_interest(event: &TerminalFrameEvent) -> u8 {
     }
 }
 
-fn prepare_terminal_frame_input_highlights(
-    event: &mut TerminalFrameEvent,
-    highlighter: &TerminalKeywordHighlighter,
-    cache: &mut HashMap<String, Arc<TerminalKeywordHighlightSnapshot>>,
-) {
-    let session_id = event.session_id().to_owned();
-    let previous = cache.get(&session_id).cloned();
-    let highlights = match event {
-        TerminalFrameEvent::Output(frame) if !frame.protocol_state.alternate_screen => {
-            let started_at = Instant::now();
-            frame.input_highlights = frame.snapshot.as_deref().and_then(|snapshot| {
-                precompute_terminal_input_highlights_reusing(
-                    snapshot,
-                    highlighter,
-                    previous.as_deref(),
-                )
-                .map(Arc::new)
-            });
-            frame.process_duration += started_at.elapsed();
-            frame.input_highlights.clone()
-        }
-        TerminalFrameEvent::Snapshot(frame) | TerminalFrameEvent::ClearExceptInput(frame) => {
-            let started_at = Instant::now();
-            frame.input_highlights = precompute_terminal_input_highlights_reusing(
-                &frame.snapshot,
-                highlighter,
-                previous.as_deref(),
-            )
-            .map(Arc::new);
-            frame.process_duration += started_at.elapsed();
-            frame.input_highlights.clone()
-        }
-        TerminalFrameEvent::Output(_) => None,
-        _ => return,
-    };
-    if let Some(highlights) = highlights {
-        cache.insert(session_id, highlights);
-    } else {
-        cache.remove(&session_id);
-    }
-}
-
 fn push_terminal_frame_worker_event(
     event_queue: &TerminalFrameEventQueue,
     event: TerminalFrameEvent,
@@ -2526,7 +2464,6 @@ pub(crate) struct TerminalFrameOutputEvent {
     pub(crate) snapshot_duration: Duration,
     pub(crate) snapshot_stats: TerminalSnapshotBuildStats,
     pub(crate) process_duration: Duration,
-    pub(crate) input_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2541,7 +2478,6 @@ pub(crate) struct TerminalFrameSnapshotEvent {
     pub(crate) snapshot_stats: TerminalSnapshotBuildStats,
     pub(crate) action_link_stats: TerminalActionLinkBuildStats,
     pub(crate) process_duration: Duration,
-    pub(crate) input_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2795,7 +2731,6 @@ impl TerminalFrameSession {
         let (snapshot, snapshot_duration, snapshot_stats) =
             terminal_frame_snapshot_with_scroll_window_and_stats(&self.screen, 0, false);
         TerminalFrameSnapshotEvent {
-            input_highlights: None,
             session_id,
             offset: 0,
             snapshot,
@@ -2868,7 +2803,6 @@ impl TerminalFrameSession {
             (None, Duration::ZERO, TerminalSnapshotBuildStats::default())
         };
         TerminalFrameOutputEvent {
-            input_highlights: None,
             session_id,
             visible_text: batch.visible_text,
             recording_text_bytes: batch.recording_text_bytes,
@@ -2928,7 +2862,6 @@ impl TerminalFrameSession {
             self.action_link_cache.clone_from(&action_links);
         }
         TerminalFrameSnapshotEvent {
-            input_highlights: None,
             session_id,
             offset: snapshot.display_offset,
             snapshot,
@@ -3774,8 +3707,6 @@ fn run_terminal_frame_processor(
     event_queue: TerminalFrameEventQueue,
     recording_writer: RecordingWriteHandle,
 ) {
-    let mut input_highlighter: Option<Arc<TerminalKeywordHighlighter>> = None;
-    let mut input_highlight_cache = HashMap::new();
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
     let mut logical_line_snapshots = false;
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
@@ -3811,35 +3742,7 @@ fn run_terminal_frame_processor(
             }
             continue;
         };
-        match &command {
-            TerminalFrameCommand::SetKeywordRules { .. } => input_highlight_cache.clear(),
-            TerminalFrameCommand::SeedSession { session_id, .. }
-            | TerminalFrameCommand::RemoveSession { session_id }
-            | TerminalFrameCommand::TakeSession { session_id, .. } => {
-                input_highlight_cache.remove(session_id);
-            }
-            TerminalFrameCommand::InsertSessions { sessions } => {
-                for (session_id, _) in sessions {
-                    input_highlight_cache.remove(session_id);
-                }
-            }
-            TerminalFrameCommand::RekeySession { old_id, new_id, .. } => {
-                input_highlight_cache.remove(old_id);
-                input_highlight_cache.remove(new_id);
-            }
-            _ => {}
-        }
-        // Enrich before enqueueing: consumers can never paint this input text
-        // before its colors. Compiling rules and matching both stay on this worker.
-        let frame_highlighter = input_highlighter.clone();
-        let mut push_event = |queue: &TerminalFrameEventQueue, mut event: TerminalFrameEvent| {
-            if let Some(highlighter) = frame_highlighter.as_deref() {
-                prepare_terminal_frame_input_highlights(
-                    &mut event,
-                    highlighter,
-                    &mut input_highlight_cache,
-                );
-            }
+        let push_event = |queue: &TerminalFrameEventQueue, event: TerminalFrameEvent| {
             push_terminal_frame_worker_event(queue, event);
         };
         match command {
@@ -3862,10 +3765,8 @@ fn run_terminal_frame_processor(
                     }
                 }
             }
-            TerminalFrameCommand::SetKeywordRules { rules } => {
-                input_highlighter = (!rules.is_empty())
-                    .then(|| Arc::new(compile_terminal_keyword_highlighter(&rules)));
-            }
+            // Keyword rules only feed the surface's own highlighter now; the frame
+            // worker no longer pre-parses input rows.
             TerminalFrameCommand::EnsureSession {
                 session_id,
                 encoding,

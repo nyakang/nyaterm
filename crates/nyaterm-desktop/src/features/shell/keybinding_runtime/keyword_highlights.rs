@@ -19,6 +19,36 @@ impl NyaTermApp {
         self.save_keyword_highlights(cx);
     }
 
+    /// Toggle the line-role highlighter from Settings → Terminal → Keyword highlights.
+    pub(in crate::features) fn toggle_line_role_highlights(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.settings.toggle_line_role_highlights();
+        // Open terminals compiled the flag into their highlighter, so push the
+        // new value to them instead of waiting for the session to be reopened.
+        self.terminal.apply_line_role_highlighting(enabled, cx);
+        self.invalidate_paint_theme_caches();
+        self.settings.mark_persistence_dirty(
+            crate::features::settings::SettingsPersistenceDomain::Appearance,
+        );
+        if self.defer_settings_persistence(cx) {
+            return;
+        }
+        let summary = self.settings.summary().clone();
+        self.submit_store_request(
+            0,
+            nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
+                store.save_appearance_settings(&summary)
+            }),
+            |this, event, cx| {
+                if let Err(error) = event.outcome {
+                    this.shell.set_status(error.to_string());
+                }
+                this.request_settings_panel_refresh(cx);
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
     fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
         self.invalidate_paint_theme_caches();
         self.settings.mark_keyword_persistence_dirty();

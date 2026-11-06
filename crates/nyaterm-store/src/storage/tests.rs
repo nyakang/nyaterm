@@ -8416,3 +8416,59 @@ fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unk
     );
     assert_eq!(raw["terminal"]["future"], 42);
 }
+
+#[test]
+fn line_role_settings_default_and_reopen_without_losing_unknown_fields() {
+    let dir = unique_temp_dir("line-role-settings-compatibility");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(&serde_json::json!({
+                "ui": {"future_highlight_option": {"version": 7}},
+                "future_root": ["retained"]
+            }))
+            .unwrap();
+        let mut summary = store.load_app_settings_summary().unwrap();
+        assert!(summary.ui_highlight_line_roles);
+        summary.ui_highlight_line_roles = false;
+        store.save_appearance_settings(&summary).unwrap();
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["ui"]["highlight_line_roles"], false);
+        assert_eq!(raw["ui"]["future_highlight_option"]["version"], 7);
+        assert_eq!(raw["future_root"][0], "retained");
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    assert!(!summary.ui_highlight_line_roles);
+    summary.ui_highlight_line_roles = true;
+    store.save_file_explorer_favorite_dirs(&summary).unwrap();
+    assert!(
+        !store
+            .load_app_settings_summary()
+            .unwrap()
+            .ui_highlight_line_roles
+    );
+    store.save_appearance_settings(&summary).unwrap();
+    assert!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .ui_highlight_line_roles
+    );
+    let mut raw = store.load_settings_value().unwrap();
+    raw["ui"]["highlight_line_roles"] = serde_json::json!({"future": "retained"});
+    store.save_settings_value(&raw).unwrap();
+    let mut fallback = store.load_app_settings_summary().unwrap();
+    assert!(fallback.ui_highlight_line_roles);
+    store.save_appearance_settings(&fallback).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["ui"]["highlight_line_roles"],
+        serde_json::json!({"future": "retained"})
+    );
+    fallback.ui_highlight_line_roles = false;
+    store.save_appearance_settings(&fallback).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["ui"]["highlight_line_roles"],
+        false
+    );
+}

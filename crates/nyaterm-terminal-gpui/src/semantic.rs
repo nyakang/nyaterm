@@ -7,17 +7,26 @@ use std::ops::Range;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use nyaterm_core::keyword_highlight_presets::{
     BuiltinKeywordMatcher, ResolvedKeywordHighlightRule, builtin_keyword_matcher,
-    builtin_keyword_rule_swatch,
+    builtin_keyword_rule_ansi,
 };
 use nyaterm_terminal::terminal_is_zero_width_mark;
 
-use crate::keywords::{is_whole_word_match, parse_hex_rgb};
+use crate::semantic_roles::{self, LineRole};
+
+use crate::keywords::{TerminalKeywordHighlightConfig, is_whole_word_match, parse_hex_rgb};
 
 #[derive(Default)]
 pub(super) struct SemanticContext {
     pub input: Vec<Range<usize>>,
     pub prompt: Vec<Range<usize>>,
     pub integrated: bool,
+    /// Explicit shell output and alternate screens must not become prompt input by shape.
+    pub output: bool,
+    /// A degraded fragment of an oversized logical line cannot establish a role.
+    pub suppress_line_roles: bool,
+    /// Shell integration is active but never published the command start, so the
+    /// prompt fallback still has to describe the input region.
+    pub input_anchor_missing: bool,
     pub continuation: bool,
 }
 
@@ -38,7 +47,7 @@ pub(super) struct SemanticMatch {
     pub color: u32,
     // Priority breaks ties only when two whole matches have identical bounds.
     pub priority: u16,
-    permissions: bool,
+    pub(super) permissions: bool,
 }
 
 struct RegexRule {
@@ -74,6 +83,7 @@ pub(super) struct SemanticHighlighter {
     automaton: Option<AhoCorasick>,
     ipv6_candidate: regex::Regex,
     children: ChildColors,
+    line_roles: bool,
 }
 
 impl SemanticHighlighter {
@@ -81,29 +91,20 @@ impl SemanticHighlighter {
         self.colors.is_empty()
     }
 
-    pub fn compile(rules: &[ResolvedKeywordHighlightRule]) -> Self {
+    pub fn compile(
+        rules: &[ResolvedKeywordHighlightRule],
+        config: TerminalKeywordHighlightConfig,
+    ) -> Self {
         let mut colors = HashMap::new();
         let mut regex = Vec::new();
         let mut words = Vec::new();
         let mut patterns = Vec::new();
-        let dark = rules
-            .iter()
-            .find(|r| r.id == "builtin-string")
-            .or_else(|| rules.iter().find(|r| r.id == "builtin-permissions"))
-            .or_else(|| {
-                rules
-                    .iter()
-                    .find(|r| builtin_keyword_matcher(&r.id).is_some())
-            })
-            .is_none_or(|r| {
-                r.color
-                    .eq_ignore_ascii_case(builtin_keyword_rule_swatch(&r.id, true))
-            });
         for rule in rules.iter().filter(|r| r.enabled) {
             let Some(matcher) = builtin_keyword_matcher(&rule.id) else {
                 continue;
             };
-            let color = parse_hex_rgb(&rule.color).unwrap_or(0x6796e6);
+            let color = parse_hex_rgb(&rule.color)
+                .unwrap_or(config.ansi[usize::from(builtin_keyword_rule_ansi(&rule.id))]);
             colors.insert(rule.id.clone(), color);
             match matcher {
                 BuiltinKeywordMatcher::LiteralWords => {
@@ -161,13 +162,13 @@ impl SemanticHighlighter {
                 .build(patterns)
                 .expect("built-in literal matcher")
         });
-        let swatch =
-            |id| parse_hex_rgb(builtin_keyword_rule_swatch(id, dark)).expect("semantic swatch");
+        let swatch = |id| config.ansi[usize::from(builtin_keyword_rule_ansi(id))];
         Self {
             colors,
             regex,
             words,
             automaton,
+            line_roles: config.line_roles,
             children: ChildColors {
                 read: swatch("builtin-info"),
                 write: swatch("builtin-warn"),
@@ -184,7 +185,15 @@ impl SemanticHighlighter {
         self.colors.get(id).copied()
     }
 
+    /// The colour for a sub-match of a rule.
+    ///
+    /// Prefers the rule's own colour, which already came from the palette the rest
+    /// of the highlighting uses, so nested values match their parent. The
+    /// current ANSI palette supplies child colours when that rule is disabled.
     fn child_color(&self, id: &str) -> u32 {
+        if let Some(color) = self.color(id) {
+            return color;
+        }
         match id {
             "builtin-info" => self.children.read,
             "builtin-warn" => self.children.write,
@@ -263,10 +272,20 @@ impl SemanticHighlighter {
         context: &SemanticContext,
         user_matches: &[(usize, usize, u32)],
     ) -> Vec<SemanticMatch> {
-        let fallback = (!context.integrated && !context.continuation)
+        // The prompt prefix is the eye's anchor for where input starts, so it is
+        // derived from the line shape as well as from the shell anchors. Anchors
+        // only describe the live input line: once the row scrolls back, or the
+        // cursor leaves it, they disappear and the very same prompt would flip to
+        // plain output. Classifying the text keeps the prompt identical in every
+        // state, which is what OxideTerm does.
+        let fallback = (!context.continuation && !context.output)
             .then(|| fallback_prompt(line))
             .flatten();
-        let fallback_input = fallback.map(|(_, start)| start..line.len());
+        // Without usable anchors the prompt also has to describe the input
+        // region, otherwise the command typed after it stays uncoloured.
+        let fallback_input = fallback
+            .filter(|_| !context.integrated || context.input_anchor_missing)
+            .map(|(_, start)| start..line.len());
         let input: &[Range<usize>] = if let Some(ref range) = fallback_input {
             std::slice::from_ref(range)
         } else {
@@ -293,6 +312,34 @@ impl SemanticHighlighter {
                 permissions: false,
             }
         })));
+        // Recognised command output is parsed field by field before the generic
+        // rules run, so an `ip addr` address is an address rather than whatever
+        // the number rule happens to grab first (issue: highlight precision).
+        let role = if self.line_roles && !context.suppress_line_roles {
+            semantic_roles::detect(line)
+        } else {
+            LineRole::Unknown
+        };
+        if role.is_known() {
+            let in_input = &in_input;
+            let in_prompt = &in_prompt;
+            let role_matches = semantic_roles::fields(role, line)
+                .into_iter()
+                .filter(move |field| {
+                    !in_prompt(field.range.start, field.range.end)
+                        && !in_input(field.range.start, field.range.end)
+                })
+                .filter_map(move |field| {
+                    self.color(field.rule).map(|color| SemanticMatch {
+                        start: field.range.start,
+                        end: field.range.end,
+                        color,
+                        priority: field.priority,
+                        permissions: field.rule == "builtin-permissions",
+                    })
+                });
+            sources.push(Box::new(role_matches));
+        }
         if let Some(color) = self.color("builtin-number") {
             let in_input = &in_input;
             let in_prompt = &in_prompt;
@@ -442,7 +489,10 @@ impl SemanticHighlighter {
             self.prompt_sign(line, prompt.clone(), &mut prompts);
         }
         if let Some((sign, _)) = fallback {
-            self.add(&mut prompts, sign..sign + 1, "builtin-prompt", 20);
+            // The prompt span is inferred from the line shape, so the prompt is
+            // punctuated the same way whether this is the live input row or
+            // history.
+            self.prompt_sign(line, 0..sign + 1, &mut prompts);
         }
         sources.push(Box::new(prompts.into_iter()));
         let mut shell = Vec::new();
@@ -483,18 +533,33 @@ impl SemanticHighlighter {
     }
 
     fn prompt_sign(&self, line: &str, region: Range<usize>, out: &mut Vec<SemanticMatch>) {
-        if let Some((offset, ch)) = line[region.clone()]
+        // Only the prompt's punctuation is coloured. A `[user@host dir]#` prompt
+        // gets its brackets, a bare `user@host:dir#` gets its sign: the words
+        // between them stay in the normal foreground so the prompt never competes
+        // with the command typed after it.
+        let text = &line[region.clone()];
+        let Some((sign_offset, sign)) = text
             .char_indices()
             .rev()
             .find(|(_, ch)| !ch.is_whitespace())
-            && matches!(ch, '$' | '#' | '>' | '%' | '❯')
-        {
-            self.add(
-                out,
-                region.start + offset..region.start + offset + ch.len_utf8(),
-                "builtin-prompt",
-                20,
-            );
+        else {
+            return;
+        };
+        if !matches!(sign, '$' | '#' | '>' | '%' | '❯') {
+            return;
+        }
+        let bracketed = text
+            .strip_prefix('[')
+            .and_then(|rest| rest.get(..sign_offset.saturating_sub(1)))
+            .is_some_and(|body| body.ends_with(']'));
+        if bracketed {
+            let open = region.start;
+            let close = region.start + text[..sign_offset].rfind(']').unwrap_or(0);
+            self.add(out, open..open + 1, "builtin-prompt", 20);
+            self.add(out, close..close + 1, "builtin-prompt", 20);
+        } else {
+            let start = region.start + sign_offset;
+            self.add(out, start..start + sign.len_utf8(), "builtin-prompt", 20);
         }
     }
 
@@ -565,6 +630,60 @@ impl SemanticHighlighter {
         let word = &line[range.clone()];
         if command {
             self.add(out, range.clone(), "builtin-command", 22);
+        }
+        // `$VAR` / `${VAR}` / `$1` — shell parameter expansion. The hand-written
+        // lexer already covers commands, options, paths and quoted strings; this
+        // closes the gap that a tree-sitter parse would otherwise fill.
+        {
+            let bytes = word.as_bytes();
+            let mut cursor = 0;
+            while cursor < bytes.len() {
+                if bytes[cursor] != b'$' {
+                    cursor += 1;
+                    continue;
+                }
+                let start = cursor;
+                cursor += 1;
+                if bytes.get(cursor) == Some(&b'{') {
+                    cursor = word[cursor..]
+                        .find('}')
+                        .map(|offset| cursor + offset + 1)
+                        .unwrap_or(bytes.len());
+                } else if bytes.get(cursor) == Some(&b'(') {
+                    // `$(command)` — treat the whole substitution as a variable.
+                    let mut depth = 0usize;
+                    while cursor < bytes.len() {
+                        match bytes[cursor] {
+                            b'(' => depth += 1,
+                            b')' => {
+                                depth = depth.saturating_sub(1);
+                                if depth == 0 {
+                                    cursor += 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        cursor += 1;
+                    }
+                } else {
+                    while cursor < bytes.len()
+                        && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+                    {
+                        cursor += 1;
+                    }
+                }
+                if cursor > start + 1 {
+                    self.add(
+                        out,
+                        range.start + start..range.start + cursor,
+                        "builtin-variable",
+                        // Below `builtin-command` (22): a `$CMD` head is a
+                        // variable first and a command second.
+                        20,
+                    );
+                }
+            }
         }
         if !command
             && (word.starts_with('/')

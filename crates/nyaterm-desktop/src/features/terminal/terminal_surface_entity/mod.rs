@@ -32,10 +32,10 @@ use crate::models::{
 };
 use crate::terminal::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalGridSelection,
-    TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter, TerminalLineDecorations,
-    compile_terminal_keyword_highlighter,
+    TerminalKeywordHighlightConfig, TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter,
+    TerminalLineDecorations, compile_terminal_keyword_highlighter,
     precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel, terminal_font_features,
-    terminal_keyword_highlight_expanded_rows, terminal_keyword_rules_key,
+    terminal_keyword_highlight_config_key, terminal_keyword_highlight_expanded_rows,
 };
 use crate::theme::ThemePalette;
 use std::collections::hash_map::DefaultHasher;
@@ -98,6 +98,10 @@ fn terminal_keyword_highlight_request_key(
     let row_start = rows.start.min(snapshot.row_count());
     let row_end = rows.end.min(snapshot.row_count()).max(row_start);
     let mut hasher = DefaultHasher::new();
+    snapshot.history.alternate_screen.hash(&mut hasher);
+    if rows.contains(&snapshot.cursor.row) {
+        snapshot.cursor.row.hash(&mut hasher);
+    }
     if snapshot.logical_lines.is_some() {
         // The worker owns the full source range. Frame identity is sufficient
         // here and keeps preparing a huge logical line off the UI thread.
@@ -363,8 +367,10 @@ pub(in crate::features) struct TerminalSurface {
     retained_rows: BTreeMap<usize, TerminalRetainedRow>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    /// Cached `ui_highlight_line_roles`; the highlight path runs inside
+    /// `app.update`, where reading the app entity would borrow it twice.
+    line_roles: bool,
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
-    input_keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
     keyword_highlight_generation: u64,
     keyword_highlight_cancel_epoch: Arc<AtomicU64>,
     keyword_highlight_task: Option<gpui::Task<()>>,
@@ -452,8 +458,8 @@ impl TerminalSurface {
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
+            line_roles: true,
             keyword_highlights: None,
-            input_keyword_highlights: None,
             keyword_highlight_generation: 0,
             keyword_highlight_cancel_epoch: Arc::new(AtomicU64::new(0)),
             keyword_highlight_task: None,
@@ -741,8 +747,22 @@ impl TerminalSurface {
         true
     }
 
-    pub(in crate::features) fn set_app(&mut self, app: Entity<NyaTermApp>) {
+    /// Re-apply the line-role setting without recreating the surface.
+    pub(in crate::features) fn set_line_roles(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.line_roles == enabled {
+            return;
+        }
+        self.line_roles = enabled;
+        self.invalidate_keyword_highlight_config();
+        self.schedule_keyword_highlights(true, self.keyword_highlight_output_pressure, cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn set_app(&mut self, app: Entity<NyaTermApp>, line_roles: bool) {
         self.app = Some(app.downgrade());
+        // Cached here because the highlight path runs inside `app.update`, where
+        // reading the app entity again would trip `RefCell already borrowed`.
+        self.line_roles = line_roles;
     }
 
     pub(in crate::features) fn retain_surviving_prefetched_rows(
@@ -860,6 +880,8 @@ impl TerminalSurface {
         self.cursor_style = cursor_style;
         self.prune_pending_scroll_snapshot_offsets();
         self.revision = self.revision.saturating_add(1);
+        // Frames publish text immediately. Keyword compilation and parsing are
+        // scheduled separately, so input never waits for a highlight cache miss.
         true
     }
 
@@ -1721,6 +1743,9 @@ impl TerminalSurface {
         if state_matches {
             return false;
         }
+        if self.palette.terminal_ansi != palette.terminal_ansi {
+            self.invalidate_keyword_highlight_config();
+        }
         self.palette = palette;
         self.font_family = font_family;
         self.font_fallbacks = font_fallbacks;
@@ -1871,8 +1896,7 @@ impl TerminalSurface {
                 || self.show_cursor != show_cursor
                 || self.cursor_style != cursor_style;
             if rules_changed {
-                self.keyword_highlight_cancel_epoch
-                    .fetch_add(1, Ordering::AcqRel);
+                self.invalidate_keyword_highlight_config();
             }
             self.keyword_rules = keyword_rules;
             self.show_cursor = show_cursor;
@@ -1921,33 +1945,12 @@ impl TerminalSurface {
             return false;
         }
         if rules_changed {
-            self.keyword_highlight_cancel_epoch
-                .fetch_add(1, Ordering::AcqRel);
+            self.invalidate_keyword_highlight_config();
         }
         self.decorations = decorations;
         self.keyword_rules = keyword_rules;
         self.show_cursor = show_cursor;
         self.cursor_style = cursor_style;
-        true
-    }
-
-    pub(in crate::features) fn set_input_keyword_highlights(
-        &mut self,
-        highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
-        rules_key: u64,
-    ) -> bool {
-        let highlights = highlights.filter(|highlights| {
-            !self.protocol_state.alternate_screen && highlights.rules_key() == rules_key
-        });
-        let unchanged = match (&self.input_keyword_highlights, &highlights) {
-            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
-            (None, None) => true,
-            _ => false,
-        };
-        if unchanged {
-            return false;
-        }
-        self.input_keyword_highlights = highlights;
         true
     }
 
@@ -1975,29 +1978,49 @@ impl TerminalSurface {
         );
         let visible_rows =
             terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), visible_rows);
+
         let rules = self.keyword_rules.clone();
-        let rules_key = terminal_keyword_rules_key(rules.as_slice());
-        if self.keyword_highlights.as_ref().is_some_and(|highlights| {
+        let config = self.keyword_highlight_config();
+        let rules_key = terminal_keyword_highlight_config_key(rules.as_slice(), config);
+        let visible_ready = self.keyword_highlights.as_ref().is_some_and(|highlights| {
             highlights.rules_key() == rules_key
                 && highlights.matches_snapshot_rows(
                     snapshot.as_ref(),
                     self.palette,
                     visible_rows.clone(),
                 )
-        }) {
+        });
+        if visible_ready && output_pressure {
             if self.keyword_highlight_task.is_none() {
                 self.keyword_highlight_pending_key = None;
             }
             return;
         }
         let prefetch_viewports = terminal_keyword_highlight_prefetch_viewports(output_pressure);
-        let requested_rows = terminal_keyword_highlight_prefetch_rows(
-            snapshot.as_ref(),
-            self.display_offset,
-            self.viewport_rows,
-            self.scrollback_len,
-            prefetch_viewports,
-        );
+        // First publish the viewport; only its follow-up fills idle prefetch.
+        let requested_rows = if visible_ready {
+            terminal_keyword_highlight_prefetch_rows(
+                snapshot.as_ref(),
+                self.display_offset,
+                self.viewport_rows,
+                self.scrollback_len,
+                prefetch_viewports,
+            )
+        } else {
+            visible_rows
+        };
+        if visible_ready
+            && self.keyword_highlights.as_ref().is_some_and(|highlights| {
+                highlights.matches_snapshot_rows(
+                    snapshot.as_ref(),
+                    self.palette,
+                    requested_rows.clone(),
+                )
+            })
+        {
+            self.keyword_highlight_pending_key = None;
+            return;
+        }
         let requested_row_count = requested_rows.len();
         let requested_rows =
             terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), requested_rows);
@@ -2043,7 +2066,7 @@ impl TerminalSurface {
             let (rules, highlighter, result, highlight_duration) = cx
                 .background_spawn(async move {
                     let highlighter = highlighter.unwrap_or_else(|| {
-                        Arc::new(compile_terminal_keyword_highlighter(rules.as_ref()))
+                        Arc::new(compile_terminal_keyword_highlighter(rules.as_ref(), config))
                     });
                     let highlight_started_at = Instant::now();
                     let result =
@@ -2060,11 +2083,23 @@ impl TerminalSurface {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.keyword_highlight_generation != generation {
-                    return;
-                }
+                // A configuration change cancels the worker cooperatively but
+                // keeps this task as the single in-flight owner until it returns.
                 this.keyword_highlight_task = None;
                 this.keyword_highlight_pending_key = None;
+                if this.keyword_highlight_generation != generation
+                    || this.keyword_highlight_cancel_epoch.load(Ordering::Acquire)
+                        != request_cancel_epoch
+                    || this.keyword_highlight_config() != config
+                    || !terminal_keyword_rule_sets_equal(&this.keyword_rules, &rules)
+                {
+                    this.schedule_keyword_highlights(
+                        clear_if_empty,
+                        this.keyword_highlight_output_pressure,
+                        cx,
+                    );
+                    return;
+                }
                 let Some((highlights, stats)) = result else {
                     this.schedule_keyword_highlights(
                         clear_if_empty,
@@ -2155,7 +2190,28 @@ impl TerminalSurface {
         self.keyword_highlighter_rules
             .as_ref()
             .filter(|cached_rules| terminal_keyword_rule_sets_equal(cached_rules, rules))
-            .and(self.keyword_highlighter.clone())
+            .and(self.keyword_highlighter.as_ref())
+            .filter(|highlighter| highlighter.config() == self.keyword_highlight_config())
+            .cloned()
+    }
+
+    fn keyword_highlight_config(&self) -> TerminalKeywordHighlightConfig {
+        TerminalKeywordHighlightConfig {
+            line_roles: self.line_roles,
+            ansi: self.palette.terminal_ansi,
+        }
+    }
+
+    fn invalidate_keyword_highlight_config(&mut self) {
+        self.keyword_highlight_generation = self.keyword_highlight_generation.saturating_add(1);
+        self.keyword_highlight_cancel_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        self.keyword_highlight_deferred_task = None;
+        self.keyword_highlight_pending_key = None;
+        self.keyword_highlight_last_started_at = None;
+        self.keyword_highlighter_rules = None;
+        self.keyword_highlighter = None;
+        self.keyword_highlights = None;
     }
 
     fn cancel_pending_keyword_highlights(&mut self) {
@@ -2168,7 +2224,7 @@ impl TerminalSurface {
         self.keyword_highlight_generation = self.keyword_highlight_generation.saturating_add(1);
         self.keyword_highlight_cancel_epoch
             .fetch_add(1, Ordering::AcqRel);
-        self.keyword_highlight_task = None;
+        // Keep the in-flight owner until its cooperatively cancelled worker returns.
         self.keyword_highlight_deferred_task = None;
         self.keyword_highlight_pending_key = None;
     }
@@ -3277,9 +3333,6 @@ impl Render for TerminalSurface {
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
         }
-        if let Some(highlights) = self.input_keyword_highlights.clone() {
-            grid = grid.with_input_keyword_highlights(highlights);
-        }
 
         let gutter = if gutter_enabled {
             let gutter_metrics = terminal_gutter_metrics(
@@ -3544,3 +3597,6 @@ mod tests;
 
 #[cfg(test)]
 mod wheel_zoom_tests;
+
+#[cfg(test)]
+mod native_probe;

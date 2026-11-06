@@ -6842,6 +6842,7 @@ dependencies = [
  "futures",
  "genai",
  "gpui",
+ "gpui_platform",
  "gtk",
  "hayro",
  "hex",
