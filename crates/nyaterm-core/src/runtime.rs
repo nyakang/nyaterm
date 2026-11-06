@@ -7,6 +7,12 @@ use thiserror::Error;
 
 use crate::app_identity::AppFlavor;
 
+// Fixed at build time so direct launches and MCP agree with the application.
+// Ordinary builds retain their existing directories and portable mode wins.
+fn linux_compatibility_build() -> bool {
+    option_env!("NYATERM_LINUX_COMPAT") == Some("glibc231")
+}
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("unable to resolve home directory for installed configuration")]
@@ -49,17 +55,38 @@ impl AppRuntime {
     }
 
     pub fn installed_config_dir(home: &Path, flavor: AppFlavor) -> PathBuf {
-        home.join(flavor.config_directory_name())
+        home.join(Self::installed_directory_names(flavor, linux_compatibility_build()).0)
     }
 
     fn installed_from(home: &Path, cache: Option<&Path>, flavor: AppFlavor) -> Self {
-        let config_dir = Self::installed_config_dir(home, flavor);
+        Self::installed_for_package(home, cache, flavor, linux_compatibility_build())
+    }
+
+    fn installed_directory_names(
+        flavor: AppFlavor,
+        compatibility: bool,
+    ) -> (&'static str, &'static str) {
+        match (flavor, compatibility) {
+            (AppFlavor::Stable, true) => (".nyaterm-compat", "nyaterm-compat"),
+            (AppFlavor::Preview, true) => (".nyaterm-compat-preview", "nyaterm-compat-preview"),
+            (_, false) => (flavor.config_directory_name(), flavor.desktop_id()),
+        }
+    }
+
+    fn installed_for_package(
+        home: &Path,
+        cache: Option<&Path>,
+        flavor: AppFlavor,
+        compatibility: bool,
+    ) -> Self {
+        let (config_name, cache_name) = Self::installed_directory_names(flavor, compatibility);
+        let config_dir = home.join(config_name);
         let data_dir = config_dir.clone();
         let log_dir = data_dir.join("logs");
         let cache_dir = cache
             .map(Path::to_path_buf)
             .unwrap_or_else(|| data_dir.join("cache"))
-            .join(flavor.desktop_id());
+            .join(cache_name);
 
         Self {
             mode: RuntimeMode::Installed,
@@ -165,9 +192,18 @@ mod tests {
     #[test]
     fn installed_flavors_isolate_all_runtime_and_instance_paths() {
         let home = Path::new("home");
-        let stable = AppRuntime::installed_from(home, Some(Path::new("cache")), AppFlavor::Stable);
-        let preview =
-            AppRuntime::installed_from(home, Some(Path::new("cache")), AppFlavor::Preview);
+        let stable = AppRuntime::installed_for_package(
+            home,
+            Some(Path::new("cache")),
+            AppFlavor::Stable,
+            false,
+        );
+        let preview = AppRuntime::installed_for_package(
+            home,
+            Some(Path::new("cache")),
+            AppFlavor::Preview,
+            false,
+        );
         assert_eq!(stable.config_dir(), home.join(".nyaterm"));
         assert_eq!(preview.config_dir(), home.join(".nyaterm-preview"));
         assert_eq!(stable.cache_dir(), Path::new("cache/nyaterm"));
@@ -180,9 +216,70 @@ mod tests {
             stable.config_dir().join(".instance/owner.lock"),
             preview.config_dir().join(".instance/owner.lock")
         );
-        let stable = AppRuntime::installed_from(home, None, AppFlavor::Stable);
-        let preview = AppRuntime::installed_from(home, None, AppFlavor::Preview);
+        let stable = AppRuntime::installed_for_package(home, None, AppFlavor::Stable, false);
+        let preview = AppRuntime::installed_for_package(home, None, AppFlavor::Preview, false);
         assert_ne!(stable.cache_dir(), preview.cache_dir());
+    }
+
+    #[test]
+    fn compatibility_packages_isolate_data_cache_and_instance_locks_without_migrating_data() {
+        let directory = crate::test_support::TestTempDir::new("nyaterm-compat-runtime");
+        let home = directory.path();
+        let cache_root = home.join("cache-root");
+        let mut paths = std::collections::HashSet::new();
+        for flavor in [AppFlavor::Stable, AppFlavor::Preview] {
+            let standard = AppRuntime::installed_for_package(home, None, flavor, false);
+            standard.ensure_directories().unwrap();
+            let existing = standard.config_dir().join("existing-data");
+            std::fs::write(&existing, b"unchanged").unwrap();
+            for cache in [None, Some(cache_root.as_path())] {
+                let compat = AppRuntime::installed_for_package(home, cache, flavor, true);
+                let standard_cache = AppRuntime::installed_for_package(home, cache, flavor, false);
+                let expected = match flavor {
+                    AppFlavor::Stable => ".nyaterm-compat",
+                    AppFlavor::Preview => ".nyaterm-compat-preview",
+                };
+                assert_eq!(compat.config_dir(), home.join(expected));
+                assert_ne!(compat.config_dir(), standard.config_dir());
+                assert_ne!(compat.cache_dir(), standard_cache.cache_dir());
+                assert_ne!(compat.log_dir(), standard.log_dir());
+                assert_ne!(compat.crash_dir(), standard.crash_dir());
+                assert_ne!(
+                    compat.config_dir().join(".instance/owner.lock"),
+                    standard.config_dir().join(".instance/owner.lock")
+                );
+                compat.ensure_directories().unwrap();
+                assert!(!compat.config_dir().join("existing-data").exists());
+                assert_eq!(std::fs::read(&existing).unwrap(), b"unchanged");
+            }
+            assert!(
+                paths.insert(
+                    AppRuntime::installed_for_package(home, None, flavor, true)
+                        .config_dir()
+                        .to_path_buf()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn installed_discovery_path_uses_the_compiled_package_namespace() {
+        let expected = if option_env!("NYATERM_LINUX_COMPAT") == Some("glibc231") {
+            [".nyaterm-compat", ".nyaterm-compat-preview"]
+        } else {
+            [".nyaterm", ".nyaterm-preview"]
+        };
+        for (flavor, name) in [AppFlavor::Stable, AppFlavor::Preview]
+            .into_iter()
+            .zip(expected)
+        {
+            let runtime = AppRuntime::installed_from(Path::new("home"), None, flavor);
+            assert_eq!(runtime.config_dir(), Path::new("home").join(name));
+            assert_eq!(
+                runtime.config_dir(),
+                AppRuntime::installed_config_dir(Path::new("home"), flavor)
+            );
+        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import io
 import shutil
 import subprocess
 import struct
@@ -61,6 +62,50 @@ def staged_package(target: str):
 
 
 class PackageNativeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
+    def test_real_deb_icons_are_readable_root_owned_and_repaired_on_configure(self) -> None:
+        for version in ("2.0.0", "2.0.0-preview.1"):
+            with self.subTest(version=version), staged_package("x86_64-unknown-linux-gnu") as (root, binary, info):
+                icon_source = root / "icons"
+                shutil.copytree(package_native.ICON_DIR, icon_source)
+                for source in icon_source.glob("*.png"):
+                    source.chmod(0o600)
+                with (
+                    mock.patch.object(package_native, "ICON_DIR", icon_source),
+                    mock.patch.object(package_native, "run", side_effect=lambda command: subprocess.run(
+                        command, check=True, stdout=subprocess.DEVNULL)),
+                ):
+                    package_native.create_linux_deb(binary, info, version, version)
+                identity = package_native.release_identity(version)
+                deb = next((root / "dist").glob("*.deb"))
+                verify_native_package.verify_deb(deb, info.target, version)
+                data = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(deb)])
+                with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                    self.assertTrue(all(member.uid == member.gid == 0 for member in archive))
+                postinst = root / "work/deb/DEBIAN/postinst"
+                self.assertEqual(postinst.stat().st_mode & 0o777, 0o755)
+                subprocess.run(["sh", "-n", str(postinst)], check=True)
+                hicolor = root / "work/deb/usr/share/icons/hicolor"
+                script = root / "postinst-test"
+                script.write_text(postinst.read_text().replace("/usr/share/icons/hicolor", str(hicolor)))
+                icon = hicolor / "128x128/apps" / f"{identity.desktop_id}.png"
+                unrelated = icon.with_name("unrelated.png")
+                unrelated.write_bytes(b"unrelated")
+                unrelated.chmod(0o600)
+                # A removed optional size must not break upgrade/reconfigure.
+                (hicolor / "32x32/apps" / f"{identity.desktop_id}.png").unlink()
+                icon.chmod(0o600)
+                subprocess.run(["sh", str(script), "abort-upgrade"], check=True)
+                self.assertEqual(icon.stat().st_mode & 0o777, 0o600)
+                for _ in range(2):
+                    subprocess.run(["sh", str(script), "configure"], check=True)
+                    self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
+                    self.assertEqual(unrelated.stat().st_mode & 0o777, 0o600)
+                icon.unlink()
+                icon.symlink_to(unrelated)
+                subprocess.run(["sh", str(script), "configure"], check=True)
+                self.assertEqual(unrelated.stat().st_mode & 0o777, 0o600)
+
     def test_windows_release_builds_use_one_static_crt_and_preserve_existing_flags(self) -> None:
         for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu"):
             for existing in ({"RUSTFLAGS": "-C debuginfo=1"}, {"CARGO_ENCODED_RUSTFLAGS": "-C\x1fdebuginfo=1"}):
@@ -188,7 +233,10 @@ class PackageNativeTests(unittest.TestCase):
                     desktop = payload / "usr" / "share" / "applications" / identity.linux_desktop_file
                     executable = "nyaterm" if payload.name == "NyaTerm.AppDir" else f"/opt/{identity.desktop_id}/nyaterm"
                     verify_native_package.verify_linux_desktop(desktop.read_text(), executable, str(desktop), identity)
-                    self.assertTrue((payload / "usr" / "share" / "icons" / "hicolor" / "128x128" / "apps" / f"{identity.desktop_id}.png").is_file())
+                    for size in package_native.linux_icons.ICON_SIZES:
+                        icon = payload / "usr/share/icons/hicolor" / size / "apps" / f"{identity.desktop_id}.png"
+                        self.assertTrue(icon.is_file())
+                        self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
                     app_root = payload / "usr" / "bin" if payload.name == "NyaTerm.AppDir" else payload / "opt" / identity.desktop_id
                     for name in ("nyaterm", *package_native.helper_bins("x86_64-unknown-linux-gnu")):
                         self.assertTrue((app_root / name).is_file())

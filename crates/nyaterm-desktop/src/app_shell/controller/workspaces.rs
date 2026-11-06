@@ -152,6 +152,12 @@ impl DesktopController {
                 ..Default::default()
             },
             move |window, cx| {
+                #[cfg(target_os = "linux")]
+                crate::platform::linux::set_window_class(
+                    window,
+                    flavor.desktop_id(),
+                    flavor.display_name(),
+                );
                 let shell = cx.new(|cx| {
                     AppShell::new(
                         runtime,
