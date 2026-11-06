@@ -632,7 +632,6 @@ impl NyaTermApp {
                     .justify_center()
             })
             .rounded_sm()
-            .cursor_pointer()
             .text_sm()
             .font_weight(FontWeight(700.))
             .text_color(if selected {
