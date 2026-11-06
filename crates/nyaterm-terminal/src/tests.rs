@@ -3659,6 +3659,104 @@ fn history_coordinates_distinguish_growth_from_full_buffer_rotation() {
 }
 
 #[test]
+fn history_changes_report_growth_and_eviction_without_changing_coordinate_contract() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(8);
+    let initial = screen.history_state();
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n");
+    let growing = screen.history_state();
+    let change = growing.changes_since(initial).unwrap();
+    assert_eq!(change.scrolled, change.grown);
+    assert_eq!(change.evicted, 0);
+    screen.advance(b"4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let full = screen.history_state();
+    screen.advance(b"11\r\n12\r\n");
+    let current = screen.history_state();
+    let change = current.changes_since(full).unwrap();
+    assert_eq!(change.scrolled, 2);
+    assert_eq!(change.grown, 0);
+    assert_eq!(change.evicted, 2);
+    assert!(!current.preserves_coordinates_from(full));
+    assert!(full.changes_since(current).is_none());
+    screen.resize(20, 3);
+    assert!(screen.history_state().changes_since(current).is_none());
+}
+
+#[test]
+fn retained_history_rebase_shares_rows_and_rejects_evicted_or_mutable_windows() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(16);
+    for index in 0..20 {
+        screen.advance_decoded_text(&format!("{index}\r\n"));
+    }
+    let old = screen.viewport_snapshot(6);
+    let mutable = screen.viewport_snapshot(1);
+    let oldest = screen.viewport_snapshot(16);
+    screen.advance(b"20\r\n21\r\n");
+    let current = screen.history_state();
+    let rebased = old.reanchored_history(current).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&old.row_data, &rebased.row_data));
+    assert_eq!(rebased.display_offset, 8);
+    assert_eq!(rebased.line(0), screen.viewport_snapshot(8).line(0));
+    assert!(mutable.reanchored_history(current).is_none());
+    assert!(oldest.reanchored_history(current).is_none());
+}
+
+#[test]
+fn history_rebase_preserves_prefetch_window_coordinates_during_growth_and_eviction() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(32);
+    for index in 0..24 {
+        screen.advance_decoded_text(&format!("{index}\r\n"));
+    }
+    let mut snapshot = screen.viewport_snapshot_with_window(12, 2, 2);
+    let original_rows = snapshot.row_data.clone();
+    for index in 24..40 {
+        let previous = snapshot.history;
+        let old_start = snapshot.total_rows - snapshot.display_offset - snapshot.row_count();
+        screen.advance_decoded_text(&format!("{index}\r\n"));
+        let history = screen.history_state();
+        let change = history.changes_since(previous).unwrap();
+        snapshot = snapshot.reanchored_history(history).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&snapshot.row_data, &original_rows));
+        let start = snapshot.total_rows - snapshot.display_offset - snapshot.row_count();
+        assert_eq!(start, old_start - change.evicted);
+        let fresh = screen.viewport_snapshot_with_window(snapshot.display_offset, 2, 2);
+        for row in 0..snapshot.row_count() {
+            assert_eq!(snapshot.line(row), fresh.line(row));
+        }
+    }
+}
+
+#[test]
+fn late_history_prefetch_range_excludes_evicted_rows_and_mutable_live_rows() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(16);
+    screen.advance(&b"line\r\n".repeat(20));
+    let oldest = screen.viewport_snapshot_with_window(16, 0, 8);
+    let mixed = screen.viewport_snapshot_with_window(1, 4, 1);
+    screen.set_logical_line_snapshots(true);
+    let logical = screen.viewport_snapshot(16);
+    screen.advance(b"new\r\nnew\r\n");
+    let history = screen.history_state();
+    assert_eq!(oldest.retained_history_row_range(history), Some(2..11));
+    assert_eq!(mixed.retained_history_row_range(history), Some(0..5));
+    assert!(logical.retained_history_row_range(history).is_none());
+    screen.advance(&b"new\r\n".repeat(20));
+    assert!(
+        oldest
+            .retained_history_row_range(screen.history_state())
+            .is_none()
+    );
+    screen.advance(b"\x1bc");
+    assert!(
+        mixed
+            .retained_history_row_range(screen.history_state())
+            .is_none()
+    );
+}
+
+#[test]
 fn history_coordinates_reject_reset_resize_screen_switch_and_backwards_snapshots() {
     let mut screen = TerminalScreen::new(16, 3);
     screen.advance(b"0\r\n1\r\n2\r\n3\r\n");

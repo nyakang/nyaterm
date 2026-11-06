@@ -1714,6 +1714,7 @@ impl NyaTermApp {
         if self.sync_terminal_live_scroll_surface(&surface, &desired_scroll_state, cx) {
             return;
         }
+        surface.update(cx, |surface, _cx| surface.advance_history(history));
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (
@@ -1862,6 +1863,7 @@ impl NyaTermApp {
         if self.sync_terminal_live_scroll_surface(&surface, &desired_scroll_state, cx) {
             return;
         }
+        surface.update(cx, |surface, _cx| surface.advance_history(history));
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (
