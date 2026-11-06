@@ -555,9 +555,9 @@
   "app": {
     "newConnection": "New Conn.",
     "noActiveSessions": "No active sessions",
-    "openChat": "Open Chat",
-    "showAllCommands": "Show All Commands",
-    "switchTerminal": "Switch Terminal"
+    "openChat": "Open AI Assistant",
+    "showAllCommands": "Open Quick Commands",
+    "switchTerminal": "Open Command Palette"
   },
   "common": {
     "operationSucceeded": "Operation completed",
@@ -3070,13 +3070,13 @@
       "nextTab": "Next Tab",
       "nextTerminalGroup": "Next Terminal Group",
       "previousTerminalGroup": "Previous Terminal Group",
-      "openChat": "Open Chat",
+      "openChat": "Open AI Assistant",
       "openSettings": "Open Settings",
       "prevTab": "Previous Tab",
       "quickSwitch": "Open Command Palette",
       "renameFile": "Rename File/Folder",
       "resetZoom": "Reset Zoom",
-      "showAllCommands": "Show All Commands",
+      "showAllCommands": "Show/Hide Quick Commands Panel",
       "switchTab": "Switch to Tab 1-9",
       "temporarySshLink": "Temporary Link",
       "toggleLeftSidebar": "Toggle Left Sidebar",

@@ -505,13 +505,7 @@ impl NyaTermApp {
                 }
             }
             ActivityBarEntry::QuickCommands => {
-                let mode = if self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands {
-                    BottomPanelMode::Hidden
-                } else {
-                    BottomPanelMode::QuickCommands
-                };
-                self.set_bottom_panel_mode(mode);
-                cx.notify();
+                self.toggle_quick_commands_panel(window, cx);
             }
             ActivityBarEntry::CommandSend => {
                 let mode = if self.shell.bottom_panel.mode == BottomPanelMode::CommandSend {

@@ -275,6 +275,7 @@ impl NyaTermApp {
         };
         div()
             .id("empty-workspace-tab-drop")
+            .track_focus(self.terminal.input_focus())
             .relative()
             .flex_1()
             .min_h_0()

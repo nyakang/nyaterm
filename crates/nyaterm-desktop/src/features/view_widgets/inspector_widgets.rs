@@ -10,7 +10,7 @@ pub(in crate::features) fn empty_workspace_action(
     label: impl Into<SharedString>,
     shortcut: impl Into<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> gpui::Stateful<gpui::Div> {
     // Tauri EmptyWorkspaceState: primary label left, Kbd chips right with "+" separators.
     let label = label.into();
     let shortcut = shortcut.into();

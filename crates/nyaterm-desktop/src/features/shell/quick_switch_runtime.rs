@@ -109,8 +109,13 @@ impl NyaTermApp {
                         return;
                     }
                 }
-                // The settings surface owns its own focus targets.
-                crate::models::WorkspaceTabId::Settings => return,
+                crate::models::WorkspaceTabId::Settings => {
+                    let focus = self.settings_panel.read(cx).focus_handle(cx);
+                    if !focus.contains_focused(window, cx) {
+                        window.focus(&focus, cx);
+                    }
+                    return;
+                }
                 crate::models::WorkspaceTabId::Session(_) => {}
             }
         }

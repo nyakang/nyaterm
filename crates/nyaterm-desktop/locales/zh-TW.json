@@ -555,9 +555,9 @@
   "app": {
     "newConnection": "新增連線",
     "noActiveSessions": "暫無活動工作階段",
-    "openChat": "開啟聊天",
-    "showAllCommands": "顯示所有命令",
-    "switchTerminal": "切換終端"
+    "openChat": "開啟 AI 助理",
+    "showAllCommands": "開啟快捷命令",
+    "switchTerminal": "開啟命令面板"
   },
   "common": {
     "operationSucceeded": "操作完成",
@@ -3077,13 +3077,13 @@
       "nextTab": "下一個標籤",
       "nextTerminalGroup": "下一個終端區域",
       "previousTerminalGroup": "上一個終端區域",
-      "openChat": "開啟聊天",
+      "openChat": "開啟 AI 助理",
       "openSettings": "開啟設定",
       "prevTab": "上一個標籤",
       "quickSwitch": "開啟命令面板",
       "renameFile": "重新命名檔案/目錄",
       "resetZoom": "重置縮放",
-      "showAllCommands": "顯示所有命令",
+      "showAllCommands": "顯示／隱藏快捷命令面板",
       "switchTab": "切換到標籤 1-9",
       "temporarySshLink": "臨時連結",
       "toggleLeftSidebar": "切換左側邊欄",
