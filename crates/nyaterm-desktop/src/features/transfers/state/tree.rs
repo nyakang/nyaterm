@@ -6,8 +6,14 @@ use nyaterm_files::file_browser::{
     file_browser_root,
 };
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+
+mod navigation;
+mod requests;
+
+use navigation::TreeNavigationCheckpoint;
+use requests::TreeListingRequest;
 
 #[derive(Clone)]
 pub(in crate::features) struct TransferTreeRow {
@@ -64,12 +70,18 @@ struct TreeSession {
     rows: Arc<[TransferTreeRow]>,
     dirty: bool,
     show_hidden: bool,
+    interaction_version: u64,
+    reveal_chain: Vec<String>,
+    manual_requests: VecDeque<String>,
 }
 
 #[derive(Default)]
 pub(super) struct TransferTreeState {
     sessions: HashMap<String, TreeSession>,
     next_generation: u64,
+    navigations: HashMap<String, TreeNavigationCheckpoint>,
+    // Keep the slot until its terminal event, even when cancellation has been requested.
+    listing: Option<TreeListingRequest>,
 }
 
 // Valid UTF-8 tokens and display-only paths denote the same directory; invalid
@@ -88,10 +100,14 @@ fn key(backend: FileBrowserBackendKind, path: &RemoteFilePath) -> String {
 
 impl TransferTreeState {
     pub(super) fn remove_session(&mut self, session: &str) {
+        self.cancel_session_requests(session);
+        self.navigations.remove(session);
         self.sessions.remove(session);
     }
 
     pub(super) fn replace_session(&mut self, old: &str, new: &str) {
+        self.cancel_session_requests(old);
+        self.navigations.remove(old);
         if let Some(mut state) = self.sessions.remove(old) {
             // Cached listings survive reconnect; requests belong to the old connection.
             for node in state.nodes.values_mut() {
@@ -192,8 +208,9 @@ impl TransferTreeState {
             .as_ref()
             .is_some_and(|current| key(backend, current) != key(backend, &root))
         {
-            *state = TreeSession::default();
-            state.backend = Some(backend);
+            // Drive/UNC roots share a backend. Retain caches for navigation rollback.
+            state.selected.clear();
+            state.anchor = None;
         }
         let mut chain = Vec::new();
         let mut current = path.clone();
@@ -225,19 +242,23 @@ impl TransferTreeState {
         state.focused = Some(selected.clone());
         state.anchor = Some(selected);
         state.scroll_to_selection = true;
+        state.reveal_chain.clear();
         let mut missing = Vec::new();
         for path in chain.into_iter().rev() {
             let id = key(backend, &path);
             state.expanded.insert(id.clone());
+            state.reveal_chain.push(id.clone());
             let node = state
                 .nodes
                 .entry(id)
                 .or_insert_with(|| DirectoryNode::new(path));
             if node.entries.is_none() && node.pending.is_none() {
+                node.error = None;
                 missing.push(node.path.clone());
             }
         }
         state.dirty = true;
+        self.cancel_obsolete_listing();
         missing
     }
 
@@ -287,6 +308,9 @@ impl TransferTreeState {
             Ok(entries) => state.apply_listing(path.clone(), Arc::new(entries)),
             Err(error) => {
                 node.error = Some(error);
+                if state.reveal_chain.contains(&key(backend, path)) {
+                    state.scroll_to_selection = false;
+                }
                 state.dirty = true;
             }
         }
@@ -309,6 +333,7 @@ impl TransferTreeState {
             node.error = None;
         }
         state.dirty = true;
+        self.cancel_obsolete_listing();
     }
 
     pub(super) fn select(&mut self, session: &str, id: String, additive: bool, range: bool) {
@@ -318,7 +343,9 @@ impl TransferTreeState {
         let Some(target) = state.rows.iter().position(|row| row.key == id) else {
             return;
         };
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         state.focused = Some(id.clone());
         if state.rows[target].root {
             if !additive && !range {
@@ -356,7 +383,9 @@ impl TransferTreeState {
         let Some(state) = self.sessions.get_mut(session) else {
             return;
         };
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         state.selected = state
             .rows
             .iter()
@@ -378,7 +407,9 @@ impl TransferTreeState {
         let Some(row) = state.rows.iter().find(|row| row.key == id) else {
             return;
         };
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         state.focused = Some(id.clone());
         if row.root {
             state.selected.clear();
@@ -391,7 +422,9 @@ impl TransferTreeState {
 
     pub(super) fn clear_selection(&mut self, session: &str) {
         if let Some(state) = self.sessions.get_mut(session) {
+            state.interaction_version = state.interaction_version.wrapping_add(1);
             state.scroll_to_selection = false;
+            state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
             state.selected.clear();
             state.anchor = None;
         }
@@ -405,17 +438,34 @@ impl TransferTreeState {
     ) -> Option<RemoteFilePath> {
         let state = self.sessions.get_mut(session)?;
         let node = state.nodes.get_mut(id)?;
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         state.focused = Some(id.to_string());
         let expand = expand.unwrap_or(!state.expanded.contains(id));
         if expand {
             state.expanded.insert(id.to_string());
+            node.error = None;
+            if !state.manual_requests.iter().any(|pending| pending == id) {
+                state.manual_requests.push_back(id.to_string());
+            }
         } else {
             state.expanded.remove(id);
+            state.manual_requests.retain(|pending| pending != id);
+            if let Some(index) = state
+                .reveal_chain
+                .iter()
+                .position(|ancestor| ancestor == id)
+            {
+                state.reveal_chain.truncate(index);
+            }
         }
         // Expanding an errored directory explicitly retries it.
         state.dirty = true;
-        (expand && node.entries.is_none() && node.pending.is_none()).then(|| node.path.clone())
+        let request =
+            (expand && node.entries.is_none() && node.pending.is_none()).then(|| node.path.clone());
+        self.cancel_obsolete_listing();
+        request
     }
 
     pub(super) fn move_selection(&mut self, session: &str, delta: isize) {
@@ -431,7 +481,9 @@ impl TransferTreeState {
             .and_then(|id| state.rows.iter().position(|row| &row.key == id))
             .unwrap_or(0);
         let next = index.saturating_add_signed(delta).min(state.rows.len() - 1);
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         state.focused = Some(state.rows[next].key.clone());
         state.selected.clear();
         if !state.rows[next].root {
@@ -469,7 +521,9 @@ impl TransferTreeState {
         let Some(index) = state.rows.iter().position(|row| row.key == id) else {
             return;
         };
+        state.interaction_version = state.interaction_version.wrapping_add(1);
         state.scroll_to_selection = false;
+        state.scroll.0.borrow_mut().deferred_scroll_to_item = None;
         let depth = state.rows[index].depth;
         if let Some(row) = state.rows[..index]
             .iter()
@@ -557,6 +611,10 @@ impl TreeSession {
             }
         }
         self.expanded.remove(id);
+        self.manual_requests.retain(|pending| pending != id);
+        if let Some(index) = self.reveal_chain.iter().position(|ancestor| ancestor == id) {
+            self.reveal_chain.truncate(index);
+        }
         self.selected.remove(id);
         if self.focused.as_deref() == Some(id) {
             self.focused = None;
@@ -624,31 +682,20 @@ impl TreeSession {
 }
 
 impl super::TransferFeatureState {
+    pub(in crate::features) fn tree_paths_equal(
+        &self,
+        backend: FileBrowserBackendKind,
+        left: &RemoteFilePath,
+        right: &RemoteFilePath,
+    ) -> bool {
+        key(backend, left) == key(backend, right)
+    }
+
     pub(in crate::features) fn tree_is_initialized(&self, session: &str) -> bool {
         self.tree
             .sessions
             .get(session)
             .is_some_and(|state| state.root.is_some())
-    }
-    pub(in crate::features) fn missing_expanded_tree_paths(
-        &self,
-        session: &str,
-    ) -> Vec<RemoteFilePath> {
-        self.tree
-            .sessions
-            .get(session)
-            .into_iter()
-            .flat_map(|state| {
-                state
-                    .expanded
-                    .iter()
-                    .filter_map(|id| state.nodes.get(id))
-                    .filter(|node| {
-                        node.entries.is_none() && node.pending.is_none() && node.error.is_none()
-                    })
-                    .map(|node| node.path.clone())
-            })
-            .collect()
     }
     pub(in crate::features) fn tree_presentation(
         &mut self,
@@ -743,336 +790,4 @@ impl super::TransferFeatureState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::TransferTreeState;
-    use nyaterm_files::file_browser::FileBrowserBackendKind;
-    use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
-    use std::sync::Arc;
-
-    fn directory(name: &str, path: &str) -> SftpFileEntry {
-        SftpFileEntry {
-            name: name.into(),
-            path: path.into(),
-            file_type: SftpFileType::Directory,
-            size: None,
-            permissions: None,
-            owner: String::new(),
-            group: String::new(),
-            modified_at: None,
-            raw_path_token: None,
-            symlink_target_is_directory: false,
-        }
-    }
-
-    fn file(name: &str, path: &str) -> SftpFileEntry {
-        SftpFileEntry {
-            name: name.into(),
-            path: path.into(),
-            file_type: SftpFileType::File,
-            size: Some(1),
-            permissions: None,
-            owner: String::new(),
-            group: String::new(),
-            modified_at: None,
-            raw_path_token: None,
-            symlink_target_is_directory: false,
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_case_distinct_nodes_keep_independent_listings_and_invalidation() {
-        let mut tree = TransferTreeState::default();
-        let backend = FileBrowserBackendKind::Local;
-        let root = r"\\wsl.localhost\Ubuntu";
-        let upper = RemoteFilePath::new(format!(r"{root}\Project"));
-        let lower = RemoteFilePath::new(format!(r"{root}\project"));
-        tree.seed(
-            "wsl",
-            backend,
-            RemoteFilePath::new(root),
-            Arc::new(vec![
-                directory("Project", &upper.display_path),
-                directory("project", &lower.display_path),
-            ]),
-        );
-        tree.reveal("wsl", backend, RemoteFilePath::new(root));
-        let view = tree.presentation(Some("wsl"), true);
-        let upper_key = view
-            .rows
-            .iter()
-            .find(|row| row.label == "Project")
-            .unwrap()
-            .key
-            .clone();
-        let lower_key = view
-            .rows
-            .iter()
-            .find(|row| row.label == "project")
-            .unwrap()
-            .key
-            .clone();
-        assert_ne!(upper_key, lower_key);
-
-        let upper_request = tree.begin_request("wsl", backend, upper.clone()).unwrap();
-        let lower_request = tree.begin_request("wsl", backend, lower.clone()).unwrap();
-        tree.invalidate("wsl", &upper, false);
-        assert!(!tree.complete("wsl", &upper, upper_request, Ok(vec![])));
-        assert!(tree.complete("wsl", &lower, lower_request, Ok(vec![])));
-    }
-
-    #[test]
-    fn reconnect_keeps_cached_tree_listings_but_retires_old_connection_requests() {
-        let mut tree = TransferTreeState::default();
-        let backend = FileBrowserBackendKind::Remote;
-        tree.seed(
-            "old",
-            backend,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![directory("pending", "/pending")]),
-        );
-        let path = RemoteFilePath::new("/pending");
-        let generation = tree.begin_request("old", backend, path.clone()).unwrap();
-        tree.reveal("old", backend, path.clone());
-        tree.replace_session("old", "new");
-        assert!(!tree.complete("old", &path, generation, Ok(vec![])));
-        assert!(!tree.complete("new", &path, generation, Ok(vec![])));
-        assert!(
-            tree.presentation(Some("new"), true)
-                .rows
-                .iter()
-                .any(|row| row.label == "pending")
-        );
-        assert!(tree.begin_request("new", backend, path).is_some());
-    }
-
-    #[test]
-    fn invalidation_rejects_old_results_and_preserves_other_parents() {
-        let mut tree = TransferTreeState::default();
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![directory("one", "/one"), directory("two", "/two")]),
-        );
-        let old = tree
-            .begin_request(
-                "a",
-                FileBrowserBackendKind::Remote,
-                RemoteFilePath::new("/one"),
-            )
-            .unwrap();
-        let two = tree
-            .begin_request(
-                "a",
-                FileBrowserBackendKind::Remote,
-                RemoteFilePath::new("/two"),
-            )
-            .unwrap();
-        tree.invalidate("a", &RemoteFilePath::new("/one"), false);
-        assert!(!tree.complete("a", &RemoteFilePath::new("/one"), old, Ok(vec![])));
-        assert!(tree.complete("a", &RemoteFilePath::new("/two"), two, Ok(vec![])));
-        let new = tree
-            .begin_request(
-                "a",
-                FileBrowserBackendKind::Remote,
-                RemoteFilePath::new("/one"),
-            )
-            .unwrap();
-        assert_ne!(old, new);
-    }
-
-    #[test]
-    fn session_scope_raw_identity_and_keyboard_selection_are_independent() {
-        let mut tree = TransferTreeState::default();
-        let mut first = directory("same", "/same");
-        first.raw_path_token = RemoteFilePath::from_raw("/same", b"/\xff").raw_path_token;
-        let mut second = first.clone();
-        second.raw_path_token = RemoteFilePath::from_raw("/same", b"/\xfe").raw_path_token;
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![first, second]),
-        );
-        tree.reveal(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-        );
-        let view = tree.presentation(Some("a"), false);
-        assert_eq!(view.rows.len(), 3);
-        assert_ne!(view.rows[1].key, view.rows[2].key);
-        tree.move_selection("a", 1);
-        assert_eq!(tree.selected_row("a").unwrap().depth, 1);
-        assert_eq!(tree.presentation(Some("b"), false).rows.len(), 0);
-        tree.remove_session("a");
-        assert!(tree.presentation(Some("a"), false).rows.is_empty());
-    }
-
-    #[test]
-    fn reveal_missing_ancestors_and_seed_supersede_pending_listings() {
-        let mut tree = TransferTreeState::default();
-        let pending = tree
-            .begin_request(
-                "a",
-                FileBrowserBackendKind::Remote,
-                RemoteFilePath::new("/a/b"),
-            )
-            .unwrap();
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/a/b"),
-            Arc::new(vec![]),
-        );
-        assert!(!tree.complete(
-            "a",
-            &RemoteFilePath::new("/a/b"),
-            pending,
-            Ok(vec![directory("old", "/a/b/old")])
-        ));
-        let missing = tree.reveal(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/a/b"),
-        );
-        assert_eq!(
-            missing
-                .iter()
-                .map(|p| p.display_path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/", "/a"]
-        );
-        let view = tree.presentation(Some("a"), false);
-        assert_eq!(view.focused.as_deref(), Some("/a/b"));
-        assert!(tree.sessions["a"].scroll_to_selection);
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![directory("a", "/a")]),
-        );
-        let view = tree.presentation(Some("a"), false);
-        assert_eq!(view.focused.as_deref(), Some("/a/b"));
-        assert!(tree.sessions["a"].scroll_to_selection);
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/a"),
-            Arc::new(vec![directory("b", "/a/b")]),
-        );
-        tree.presentation(Some("a"), false);
-        assert!(!tree.sessions["a"].scroll_to_selection);
-    }
-
-    #[test]
-    fn manual_selection_cancels_a_reveal_waiting_for_ancestors() {
-        let mut tree = TransferTreeState::default();
-        let backend = FileBrowserBackendKind::Remote;
-        tree.reveal("a", backend, RemoteFilePath::new("/a/b"));
-        tree.seed(
-            "a",
-            backend,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![directory("a", "/a"), directory("other", "/other")]),
-        );
-        tree.presentation(Some("a"), false);
-        tree.select("a", "/other".into(), false, false);
-        tree.seed(
-            "a",
-            backend,
-            RemoteFilePath::new("/a"),
-            Arc::new(vec![directory("b", "/a/b")]),
-        );
-        let view = tree.presentation(Some("a"), false);
-        assert_eq!(view.focused.as_deref(), Some("/other"));
-        assert!(!tree.sessions["a"].scroll_to_selection);
-    }
-
-    #[test]
-    fn initial_relative_remote_directory_uses_filesystem_root() {
-        let mut tree = TransferTreeState::default();
-        let missing = tree.reveal(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("."),
-        );
-        assert_eq!(missing, vec![RemoteFilePath::new("/")]);
-        let view = tree.presentation(Some("a"), false);
-        assert_eq!(view.rows.len(), 1);
-        assert_eq!(view.rows[0].label, "/");
-        assert_eq!(view.rows[0].path, RemoteFilePath::new("/"));
-    }
-
-    #[test]
-    fn selection_excludes_root_supports_ranges_and_directory_symlinks_do_not_expand() {
-        let mut symlink = file("linked-dir", "/linked-dir");
-        symlink.file_type = SftpFileType::Symlink;
-        symlink.symlink_target_is_directory = true;
-        let mut tree = TransferTreeState::default();
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![
-                directory("folder", "/folder"),
-                file("one.txt", "/one.txt"),
-                symlink,
-            ]),
-        );
-        tree.reveal(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-        );
-        let view = tree.presentation(Some("a"), false);
-        let root = view.rows.iter().find(|row| row.root).unwrap();
-        let folder = view.rows.iter().find(|row| row.label == "folder").unwrap();
-        let linked = view
-            .rows
-            .iter()
-            .find(|row| row.label == "linked-dir")
-            .unwrap();
-        assert!(folder.expandable);
-        assert!(linked.directory);
-        assert!(!linked.expandable);
-        assert!(tree.toggle("a", &linked.key, Some(true)).is_none());
-
-        tree.select("a", root.key.clone(), false, false);
-        assert!(tree.selected_entries("a").is_empty());
-        tree.select("a", folder.key.clone(), false, false);
-        tree.select("a", linked.key.clone(), false, true);
-        assert_eq!(tree.selected_entries("a").len(), 2);
-        tree.select_all("a");
-        assert_eq!(tree.selected_entries("a").len(), 3);
-    }
-
-    #[test]
-    fn hiding_hidden_files_clears_their_tree_selection() {
-        let mut tree = TransferTreeState::default();
-        tree.seed(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-            Arc::new(vec![file(".secret", "/.secret")]),
-        );
-        tree.reveal(
-            "a",
-            FileBrowserBackendKind::Remote,
-            RemoteFilePath::new("/"),
-        );
-        let shown = tree.presentation(Some("a"), true);
-        let hidden = shown
-            .rows
-            .iter()
-            .find(|row| row.label == ".secret")
-            .unwrap();
-        tree.select("a", hidden.key.clone(), false, false);
-        assert_eq!(tree.selected_entries("a").len(), 1);
-
-        let view = tree.presentation(Some("a"), false);
-        assert!(!view.rows.iter().any(|row| row.label == ".secret"));
-        assert!(tree.selected_entries("a").is_empty());
-    }
-}
+mod tests;

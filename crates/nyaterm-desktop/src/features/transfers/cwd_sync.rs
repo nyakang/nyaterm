@@ -163,9 +163,11 @@ impl NyaTermApp {
             if !self.sync_transfer_browser_to_cwd(TransferCwdSyncReason::Automatic, cx) {
                 self.load_transfer_browser_for_active_session_if_needed(cx);
             }
+            self.request_missing_expanded_tree_listings(cx);
         } else {
             if let Some(session_id) = self.session.active_id_owned() {
                 self.transfer.cancel_browser_auto_cwd_sync(&session_id);
+                self.transfer.cancel_tree_session_requests(&session_id);
             }
             self.transfer.clear_pending_cwd_sync();
             self.transfer.finish_browser_path_edit();
@@ -250,7 +252,12 @@ impl NyaTermApp {
         self.transfer.record_browser_history(cwd);
         self.start_transfer_directory_navigation_job(None, rollback, Some(reason), cx);
         // Reveal cached ancestors immediately, without waiting for remote metadata.
-        self.reveal_transfer_tree_current_path(cx);
+        if self
+            .transfer
+            .browser_navigation_job_running_for_session(&session_id)
+        {
+            self.reveal_transfer_tree_current_path(cx);
+        }
         self.defer_transfer_panel_snapshot_flush(cx);
         true
     }

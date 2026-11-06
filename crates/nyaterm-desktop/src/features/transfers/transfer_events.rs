@@ -8,7 +8,7 @@ use crate::models::{
 use futures::{FutureExt as _, StreamExt as _, select_biased};
 use gpui::{Context, Window};
 use nyaterm_core::{AiAction, truncate_preview};
-use nyaterm_files::sftp::{SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType};
+use nyaterm_files::sftp::{RemoteFilePath, SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType};
 use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 use nyaterm_ui::NyaDialogWindowExt as _;
 use rust_i18n::t;
@@ -314,10 +314,19 @@ impl NyaTermApp {
                 });
             return true;
         }
+        let event_finished = matches!(event.event, TransferJobEvent::Finished(_));
+        if event_finished {
+            self.transfer.browser.navigation_handles.remove(&event.id);
+        }
         let Some((job_index, mut job)) = self.transfer.take_transfer_job_for_event(&event.id)
         else {
-            // The job was cancelled or removed while its worker was still running.
-            return false;
+            // A removed job must release both its slot and its node's pending generation.
+            let tree_slot_released =
+                event_finished && self.transfer.discard_tree_listing(&event.id);
+            if tree_slot_released {
+                self.request_missing_expanded_tree_listings(cx);
+            }
+            return tree_slot_released;
         };
         if self.transfer.file_operation(&event.id).is_some() {
             let cancelled_without_running = job.status == TransferJobStatus::Cancelling
@@ -409,25 +418,20 @@ impl NyaTermApp {
             }
             return false;
         }
-        let reveal_tree_after_navigation = matches!(
-            &job.kind,
-            TransferJobKind::InitialDirectory
-                | TransferJobKind::ListDir { .. }
-                | TransferJobKind::ResolveHome
-        ) || job_session_id
-            .as_deref()
-            .is_some_and(|id| !self.transfer.tree_is_initialized(id));
         if let TransferJobKind::ListTree { path, generation } = &job.kind {
             if let TransferJobEvent::Finished(result) = event.event {
+                let tree_slot_released = self.transfer.finish_tree_listing(&event.id);
                 let result = match result {
                     Ok(TransferJobOutput::TreeEntries(entries)) => Ok(entries),
                     Err(error) => Err(error),
                     _ => Err(t!("fileExplorer.treeUnexpectedResult").to_string()),
                 };
-                return job_session_id.as_deref().is_some_and(|session| {
+                let changed = job_session_id.as_deref().is_some_and(|session| {
                     self.transfer
                         .complete_tree_request(session, path, *generation, result)
                 });
+                self.request_missing_expanded_tree_listings(cx);
+                return changed || tree_slot_released;
             }
             self.transfer
                 .restore_transfer_job_after_event((job_index, job));
@@ -453,6 +457,55 @@ impl NyaTermApp {
             }
             return false;
         }
+        let navigation_position_owned = if let (Some(session), TransferJobEvent::Finished(result)) =
+            (navigation_job_key.as_deref(), &event.event)
+        {
+            self.transfer
+                .settle_tree_navigation(session, &event_id, result.is_ok())
+        } else {
+            false
+        };
+        let tree_uninitialized = job_session_id
+            .as_deref()
+            .is_some_and(|id| !self.transfer.tree_is_initialized(id));
+        let directory_changed = match &job.kind {
+            TransferJobKind::ListDir { remote_path, .. } => self
+                .transfer
+                .browser
+                .pending_navigations
+                .get(&event_id)
+                .is_some_and(|snapshot| {
+                    let backend = job_session_id.as_deref().and_then(|session| {
+                        self.session
+                            .file_browser_backend_support_for_session(session)
+                    });
+                    backend.is_some_and(|backend| {
+                        if self.session.active_id() == job_session_id.as_deref() {
+                            !self.transfer.tree_paths_equal(
+                                backend,
+                                &RemoteFilePath {
+                                    display_path: snapshot.browser_path.clone(),
+                                    raw_path_token: snapshot.browser_raw_path_token.clone(),
+                                },
+                                &self.transfer.browser_remote_file_path(),
+                            )
+                        } else {
+                            !super::cwd_sync::cwd_paths_equal(
+                                backend,
+                                &snapshot.browser_path,
+                                remote_path,
+                            )
+                        }
+                    })
+                }),
+            TransferJobKind::InitialDirectory => true,
+            _ => false,
+        };
+        let reveal_tree_after_navigation = if navigation_job_key.is_some() {
+            navigation_position_owned && (directory_changed || tree_uninitialized)
+        } else {
+            tree_uninitialized
+        };
         dirty |= transfer_event_needs_ui_refresh(
             self.session.active_id(),
             job_session_id.as_deref(),
@@ -695,10 +748,11 @@ impl NyaTermApp {
                 job.detail = format!("Home {home_dir}");
                 self.transfer.browser.home_dir = home_dir.clone();
                 self.transfer.browser.home_dir_pending = false;
-                self.transfer.browser.loading = false;
-                self.transfer.browser.error = None;
-                self.transfer.browser.status =
-                    format!("remote home resolved: {}", truncate_preview(&home_dir, 72));
+                // Metadata replies must not settle a directory request started afterwards.
+                if !self.transfer.browser.loading {
+                    self.transfer.browser.status =
+                        format!("remote home resolved: {}", truncate_preview(&home_dir, 72));
+                }
                 job.entries.clear();
                 job.summary = None;
                 job.progress = None;
@@ -1360,9 +1414,11 @@ impl NyaTermApp {
                     &job.kind,
                     TransferJobKind::InitialDirectory
                         | TransferJobKind::ListDir { .. }
-                        | TransferJobKind::ResolveHome
                         | TransferJobKind::SyncCwd { .. }
                 );
+                if matches!(job.kind, TransferJobKind::ResolveHome) {
+                    self.transfer.browser.home_dir_pending = false;
+                }
                 let property_remote_path = match &job.kind {
                     TransferJobKind::LoadProperties { remote_path }
                     | TransferJobKind::UpdateProperties { remote_path, .. }

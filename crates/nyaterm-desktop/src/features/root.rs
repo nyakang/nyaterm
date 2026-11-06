@@ -361,6 +361,7 @@ impl NyaTermApp {
             // panels. Popup dismissal and panel dismissal are separate clicks.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 this.shell.panels.clear_floating_outside_press();
+                this.shell.panels.clear_native_floating_outside_press();
                 if event.button == MouseButton::Left
                     && !this.floating_panel_dismissal_is_blocked(window, cx)
                 {
@@ -584,6 +585,15 @@ impl NyaTermApp {
             // Floating selections are transient and independent from the
             // persisted docked active/open stacks.
             let floating_mode = self.shell.panel_is_floating();
+            // While a native RDP presentation scope exists the ActiveX child
+            // window is composed above the owner's GPUI scene and owns the
+            // pointer inside its rectangle. Panels that overlap it must join the
+            // owned overlay popup instead of the owner scene, or they are both
+            // invisible and unclickable.
+            #[cfg(windows)]
+            let native_presentation = self.remote_desktop.native_presentation_needed();
+            #[cfg(not(windows))]
+            let native_presentation = false;
             let left_floating = floating_mode
                 .then(|| self.shell.floating_panel(PanelSide::Left))
                 .flatten();
@@ -635,56 +645,56 @@ impl NyaTermApp {
 
             if let Some(panel) = left_floating {
                 let width = self.shell.left_panel_width();
-                surface = surface.child(
-                    div()
-                        .id("floating-left-panel")
-                        .debug_selector(|| "floating-left-panel".into())
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(px(40.))
-                        .w(px(width))
-                        .flex()
-                        .border_r_1()
-                        .border_color(rgb(palette.border))
-                        .bg(self.shell_surface_color(palette.surface))
-                        .shadow_lg()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex_1().min_w_0().child(self.floating_side_panel(
-                            PanelSide::Left,
-                            panel,
-                            window,
-                            cx,
-                        )))
-                        .child(self.panel_resize_handle(PanelResizeSide::Left, cx)),
-                );
+                let panel = div()
+                    .id("floating-left-panel")
+                    .debug_selector(|| "floating-left-panel".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(40.))
+                    .w(px(width))
+                    .flex()
+                    .border_r_1()
+                    .border_color(rgb(palette.border))
+                    .bg(self.shell_surface_color(palette.surface))
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(div().flex_1().min_w_0().child(self.floating_side_panel(
+                        PanelSide::Left,
+                        panel,
+                        window,
+                        cx,
+                    )))
+                    .child(self.panel_resize_handle(PanelResizeSide::Left, cx))
+                    .into_any_element();
+                surface = surface.child(floating_panel_layer(native_presentation, panel));
             }
 
             if let Some(panel) = right_floating {
                 let width = self.shell.right_panel_width();
-                surface = surface.child(
-                    div()
-                        .id("floating-right-panel")
-                        .debug_selector(|| "floating-right-panel".into())
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(40.))
-                        .w(px(width))
-                        .flex()
-                        .border_l_1()
-                        .border_color(rgb(palette.border))
-                        .bg(self.shell_surface_color(palette.surface))
-                        .shadow_lg()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(self.panel_resize_handle(PanelResizeSide::Right, cx))
-                        .child(div().flex_1().min_w_0().child(self.floating_side_panel(
-                            PanelSide::Right,
-                            panel,
-                            window,
-                            cx,
-                        ))),
-                );
+                let panel = div()
+                    .id("floating-right-panel")
+                    .debug_selector(|| "floating-right-panel".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(40.))
+                    .w(px(width))
+                    .flex()
+                    .border_l_1()
+                    .border_color(rgb(palette.border))
+                    .bg(self.shell_surface_color(palette.surface))
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(self.panel_resize_handle(PanelResizeSide::Right, cx))
+                    .child(div().flex_1().min_w_0().child(self.floating_side_panel(
+                        PanelSide::Right,
+                        panel,
+                        window,
+                        cx,
+                    )))
+                    .into_any_element();
+                surface = surface.child(floating_panel_layer(native_presentation, panel));
             }
 
             if left_drawer_open || right_drawer_open {
@@ -862,8 +872,24 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let app = cx.weak_entity();
-        window.on_native_overlay_outside_mouse_down(move |_, _, cx| {
+        window.on_native_overlay_outside_mouse_down(move |event, window, cx| {
+            let position = event.position;
             let _ = app.update(cx, |this, cx| {
+                // Native child surfaces report the press but never the release,
+                // so the owner scene's capture handlers never see it. Arm the
+                // shared outside-press record here, before this callback closes
+                // menus, so an open menu keeps the first dismissal click. A real
+                // press clears the mark in `capture_any_mouse_down`, leaving the
+                // release path in charge.
+                if !this.floating_panel_dismissal_is_blocked(window, cx) {
+                    this.note_native_floating_panel_outside_press(position);
+                    let app = cx.entity().downgrade();
+                    window.defer(cx, move |_, cx| {
+                        let _ = app.update(cx, |this, cx| {
+                            this.finish_native_floating_panel_outside_press(position, cx);
+                        });
+                    });
+                }
                 this.shell.close_root_menus();
                 this.session.dialog_close_tab_actions();
                 this.close_tab_color_picker(cx);
@@ -1398,6 +1424,21 @@ impl NyaTermApp {
                         this.child(self.keyboard_interactive_prompt_banner(prompt, cx))
                     }),
             )
+    }
+}
+
+/// Presents a floating workspace panel above a native child window.
+///
+/// The panel keeps its layout slot, ids, focus handles and event tree; only its
+/// primitives and input regions move into the owned overlay popup, which is the
+/// only GPUI surface composed above the ActiveX RDP child. Painting it in the
+/// owner scene instead would leave it behind the child window: invisible, and
+/// with every click inside the RDP rectangle going to the remote session.
+fn floating_panel_layer(present_above_native: bool, panel: AnyElement) -> AnyElement {
+    if present_above_native {
+        nyaterm_ui::nya_region_overlay(panel).into_any_element()
+    } else {
+        panel
     }
 }
 

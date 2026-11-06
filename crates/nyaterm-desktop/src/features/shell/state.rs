@@ -179,6 +179,11 @@ pub(in crate::features) struct ShellPanelState {
     /// Pending primary-button press outside the floating overlay, consumed by
     /// the deferred mouse-up handler. Never persisted.
     floating_outside_press: Option<FloatingOutsidePress>,
+    /// Set by the native overlay outside-press callback and cleared by the
+    /// owner scene's capture handler. A surviving flag at the deferred finish
+    /// means the press came from the native child surface, which never sends a
+    /// release, so the release-based dismissal cannot run.
+    native_floating_outside_press: bool,
     pub(super) right_focus: RightFocus,
     pub(in crate::features) left_collapsed: bool,
     pub(in crate::features) right_collapsed: bool,
@@ -311,6 +316,7 @@ impl ShellFeatureState {
                 floating_right: None,
                 last_floating_side: None,
                 floating_outside_press: None,
+                native_floating_outside_press: false,
                 right_focus: RightFocus::Default,
                 left_collapsed: init.left_sidebar_collapsed,
                 right_collapsed: init.right_inspector_collapsed,
@@ -1071,6 +1077,7 @@ impl ShellPanelState {
         // Any state change invalidates a press from the gesture that caused it,
         // so an opening/toggling click cannot dismiss what it just opened.
         self.floating_outside_press = None;
+        self.native_floating_outside_press = false;
         match side {
             PanelSide::Left => self.floating_left = panel,
             PanelSide::Right => self.floating_right = panel,
@@ -1091,6 +1098,7 @@ impl ShellPanelState {
         self.floating_right = None;
         self.last_floating_side = None;
         self.floating_outside_press = None;
+        self.native_floating_outside_press = false;
     }
 
     pub(super) fn set_floating_outside_press(&mut self, position: Point<Pixels>) {
@@ -1106,6 +1114,18 @@ impl ShellPanelState {
 
     pub(in crate::features) fn clear_floating_outside_press(&mut self) {
         self.floating_outside_press = None;
+    }
+
+    pub(super) fn mark_native_floating_outside_press(&mut self) {
+        self.native_floating_outside_press = true;
+    }
+
+    pub(super) fn take_native_floating_outside_press(&mut self) -> bool {
+        std::mem::take(&mut self.native_floating_outside_press)
+    }
+
+    pub(in crate::features) fn clear_native_floating_outside_press(&mut self) {
+        self.native_floating_outside_press = false;
     }
 
     pub(in crate::features) fn cancel_floating_outside_drag(&mut self, position: Point<Pixels>) {

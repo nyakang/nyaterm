@@ -190,6 +190,7 @@ pub(super) struct TransferBrowserState {
     /// Latest SFTP navigation job per session; older results must not rewind the browser.
     pub(super) navigation_jobs: HashMap<String, String>,
     pub(super) pending_navigations: HashMap<String, TransferBrowserNavigationSnapshot>,
+    pub(super) navigation_handles: HashMap<String, crate::blocking_jobs::JobHandle>,
     pub(super) pending_cwd_sync: bool,
     #[cfg(test)]
     pub(super) directory_requests: Option<Vec<(String, nyaterm_files::sftp::RemoteFilePath)>>,
@@ -404,6 +405,7 @@ impl TransferFeatureState {
                 session_cache: HashMap::new(),
                 navigation_jobs: HashMap::new(),
                 pending_navigations: HashMap::new(),
+                navigation_handles: HashMap::new(),
                 pending_cwd_sync: false,
                 #[cfg(test)]
                 directory_requests: None,
@@ -1417,6 +1419,9 @@ impl TransferFeatureState {
             changed |= source.session_id() == Some(old_id) || target.session_id() == Some(old_id);
             context.replace_session(old_id, new_id);
         }
+        if self.invalidate_browser_navigation(old_id).is_some() {
+            changed = true;
+        }
         self.tree.replace_session(old_id, new_id);
         if self.file_ops.delete_refresh_pending.remove(old_id) {
             self.file_ops
@@ -1429,10 +1434,6 @@ impl TransferFeatureState {
             changed = true;
         }
 
-        if let Some(job_id) = self.browser.navigation_jobs.remove(old_id) {
-            self.browser.pending_navigations.remove(&job_id);
-            changed = true;
-        }
         self.prune_unreferenced_browser_navigation_snapshots();
 
         for job in &mut self.queue.jobs {

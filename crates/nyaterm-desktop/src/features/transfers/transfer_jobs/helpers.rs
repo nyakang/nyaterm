@@ -1,4 +1,4 @@
-use crate::blocking_jobs::{BlockingJobScheduler, JobOutcome};
+use crate::blocking_jobs::{BlockingJobScheduler, JobHandle, JobOutcome};
 use crate::models::{TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState};
 use futures::channel::mpsc::UnboundedSender;
 use nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED;
@@ -32,13 +32,29 @@ pub(in crate::features) fn submit_transfer_blocking_job(
     rejection_tx: UnboundedSender<TransferJobResult>,
     run: impl FnOnce() + Send + 'static,
 ) {
+    drop(submit_transfer_cancellable_blocking_job(
+        scheduler,
+        name,
+        rejection_job_id,
+        rejection_tx,
+        run,
+    ));
+}
+
+pub(in crate::features) fn submit_transfer_cancellable_blocking_job(
+    scheduler: &BlockingJobScheduler,
+    name: &'static str,
+    rejection_job_id: String,
+    rejection_tx: UnboundedSender<TransferJobResult>,
+    run: impl FnOnce() + Send + 'static,
+) -> Option<JobHandle> {
     // A normal closure sends its own typed result. Only synthesize a terminal
     // event when the scheduler skips the closure or catches its panic.
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let run_completed = completed.clone();
     let outcome_tx = rejection_tx.clone();
     let outcome_id = rejection_job_id.clone();
-    if let Err(error) = scheduler.submit_with_outcome(
+    match scheduler.submit_with_outcome(
         name,
         move |_| {
             run();
@@ -59,10 +75,14 @@ pub(in crate::features) fn submit_transfer_blocking_job(
             });
         },
     ) {
-        let _ = rejection_tx.unbounded_send(TransferJobResult {
-            id: rejection_job_id,
-            event: TransferJobEvent::Finished(Err(error.to_string())),
-        });
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            let _ = rejection_tx.unbounded_send(TransferJobResult {
+                id: rejection_job_id,
+                event: TransferJobEvent::Finished(Err(error.to_string())),
+            });
+            None
+        }
     }
 }
 
@@ -139,10 +159,63 @@ pub(super) fn transfer_job_local_target_path(job: &TransferJobState) -> Option<P
 
 #[cfg(test)]
 mod tests {
-    use super::{TransferProgressEventSender, submit_transfer_blocking_job};
+    use super::{
+        TransferProgressEventSender, submit_transfer_blocking_job,
+        submit_transfer_cancellable_blocking_job,
+    };
     use crate::blocking_jobs::BlockingJobScheduler;
     use crate::models::TransferJobEvent;
     use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+
+    #[test]
+    fn cancelling_a_queued_directory_request_skips_io_and_emits_one_terminal_event() {
+        use crate::blocking_jobs::JobOutcome;
+        use futures::StreamExt as _;
+        use nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        use std::time::Duration;
+
+        let scheduler = BlockingJobScheduler::with_limits(1, 4).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let occupied = scheduler
+            .submit("occupied", move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let accessed = Arc::new(AtomicBool::new(false));
+        let accessed_in_job = accessed.clone();
+        let handle = submit_transfer_cancellable_blocking_job(
+            &scheduler,
+            "directory",
+            "cancelled".into(),
+            tx,
+            move || {
+                accessed_in_job.store(true, Ordering::Release);
+            },
+        )
+        .unwrap();
+        handle.cancel();
+        release_tx.send(()).unwrap();
+        assert_eq!(occupied.wait(), JobOutcome::Completed);
+        assert_eq!(handle.wait(), JobOutcome::Cancelled);
+        assert!(!accessed.load(Ordering::Acquire));
+        // The outcome is published before on_outcome emits the feature event.
+        let event = futures::executor::block_on(rx.next()).unwrap();
+        assert_eq!(event.id, "cancelled");
+        assert!(
+            matches!(event.event, TransferJobEvent::Finished(Err(error)) if error == SFTP_TRANSFER_CANCELLED)
+        );
+        assert!(futures::executor::block_on(rx.next()).is_none());
+        scheduler.shutdown();
+    }
 
     #[test]
     fn occupied_bulk_executor_does_not_block_interactive_jobs() {
