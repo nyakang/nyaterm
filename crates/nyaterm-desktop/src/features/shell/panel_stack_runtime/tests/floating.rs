@@ -463,6 +463,94 @@ fn resized_panels_use_the_rendered_bounds_and_releasing_inside_either_does_not_c
 }
 
 #[test]
+fn native_outside_press_dismisses_floating_panels() {
+    let root = TestConfigDir::new("nyaterm-floating-native-outside");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let position = outside(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.note_native_floating_panel_outside_press(position);
+            app.finish_native_floating_panel_outside_press(position, cx);
+        });
+    });
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_inside_press_keeps_floating_panels() {
+    let root = TestConfigDir::new("nyaterm-floating-native-inside");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let bounds = cx.debug_bounds("floating-left-panel").unwrap();
+    let position = point(bounds.left() + px(12.), bounds.center().y);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.note_native_floating_panel_outside_press(position);
+            app.finish_native_floating_panel_outside_press(position, cx);
+        });
+    });
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+}
+
+#[test]
+fn real_press_clears_the_native_arm_and_leaves_the_release_path_in_charge() {
+    let root = TestConfigDir::new("nyaterm-floating-native-real-press");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let position = outside(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.note_native_floating_panel_outside_press(position);
+            // What the owner scene's `capture_any_mouse_down` does for a real press.
+            app.shell.panels.clear_floating_outside_press();
+            app.shell.panels.clear_native_floating_outside_press();
+            app.finish_native_floating_panel_outside_press(position, cx);
+        });
+    });
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    cx.simulate_click(position, Modifiers::none());
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_press_without_open_panels_is_a_noop() {
+    let root = TestConfigDir::new("nyaterm-floating-native-no-panel");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    let position = point(px(600.), px(400.));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.note_native_floating_panel_outside_press(position);
+            app.finish_native_floating_panel_outside_press(position, cx);
+        });
+    });
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
 fn file_menu_keyboard_action_opens_a_dialog_without_dismissing_the_panels() {
     let root = TestConfigDir::new("nyaterm-floating-file-popup");
     let mut cx = TestAppContext::single();

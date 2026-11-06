@@ -13,7 +13,7 @@ use raw_window_handle::RawWindowHandle;
 use crate::features::NyaTermApp;
 
 use super::runtime::fit_window_display_metrics;
-use super::state::RemoteDesktopSessionState;
+use super::state::{RemoteDesktopSessionState, native_rdp_state_is_displayable};
 
 impl NyaTermApp {
     pub(super) fn native_rdp_view(
@@ -164,13 +164,7 @@ impl NyaTermApp {
         {
             return false;
         }
-        let needs_native = self.remote_desktop.sessions.values().any(|session| {
-            native_surface_needed(
-                session.native_rdp_config.is_some(),
-                session.native_rdp.is_some(),
-                session.state,
-            )
-        });
+        let needs_native = self.remote_desktop.native_presentation_needed();
         if needs_native {
             if let Err(error) = nyaterm_ui::enable_native_child_overlays(window) {
                 for session in self.remote_desktop.sessions.values_mut() {
@@ -320,29 +314,6 @@ pub(in crate::features) struct NativeRdpOverlayState {
     pub restore_focus: bool,
 }
 
-fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
-    matches!(
-        state,
-        RemoteDesktopViewState::Connecting
-            | RemoteDesktopViewState::Connected
-            | RemoteDesktopViewState::Reconnecting
-    )
-}
-
-/// Whether a native presentation scope is still required.
-///
-/// The scope exists so application overlays can be painted above the ActiveX
-/// child window. Once a native session reaches a non-displayable state its
-/// surface is hidden, so keeping the scope alive only leaves an input popup and
-/// a global mouse hook behind.
-fn native_surface_needed(
-    config_pending: bool,
-    control_present: bool,
-    state: RemoteDesktopViewState,
-) -> bool {
-    config_pending || (control_present && native_rdp_state_is_displayable(state))
-}
-
 fn native_rdp_surface_visible(
     window_visible: bool,
     tab_visible: bool,
@@ -402,46 +373,17 @@ fn fit_native_desktop_dimensions(rect: NativeRdpRect) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{native_disconnect_message, native_rdp_state_is_displayable};
+    use super::{native_disconnect_message, native_rdp_surface_visible};
     use nyaterm_remote_desktop::RemoteDesktopViewState;
     use nyaterm_remote_desktop::activex::NativeRdpDisconnectInfo;
 
     #[test]
-    fn failed_native_sessions_release_the_panel() {
-        assert!(!native_rdp_state_is_displayable(
-            RemoteDesktopViewState::Failed
-        ));
-        assert!(native_rdp_state_is_displayable(
-            RemoteDesktopViewState::Connected
-        ));
-    }
-
-    #[test]
     fn dismissing_an_overlay_never_resurrects_a_hidden_or_failed_tab() {
-        use super::native_rdp_surface_visible;
         use RemoteDesktopViewState::{Connected, Failed};
         assert!(native_rdp_surface_visible(true, true, Connected));
         assert!(!native_rdp_surface_visible(true, false, Connected));
         assert!(!native_rdp_surface_visible(false, true, Connected));
         assert!(!native_rdp_surface_visible(true, true, Failed));
-    }
-
-    #[test]
-    fn native_surface_scope_ends_with_its_last_visible_session() {
-        use super::native_surface_needed;
-        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Failed};
-
-        // Nothing native left: the owned input popup and mouse hook must go,
-        // otherwise they cover later modal child windows.
-        assert!(!native_surface_needed(false, false, Connected));
-        assert!(!native_surface_needed(false, false, Disconnected));
-        assert!(!native_surface_needed(false, true, Failed));
-        assert!(!native_surface_needed(false, true, Disconnected));
-
-        // A pending config or a still-displayable control keeps the scope.
-        assert!(native_surface_needed(true, false, Failed));
-        assert!(native_surface_needed(false, true, Connecting));
-        assert!(native_surface_needed(false, true, Connected));
     }
 
     #[test]
