@@ -133,13 +133,15 @@ impl NyaTermApp {
                 .workspace_reconnect_failed_state(session_id, error, cx)
                 .into_any_element();
         }
-        if self.remote_desktop.is_session(&session_id) {
-            return self.remote_desktop_view(session_id, cx);
-        }
-        if self.session_is_sftp_only(&session_id) {
-            return self.sftp_session_content(&session_id);
-        }
-        self.terminal_canvas_for(session_id, cx).into_any_element()
+        let content = if self.remote_desktop.is_session(&session_id) {
+            self.remote_desktop_view(session_id.clone(), cx)
+        } else if self.session_is_sftp_only(&session_id) {
+            self.sftp_session_content(&session_id)
+        } else {
+            self.terminal_canvas_for(session_id.clone(), cx)
+                .into_any_element()
+        };
+        self.with_session_notice_bar(&session_id, content, cx)
     }
 
     /// Content for one workspace tab: the owning root's pane tree when the
@@ -156,13 +158,19 @@ impl NyaTermApp {
         let Some(root) = self.shell.workspace_pane_root(&tab_root).cloned() else {
             return self.workspace_session_content(session_id, cx);
         };
+        let host_is_hidden = !root.session_ids().iter().any(|id| id == &tab_root);
         let tree = self.render_workspace_pane_node(root, cx);
         let mut area = div().flex_1().min_h_0().min_w_0().flex().flex_col();
         area = area.child(div().flex_1().min_h_0().min_w_0().child(tree));
         if self.tmux.is_control_session(&tab_root) {
             area = area.child(self.tmux_window_strip(&tab_root, cx));
         }
-        area.into_any_element()
+        let content = area.into_any_element();
+        if host_is_hidden {
+            self.with_session_notice_bar(&tab_root, content, cx)
+        } else {
+            content
+        }
     }
 
     pub(super) fn render_workspace_pane_node(

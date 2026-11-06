@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, FontWeight, IntoElement, RenderOnce, ScrollHandle, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg,
+    AnyElement, App, ClickEvent, FontWeight, IntoElement, RenderOnce, Rgba, ScrollHandle,
+    SharedString, Window, canvas, div, prelude::*, px, rgb, rgba, svg,
 };
 
 use gpui_kit::component::scroll::ScrollableElement;
@@ -12,6 +12,7 @@ use crate::tooltip::NyaTooltip;
 
 type NyaSettingsSelectHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type NyaSettingsGroupToggleHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
+type NyaSettingsContentWidthHandler = Rc<dyn Fn(f32, &mut Window, &mut App)>;
 
 const DEFAULT_COMPACT_BREAKPOINT: f32 = 640.;
 const DEFAULT_WIDE_BREAKPOINT: f32 = 1024.;
@@ -107,7 +108,9 @@ pub struct NyaSettingsLayout {
     sidebar_title: SharedString,
     content: AnyElement,
     palette: ThemePalette,
+    content_background: Option<Rgba>,
     viewport_width: Option<f32>,
+    on_content_width_changed: Option<NyaSettingsContentWidthHandler>,
     content_scroll_handle: Option<ScrollHandle>,
     compact_breakpoint: f32,
     wide_breakpoint: f32,
@@ -140,7 +143,9 @@ impl NyaSettingsLayout {
             sidebar_title: SharedString::from("Settings"),
             content: content.into_any_element(),
             palette: theme_palette("github-dark"),
+            content_background: None,
             viewport_width: None,
+            on_content_width_changed: None,
             content_scroll_handle: None,
             compact_breakpoint: DEFAULT_COMPACT_BREAKPOINT,
             wide_breakpoint: DEFAULT_WIDE_BREAKPOINT,
@@ -154,6 +159,13 @@ impl NyaSettingsLayout {
         self
     }
 
+    /// Overrides the opaque `palette.bg` content fill, e.g. so a translucent
+    /// host surface shows through instead of being painted over.
+    pub fn content_background(mut self, background: impl Into<Rgba>) -> Self {
+        self.content_background = Some(background.into());
+        self
+    }
+
     pub fn active_title(mut self, title: impl Into<SharedString>) -> Self {
         self.active_title = title.into();
         self
@@ -164,8 +176,20 @@ impl NyaSettingsLayout {
         self
     }
 
+    /// Sets the available host width in logical pixels, including the sidebar.
+    /// Embedded layouts should pass their pane width rather than the window width.
     pub fn viewport_width(mut self, width: f32) -> Self {
         self.viewport_width = Some(width);
+        self
+    }
+
+    /// Reports the laid-out body width after padding and the maximum-width cap.
+    /// Called after layout; consumers should ignore unchanged measurements.
+    pub fn on_content_width_changed(
+        mut self,
+        handler: impl Fn(f32, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_content_width_changed = Some(Rc::new(handler));
         self
     }
 
@@ -219,11 +243,32 @@ impl RenderOnce for NyaSettingsLayout {
         let active_item_id = self.active_item_id.clone();
         let on_select = self.on_select.clone();
         let on_toggle_group = self.on_toggle_group.clone();
+        let content = div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .child(self.content)
+            .when_some(self.on_content_width_changed, |this, handler| {
+                this.child(
+                    canvas(
+                        move |bounds, window, cx| {
+                            let width = f32::from(bounds.size.width);
+                            let handler = handler.clone();
+                            window.defer(cx, move |window, cx| handler(width, window, cx));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            });
 
         div()
             .id(self.id)
             .flex()
             .flex_1()
+            .min_w_0()
             .min_h(px(0.))
             .size_full()
             .child(settings_sidebar(SettingsSidebarParams {
@@ -238,10 +283,11 @@ impl RenderOnce for NyaSettingsLayout {
             }))
             .child(settings_content_panel(
                 palette,
+                self.content_background.unwrap_or_else(|| rgb(palette.bg)),
                 compact,
                 wide,
                 self.active_title,
-                self.content,
+                content.into_any_element(),
                 self.content_scroll_handle,
             ))
     }
@@ -281,6 +327,7 @@ fn settings_sidebar(params: SettingsSidebarParams) -> impl IntoElement {
         on_toggle_group,
     } = params;
     div()
+        .debug_selector(|| "settings-sidebar".into())
         .w(px(sidebar_width))
         .flex_none()
         .h_full()
@@ -546,6 +593,7 @@ fn settings_nav_item(
 
 fn settings_content_panel(
     palette: ThemePalette,
+    background: Rgba,
     compact: bool,
     wide: bool,
     active_title: SharedString,
@@ -558,7 +606,7 @@ fn settings_content_panel(
         .min_w_0()
         .min_h_0()
         .overflow_hidden()
-        .bg(rgb(palette.bg))
+        .bg(background)
         .child(
             div()
                 .size_full()
@@ -607,7 +655,10 @@ fn settings_content_panel(
                                 .when(wide, |this| this.px_8().py_8())
                                 .child(
                                     div()
+                                        .debug_selector(|| "settings-content-body".into())
                                         .w_full()
+                                        .min_w_0()
+                                        .flex_none()
                                         .max_w(px(1024.))
                                         .mx_auto()
                                         .flex()
@@ -618,4 +669,81 @@ fn settings_content_panel(
                         ),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px, size};
+
+    use super::{NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem};
+
+    struct LayoutFixture {
+        width: f32,
+        measured_width: Rc<Cell<f32>>,
+    }
+
+    impl Render for LayoutFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let measured = self.measured_width.clone();
+            div().w(px(self.width)).h(px(400.)).child(
+                NyaSettingsLayout::new(
+                    "fixture",
+                    [NyaSettingsNavGroup::standalone([NyaSettingsNavItem::new(
+                        "models",
+                        "Models",
+                        "icons/settings.svg",
+                    )])],
+                    "models",
+                    div().h(px(1200.)),
+                )
+                .viewport_width(self.width)
+                .on_content_width_changed(move |width, _, _| measured.set(width)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn embedded_layout_measures_body_after_sidebar_padding_and_width_cap(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let measured_width = Rc::new(Cell::new(0.));
+        let (fixture, cx) = cx.add_window_view(|_, _| LayoutFixture {
+            width: 395.,
+            measured_width: measured_width.clone(),
+        });
+        cx.simulate_resize(size(px(1800.), px(960.)));
+        for (width, sidebar, padding) in [
+            (395., 56., 32.),
+            (639., 56., 32.),
+            (640., 192., 48.),
+            (1023., 192., 48.),
+            (1024., 224., 64.),
+            (1600., 224., 64.),
+            (395., 56., 32.),
+        ] {
+            fixture.update(cx, |fixture, cx| {
+                fixture.width = width;
+                cx.notify();
+            });
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            cx.run_until_parked();
+            let nav = cx.debug_bounds("settings-sidebar").unwrap();
+            let body = cx.debug_bounds("settings-content-body").unwrap();
+            let expected = (width - sidebar - padding).min(1024.);
+            assert_eq!(nav.size.width, px(sidebar), "host width {width}");
+            assert_eq!(body.size.width, px(expected), "host width {width}");
+            assert_eq!(measured_width.get(), expected);
+            assert!(body.left() >= nav.right());
+            assert!(body.right() <= px(width));
+            assert_eq!(
+                body.size.height,
+                px(1200.),
+                "body must retain its natural height"
+            );
+        }
+    }
 }

@@ -1,13 +1,10 @@
-use gpui::{ClickEvent, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window};
-use nyaterm_core::truncate_preview;
-use nyaterm_transport::SftpFileEntry;
-
-use std::collections::HashSet;
-
+use super::{TransferPathPart, transfer_path_part_value};
 use crate::features::NyaTermApp;
 use crate::models::{TransferBrowserContextTarget, TransferBrowserDragSelectionState};
-
-use super::{TransferPathPart, transfer_path_part_value};
+use gpui::{ClickEvent, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window};
+use nyaterm_core::truncate_preview;
+use nyaterm_files::sftp::SftpFileEntry;
+use std::collections::HashSet;
 
 /// Converts a selection identity key to its display path so raw-path-token is not
 /// treated as a user-facing path.
@@ -20,7 +17,7 @@ fn browser_display_path_for_identity(entries: &[SftpFileEntry], identity: &str) 
 }
 
 fn browser_operation_target_directory(
-    backend: nyaterm_transport::FileBrowserBackendKind,
+    backend: nyaterm_files::file_browser::FileBrowserBackendKind,
     selected: &[SftpFileEntry],
     current: &str,
     home: &str,
@@ -30,7 +27,7 @@ fn browser_operation_target_directory(
         return if entry.is_directory() {
             entry.path.clone()
         } else {
-            nyaterm_transport::file_browser_parent(backend, &entry.path)
+            nyaterm_files::file_browser::file_browser_parent(backend, &entry.path)
         };
     }
     [current, home, fallback]
@@ -46,7 +43,7 @@ impl NyaTermApp {
         let backend = self
             .session
             .active_file_browser_backend()
-            .unwrap_or(nyaterm_transport::FileBrowserBackendKind::Remote);
+            .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         if self.settings.summary().ui_file_explorer_view_mode
             == nyaterm_core::TransferBrowserViewMode::Tree
             && let Some(session) = self.session.active_id()
@@ -141,7 +138,7 @@ impl NyaTermApp {
         // A plain press on a selected entry preserves the multi-file selection
         // for export. Modifier gestures retain the existing range-selection path.
         let exportable = self.session.active_file_browser_backend()
-            == Some(nyaterm_transport::FileBrowserBackendKind::Local)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
             || ((window.supports_virtual_file_drag()
                 || window.supports_file_promise_drag()
                 || cfg!(target_os = "linux"))
@@ -149,8 +146,8 @@ impl NyaTermApp {
                     entry.matches_identity(&path)
                         && matches!(
                             entry.file_type,
-                            nyaterm_transport::SftpFileType::File
-                                | nyaterm_transport::SftpFileType::Directory
+                            nyaterm_files::sftp::SftpFileType::File
+                                | nyaterm_files::sftp::SftpFileType::Directory
                         )
                 }));
         if exportable
@@ -651,9 +648,10 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath, SftpFileEntry, SftpFileType};
 
     use super::{browser_display_path_for_identity, browser_operation_target_directory};
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
 
     fn entry(name: &str, path: &str, file_type: SftpFileType) -> SftpFileEntry {
         SftpFileEntry {

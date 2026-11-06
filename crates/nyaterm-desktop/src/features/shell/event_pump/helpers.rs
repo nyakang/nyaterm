@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 pub(super) const SESSION_EVENT_DRAIN_BATCH: usize = 256;
 pub(super) const SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET: usize = 32 * 1024;
 pub(super) const SESSION_EVENT_DRAIN_PRESSURE_OUTPUT_BUDGET: usize = 8 * 1024;
+pub(super) const SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET: usize = 4 * 1024;
 pub(super) const SESSION_EVENT_DRAIN_WALL_BUDGET: Duration = Duration::from_millis(8);
 pub(super) const SESSION_EVENT_INPUT_WAKE_DRAIN_BATCH: usize = 32;
 pub(super) const SESSION_EVENT_INPUT_WAKE_OUTPUT_BUDGET: usize = 4 * 1024;

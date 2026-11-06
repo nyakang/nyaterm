@@ -7,6 +7,7 @@ use russh::{ChannelMsg, client};
 use super::{SshClientHandler, SshShellHandle};
 
 const READY_MARKER_PREFIX: &str = "7777;NyaTermReady:";
+const SHELL_MARKER_PREFIX: &str = "7777;NyaTermShell:";
 const COMMAND_MARKER_PREFIX: &str = "7777;NyaTermCommand:";
 const LEGACY_READY_MARKER_PREFIX: &str = "7777;DflyReady:";
 const LEGACY_COMMAND_MARKER_PREFIX: &str = "7777;DflyCommand:";
@@ -71,9 +72,9 @@ impl PreparedSshShellIntegration {
         let remote_dir = sh_single_quote(remote_dir);
         let source = match self.shell {
             ShellKind::Bash | ShellKind::Zsh => {
-                format!(". {remote_path}; rm -rf {remote_dir}")
+                format!(". {remote_path}; command rm -rf {remote_dir}")
             }
-            ShellKind::Fish => format!("source {remote_path}; rm -rf {remote_dir}"),
+            ShellKind::Fish => format!("source {remote_path}; command rm -rf {remote_dir}"),
             ShellKind::PosixSh | ShellKind::Unknown => {
                 unreachable!("prepared shell integration uses a supported shell")
             }
@@ -110,11 +111,22 @@ impl ShellKind {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct ShellIdentity {
+    pub program: String,
+    pub user: String,
+}
+impl std::fmt::Debug for ShellIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ShellIdentity([REDACTED])")
+    }
+}
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct SshIntegrationOutput {
     pub(super) visible: Vec<u8>,
     pub(super) cwd_paths: Vec<String>,
     pub(super) accepted_commands: Vec<String>,
+    pub(super) shell_identities: Vec<ShellIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +136,7 @@ pub(super) struct OscResult {
     pub(super) cwd_paths: Vec<String>,
     pub(super) ready: bool,
     pub(super) accepted_commands: Vec<String>,
+    pub(super) shell_identities: Vec<ShellIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,6 +272,7 @@ impl SshShellIntegrationState {
                 let result = self.stripper.push(bytes);
                 let cwd_paths = result.cwd_paths;
                 let accepted_commands = result.accepted_commands;
+                let shell_identities = result.shell_identities;
                 if result.ready {
                     let visible = result.visible_after_ready;
                     self.force_normal();
@@ -266,6 +280,7 @@ impl SshShellIntegrationState {
                         visible,
                         cwd_paths,
                         accepted_commands,
+                        shell_identities,
                     }
                 } else {
                     self.suppressed_visible_bytes = self
@@ -290,6 +305,7 @@ impl SshShellIntegrationState {
                         visible: Vec::new(),
                         cwd_paths,
                         accepted_commands,
+                        shell_identities,
                     }
                 }
             }
@@ -401,6 +417,7 @@ impl OscResult {
             visible: self.visible,
             cwd_paths: self.cwd_paths,
             accepted_commands: self.accepted_commands,
+            shell_identities: self.shell_identities,
         }
     }
 }
@@ -1361,6 +1378,7 @@ impl OscStripper {
                 cwd_paths: Vec::new(),
                 ready: false,
                 accepted_commands: Vec::new(),
+                shell_identities: Vec::new(),
             };
         }
 
@@ -1370,6 +1388,7 @@ impl OscStripper {
         let mut ready = false;
         let mut after_ready = false;
         let mut accepted_commands = Vec::new();
+        let mut shell_identities = Vec::new();
 
         loop {
             let Some(esc_pos) = find_subsequence(&self.buf, b"\x1b]") else {
@@ -1409,6 +1428,10 @@ impl OscStripper {
                 || inner.starts_with(LEGACY_READY_MARKER_PREFIX.as_bytes())
             {
                 // Private marker for another session. Strip it but do not mark ready.
+            } else if let Some(payload) = inner.strip_prefix(SHELL_MARKER_PREFIX.as_bytes()) {
+                if let Some(identity) = parse_shell_identity(payload) {
+                    shell_identities.push(identity);
+                }
             } else if let Some(command) = parse_command_marker(inner) {
                 accepted_commands.push(command);
             } else {
@@ -1426,6 +1449,7 @@ impl OscStripper {
             cwd_paths,
             ready,
             accepted_commands,
+            shell_identities,
         }
     }
 
@@ -1457,6 +1481,23 @@ fn find_osc_terminator(bytes: &[u8]) -> Option<(usize, usize)> {
         .position(|byte| *byte == b'\x07')
         .map(|index| (index, 1))
         .or_else(|| find_subsequence(&bytes[2..], b"\x1b\\").map(|index| (index + 2, 2)))
+}
+
+fn parse_shell_identity(payload: &[u8]) -> Option<ShellIdentity> {
+    if payload.len() > 4096 {
+        return None;
+    }
+    let encoded = std::str::from_utf8(payload).ok()?;
+    let (program, user) = encoded.split_once(':')?;
+    let program = String::from_utf8(BASE64_STANDARD.decode(program).ok()?).ok()?;
+    let user = String::from_utf8(BASE64_STANDARD.decode(user).ok()?).ok()?;
+    if program.is_empty()
+        || user.is_empty()
+        || program.chars().chain(user.chars()).any(char::is_control)
+    {
+        return None;
+    }
+    Some(ShellIdentity { program, user })
 }
 
 fn parse_osc7_payload(payload: &[u8]) -> Option<String> {

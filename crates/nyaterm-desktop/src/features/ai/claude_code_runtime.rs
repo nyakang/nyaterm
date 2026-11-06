@@ -95,12 +95,8 @@ fn run_claude_code_with_environment(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    hide_window(&mut command);
-    let mut child = ExternalAgentChild::new(
-        command
-            .spawn()
-            .map_err(|error| format!("failed to start Claude Code: {error}"))?,
-    );
+    let mut child = ExternalAgentChild::spawn(&mut command)
+        .map_err(|error| format!("failed to start Claude Code: {error}"))?;
     let mut stdin = child
         .take_stdin()
         .ok_or_else(|| "Claude Code stdin is unavailable".to_string())?;
@@ -162,7 +158,9 @@ fn run_claude_code_with_environment(
                 }
             }
             Ok(Err(error)) => break Err(error),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(
+                error @ (mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected),
+            ) => {
                 if let Some(status) = child
                     .child_mut()
                     .try_wait()
@@ -179,35 +177,15 @@ fn run_claude_code_with_environment(
                             .or_else(|| request.existing_external_session_id.clone()),
                     });
                 }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let status = child
-                    .child_mut()
-                    .wait()
-                    .map_err(|error| error.to_string())?;
-                if !status.success() {
-                    break Err(format!("Claude Code exited with {status}"));
+                // Closing stdout does not mean the CLI has exited. Keep polling
+                // cancellation instead of blocking in Child::wait indefinitely.
+                if error == mpsc::RecvTimeoutError::Disconnected {
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                break Ok(ClaudeCodeRunResult {
-                    text: content,
-                    external_session_id: parser
-                        .session_id()
-                        .map(ToOwned::to_owned)
-                        .or_else(|| request.existing_external_session_id.clone()),
-                });
             }
         }
     }
 }
-
-#[cfg(windows)]
-fn hide_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x0800_0000);
-}
-
-#[cfg(not(windows))]
-fn hide_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
@@ -220,6 +198,28 @@ mod tests {
     };
 
     use super::run_claude_code_with_environment;
+
+    #[test]
+    fn fake_claude_cli_accepts_localized_system_arguments_on_windows() {
+        let (_script_dir, script) = fake_claude_script(false);
+        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+            let (settings, mut request) = fixture_request(&script);
+            request.options.language = language.into();
+            let completion = run_claude_code_with_environment(
+                &settings,
+                &request,
+                None,
+                &Arc::new(AtomicBool::new(false)),
+                1,
+                "chat-1",
+                fixture_mcp_environment(),
+                &script,
+                &mut |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("{language}: {error}"));
+            assert_eq!(completion.text, "hello world");
+        }
+    }
 
     #[test]
     fn fake_claude_cli_streams_resumes_and_cancels() {

@@ -38,6 +38,9 @@ class PathSelectionTests(unittest.TestCase):
             ("crates/nyaterm-desktop/locales/ja.json", {"run_rust"}),
             ("crates/nyaterm-desktop/src/features/settings.rs", {"run_rust"}),
             ("crates/nyaterm-desktop/src/features/tmux.rs", {"run_rust"}),
+            ("crates/nyaterm-files/src/sftp/mod.rs", {"run_rust"}),
+            ("crates/nyaterm-recording/src/recording.rs", {"run_rust"}),
+            ("crates/nyaterm-remote-ops/src/docker.rs", {"run_rust"}),
             ("crates/nyaterm-transport/src/tmux/control.rs", {"run_rust", "run_tmux"}),
             ("crates/nyaterm-transport/src/ssh/worker.rs", {"run_rust", "run_tmux"}),
             ("crates/nyaterm-terminal/src/lib.rs", {"run_rust", "run_tmux"}),
@@ -305,6 +308,17 @@ def dependency_closure(graph: dict[str, set[str]], roots: set[str]) -> set[str]:
 
 
 class ManifestCoverageTests(unittest.TestCase):
+    def test_transport_split_preserves_independent_dependency_closures(self):
+        graph = manifest_graph(ROOT)
+        business = {"nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops"}
+        self.assertTrue(business.isdisjoint(dependency_closure(graph, {"nyaterm-transport"})))
+        for crate in business:
+            with self.subTest(crate=crate):
+                closure = dependency_closure(graph, {crate})
+                self.assertEqual(closure & business, {crate})
+                self.assertTrue({"nyaterm-desktop", "nyaterm-ui", "nyaterm-terminal-gpui"}.isdisjoint(closure))
+        self.assertNotIn("nyaterm-transport", dependency_closure(graph, {"nyaterm-recording"}))
+
     def test_every_workspace_crate_is_registered(self):
         self.assertEqual(set(manifest_graph(ROOT)), selector.KNOWN_CRATES, "Register workspace crates in select_rust_jobs.py")
 

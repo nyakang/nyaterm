@@ -1,5 +1,6 @@
+pub mod completion;
 pub mod proxy;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -14,6 +15,7 @@ mod codex;
 mod diagnostics;
 pub mod harness;
 pub mod ollama;
+mod prompts;
 pub mod provider_settings;
 mod providers;
 mod responses;
@@ -788,6 +790,8 @@ pub enum AiAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiRequestOptions {
+    #[serde(skip)]
+    pub generation: completion::AiGenerationOptions,
     /// Ephemeral tool transcript; never part of settings or saved chat history.
     #[serde(skip)]
     pub agent_context: Option<harness::AgentRequestContext>,
@@ -803,11 +807,15 @@ pub struct AiRequestOptions {
     pub history_turns: u16,
     #[serde(skip)]
     pub agent_json_protocol: bool,
+    /// Request-local correction after a response with no usable Agent action.
+    #[serde(skip)]
+    pub agent_protocol_repair: bool,
 }
 
 impl Default for AiRequestOptions {
     fn default() -> Self {
         Self {
+            generation: Default::default(),
             agent_context: None,
             connectivity_test: false,
             max_output_commands: default_max_output_commands(),
@@ -815,6 +823,7 @@ impl Default for AiRequestOptions {
             safety_mode: default_safety_mode(),
             history_turns: default_history_turns(),
             agent_json_protocol: false,
+            agent_protocol_repair: false,
         }
     }
 }
@@ -889,14 +898,15 @@ pub struct ResolvedAiModel {
     pub credential: Option<AiProviderCredential>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AiChatCompletion {
+    pub metadata: completion::AiResponseMetadata,
     pub text: String,
     pub reasoning_content: Option<String>,
     pub tool_calls: Vec<AiToolCall>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiToolCall {
     #[serde(skip)]
     pub thought_signature: Option<String>,
@@ -907,15 +917,16 @@ pub struct AiToolCall {
     pub arguments: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct AiChatStreamDelta {
+    pub metadata: Option<completion::AiResponseMetadata>,
     pub text_delta: String,
     pub reasoning_delta: Option<String>,
     pub tool_call_deltas: Vec<AiToolCallDelta>,
     pub done: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct AiToolCallDelta {
     pub thought_signature: Option<String>,
     pub index: usize,
@@ -989,113 +1000,15 @@ pub enum AiModelError {
     InvalidModelsJson(String),
     #[error("invalid AI chat JSON: {0}")]
     InvalidChatJson(String),
+    #[error(
+        "AI agent response contained no tool calls and its text could not be parsed as valid JSON"
+    )]
+    InvalidAgentJsonFallback,
     #[error("Responses API error: {0}")]
     ResponsesError(String),
     #[error("AI chat response did not include assistant content")]
     MissingChatContent,
 }
-
-const SYSTEM_PROMPT_ZH: &str = r#"你是一个专业、谨慎、安全优先的 Linux / DevOps / 云原生终端助手。
-你的任务是帮助用户解释终端输出、生成 Shell 命令、分析错误、提供排查步骤。
-
-必须遵守：
-1. 不要建议不可逆高危操作，除非明确说明风险和安全替代方案。
-2. 默认生成只读诊断命令。
-3. 对任何删除、格式化、重启、停服务、改权限、批量变更命令标记风险。
-4. 命令必须适配用户当前系统、架构、shell 和权限上下文。
-5. 输出必须结构化，包含命令、说明、风险等级、影响范围和回滚建议。
-6. 不要编造当前系统不存在的信息；不确定时给出验证命令。
-7. 不要要求用户粘贴密码、私钥、token。
-
-只返回一个 JSON 对象，不要使用 Markdown 代码块。格式：
-{
-  "text": "给用户看的说明",
-  "commandCards": [
-    {
-      "id": "cmd-uuid",
-      "title": "标题",
-      "command": "shell command",
-      "explanation": "命令说明",
-      "riskLevel": "low|medium|high|critical",
-      "riskReason": "风险原因",
-      "expectedEffect": "预计影响",
-      "rollback": "回滚方式或无需回滚",
-      "category": "Linux 性能"
-    }
-  ]
-}"#;
-
-const SYSTEM_PROMPT_EN: &str = r#"You are a professional, careful, safety-first Linux / DevOps / cloud-native terminal assistant.
-Your job is to explain terminal output, generate Shell commands, analyze errors, and suggest next troubleshooting steps.
-
-You must follow these rules:
-1. Do not suggest irreversible high-risk actions unless you clearly explain the risk and provide safer alternatives.
-2. Prefer read-only diagnostic commands by default.
-3. Mark any delete, format, restart, stop-service, permission-change, or bulk-change command with the appropriate risk.
-4. Commands must fit the user's current system, architecture, shell, and privilege context.
-5. Output must be structured and include commands, explanations, risk level, expected effect, and rollback guidance.
-6. Do not invent facts about the current system. If uncertain, provide verification commands.
-7. Do not ask the user to paste passwords, private keys, or tokens.
-
-Return exactly one JSON object and do not use Markdown code fences. Format:
-{
-  "text": "user-facing explanation",
-  "commandCards": [
-    {
-      "id": "cmd-uuid",
-      "title": "title",
-      "command": "shell command",
-      "explanation": "command explanation",
-      "riskLevel": "low|medium|high|critical",
-      "riskReason": "why this risk applies",
-      "expectedEffect": "expected effect",
-      "rollback": "rollback steps or state that rollback is unnecessary",
-      "category": "Linux performance"
-    }
-  ]
-}"#;
-
-const SYSTEM_PROMPT_ZH_HANT: &str = r#"你是一個專業、謹慎、安全優先的 Linux / DevOps / 雲端原生終端助手。協助使用者解釋終端輸出、產生 Shell 命令及分析錯誤。預設使用唯讀診斷命令；對刪除、格式化、重新啟動、停止服務或修改權限標示風險。不要編造資訊，也不要索取密碼、私鑰或 token。只回傳一個 JSON 物件，包含 text 與 commandCards；每個命令卡包含 command、explanation、riskLevel、riskReason、expectedEffect 與 rollback。不要使用 Markdown 程式碼區塊。"#;
-
-const SYSTEM_PROMPT_KO: &str = r#"당신은 안전을 최우선으로 하는 Linux / DevOps / 클라우드 네이티브 터미널 어시스턴트입니다. 터미널 출력을 설명하고 Shell 명령을 생성하며 오류를 분석하세요. 기본적으로 읽기 전용 진단 명령을 우선하고 삭제, 포맷, 재시작, 서비스 중지 또는 권한 변경의 위험을 표시하세요. 사실을 지어내거나 비밀번호, 개인 키, token을 요청하지 마세요. text와 commandCards를 포함한 JSON 객체 하나만 반환하세요. 각 명령 카드에는 command, explanation, riskLevel, riskReason, expectedEffect, rollback을 포함하고 Markdown 코드 블록을 사용하지 마세요."#;
-
-const AGENT_SYSTEM_PROMPT_ZH: &str = r#"你是一个终端自动化 Agent，通过"思考—执行—观察"循环完成用户的任务。
-
-每一轮你只能做一件事：调用 execute_command 工具执行一条命令，或调用 final_answer 工具给出最终回答。
-
-规则：
-1. 每轮必须且只能调用一个工具，不要在普通正文里输出 JSON。
-2. 如果需要执行命令，调用 execute_command。
-3. 任务完成或无需执行命令时，调用 final_answer。
-4. thought 和 answer 尽量使用用户请求指定的目标语言。
-5. 优先使用只读命令收集信息，再做修改操作。
-6. 不要执行不可逆高危命令（如 rm -rf /、mkfs、停止 SSH 等），改为在 thought 中说明风险并调用 final_answer。
-7. 不要编造信息；不确定时先用验证命令确认。
-8. 不要要求用户提供密码、私钥、token。
-9. 命令必须适配用户当前的系统和 shell 环境。
-10. riskLevel 规则：只读命令 -> low，普通写操作 -> medium，删除/重启/权限修改 -> high，不可逆破坏 -> critical。
-11. 调用 execute_command 时必须同时提供 riskLevel 和 riskReason；riskReason 要简短说明为什么这样分级。"#;
-
-const AGENT_SYSTEM_PROMPT_EN: &str = r#"You are a terminal automation agent that completes tasks using a think-execute-observe loop.
-
-In each turn, do exactly one thing: call the execute_command tool to execute one command, or call the final_answer tool to finish.
-
-Rules:
-1. You must call exactly one tool per turn. Do not put protocol JSON in normal assistant text.
-2. If a command must be executed, call execute_command.
-3. If the task is complete or no command is needed, call final_answer.
-4. Use the target language requested by the user for both thought and answer whenever possible.
-5. Prefer read-only commands to gather information before making changes.
-6. Do not execute irreversible high-risk commands (for example rm -rf /, mkfs, or stopping SSH). Explain the risk in thought and call final_answer instead.
-7. Do not invent facts. If uncertain, verify first.
-8. Do not ask the user for passwords, private keys, or tokens.
-9. Commands must fit the user's current system and shell environment.
-10. riskLevel guidance: read-only commands -> low, normal write actions -> medium, delete/restart/permission changes -> high, irreversible destructive actions -> critical.
-11. execute_command calls must include both riskLevel and riskReason. Keep riskReason brief and explain why the risk applies."#;
-
-const AGENT_SYSTEM_PROMPT_ZH_HANT: &str = r#"你是一個終端自動化 Agent，透過思考、執行和觀察完成任務。每輪必須且只能呼叫一個工具：execute_command 或 final_answer。優先使用唯讀命令，不要執行不可逆的高風險命令，不要編造資訊或索取密碼、私鑰、token。命令必須符合目前系統與 Shell，且不得等待輸入、確認或分頁器。execute_command 必須提供簡短 thought、riskLevel 和 riskReason；完成任務時呼叫 final_answer。"#;
-
-const AGENT_SYSTEM_PROMPT_KO: &str = r#"당신은 생각, 실행, 관찰을 통해 작업을 완료하는 터미널 자동화 Agent입니다. 각 턴에서 execute_command 또는 final_answer 도구를 정확히 하나만 호출하세요. 읽기 전용 명령을 우선하고 되돌릴 수 없는 고위험 명령을 실행하지 마세요. 정보를 지어내거나 비밀번호, 개인 키, token을 요청하지 마세요. 명령은 현재 시스템과 Shell에 맞아야 하며 입력, 확인 또는 pager를 기다리면 안 됩니다. execute_command에는 간단한 thought, riskLevel, riskReason을 포함하고 작업을 마치면 final_answer를 호출하세요."#;
 
 pub fn ai_model_id_for_provider(kind: &AiProviderKind, name: &str) -> String {
     format!("{}:{name}", provider_kind_key(kind))
@@ -1460,21 +1373,11 @@ where
 }
 
 pub fn system_prompt(language: &str) -> &'static str {
-    match resolve_prompt_language(language) {
-        PromptLanguage::ZhCn => SYSTEM_PROMPT_ZH,
-        PromptLanguage::ZhHant => SYSTEM_PROMPT_ZH_HANT,
-        PromptLanguage::Ko => SYSTEM_PROMPT_KO,
-        PromptLanguage::En => SYSTEM_PROMPT_EN,
-    }
+    prompts::system(language, false)
 }
 
 pub fn agent_system_prompt(language: &str) -> &'static str {
-    match resolve_prompt_language(language) {
-        PromptLanguage::ZhCn => AGENT_SYSTEM_PROMPT_ZH,
-        PromptLanguage::ZhHant => AGENT_SYSTEM_PROMPT_ZH_HANT,
-        PromptLanguage::Ko => AGENT_SYSTEM_PROMPT_KO,
-        PromptLanguage::En => AGENT_SYSTEM_PROMPT_EN,
-    }
+    prompts::system(language, true)
 }
 
 fn request_system_prompt(request: &AiChatRequest) -> &'static str {
@@ -1482,200 +1385,20 @@ fn request_system_prompt(request: &AiChatRequest) -> &'static str {
         return "You are NyaTerm's terminal AI connectivity check. Reply with OK only; do not suggest or run commands.";
     }
     if request.mode == AiMode::Agent && request.options.agent_json_protocol {
-        return AGENT_JSON_PROTOCOL_PROMPT;
+        return prompts::json_system(request);
     }
-    match request.mode {
-        AiMode::Ask => system_prompt(&request.options.language),
-        AiMode::Agent => agent_system_prompt(&request.options.language),
-    }
+    prompts::system(&request.options.language, request.mode == AiMode::Agent)
 }
-
-const AGENT_JSON_PROTOCOL_PROMPT: &str = r#"You are a terminal automation agent. Return exactly one JSON object per turn, with no Markdown. For a command use {"thought":"brief reason","action":"execute_command","command":"one non-interactive shell command","riskLevel":"low|medium|high|critical","riskReason":"brief reason","targetTerminalSessionId":"terminal ID"}. To finish use {"thought":"brief reason","action":"final_answer","answer":"user-facing answer"}. Never request passwords or execute irreversible destructive commands. Keep commands and paths unchanged."#;
 
 fn request_user_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
     if request.options.connectivity_test {
         return "Confirm that this model can respond.".into();
     }
-    if request.mode == AiMode::Agent && request.options.agent_json_protocol {
-        return format!(
-            "Task or latest observation:\n{}\n\nConnection: {}\nHost: {}\nDirectory: {}\nRecent terminal output:\n{}\n\nRespond with exactly one JSON action: execute_command or final_answer. Use {} for user-facing text. Commands must be non-interactive; never wait for a pager, confirmation, or input.",
-            user_input_with_target_contexts(request),
-            request.context.connection_name.as_deref().unwrap_or("-"),
-            request.context.host.as_deref().unwrap_or("-"),
-            request.context.cwd.as_deref().unwrap_or("-"),
-            request.context.recent_output,
-            request.options.language,
-        );
-    }
-    match request.mode {
-        AiMode::Ask => build_prompt(request, settings),
-        AiMode::Agent => build_agent_prompt(request, settings),
-    }
+    prompts::user_prompt(request, settings, request.mode == AiMode::Agent)
 }
 
 pub fn build_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
-    let ctx = &request.context;
-    let user_input = user_input_with_target_contexts(request);
-    if let language @ (PromptLanguage::ZhHant | PromptLanguage::Ko) =
-        resolve_prompt_language(&request.options.language)
-    {
-        let (task, context, output, requirements) = match language {
-            PromptLanguage::ZhHant => (
-                "使用者任務",
-                "目前連線情境",
-                "最近終端輸出",
-                "請使用繁體中文說明和推理；命令、路徑和設定鍵名保持原樣。優先使用唯讀命令，資訊不足時提供驗證命令。只回傳 JSON 物件，不要使用 Markdown。",
-            ),
-            _ => (
-                "사용자 작업",
-                "현재 연결 컨텍스트",
-                "최근 터미널 출력",
-                "설명과 추론에는 한국어를 사용하고 명령, 경로, 구성 키는 번역하지 마세요. 읽기 전용 명령을 우선하고 정보가 부족하면 확인 명령을 제공하세요. Markdown 없이 JSON 객체만 반환하세요.",
-            ),
-        };
-        return format!(
-            "{task}: {:?}\n{user_input}\n\n{context}: {} / {} / {}\n\n{output}:\n{}\n\n{requirements}\nTarget language: {}\nMaximum commands: {}",
-            request.action,
-            ctx.connection_name.as_deref().unwrap_or("-"),
-            ctx.host.as_deref().unwrap_or("-"),
-            ctx.cwd.as_deref().unwrap_or("-"),
-            ctx.recent_output,
-            request.options.language,
-            request.options.max_output_commands,
-        );
-    }
-    if resolve_prompt_language(&request.options.language) == PromptLanguage::ZhCn {
-        let action = match request.action {
-            AiAction::GenerateCommand => "根据自然语言需求生成 1 到 2 条 Shell 命令",
-            AiAction::ExplainOutput => "解释最近终端输出并给出下一步建议",
-            AiAction::ExplainSelected => "解释用户选中的终端文本并给出下一步建议",
-            AiAction::AnalyzeError => "分析终端错误输出并给出排查步骤",
-            AiAction::RepairFromSelection => "根据选中内容生成修复或排查命令",
-            AiAction::CustomTerminalAction => "根据用户配置的终端 AI 功能处理选中内容",
-            AiAction::CustomFileAction => "根据用户配置的文件 AI 功能处理文件内容",
-        };
-        format!(
-            r#"任务：{action}
-用户需求：
-{user_input}
-
-当前连接上下文：
-- 连接名：{connection_name}
-- 主机：{host}
-- 端口：{port}
-- 用户：{username}
-- 当前目录：{cwd}
-- 操作系统：{os}
-- 架构：{arch}
-- 当前输入：{input_buffer}
-
-选中文本：
-{selected_text}
-
-最近终端输出（最多 {line_limit} 行）：
-{recent_output}
-
-要求：
-- 语言：{language}
-- 面向用户的说明和推理过程使用该语言；命令、路径、文件名、配置键名保持原样
-- 安全模式：{safety_mode}
-- 最多生成 {max_commands} 条命令
-- 优先生成只读诊断命令
-- 如果信息不足，请给出验证命令
-- 必须返回 JSON 对象，不要返回 Markdown"#,
-            user_input = user_input,
-            connection_name = ctx.connection_name.as_deref().unwrap_or("-"),
-            host = ctx.host.as_deref().unwrap_or("-"),
-            port = ctx
-                .port
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            username = ctx.username.as_deref().unwrap_or("-"),
-            cwd = ctx.cwd.as_deref().unwrap_or("-"),
-            os = ctx.os.as_deref().unwrap_or("-"),
-            arch = ctx.arch.as_deref().unwrap_or(std::env::consts::ARCH),
-            input_buffer = ctx.input_buffer.as_str(),
-            selected_text = ctx.selected_text.as_str(),
-            line_limit = settings.context_line_limit,
-            recent_output = ctx.recent_output.as_str(),
-            language = request.options.language,
-            safety_mode = request.options.safety_mode,
-            max_commands = request.options.max_output_commands,
-        )
-    } else {
-        let action = match request.action {
-            AiAction::GenerateCommand => {
-                "Generate 1 to 2 Shell commands from the natural language request"
-            }
-            AiAction::ExplainOutput => {
-                "Explain the recent terminal output and suggest the next step"
-            }
-            AiAction::ExplainSelected => {
-                "Explain the selected terminal text and suggest the next step"
-            }
-            AiAction::AnalyzeError => {
-                "Analyze the terminal error output and provide troubleshooting steps"
-            }
-            AiAction::RepairFromSelection => {
-                "Generate repair or troubleshooting commands from the selected content"
-            }
-            AiAction::CustomTerminalAction => {
-                "Handle the selected content using the configured terminal AI action"
-            }
-            AiAction::CustomFileAction => {
-                "Handle the file content using the configured file AI action"
-            }
-        };
-        format!(
-            r#"Task: {action}
-User request:
-{user_input}
-
-Current connection context:
-- Connection name: {connection_name}
-- Host: {host}
-- Port: {port}
-- User: {username}
-- Current directory: {cwd}
-- Operating system: {os}
-- Architecture: {arch}
-- Current input: {input_buffer}
-
-Selected text:
-{selected_text}
-
-Recent terminal output (up to {line_limit} lines):
-{recent_output}
-
-Requirements:
-- Target language: {language}
-- Use that language for user-facing explanation and reasoning when possible.
-- Keep commands, paths, file names, and configuration keys unchanged.
-- Safety mode: {safety_mode}
-- Generate at most {max_commands} commands.
-- Prefer read-only diagnostic commands first.
-- If information is insufficient, provide verification commands.
-- Return a JSON object only. Do not return Markdown."#,
-            user_input = user_input,
-            connection_name = ctx.connection_name.as_deref().unwrap_or("-"),
-            host = ctx.host.as_deref().unwrap_or("-"),
-            port = ctx
-                .port
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            username = ctx.username.as_deref().unwrap_or("-"),
-            cwd = ctx.cwd.as_deref().unwrap_or("-"),
-            os = ctx.os.as_deref().unwrap_or("-"),
-            arch = ctx.arch.as_deref().unwrap_or(std::env::consts::ARCH),
-            input_buffer = ctx.input_buffer.as_str(),
-            selected_text = ctx.selected_text.as_str(),
-            line_limit = settings.context_line_limit,
-            recent_output = ctx.recent_output.as_str(),
-            language = request.options.language,
-            safety_mode = request.options.safety_mode,
-            max_commands = request.options.max_output_commands,
-        )
-    }
+    prompts::user_prompt(request, settings, false)
 }
 
 fn chat_history_for_request(
@@ -1788,46 +1511,29 @@ fn redaction_patterns() -> &'static [(Regex, &'static str)] {
     })
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-enum PromptLanguage {
-    ZhCn,
-    ZhHant,
-    Ko,
-    En,
-}
+#[cfg(test)]
+mod tests;
 
-fn normalize_prompt_locale(language: &str) -> String {
-    let normalized = language.trim().replace('_', "-").to_ascii_lowercase();
-    match normalized.as_str() {
-        "zh" | "zh-cn" | "zh-hans" | "zh-hans-cn" => "zh-cn".to_string(),
-        "zh-tw" | "zh-hk" | "zh-mo" | "zh-hant" => "zh-hant".to_string(),
-        "ko" | "ko-kr" => "ko".to_string(),
-        "en" | "en-us" | "en-gb" => "en".to_string(),
-        _ if normalized.starts_with("zh-hant-") => "zh-hant".to_string(),
-        _ if normalized.starts_with("zh-hans-") => "zh-cn".to_string(),
-        _ => normalized,
+impl std::fmt::Debug for AiChatCompletion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiChatCompletion { [REDACTED] }")
     }
 }
 
-fn prompt_language_map() -> &'static HashMap<&'static str, PromptLanguage> {
-    static PROMPT_LANGUAGE_MAP: OnceLock<HashMap<&'static str, PromptLanguage>> = OnceLock::new();
-    PROMPT_LANGUAGE_MAP.get_or_init(|| {
-        HashMap::from([
-            ("zh-cn", PromptLanguage::ZhCn),
-            ("zh-hant", PromptLanguage::ZhHant),
-            ("ko", PromptLanguage::Ko),
-            ("en", PromptLanguage::En),
-        ])
-    })
+impl std::fmt::Debug for AiToolCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiToolCall { [REDACTED] }")
+    }
 }
 
-fn resolve_prompt_language(language: &str) -> PromptLanguage {
-    let normalized = normalize_prompt_locale(language);
-    prompt_language_map()
-        .get(normalized.as_str())
-        .copied()
-        .unwrap_or(PromptLanguage::En)
+impl std::fmt::Debug for AiChatStreamDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiChatStreamDelta { [REDACTED] }")
+    }
 }
 
-#[cfg(test)]
-mod tests;
+impl std::fmt::Debug for AiToolCallDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AiToolCallDelta { [REDACTED] }")
+    }
+}

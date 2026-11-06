@@ -1,3 +1,4 @@
+use super::components::agent_kind_display_name;
 use super::{
     AiAgentStepPresentation, AiHeaderPresentation, AiMentionCandidate, AiModelChoice,
     AiPanelChrome, AiPanelSnapshot, AiTargetSession, harness,
@@ -69,8 +70,18 @@ impl NyaTermApp {
                 label
             };
         }
+        let mode_label = if self.ai.chat_run_mode() == AiMode::Agent {
+            format!(
+                "{} · {}",
+                t!("ai.modeAgent"),
+                agent_kind_display_name(&self.ai.chat_agent_kind())
+            )
+        } else {
+            t!("ai.modeAsk").to_string()
+        };
         AiHeaderPresentation {
             running: self.ai.chat_or_agent_is_running(),
+            mode_label,
             selected_model_id,
             model_label,
             execution_mode: self
@@ -222,8 +233,11 @@ impl NyaTermApp {
             .existing_text_input("ai.chat.prompt")
             .expect("AI prompt input was just built");
 
+        // A running request keeps the box editable so the next instruction can
+        // be drafted; sending stays blocked until the run settles.
         prompt_input.update(cx, |input, cx| {
-            input.set_disabled(running || !enabled, cx);
+            input.set_disabled(!enabled, cx);
+            input.set_auto_grow(3, 6, cx);
             input.set_placeholder(prompt_placeholder, cx);
         });
 
@@ -412,7 +426,6 @@ impl NyaTermApp {
             mention_candidates,
             quoted_text: self.ai.chat_quote().map(str::to_string),
             detected_error: self.ai.panel_detected_error().cloned(),
-            message_menu: self.ai.chat_message_menu().cloned(),
             history_open: self.ai.history_is_open(),
             history_query: self.ai.history_query().to_string(),
             history_sessions: self.ai.history_sessions().to_vec().into(),
@@ -426,6 +439,7 @@ impl NyaTermApp {
                 .into(),
             current_ai_session_id: self.ai.chat_session_id().to_string(),
             owner_terminal_id: self.session.active_id().map(str::to_string),
+            last_agent_kind: self.ai.last_agent_kind(),
             owner_connection_id: self
                 .session
                 .active_id()

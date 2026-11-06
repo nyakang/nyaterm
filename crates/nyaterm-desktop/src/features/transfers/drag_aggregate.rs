@@ -1,11 +1,9 @@
 use crate::models::{TransferJobEvent, TransferJobOutput, TransferJobResult};
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{NativeFileDragEvent, NativeFileDragObserver, NativeFileDragOutcome};
-use nyaterm_transport::drag_export::{ExportObserver, ExportReadEvent, RemoteDragFile};
-use nyaterm_transport::{
-    SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpTransferControl, SftpTransferProgress,
-    SftpTransferSummary,
-};
+use nyaterm_files::drag_export::{ExportObserver, ExportReadEvent, RemoteDragFile};
+use nyaterm_files::sftp::{SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{SftpTransferProgress, SftpTransferSummary};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -58,7 +56,7 @@ struct RootDelivery {
     id: String,
     path: String,
     control: SftpTransferControl,
-    files: HashMap<nyaterm_transport::RemoteFilePath, FileDelivery>,
+    files: HashMap<nyaterm_files::sftp::RemoteFilePath, FileDelivery>,
     active: usize,
     bytes: u64,
     completed: u64,
@@ -280,8 +278,8 @@ mod tests {
     use super::DragAggregate;
     use crate::models::TransferJobEvent;
     use gpui::{NativeFileDragEvent, NativeFileDragObserver, NativeFileDragOutcome};
-    use nyaterm_transport::drag_export::{ExportReadEvent, RemoteDragFile};
-    use nyaterm_transport::{RemoteFilePath, SftpFileEntry, SftpFileType};
+    use nyaterm_files::drag_export::{ExportReadEvent, RemoteDragFile};
+    use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
 
     fn root() -> SftpFileEntry {
         SftpFileEntry {
@@ -417,7 +415,7 @@ mod tests {
         let aggregate = DragAggregate::new("session".into(), &[root()], sender);
         let observe = aggregate.observer(0, file("/folder/file"));
         observe(ExportReadEvent::Finished(Err(
-            nyaterm_transport::SFTP_TRANSFER_CANCELLED.into(),
+            nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into(),
         )));
         assert!(!aggregate.controls()[0].is_cancelled());
         let observe = aggregate.observer(0, file("/folder/file"));

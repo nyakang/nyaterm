@@ -524,11 +524,6 @@ impl NyaTermApp {
         }
         cx.notify();
     }
-
-    pub(in crate::features) fn append_terminal_log(&mut self, text: impl AsRef<str>) {
-        let session_id = self.session.active_id_owned();
-        self.append_terminal_log_for_session(session_id.as_deref(), text.as_ref(), false);
-    }
 }
 
 #[cfg(test)]

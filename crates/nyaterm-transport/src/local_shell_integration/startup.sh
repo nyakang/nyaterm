@@ -24,6 +24,13 @@ case $nyaterm_namespace in
         esac
         ;;
 esac
+# The bootstrap observes the actual guest shell and user, including WSL defaults.
+# Emission waits for installed command hooks; names are encoded only for framing.
+nyaterm_program_b64=$(printf '%s' "$nyaterm_shell" | base64 | tr -d '\r\n')
+nyaterm_user=$(id -un)
+nyaterm_user_b64=$(printf '%s' "$nyaterm_user" | base64 | tr -d '\r\n')
+NYATERM_LOCAL_IDENTITY=$nyaterm_program_b64:$nyaterm_user_b64
+export NYATERM_LOCAL_IDENTITY
 NYATERM_LOCAL_DIR=$nyaterm_dir
 export NYATERM_LOCAL_DIR
 
@@ -38,8 +45,14 @@ for __nyaterm_index in "${!PROMPT_COMMAND[@]}"; do
     PROMPT_COMMAND[$__nyaterm_index]=${PROMPT_COMMAND[$__nyaterm_index]//"$__nyaterm_loader"/:}
 done
 unset __nyaterm_loader __nyaterm_index
+__NYATERM_BASH_FULL__
+__nyaterm_install_prompt full || true
 __nyaterm_local_cwd() {
     local ret=$?
+    if [ -n "${NYATERM_BASH_HOOKS_READY:-}" ] && [ -n "${NYATERM_LOCAL_IDENTITY:-}" ]; then
+        printf '\033]7777;NyaTermShell:%s\007' "$NYATERM_LOCAL_IDENTITY"
+        unset NYATERM_LOCAL_IDENTITY
+    fi
     local path=$PWD
     # MSYS mounts such as /tmp need not be drive-letter aliases. Emit the
     # actual Windows URI rather than guessing their host mapping.
@@ -59,14 +72,26 @@ else
 }__nyaterm_local_cwd"
 fi
 export -n PROMPT_COMMAND
+# The loader already runs at the first prompt, after the user's rc file.
+# Complete SSH's deferred installer here so the first submitted command is observed.
+if [ -n "${NYATERM_BASH_INSTALL_PENDING:-}" ]; then
+    eval "${__nya_bp_install_payload-:}"
+fi
 unset NYATERM_LOCAL_DIR
 __nyaterm_local_cwd
+if [ -n "${NYATERM_BASH_HOOKS_READY:-}" ]; then __nya_bp_interactive_mode; fi
 NYATERM_BASH_EOF
 
 cat > "$nyaterm_dir/fish" <<'NYATERM_FISH_EOF' || exec "$nyaterm_shell" "$@"
+__NYATERM_FISH_FULL__
 function __nyaterm_local_cwd --on-event fish_prompt
+    if set -q NYATERM_FISH_HOOKS_READY; and set -q NYATERM_LOCAL_IDENTITY
+        printf '\033]7777;NyaTermShell:%s\007' "$NYATERM_LOCAL_IDENTITY"
+        set -e NYATERM_LOCAL_IDENTITY
+    end
     printf '\033]7;file://localhost%s\007' (string replace -a -- '%' '%25' $PWD)
 end
+__nyaterm_install_prompt full
 set -e NYATERM_LOCAL_DIR
 NYATERM_FISH_EOF
 
@@ -108,8 +133,17 @@ if [[ $NYATERM_LOCAL_USER_ZDOTDIR_SET = x ]]; then
 else
     unset ZDOTDIR
 fi
+if [[ -n $NYATERM_LOCAL_DIR && $HISTFILE == "$NYATERM_LOCAL_DIR/.zsh_history" ]]; then
+    HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history
+fi
 [[ ! -r "${ZDOTDIR:-$HOME}/.zshrc" ]] || source "${ZDOTDIR:-$HOME}/.zshrc"
+__NYATERM_ZSH_FULL__
+__nyaterm_install_prompt full || true
 __nyaterm_local_cwd() {
+    if [[ -n ${NYATERM_ZSH_HOOKS_READY:-} && -n ${NYATERM_LOCAL_IDENTITY:-} ]]; then
+        printf '\033]7777;NyaTermShell:%s\007' "$NYATERM_LOCAL_IDENTITY"
+        unset NYATERM_LOCAL_IDENTITY
+    fi
     printf '\033]7;file://localhost%s\007' "${PWD//%/%25}"
 }
 autoload -Uz add-zsh-hook

@@ -467,6 +467,21 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         )
 
 
+def verify_windows_msi_cleanup(rows: list[dict[str, str]], application_component: str) -> None:
+    # Cleanup is limited to the legacy helper in INSTALLDIR and the empty Start
+    # Menu folder, with both rules owned by the installed application's component.
+    expected = {
+        ("RemoveLegacyActiveXHelper", application_component, "nyaterm-activex-helper.exe", "INSTALLDIR", "1"),
+        ("RemoveStartMenuFolder", application_component, "", "ApplicationProgramsFolder", "2"),
+    }
+    actual = {(row["FileKey"], row["Component_"], row["FileName"].split("|")[-1],
+               row["DirProperty"], row["InstallMode"]) for row in rows}
+    if (len(rows) != len(expected) or actual != expected or
+            any(any(char in row["FileName"] for char in "*?/\\:") or row["FileName"].count("|") > 1
+                for row in rows)):
+        raise RuntimeError("MSI must not delete user data or change required cleanup")
+
+
 def verify_windows_msi_database(metadata: dict, target: str, version: str) -> dict[str, str]:
     """Validate the compiled database, returning installed paths -> cabinet file IDs."""
     numeric = package_native.windows_msi_version(version)
@@ -559,9 +574,9 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
         rows["RegisterUrlProtocols"]["Condition"] != 'NOT REMOVE~="ALL"' or
         rows["UnregisterUrlProtocols"]["Condition"] != 'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE'):
         raise RuntimeError("MSI protocol helpers have unsafe sequencing")
-    if any(row["FileName"] or row["DirProperty"] != "ApplicationProgramsFolder"
-           or row["InstallMode"] != "2" for row in tables["RemoveFile"]):
-        raise RuntimeError("MSI must not delete user data")
+    application_component = next(row["Component_"] for row in tables["File"]
+                                 if row["File"] == files["NyaTerm.exe"])
+    verify_windows_msi_cleanup(tables["RemoveFile"], application_component)
     shortcuts = {(row["Directory_"], row["Name"].split("|")[-1], row["Target"])
                  for row in tables["Shortcut"]}
     if shortcuts != {(directory, "NyaTerm", f"[#{files['NyaTerm.exe']}]")

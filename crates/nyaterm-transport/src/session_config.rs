@@ -561,6 +561,7 @@ pub enum SshCredentialPromptKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SshCredentialPromptReason {
     MissingPassword,
+    AdditionalPasswordRequired,
     PasswordRejected,
     PublickeyRequired,
     PublickeyRejected,

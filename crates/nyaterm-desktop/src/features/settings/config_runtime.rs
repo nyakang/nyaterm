@@ -1,18 +1,16 @@
-use rust_i18n::t;
-
-use gpui::{
-    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
-    prelude::*, rgb,
-};
-use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
-use nyaterm_transport::SftpDuplicatePolicy;
-use nyaterm_ui::NyaDialogWindowExt;
-
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup};
 use crate::models::{
     ConfigPathPromptKind, ConfigPathPromptResult, SnapshotPasswordPromptKind,
     TranslationSecretDraft,
 };
+use gpui::{
+    AnyElement, Context, FontWeight, KeyDownEvent, PathPromptOptions, SharedString, Window, div,
+    prelude::*, rgb,
+};
+use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
+use nyaterm_store::{BootstrapSnapshot, LoadBootstrap, StoreDomain};
+use nyaterm_ui::NyaDialogWindowExt;
+use rust_i18n::t;
 
 fn snapshot_password_prompt_title_key(kind: SnapshotPasswordPromptKind) -> &'static str {
     match kind {
@@ -38,9 +36,11 @@ impl NyaTermApp {
         if self.block_import_for_settings_draft(cx) {
             return;
         }
-        if self.session.active_id().is_some() || self.session.start_has_pending() {
-            self.shell
-                .set_status(t!("settings.closeActiveSessionBeforeImport"));
+        if let Some(message) =
+            self.configuration_replacement_message("settings.closeActiveSessionBeforeImport", cx)
+        {
+            self.shell.set_status(message);
+            self.retry_configuration_refresh(cx);
             cx.notify();
             return;
         }
@@ -325,10 +325,41 @@ impl NyaTermApp {
         self.settings
             .set_store_message(t!("settings.nyaSelectingSnapshot"));
         self.request_settings_panel_refresh(cx);
+        let replacement_controller = self.desktop_controller.clone();
         cx.spawn(async move |this, cx| {
+            let mut replacement = None;
+            let mut registration = None;
             let result = match receiver.await {
                 Ok(Ok(Some(paths))) => match paths.into_iter().next() {
                     Some(path) => {
+                        replacement = this
+                            .update(cx, |this, cx| {
+                                if this.block_import_for_settings_draft(cx) {
+                                    return None;
+                                }
+                                let lease = this.begin_configuration_replacement(
+                                    "settings.closeActiveSessionBeforeImport",
+                                    cx,
+                                )?;
+                                registration = this.cloud_sync.operations.register(
+                                    "portable-snapshot-import",
+                                    vec![],
+                                    None,
+                                );
+                                registration.as_ref()?;
+                                Some(lease)
+                            })
+                            .ok()
+                            .flatten();
+                        let Some(worker_replacement) = replacement.clone() else {
+                            let _ = this.update(cx, |this, cx| {
+                                this.settings.finish_config_path_prompt(
+                                    ConfigPathPromptKind::EncryptedPortableImport,
+                                );
+                                this.request_settings_panel_refresh(cx);
+                            });
+                            return;
+                        };
                         let _ = this.update(cx, |this, cx| {
                             this.settings.update_store_status(
                                 t!("settings.nyaImporting").to_string(),
@@ -337,17 +368,22 @@ impl NyaTermApp {
                             this.request_settings_panel_refresh(cx);
                         });
                         tracing::info!(operation = "portable_snapshot_import", "started");
-                        let task =
-                            scheduler.submit_task("portable-snapshot-import", move |_| match store
-                                .request_mutation_fn(StoreDomain::Settings, move |database| {
+                        let task = scheduler.submit_task("portable-snapshot-import", move |_| {
+                            let _replacement = worker_replacement;
+                            _replacement.require_refresh();
+                            match store.request_mutation_fn(
+                                StoreDomain::Settings,
+                                move |database| {
                                     database.import_encrypted_portable_snapshot_into_open_store(
                                         &path,
                                         master_password.expose_secret(),
                                     )
-                                }) {
+                                },
+                            ) {
                                 Ok(info) => ConfigPathPromptResult::Imported(info),
                                 Err(error) => ConfigPathPromptResult::Failed(error.to_string()),
-                            });
+                            }
+                        });
                         await_blocking_job(task)
                             .await
                             .unwrap_or_else(ConfigPathPromptResult::Failed)
@@ -366,6 +402,10 @@ impl NyaTermApp {
                 );
                 cx.notify();
             });
+            if let Some(lease) = replacement {
+                Self::finish_configuration_replacement(lease, replacement_controller, &this, cx);
+            }
+            drop(registration);
         })
         .detach();
         cx.notify();
@@ -470,6 +510,17 @@ impl NyaTermApp {
         success_message: String,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .cloud_sync
+            .operations
+            .replacement_gate()
+            .block_reason()
+            .is_some()
+        {
+            self.settings.update_store_status(success_message, true);
+            self.request_settings_panel_refresh(cx);
+            return;
+        }
         self.submit_store_request(
             0,
             LoadBootstrap,
@@ -499,10 +550,24 @@ impl NyaTermApp {
         );
     }
 
+    /// Reload the whole store after a pull or import.
+    ///
+    /// Rebases an untouched settings draft onto the refreshed values so the
+    /// panel does not read the pull as an unsaved edit; edited drafts keep the
+    /// normal conflict path.
     pub(in crate::features) fn refresh_store_from_runtime_and_sync_theme(
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .cloud_sync
+            .operations
+            .replacement_gate()
+            .block_reason()
+            .is_some()
+        {
+            return;
+        }
         let registration = self
             .cloud_sync
             .operations
@@ -513,12 +578,18 @@ impl NyaTermApp {
             move |this, event, cx| {
                 match event.outcome {
                     Ok(snapshot) => {
+                        // Capture draft cleanliness before the baseline is replaced.
+                        let rebase_draft =
+                            this.shell.has_settings_draft() && !this.settings_draft_dirty();
                         this.apply_store_refresh(snapshot.clone(), cx);
                         this.replace_shared_snapshot(
                             snapshot,
                             crate::app_shell::SharedStateDomain::All,
                             cx,
                         );
+                        if rebase_draft {
+                            this.rebase_open_settings_draft(cx);
+                        }
                         cx.notify();
                     }
                     Err(error) => {
@@ -534,7 +605,11 @@ impl NyaTermApp {
         );
     }
 
-    fn apply_store_refresh(&mut self, snapshot: BootstrapSnapshot, cx: &mut Context<Self>) {
+    pub(super) fn apply_store_refresh(
+        &mut self,
+        snapshot: BootstrapSnapshot,
+        cx: &mut Context<Self>,
+    ) {
         let mut shared_settings = snapshot.settings;
         let local_settings = self.settings.summary();
         shared_settings.ui_left_panel_width = local_settings.ui_left_panel_width;

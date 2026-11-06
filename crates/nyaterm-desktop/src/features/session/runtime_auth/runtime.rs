@@ -26,14 +26,6 @@ impl NyaTermApp {
         if !form.can_submit(&state.value) {
             return;
         }
-        if (form.remember || !form.uses_secret_input()) && self.security_secrets_locked() {
-            self.require_security_secrets_unlocked(
-                window,
-                cx,
-                Some(crate::models::SecurityUnlockAction::SubmitSshAuthentication(state.id)),
-            );
-            return;
-        }
         if let Some(active) = self
             .session
             .prompts

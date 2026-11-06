@@ -256,6 +256,7 @@ fn terminal_snapshot_with_newer_edge_row(
             total_rows: base.total_rows.saturating_add(1),
             display_offset: base.display_offset,
             images: base.images.clone(),
+            line_number_base: base.line_number_base,
         },
         rows,
     ))
@@ -317,6 +318,7 @@ fn terminal_snapshot_with_retained_scroll_window(
             total_rows: base.total_rows.saturating_add(newer_count),
             display_offset: base.display_offset,
             images,
+            line_number_base: base.line_number_base,
         },
         rows,
     ))
@@ -1047,6 +1049,7 @@ impl NyaTermApp {
         let protocol_state = view.map(|v| v.protocol_state).unwrap_or_default();
         let target_line = view.and_then(|v| v.target_line);
         let zebra_stripes_enabled = self.settings.summary().terminal_zebra_stripes_enabled;
+        let zebra_stripes_by_row = self.settings.summary().terminal_zebra_stripes_by_row;
         let layout_cache = view
             .map(|v| v.render_cache.layout_cache.clone())
             .unwrap_or_else(|| {
@@ -1263,7 +1266,11 @@ impl NyaTermApp {
                     is_active,
                 });
                 changed |= surface.set_protocol_state(protocol_state);
-                changed |= surface.set_zebra_stripes(zebra_stripes_enabled, target_line);
+                changed |= surface.set_zebra_stripes(
+                    zebra_stripes_enabled,
+                    zebra_stripes_by_row,
+                    target_line,
+                );
                 changed |= surface.update_scroll_chrome_without_snapshot(&scroll_state);
                 if changed {
                     surface.schedule_keyword_highlights(false, false, cx);
@@ -1549,7 +1556,8 @@ impl NyaTermApp {
                 is_active,
             });
             changed |= surface.set_protocol_state(protocol_state);
-            changed |= surface.set_zebra_stripes(zebra_stripes_enabled, target_line);
+            changed |=
+                surface.set_zebra_stripes(zebra_stripes_enabled, zebra_stripes_by_row, target_line);
             let had_pending_local_scroll_sync = surface.has_pending_local_scroll_sync();
             let frame_applied = surface.apply_frame_snapshot(
                 TerminalSurfaceFrameSnapshot::new(
@@ -1690,6 +1698,7 @@ impl NyaTermApp {
         if self.sync_terminal_live_scroll_surface(&surface, &desired_scroll_state, cx) {
             return;
         }
+        surface.update(cx, |surface, _cx| surface.advance_history(history));
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (
@@ -1838,6 +1847,7 @@ impl NyaTermApp {
         if self.sync_terminal_live_scroll_surface(&surface, &desired_scroll_state, cx) {
             return;
         }
+        surface.update(cx, |surface, _cx| surface.advance_history(history));
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (

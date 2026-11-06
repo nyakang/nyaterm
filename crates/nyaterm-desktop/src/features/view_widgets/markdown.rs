@@ -50,19 +50,6 @@ impl PreparedMarkdown {
     }
 }
 
-pub(in crate::features) fn prepared_markdown_view(
-    palette: ThemePalette,
-    prepared: &PreparedMarkdown,
-    answer: bool,
-) -> gpui::Div {
-    markdown_prepared_view(
-        palette,
-        prepared,
-        if answer { 14. } else { 12. },
-        if answer { 22. } else { 18. },
-    )
-}
-
 /// Lightweight GFM markdown renderer for AI transcript (Tauri MarkdownContent parity).
 pub(in crate::features) fn markdown_content_view(
     palette: ThemePalette,

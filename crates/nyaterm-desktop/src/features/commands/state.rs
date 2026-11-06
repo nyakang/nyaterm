@@ -22,15 +22,30 @@ use crate::models::{
     QuickCommandVariablePromptState, QuickCommandViewMode,
 };
 
+use super::completion_runtime::CompletionRuntime;
 use super::runtime_state::CommandRuntimeState;
 use super::staged::StagedQuickCommands;
+use nyaterm_core::completion::types::ShellCommandContext;
+use std::collections::HashMap;
 
 pub(in crate::features) struct CommandFeatureState {
     catalog: CommandCatalogState,
     quick: QuickCommandFeatureState,
     history: Arc<[CommandHistoryEntry]>,
     runtime: CommandRuntimeState,
+    completion: CompletionRuntime,
+    command_contexts: HashMap<String, ShellCommandContext>,
+    sensitive_submissions: std::collections::HashSet<String>,
+    completed_sensitive_submissions: std::collections::HashSet<String>,
+    confirmed_submissions: std::collections::HashSet<String>,
     pub(super) staged: StagedQuickCommands,
+}
+
+pub(in crate::features) struct CompletionSessionTransfer {
+    pub session_id: String,
+    pub context: Option<ShellCommandContext>,
+    pub sensitive: bool,
+    pub submitted_sensitive: bool,
 }
 
 pub(in crate::features) struct CommandFeatureInit {
@@ -73,6 +88,8 @@ impl CommandFeatureState {
     pub(in crate::features) fn new(init: CommandFeatureInit) -> Self {
         let catalog = CommandCatalogState::new(init.commands, init.categories);
         let selected_category = valid_quick_category(&init.selected_category, &catalog.categories);
+        let runtime = CommandRuntimeState::new(init.store.clone(), init.scheduler);
+        let completion = CompletionRuntime::new(init.store, runtime.result_sender());
         Self {
             catalog,
             quick: QuickCommandFeatureState::new(
@@ -82,7 +99,12 @@ impl CommandFeatureState {
                 init.focus,
             ),
             history: Arc::from(init.history),
-            runtime: CommandRuntimeState::new(init.store, init.scheduler),
+            runtime,
+            completion,
+            command_contexts: HashMap::new(),
+            sensitive_submissions: std::collections::HashSet::new(),
+            completed_sensitive_submissions: std::collections::HashSet::new(),
+            confirmed_submissions: std::collections::HashSet::new(),
             staged: StagedQuickCommands::default(),
         }
     }
@@ -105,6 +127,7 @@ impl CommandFeatureState {
         categories: Vec<QuickCommandCategory>,
         history: Vec<CommandHistoryEntry>,
     ) {
+        self.completion.reload();
         self.catalog.replace(commands, categories);
         self.history = Arc::from(history);
         self.reconcile_quick_category();
@@ -126,15 +149,12 @@ impl CommandFeatureState {
         &self.history
     }
 
-    pub(in crate::features) fn command_history_snapshot(&self) -> Arc<[CommandHistoryEntry]> {
-        self.history.clone()
-    }
-
     pub(in crate::features) fn replace_quick_command_catalog(
         &mut self,
         commands: Vec<QuickCommand>,
         categories: Vec<QuickCommandCategory>,
     ) {
+        self.completion.reload();
         self.catalog.replace(commands, categories);
         self.reconcile_quick_category();
     }
@@ -290,6 +310,122 @@ impl CommandFeatureState {
         self.history = Arc::from(history);
     }
 
+    pub(in crate::features) fn take_completion_sessions(
+        &mut self,
+        sessions: &[String],
+    ) -> Vec<CompletionSessionTransfer> {
+        self.completion.reload();
+        sessions
+            .iter()
+            .map(|session| {
+                self.confirmed_submissions.remove(session);
+                CompletionSessionTransfer {
+                    session_id: session.clone(),
+                    context: self.command_contexts.remove(session),
+                    sensitive: self.sensitive_submissions.remove(session),
+                    submitted_sensitive: self.completed_sensitive_submissions.remove(session),
+                }
+            })
+            .collect()
+    }
+    pub(in crate::features) fn accept_completion_sessions(
+        &mut self,
+        sessions: Vec<CompletionSessionTransfer>,
+    ) {
+        for session in sessions {
+            if let Some(context) = session.context {
+                self.command_contexts
+                    .insert(session.session_id.clone(), context);
+            }
+            if session.sensitive {
+                self.sensitive_submissions
+                    .insert(session.session_id.clone());
+            }
+            if session.submitted_sensitive {
+                self.completed_sensitive_submissions
+                    .insert(session.session_id);
+            }
+        }
+        self.completion.reload();
+    }
+    pub(in crate::features) fn completion_runtime(&self) -> CompletionRuntime {
+        self.completion.clone()
+    }
+    pub(in crate::features) fn command_context(
+        &self,
+        session: &str,
+    ) -> Option<&ShellCommandContext> {
+        self.command_contexts.get(session)
+    }
+    pub(in crate::features) fn set_command_context(
+        &mut self,
+        session: String,
+        context: ShellCommandContext,
+    ) {
+        self.command_contexts.insert(session, context);
+        self.completion.reload();
+    }
+    pub(in crate::features) fn mark_completion_confirmed(
+        &mut self,
+        session: &str,
+        confirmed: bool,
+    ) {
+        if confirmed {
+            self.confirmed_submissions.insert(session.to_string());
+        } else {
+            self.confirmed_submissions.remove(session);
+        }
+    }
+    pub(in crate::features) fn take_completion_confirmed(&mut self, session: &str) -> bool {
+        self.confirmed_submissions.remove(session)
+    }
+    pub(in crate::features) fn mark_completion_sensitive(&mut self, session: &str) {
+        self.sensitive_submissions.insert(session.to_string());
+    }
+    pub(in crate::features) fn complete_completion_submission(&mut self, session: &str) {
+        // Finalize every successful logical Enter, including lines intentionally
+        // omitted by staged commands or password handling. A skipped observation
+        // cannot leave its secret latch attached to the next command.
+        let sensitive = self.sensitive_submissions.remove(session);
+        if sensitive {
+            self.completed_sensitive_submissions
+                .insert(session.to_string());
+        } else {
+            self.completed_sensitive_submissions.remove(session);
+        }
+    }
+    pub(in crate::features) fn take_completion_sensitive(&mut self, session: &str) -> bool {
+        self.completed_sensitive_submissions.remove(session)
+    }
+    pub(in crate::features) fn observe_completion_command(
+        &mut self,
+        context: ShellCommandContext,
+        command: String,
+    ) -> bool {
+        if self.completion.observe(context, command) {
+            self.runtime.note_queued();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::features) fn observe_completion_submission(
+        &mut self,
+        context: ShellCommandContext,
+        command: String,
+        include_global: bool,
+    ) -> bool {
+        if self
+            .completion
+            .observe_submission(context, command, include_global)
+        {
+            self.runtime.note_queued();
+            true
+        } else {
+            false
+        }
+    }
     pub(in crate::features) fn queue_command_history(&mut self, commands: Vec<String>) -> bool {
         self.runtime
             .queue(CommandPersistenceRequest::AppendHistory(commands))
@@ -862,16 +998,25 @@ impl CommandFeatureState {
         prompt: QuickCommandVariablePromptState,
     ) {
         self.quick.dialogs.variable_prompt = Some(prompt);
+        self.quick.dialogs.variable_autofocus_pending = true;
     }
 
     pub(in crate::features) fn take_quick_variable_prompt(
         &mut self,
     ) -> Option<QuickCommandVariablePromptState> {
+        self.quick.dialogs.variable_autofocus_pending = false;
         self.quick.dialogs.variable_prompt.take()
     }
 
     pub(in crate::features) fn clear_quick_variable_prompt(&mut self) {
+        self.quick.dialogs.variable_autofocus_pending = false;
         self.quick.dialogs.variable_prompt = None;
+    }
+
+    /// Consume the request to focus the first variable field. Only a fresh
+    /// prompt request sets it, so focus is grabbed exactly once per open.
+    pub(in crate::features) fn take_quick_variable_prompt_autofocus(&mut self) -> bool {
+        std::mem::take(&mut self.quick.dialogs.variable_autofocus_pending)
     }
 
     pub(in crate::features) fn set_quick_variable_value(
@@ -1092,6 +1237,8 @@ struct QuickCommandDialogState {
     category_create: Option<QuickCommandCategoryCreateState>,
     category_rename: Option<QuickCommandCategoryRenameState>,
     variable_prompt: Option<QuickCommandVariablePromptState>,
+    /// Set when a prompt opens, cleared by the first autofocus or on close.
+    variable_autofocus_pending: bool,
     variable_focus: FocusHandle,
 }
 
@@ -1141,6 +1288,7 @@ impl QuickCommandFeatureState {
                 category_create: None,
                 category_rename: None,
                 variable_prompt: None,
+                variable_autofocus_pending: false,
                 variable_focus: focus.variable,
             },
             import: QuickCommandImportState { path_prompt: None },

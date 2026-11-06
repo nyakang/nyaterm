@@ -309,6 +309,17 @@ impl NyaTermApp {
             return;
         }
         self.close_terminal_executions_for_session(session_id, cx);
+        if self
+            .session
+            .notices
+            .get(session_id)
+            .is_none_or(|notices| !notices.contains("disconnected"))
+        {
+            self.publish_session_notice(
+                session_id,
+                crate::features::session::notices::SessionNoticeKind::Disconnected(String::new()),
+            );
+        }
         let banner = "\r\n\x1b[31m[Session disconnected]\x1b[0m\r\n\x1b[33m[Press Enter to reconnect]\x1b[0m\r\n";
         let encoding = self
             .session
@@ -357,6 +368,49 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        let metadata = self
+            .session
+            .metadata(&session_id)
+            .cloned()
+            .expect("existing session metadata");
+        if !matches!(metadata.launch_config, SessionLaunchConfig::Local(_))
+            && self.remote_start_blocked_by_configuration_replacement(cx)
+        {
+            return;
+        }
+        let saved = if let Some(id) = metadata.source_connection_id.as_ref() {
+            let Some(connection) = self
+                .connection_state
+                .connections()
+                .iter()
+                .find(|connection| &connection.id == id)
+                .cloned()
+            else {
+                self.shell
+                    .set_status(rust_i18n::t!("terminal.savedConnectionDeleted"));
+                cx.notify();
+                return;
+            };
+            if !metadata
+                .launch_config
+                .matches_saved_protocol(&connection.config)
+            {
+                self.shell
+                    .set_status(rust_i18n::t!("terminal.savedConnectionProtocolChanged"));
+                cx.notify();
+                return;
+            }
+            Some(connection)
+        } else {
+            None
+        };
+        if matches!(
+            metadata.launch_config,
+            SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_)
+        ) {
+            self.retry_rdp_runtime(&session_id, cx);
+            return;
+        }
         self.remote_ops.clear_stats_sample(&session_id);
         self.session.begin_reconnect_action(session_id.clone());
         self.session.start.clear_active_selection();
@@ -368,11 +422,17 @@ impl NyaTermApp {
             .unwrap_or(self.session.session_order_len());
         let custom_name = self.session.custom_name(&old_id).map(str::to_string);
         let custom_color = self.session.tab_color(&old_id);
+        let restore_cwd = saved.as_ref().is_none_or(|connection| {
+            metadata
+                .launch_config
+                .same_saved_remote_endpoint(connection)
+        });
+        let locked = self.session.tab_is_locked(&old_id);
         let reconnect_cwd_command = self
             .settings
             .summary()
             .terminal_reconnect_restore_cwd
-            .then(|| self.session.cwd(&old_id))
+            .then(|| restore_cwd.then(|| self.session.cwd(&old_id)).flatten())
             .flatten()
             .and_then(nyaterm_transport::build_ssh_reconnect_cwd_command);
         self.session.clear_cwd(&old_id);
@@ -409,6 +469,42 @@ impl NyaTermApp {
         self.commands.cancel_staged_quick_command(&old_id);
         self.session.mark_session_disconnected(&old_id);
         self.close_terminal_executions_for_session(&old_id, cx);
+        if let Some(connection) = saved {
+            let ssh_runtime_mode = match &metadata.launch_config {
+                SessionLaunchConfig::Ssh(config) => Some(config.effective_runtime_mode()),
+                _ => None,
+            };
+            self.continue_saved_connection_start(
+                connection,
+                SavedConnectionStartOptions {
+                    ssh_runtime_mode,
+                    custom_name,
+                    tab_color: custom_color,
+                    locked,
+                    insert_index: Some(source_index),
+                    reconnect_session_id: Some(old_id.clone()),
+                    startup_command: reconnect_cwd_command.map(|command| StartupCommandRequest {
+                        command,
+                        delay_ms: 0,
+                    }),
+                    ..Default::default()
+                },
+                cx,
+            );
+            self.session.finish_busy_action(&old_id);
+            self.shell.show_workspace();
+            if self.session.active_id() == Some(old_id.as_str())
+                && self.session.start_reconnect_is_pending(&old_id)
+            {
+                self.focus_user_started_session_surface(
+                    SessionStartFocusTarget::Terminal,
+                    window,
+                    cx,
+                );
+            }
+            cx.notify();
+            return;
+        }
         let launch_config = metadata.launch_config;
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
@@ -423,6 +519,7 @@ impl NyaTermApp {
                     SavedConnectionStartOptions {
                         custom_name,
                         tab_color: custom_color,
+                        locked,
                         insert_index: Some(source_index),
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
@@ -439,6 +536,7 @@ impl NyaTermApp {
                     SavedConnectionStartOptions {
                         custom_name,
                         tab_color: custom_color,
+                        locked,
                         insert_index: Some(source_index),
                         startup_command: reconnect_cwd_command.map(|command| {
                             crate::models::StartupCommandRequest {
@@ -461,6 +559,7 @@ impl NyaTermApp {
                     SavedConnectionStartOptions {
                         custom_name,
                         tab_color: custom_color,
+                        locked,
                         insert_index: Some(source_index),
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
@@ -477,6 +576,7 @@ impl NyaTermApp {
                     SavedConnectionStartOptions {
                         custom_name,
                         tab_color: custom_color,
+                        locked,
                         insert_index: Some(source_index),
                         reconnect_session_id: Some(old_id.clone()),
                         ..Default::default()
@@ -509,6 +609,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.session.start.clear_reconnect_failure(old_id);
+        if old_id != new_id {
+            self.session.notices.clear(old_id);
+        }
         let encoding = self
             .session
             .metadata(new_id)
@@ -561,6 +664,71 @@ mod tests {
     };
     use crate::models::{SessionLaunchConfig, StartupCommandRequest};
     use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn saved_telnet_reconnect_uses_current_catalog_and_retains_tab_properties() {
+        let root = TestConfigDir::new("nyaterm-reconnect-current-catalog");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| app.update(cx, |app, cx| {
+            let metadata = app.session.metadata_mut("source").unwrap();
+            metadata.launch_config = SessionLaunchConfig::Telnet(nyaterm_transport::TelnetSessionConfig {
+                host: "old.example".into(), ..Default::default()
+            });
+            metadata.source_connection_id = Some("saved".into());
+            metadata.disconnected = true;
+            let saved: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+                "id":"saved", "name":"Updated", "type":"telnet", "host":"127.0.0.1", "port":0,
+                "username":"new-user"
+            })).unwrap();
+            app.connection_state.replace_loaded(vec![saved], vec![]);
+            app.session.set_custom_name("source".into(), "My tab".into());
+            app.session.set_tab_color("source", Some(0x123456));
+            app.session.set_tab_locked("source", true);
+            app.reconnect_session("source".into(), window, cx);
+            let pending = app.session.start.pending_entries().next().unwrap().1;
+            let Some(SessionLaunchConfig::Telnet(config)) = &pending.launch_config else { panic!("expected Telnet"); };
+            assert_eq!(config.host, "127.0.0.1");
+            assert_eq!(config.port, 0);
+            assert_eq!(config.username, "new-user");
+            assert_eq!(pending.custom_name.as_deref(), Some("My tab"));
+            assert_eq!(pending.tab_color, Some(0x123456));
+            assert!(pending.locked);
+            assert_eq!(pending.reconnect_session_id.as_deref(), Some("source"));
+            assert!(pending.startup_command.is_none());
+        }));
+    }
+
+    #[test]
+    fn deleted_or_changed_saved_source_keeps_the_disconnected_tab_without_starting() {
+        for changed_protocol in [false, true] {
+            let root = TestConfigDir::new("nyaterm-reconnect-invalid-source");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+            let cx = session_focus_test_window(&mut cx, &app);
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let metadata = app.session.metadata_mut("source").unwrap();
+                    metadata.source_connection_id = Some("saved".into());
+                    metadata.disconnected = true;
+                    if changed_protocol {
+                        let saved = serde_json::from_value(serde_json::json!({
+                            "id":"saved", "name":"Changed", "type":"ssh", "host":"new.example"
+                        }))
+                        .unwrap();
+                        app.connection_state.replace_loaded(vec![saved], vec![]);
+                    }
+                    app.reconnect_session("source".into(), window, cx);
+                    assert!(!app.session.start_is_busy());
+                    assert!(app.session.metadata("source").unwrap().disconnected);
+                    assert!(!app.session.session_is_busy("source"));
+                })
+            });
+        }
+    }
 
     #[test]
     fn duplicate_session_focus_handoff_survives_menu_dismissal() {

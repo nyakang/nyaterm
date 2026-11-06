@@ -1633,7 +1633,7 @@ mod tests {
             });
             for _ in 1..width {
                 cells.push(nyaterm_terminal::RenderCell {
-                    text: Arc::from(""),
+                    text: nyaterm_terminal::CellText::EMPTY,
                     style: nyaterm_terminal::CellStyle::default(),
                     width: 0,
                     hyperlink: None,
@@ -1642,7 +1642,7 @@ mod tests {
         }
         while cells.len() < cols {
             cells.push(nyaterm_terminal::RenderCell {
-                text: Arc::from(""),
+                text: nyaterm_terminal::CellText::EMPTY,
                 style: nyaterm_terminal::CellStyle::default(),
                 width: 1,
                 hyperlink: None,
@@ -2219,7 +2219,7 @@ mod tests {
             assert!(highlights.stale_lookup(0, &changed).is_none());
             set_snapshot_row(&mut changed, 0, format!("{text} e"), 42);
             let rows = Arc::make_mut(&mut changed.row_data);
-            Arc::make_mut(&mut rows[0]).cells[0].text = Arc::from("e");
+            Arc::make_mut(&mut rows[0]).cells[0].text = "e".into();
             assert!(highlights.stale_lookup(0, &changed).is_none());
         }
     }

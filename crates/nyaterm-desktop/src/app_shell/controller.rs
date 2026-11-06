@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 mod auto_sync;
 mod bootstrap;
+mod configuration_replacement;
 pub(crate) mod native_menu;
 mod shutdown;
 #[cfg(test)]
@@ -91,6 +92,7 @@ impl RecentActivationCache {
 }
 
 pub struct DesktopController {
+    pub(crate) ai_runtime: Result<crate::ai_runtime::AiRuntime, String>,
     runtime: AppRuntime,
     startup: AppShellStartup,
     session_hub: gpui::Entity<SessionHub>,
@@ -127,6 +129,7 @@ impl DesktopController {
             .shared_store_runtime()
             .map_or(0, |store| store.sync_mutation_generation());
         Self {
+            ai_runtime: crate::ai_runtime::AiRuntime::new(),
             native_menu: Default::default(),
             plugin_process: cx
                 .new(|cx| crate::features::plugins::PluginProcess::new(runtime.clone(), cx)),

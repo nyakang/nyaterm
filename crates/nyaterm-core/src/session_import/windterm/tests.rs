@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 use crate::ConnectionType;
 use crate::session_import::{
     SessionImportError, SessionImportOptions, SessionImportWarningKind, prepare_session_import,
-    prepare_session_import_with_options,
+    prepare_session_import_with_options, prepare_windterm_preview,
 };
 use crate::test_support::TestTempDir;
 
-use super::{parse_windterm_content, resolve_key_path};
+use super::{
+    WindtermAccountAction, WindtermAccountDecision, WindtermOneKeyConfigState,
+    WindtermUnlinkedReason, parse_windterm_content, prepare_windterm_import_with_decisions,
+    resolve_key_path,
+};
 
 // Independent vectors produced with Python hashlib.pbkdf2_hmac('sha3_512') and
 // cryptography's AES-CBC + PKCS7, not this importer's encryption implementation.
@@ -300,6 +304,493 @@ fn corrupt_plaintext_and_ciphertext_do_not_leak_values_in_errors() {
 }
 
 #[test]
+fn one_keys_config_lookup_is_case_insensitive() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekeys-case");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/OneKeys.config"),
+        serde_json::json!([{
+            "name": "case.example",
+            "type": "SshOneKey",
+            "uuid": "one-key-case",
+            "auth": EMPTY_MASTER,
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([{
+            "session.protocol": "SSH", "session.target": "10.11.0.20",
+            "session.oneKey": "one-key-case"
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Readable);
+    assert_eq!(preview.accounts.len(), 1);
+    assert!(preview.missing_one_keys.is_empty());
+}
+
+#[test]
+fn one_key_config_builds_accounts_and_relinks_sessions_by_uuid() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{
+            "name": "172.20.0.21",
+            "type": "SshOneKey",
+            "uuid": "one-key-1",
+            "auth": EMPTY_MASTER,
+            "expect.password": r#"{"text.matchRegex":true,"text.pattern":"password:"}"#,
+            "expect.username": r#"{"text.matchRegex":true,"text.pattern":"login:"}"#,
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH","session.target":"10.11.0.15","session.oneKey":"one-key-1"},
+            {"session.protocol":"SSH","session.target":"root@10.11.0.16","session.oneKey":"one-key-1"},
+            {"session.protocol":"SSH","session.target":"inline.example",
+             "session.autoLogin": r#"{"PasswordEnabled":true,"Password":"inline"}"#},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Readable);
+    assert_eq!(preview.accounts.len(), 1);
+    assert!(preview.missing_one_keys.is_empty());
+    let account = &preview.accounts[0];
+    assert_eq!(account.name, "172.20.0.21");
+    assert_eq!(account.username, "deploy");
+    assert!(account.password_available);
+    assert!(account.password_readable);
+    assert_eq!(account.session_count, 2);
+
+    assert_eq!(preview.prepared.passwords.len(), 1);
+    assert_eq!(preview.prepared.passwords[0].id, account.id);
+    assert_eq!(
+        preview.prepared.passwords[0].password.as_deref(),
+        Some(" secret ")
+    );
+
+    for connection in &preview.prepared.connections[..2] {
+        let auth = connection.auth.as_ref().unwrap();
+        assert_eq!(auth.account_id.as_deref(), Some(account.id.as_str()));
+        assert_eq!(auth.mode, "password");
+        assert!(auth.password.is_none());
+        assert!(
+            matches!(&connection.config, ConnectionType::Ssh { username, .. } if username == "deploy")
+        );
+    }
+    assert_eq!(
+        preview.prepared.connections[2]
+            .auth
+            .as_ref()
+            .unwrap()
+            .password
+            .as_deref(),
+        Some("inline")
+    );
+    assert!(!format!("{:?}", preview.prepared).contains("secret"));
+}
+
+#[test]
+fn unreadable_one_key_auth_still_creates_account_for_later_password_edit() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-unreadable");
+    fs::create_dir_all(dir.join("terminal")).unwrap();
+    let path = dir.join("terminal/user.sessions");
+    fs::write(
+        &path,
+        r#"[{"session.protocol":"SSH","session.target":"10.11.0.15","session.oneKey":"broken"}]"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{
+            "name": "jump-host", "type": "SshOneKey", "uuid": "broken", "auth": "not-decryptable",
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.accounts.len(), 1);
+    assert_eq!(preview.unreadable_account_count, 1);
+    assert!(!preview.accounts[0].password_available);
+    assert!(!preview.accounts[0].password_readable);
+    assert_eq!(preview.accounts[0].session_count, 1);
+    assert_eq!(preview.prepared.passwords.len(), 1);
+    assert!(preview.prepared.passwords[0].password.is_none());
+    assert_eq!(
+        preview.prepared.connections[0]
+            .auth
+            .as_ref()
+            .unwrap()
+            .account_id
+            .as_deref(),
+        Some(preview.accounts[0].id.as_str())
+    );
+}
+
+#[test]
+fn duplicate_one_key_names_are_suffixed_and_unmatched_references_are_counted() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-conflicts");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([
+            {"name":"same", "type":"SshOneKey", "uuid":"a", "auth": EMPTY_MASTER},
+            {"name":"same", "type":"SshOneKey", "uuid":"b", "auth": EMPTY_MASTER},
+            {"name":"ignored", "type":"TelnetOneKey", "uuid":"c", "auth": EMPTY_MASTER},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH","session.target":"one","session.oneKey":"a"},
+            {"session.protocol":"SSH","session.target":"two","session.oneKey":"missing"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    // Only the referenced, supported definition becomes an account candidate.
+    assert_eq!(preview.accounts.len(), 1);
+    assert_eq!(preview.duplicate_account_name_count, 1);
+    assert_eq!(preview.accounts[0].name, "same");
+    assert_eq!(preview.missing_one_keys.len(), 1);
+    assert_eq!(preview.missing_one_keys[0].session_name, "two");
+    assert_eq!(preview.missing_one_keys[0].one_key_uuid, "missing");
+    assert_eq!(preview.unsupported_one_key_count, 1);
+}
+
+#[test]
+fn missing_one_key_config_keeps_legacy_single_step_import() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-missing");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Absent);
+    assert!(preview.accounts.is_empty());
+    assert!(preview.prepared.passwords.is_empty());
+    assert_eq!(preview.prepared.connections.len(), 1);
+    assert_eq!(
+        preview.prepared.connections[0]
+            .auth
+            .as_ref()
+            .unwrap()
+            .password
+            .as_deref(),
+        Some(" secret ")
+    );
+}
+
+#[test]
+fn corrupt_one_key_config_degrades_without_leaking_content() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-corrupt");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        "[{\"auth\":\"private-value\"",
+    )
+    .unwrap();
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Unreadable);
+    assert!(preview.accounts.is_empty());
+    assert_eq!(preview.prepared.connections.len(), 1);
+    assert!(!format!("{preview:?}").contains("private-value"));
+}
+
+#[test]
+fn missing_one_key_references_are_reported_for_none_partial_and_all_cases() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-report");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    let one_key_path = dir.join("terminal/onekeys.config");
+    let sessions = serde_json::json!([
+        {"session.protocol":"SSH", "session.target":"one", "session.label":"one", "session.oneKey":"a"},
+        {"session.protocol":"SSH", "session.target":"two", "session.label":"two", "session.oneKey":"b"},
+        {"session.protocol":"SSH", "session.target":"three", "session.label":"plain"},
+    ]);
+    fs::write(&path, sessions.to_string()).unwrap();
+    let cases = [
+        (
+            Some(serde_json::json!([
+                {"name":"a", "type":"SshOneKey", "uuid":"a", "auth": EMPTY_MASTER},
+                {"name":"b", "type":"SshOneKey", "uuid":"b", "auth": EMPTY_MASTER},
+            ])),
+            Vec::<&str>::new(),
+        ),
+        (
+            Some(serde_json::json!([
+                {"name":"a", "type":"SshOneKey", "uuid":"a", "auth": EMPTY_MASTER},
+            ])),
+            vec!["two"],
+        ),
+        (
+            Some(serde_json::json!([
+                {"name":"c", "type":"SshOneKey", "uuid":"c", "auth": EMPTY_MASTER},
+            ])),
+            vec!["one", "two"],
+        ),
+        (None, vec!["one", "two"]),
+    ];
+    for (config, expected_names) in cases {
+        match config {
+            Some(config) => fs::write(&one_key_path, config.to_string()).unwrap(),
+            None => {
+                if one_key_path.exists() {
+                    fs::remove_file(&one_key_path).unwrap();
+                }
+            }
+        }
+        let preview = prepare_windterm_preview(&path, None).unwrap();
+        let names = preview
+            .missing_one_keys
+            .iter()
+            .map(|missing| missing.session_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, expected_names);
+        let report = preview.report();
+        assert_eq!(report.missing_one_keys.len(), expected_names.len());
+        assert_eq!(report.imported_sessions, 3);
+    }
+}
+
+#[test]
+fn unsupported_one_key_types_are_counted_and_sessions_stay_unlinked() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-unsupported");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{"name":"telnet", "type":"TelnetOneKey", "uuid":"c"}]).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH", "session.target":"telnet-host", "session.label":"telnet-host", "session.oneKey":"c"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.unsupported_one_key_count, 1);
+    assert!(preview.accounts.is_empty());
+    assert!(preview.missing_one_keys.is_empty());
+    assert_eq!(preview.unlinked_sessions.len(), 1);
+    assert_eq!(
+        preview.unlinked_sessions[0].reason,
+        WindtermUnlinkedReason::UnsupportedType
+    );
+    assert_eq!(
+        preview.prepared.connections[0].auth.as_ref().unwrap().mode,
+        "none"
+    );
+}
+
+#[test]
+fn invalid_and_duplicate_one_key_entries_are_counted_and_name_falls_back_to_uuid() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-invalid");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([
+            {"name":"no-uuid", "type":"SshOneKey"},
+            {"name":"first", "type":"SshOneKey", "uuid":"dup", "auth": EMPTY_MASTER},
+            {"name":"second", "type":"SshOneKey", "uuid":"dup", "auth": EMPTY_MASTER},
+            {"name":"", "type":"SshOneKey", "uuid":"nameless"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH", "session.target":"one", "session.oneKey":"dup"},
+            {"session.protocol":"SSH", "session.target":"two", "session.oneKey":"nameless"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.invalid_one_key_count, 1);
+    assert_eq!(preview.duplicate_one_key_uuid_count, 1);
+    assert_eq!(preview.accounts.len(), 2);
+    assert_eq!(preview.accounts[0].name, "first");
+    assert_eq!(preview.accounts[1].name, "nameless");
+}
+
+#[test]
+fn account_decisions_create_reuse_and_skip_rebuild_connections() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-decisions");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{"name":"jump", "type":"SshOneKey", "uuid":"a", "auth": EMPTY_MASTER}])
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH", "session.target":"fallback@host", "session.label":"host-a",
+             "session.oneKey":"a",
+             "session.autoLogin": r#"{"PasswordEnabled":true,"Password":"fallback","session.user":"inline"}"#},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let create = prepare_windterm_import_with_decisions(
+        &path,
+        None,
+        &[WindtermAccountDecision {
+            one_key_uuid: "a".into(),
+            action: WindtermAccountAction::Create {
+                username: "custom".into(),
+                password: Some("new-secret".into()),
+            },
+        }],
+    )
+    .unwrap();
+    assert_eq!(create.prepared.passwords.len(), 1);
+    assert_eq!(create.prepared.passwords[0].username, "custom");
+    assert_eq!(
+        create.prepared.passwords[0].password.as_deref(),
+        Some("new-secret")
+    );
+    let connection = &create.prepared.connections[0];
+    assert_eq!(
+        connection.auth.as_ref().unwrap().account_id.as_deref(),
+        Some(create.prepared.passwords[0].id.as_str())
+    );
+    assert!(
+        matches!(&connection.config, ConnectionType::Ssh { username, .. } if username == "custom")
+    );
+    assert_eq!(create.report.imported_sessions, 1);
+    assert!(create.report.missing_one_keys.is_empty());
+    assert!(!format!("{create:?}").contains("new-secret"));
+
+    let reuse = prepare_windterm_import_with_decisions(
+        &path,
+        None,
+        &[WindtermAccountDecision {
+            one_key_uuid: "a".into(),
+            action: WindtermAccountAction::Reuse {
+                account_id: "existing-id".into(),
+                username: "existing-user".into(),
+            },
+        }],
+    )
+    .unwrap();
+    assert!(reuse.prepared.passwords.is_empty());
+    let connection = &reuse.prepared.connections[0];
+    assert_eq!(
+        connection.auth.as_ref().unwrap().account_id.as_deref(),
+        Some("existing-id")
+    );
+    assert!(
+        matches!(&connection.config, ConnectionType::Ssh { username, .. } if username == "existing-user")
+    );
+
+    let skip = prepare_windterm_import_with_decisions(
+        &path,
+        None,
+        &[WindtermAccountDecision {
+            one_key_uuid: "a".into(),
+            action: WindtermAccountAction::Skip,
+        }],
+    )
+    .unwrap();
+    assert!(skip.prepared.passwords.is_empty());
+    let connection = &skip.prepared.connections[0];
+    assert_eq!(
+        connection.auth.as_ref().unwrap().password.as_deref(),
+        Some("fallback")
+    );
+    assert!(
+        matches!(&connection.config, ConnectionType::Ssh { username, .. } if username == "inline")
+    );
+    assert_eq!(skip.report.unlinked_sessions.len(), 1);
+    assert_eq!(
+        skip.report.unlinked_sessions[0].reason,
+        WindtermUnlinkedReason::SkippedByUser
+    );
+    assert!(skip.report.missing_one_keys.is_empty());
+}
+
+#[test]
+fn report_keeps_skipped_session_and_warning_counts_consistent() {
+    let content = serde_json::json!([
+        null,
+        {"session.protocol":"Telnet", "session.target":"telnet"},
+        {"session.protocol":"SSH", "session.target":"bad-port", "session.port":0},
+        {"session.protocol":"SSH", "session.target":"readable", "session.autoLogin": r#"{"PasswordEnabled":true,"Password":"p"}"#},
+    ])
+    .to_string();
+    let parsed = parse_windterm_content(&content).unwrap();
+    assert_eq!(parsed.connections.len(), 1);
+    assert_eq!(parsed.incomplete_credentials_count(), 0);
+
+    let dir = TestTempDir::new("nyaterm-windterm-report-counts");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(&path, content).unwrap();
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    let report = preview.report();
+    assert_eq!(report.imported_sessions, 1);
+    assert_eq!(report.skipped_sessions, 3);
+    assert_eq!(report.credential_warning_sessions, 0);
+    assert_eq!(report.one_key_state, WindtermOneKeyConfigState::Absent);
+}
+
+#[test]
+fn all_unusable_sessions_return_a_clear_error_instead_of_silent_partial_import() {
+    let content = serde_json::json!([
+        null,
+        {"session.protocol":"Telnet", "session.target":"telnet"},
+    ])
+    .to_string();
+    assert!(parse_windterm_content(&content).is_err());
+}
+
+#[test]
+fn unreadable_one_key_config_keeps_sessions_and_reports_missing_references() {
+    let dir = TestTempDir::new("nyaterm-windterm-onekey-unreadable-config");
+    let path = profile(&dir, false, EMPTY_MASTER);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        "[{\"auth\":\"private-value\"",
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([
+            {"session.protocol":"SSH", "session.target":"host", "session.label":"host", "session.oneKey":"a"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Unreadable);
+    assert_eq!(preview.prepared.connections.len(), 1);
+    assert_eq!(preview.missing_one_keys.len(), 1);
+    assert_eq!(preview.missing_one_keys[0].session_name, "host");
+    assert!(!format!("{preview:?}").contains("private-value"));
+}
+
+#[test]
 fn unsupported_optional_fields_do_not_abort_other_sessions_or_lose_readable_passwords() {
     let prepared = parse_windterm_content(&serde_json::json!([
         null, 123,
@@ -324,4 +815,78 @@ fn unsupported_optional_fields_do_not_abort_other_sessions_or_lose_readable_pass
             .as_deref(),
         Some("readable")
     );
+}
+
+#[test]
+fn one_key_auth_preserves_alias_priority_tolerance_and_zeroizing_nested_strings() {
+    let crypto = super::ProfileCrypto::Unavailable(SessionImportWarningKind::MissingProfileConfig);
+    for (raw, user, password) in [
+        (
+            r#"{"username":" first ","user":"second","password":" primary ","Password":"secondary"}"#,
+            Some("first"),
+            Some(" primary "),
+        ),
+        (
+            r#"{"username":42,"user":"fallback","password":false,"pass":"fallback-secret"}"#,
+            Some("fallback"),
+            Some("fallback-secret"),
+        ),
+        (
+            r#"{"username":" ","user":"blocked","password":"","secret":"blocked"}"#,
+            None,
+            None,
+        ),
+        (
+            r#"{"session.user":"login","secret":"\u0061\"escaped"}"#,
+            Some("login"),
+            Some("a\"escaped"),
+        ),
+        (
+            r#"{"username":"old","username":"last","password":"old","password":12,"pass":"last"}"#,
+            Some("last"),
+            Some("last"),
+        ),
+    ] {
+        for payload in [raw.to_owned(), serde_json::to_string(raw).unwrap()] {
+            let (actual_user, actual_password, readable) =
+                super::parse_one_key_auth(Some(&payload), &crypto);
+            assert!(readable);
+            assert_eq!(actual_user.as_deref(), user);
+            assert_eq!(actual_password.as_deref(), password);
+            if let Some(secret) = actual_password {
+                assert_eq!(format!("{secret:?}"), "SecretString(<redacted>)");
+            }
+        }
+    }
+    for invalid in ["not ciphertext", "{broken", "AAAA"] {
+        let (user, password, readable) = super::parse_one_key_auth(Some(invalid), &crypto);
+        assert!(!readable);
+        assert!(user.is_none());
+        assert!(password.is_none());
+    }
+}
+
+#[test]
+fn encrypted_one_key_auth_handles_nested_json_wrong_password_and_corruption() {
+    use base64::Engine;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+    let crypto = super::derive_crypto("fingerprint-1", "master");
+    let payload =
+        serde_json::to_string(r#"{"userName":"deploy","Password":"sensitive-value"}"#).unwrap();
+    let mut buffer = zeroize::Zeroizing::new(vec![0u8; payload.len() + 16]);
+    buffer[..payload.len()].copy_from_slice(payload.as_bytes());
+    let ciphertext =
+        cbc::Encryptor::<aes::Aes256>::new_from_slices(&crypto.0[..32], &crypto.0[32..])
+            .unwrap()
+            .encrypt_padded_mut::<Pkcs7>(&mut buffer, payload.len())
+            .unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(ciphertext);
+    let ready = super::ProfileCrypto::Ready(crypto);
+    let (user, password, readable) = super::parse_one_key_auth(Some(&encoded), &ready);
+    assert!(readable);
+    assert_eq!(user.as_deref(), Some("deploy"));
+    assert_eq!(password.as_deref(), Some("sensitive-value"));
+    let wrong = super::ProfileCrypto::Ready(super::derive_crypto("fingerprint-1", "wrong"));
+    assert!(!super::parse_one_key_auth(Some(&encoded), &wrong).2);
+    assert!(!super::parse_one_key_auth(Some(&encoded[..encoded.len() - 4]), &ready).2);
 }

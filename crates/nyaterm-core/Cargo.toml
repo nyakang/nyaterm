@@ -10,6 +10,7 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+nucleo-matcher.workspace = true
 csscolorparser = "0.7"
 aes-gcm.workspace = true
 aes.workspace = true

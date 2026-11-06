@@ -59,20 +59,26 @@ impl SettingsPanel {
             ));
         let fields = div()
             .grid()
-            .grid_cols(if self.viewport_width >= 1024. { 2 } else { 1 })
+            .grid_cols(if self.content_width >= 1024. { 2 } else { 1 })
             .gap_4()
-            .child(ai_field(
-                palette,
-                t!("ai.contextLineLimit"),
-                None,
-                self.existing_number_input_box("ai.number.context-line-limit"),
-            ))
-            .child(ai_field(
-                palette,
-                t!("ai.timeoutMs"),
-                None,
-                self.existing_number_input_box("ai.number.timeout-ms"),
-            ));
+            .child(
+                ai_field(
+                    palette,
+                    t!("ai.contextLineLimit"),
+                    None,
+                    self.existing_number_input_box("ai.number.context-line-limit"),
+                )
+                .debug_selector(|| "ai-general-context-field".into()),
+            )
+            .child(
+                ai_field(
+                    palette,
+                    t!("ai.timeoutMs"),
+                    None,
+                    self.existing_number_input_box("ai.number.timeout-ms"),
+                )
+                .debug_selector(|| "ai-general-timeout-field".into()),
+            );
         use nyaterm_core::ai::proxy::{AiProxyMode, AiProxyProtocol};
         let proxy_mode = self.form_select_control(
             "ai-proxy-mode",
@@ -197,7 +203,7 @@ impl SettingsPanel {
         );
         let params = div()
             .grid()
-            .grid_cols(if self.viewport_width >= 1024. { 2 } else { 1 })
+            .grid_cols(if self.content_width >= 1024. { 2 } else { 1 })
             .gap_4()
             .child(ai_field(
                 palette,

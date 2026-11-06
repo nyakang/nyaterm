@@ -1,4 +1,4 @@
-use nyaterm_core::{AiExecutionProfile, SavedConnection};
+use nyaterm_core::{AiExecutionProfile, ConnectionType, SavedConnection};
 use nyaterm_remote_desktop::{RdpSessionConfig, VncSessionConfig};
 use nyaterm_transport::{
     LocalSessionConfig, SerialSessionConfig, SshSessionConfig, TelnetSessionConfig,
@@ -64,6 +64,51 @@ pub(crate) enum SessionLaunchConfig {
 }
 
 impl SessionLaunchConfig {
+    pub(crate) fn matches_saved_protocol(&self, config: &ConnectionType) -> bool {
+        matches!(
+            (self, config),
+            (Self::Local(_), ConnectionType::LocalTerminal { .. })
+                | (Self::Ssh(_), ConnectionType::Ssh { .. })
+                | (Self::Telnet(_), ConnectionType::Telnet { .. })
+                | (Self::Serial(_), ConnectionType::Serial { .. })
+                | (Self::Rdp(_), ConnectionType::Rdp { .. })
+                | (Self::Vnc(_), ConnectionType::Vnc { .. })
+        )
+    }
+
+    pub(crate) fn same_saved_remote_endpoint(&self, connection: &SavedConnection) -> bool {
+        // Account credentials can replace the configured username. In that case
+        // do not carry a previous user's working directory into a new login.
+        if connection
+            .auth
+            .as_ref()
+            .is_some_and(|auth| auth.saved_account_id().is_some())
+        {
+            return false;
+        }
+        match (self, &connection.config) {
+            (
+                Self::Ssh(old),
+                ConnectionType::Ssh {
+                    host,
+                    port,
+                    username,
+                    ..
+                },
+            ) => (&old.host, old.port, &old.username) == (host, *port, username),
+            (
+                Self::Telnet(old),
+                ConnectionType::Telnet {
+                    host,
+                    port,
+                    username,
+                    ..
+                },
+            ) => (&old.host, old.port, &old.username) == (host, *port, username),
+            _ => false,
+        }
+    }
+
     pub(crate) fn encoding(&self) -> Option<&str> {
         match self {
             Self::Local(config) => Some(&config.encoding),
@@ -203,6 +248,25 @@ mod tests {
     use nyaterm_transport::{
         LocalSessionConfig, SerialSessionConfig, SshSessionConfig, TelnetSessionConfig,
     };
+
+    #[test]
+    fn reconnect_cwd_is_only_reused_for_the_same_remote_login() {
+        let old = SessionLaunchConfig::Ssh(Box::new(SshSessionConfig {
+            host: "host.example".into(),
+            port: 22,
+            username: "alice".into(),
+            ..Default::default()
+        }));
+        let saved = |host, port, username| {
+            serde_json::from_value(serde_json::json!({
+            "id":"saved", "name":"SSH", "type":"ssh", "host":host, "port":port, "username":username
+        })).unwrap()
+        };
+        assert!(old.same_saved_remote_endpoint(&saved("host.example", 22, "alice")));
+        assert!(!old.same_saved_remote_endpoint(&saved("other.example", 22, "alice")));
+        assert!(!old.same_saved_remote_endpoint(&saved("host.example", 2222, "alice")));
+        assert!(!old.same_saved_remote_endpoint(&saved("host.example", 22, "bob")));
+    }
 
     fn telnet(username: &str) -> SessionLaunchConfig {
         SessionLaunchConfig::Telnet(TelnetSessionConfig {

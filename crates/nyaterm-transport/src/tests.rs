@@ -1,31 +1,30 @@
+use super::{
+    DO, ForwardedTcpIpDispatch, IAC, LocalSessionConfig, OPT_SUPPRESS_GO_AHEAD, PrimarySessionGate,
+    SESSION_EVENT_QUEUE_OUTPUT_EVENT_LIMIT, SESSION_EVENT_QUEUE_OUTPUT_LIMIT, SerialSessionConfig,
+    SessionError, SessionEvent, SessionEventConsumerId, SessionEventQueue, SessionManager,
+    SshAlgorithmListKind, SshAlgorithmMode, SshAlgorithmPreferences, SshAlgorithmRisk,
+    SshAlgorithmValidationError, SshKeyAuthConfig, SshProxyConfig, SshPtyDimensions,
+    SshSessionConfig, TelnetSessionConfig, WILL, cipher, defaults_from_preferred,
+    drain_deferred_ssh_open_commands, expand_proxy_command, forwarded_tcpip_sender_for,
+    has_password_prompt, has_username_prompt, kex, mac, register_x11_sender, remap_del_to_bs,
+    ssh_client_config, ssh_host_identifier, supported_ssh_algorithms, unregister_x11_sender,
+    validate_ssh_algorithm_preferences,
+};
+#[cfg(unix)]
+use super::{EnvironmentSnapshot, EnvironmentValue};
+use crate::session::local_pty_size;
+use crate::ssh_algorithms::resolve_preferred_algorithms;
+use crate::ssh_execution::run_local_command;
+use crate::transport_io::QueuedTransportWriter;
+use base64::Engine;
+#[cfg(unix)]
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
-
-use base64::Engine;
-#[cfg(unix)]
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::mpsc as tokio_mpsc;
-
-use super::{
-    DO, DockerService, ForwardedTcpIpDispatch, IAC, LocalSessionConfig, OPT_SUPPRESS_GO_AHEAD,
-    PrimarySessionGate, QueuedTransportWriter, RemoteGpuService, RemoteNpuService,
-    RemoteStatsService, SESSION_EVENT_QUEUE_OUTPUT_EVENT_LIMIT, SESSION_EVENT_QUEUE_OUTPUT_LIMIT,
-    SerialSessionConfig, SessionError, SessionEvent, SessionEventConsumerId, SessionEventQueue,
-    SessionManager, SftpService, SftpSettings, SshAlgorithmListKind, SshAlgorithmMode,
-    SshAlgorithmPreferences, SshAlgorithmRisk, SshAlgorithmValidationError, SshKeyAuthConfig,
-    SshProxyConfig, SshPtyDimensions, SshSessionConfig, SshSessionProfile, TelnetSessionConfig,
-    WILL, cipher, defaults_from_preferred, drain_deferred_ssh_open_commands, expand_proxy_command,
-    forwarded_tcpip_sender_for, has_password_prompt, has_username_prompt,
-    is_process_list_unsupported, kex, local_pty_size, mac, normalize_process_signal,
-    parse_process_output, register_x11_sender, remap_del_to_bs, resolve_preferred_algorithms,
-    run_local_command, ssh_client_config, ssh_host_identifier, supported_ssh_algorithms,
-    unregister_x11_sender, validate_ssh_algorithm_preferences,
-};
-#[cfg(unix)]
-use super::{EnvironmentSnapshot, EnvironmentValue};
 
 fn wait_for_queue_state(mut predicate: impl FnMut() -> bool, description: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -258,7 +257,7 @@ fn queued_transport_writer_returns_before_blocking_write_completes() {
             release_rx,
             output: output.clone(),
         },
-        crate::WriterFlushPolicy::AfterWrite,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
         SessionEventQueue::new(),
     )
     .unwrap();
@@ -280,7 +279,7 @@ fn queued_transport_writer_preserves_character_at_a_time_mode() {
     let mut writer = QueuedTransportWriter::spawn(
         "character-mode".to_string(),
         WriteCapture(writes.clone()),
-        crate::WriterFlushPolicy::EachByte,
+        crate::transport_io::WriterFlushPolicy::EachByte,
         SessionEventQueue::new(),
     )
     .unwrap();
@@ -346,7 +345,7 @@ fn local_command_receives_the_cached_shell_environment() {
     );
     let mut command = CommandBuilder::new("/bin/sh");
 
-    super::configure_environment(&mut command, Some(&snapshot));
+    crate::session::configure_environment(&mut command, Some(&snapshot));
 
     assert_eq!(
         command
@@ -789,7 +788,8 @@ fn telnet_auto_login_sends_username_and_password_prompts() {
         password: Some("secret".to_string().into()),
         ..Default::default()
     };
-    let mut state = super::TelnetAutoLoginState::new(&config).expect("auto login state");
+    let mut state =
+        crate::transport_io::TelnetAutoLoginState::new(&config).expect("auto login state");
 
     let username_payload = state
         .handle_visible_output(b"router login: ", &config)
@@ -834,7 +834,8 @@ fn telnet_auto_login_handles_split_and_chinese_prompts() {
         password: Some("sekret".to_string().into()),
         ..Default::default()
     };
-    let mut state = super::TelnetAutoLoginState::new(&config).expect("auto login state");
+    let mut state =
+        crate::transport_io::TelnetAutoLoginState::new(&config).expect("auto login state");
 
     assert!(telnet_send_payloads(state.handle_visible_output(b"User", &config)).is_empty());
     assert_eq!(
@@ -854,7 +855,8 @@ fn telnet_auto_login_wakes_prompt_and_ignores_last_login() {
         password: Some("sekret".to_string().into()),
         ..Default::default()
     };
-    let mut state = super::TelnetAutoLoginState::new(&config).expect("auto login state");
+    let mut state =
+        crate::transport_io::TelnetAutoLoginState::new(&config).expect("auto login state");
 
     assert_eq!(
         telnet_send_payloads(state.handle_visible_output(b"Press Enter to continue", &config)),
@@ -883,7 +885,8 @@ fn telnet_auto_login_retries_failure_and_disables_after_manual_input() {
         },
         ..Default::default()
     };
-    let mut state = super::TelnetAutoLoginState::new(&config).expect("auto login state");
+    let mut state =
+        crate::transport_io::TelnetAutoLoginState::new(&config).expect("auto login state");
 
     assert_eq!(
         telnet_send_payloads(state.handle_visible_output(b"login: ", &config)),
@@ -911,39 +914,6 @@ fn telnet_auto_login_retries_failure_and_disables_after_manual_input() {
             .handle_visible_output(b"Password: ", &config)
             .is_empty()
     );
-}
-
-#[test]
-fn sftp_service_rejects_operations_when_disabled() {
-    let service = SftpService::new(SshSessionConfig {
-        sftp: SftpSettings {
-            enabled: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-
-    let error = service.list_dir("/").expect_err("SFTP disabled");
-
-    assert!(error.to_string().contains("SFTP is disabled"));
-}
-
-#[test]
-fn sftp_service_rejects_network_device_profile_even_when_saved_enabled() {
-    let service = SftpService::new(SshSessionConfig {
-        profile: SshSessionProfile::NetworkDevice,
-        sftp: SftpSettings {
-            enabled: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-
-    let error = service
-        .list_dir("/")
-        .expect_err("network device SFTP must be disabled before connecting");
-
-    assert!(error.to_string().contains("SFTP is disabled"));
 }
 
 #[test]
@@ -1047,25 +1017,6 @@ fn primary_session_gate_opens_when_a_pending_session_is_abandoned() {
 }
 
 #[test]
-fn remote_services_keep_dedicated_fallback_constructors() {
-    let config = SshSessionConfig {
-        name: "fallback".to_string(),
-        host: "example.test".to_string(),
-        username: "tester".to_string(),
-        ..Default::default()
-    };
-
-    let stats = format!("{:?}", RemoteStatsService::new(config.clone()));
-    let gpu = format!("{:?}", RemoteGpuService::new(config.clone()));
-    let npu = format!("{:?}", RemoteNpuService::new(config.clone()));
-    let docker = format!("{:?}", DockerService::new(config));
-
-    for debug in [stats, gpu, npu, docker] {
-        assert!(debug.contains("multiplex: None"));
-    }
-}
-
-#[test]
 fn ssh_refused_connection_reports_create_error() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let port = listener.local_addr().expect("addr").port();
@@ -1112,9 +1063,9 @@ fn ssh_session_host_key_alias_is_preserved_by_defaults_and_debug() {
 
 #[test]
 fn ssh_shell_integration_script_emits_osc7_and_ready_marker() {
-    let ready = super::build_ssh_ready_marker("session-1");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1");
     let script = super::ssh_shell_injection_script(
-        super::ShellKind::Bash,
+        crate::ssh_shell_integration::ShellKind::Bash,
         &ready,
         super::ShellIntegrationMode::Full,
     )
@@ -1127,11 +1078,11 @@ fn ssh_shell_integration_script_emits_osc7_and_ready_marker() {
 
 #[test]
 fn ssh_shell_scripts_emit_complete_standard_osc133_lifecycle() {
-    let ready = super::build_ssh_ready_marker("session-lifecycle");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-lifecycle");
     for shell in [
-        super::ShellKind::Bash,
-        super::ShellKind::Zsh,
-        super::ShellKind::Fish,
+        crate::ssh_shell_integration::ShellKind::Bash,
+        crate::ssh_shell_integration::ShellKind::Zsh,
+        crate::ssh_shell_integration::ShellKind::Fish,
     ] {
         let script = super::persistent_script(shell).expect("persistent integration script");
         assert!(script.contains("133;A"), "missing A for {shell:?}");
@@ -1144,21 +1095,24 @@ fn ssh_shell_scripts_emit_complete_standard_osc133_lifecycle() {
         assert!(inline.contains("NyaTermReady:session-lifecycle"));
     }
 
-    let bash = super::persistent_script(super::ShellKind::Bash).expect("bash script");
+    let bash = super::persistent_script(crate::ssh_shell_integration::ShellKind::Bash)
+        .expect("bash script");
     assert!(bash.contains("NYATERM_BASH_HOOKS_READY:-"));
-    let zsh = super::persistent_script(super::ShellKind::Zsh).expect("zsh script");
+    let zsh =
+        super::persistent_script(crate::ssh_shell_integration::ShellKind::Zsh).expect("zsh script");
     assert!(zsh.matches("NYATERM_ZSH_HOOKS_READY:-").count() >= 4);
-    let fish = super::persistent_script(super::ShellKind::Fish).expect("fish script");
+    let fish = super::persistent_script(crate::ssh_shell_integration::ShellKind::Fish)
+        .expect("fish script");
     assert!(fish.matches("NYATERM_FISH_HOOKS_READY").count() >= 4);
 }
 
 #[test]
 fn cwd_only_shell_scripts_omit_semantic_markers_and_bash_debug_trap() {
-    let ready = super::build_ssh_ready_marker("session-cwd-only");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-cwd-only");
     for shell in [
-        super::ShellKind::Bash,
-        super::ShellKind::Zsh,
-        super::ShellKind::Fish,
+        crate::ssh_shell_integration::ShellKind::Bash,
+        crate::ssh_shell_integration::ShellKind::Zsh,
+        crate::ssh_shell_integration::ShellKind::Fish,
     ] {
         let script =
             super::ssh_shell_injection_script(shell, &ready, super::ShellIntegrationMode::CwdOnly)
@@ -1169,7 +1123,7 @@ fn cwd_only_shell_scripts_omit_semantic_markers_and_bash_debug_trap() {
         );
         assert!(script.contains("NyaTermCommand"));
         assert!(script.contains("NyaTermReady:session-cwd-only"));
-        if shell == super::ShellKind::Bash {
+        if shell == crate::ssh_shell_integration::ShellKind::Bash {
             assert!(!script.contains("DEBUG"));
         }
     }
@@ -1238,9 +1192,13 @@ fn run_bash_injection_history_probe(
         return None;
     }
 
-    let ready = super::build_ssh_ready_marker("history-probe");
-    let script = super::ssh_shell_injection_script(super::ShellKind::Bash, &ready, mode)
-        .expect("bash injection script");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("history-probe");
+    let script = super::ssh_shell_injection_script(
+        crate::ssh_shell_integration::ShellKind::Bash,
+        &ready,
+        mode,
+    )
+    .expect("bash injection script");
     let pty = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -1429,15 +1387,16 @@ enum UploadedHistoryProbeState {
 
 #[cfg(unix)]
 fn run_uploaded_shell_history_probe(
-    shell: super::ShellKind,
+    shell: crate::ssh_shell_integration::ShellKind,
     mode: super::ShellIntegrationMode,
     initial_state: UploadedHistoryProbeState,
 ) -> Option<(String, std::path::PathBuf)> {
     let executable = match shell {
-        super::ShellKind::Bash => "bash",
-        super::ShellKind::Zsh => "zsh",
-        super::ShellKind::Fish => "fish",
-        super::ShellKind::PosixSh | super::ShellKind::Unknown => return None,
+        crate::ssh_shell_integration::ShellKind::Bash => "bash",
+        crate::ssh_shell_integration::ShellKind::Zsh => "zsh",
+        crate::ssh_shell_integration::ShellKind::Fish => "fish",
+        crate::ssh_shell_integration::ShellKind::PosixSh
+        | crate::ssh_shell_integration::ShellKind::Unknown => return None,
     };
     if !std::process::Command::new(executable)
         .arg("--version")
@@ -1456,7 +1415,7 @@ fn run_uploaded_shell_history_probe(
     std::fs::create_dir(&remote_dir).expect("create uploaded integration probe directory");
     std::fs::create_dir(&state_dir).expect("create shell history probe state directory");
 
-    let ready = super::build_ssh_ready_marker("uploaded-history-probe");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("uploaded-history-probe");
     let integration =
         super::prepare_shell_integration(shell, &ready, mode).expect("prepared shell integration");
     std::fs::write(&remote_path, integration.upload_payload())
@@ -1477,20 +1436,20 @@ fn run_uploaded_shell_history_probe(
         .expect("open uploaded shell history probe pty");
     let mut command = CommandBuilder::new(executable);
     match shell {
-        super::ShellKind::Bash => {
+        crate::ssh_shell_integration::ShellKind::Bash => {
             command.args(["--noprofile", "--norc", "-i"]);
             command.env("HISTFILE", "/dev/null");
             command.env("PS1", "");
             command.env_remove("PROMPT_COMMAND");
             command.env_remove("HISTCONTROL");
         }
-        super::ShellKind::Zsh => {
+        crate::ssh_shell_integration::ShellKind::Zsh => {
             command.args(["-f", "-i"]);
             command.env("HISTFILE", "/dev/null");
             command.env("PROMPT", "");
             command.env("RPROMPT", "");
         }
-        super::ShellKind::Fish => {
+        crate::ssh_shell_integration::ShellKind::Fish => {
             if matches!(initial_state, UploadedHistoryProbeState::FishPrivate) {
                 command.args(["--private", "--interactive"]);
             } else {
@@ -1501,7 +1460,8 @@ fn run_uploaded_shell_history_probe(
             command.env("XDG_DATA_HOME", state_dir.to_string_lossy().to_string());
             command.env("XDG_CONFIG_HOME", state_dir.to_string_lossy().to_string());
         }
-        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+        crate::ssh_shell_integration::ShellKind::PosixSh
+        | crate::ssh_shell_integration::ShellKind::Unknown => unreachable!(),
     }
     command.env("TERM", "xterm-256color");
 
@@ -1535,7 +1495,7 @@ fn run_uploaded_shell_history_probe(
     });
 
     let setup = match shell {
-        super::ShellKind::Fish => {
+        crate::ssh_shell_integration::ShellKind::Fish => {
             "stty -echo\nset -g fish_greeting\nfunction fish_prompt; end\nprintf '__NYATERM_PTY_READY__\\n'\n"
         }
         _ => "stty -echo\nprintf '__NYATERM_PTY_READY__\\n'\n",
@@ -1565,12 +1525,17 @@ fn run_uploaded_shell_history_probe(
     }
 
     let mut commands = match shell {
-        super::ShellKind::Bash => "history -c\nprintf '__NYATERM_USER_BEFORE__\\n'\n".to_string(),
-        super::ShellKind::Zsh => {
+        crate::ssh_shell_integration::ShellKind::Bash => {
+            "history -c\nprintf '__NYATERM_USER_BEFORE__\\n'\n".to_string()
+        }
+        crate::ssh_shell_integration::ShellKind::Zsh => {
             "HISTSIZE=0\nHISTSIZE=1000\nprint -r -- '__NYATERM_USER_BEFORE__'\n".to_string()
         }
-        super::ShellKind::Fish => "printf '__NYATERM_USER_BEFORE__\\n'\n".to_string(),
-        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+        crate::ssh_shell_integration::ShellKind::Fish => {
+            "printf '__NYATERM_USER_BEFORE__\\n'\n".to_string()
+        }
+        crate::ssh_shell_integration::ShellKind::PosixSh
+        | crate::ssh_shell_integration::ShellKind::Unknown => unreachable!(),
     };
     match initial_state {
         UploadedHistoryProbeState::Default => {}
@@ -1579,16 +1544,16 @@ fn run_uploaded_shell_history_probe(
     }
     commands.push_str(&injected);
     match shell {
-        super::ShellKind::Bash => commands.push_str(
+        crate::ssh_shell_integration::ShellKind::Bash => commands.push_str(
             "if [[ -o history ]]; then printf '__NYATERM_HISTORY_STATE__:enabled\\n'; else printf '__NYATERM_HISTORY_STATE__:disabled\\n'; fi\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nHISTTIMEFORMAT= builtin history\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
         ),
-        super::ShellKind::Zsh => commands.push_str(
+        crate::ssh_shell_integration::ShellKind::Zsh => commands.push_str(
             "fc -P 2>/dev/null\nprintf '__NYATERM_HISTORY_STACK__:%s\\n' $?\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nfc -l 1\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
         ),
-        super::ShellKind::Fish => commands.push_str(
+        crate::ssh_shell_integration::ShellKind::Fish => commands.push_str(
             "if set -q fish_private_mode; printf '__NYATERM_PRIVATE_STATE__:enabled\\n'; else; printf '__NYATERM_PRIVATE_STATE__:disabled\\n'; end\nprintf '__NYATERM_HISTORY_BEGIN__\\n'\nhistory\nprintf '__NYATERM_HISTORY_END__\\n'\nexit\n",
         ),
-        super::ShellKind::PosixSh | super::ShellKind::Unknown => unreachable!(),
+        crate::ssh_shell_integration::ShellKind::PosixSh | crate::ssh_shell_integration::ShellKind::Unknown => unreachable!(),
     }
     write_pty_paced(&mut writer, &commands);
 
@@ -1644,12 +1609,12 @@ fn uploaded_history_probe_section(output: &str) -> &str {
 
 #[cfg(unix)]
 fn assert_uploaded_integration_is_private(
-    shell: super::ShellKind,
+    shell: crate::ssh_shell_integration::ShellKind,
     mode: super::ShellIntegrationMode,
     initial_state: UploadedHistoryProbeState,
 ) -> Option<String> {
     let (output, remote_dir) = run_uploaded_shell_history_probe(shell, mode, initial_state)?;
-    let ready = super::build_ssh_ready_marker("uploaded-history-probe");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("uploaded-history-probe");
     assert!(
         output.contains(&ready),
         "ready marker missing for {shell:?} {mode:?}: {output:?}"
@@ -1687,7 +1652,7 @@ fn bash_uploaded_shell_integration_preserves_history_state_without_pollution() {
         super::ShellIntegrationMode::CwdOnly,
     ] {
         let enabled = assert_uploaded_integration_is_private(
-            super::ShellKind::Bash,
+            crate::ssh_shell_integration::ShellKind::Bash,
             mode,
             UploadedHistoryProbeState::Default,
         );
@@ -1697,7 +1662,7 @@ fn bash_uploaded_shell_integration_preserves_history_state_without_pollution() {
             return;
         }
         let disabled = assert_uploaded_integration_is_private(
-            super::ShellKind::Bash,
+            crate::ssh_shell_integration::ShellKind::Bash,
             mode,
             UploadedHistoryProbeState::BashHistoryDisabled,
         )
@@ -1714,7 +1679,7 @@ fn zsh_uploaded_shell_integration_restores_history_stack_without_pollution() {
         super::ShellIntegrationMode::CwdOnly,
     ] {
         let Some(output) = assert_uploaded_integration_is_private(
-            super::ShellKind::Zsh,
+            crate::ssh_shell_integration::ShellKind::Zsh,
             mode,
             UploadedHistoryProbeState::Default,
         ) else {
@@ -1738,9 +1703,11 @@ fn fish_uploaded_shell_integration_preserves_private_mode_without_pollution() {
             (UploadedHistoryProbeState::Default, "disabled"),
             (UploadedHistoryProbeState::FishPrivate, "enabled"),
         ] {
-            let Some(output) =
-                assert_uploaded_integration_is_private(super::ShellKind::Fish, mode, initial_state)
-            else {
+            let Some(output) = assert_uploaded_integration_is_private(
+                crate::ssh_shell_integration::ShellKind::Fish,
+                mode,
+                initial_state,
+            ) else {
                 return;
             };
             assert!(
@@ -1775,25 +1742,25 @@ fn generated_bash_shell_integration_scripts_pass_syntax_check() {
     let Some(_) = gnu_bash_for_syntax_check() else {
         return;
     };
-    let ready = super::build_ssh_ready_marker("syntax-check");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("syntax-check");
     let scripts = [
-        super::persistent_script(super::ShellKind::Bash)
+        super::persistent_script(crate::ssh_shell_integration::ShellKind::Bash)
             .expect("persistent bash script")
             .to_string(),
         super::ssh_shell_injection_script(
-            super::ShellKind::Bash,
+            crate::ssh_shell_integration::ShellKind::Bash,
             &ready,
             super::ShellIntegrationMode::Full,
         )
         .expect("full bash script"),
         super::ssh_shell_injection_script(
-            super::ShellKind::Bash,
+            crate::ssh_shell_integration::ShellKind::Bash,
             &ready,
             super::ShellIntegrationMode::CwdOnly,
         )
         .expect("cwd-only bash script"),
         super::activation_script(
-            super::ShellKind::Bash,
+            crate::ssh_shell_integration::ShellKind::Bash,
             &ready,
             super::ShellIntegrationMode::Full,
         )
@@ -1834,21 +1801,23 @@ fn generated_bash_shell_integration_scripts_pass_syntax_check() {
 
 #[test]
 fn ssh_activation_and_persistent_scripts_match_rc_file_mode_contract() {
-    let ready = super::build_ssh_ready_marker("session-1");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1");
     let activation = super::activation_script(
-        super::ShellKind::Bash,
+        crate::ssh_shell_integration::ShellKind::Bash,
         &ready,
         super::ShellIntegrationMode::Full,
     )
     .expect("activation script");
-    let persistent = super::persistent_script(super::ShellKind::Bash).expect("persistent script");
-    let block = super::rc_managed_block(super::ShellKind::Bash).expect("managed block");
+    let persistent = super::persistent_script(crate::ssh_shell_integration::ShellKind::Bash)
+        .expect("persistent script");
+    let block = super::rc_managed_block(crate::ssh_shell_integration::ShellKind::Bash)
+        .expect("managed block");
 
     assert!(activation.contains("shell-integration.bash"));
     assert!(activation.contains("NyaTermReady:session-1"));
     assert!(activation.contains("__nyaterm_install_prompt full"));
     let cwd_activation = super::activation_script(
-        super::ShellKind::Bash,
+        crate::ssh_shell_integration::ShellKind::Bash,
         &ready,
         super::ShellIntegrationMode::CwdOnly,
     )
@@ -1862,8 +1831,8 @@ fn ssh_activation_and_persistent_scripts_match_rc_file_mode_contract() {
 
 #[test]
 fn ssh_osc_stripper_extracts_cwd_and_command_without_leaking_private_markers() {
-    let ready = super::build_ssh_ready_marker("session-1");
-    let legacy = super::build_legacy_ssh_ready_marker(&ready);
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1");
+    let legacy = crate::ssh_shell_integration::build_legacy_ssh_ready_marker(&ready);
     let mut stripper = super::OscStripper::new(&ready, legacy.as_deref());
     let command = base64::engine::general_purpose::STANDARD.encode("git status");
 
@@ -1887,7 +1856,7 @@ fn ssh_osc_stripper_extracts_cwd_and_command_without_leaking_private_markers() {
 
 #[test]
 fn ssh_osc_stripper_ignores_ready_marker_for_other_sessions() {
-    let ready = super::build_ssh_ready_marker("session-1");
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1");
     let mut stripper = super::OscStripper::new(&ready, None);
 
     let result = stripper.push(b"a\x1b]7777;NyaTermReady:session-2\x07b");
@@ -1899,10 +1868,12 @@ fn ssh_osc_stripper_ignores_ready_marker_for_other_sessions() {
 
 #[test]
 fn ssh_ready_marker_helpers_strip_current_and_legacy_markers() {
-    let ready = super::build_ssh_ready_marker("session-1").into_bytes();
-    let legacy = super::build_legacy_ssh_ready_marker("\x1b]7777;NyaTermReady:session-1\x07")
-        .expect("legacy marker")
-        .into_bytes();
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1").into_bytes();
+    let legacy = crate::ssh_shell_integration::build_legacy_ssh_ready_marker(
+        "\x1b]7777;NyaTermReady:session-1\x07",
+    )
+    .expect("legacy marker")
+    .into_bytes();
     let payload = [
         b"before".as_slice(),
         ready.as_slice(),
@@ -1984,7 +1955,7 @@ fn session_event_queue_drains_metadata_even_with_zero_output_budget() {
 
 #[test]
 fn ssh_ready_marker_detection_returns_bytes_after_marker() {
-    let ready = super::build_ssh_ready_marker("session-1").into_bytes();
+    let ready = crate::ssh_shell_integration::build_ssh_ready_marker("session-1").into_bytes();
     let mut split = b"echoed injection".to_vec();
     split.extend_from_slice(&ready[..8]);
     assert!(super::bytes_after_ssh_ready_marker(&split, &ready, None).is_none());
@@ -2015,48 +1986,6 @@ fn forwarded_tcpip_dispatch_prefers_listener_specific_sender() {
 
     let empty = ForwardedTcpIpDispatch::default();
     assert!(forwarded_tcpip_sender_for(&empty, "127.0.0.1", 2022).is_none());
-}
-
-#[test]
-fn process_parser_reads_legacy_rows() {
-    let rows = "PROCESS\t42\t1\troot\tSs\t0.4\t1.2\t1234\t5678\t01:02\tsshd\t/usr/sbin/sshd -D\n";
-
-    let processes = parse_process_output(rows);
-
-    assert_eq!(processes.len(), 1);
-    assert_eq!(processes[0].pid, 42);
-    assert_eq!(processes[0].ppid, 1);
-    assert_eq!(processes[0].user, "root");
-    assert_eq!(processes[0].cpu_percent, 0.4);
-    assert_eq!(processes[0].command_line, "/usr/sbin/sshd -D");
-}
-
-#[test]
-fn process_parser_preserves_command_lines_containing_tabs() {
-    let rows = "PROCESS\t9\t1\troot\tS\t0\t0\t1\t2\t-\tawk\tawk\twith\ttabs\n";
-
-    let processes = parse_process_output(rows);
-
-    assert_eq!(processes.len(), 1);
-    assert_eq!(processes[0].command_line, "awk\twith\ttabs");
-}
-
-#[test]
-fn process_parser_detects_unsupported_marker() {
-    assert!(is_process_list_unsupported(
-        "warning\nNYATERM_PROCESS_UNSUPPORTED\n"
-    ));
-    assert!(!is_process_list_unsupported(
-        "PROCESS\t1\t0\troot\tS\t0\t0\t0\t0\t-\tsh\tsh\n"
-    ));
-}
-
-#[test]
-fn process_signal_normalization_matches_legacy_allowlist() {
-    assert_eq!(normalize_process_signal("sigterm").unwrap(), "TERM");
-    assert_eq!(normalize_process_signal("9").unwrap(), "KILL");
-    assert_eq!(normalize_process_signal("cont").unwrap(), "CONT");
-    assert!(normalize_process_signal("USR1").is_err());
 }
 
 #[test]
@@ -2948,9 +2877,9 @@ fn serial_writer_does_not_flush_on_windows() {
         }
     }
     let policy = if cfg!(windows) {
-        crate::WriterFlushPolicy::serial()
+        crate::transport_io::WriterFlushPolicy::serial()
     } else {
-        crate::WriterFlushPolicy::Never
+        crate::transport_io::WriterFlushPolicy::Never
     };
     let (tx, rx) = mpsc::channel();
     let mut writer = QueuedTransportWriter::spawn(
@@ -2975,8 +2904,8 @@ fn bash_prompt_hooks_do_not_leak_into_child_shells() {
         super::ShellIntegrationMode::CwdOnly,
     ] {
         let script = super::ssh_shell_injection_script(
-            super::ShellKind::Bash,
-            &super::build_ssh_ready_marker("child-shell"),
+            crate::ssh_shell_integration::ShellKind::Bash,
+            &crate::ssh_shell_integration::build_ssh_ready_marker("child-shell"),
             mode,
         )
         .unwrap();
@@ -3027,8 +2956,8 @@ fn bash_exported_arrays_and_readonly_prompt_commands_preserve_user_hooks() {
                 return;
             };
             let script = super::ssh_shell_injection_script(
-                super::ShellKind::Bash,
-                &super::build_ssh_ready_marker("array-prompt"),
+                crate::ssh_shell_integration::ShellKind::Bash,
+                &crate::ssh_shell_integration::build_ssh_ready_marker("array-prompt"),
                 mode,
             )
             .unwrap();
@@ -3123,7 +3052,7 @@ impl Write for TimedWriteCapture {
 fn test_telnet_writer<W: Write + Send + 'static>(
     output: W,
     interval: Option<Duration>,
-    flush_policy: crate::WriterFlushPolicy,
+    flush_policy: crate::transport_io::WriterFlushPolicy,
     events: SessionEventQueue,
 ) -> QueuedTransportWriter {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3134,9 +3063,9 @@ fn test_telnet_writer<W: Write + Send + 'static>(
         output,
         flush_policy,
         events,
-        Some(crate::TelnetWriterPolicy {
+        Some(crate::transport_io::TelnetWriterPolicy {
             idle_interval: interval,
-            lifecycle: Arc::new(crate::TelnetWriterLifecycle {
+            lifecycle: Arc::new(crate::transport_io::TelnetWriterLifecycle {
                 stopped: std::sync::atomic::AtomicBool::new(false),
                 stream,
             }),
@@ -3153,7 +3082,7 @@ fn telnet_writer_waits_a_full_interval_between_raw_nops() {
     let mut writer = test_telnet_writer(
         TimedWriteCapture(tx),
         Some(interval),
-        crate::WriterFlushPolicy::EachByte,
+        crate::transport_io::WriterFlushPolicy::EachByte,
         SessionEventQueue::new(),
     );
     let (first, first_at) = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -3178,7 +3107,7 @@ fn telnet_writer_resets_idle_after_application_control_and_login_sends() {
     let mut writer = test_telnet_writer(
         TimedWriteCapture(tx),
         Some(interval),
-        crate::WriterFlushPolicy::EachByte,
+        crate::transport_io::WriterFlushPolicy::EachByte,
         SessionEventQueue::new(),
     );
     let mut last_sent_at = Instant::now();
@@ -3212,7 +3141,7 @@ fn telnet_writer_empty_commands_do_not_reset_idle() {
     let mut writer = test_telnet_writer(
         TimedWriteCapture(tx),
         Some(Duration::from_millis(500)),
-        crate::WriterFlushPolicy::AfterWrite,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
         SessionEventQueue::new(),
     );
     assert!(matches!(
@@ -3234,7 +3163,7 @@ fn telnet_writer_without_keepalive_blocks_until_close() {
     let mut writer = test_telnet_writer(
         TimedWriteCapture(tx),
         None,
-        crate::WriterFlushPolicy::AfterWrite,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
         SessionEventQueue::new(),
     );
     assert!(matches!(
@@ -3264,7 +3193,7 @@ fn telnet_writer_failure_reports_error_and_stops_lifecycle() {
     let mut writer = test_telnet_writer(
         FailingWriter,
         Some(Duration::from_millis(20)),
-        crate::WriterFlushPolicy::AfterWrite,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
         events.clone(),
     );
     wait_for_queue_state(
@@ -3424,7 +3353,7 @@ fn telnet_slow_write_starts_a_new_idle_interval_instead_of_catching_up() {
             release: Some(release_rx),
         },
         Some(interval),
-        crate::WriterFlushPolicy::AfterWrite,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
         SessionEventQueue::new(),
     );
     writer.write(b"x".to_vec()).unwrap();
@@ -3547,7 +3476,7 @@ fn transfer_backpressure_retries_without_reordering_and_is_cancellable() {
                 release_rx,
                 output: output.clone(),
             },
-            crate::WriterFlushPolicy::Never,
+            crate::transport_io::WriterFlushPolicy::Never,
             SessionEventQueue::new(),
         )
         .unwrap();

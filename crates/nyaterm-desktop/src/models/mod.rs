@@ -14,7 +14,7 @@ mod remote;
 mod security;
 mod session;
 mod session_event_bridge;
-mod terminal;
+pub(crate) mod terminal;
 mod transfer_preview;
 mod transfer_ui;
 mod transfers;

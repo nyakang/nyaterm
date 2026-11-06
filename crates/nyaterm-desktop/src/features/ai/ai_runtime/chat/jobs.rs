@@ -146,7 +146,11 @@ impl NyaTermApp {
             action,
             user_input: request_prompt.clone(),
             context,
-            options: Default::default(),
+            options: nyaterm_core::AiRequestOptions {
+                language: crate::i18n::normalize_locale(&self.settings.summary().language)
+                    .into_owned(),
+                ..Default::default()
+            },
         };
         let external_agent = matches!(
             request.agent_kind,
@@ -194,15 +198,24 @@ impl NyaTermApp {
         };
         let before = self.ai_header_presentation();
         let store = self.store_blocking_client();
-        let launch =
-            self.ai
-                .begin_chat_request(request_prompt, mode.clone(), source_label.as_deref());
+        let launch = self.ai.begin_chat_request_with_language(
+            request_prompt,
+            mode.clone(),
+            source_label.as_deref(),
+            request.options.language.clone(),
+        );
         self.reset_text_input("ai.chat.prompt", "", cx);
         let mut agent_history = None;
         if request.mode == AiMode::Agent && request.agent_kind == AiAgentKind::Nyaterm {
             self.ai.begin_native_run(request.clone());
             request.options.agent_context = self.ai.native_request_context();
             agent_history = self.ai.native_initial_history();
+        }
+        if request.agent_kind == AiAgentKind::Nyaterm {
+            self.launch_native_chat(request, launch, agent_history, true, cx);
+            self.defer_ai_panel_snapshot_flush(cx);
+            self.notify_root_if_ai_header_changed(before, cx);
+            return;
         }
         let job_id = launch.job_id;
         let cancel = launch.cancel;
@@ -730,7 +743,7 @@ impl NyaTermApp {
 
     /// Apply an edit from the AI prompt box.
     pub(in crate::features) fn apply_ai_prompt(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.ai.chat_or_agent_is_running() || !self.ai.settings_enabled() {
+        if !self.ai.settings_enabled() {
             return;
         }
         self.ai.set_chat_prompt_draft(text);
@@ -747,29 +760,9 @@ impl NyaTermApp {
         };
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.next().await {
-                let stream_event = matches!(
-                    &event,
-                    AiChatWorkerEvent::Delta { .. } | AiChatWorkerEvent::AgentToolCallDelta { .. }
-                );
                 if this
                     .update(cx, |this, cx| {
-                        let before = this.ai_header_presentation();
-                        let Some(scope) = this.ai.scope_for_ai_session(event.session_id()) else {
-                            return;
-                        };
-                        let visible_scope = this.ai.active_scope_key().to_string();
-                        this.ai.switch_scope(&scope);
-                        let dirty =
-                            this.ai.chat_event_is_wanted() && this.apply_ai_chat_event(event, cx);
-                        this.ai.switch_scope(&visible_scope);
-                        if dirty && scope == visible_scope {
-                            if stream_event {
-                                this.schedule_ai_stream_refresh(cx);
-                            } else {
-                                this.flush_ai_panel_snapshot(cx);
-                            }
-                            this.notify_root_if_ai_header_changed(before, cx);
-                        }
+                        this.dispatch_ai_chat_event(event, cx);
                     })
                     .is_err()
                 {
@@ -778,6 +771,33 @@ impl NyaTermApp {
             }
         })
         .detach();
+    }
+
+    pub(in crate::features) fn dispatch_ai_chat_event(
+        &mut self,
+        event: AiChatWorkerEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let stream_event = matches!(
+            &event,
+            AiChatWorkerEvent::Delta { .. } | AiChatWorkerEvent::AgentToolCallDelta { .. }
+        );
+        let before = self.ai_header_presentation();
+        let Some(scope) = self.ai.scope_for_ai_session(event.session_id()) else {
+            return;
+        };
+        let visible_scope = self.ai.active_scope_key().to_string();
+        self.ai.switch_scope(&scope);
+        let dirty = self.ai.chat_event_is_wanted() && self.apply_ai_chat_event(event, cx);
+        self.ai.switch_scope(&visible_scope);
+        if dirty && scope == visible_scope {
+            if stream_event {
+                self.schedule_ai_stream_refresh(cx);
+            } else {
+                self.flush_ai_panel_snapshot(cx);
+            }
+            self.notify_root_if_ai_header_changed(before, cx);
+        }
     }
 
     pub(in crate::features) fn schedule_ai_stream_refresh(&mut self, cx: &mut Context<Self>) {
@@ -836,6 +856,9 @@ impl NyaTermApp {
             }
             AiChatWorkerEvent::AgentProtocolFallback { job_id, .. } => {
                 dirty = self.ai.apply_agent_protocol_fallback(job_id);
+            }
+            AiChatWorkerEvent::AgentProtocolRepair { job_id, .. } => {
+                dirty = self.ai.apply_agent_protocol_repair(job_id);
             }
             AiChatWorkerEvent::Finished(event) => {
                 let native_call = event

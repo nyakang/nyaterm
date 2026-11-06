@@ -406,6 +406,10 @@ pub(crate) struct ConnectionEditorState {
 }
 
 impl ConnectionEditorState {
+    pub(crate) fn uses_mstsc_rdp(&self) -> bool {
+        self.kind == ConnectionKindTab::Rdp && self.rdp_backend == "mstsc"
+    }
+
     pub(crate) fn uses_windows_rdp(&self) -> bool {
         matches!(self.rdp_backend.as_str(), "windows" | "active-x")
     }
@@ -551,6 +555,8 @@ pub(crate) struct TranslationDialogState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommandSuggestionItem {
+    pub(crate) fillable: bool,
+    pub(crate) description: String,
     pub(crate) command: String,
     pub(crate) display: String,
     pub(crate) source: String,
@@ -560,6 +566,9 @@ pub(crate) struct CommandSuggestionItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommandSuggestionState {
+    pub(crate) mode: nyaterm_core::completion::types::CompletionMode,
+    pub(crate) completion_revision: u64,
+    pub(crate) scope: Option<nyaterm_core::completion::types::CompletionScope>,
     pub(crate) session_id: String,
     pub(crate) input_version: u64,
     pub(crate) sync_revision: u64,

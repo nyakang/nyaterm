@@ -27,6 +27,7 @@ mod app_settings;
 mod cloud_sync;
 mod cloud_sync_v4;
 mod command_history;
+mod completion_history;
 mod config_backup;
 mod keyword_highlights;
 mod known_hosts;
@@ -145,6 +146,8 @@ pub enum StorageError {
     Transaction(#[from] redb::TransactionError),
     #[error("redb commit error: {0}")]
     Commit(#[from] redb::CommitError),
+    #[error("completion history error: {0}")]
+    CompletionHistory(&'static str),
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("portable snapshot error: {0}")]
@@ -196,6 +199,7 @@ pub struct ConnectionStore {
     db: Database,
     db_path: PathBuf,
     portable_key_path: Option<PathBuf>,
+    completion_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -232,8 +236,10 @@ impl ConnectionStore {
             db,
             db_path,
             portable_key_path,
+            completion_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         store.ensure_tables()?;
+        store.initialize_completion_history()?;
         store.ensure_portable_key()?;
         store.migrate_legacy_panel_visibility()?;
         store.migrate_legacy_rdp_known_hosts()?;
@@ -626,6 +632,37 @@ impl ConnectionStore {
         Ok(())
     }
 
+    /// Update only an automatically detected icon, preserving concurrent user
+    /// edits, unknown fields, timestamps and the separately stored password.
+    pub fn update_auto_detected_connection_icon(
+        &self,
+        connection_id: &str,
+        icon: &str,
+    ) -> Result<bool, StorageError> {
+        let txn = self.db.begin_write()?;
+        let key = entity_key(CONNECTION_PREFIX, connection_id);
+        let mut value: serde_json::Value = {
+            let table = txn.open_table(CONNECTIONS_TABLE)?;
+            let Some(raw) = table.get(key.as_str())? else {
+                return Ok(false);
+            };
+            deserialize_json(raw.value())?
+        };
+        let connection: SavedConnection = serde_json::from_value(value.clone())?;
+        if !matches!(connection.config, ConnectionType::Ssh { .. })
+            || connection.ssh_profile == nyaterm_core::SshProfile::NetworkDevice
+            || !connection.icon_auto_detect_enabled()
+            || connection.icon.as_deref() == Some(icon)
+        {
+            return Ok(false);
+        }
+        value["icon"] = serde_json::Value::String(icon.to_string());
+        value["icon_auto_detect"] = serde_json::Value::Bool(true);
+        write_json_in_txn(&txn, CONNECTIONS_TABLE, &key, &value)?;
+        txn.commit()?;
+        Ok(true)
+    }
+
     /// Merges a monitoring-derived asset patch into one connection atomically.
     ///
     /// Reads the stored connection, applies [`AssetMetadata::merge_monitoring_patch`],
@@ -910,6 +947,7 @@ impl ConnectionStore {
         txn.open_table(VNC_KNOWN_HOSTS_TABLE)?;
         txn.open_table(PORTABLE_OPAQUE_ENTITIES_TABLE)?;
         txn.open_table(COMMAND_HISTORY_TABLE)?;
+        txn.open_table(completion_history::COMPLETION_HISTORY_TABLE)?;
         txn.open_table(NOTE_FOLDERS_TABLE)?;
         txn.open_table(NOTES_TABLE)?;
         txn.open_table(NOTE_SUMMARIES_TABLE)?;

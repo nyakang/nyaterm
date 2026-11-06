@@ -3,12 +3,32 @@ use nyaterm_ui::notification::NyaNotificationKind;
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::state::TerminalSelectionTextStatus;
+use crate::models::terminal::TerminalSelectionTextResult;
 use crate::models::{TerminalSelection, TerminalSelectionTextError};
 
 #[cfg(test)]
 mod tests;
 
 impl NyaTermApp {
+    pub(in crate::features) fn reanchor_terminal_selection_for_session(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(history) = self
+            .terminal
+            .view
+            .views
+            .get(session_id)
+            .map(|view| view.history_state())
+        else {
+            return;
+        };
+        if self.terminal.selection.advance_history(session_id, history) {
+            self.ensure_terminal_selection_text(cx);
+        }
+    }
+
     pub(in crate::features) fn terminal_has_selection_for_session(&self, session_id: &str) -> bool {
         self.terminal
             .selection
@@ -24,6 +44,16 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn ensure_terminal_selection_text(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.terminal.selection.session_id.clone()
+            && let Some(history) = self
+                .terminal
+                .view
+                .views
+                .get(&id)
+                .map(|view| view.history_state())
+        {
+            self.terminal.selection.advance_history(&id, history);
+        }
         let Some(selection) = self
             .terminal
             .selection
@@ -45,7 +75,7 @@ impl NyaTermApp {
         if self.terminal.selection.text.key.as_ref() == Some(&key) {
             return;
         }
-        self.terminal.selection.text.invalidate();
+        self.terminal.selection.text.invalidate_preserving_copy();
         // Small selections keep the snapshot fast path. Large ranges are read only
         // on the frame worker; never rebuild the entire UI-side history here.
         let immediate = self.selected_terminal_text();
@@ -71,6 +101,10 @@ impl NyaTermApp {
         }
         if let Some(text) = immediate {
             self.terminal.selection.text.status = TerminalSelectionTextStatus::Ready(Some(text));
+            if let Some(feedback) = self.terminal.selection.text.pending_copy.take() {
+                self.copy_terminal_selection_with_feedback(feedback, cx);
+                self.terminal.selection.text.deferred_copy_completed = true;
+            }
             return;
         }
         let Some(history) = history else {
@@ -92,35 +126,108 @@ impl NyaTermApp {
                 self.terminal
                     .view
                     .frame_pipeline
-                    .request_selection_text(session_id, selection, history),
+                    .request_selection_text_frame(session_id, selection, history),
             )
         };
         self.terminal.selection.text.task = Some(cx.spawn(async move |this, cx| {
             let result = match response {
-                futures::future::Either::Left(response) => response.await.map(Ok),
+                futures::future::Either::Left(response) => response.await.map(|text| {
+                    Ok(TerminalSelectionTextResult {
+                        text,
+                        selection,
+                        history,
+                    })
+                }),
                 futures::future::Either::Right(response) => response.await,
             }
             .unwrap_or(Err(TerminalSelectionTextError::WorkerUnavailable));
-            let _ = this.update(cx, |this, cx| {
-                if this.terminal.selection.text.generation != generation
-                    || this.terminal.selection.text.key.as_ref() != Some(&key)
-                    || !this.terminal_has_selection_for_session(&key.0)
-                    || this.terminal.selection.selection != Some(key.1)
-                {
-                    return;
+            let mut result = Some(result);
+            loop {
+                let complete = this
+                    .update(cx, |this, cx| {
+                        let current = this
+                            .terminal
+                            .view
+                            .views
+                            .get(&key.0)
+                            .map(|view| view.history_state())
+                            .unwrap_or(history);
+                        let expected = if selection.all_buffer {
+                            Some(selection)
+                        } else {
+                            selection.reanchored_history(history, current)
+                        };
+                        if this.terminal.selection.text.generation != generation
+                            || !this.terminal_has_selection_for_session(&key.0)
+                            || (expected.is_some() && this.terminal.selection.selection != expected)
+                        {
+                            return true;
+                        }
+                        if let Some(Ok(frame)) = result.as_ref()
+                            && !frame.selection.all_buffer
+                            && current.changes_since(frame.history).is_none()
+                            && frame.history.changes_since(current).is_some()
+                        {
+                            // A priority copy can overtake coalesced output frames. Wait
+                            // for its history without reissuing or rereading the text.
+                            if let Some(view) = this.terminal.view.views.get_mut(&key.0)
+                                && view.pending_snapshot_offsets.insert(0)
+                            {
+                                this.terminal.view.frame_pipeline.request_anchored_snapshot(
+                                    key.0.clone(),
+                                    0,
+                                    current,
+                                    false,
+                                    this.settings
+                                        .summary()
+                                        .terminal_action_links_matchers
+                                        .clone(),
+                                    true,
+                                );
+                            }
+                            this.drain_terminal_frame_events_for_input_wake(cx);
+                            return false;
+                        }
+                        this.terminal.selection.text.task = None;
+                        if expected.is_none() {
+                            result = Some(Err(TerminalSelectionTextError::StaleHistory));
+                        }
+                        match result.take().expect("selection response committed once") {
+                            Ok(frame) => {
+                                let effective = if frame.selection.all_buffer {
+                                    Some(frame.selection)
+                                } else {
+                                    frame.selection.reanchored_history(frame.history, current)
+                                };
+                                if effective != expected {
+                                    this.terminal.selection.text.invalidate_preserving_copy();
+                                    this.ensure_terminal_selection_text(cx);
+                                    return true;
+                                }
+                                this.terminal.selection.text.status =
+                                    TerminalSelectionTextStatus::Ready(frame.text);
+                            }
+                            Err(error) => {
+                                this.terminal.selection.text.status =
+                                    TerminalSelectionTextStatus::Failed(error)
+                            }
+                        }
+                        if let Some(feedback) = this.terminal.selection.text.pending_copy.take() {
+                            this.copy_terminal_selection_with_feedback(feedback, cx);
+                            this.terminal.selection.text.deferred_copy_completed = true;
+                        }
+                        this.schedule_terminal_selected_occurrence_search(cx);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(true);
+                if complete {
+                    break;
                 }
-                this.terminal.selection.text.task = None;
-                this.terminal.selection.text.status = match result {
-                    Ok(text) => TerminalSelectionTextStatus::Ready(text),
-                    Err(error) => TerminalSelectionTextStatus::Failed(error),
-                };
-                if let Some(feedback) = this.terminal.selection.text.pending_copy.take() {
-                    this.copy_terminal_selection_with_feedback(feedback, cx);
-                    this.terminal.selection.text.deferred_copy_completed = true;
-                }
-                this.schedule_terminal_selected_occurrence_search(cx);
-                cx.notify();
-            });
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+            }
         }));
     }
 
@@ -136,8 +243,10 @@ impl NyaTermApp {
     ) {
         if !self.terminal.selection.text.deferred_copy_completed
             && self.terminal.selection.text.generation == generation
-            && self.terminal.selection.text.key.as_ref() == Some(key)
-            && self.terminal.selection.selection == Some(key.1)
+            // A coordinate-only rebase preserves the logical request generation.
+            && self.terminal.selection.text.key.as_ref().is_some_and(|(id, cached)| {
+                id == &key.0 && self.terminal.selection.selection == Some(*cached)
+            })
             && self.terminal_has_selection_for_session(&key.0)
         {
             self.copy_terminal_selection_with_feedback(true, cx);

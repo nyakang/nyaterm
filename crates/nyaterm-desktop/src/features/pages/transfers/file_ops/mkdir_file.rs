@@ -1,13 +1,11 @@
-use rust_i18n::t;
-
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus, TransferNewFileState, TransferNewFolderState,
 };
 use gpui::{Context, Window};
-
-use nyaterm_transport::file_browser_join;
+use nyaterm_files::file_browser::file_browser_join;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_transfer_new_folder_dialog(
@@ -82,7 +80,7 @@ impl NyaTermApp {
         let backend = self
             .session
             .active_file_browser_backend()
-            .unwrap_or(nyaterm_transport::FileBrowserBackendKind::Remote);
+            .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         let remote_path = file_browser_join(backend, &state.parent_path, &name);
         self.start_sftp_mkdir_job(
             remote_path,
@@ -248,7 +246,7 @@ impl NyaTermApp {
         let backend = self
             .session
             .active_file_browser_backend()
-            .unwrap_or(nyaterm_transport::FileBrowserBackendKind::Remote);
+            .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         let remote_path = file_browser_join(backend, &state.parent_path, &name);
         self.start_sftp_create_file_job(
             remote_path,

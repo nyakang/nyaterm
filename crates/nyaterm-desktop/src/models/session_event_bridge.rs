@@ -525,10 +525,12 @@ fn bridge_event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
+        | SessionEvent::CommandContext { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
         | SessionEvent::Exited { session_id, .. }
         | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::TmuxState { session_id, .. }
+        | SessionEvent::Notice { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }
@@ -550,10 +552,12 @@ impl SessionEventBridgeQueue {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
+                | SessionEvent::Notice { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id.as_str()) {
@@ -657,10 +661,12 @@ impl SessionEventBridgeQueueInner {
             SessionEvent::OutputBoundary { .. }
             | SessionEvent::OutputDropped { .. }
             | SessionEvent::CwdChanged { .. }
+            | SessionEvent::CommandContext { .. }
             | SessionEvent::CommandAccepted { .. }
             | SessionEvent::Exited { .. }
             | SessionEvent::CleanupFailed { .. }
             | SessionEvent::TmuxState { .. }
+            | SessionEvent::Notice { .. }
             | SessionEvent::Error { .. } => {}
         }
         self.events.push_back(event);
@@ -715,10 +721,12 @@ impl SessionEventBridgeQueueInner {
                 }
                 SessionEvent::OutputBoundary { .. }
                 | SessionEvent::CwdChanged { .. }
+                | SessionEvent::CommandContext { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::TmuxState { .. }
+                | SessionEvent::Notice { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -891,6 +899,10 @@ fn bridge_route_event(
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             state.push_ui_event(&mut control, event);
         }
+        event @ SessionEvent::CommandContext { .. } => {
+            flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
+            state.push_ui_event(&mut control, event);
+        }
         SessionEvent::CwdChanged { session_id, cwd } => {
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             state.push_ui_event(&mut control, SessionEvent::CwdChanged { session_id, cwd });
@@ -912,6 +924,10 @@ fn bridge_route_event(
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             sideband_probe_sessions.remove(&session_id);
             state.push_ui_event(&mut control, SessionEvent::Exited { session_id, reason });
+        }
+        event @ SessionEvent::Notice { .. } => {
+            flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
+            state.push_ui_event(&mut control, event);
         }
         event @ SessionEvent::CleanupFailed { .. } => {
             state.push_ui_event(&mut control, event);
@@ -1727,5 +1743,47 @@ mod tests {
             "s2",
             now + SESSION_EVENT_BRIDGE_SIDEBAND_PROBE_WINDOW + Duration::from_millis(1)
         ));
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::SessionEventBridgeQueue;
+    use nyaterm_transport::SessionEvent;
+    use nyaterm_transport::session_notice::SessionNotice;
+
+    #[test]
+    fn notice_stays_ordered_between_outputs_and_moves_without_byte_accounting() {
+        let queue = SessionEventBridgeQueue::new();
+        queue.push(SessionEvent::Output {
+            session_id: "s1".into(),
+            data: b"before".to_vec(),
+        });
+        queue.push(SessionEvent::Notice {
+            session_id: "s1".into(),
+            notice: SessionNotice::X11ForwardingDenied,
+        });
+        queue.push(SessionEvent::Output {
+            session_id: "s1".into(),
+            data: b"after".to_vec(),
+        });
+        assert_eq!(queue.queued_output_bytes(), 11);
+        let moved = queue.take_sessions(&["s1".into()]);
+        assert!(matches!(moved[0], SessionEvent::Output { .. }));
+        assert!(matches!(moved[1], SessionEvent::Notice { .. }));
+        assert!(matches!(moved[2], SessionEvent::Output { .. }));
+        assert_eq!(queue.queued_output_bytes(), 0);
+    }
+
+    #[test]
+    fn notice_drains_with_zero_output_budget() {
+        let queue = SessionEventBridgeQueue::new();
+        queue.push(SessionEvent::Notice {
+            session_id: "s1".into(),
+            notice: SessionNotice::TmuxControlUnconfirmed,
+        });
+        let drain = queue.drain_with_output_budget(1, 0);
+        assert!(matches!(drain.events[0], SessionEvent::Notice { .. }));
+        assert_eq!(drain.stats.drained_ui_output_bytes, 0);
     }
 }

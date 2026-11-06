@@ -1,11 +1,3 @@
-use std::sync::Arc;
-
-use nyaterm_transport::{
-    DockerContainer, DockerContainerDetails, DockerImage, NetworkInfo, NetworkSummaryInfo,
-    RemoteDockerOverview, RemoteGpu, RemoteGpuOverview, RemoteGpuProcess, RemoteNpu,
-    RemoteNpuOverview, RemoteNpuProcess, RemoteProcess, RemoteStats,
-};
-
 use super::{
     AcceleratorProcessList, DockerDerivedItems, ProcessApplyOutcome, RemoteOpsFeatureFocus,
     RemoteOpsFeatureState, StatsApplyOutcome,
@@ -15,6 +7,14 @@ use crate::features::runtime_jobs::{
     DockerResource, ProcessJobOutput, ProcessJobResult, StatsJobResult,
 };
 use crate::models::{DockerTab, RemoteProcessSortKey};
+use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview, RemoteNpuProcess};
+use nyaterm_remote_ops::docker::{
+    DockerContainer, DockerContainerDetails, DockerImage, RemoteDockerOverview,
+};
+use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview, RemoteGpuProcess};
+use nyaterm_remote_ops::remote_process::RemoteProcess;
+use nyaterm_remote_ops::stats::{NetworkInfo, NetworkSummaryInfo, RemoteStats};
+use std::sync::Arc;
 
 fn process(pid: u32) -> RemoteProcess {
     RemoteProcess {
@@ -324,7 +324,7 @@ fn docker_summary_disables_compose_without_dropping_other_resource_caches() {
         ..Default::default()
     });
     state.apply_docker_resource(DockerResource::Compose(vec![
-        nyaterm_transport::DockerComposeProject {
+        nyaterm_remote_ops::docker::DockerComposeProject {
             name: "project".to_string(),
             status: "running".to_string(),
             config_files: "/compose.yml".to_string(),
@@ -669,7 +669,7 @@ fn accelerator_owner_caches_unavailable_sessions_until_success() {
 
     state.apply_gpu(
         session_id,
-        nyaterm_transport::RemoteGpuOverview {
+        nyaterm_remote_ops::gpu::RemoteGpuOverview {
             available: false,
             ..Default::default()
         },
@@ -682,7 +682,7 @@ fn accelerator_owner_caches_unavailable_sessions_until_success() {
 
     state.apply_gpu(
         session_id,
-        nyaterm_transport::RemoteGpuOverview {
+        nyaterm_remote_ops::gpu::RemoteGpuOverview {
             available: true,
             ..Default::default()
         },

@@ -3,13 +3,16 @@ use std::sync::Arc;
 use gpui::AppContext as _;
 
 use nyaterm_core::test_support::TestTempDir;
-use nyaterm_core::{SavedConnection, SavedPassword};
+use nyaterm_core::{SavedConnection, SavedPassword, SshKey};
 use nyaterm_store::ConnectionStore;
 use nyaterm_transport::connection_attempt::ConnectionAttempt;
 use nyaterm_transport::ssh_authentication::{
     SshAuthenticationMaterial, SshAuthenticationMethod, SshAuthenticationRequest,
+    SshAuthenticationStage,
 };
-use nyaterm_transport::{SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason};
+use nyaterm_transport::{
+    SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason, SshKeyAuthConfig,
+};
 use serde_json::json;
 
 use super::prepare_response;
@@ -31,6 +34,8 @@ fn request() -> SshAuthenticationRequest {
             echo: false,
         },
         available_methods: vec![SshAuthenticationMethod::Password],
+        stage: Default::default(),
+        accepted_response_ids: Vec::new(),
         key_response_id: None,
     }
 }
@@ -152,6 +157,257 @@ fn unavailable_selection_keeps_the_form_and_does_not_prepare_a_save() {
     assert!(prepare_response(&store, &form, "".into()).is_err());
     assert_eq!(form.password_id.as_deref(), Some("deleted-account"));
     assert!(!form.remember);
+}
+
+#[test]
+fn additional_password_never_prepares_a_save_or_changes_key_or_agent_mode() {
+    for mode in ["key", "agent"] {
+        for saved_password in [false, true] {
+            let (_dir, store) = store();
+            let mut connection = store.get_connection("fixture").unwrap().unwrap();
+            connection.auth.as_mut().unwrap().mode = mode.into();
+            connection.auth.as_mut().unwrap().key_id = Some("original-key".into());
+            store.save_connection(&connection).unwrap();
+            let original =
+                serde_json::to_value(store.get_connection("fixture").unwrap().unwrap()).unwrap();
+            let account_id = store
+                .save_password(SavedPassword {
+                    id: String::new(),
+                    name: "account".into(),
+                    username: "other-user".into(),
+                    password: Some("account secret".into()),
+                    sort_order: 0,
+                    has_password: false,
+                })
+                .unwrap();
+            let context = Arc::new(RuntimeAuthenticationContext::new(
+                Some(store.runtime_connection_snapshot("fixture").unwrap()),
+                None,
+                None,
+                None,
+                ConnectionAttempt::default(),
+            ));
+            let mut additional = request();
+            additional.stage = SshAuthenticationStage::AdditionalFactor;
+            let mut form = RuntimeAuthenticationForm::new(additional, context.clone());
+            form.remember = true;
+            form.saved_password = saved_password;
+            form.password_id = Some(account_id);
+            assert!(!form.can_remember());
+            let (response, _, save) =
+                prepare_response(&store, &form, "session secret".into()).unwrap();
+            assert!(save.is_none());
+            let id = response.response_id.unwrap();
+            context
+                .remember_selection(id.clone(), None, None, save)
+                .unwrap();
+            assert!(context.finish(Some(&[id])).is_empty());
+            assert_eq!(
+                serde_json::to_value(store.get_connection("fixture").unwrap().unwrap()).unwrap(),
+                original
+            );
+        }
+    }
+}
+
+#[test]
+fn accepted_passphrase_survives_password_retries_and_is_saved_only_after_full_success() {
+    for succeeds in [false, true] {
+        let (_dir, store) = store();
+        let key_id = store
+            .save_ssh_key(SshKey {
+                id: String::new(),
+                name: "key".into(),
+                sort_order: 0,
+                key: Some("fixture-key-material".into()),
+                cert: None,
+                passphrase: None,
+                key_file_path: None,
+                cert_file_path: None,
+                has_key_data: false,
+                has_cert_data: false,
+            })
+            .unwrap();
+        let mut connection = store.get_connection("fixture").unwrap().unwrap();
+        connection.auth.as_mut().unwrap().mode = "key".into();
+        connection.auth.as_mut().unwrap().key_id = Some(key_id.clone());
+        store.save_connection(&connection).unwrap();
+        let original =
+            serde_json::to_value(store.get_connection("fixture").unwrap().unwrap()).unwrap();
+        let context = Arc::new(RuntimeAuthenticationContext::new(
+            Some(store.runtime_connection_snapshot("fixture").unwrap()),
+            None,
+            None,
+            None,
+            ConnectionAttempt::default(),
+        ));
+        context
+            .remember_selection(
+                "key-response".into(),
+                Some(key_id.clone()),
+                Some(SshKeyAuthConfig {
+                    key_data: "fixture-key-material".into(),
+                    cert_data: None,
+                    passphrase: None,
+                }),
+                None,
+            )
+            .unwrap();
+        let mut unlock = request();
+        unlock.prompt.kind = SshCredentialPromptKind::KeyPassphrase;
+        unlock.key_response_id = Some("key-response".into());
+        let mut form = RuntimeAuthenticationForm::new(unlock, context.clone());
+        form.remember = true;
+        let (response, _, save) =
+            prepare_response(&store, &form, "unlocked phrase".into()).unwrap();
+        assert!(save.is_some());
+        let phrase_id = response.response_id.unwrap();
+        context
+            .remember_selection(phrase_id.clone(), None, None, save)
+            .unwrap();
+        let accepted = vec!["key-response".into(), phrase_id];
+        for password in ["wrong password", "correct password"] {
+            context.begin_request(None, &accepted);
+            let mut additional = request();
+            additional.stage = SshAuthenticationStage::AdditionalFactor;
+            additional.accepted_response_ids = accepted.clone();
+            let form = RuntimeAuthenticationForm::new(additional, context.clone());
+            let (response, _, save) = prepare_response(&store, &form, password.into()).unwrap();
+            assert!(save.is_none());
+            context
+                .remember_selection(response.response_id.unwrap(), None, None, save)
+                .unwrap();
+            assert!(
+                store
+                    .load_decrypted_ssh_key_by_id(&key_id)
+                    .unwrap()
+                    .unwrap()
+                    .passphrase
+                    .is_none()
+            );
+        }
+        let saves = context.finish(succeeds.then_some(accepted.as_slice()));
+        assert_eq!(saves.len(), usize::from(succeeds));
+        for save in saves {
+            store.save_runtime_credential(save).unwrap();
+        }
+        assert_eq!(
+            store
+                .load_decrypted_ssh_key_by_id(&key_id)
+                .unwrap()
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            succeeds.then_some("unlocked phrase")
+        );
+        assert_eq!(
+            serde_json::to_value(store.get_connection("fixture").unwrap().unwrap()).unwrap(),
+            original
+        );
+        assert!(context.finish(Some(&accepted)).is_empty());
+    }
+}
+
+#[gpui::test]
+fn authentication_uses_and_remembers_credentials_without_unlocking_plaintext(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use nyaterm_store::StoreDomain;
+
+    use crate::features::session::CredentialPromptState;
+    use crate::features::session::runtime_auth::state::CredentialResponseSender;
+    use crate::features::test_support::{
+        app_with_visible_local_session, session_focus_test_window,
+    };
+
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-auth-without-plaintext-unlock");
+    let app = app_with_visible_local_session(cx, root.path(), "terminal");
+    let (snapshot, account_id) = app.update(cx, |app, _| {
+        let mut summary = app.settings.summary().clone();
+        summary.has_master_password = true;
+        app.settings.replace_summary(summary);
+        app.security.lock_secrets();
+        app.store_blocking_client()
+            .request_mutation_fn(StoreDomain::Security, |store| {
+                let connection: SavedConnection = serde_json::from_value(json!({
+                    "id":"fixture", "name":"fixture", "type":"ssh", "host":"localhost",
+                    "username":"actual-user", "auth":{"mode":"password"}
+                }))?;
+                store.save_connection(&connection)?;
+                let account_id = store.save_password(SavedPassword {
+                    id: String::new(),
+                    name: "account".into(),
+                    username: "actual-user".into(),
+                    password: Some("saved secret".into()),
+                    sort_order: 0,
+                    has_password: false,
+                })?;
+                Ok((store.runtime_connection_snapshot("fixture")?, account_id))
+            })
+            .unwrap()
+    });
+    let cx = session_focus_test_window(cx, &app);
+    for (saved_password, remember) in [(false, false), (false, true), (true, false), (true, true)] {
+        let context = Arc::new(RuntimeAuthenticationContext::new(
+            Some(snapshot.clone()),
+            None,
+            None,
+            None,
+            ConnectionAttempt::default(),
+        ));
+        let mut form = RuntimeAuthenticationForm::new(request(), context.clone());
+        form.saved_password = saved_password;
+        form.password_id = saved_password.then(|| account_id.clone());
+        form.remember = remember;
+        let (sender, submitted) = mpsc::channel();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.security_secrets_locked());
+                app.session
+                    .prompts
+                    .activate_credential(CredentialPromptState {
+                        id: "without-unlock".into(),
+                        prompt: form.request.prompt.clone(),
+                        response_tx: CredentialResponseSender::Authentication(sender),
+                        authentication: Some(form),
+                        value: if saved_password { "" } else { "entered secret" }.into(),
+                    });
+                app.submit_runtime_authentication(window, cx);
+                assert!(!app.security.unlock_prompt_open());
+            });
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let response = loop {
+            cx.run_until_parked();
+            if let Ok(response) = submitted.try_recv() {
+                break response.unwrap();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "authentication was not submitted"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let expected = if saved_password {
+            "saved secret"
+        } else {
+            "entered secret"
+        };
+        assert!(
+            matches!(response.material, SshAuthenticationMaterial::Password(ref p) if p == expected)
+        );
+        let saves = context.finish(Some(&[response.response_id.unwrap()]));
+        assert_eq!(saves.len(), usize::from(remember));
+        app.read_with(cx, |app, _| {
+            assert!(app.session.prompt_active_credential().is_none());
+            assert!(app.security_secrets_locked());
+            assert!(!app.security.unlock_prompt_open());
+        });
+    }
 }
 
 #[gpui::test]

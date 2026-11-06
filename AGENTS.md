@@ -26,9 +26,19 @@ must include explicit conversion logic and tests.
   independent of UI frameworks.
 * `crates/nyaterm-terminal-gpui`: GPUI-specific terminal layout, input,
   highlighting, images, and painting.
-* `crates/nyaterm-transport`: local PTY, SSH, Telnet, Serial, SFTP, tunnels,
-  remote operations, and transfer-protocol runtime. It must remain independent
-  of GPUI and desktop presentation types.
+* `crates/nyaterm-transport`: local PTY, SSH authentication and channels, Telnet,
+  Serial, tunnels, session lifecycle, tmux, and transfer-protocol runtime. It
+  exposes file-session probe injection and must not depend on the file,
+  recording, or remote-operations crates.
+* `crates/nyaterm-files`: local and remote file services, SFTP and shell file
+  backends, file revisions, path safety, and file-transfer policies.
+* `crates/nyaterm-remote-ops`: system metrics, process management, Docker, and
+  GPU/NPU operations over transport execution APIs. Docker state is shared by
+  the desktop SSH connection lease, not owned by transport.
+* `crates/nyaterm-recording`: recording, transcripts, rotation, and terminal
+  history search over the core and terminal contracts.
+* These four crates remain independent of GPUI and desktop presentation types;
+  the three business crates must not depend on each other.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
   integration boundary, and reusable NyaTerm presentation and interaction
   widgets.
@@ -105,7 +115,8 @@ For new or substantially changed features:
   `nyaterm-terminal`.
 * Keep terminal layout, GPUI input adapters, highlighting, image presentation,
   and painting in `nyaterm-terminal-gpui`.
-* Keep transport code independent of GPUI and desktop presentation types.
+* Keep transport, files, remote operations, and recording code independent of
+  GPUI and desktop presentation types.
 * Keep remote-desktop protocol and session logic in
   `nyaterm-remote-desktop`; keep GPUI presentation in `nyaterm-desktop`.
 * Keep protocol decoders that parse server-controlled bytes in the helper
@@ -285,8 +296,9 @@ Add tests beside the behavior being changed.
 
 * Terminal parsing, snapshots, graphics, selection, input, and rendering tests
   belong in `nyaterm-terminal` or `nyaterm-terminal-gpui`.
-* SSH, SFTP, Telnet, Serial, tunnel, transfer, and terminal-session lifecycle
-  tests belong in `nyaterm-transport`.
+* SSH, Telnet, Serial, tunnel, protocol transfer, and terminal-session lifecycle
+  tests belong in `nyaterm-transport`. File and SFTP tests belong in
+  `nyaterm-files`; operation and recording tests belong in their owning crates.
 * RDP/VNC protocol, framebuffer, input mapping, IPC, certificate, clipboard,
   and reconnect tests belong in `nyaterm-remote-desktop`, `nyaterm-rdp-helper`,
   or `nyaterm-vnc-helper`. Helper crates carry a `tests/lifecycle.rs` covering

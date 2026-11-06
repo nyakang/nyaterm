@@ -65,7 +65,7 @@ impl NyaTermApp {
         self.shell.set_status("screen unlocked".to_string());
         self.broadcast_screen_lock(false, cx);
         cx.spawn(async move |this, cx| {
-            let _ = this.update_in(cx, |this, window, cx| {
+            let _ = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
                 if !this.security.screen_locked() {
                     if let Some(focus) = restore_focus {
                         window.focus(&focus, cx);

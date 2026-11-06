@@ -1431,6 +1431,7 @@ fn rdp_backend_legacy_aliases_and_unknown_values_survive_editing() {
         (Some("builtin"), "builtin"),
         (Some("windows"), "windows"),
         (Some("active-x"), "windows"),
+        (Some("mstsc"), "mstsc"),
         (Some("future-engine"), "future-engine"),
     ] {
         let mut document = serde_json::json!({

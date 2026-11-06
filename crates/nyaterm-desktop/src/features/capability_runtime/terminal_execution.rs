@@ -1,29 +1,28 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
+use super::{CapabilityCaller, CapabilityRequest};
+use crate::features::NyaTermApp;
+use crate::features::mcp::server::rpc_failure;
+use crate::features::runtime_jobs::await_blocking_result;
+use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
+use crate::models::SessionLaunchConfig;
+use crate::models::recording::ExecutionRecordingEvent;
 use gpui::Context;
 use nyaterm_core::McpTerminalDisplayMode;
 use nyaterm_core::agent_capture::build_agent_capture_command;
 use nyaterm_core::models::connection::AiExecutionProfile;
 use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
 use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs, TerminalExecuteResult};
+use nyaterm_remote_ops::remote_process::SshProcessService;
 use nyaterm_terminal::agent_capture::{
     AgentCaptureProcessResult, AgentOutputCaptureProcessor, RetiredCaptureFilter,
 };
-use nyaterm_transport::{SessionKind, SshProcessService, SshSessionConfig, run_local_command};
+use nyaterm_transport::ssh_execution::run_local_command;
+use nyaterm_transport::{SessionKind, SshSessionConfig};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-
-use crate::features::NyaTermApp;
-use crate::features::runtime_jobs::await_blocking_result;
-use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
-use crate::models::SessionLaunchConfig;
-use crate::models::recording::ExecutionRecordingEvent;
-
-use super::{CapabilityCaller, CapabilityRequest};
-use crate::features::mcp::server::rpc_failure;
 
 enum BackgroundTerminalTarget {
     Ssh(Box<SshSessionConfig>),
@@ -400,8 +399,8 @@ impl NyaTermApp {
                 self.ai
                     .native_terminal_policy()
                     .unwrap_or(TerminalExecutionPolicy {
-                        background: self.ai.settings_config().agent_background_execution_enabled,
-                        max_lines: self.ai.settings_config().terminal_output_lines,
+                        background: self.ai.run_settings().agent_background_execution_enabled,
+                        max_lines: self.ai.run_settings().terminal_output_lines,
                     })
             }
             CapabilityCaller::Mcp => external_mcp_terminal_policy(
@@ -412,7 +411,7 @@ impl NyaTermApp {
         };
         let default_timeout = if matches!(&request.caller, CapabilityCaller::Native { .. }) {
             self.ai
-                .settings_config()
+                .run_settings()
                 .agent_step_timeout_ms
                 .unwrap_or(30_000)
         } else {

@@ -25,18 +25,7 @@ mod editor;
 mod preview;
 pub(in crate::features) use self::preview::{PdfPageRequest, TransferPreviewCloseOutcome};
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-use std::time::Instant;
-
-use gpui::{BackgroundExecutor, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
-use nyaterm_transport::{
-    SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpPathTransferOptions,
-    SftpTransferControl,
-};
-use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
-
+use super::external_sync_runtime::ExternalEditorWatcher;
 use crate::models::{
     TransferBrowserColumnResizeState, TransferBrowserColumnWidths, TransferBrowserContextTarget,
     TransferBrowserDragSelectionState, TransferBrowserFavoritesMenuState,
@@ -49,13 +38,19 @@ use crate::models::{
     TransferPreviewWorkspaceState, TransferPropertiesState, TransferRenameState,
     TransferUnknownFileState,
 };
-
-use super::external_sync_runtime::ExternalEditorWatcher;
 use crate::thread_owner::BackgroundCleanup;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use gpui::{BackgroundExecutor, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
+use nyaterm_files::sftp::{SftpFileEntry, SftpFileProperties, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{SftpDuplicatePolicy, SftpPathTransferOptions};
+use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Instant;
 
 struct TransferRetryContext {
     options: SftpPathTransferOptions,
-    source: Option<std::sync::Weak<nyaterm_transport::RemoteFileService>>,
+    source: Option<std::sync::Weak<nyaterm_files::remote_file::RemoteFileService>>,
 }
 
 pub(in crate::features) struct TransferFeatureState {
@@ -197,7 +192,7 @@ pub(super) struct TransferBrowserState {
     pub(super) pending_navigations: HashMap<String, TransferBrowserNavigationSnapshot>,
     pub(super) pending_cwd_sync: bool,
     #[cfg(test)]
-    pub(super) directory_requests: Option<Vec<(String, nyaterm_transport::RemoteFilePath)>>,
+    pub(super) directory_requests: Option<Vec<(String, nyaterm_files::sftp::RemoteFilePath)>>,
     pub(super) favorites: VecDeque<String>,
     pub(super) sort_column: TransferBrowserSortColumn,
     pub(super) sort_direction: TransferBrowserSortDirection,
@@ -577,7 +572,7 @@ impl TransferFeatureState {
         &mut self,
         job_id: &str,
         options: SftpPathTransferOptions,
-        source: std::sync::Weak<nyaterm_transport::RemoteFileService>,
+        source: std::sync::Weak<nyaterm_files::remote_file::RemoteFileService>,
     ) {
         self.path_options_by_job.insert(
             job_id.to_owned(),
@@ -591,7 +586,7 @@ impl TransferFeatureState {
     pub(in crate::features) fn promised_download_source(
         &self,
         job_id: &str,
-    ) -> Option<std::sync::Weak<nyaterm_transport::RemoteFileService>> {
+    ) -> Option<std::sync::Weak<nyaterm_files::remote_file::RemoteFileService>> {
         self.path_options_by_job
             .get(job_id)
             .and_then(|context| context.source.clone())

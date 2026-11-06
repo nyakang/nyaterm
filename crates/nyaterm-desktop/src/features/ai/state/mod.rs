@@ -34,8 +34,7 @@ use crate::features::{
     runtime_jobs::AiDiscoveryJobResult,
 };
 use crate::models::{
-    AiActionEditorField, AiActionListKind, AiDetectedErrorState, AiInputField, AiMessageMenuState,
-    AiPreparedRequest,
+    AiActionEditorField, AiActionListKind, AiDetectedErrorState, AiInputField, AiPreparedRequest,
 };
 
 pub(in crate::features) struct AiFeatureState {
@@ -106,6 +105,9 @@ pub(in crate::features) struct AiSettingsPersistenceCompletion {
 
 /// Composer, in-flight request and the visible transcript.
 struct AiChatState {
+    native_task: Option<crate::ai_runtime::AiTask>,
+    response_metadata: HashMap<String, nyaterm_core::ai::completion::AiResponseMetadata>,
+    provider_session: Option<Arc<crate::http::ai::AiProviderSession>>,
     tx: UnboundedSender<AiChatWorkerEvent>,
     /// Taken once by `NyaTermApp::start_ai_chat_event_drain`, which owns
     /// delivery from then on. `None` afterwards, so a second start is a no-op.
@@ -131,7 +133,6 @@ struct AiChatState {
     command_scripts_expanded: HashSet<String>,
     agent_history_expanded: bool,
     execution_groups_expanded: HashSet<String>,
-    message_menu: Option<AiMessageMenuState>,
     quoted_text: Option<String>,
     command_cards: Vec<AiCommandCard>,
     focus: FocusHandle,
@@ -154,6 +155,9 @@ impl AiChatState {
         Self {
             tx,
             rx: None,
+            native_task: None,
+            response_metadata: HashMap::new(),
+            provider_session: None,
             pending: false,
             job_id: 0,
             cancel: None,
@@ -175,7 +179,6 @@ impl AiChatState {
             command_scripts_expanded: HashSet::new(),
             agent_history_expanded: false,
             execution_groups_expanded: HashSet::new(),
-            message_menu: None,
             quoted_text: None,
             command_cards: Vec::new(),
             focus,
@@ -217,6 +220,8 @@ struct AiDiscoveryState {
 struct AiAgentState {
     native: Option<harness::NativeRunState>,
     task_prompt: Option<String>,
+    /// Legacy runs only; native runs own their language in NativeRunState::request.
+    task_language: Option<String>,
     conversation: Vec<AiMessage>,
     json_protocol: bool,
     step_index: u16,
@@ -231,6 +236,7 @@ impl AiAgentState {
         Self {
             native: None,
             task_prompt: None,
+            task_language: None,
             conversation: Vec::new(),
             json_protocol: false,
             step_index: 0,
@@ -267,6 +273,10 @@ pub(in crate::features) enum AiSettingsMutation {
 /// Panel chrome: status line, focus routing and the detected-error banner.
 struct AiPanelState {
     execution_menu_open: bool,
+    /// Agent runtime restored when the composer switches from Ask back to
+    /// Agent. Ask persists `Nyaterm` as the default kind, so this choice is
+    /// remembered for the process lifetime only.
+    last_agent_kind: AiAgentKind,
     status: String,
     focused_field: AiInputField,
     detected_error: Option<AiDetectedErrorState>,
@@ -281,6 +291,55 @@ fn non_empty(value: String) -> Option<String> {
 }
 
 impl AiFeatureState {
+    pub(in crate::features) fn cancel_removed_provider_runs(&mut self, config: &AiSettings) {
+        let visible = self.active_scope_key.clone();
+        let mut scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        scopes.push(visible.clone());
+        for scope in scopes {
+            self.switch_scope(&scope);
+            if self.chat.provider_session.as_ref().is_some_and(|session| {
+                !config.provider_credentials.iter().any(|credential| {
+                    credential.id == session.credential_id() && credential.enabled
+                })
+            }) {
+                self.cancel_chat_and_agent();
+                self.chat.provider_session = None;
+            }
+        }
+        self.switch_scope(&visible);
+    }
+    pub(in crate::features) fn run_settings(&self) -> &AiSettings {
+        self.chat
+            .provider_session
+            .as_ref()
+            .map(|session| &session.settings)
+            .unwrap_or(&self.settings.config)
+    }
+
+    pub(in crate::features) fn provider_session(
+        &mut self,
+        request: &nyaterm_core::ai::AiChatRequest,
+    ) -> Result<Arc<crate::http::ai::AiProviderSession>, String> {
+        if let Some(session) = &self.chat.provider_session {
+            return Ok(session.clone());
+        }
+        let session =
+            crate::http::ai::AiProviderSession::new(self.settings.config.clone(), request)
+                .map_err(|error| error.to_string())?;
+        self.chat.provider_session = Some(session.clone());
+        Ok(session)
+    }
+    pub(in crate::features) fn native_network_cancel(&self) -> tokio_util::sync::CancellationToken {
+        self.agent
+            .native
+            .as_ref()
+            .map(|native| native.cancellation.child_token())
+            .unwrap_or_default()
+    }
+    pub(in crate::features) fn own_native_task(&mut self, task: crate::ai_runtime::AiTask) {
+        self.chat.native_task = Some(task);
+    }
+
     pub(in crate::features) fn new(init: AiFeatureInit, focus: AiFeatureFocus) -> Self {
         let AiFeatureInit {
             settings,
@@ -295,6 +354,7 @@ impl AiFeatureState {
         let (_discovery_tx, discovery_rx) = unbounded();
         let default_mode = settings.default_mode.clone();
         let default_agent_kind = settings.default_agent_kind.clone();
+        let last_agent_kind_seed = default_agent_kind.clone();
         Self {
             settings: AiSettingsState {
                 providers: ProviderSettingsView::default(),
@@ -315,6 +375,9 @@ impl AiFeatureState {
                 pending_full_access: None,
             },
             chat: AiChatState {
+                native_task: None,
+                response_metadata: HashMap::new(),
+                provider_session: None,
                 tx: chat_tx,
                 rx: Some(chat_rx),
                 pending: false,
@@ -338,7 +401,6 @@ impl AiFeatureState {
                 command_scripts_expanded: HashSet::new(),
                 agent_history_expanded: false,
                 execution_groups_expanded: HashSet::new(),
-                message_menu: None,
                 quoted_text: None,
                 command_cards: Vec::new(),
                 focus: focus.chat,
@@ -375,6 +437,7 @@ impl AiFeatureState {
             agent_management: AgentManagementState::new(),
             panel: AiPanelState {
                 execution_menu_open: false,
+                last_agent_kind: last_agent_kind_seed,
                 status: "AI settings ready".to_string(),
                 focused_field: AiInputField::Model,
                 detected_error: None,
@@ -557,6 +620,17 @@ impl AiFeatureState {
         self.chat.pending || self.agent.loop_state.is_some() || self.agent.task_prompt.is_some()
     }
 
+    pub(in crate::features) fn chat_or_agent_is_running_in_scope(&self, scope: &str) -> bool {
+        if scope == self.active_scope_key {
+            return self.chat_or_agent_is_running();
+        }
+        self.inactive_scopes.get(scope).is_some_and(|state| {
+            state.chat.pending
+                || state.agent.loop_state.is_some()
+                || state.agent.task_prompt.is_some()
+        })
+    }
+
     pub(in crate::features) fn agent_task_is_active(&self) -> bool {
         self.agent.task_prompt.is_some()
     }
@@ -617,6 +691,18 @@ impl AiFeatureState {
         }
     }
 
+    /// The agent runtime to restore when switching from Ask to Agent, falling
+    /// back to NyaTerm when the remembered external runtime was disabled.
+    pub(in crate::features) fn last_agent_kind(&self) -> AiAgentKind {
+        match self.panel.last_agent_kind {
+            AiAgentKind::Codex if !self.settings.config.codex.enabled => AiAgentKind::Nyaterm,
+            AiAgentKind::ClaudeCode if !self.settings.config.claude_code.enabled => {
+                AiAgentKind::Nyaterm
+            }
+            ref kind => kind.clone(),
+        }
+    }
+
     pub(in crate::features) fn set_chat_run_mode(
         &mut self,
         mode: AiMode,
@@ -634,6 +720,7 @@ impl AiFeatureState {
         let kind = if mode == AiMode::Ask {
             AiAgentKind::Nyaterm
         } else {
+            self.panel.last_agent_kind = kind.clone();
             kind
         };
         self.settings.config.default_mode = mode.clone();
@@ -800,15 +887,28 @@ impl AiFeatureState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn begin_chat_request(
         &mut self,
         request_prompt: String,
         mode: AiMode,
         source_label: Option<&str>,
     ) -> AiChatLaunch {
+        self.begin_chat_request_with_language(request_prompt, mode, source_label, "en".into())
+    }
+
+    pub(in crate::features) fn begin_chat_request_with_language(
+        &mut self,
+        request_prompt: String,
+        mode: AiMode,
+        source_label: Option<&str>,
+        language: String,
+    ) -> AiChatLaunch {
+        self.agent.task_language = Some(language);
         if let Some(previous) = self.agent.native.take() {
             previous.cancellation.cancel();
         }
+        self.chat.provider_session = None;
         let launch = self.begin_chat_job();
         if mode == AiMode::Agent {
             self.agent.task_prompt = Some(request_prompt.clone());
@@ -872,7 +972,6 @@ impl AiFeatureState {
         }));
         self.chat.prompt_draft.clear();
         self.chat.quoted_text = None;
-        self.chat.message_menu = None;
         self.chat.close_mention();
         self.chat.streaming_assistant_id = Some(assistant_id);
         self.panel.status = if mode == AiMode::Agent {
@@ -886,7 +985,22 @@ impl AiFeatureState {
         launch
     }
 
+    pub(in crate::features) fn cancel_all_chats_and_agents(&mut self) {
+        // Switching/closing a terminal keeps its running conversation in an
+        // inactive scope. Every worker must see cancellation before pool join.
+        // Archived conversations cannot contain running jobs.
+        let visible = self.active_scope_key.clone();
+        let scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        self.cancel_chat_and_agent();
+        for scope in scopes {
+            self.switch_scope(&scope);
+            self.cancel_chat_and_agent();
+        }
+        self.switch_scope(&visible);
+    }
+
     pub(in crate::features) fn cancel_chat_and_agent(&mut self) {
+        self.chat.native_task = None;
         if let Some(native) = &mut self.agent.native {
             native.cancellation.cancel();
             native.run.cancel();
@@ -1022,6 +1136,23 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn apply_agent_protocol_fallback(&mut self, job_id: u64) -> bool {
+        if !self.reset_agent_response_for_retry(job_id) {
+            return false;
+        }
+        self.panel.status = "AI Agent retrying with JSON protocol".to_string();
+        self.agent.json_protocol = true;
+        true
+    }
+
+    pub(in crate::features) fn apply_agent_protocol_repair(&mut self, job_id: u64) -> bool {
+        if !self.reset_agent_response_for_retry(job_id) {
+            return false;
+        }
+        self.panel.status = "AI Agent correcting an invalid response (retry 1/1)".to_string();
+        true
+    }
+
+    fn reset_agent_response_for_retry(&mut self, job_id: u64) -> bool {
         if job_id != self.chat.job_id || !self.chat.pending {
             return false;
         }
@@ -1038,8 +1169,7 @@ impl AiFeatureState {
             message.reasoning_content = None;
         }
         self.chat.response_phase = AiResponsePhase::Waiting;
-        self.panel.status = "AI Agent retrying with JSON protocol".to_string();
-        self.agent.json_protocol = true;
+        self.chat.response_preview.clear();
         true
     }
 
@@ -1057,6 +1187,14 @@ impl AiFeatureState {
         self.chat.cancel = None;
         match result {
             Ok(output) => {
+                if let Some(metadata) = &output.metadata {
+                    let id = self
+                        .chat
+                        .streaming_assistant_id
+                        .clone()
+                        .unwrap_or_else(|| job_id.to_string());
+                    self.chat.response_metadata.insert(id, metadata.clone());
+                }
                 let has_native_call = output.native_call.is_some();
                 if output.mode == AiMode::Agent && !has_native_call {
                     self.agent.conversation.push(AiMessage {
@@ -1279,23 +1417,8 @@ impl AiFeatureState {
             })
     }
 
-    pub(in crate::features) fn chat_message_menu(&self) -> Option<&AiMessageMenuState> {
-        self.chat.message_menu.as_ref()
-    }
-
     pub(in crate::features) fn chat_quote(&self) -> Option<&str> {
         self.chat.quoted_text.as_deref()
-    }
-
-    pub(in crate::features) fn close_message_menu(&mut self) {
-        self.chat.close_message_menu();
-    }
-
-    pub(in crate::features) fn open_message_menu(&mut self, menu: AiMessageMenuState) {
-        self.chat.message_menu = Some(menu);
-        self.history.open = false;
-        self.panel.execution_menu_open = false;
-        self.discovery.menu_open = false;
     }
 
     pub(in crate::features) fn quote_message(&mut self, text: String) -> bool {
@@ -1307,17 +1430,7 @@ impl AiFeatureState {
         } else {
             self.panel.status = "AI message is empty".to_string();
         }
-        self.chat.message_menu = None;
         quoted
-    }
-
-    pub(in crate::features) fn finish_copy_message(&mut self, copied: bool) {
-        self.panel.status = if copied {
-            "AI message copied".to_string()
-        } else {
-            "AI message is empty".to_string()
-        };
-        self.chat.message_menu = None;
     }
 
     pub(in crate::features) fn prepare_external_request(
@@ -1424,7 +1537,6 @@ impl AiFeatureState {
         if self.history.sessions.is_empty() {
             return false;
         }
-        self.chat.message_menu = None;
         self.discovery.menu_open = false;
         self.panel.execution_menu_open = false;
         true
@@ -1448,7 +1560,6 @@ impl AiFeatureState {
         self.panel.execution_menu_open = false;
         self.history.open = !self.history.open;
         if self.history.open {
-            self.chat.message_menu = None;
             self.discovery.menu_open = false;
         } else {
             self.history.query.clear();
@@ -1527,7 +1638,6 @@ impl AiFeatureState {
                 self.chat.streaming_assistant_id = None;
                 self.chat.response_phase = AiResponsePhase::Ended;
                 self.history.open = false;
-                self.chat.message_menu = None;
                 self.chat.quoted_text = None;
                 self.chat.command_cards.clear();
                 if let Some(last) = self
@@ -1571,7 +1681,6 @@ impl AiFeatureState {
                     self.chat.command_cards.clear();
                     self.chat.streaming_assistant_id = None;
                     self.chat.response_phase = AiResponsePhase::Ended;
-                    self.chat.message_menu = None;
                     self.chat.quoted_text = None;
                     self.chat.session_id = format!("ai-session-{}", uuid());
                     self.chat.response_preview = "Ask mode ready".to_string();
@@ -1616,7 +1725,6 @@ impl AiFeatureState {
                     self.chat.command_cards.clear();
                     self.chat.streaming_assistant_id = None;
                     self.chat.response_phase = AiResponsePhase::Ended;
-                    self.chat.message_menu = None;
                     self.chat.quoted_text = None;
                     self.clear_detected_error();
                     self.chat.session_id = format!("ai-session-{}", uuid());
@@ -1698,7 +1806,6 @@ impl AiFeatureState {
             self.discovery.index = selected_index;
             self.history.open = false;
             self.panel.execution_menu_open = false;
-            self.chat.message_menu = None;
         } else {
             self.discovery.query.clear();
             self.discovery.index = 0;
@@ -1888,6 +1995,15 @@ impl AiFeatureState {
         Some(launch)
     }
 
+    pub(in crate::features) fn agent_task_language(&self) -> &str {
+        self.agent
+            .native
+            .as_ref()
+            .map(|native| native.request.options.language.as_str())
+            .or(self.agent.task_language.as_deref())
+            .unwrap_or("en")
+    }
+
     pub(in crate::features) fn agent_conversation_snapshot(&self) -> Vec<AiMessage> {
         self.agent.conversation.clone()
     }
@@ -2026,7 +2142,6 @@ impl AiFeatureState {
         self.history.query.clear();
         self.panel.execution_menu_open = !self.panel.execution_menu_open;
         if self.panel.execution_menu_open {
-            self.chat.message_menu = None;
             self.discovery.menu_open = false;
         }
         self.panel.execution_menu_open
@@ -2072,22 +2187,14 @@ impl AiFeatureState {
         self.history.open = false;
         self.discovery.menu_open = false;
         self.panel.execution_menu_open = false;
-        self.chat.message_menu = None;
     }
 
     pub(in crate::features) fn transient_menus_are_open(&self) -> bool {
-        self.history.open
-            || self.discovery.menu_open
-            || self.panel.execution_menu_open
-            || self.chat.message_menu.is_some()
+        self.history.open || self.discovery.menu_open || self.panel.execution_menu_open
     }
 }
 
 impl AiChatState {
-    fn close_message_menu(&mut self) {
-        self.message_menu = None;
-    }
-
     /// Tracks the trailing `@mention` the composer is currently completing.
     ///
     /// Only a trailing run with no whitespace counts, so the picker closes as
@@ -2170,7 +2277,7 @@ impl AiFeatureState {
         self.archive_current_session();
         self.chat.prompt_draft.clear();
         self.chat.target_session_ids.clear();
-        self.chat.message_menu = None;
+
         self.chat.quoted_text = None;
         self.chat.close_mention();
         self.chat.response_preview = if self.chat.run_mode == AiMode::Agent {

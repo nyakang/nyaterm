@@ -18,6 +18,11 @@ pub type NyaRoot = gpui_kit::component::Root;
 
 pub type NyaWindowHandle = WindowHandle<NyaRoot>;
 
+/// Install component actions and keybindings once before creating UI roots.
+pub fn init_components(cx: &mut App) {
+    gpui_kit::init(cx);
+}
+
 /// Override only this window's component root; restoring removes the override so
 /// subsequent theme changes continue to supply the background normally.
 pub fn set_nya_root_transparent(root: &mut NyaRoot, transparent: bool) {

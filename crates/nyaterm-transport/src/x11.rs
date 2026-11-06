@@ -11,7 +11,13 @@ use russh::{ChannelMsg, client};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
 
-use super::{MIT_MAGIC_COOKIE, SessionEvent, SessionEventQueue, XAUTH_TIMEOUT};
+use std::time::Duration;
+
+use super::{SessionEvent, SessionEventQueue};
+
+pub(crate) const MIT_MAGIC_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
+
+pub(crate) const XAUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct X11ChannelOpen {
     pub(super) channel: russh::Channel<client::Msg>,
@@ -436,56 +442,6 @@ pub fn rewrite_x11_auth_setup_packet(
     true
 }
 
-fn local_x_server_error_message(display_target: &str) -> String {
-    let platform = if cfg!(windows) {
-        X11Platform::Windows
-    } else if cfg!(target_os = "macos") {
-        X11Platform::Macos
-    } else {
-        X11Platform::Linux
-    };
-    local_x_server_error_message_for_platform(display_target, platform)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum X11Platform {
-    Windows,
-    Macos,
-    Linux,
-}
-
-fn local_x_server_error_message_for_platform(
-    display_target: &str,
-    platform: X11Platform,
-) -> String {
-    let mut lines = vec![
-        "[X11] Could not connect to the local X11 server.".to_string(),
-        format!("[X11] Display target: {display_target}"),
-    ];
-
-    match platform {
-        X11Platform::Windows => {
-            lines.push(
-                "[X11] Windows: install and start VcXsrv or Xming, then try again.".to_string(),
-            );
-        }
-        X11Platform::Macos => {
-            lines.push("[X11] macOS: install and start XQuartz, then try again.".to_string());
-        }
-        X11Platform::Linux => {
-            lines.push(
-                "[X11] Linux: check DISPLAY and make sure Xorg/Xwayland is running.".to_string(),
-            );
-        }
-    }
-
-    format!("{}\r\n", lines.join("\r\n"))
-}
-
-pub(super) fn enable_x11_failed_message() -> String {
-    "[X11] Could not enable X11 forwarding.\r\n[X11] Make sure sshd_config has X11Forwarding yes and xauth is installed on the server.\r\n".to_string()
-}
-
 pub(super) fn spawn_x11_forwarder(
     event_queue: SessionEventQueue,
     session_id: String,
@@ -535,9 +491,11 @@ async fn handle_x11_channel(
         Ok(stream) => stream,
         Err(error) => {
             let _ = channel.close().await;
-            event_queue.push(SessionEvent::Output {
+            event_queue.push(SessionEvent::Notice {
                 session_id,
-                data: local_x_server_error_message(&target.describe()).into_bytes(),
+                notice: crate::session_notice::SessionNotice::X11ServerUnavailable {
+                    display_target: target.describe(),
+                },
             });
             anyhow::bail!("failed to connect local X11 server: {error}");
         }
@@ -621,9 +579,8 @@ fn hex_value(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIT_MAGIC_COOKIE, X11AuthRewriter, X11DisplayTarget, decode_hex,
-        local_x_server_error_message, pad4, parse_xauth_cookie, resolve_x11_display_spec,
-        rewrite_x11_auth_setup_packet,
+        MIT_MAGIC_COOKIE, X11AuthRewriter, X11DisplayTarget, decode_hex, pad4, parse_xauth_cookie,
+        resolve_x11_display_spec, rewrite_x11_auth_setup_packet,
     };
 
     fn x11_target_desc(target: X11DisplayTarget) -> String {
@@ -760,18 +717,5 @@ host/unix:1  MIT-MAGIC-COOKIE-1  ffeeddccbbaa99887766554433221100
             parse_xauth_cookie(output, ":9").expect("fallback cookie"),
             decode_hex("00112233445566778899aabbccddeeff").expect("hex")
         );
-    }
-
-    #[test]
-    fn x11_error_messages_are_platform_specific() {
-        let message = local_x_server_error_message("localhost:6000");
-        assert!(message.contains("[X11] Could not connect"));
-        if cfg!(windows) {
-            assert!(message.contains("Windows"));
-        } else if cfg!(target_os = "macos") {
-            assert!(message.contains("macOS"));
-        } else {
-            assert!(message.contains("Linux"));
-        }
     }
 }

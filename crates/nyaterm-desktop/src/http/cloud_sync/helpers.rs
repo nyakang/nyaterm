@@ -1,4 +1,7 @@
+use std::error::Error as StdError;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use nyaterm_core::cloud_sync::error::CloudStorageErrorKind;
 
 use nyaterm_core::CloudSyncError;
 use sha2::{Digest as ShaDigest, Sha256};
@@ -6,19 +9,61 @@ use zed_reqwest::header::WWW_AUTHENTICATE;
 
 pub(super) fn safe_http_error(provider: &str, error: zed_reqwest::Error) -> CloudSyncError {
     // Do not format reqwest errors: their URLs may contain tokens or signatures.
-    if error.is_timeout() {
-        CloudSyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!("{provider} operation timed out"),
-        ))
+    if let Some(status) = error.status() {
+        http_failure(provider, "request", status.as_u16(), None)
     } else {
-        http_failure(
-            provider,
-            "request",
-            error.status().map_or(0, |s| s.as_u16()),
-            None,
-        )
+        CloudSyncError::Storage {
+            provider: provider.into(),
+            operation: "request".into(),
+            kind: http_error_kind(&error),
+        }
     }
+}
+
+pub(super) fn http_error_kind(error: &zed_reqwest::Error) -> CloudStorageErrorKind {
+    let mut kind = if error.is_timeout() {
+        CloudStorageErrorKind::Timeout
+    } else if error.is_connect() {
+        CloudStorageErrorKind::Connect
+    } else {
+        CloudStorageErrorKind::Unexpected
+    };
+    let mut source = error.source();
+    while let Some(current) = source {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe => kind = CloudStorageErrorKind::ConnectionReset,
+                std::io::ErrorKind::TimedOut => kind = CloudStorageErrorKind::Timeout,
+                _ => {}
+            }
+        }
+        // Source text is inspected only for classification, never retained or
+        // emitted. reqwest's top-level Display would include credential URLs.
+        let detail = current.to_string().to_ascii_lowercase();
+        if detail.contains("connection closed")
+            || detail.contains("unexpected eof")
+            || detail.contains("incomplete message")
+            || detail.contains("connection reset")
+            || detail.contains("connection aborted")
+        {
+            kind = CloudStorageErrorKind::ConnectionReset;
+        }
+        if detail.contains("certificate") || detail.contains("tls") {
+            kind = CloudStorageErrorKind::Tls;
+            break;
+        }
+        if detail.contains("dns")
+            || detail.contains("failed to lookup")
+            || detail.contains("name resolution")
+        {
+            kind = CloudStorageErrorKind::Dns;
+        }
+        source = current.source();
+    }
+    kind
 }
 
 pub(super) fn http_failure(
@@ -152,8 +197,11 @@ pub(super) fn request_nonce() -> String {
 }
 
 pub(super) fn digest_challenge(response: &zed_reqwest::blocking::Response) -> Option<String> {
-    response
-        .headers()
+    digest_challenge_headers(response.headers())
+}
+
+pub(super) fn digest_challenge_headers(headers: &zed_reqwest::header::HeaderMap) -> Option<String> {
+    headers
         .get_all(WWW_AUTHENTICATE)
         .iter()
         .filter_map(|value| value.to_str().ok())

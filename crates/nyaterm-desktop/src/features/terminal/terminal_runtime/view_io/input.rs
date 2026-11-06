@@ -1,16 +1,14 @@
-use std::time::{Duration, Instant};
-
-use gpui::{Context, KeyDownEvent, KeyUpEvent, MouseButton, MouseMoveEvent, MouseUpEvent, Window};
-use nyaterm_core::{
-    TerminalMouseReportEligibility, TerminalWireWriteKind, terminal_input_fanout_status,
-    terminal_mouse_report_should_send, terminal_wire_write_disposition,
-};
-
 use crate::features::NyaTermApp;
 use crate::models::recording::ExecutionRecordingEvent;
 use crate::terminal::{
     TerminalKeyMode, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
 };
+use gpui::{Context, KeyDownEvent, KeyUpEvent, MouseButton, MouseMoveEvent, MouseUpEvent, Window};
+use nyaterm_core::{
+    TerminalMouseReportEligibility, TerminalWireWriteKind, terminal_input_fanout_status,
+    terminal_mouse_report_should_send, terminal_wire_write_disposition,
+};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseReportWriteResult {
@@ -1014,6 +1012,24 @@ impl NyaTermApp {
             return Err("screen locked".to_string());
         }
         // Charset-encode paste/typed text; pure ASCII CSI/mouse reports pass through.
+        if self.recording_input_is_sensitive(session_id) {
+            self.commands.mark_completion_sensitive(session_id);
+        }
+        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
+            let confirmed = self
+                .terminal
+                .editing
+                .sessions
+                .get(session_id)
+                .is_some_and(|state| {
+                    !state.awaiting_snapshot
+                        && state.model.phase == nyaterm_core::terminal::editing::EditPhase::Ready
+                        && state.mapping.is_some()
+                        && state.allows_editing()
+                });
+            self.commands
+                .mark_completion_confirmed(session_id, confirmed);
+        }
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::LogicalInput);
         let terminal_line = (bytes == b"\r" || bytes == b"\n")
             .then(|| self.read_terminal_input_line_for_session(session_id))
@@ -1032,6 +1048,9 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "input", &error);
             return Err(error);
         }
+        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
+            self.commands.complete_completion_submission(session_id);
+        }
         if self.session.active_id() == Some(session_id)
             && bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
         {
@@ -1040,7 +1059,7 @@ impl NyaTermApp {
         }
         if let Some(command) = command {
             if self.recording.writer().capture_policy(session_id).mode
-                == nyaterm_transport::RecordingMode::Raw
+                == nyaterm_recording::recording::RecordingMode::Raw
             {
                 if self
                     .recording
@@ -1065,7 +1084,7 @@ impl NyaTermApp {
             && !self.recording_input_is_sensitive(session_id)
         {
             let policy = self.recording.writer().capture_policy(session_id);
-            if policy.mode == nyaterm_transport::RecordingMode::Raw {
+            if policy.mode == nyaterm_recording::recording::RecordingMode::Raw {
                 self.recording.write_raw_input(session_id, encoded);
                 return Ok(());
             }
@@ -1142,6 +1161,7 @@ impl NyaTermApp {
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }
+        self.commands.mark_completion_sensitive(session_id);
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::SensitiveInput);
         debug_assert!(disposition.encode_session_charset);
         debug_assert!(!disposition.record_logical_input);
@@ -1151,7 +1171,11 @@ impl NyaTermApp {
         self.session
             .manager()
             .write(session_id, &encoded)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
+            self.commands.complete_completion_submission(session_id);
+        }
+        Ok(())
     }
 
     pub(in crate::features) fn send_sensitive_input_to_active_session(
@@ -1232,7 +1256,7 @@ impl NyaTermApp {
         {
             let policy = self.recording.writer().capture_policy(session_id);
             if policy.include_input {
-                if policy.mode == nyaterm_transport::RecordingMode::Raw {
+                if policy.mode == nyaterm_recording::recording::RecordingMode::Raw {
                     self.recording
                         .write_raw_input(session_id, wire_bytes.to_vec());
                 } else {
@@ -1274,12 +1298,10 @@ impl NyaTermApp {
         context: &str,
         error: &str,
     ) {
-        let safe_error = terminal_session_write_failure_safe_text(error);
         tracing::warn!(
             diagnostic = "session_write_failed",
             session_id = %session_id,
             context,
-            error = %safe_error,
             "terminal session write failed"
         );
         if session_id.is_empty() {
@@ -1288,7 +1310,13 @@ impl NyaTermApp {
         let log = terminal_session_write_failure_log(context, error);
         self.recording
             .write_local_message(session_id.to_string(), log.clone());
-        self.append_terminal_log_for_session(Some(session_id), &log, true);
+        self.publish_session_notice(
+            session_id,
+            crate::features::session::notices::SessionNoticeKind::WriteFailed {
+                context: context.to_string(),
+                error: terminal_session_write_failure_safe_text(error),
+            },
+        );
     }
 
     /// Encode UTF-8 host input for the session wire charset (UTF-8/GBK/…).
@@ -1578,6 +1606,7 @@ impl NyaTermApp {
             kitty_keyboard_report_alternate_keys,
             kitty_keyboard_report_all_keys_as_esc,
             kitty_keyboard_report_associated_text,
+            alt_arrows_word_jump: self.settings.summary().interaction_alt_as_meta,
         }
     }
 

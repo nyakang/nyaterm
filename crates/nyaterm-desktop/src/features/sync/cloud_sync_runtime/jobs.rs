@@ -279,12 +279,18 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+        if let Some(message) =
+            self.cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforePull", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
+        let Some(replacement) =
+            self.begin_configuration_replacement("settings.syncCloseActiveSessionBeforePull", cx)
+        else {
+            return;
+        };
         if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
@@ -313,9 +319,13 @@ impl NyaTermApp {
             return;
         };
         let operation_control = control.clone();
+        let worker_replacement = replacement.clone();
+        let replacement_controller = self.desktop_controller.clone();
         let task = self
             .blocking_jobs
             .submit_task("cloud-sync-local-pull", move |_| {
+                let _replacement = worker_replacement;
+                _replacement.require_refresh();
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
                 let state = load_current_cloud_sync_state(&local_store)?;
                 let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
@@ -423,6 +433,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            Self::finish_configuration_replacement(replacement, replacement_controller, &this, cx);
             drop(registration);
         })
         .detach();
@@ -598,12 +609,18 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforePull"));
+        if let Some(message) =
+            self.cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforePull", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
+        let Some(replacement) =
+            self.begin_configuration_replacement("settings.syncCloseActiveSessionBeforePull", cx)
+        else {
+            return;
+        };
         if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
@@ -636,9 +653,13 @@ impl NyaTermApp {
             return;
         };
         let operation_control = control.clone();
+        let worker_replacement = replacement.clone();
+        let replacement_controller = self.desktop_controller.clone();
         let task = self
             .blocking_jobs
             .submit_task("cloud-sync-provider-pull", move |_| {
+                let _replacement = worker_replacement;
+                _replacement.require_refresh();
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
                 let state = load_current_cloud_sync_state(&local_store)?;
                 let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
@@ -744,6 +765,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            Self::finish_configuration_replacement(replacement, replacement_controller, &this, cx);
             drop(registration);
         })
         .detach();
@@ -758,12 +780,18 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if self.cloud_sync_restore_blocked(cx) {
-            self.cloud_sync
-                .set_status(t!("settings.syncCloseActiveSessionBeforeRecovery"));
+        if let Some(message) = self
+            .cloud_sync_restore_block_message("settings.syncCloseActiveSessionBeforeRecovery", cx)
+        {
+            self.cloud_sync.set_status(message);
             cx.notify();
             return;
         }
+        let Some(replacement) =
+            self.begin_configuration_replacement("settings.syncCloseActiveSessionBeforePull", cx)
+        else {
+            return;
+        };
         if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
@@ -789,9 +817,13 @@ impl NyaTermApp {
             return;
         };
         let operation_control = control.clone();
+        let worker_replacement = replacement.clone();
+        let replacement_controller = self.desktop_controller.clone();
         let task = self
             .blocking_jobs
             .submit_task("cloud-sync-recover", move |_| {
+                let _replacement = worker_replacement;
+                _replacement.require_refresh();
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
                 let state = load_current_cloud_sync_state(&local_store)?;
                 let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
@@ -877,6 +909,7 @@ impl NyaTermApp {
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
+            Self::finish_configuration_replacement(replacement, replacement_controller, &this, cx);
             drop(registration);
         })
         .detach();

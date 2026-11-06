@@ -30,9 +30,9 @@ pub(super) enum TransferContextMenuAction {
 
 pub(super) fn transfer_context_action_visible_for_backend(
     action: TransferContextMenuAction,
-    backend: nyaterm_transport::FileBrowserBackendKind,
+    backend: nyaterm_files::file_browser::FileBrowserBackendKind,
 ) -> bool {
-    backend == nyaterm_transport::FileBrowserBackendKind::Remote
+    backend == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
         || !matches!(
             action,
             TransferContextMenuAction::Upload
@@ -44,7 +44,7 @@ pub(super) fn transfer_context_action_visible_for_backend(
 
 pub(super) fn transfer_visible_context_menu_nodes(
     nodes: impl IntoIterator<Item = TransferContextMenuNode>,
-    backend: nyaterm_transport::FileBrowserBackendKind,
+    backend: nyaterm_files::file_browser::FileBrowserBackendKind,
 ) -> Vec<TransferContextMenuNode> {
     let mut visible = Vec::new();
     for node in nodes {
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn local_backend_hides_remote_only_actions() {
-        use nyaterm_transport::FileBrowserBackendKind::{Local, Remote};
+        use nyaterm_files::file_browser::FileBrowserBackendKind::{Local, Remote};
 
         for action in [
             Action::Upload,
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn local_menu_removes_remote_actions_without_empty_groups() {
-        use nyaterm_transport::FileBrowserBackendKind::Local;
+        use nyaterm_files::file_browser::FileBrowserBackendKind::Local;
 
         let nodes = transfer_visible_context_menu_nodes(
             transfer_entry_context_menu_policy(TransferEntryMenuCapabilities {

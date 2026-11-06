@@ -34,6 +34,7 @@ use crate::keywords::{
 use crate::paint::{
     apply_action_link_ranges, flatten_highlight_spans, terminal_highlight_spans_with_keyword_ranges,
 };
+use crate::stripes::TerminalStripeMode;
 use crate::types::{TerminalHighlightSpan, TerminalPaintGeometry};
 
 fn edit_snapshot_row(
@@ -652,7 +653,9 @@ fn zebra_state_does_not_invalidate_row_shaping() {
         )
     };
     let plain = make_element(plain_snapshot);
-    let striped = make_element(striped_snapshot);
+    let striped = make_element(striped_snapshot)
+        .with_zebra_stripes(true, None)
+        .with_zebra_stripes_by_row(true);
     let decorations = TerminalLineDecorations::default();
     let plain_key = plain.row_layout_key(0, "same", None, &decorations);
     let striped_key = striped.row_layout_key(0, "same", None, &decorations);
@@ -695,7 +698,15 @@ fn zebra_stripes_merge_input_rows_and_target_row_takes_priority() {
     };
     let mut stripes = Vec::new();
 
-    push_terminal_zebra_stripes(&snapshot, 0..3, None, palette, geometry, &mut stripes);
+    push_terminal_zebra_stripes(
+        &snapshot,
+        0..3,
+        None,
+        TerminalStripeMode::ShellInput,
+        palette,
+        geometry,
+        &mut stripes,
+    );
     assert_eq!(stripes.len(), 1);
     assert_eq!(stripes[0].bounds.size.height, px(48.0));
     assert_eq!(
@@ -708,6 +719,7 @@ fn zebra_stripes_merge_input_rows_and_target_row_takes_priority() {
         &snapshot,
         0..3,
         Some(target_line),
+        TerminalStripeMode::ShellInput,
         palette,
         geometry,
         &mut stripes,
@@ -717,6 +729,44 @@ fn zebra_stripes_merge_input_rows_and_target_row_takes_priority() {
         stripes[1].background,
         gpui::rgb(palette.terminal_line_highlight).into()
     );
+}
+
+#[test]
+fn alternating_stripes_follow_fractional_scroll_geometry_and_visible_rows() {
+    let snapshot = TerminalScreen::new(8, 4).viewport_snapshot(0);
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let geometry = TerminalPaintGeometry {
+        bounds: Bounds::new(point(px(0.), px(0.)), size(px(64.), px(64.))),
+        visual_y_offset: -8.0,
+        cell_width: 8.0,
+        cell_height: 16.0,
+    };
+    let mut stripes = Vec::new();
+    push_terminal_zebra_stripes(
+        &snapshot,
+        0..4,
+        None,
+        TerminalStripeMode::Rows,
+        palette,
+        geometry,
+        &mut stripes,
+    );
+    assert_eq!(stripes.len(), 2);
+    assert_eq!(stripes[0].bounds.top(), px(8.));
+    assert_eq!(stripes[1].bounds.top(), px(40.));
+    assert_eq!(stripes[0].bounds.size.height, px(16.));
+    stripes.clear();
+    push_terminal_zebra_stripes(
+        &snapshot,
+        1..3,
+        None,
+        TerminalStripeMode::Rows,
+        palette,
+        geometry,
+        &mut stripes,
+    );
+    assert_eq!(stripes.len(), 1);
+    assert_eq!(stripes[0].bounds.top(), px(8.));
 }
 
 #[test]

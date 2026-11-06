@@ -1,4 +1,5 @@
 mod about_dialog;
+mod connection_import_accounts;
 mod connection_import_overlay;
 mod helpers;
 mod lock_screen_overlay;

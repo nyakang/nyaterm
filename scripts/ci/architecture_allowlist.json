@@ -2,7 +2,6 @@
   "wildcard_super_import": [],
   "desktop_feature_thread_spawn": [
     {"path": "crates/nyaterm-desktop/src/features/ai/agent_management.rs", "max_count": 1, "reason": "The cancellation unit test uses a temporary waiter thread and joins it before returning."},
-    {"path": "crates/nyaterm-desktop/src/features/ai/agent_management/child_process.rs", "max_count": 1, "reason": "The Windows child-cleanup unit test uses a temporary cleanup thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/features/app_state/store_runtime.rs", "max_count": 1, "reason": "The GPUI shutdown responsiveness test uses a watchdog thread and joins it before returning."}
   ],
   "desktop_thread_builder": [
@@ -28,6 +27,7 @@
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/assets.rs", "max_count": 1, "reason": "Asset table uses a caller-owned horizontal scroll handle with an explicit NyaHorizontalScrollbar overlay."},
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/tabs.rs", "max_count": 1, "reason": "Session tabs use a caller-owned scroll handle and attach a visible horizontal scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-desktop/src/features/pages/connections/editor/connection/mod.rs", "max_count": 1, "reason": "Connection editor content tracks its caller-owned ScrollHandle for section anchors and keyboard reveal; connection_editor_frame in connection/layout.rs attaches vertical_scrollbar to the non-scrolling parent."},
+    {"path": "crates/nyaterm-desktop/src/features/pages/settings/ai/models/tests.rs", "max_count": 1, "reason": "The model-row layout fixture tracks a caller-owned ScrollHandle to verify scrolling and attaches vertical_scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/browser/view.rs", "max_count": 1, "reason": "Browser uses a caller-owned horizontal scrollbar."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/path_bar.rs", "max_count": 1, "reason": "Transfer path menu uses a caller-owned ScrollHandle and attaches an explicit vertical scrollbar to the scrolling child."},
     {"path": "crates/nyaterm-ui/src/settings.rs", "max_count": 1, "reason": "Settings content tracks an explicit scroll handle and attaches a visible vertical scrollbar to the non-scrolling parent."},

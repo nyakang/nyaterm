@@ -24,15 +24,15 @@ mod transfer_paths;
 mod transfer_widgets;
 mod tree_runtime;
 
-use std::sync::Arc;
-
-use nyaterm_store::{StoreBlockingClient, StoreDomain};
-use nyaterm_transport::{
-    FileBrowserService, RemoteFileBackendKind, RemoteFileBackendPreference,
-    RemoteFileBackendPreferenceStore, RemoteFileService, SshSessionConfig,
-};
-
 use crate::features::NyaTermApp;
+use nyaterm_files::file_browser::FileBrowserService;
+use nyaterm_files::remote_file::{
+    RemoteFileBackendKind, RemoteFileBackendPreference, RemoteFileBackendPreferenceStore,
+    RemoteFileService,
+};
+use nyaterm_store::{StoreBlockingClient, StoreDomain};
+use nyaterm_transport::SshSessionConfig;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(in crate::features) struct SftpJobSession {
@@ -176,10 +176,10 @@ impl NyaTermApp {
         session_id: &str,
     ) -> anyhow::Result<FileBrowserService> {
         match self.session.file_browser_backend_for_session(session_id) {
-            Some(nyaterm_transport::FileBrowserBackendKind::Local) => {
+            Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local) => {
                 Ok(FileBrowserService::local())
             }
-            Some(nyaterm_transport::FileBrowserBackendKind::Remote) => {
+            Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote) => {
                 let config = self
                     .session
                     .metadata(session_id)

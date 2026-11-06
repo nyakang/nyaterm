@@ -1,13 +1,11 @@
 //! Local integration is installed through shell startup hooks, never PTY input.
 //! Unrecognized launch modes retain their original command and byte stream.
 
-use std::path::{Path, PathBuf};
-
-use crate::file_browser::LocalShellPathStyle;
-use crate::local_shell::ResolvedLocalShell;
+use crate::local_shell::{LocalShellPathStyle, ResolvedLocalShell};
 use crate::ssh_shell_integration::{
     SshIntegrationOutput, SshShellIntegrationState, build_ssh_ready_marker,
 };
+use std::path::{Path, PathBuf};
 
 #[cfg(all(test, windows))]
 mod lifecycle_tests;
@@ -17,6 +15,7 @@ mod tests;
 pub(super) struct LocalShellIntegration {
     state: SshShellIntegrationState,
     pub(super) path_style: LocalShellPathStyle,
+    pub(super) completion_distro: Option<String>,
     pub(super) startup_files: Option<tempfile::TempDir>,
 }
 
@@ -36,6 +35,7 @@ impl LocalShellIntegration {
             Self {
                 path_style,
                 startup_files: Some(startup_files),
+                completion_distro: None,
                 // No ready marker or suppression is needed: the script is a startup
                 // argument, not echoed PTY input. Startup errors and prompts stay visible.
                 state: SshShellIntegrationState::new(
@@ -47,6 +47,24 @@ impl LocalShellIntegration {
         ))
     }
 
+    pub(super) fn completion_context(
+        &self,
+        identity: crate::ssh_shell_integration::ShellIdentity,
+    ) -> nyaterm_core::completion::types::ShellCommandContext {
+        let dialect =
+            nyaterm_core::completion::types::ShellDialect::from_program(&identity.program);
+        nyaterm_core::completion::types::ShellCommandContext {
+            scope: nyaterm_core::completion::types::CompletionScope::new(&[
+                "local",
+                &identity.user,
+                &identity.program,
+                self.completion_distro.as_deref().unwrap_or(""),
+                &format!("{dialect:?}"),
+            ]),
+            dialect,
+            command_events: true,
+        }
+    }
     pub(super) fn filter(&mut self, bytes: &[u8]) -> SshIntegrationOutput {
         self.state.filter_output(bytes)
     }
@@ -112,7 +130,6 @@ fn wsl_distro_from_args(args: &[String]) -> Option<String> {
 fn wsl_default_distro() -> Option<String> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW,
@@ -302,10 +319,22 @@ fn integrated_launch(
 fn startup_directory(session_id: &str) -> Option<tempfile::TempDir> {
     // Created before spawning, so every failure and session teardown has a host
     // owner even if TerminateProcess prevents the shell from running traps.
-    tempfile::Builder::new()
+    let directory = tempfile::Builder::new()
         .prefix(&format!("nyaterm-shell-{session_id}-"))
         .tempdir()
-        .ok()
+        .ok()?;
+    for (kind, filename) in [
+        (crate::ssh_shell_integration::ShellKind::Bash, "full.bash"),
+        (crate::ssh_shell_integration::ShellKind::Zsh, "full.zsh"),
+        (crate::ssh_shell_integration::ShellKind::Fish, "full.fish"),
+    ] {
+        let script = crate::ssh_shell_integration::persistent_script(kind)?;
+        // Preserve the local MSYS/WSL path conversion when reusing SSH's hooks.
+        let script = script.replace(r#"printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}""#, "__nyaterm_local_cwd")
+            .replace(r#"printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)"#, "__nyaterm_local_cwd");
+        std::fs::write(directory.path().join(filename), script).ok()?;
+    }
+    Some(directory)
 }
 
 fn native_bootstrap(program: &str) -> Option<(String, String)> {
@@ -338,5 +367,20 @@ fn native_bootstrap(program: &str) -> Option<(String, String)> {
 }
 
 fn startup_script() -> String {
-    include_str!("local_shell_integration/startup.sh").replace("\r\n", "\n")
+    // Keep the Windows launch argument small. Rust owns the sourced files and
+    // their lifetime, exactly as it owns the existing startup loaders.
+    include_str!("local_shell_integration/startup.sh")
+        .replace("\r\n", "\n")
+        .replace(
+            "__NYATERM_BASH_FULL__",
+            r#". "$NYATERM_LOCAL_DIR/full.bash""#,
+        )
+        .replace(
+            "__NYATERM_ZSH_FULL__",
+            r#"source "$NYATERM_LOCAL_DIR/full.zsh""#,
+        )
+        .replace(
+            "__NYATERM_FISH_FULL__",
+            r#"source "$NYATERM_LOCAL_DIR/full.fish""#,
+        )
 }

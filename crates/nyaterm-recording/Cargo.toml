@@ -1,0 +1,20 @@
+[package]
+name = "nyaterm-recording"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nyaterm-core.workspace = true
+nyaterm-terminal.workspace = true
+regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tempfile.workspace = true
+same-file.workspace = true
+
+[dev-dependencies]
+nyaterm-core = { workspace = true, features = ["test-support"] }

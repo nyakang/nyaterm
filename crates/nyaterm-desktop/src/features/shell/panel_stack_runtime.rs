@@ -1,15 +1,17 @@
 use rust_i18n::t;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, deferred, div,
+    StatefulInteractiveElement as _, Styled as _, Window, canvas, deferred, div,
     prelude::FluentBuilder as _, px, rgb, svg,
 };
-use nyaterm_core::{AgentCommandExecutionMode, truncate_preview};
+use nyaterm_core::truncate_preview;
 
 use crate::features::{NyaTermApp, view_widgets::panel_header_with_actions};
 use crate::models::{
@@ -18,6 +20,10 @@ use crate::models::{
 };
 use crate::theme::ThemePalette;
 use nyaterm_ui::NyaTooltip;
+
+use super::state::PANEL_STACK_MIN_HEIGHT;
+
+type PanelStackMeasurements = Rc<RefCell<Vec<(String, f32)>>>;
 
 const EXCLUSIVE_PANEL_IDS: &[&str] = &["aiAssistant"];
 const NON_PANEL_IDS: &[&str] = &["settings", "lock", "quickCmdBar", "serialSend"];
@@ -543,16 +549,18 @@ impl NyaTermApp {
         above_id: String,
         below_id: String,
         event: &MouseDownEvent,
-        container_height: f32,
+        panel_heights: &[(String, f32)],
         cx: &mut Context<Self>,
     ) {
-        self.shell.panels.start_stack_resize(
+        if !self.shell.panels.start_stack_resize(
             side,
             above_id,
             below_id,
             event.position.y,
-            container_height,
-        );
+            panel_heights,
+        ) {
+            return;
+        }
         self.shell.set_status("resizing panel stack".to_string());
         cx.notify();
     }
@@ -607,8 +615,6 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        use gpui::relative;
-
         if let SidePanelStackRenderMode::Overlay(overlay) =
             side_panel_stack_render_mode(self.side_overlay_panel(side))
         {
@@ -650,12 +656,26 @@ impl NyaTermApp {
                 .iter()
                 .map(|id| self.panel_stack_weight(id))
                 .collect();
-            let total: f32 = weights.iter().sum::<f32>().max(0.001);
+            let total: f64 = weights.iter().map(|weight| f64::from(*weight)).sum();
             let count = open_ids.len();
+            let measurements: PanelStackMeasurements = Rc::new(RefCell::new(
+                open_ids.iter().map(|id| (id.clone(), 0.)).collect(),
+            ));
             let mut stack = div().size_full().flex().flex_col().min_h_0();
             for (index, panel_id) in open_ids.iter().enumerate() {
                 let panel = NavItem::from_persistence_id(panel_id).unwrap_or(NavItem::Transfers);
-                let basis = weights[index] / total;
+                // Distribute only the space left by dividers. Keep total grow
+                // above one even when all persisted weights are tiny.
+                let grow = (f64::from(weights[index]) / total * count as f64) as f32;
+                let panel_measurements = measurements.clone();
+                let measurement = canvas(
+                    move |bounds, _, _| {
+                        panel_measurements.borrow_mut()[index].1 = f32::from(bounds.size.height);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0();
                 let title = panel
                     .i18n_key()
                     .map(|key| t!(key))
@@ -665,12 +685,15 @@ impl NyaTermApp {
                 let (meta, body) = self.side_panel_content(side, panel, window, cx);
                 stack = stack.child(
                     div()
+                        .relative()
                         .flex_shrink(1.)
-                        .flex_basis(relative(basis))
-                        .min_h(px(48.))
+                        .flex_basis(px(0.))
+                        .flex_grow(grow)
+                        .min_h(px(PANEL_STACK_MIN_HEIGHT))
                         .flex()
                         .flex_col()
                         .overflow_hidden()
+                        .child(measurement)
                         .child(panel_header_with_actions(
                             title,
                             meta,
@@ -683,7 +706,13 @@ impl NyaTermApp {
                 if index + 1 < count {
                     let above = panel_id.clone();
                     let below = open_ids[index + 1].clone();
-                    stack = stack.child(self.panel_stack_resize_handle(side, above, below, cx));
+                    stack = stack.child(self.panel_stack_resize_handle(
+                        side,
+                        above,
+                        below,
+                        measurements.clone(),
+                        cx,
+                    ));
                 }
             }
             stack
@@ -771,7 +800,7 @@ impl NyaTermApp {
     fn side_panel_meta(&self, _side: PanelSide, panel: NavItem) -> SharedString {
         match panel {
             NavItem::Connections => SharedString::from(""),
-            NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().model_label),
+            NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().mode_label),
             NavItem::ActiveSessions => SharedString::from(""),
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
@@ -891,26 +920,6 @@ impl NyaTermApp {
                         // their mouse-down away from the root outside-click
                         // handler so a second click can toggle the menu closed.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(header_svg_icon_button_with_color(
-                            palette,
-                            "ai-header-execution-mode-toggle",
-                            match self.ai.settings_config().agent_command_execution_mode {
-                                AgentCommandExecutionMode::Auto => "icons/ai/exec-auto.svg",
-                                AgentCommandExecutionMode::Smart => "icons/ai/exec-smart.svg",
-                                AgentCommandExecutionMode::ConfirmEach => {
-                                    "icons/ai/exec-confirm.svg"
-                                }
-                            },
-                            t!("ai.agentCommandExecutionMode"),
-                            (self.ai.settings_config().agent_command_execution_mode
-                                == AgentCommandExecutionMode::Auto)
-                                .then_some(palette.warning),
-                            !ai_running,
-                            cx.listener(|this, _, _, cx| {
-                                this.ai.toggle_execution_menu();
-                                this.defer_ai_panel_snapshot_flush(cx);
-                            }),
-                        ))
                         .child(header_svg_icon_button(
                             palette,
                             "ai-header-history-toggle",
@@ -1169,6 +1178,7 @@ impl NyaTermApp {
         side: PanelSide,
         above_id: String,
         below_id: String,
+        measurements: PanelStackMeasurements,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
@@ -1200,6 +1210,7 @@ impl NyaTermApp {
                 self.shell.resize_handle_is_highlighted(&id),
             )
             .id(id.clone())
+            .debug_selector(move || id.to_string())
             .cursor_row_resize()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 this.update_resize_handle_hover(hover_id.clone(), *hovered, cx);
@@ -1208,15 +1219,12 @@ impl NyaTermApp {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     this.activate_resize_handle_immediately(drag_id.clone(), cx);
-                    let open = this.side_open_panel_ids(side);
-                    let total_weight: f32 = open.iter().map(|id| this.panel_stack_weight(id)).sum();
-                    let container_height = 480.0_f32.max(total_weight * 120.);
                     this.start_panel_stack_resize(
                         side,
                         above.clone(),
                         below.clone(),
                         event,
-                        container_height,
+                        &measurements.borrow(),
                         cx,
                     );
                 }),
@@ -1298,8 +1306,9 @@ fn header_svg_icon_button_with_color(
 #[cfg(test)]
 mod tests {
     use gpui::{
-        Context, Entity, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _,
-        Render, Styled as _, TestAppContext, Window, div, px,
+        Context, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
+        MouseMoveEvent, ParentElement as _, Render, Styled as _, TestAppContext, Window, div,
+        point, px,
     };
 
     use crate::features::NyaTermApp;
@@ -1328,6 +1337,135 @@ mod tests {
                     .h_full()
                     .child(panel),
             )
+        }
+    }
+
+    struct PanelStackFixture {
+        app: Entity<NyaTermApp>,
+        side: PanelSide,
+        height: f32,
+    }
+
+    impl Render for PanelStackFixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let panel = self.app.update(cx, |app, cx| {
+                app.side_panel_stack(self.side, window, cx)
+                    .into_any_element()
+            });
+            div()
+                .size_full()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                    this.app.update(cx, |app, cx| {
+                        if event.dragging() {
+                            app.update_panel_stack_resize(event, cx);
+                        }
+                    });
+                    cx.notify();
+                }))
+                .child(div().w(px(320.)).h(px(self.height)).child(panel))
+        }
+    }
+
+    #[test]
+    fn panel_stack_resize_tracks_real_layout_with_cached_connections_and_monitor() {
+        let test_dir = TestConfigDir::new("nyaterm-panel-stack-resize");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "resize-test");
+        app.update(&mut cx, |app, cx| {
+            app.sync_component_theme(cx);
+            let ids = vec![
+                "savedConnections".to_string(),
+                "resourceMonitor".to_string(),
+            ];
+            app.shell.panels.multi_open = true;
+            app.shell.panels.active_left = Some(NavItem::Connections);
+            app.shell.panels.active_right = Some(NavItem::Connections);
+            app.shell.panels.left_open = ids.clone();
+            app.shell.panels.right_open = ids.clone();
+            app.shell.chrome.activity_bar_layout.left_top = ids.clone();
+            app.shell.chrome.activity_bar_layout.right_top = ids;
+            app.shell.chrome.activity_bar_layout.left_bottom.clear();
+            app.shell.chrome.activity_bar_layout.right_bottom.clear();
+        });
+        let (fixture, cx) = cx.add_window_view(|_, _| PanelStackFixture {
+            app: app.clone(),
+            side: PanelSide::Left,
+            height: 301.,
+        });
+
+        for (side, divider_id) in [
+            (
+                PanelSide::Left,
+                "panel-stack-resize-left-savedConnections-resourceMonitor",
+            ),
+            (
+                PanelSide::Right,
+                "panel-stack-resize-right-savedConnections-resourceMonitor",
+            ),
+        ] {
+            for (height, above_weight, below_weight) in [
+                (301., 0.02, 0.03),
+                (901., 0.02, 0.03),
+                (301., 0.001, 1.),
+                (97., 1., 1.),
+            ] {
+                cx.update(|_, cx| {
+                    app.update(cx, |app, _| {
+                        app.shell
+                            .panels
+                            .stack_sizes
+                            .insert("savedConnections".into(), above_weight);
+                        app.shell
+                            .panels
+                            .stack_sizes
+                            .insert("resourceMonitor".into(), below_weight);
+                    });
+                    fixture.update(cx, |fixture, cx| {
+                        fixture.side = side;
+                        fixture.height = height;
+                        cx.notify();
+                    });
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| _ = window.draw(cx));
+                let divider = cx.debug_bounds(divider_id).unwrap();
+                let start = divider.center();
+                cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+                cx.update(|window, cx| {
+                    let state = app.read(cx).shell.panels.stack_resize.as_ref().unwrap();
+                    // The divider occupies one layout pixel (5px hitbox minus margins).
+                    assert!(
+                        (state.pair_height - f64::from(height - 1.)).abs() < 1.,
+                        "{side:?} {height}px: measured pair height {}",
+                        state.pair_height,
+                    );
+                    fixture.update(cx, |_, cx| cx.notify());
+                    _ = window.draw(cx);
+                });
+                let after_press = cx.debug_bounds(divider_id).unwrap().center();
+                assert!(
+                    (f32::from(after_press.y - start.y)).abs() < 1.,
+                    "{side:?} {height}px: divider jumped on press",
+                );
+
+                let delta = if height > 97. { 30. } else { 0. };
+                let target = point(start.x, start.y + px(30.));
+                cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
+                cx.update(|window, cx| _ = window.draw(cx));
+                let after_move = cx.debug_bounds(divider_id).unwrap().center();
+                assert!(
+                    (f32::from(after_move.y - start.y) - delta).abs() < 1.,
+                    "{side:?} {height}px: divider moved {}px for a 30px drag",
+                    f32::from(after_move.y - start.y),
+                );
+                cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+                cx.update(|_, cx| {
+                    app.update(cx, |app, _| {
+                        assert!(app.shell.panels.finish_stack_resize());
+                    });
+                });
+            }
         }
     }
 
@@ -1370,8 +1508,11 @@ mod tests {
                 let panel = cx.debug_bounds("floating-panel-fixture").unwrap();
                 let close = cx.debug_bounds(close_id).unwrap();
                 assert!(close.left() >= panel.left() && close.right() <= panel.right());
+                assert!(
+                    cx.debug_bounds("ai-header-execution-mode-toggle").is_none(),
+                    "execution mode lives in the composer, not the header"
+                );
                 for id in [
-                    "ai-header-execution-mode-toggle",
                     "ai-header-history-toggle",
                     "ai-header-open-settings",
                     "ai-header-new-chat",

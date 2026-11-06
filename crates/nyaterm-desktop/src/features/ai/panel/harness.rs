@@ -1,8 +1,9 @@
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb};
-use nyaterm_core::ai::harness::{AgentRunStatus, AgentTaskStatus, AgentVerificationStatus};
+use nyaterm_core::ai::harness::{AgentRunStatus, AgentVerificationStatus};
 use nyaterm_ui::{NyaButton, NyaInputShell};
 use rust_i18n::t;
 
+use super::texts::TextOwner;
 use super::{AiPanel, AiPanelSnapshot};
 use crate::features::ai::state::harness::NativeRunView;
 
@@ -35,39 +36,18 @@ impl AiPanel {
             .border_b_1()
             .border_color(rgb(palette.border))
             .text_size(px(12.));
-        if history && !view.plan.tasks.is_empty() {
-            card = card.child(
-                div()
-                    .font_weight(gpui::FontWeight(600.))
-                    .child(t!("ai.harness.plan")),
-            );
-            for task in &view.plan.tasks {
-                let marker = match task.status {
-                    AgentTaskStatus::Pending => "○",
-                    AgentTaskStatus::InProgress => "→",
-                    AgentTaskStatus::Completed => "✓",
-                    AgentTaskStatus::Blocked => "!",
-                };
-                card = card.child(
-                    div()
-                        .child(format!("{marker} {}", task.description))
-                        .when_some(task.verification.clone(), |this, verification| {
-                            this.child(
-                                div()
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(verification),
-                            )
-                        }),
-                );
-            }
-        }
         if history && let Some(verification) = &view.verification {
             let label = match verification.status {
                 AgentVerificationStatus::Verified => t!("ai.harness.verified"),
                 AgentVerificationStatus::Unverified => t!("ai.harness.unverified"),
                 AgentVerificationStatus::Blocked => t!("ai.harness.blocked"),
             };
-            card = card.child(div().child(format!("{label}: {}", verification.summary)));
+            card = card.child(div().child(label).child(self.selectable_text(
+                TextOwner::Run(view.run_id.clone()),
+                "verification",
+                false,
+                cx,
+            )));
         }
         if view.status == AgentRunStatus::WaitingForUser {
             card = card.child(
@@ -77,12 +57,18 @@ impl AiPanel {
             );
             let call_id = view.call_id.clone().expect("pending question call");
             for (index, question) in view.questions.iter().enumerate() {
-                let mut question_card = div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(question.question.clone());
+                let mut question_card =
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.selectable_text(
+                            TextOwner::Run(view.run_id.clone()),
+                            &format!("question-{index}"),
+                            false,
+                            cx,
+                        ));
                 if let Some(options) = &question.options {
                     let mut buttons = div().flex().flex_wrap().gap_2();
                     for (option_index, option) in options.iter().enumerate() {

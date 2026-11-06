@@ -14,6 +14,7 @@ mod images;
 mod input;
 mod keywords;
 mod paint;
+mod paint_mask;
 mod semantic;
 mod semantic_roles;
 
@@ -109,4 +110,5 @@ pub use keywords::{
 #[cfg(test)]
 mod tests;
 
+pub mod stripes;
 pub mod unwrapped;

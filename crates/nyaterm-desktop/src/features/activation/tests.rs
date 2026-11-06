@@ -153,6 +153,62 @@ fn external_queue_waits_for_restoration_unlock_and_dialogs_and_cancel_keeps_the_
 }
 
 #[test]
+fn activation_clock_pumps_requests_without_leasing_the_component_root() {
+    use super::state::ExternalDialog;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{ActivationRequest, SavedConnection};
+    use nyaterm_ui::NyaDialogWindowExt as _;
+
+    let root = TestConfigDir::new("nyaterm-external-clock");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        let saved = |id| -> SavedConnection { serde_json::from_value(serde_json::json!({"id":id, "name":id, "type":"ssh", "host":"example.com", "username":"root"})).unwrap() };
+        app.connection_state
+            .replace_loaded(vec![saved("first"), saved("second")], Vec::new());
+        app.session.mark_restore_complete();
+        app.shell.complete_terminal_windows_restore();
+    });
+    let fixture = cx.new(|_| DialogHost);
+    let handle = cx.add_window(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    app.update(&mut cx, |app, _| app.shell.remember_main_window(handle));
+    app.update(&mut cx, |app, cx| {
+        let request = ActivationRequest::from_os_args(
+            [1; 16],
+            [std::ffi::OsString::from("ssh://example.com")],
+        );
+        app.handle_activation(request.parse(), cx);
+        assert!(app.activation.clock_armed);
+    });
+    // The first pump runs before the loop's first timer wait. It reads dialog
+    // state through the component root; doing that while holding the typed
+    // WindowHandle's root lease panicked with a double lease.
+    cx.run_until_parked();
+    app.update(&mut cx, |app, _| {
+        assert!(matches!(
+            app.activation.dialog,
+            Some(ExternalDialog::Choose { .. })
+        ));
+        assert!(app.activation.pending.is_empty());
+    });
+    // The second pump opens the chooser, which updates the same root.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    app.update(&mut cx, |_, cx| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            assert!(window.has_active_nya_dialog(cx));
+        })
+        .unwrap();
+    });
+    app.update(&mut cx, |app, _| app.cancel_external_activations());
+}
+
+#[test]
 fn one_time_password_bypasses_saved_credentials_and_never_enters_restore_documents() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};

@@ -236,6 +236,12 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if !matches!(launch_config, SessionLaunchConfig::Local(_))
+            && self.remote_start_blocked_by_configuration_replacement(cx)
+        {
+            return;
+        }
+
         if let Some(label) = launch_config.encoding()
             && let Err(error) = nyaterm_core::character_encoding::CharacterEncoding::parse(label)
         {
@@ -346,6 +352,10 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         if !self.session.start.retry_is_pending(&options) {
             return;
         }
@@ -473,6 +483,10 @@ impl NyaTermApp {
         request: MultiplexSshStartRequest,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         let MultiplexSshStartRequest {
             connection_name,
             mut config,
@@ -633,19 +647,18 @@ impl NyaTermApp {
             while let Some(event) = rx.next().await {
                 // `update_in`: pumping the restore queue opens sessions, which needs
                 // the window.
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        this.apply_session_start_event(event, cx);
-                        // A start finishing is precisely when the next queued restore
-                        // may go; the idle plane used to poll for that.
-                        this.pump_startup_restore_queue_if_ready(window, cx);
-                        // A start settling is also when the layout restore and any
-                        // auto-recording become eligible -- though both still have to
-                        // wait out connect settle, which the clock handles.
-                        this.ensure_post_start_work_clock(cx);
-                        cx.notify();
-                    })
-                    .is_err()
+                if NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                    this.apply_session_start_event(event, cx);
+                    // A start finishing is precisely when the next queued restore
+                    // may go; the idle plane used to poll for that.
+                    this.pump_startup_restore_queue_if_ready(window, cx);
+                    // A start settling is also when the layout restore and any
+                    // auto-recording become eligible -- though both still have to
+                    // wait out connect settle, which the clock handles.
+                    this.ensure_post_start_work_clock(cx);
+                    cx.notify();
+                })
+                .is_err()
                 {
                     break;
                 }
@@ -816,6 +829,9 @@ impl NyaTermApp {
                     true
                 };
                 if let Some(old_id) = reconnect_session_id.as_deref() {
+                    if old_id == session_id {
+                        self.session.notices.clear(old_id);
+                    }
                     self.recording.rekey_session(old_id, &session_id);
                     self.register_session_for_reconnect(&session_id, metadata);
                 } else {
@@ -966,12 +982,6 @@ impl NyaTermApp {
                 }
                 self.shell
                     .set_status(format!("failed to start {connection_name}: {error}"));
-                if self.session.active_id().is_none() {
-                    self.append_terminal_log(format!(
-                        "\n# failed to start {}: {error}\n",
-                        connection_name
-                    ));
-                }
                 self.shell.select_nav(NavItem::Workspace);
                 let request_to_ui_duration = requested_at
                     .map(|requested_at| requested_at.elapsed())

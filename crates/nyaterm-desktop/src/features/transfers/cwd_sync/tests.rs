@@ -1,14 +1,4 @@
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
-
-use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-use nyaterm_core::TransferBrowserViewMode;
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFilePath, SessionEvent, SftpCwdFollowMode, SftpFileEntry,
-    SftpFileType, SshSessionConfig,
-};
-
+use super::cwd_paths_equal;
 use crate::features::NyaTermApp;
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
 use crate::models::{
@@ -16,8 +6,14 @@ use crate::models::{
     TransferJobKind, TransferJobOutput, TransferJobResult,
 };
 use crate::test_support::{TestAppCleanup, TestConfigDir};
-
-use super::cwd_paths_equal;
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+use nyaterm_core::TransferBrowserViewMode;
+use nyaterm_files::file_browser::FileBrowserBackendKind;
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType};
+use nyaterm_transport::{SessionEvent, SftpCwdFollowMode, SshSessionConfig};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 const SESSION: &str = "cwd-session";
 

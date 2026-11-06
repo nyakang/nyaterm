@@ -17,6 +17,7 @@ pub(crate) struct WorkspaceTabTransferBundle {
     session_ids: Vec<String>,
     pane_root: Option<WorkspacePaneNode>,
     catalog: SessionCatalogTransferBundle,
+    completion: Vec<super::commands::CompletionSessionTransfer>,
     terminal: TerminalSessionTransferBundle,
     transfer: TransferSessionTransferBundle,
     sync_input: SyncInputTransferBundle,
@@ -256,6 +257,7 @@ impl NyaTermApp {
             .session
             .detach_sessions_for_transfer(&session_ids, bridge_events)
             .ok_or_else(|| "the source tab changed during transfer".to_string())?;
+        let completion = self.commands.take_completion_sessions(&session_ids);
         for id in &session_ids {
             self.file_manager.remove_sftp_session(id);
         }
@@ -289,6 +291,7 @@ impl NyaTermApp {
             session_ids,
             pane_root,
             catalog,
+            completion,
             terminal,
             transfer,
             sync_input,
@@ -317,6 +320,7 @@ impl NyaTermApp {
         let WorkspaceTabTransferBundle {
             root_tab_id,
             catalog,
+            completion,
             terminal,
             transfer,
             sync_input,
@@ -334,6 +338,7 @@ impl NyaTermApp {
                     session_ids,
                     pane_root,
                     catalog,
+                    completion,
                     terminal,
                     transfer,
                     sync_input,
@@ -348,6 +353,7 @@ impl NyaTermApp {
         for id in &session_ids {
             self.ensure_sftp_session_view(id, cx);
         }
+        self.commands.accept_completion_sessions(completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(transfer);
         self.sync_input.attach_sessions_from_transfer(sync_input);
@@ -403,6 +409,7 @@ impl NyaTermApp {
         for id in &bundle.session_ids {
             self.ensure_sftp_session_view(id, cx);
         }
+        self.commands.accept_completion_sessions(bundle.completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(bundle.transfer);
         self.sync_input

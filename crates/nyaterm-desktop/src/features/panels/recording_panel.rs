@@ -1,19 +1,17 @@
-use rust_i18n::t;
-
-use std::sync::Arc;
-use std::time::Instant;
-
-use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
-    Window, div, list, prelude::*, px, rgb, rgba, svg,
-};
-use nyaterm_transport::{RecordingMode, RecordingStatus, RecordingStatusState, SessionInfo};
-use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaScrollable, NyaSearchInput};
-
 use crate::features::formatting::{session_kind_label, short_id};
 use crate::features::perf::record_gpui_perf_sample;
 use crate::features::recording::state::RecordingPanelRowLayout;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
+    Window, div, list, prelude::*, px, rgb, rgba, svg,
+};
+use nyaterm_recording::recording::{RecordingMode, RecordingStatus, RecordingStatusState};
+use nyaterm_transport::SessionInfo;
+use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaScrollable, NyaSearchInput};
+use rust_i18n::t;
+use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Clone)]
 struct RecordingSessionPanelRow {
@@ -595,9 +593,8 @@ fn recording_action_svg_button(
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_transport::{SessionInfo, SessionKind};
-
     use super::{recording_session_matches_query, session_panel_count_label};
+    use nyaterm_transport::{SessionInfo, SessionKind};
 
     fn session() -> SessionInfo {
         SessionInfo {

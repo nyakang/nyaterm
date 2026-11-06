@@ -1,8 +1,8 @@
+use crate::features::{NyaTermApp, runtime_jobs::GpuJobResult, runtime_jobs::NpuJobResult};
 use futures::StreamExt as _;
 use gpui::Context;
-use nyaterm_transport::{RemoteGpuOverview, RemoteGpuService, RemoteNpuOverview, RemoteNpuService};
-
-use crate::features::{NyaTermApp, runtime_jobs::GpuJobResult, runtime_jobs::NpuJobResult};
+use nyaterm_remote_ops::ascend_npu::{RemoteNpuOverview, RemoteNpuService};
+use nyaterm_remote_ops::gpu::{RemoteGpuOverview, RemoteGpuService};
 
 impl NyaTermApp {
     pub(in crate::features) fn apply_gpu_search(&mut self, text: String, cx: &mut Context<Self>) {

@@ -1,24 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use rust_i18n::t;
-
 use crate::features::ai::agent_management::AgentManagementView;
-use gpui::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, div, prelude::*, px, rgb,
-};
-use nyaterm_core::{
-    AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
-    KeywordHighlightConfig, TranslationSettings,
-};
-use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaInputShell, NyaNumberInputState, NyaSelect, NyaSelectOption,
-    NyaSelectState, NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem, NyaSliderState,
-    NyaSliderValue,
-};
-
 use crate::features::selects::SelectRegistry;
 use crate::features::settings::{
     KeybindingPresentationState, KeywordHighlightPresentationState, SearchEnginePresentationState,
@@ -35,10 +15,35 @@ use crate::models::{
     TranslationSecretDraft,
 };
 use crate::theme::ThemePalette;
+use gpui::{
+    AnyElement, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, WeakEntity, Window, canvas, div, prelude::*, px, rgb,
+};
+use nyaterm_core::{
+    AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
+    KeywordHighlightConfig, TranslationSettings,
+};
+use nyaterm_ui::{
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaInputShell, NyaNumberInputState, NyaSelect, NyaSelectOption,
+    NyaSelectState, NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem, NyaSliderState,
+    NyaSliderValue,
+};
+use rust_i18n::t;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-#[derive(Clone, PartialEq)]
+/// Background colours are resolved by the app because the panel is cached: it
+/// only repaints when a new snapshot arrives, so wallpaper, window material, and
+/// content opacity must travel inside the snapshot to reach it.
+#[derive(Clone, Copy, PartialEq)]
 pub(in crate::features) struct SettingsChrome {
     pub palette: ThemePalette,
+    /// The page's single tinted layer, honouring content opacity.
+    pub surface: gpui::Rgba,
+    pub transparent_bg: gpui::Rgba,
+    pub transparent_surface: gpui::Rgba,
+    pub transparent_section_header: gpui::Rgba,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,7 +149,6 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) snapshot_password_prompt_active: bool,
     pub(in crate::features) config_path_prompt_active: bool,
     pub(in crate::features) terminal_theme_is_dark: bool,
-    pub(in crate::features) panel_multi_open: bool,
 }
 
 impl SettingsPresentation {
@@ -158,7 +162,6 @@ impl SettingsPresentation {
             search_engine_presentation: SearchEnginePresentationState {
                 expanded_index: None,
                 icon_picker_index: None,
-                actions_index: None,
             },
             keyword_highlight_presentation: KeywordHighlightPresentationState {
                 expanded_id: None,
@@ -180,7 +183,6 @@ impl SettingsPresentation {
             snapshot_password_prompt_active: false,
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
-            panel_multi_open: false,
         }
     }
 }
@@ -276,10 +278,6 @@ impl SettingsPresentation {
 
     pub(in crate::features) fn terminal_theme_is_dark(&self) -> bool {
         self.terminal_theme_is_dark
-    }
-
-    pub(in crate::features) fn panel_multi_open(&self) -> bool {
-        self.panel_multi_open
     }
 }
 
@@ -408,11 +406,14 @@ impl TranslationPresentation {
 
 #[derive(Clone, Default, PartialEq)]
 pub(in crate::features) struct TransferSettingsPresentation {
-    pub(in crate::features) duplicate_policy: nyaterm_transport::SftpDuplicatePolicy,
+    pub(in crate::features) duplicate_policy:
+        nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy,
 }
 
 impl TransferSettingsPresentation {
-    pub(in crate::features) fn duplicate_policy(&self) -> nyaterm_transport::SftpDuplicatePolicy {
+    pub(in crate::features) fn duplicate_policy(
+        &self,
+    ) -> nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy {
         self.duplicate_policy
     }
 }
@@ -462,8 +463,10 @@ impl FontSelectOptionCache {
 }
 
 pub(in crate::features) struct SettingsPanel {
+    focus: FocusHandle,
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
-    pub(in crate::features::pages::settings) viewport_width: f32,
+    pub(in crate::features::pages::settings) pane_width: f32,
+    pub(in crate::features::pages::settings) content_width: f32,
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<SettingsSnapshot>,
     pub(in crate::features) settings: SettingsPresentation,
@@ -559,8 +562,10 @@ impl SettingsPanel {
         });
         Self {
             content_scroll_handles: HashMap::new(),
-            viewport_width: 800.,
+            pane_width: 0.,
+            content_width: 0.,
             app,
+            focus: cx.focus_handle(),
             snapshot: None,
             settings: SettingsPresentation::empty(cx),
             ai: AiSettingsPresentation::empty(cx),
@@ -878,9 +883,13 @@ impl SettingsPanel {
     }
 
     pub(in crate::features) fn theme_palette(&self) -> ThemePalette {
+        self.settings_chrome().palette
+    }
+
+    pub(in crate::features::pages::settings) fn settings_chrome(&self) -> SettingsChrome {
         self.snapshot
             .as_ref()
-            .map(|snapshot| snapshot.chrome.palette)
+            .map(|snapshot| snapshot.chrome)
             .expect("settings panel render requires a snapshot")
     }
 
@@ -1077,33 +1086,71 @@ impl SettingsPanel {
     }
 }
 
+impl Focusable for SettingsPanel {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for SettingsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.viewport_width = f32::from(window.viewport_size().width);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.paint_count += 1;
         }
 
         let Some(snapshot) = self.snapshot.clone() else {
-            return div().size_full().into_any_element();
+            return div()
+                .track_focus(&self.focus)
+                .size_full()
+                .into_any_element();
         };
 
+        let panel = cx.weak_entity();
+        let measurement = canvas(
+            move |bounds, _, cx| {
+                let width = f32::from(bounds.size.width);
+                let Some(panel) = panel.upgrade() else { return };
+                if panel.read(cx).pane_width == width {
+                    return;
+                }
+                cx.defer(move |cx| {
+                    panel.update(cx, |panel, cx| {
+                        if panel.pane_width != width {
+                            panel.pane_width = width;
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+
+        let root = div()
+            .track_focus(&self.focus)
+            .relative()
+            .min_w_0()
+            .min_h_0()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(measurement);
         if snapshot.settings.theme_designer.open {
-            return self.theme_designer_section(cx);
+            return root
+                .child(self.theme_designer_section(cx))
+                .into_any_element();
         }
 
-        let palette = snapshot.chrome.palette;
+        let chrome = snapshot.chrome;
+        let palette = chrome.palette;
         let settings_title = t!("settings.title");
         let active_group = t!(snapshot.active_tab.group_i18n_key());
         let active_label = t!(snapshot.active_tab.i18n_key());
         let back_label = t!("common.close");
 
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(palette.bg))
+        root.bg(chrome.surface)
             .child(
                 div()
                     .h(px(36.))
@@ -1114,7 +1161,7 @@ impl Render for SettingsPanel {
                     .px_3()
                     .border_b_1()
                     .border_color(rgb(palette.border))
-                    .bg(rgb(palette.section_header))
+                    .bg(chrome.transparent_section_header)
                     .child(
                         div()
                             .flex()
@@ -1182,7 +1229,7 @@ impl Render for SettingsPanel {
                             })),
                     ),
             )
-            .child(self.settings_layout(&snapshot, window, cx))
+            .child(self.settings_layout(&snapshot, cx))
             .child(self.settings_action_footer(&snapshot, cx))
             .into_any_element()
     }
@@ -1192,10 +1239,8 @@ impl SettingsPanel {
     fn settings_layout(
         &mut self,
         snapshot: &SettingsSnapshot,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let viewport_width = f32::from(window.viewport_size().width);
         let active_item_id = settings_tab_nav_id(snapshot.active_tab);
         let active_label = t!(snapshot.active_tab.i18n_key());
         let scroll_handle = self
@@ -1206,6 +1251,7 @@ impl SettingsPanel {
         let content = self.settings_tab_content(snapshot, cx);
         let panel = cx.entity();
         let toggle_panel = panel.clone();
+        let measured_panel = panel.downgrade();
 
         NyaSettingsLayout::new(
             "settings-layout",
@@ -1214,10 +1260,19 @@ impl SettingsPanel {
             content,
         )
         .palette(snapshot.chrome.palette)
+        .content_background(snapshot.chrome.transparent_bg)
         .active_title(active_label)
         .sidebar_title(t!("settings.title"))
         .content_scroll_handle(scroll_handle)
-        .viewport_width(viewport_width)
+        .viewport_width(self.pane_width)
+        .on_content_width_changed(move |width, _, cx| {
+            let _ = measured_panel.update(cx, |panel, cx| {
+                if panel.content_width != width {
+                    panel.content_width = width;
+                    cx.notify();
+                }
+            });
+        })
         .compact_breakpoint(640.)
         .wide_breakpoint(1024.)
         .on_select(move |item_id, _, cx| {
@@ -1351,7 +1406,7 @@ impl SettingsPanel {
             .py_3()
             .border_t_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(palette.section_header))
+            .bg(snapshot.chrome.transparent_section_header)
             .child(
                 div()
                     .min_w_0()
@@ -1990,7 +2045,6 @@ forward_app_action!(
     toggle_minimize_to_tray,
     toggle_multi_line_paste_dialog,
     toggle_osc52_clipboard_write,
-    toggle_panel_multi_open,
     toggle_paste_image_as_path,
     toggle_recording_auto_start,
     toggle_recording_binary_transfer_payloads,
@@ -2012,6 +2066,7 @@ forward_app_action!(
     toggle_terminal_timestamps,
     toggle_terminal_workspace_padding,
     toggle_terminal_zebra_stripes,
+    toggle_terminal_zebra_stripes_by_row,
     toggle_terminal_zoom_enabled,
     toggle_file_manager_auto_collapse,
     toggle_transfer_ask_save_location,
@@ -2021,21 +2076,18 @@ forward_app_action!(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use gpui::{
-        AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
-    };
-    use nyaterm_core::{AppRuntime, RuntimeMode};
-
+    use super::{FontSelectOptionCache, SettingsPanel};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::pages::settings::inputs::ALL_SETTINGS_TABS;
     use crate::features::{FontCatalogLoadState, NyaTermApp};
     use crate::models::{AiActionEditorField, AiActionListKind, NavItem, SettingsTab};
     use crate::test_support::TestConfigDir;
-
-    use super::{FontSelectOptionCache, SettingsPanel};
+    use gpui::{
+        AppContext as _, Entity, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
+    };
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use std::path::Path;
 
     #[test]
     fn font_select_option_cache_rebuilds_after_catalog_load() {
@@ -2097,6 +2149,190 @@ mod tests {
 
     struct PanelHost {
         panel: Entity<SettingsPanel>,
+    }
+
+    struct ResizablePanelHost {
+        app: Entity<NyaTermApp>,
+        width: f32,
+    }
+
+    struct SettingsBodyHost {
+        panel: Entity<SettingsPanel>,
+        width: f32,
+    }
+
+    impl Render for SettingsBodyHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let body = self.panel.update(cx, |panel, cx| {
+                panel.content_width = self.width;
+                // Exercise provider cards without opening the credential editor.
+                panel.ai.providers.selected_id = None;
+                let snapshot = panel.snapshot.clone().unwrap();
+                panel.settings_tab_content(&snapshot, cx)
+            });
+            div().w(px(self.width)).child(body)
+        }
+    }
+
+    #[test]
+    fn ai_settings_grids_follow_body_width_in_a_large_window() {
+        let dir = TestConfigDir::new("nyaterm-settings-grid-width");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            for _ in 0..3 {
+                app.add_ai_provider_preset(nyaterm_core::AiProviderKind::OpenaiCompatible, cx);
+            }
+            app.focus_settings_tab(SettingsTab::AiModels, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let panel = cx.update_entity(&app, |app, _| app.settings_panel.clone());
+        let provider_selectors: Vec<&'static str> = panel.read_with(&cx, |panel, _| {
+            panel
+                .ai
+                .config
+                .provider_credentials
+                .iter()
+                .map(|credential| {
+                    &*Box::leak(format!("ai-provider-card-{}", credential.id).into_boxed_str())
+                })
+                .collect()
+        });
+        let (host, vcx) = cx.add_window_view(|_, _| SettingsBodyHost {
+            panel: panel.clone(),
+            width: 519.,
+        });
+        vcx.simulate_resize(gpui::size(px(1420.), px(960.)));
+        for (width, columns) in [(519., 1), (520., 2), (799., 2), (800., 3)] {
+            host.update(vcx, |host, cx| {
+                host.width = width;
+                cx.notify();
+            });
+            vcx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            let first = vcx.debug_bounds(provider_selectors[0]).unwrap();
+            let second = vcx.debug_bounds(provider_selectors[1]).unwrap();
+            let third = vcx.debug_bounds(provider_selectors[2]).unwrap();
+            assert_eq!(first.top() == second.top(), columns >= 2);
+            assert_eq!(first.top() == third.top(), columns == 3);
+            assert!(third.right() <= px(width));
+        }
+        for (tab, first, second) in [
+            (
+                SettingsTab::AiGeneral,
+                "ai-general-context-field",
+                "ai-general-timeout-field",
+            ),
+            (
+                SettingsTab::AiAgents,
+                "ai-agent-thread-field",
+                "ai-agent-model-field",
+            ),
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.focus_settings_tab(tab, cx);
+                    app.flush_settings_panel_snapshots(cx);
+                });
+            });
+            for width in [1023., 1024., 519.] {
+                host.update(vcx, |host, cx| {
+                    host.width = width;
+                    cx.notify();
+                });
+                vcx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+                vcx.run_until_parked();
+                let first = vcx.debug_bounds(first).unwrap();
+                let second = vcx.debug_bounds(second).unwrap();
+                assert_eq!(
+                    first.top() == second.top(),
+                    width >= 1024.,
+                    "{tab:?} at {width}"
+                );
+                assert!(second.right() <= px(width));
+            }
+        }
+    }
+
+    impl Render for ResizablePanelHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(px(self.width)).h(px(720.)).flex().child(
+                self.app
+                    .read(cx)
+                    .settings_panel
+                    .clone()
+                    .cached(crate::features::layout::cached_panel_style()),
+            )
+        }
+    }
+
+    #[test]
+    fn cached_settings_responds_to_pane_resize_without_window_resize() {
+        let dir = TestConfigDir::new("nyaterm-settings-pane-resize");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.open_page(NavItem::Settings, cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let (host, vcx) = cx.add_window_view(|_, _| ResizablePanelHost {
+            app: app.clone(),
+            width: 395.,
+        });
+        for (window_width, window_height) in [(1271., 877.), (1289., 919.), (1420., 960.)] {
+            vcx.simulate_resize(gpui::size(px(window_width), px(window_height)));
+            for (width, sidebar, padding) in [
+                (395., 56., 32.),
+                (639., 56., 32.),
+                (640., 192., 48.),
+                (1023., 192., 48.),
+                (1024., 224., 64.),
+                (395., 56., 32.),
+            ] {
+                host.update(vcx, |host, cx| {
+                    host.width = width;
+                    cx.notify();
+                });
+                for _ in 0..4 {
+                    draw(&app, vcx);
+                }
+                assert_eq!(
+                    vcx.debug_bounds("settings-sidebar").unwrap().size.width,
+                    px(sidebar)
+                );
+                vcx.update(|_, cx| {
+                    let panel = app.read(cx).settings_panel.read(cx);
+                    assert_eq!(panel.pane_width, width);
+                    assert_eq!(panel.content_width, width - sidebar - padding);
+                });
+                let before = vcx.update(|_, cx| paints(&app, cx));
+                for _ in 0..3 {
+                    draw(&app, vcx);
+                }
+                assert_eq!(
+                    vcx.update(|_, cx| paints(&app, cx)),
+                    before,
+                    "stable measurements must not repaint the cached panel"
+                );
+            }
+        }
     }
 
     impl Render for PanelHost {
@@ -2208,6 +2444,33 @@ mod tests {
                 assert!(!saved.has_master_password);
             });
         }
+    }
+
+    #[test]
+    fn row_stripes_subswitch_follows_main_switch_and_keeps_its_preference() {
+        let dir = TestConfigDir::new("nyaterm-settings-row-stripes");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+                app.toggle_terminal_zebra_stripes_by_row(cx);
+            })
+        });
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_some());
+        vcx.update(|_, cx| app.update(cx, |app, cx| app.toggle_terminal_zebra_stripes(cx)));
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_none());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.settings.summary().terminal_zebra_stripes_by_row);
+                app.toggle_terminal_zebra_stripes(cx);
+            })
+        });
+        draw(&app, vcx);
+        assert!(vcx.debug_bounds("terminal-row-stripes-setting").is_some());
     }
 
     #[test]
@@ -2343,6 +2606,46 @@ mod tests {
             assert!(editor.right() <= px(width));
             assert!(editor.bottom() <= px(480.));
         }
+    }
+
+    #[test]
+    fn window_material_and_content_opacity_reach_the_cached_settings_panel() {
+        use nyaterm_core::models::window_material::WindowMaterial;
+        let dir = TestConfigDir::new("nyaterm-settings-panel-background");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.open_page(NavItem::Settings, cx);
+            app.begin_settings_draft(cx);
+        });
+        for material in [
+            WindowMaterial::Blurred,
+            WindowMaterial::Transparent,
+            WindowMaterial::Opaque,
+        ] {
+            cx.update_entity(&app, |app, cx| {
+                app.set_window_material(material, cx);
+                app.set_background_content_opacity(45, cx);
+            });
+            cx.run_until_parked();
+            cx.read_entity(&app, |app, cx| {
+                let native = app.shell_background().native_transparent;
+                let chrome = app.settings_panel.read(cx).snapshot().unwrap().chrome;
+                assert_eq!(chrome.surface, app.shell_surface_color(chrome.palette.bg));
+                assert_eq!(chrome.transparent_bg.a, if native { 0. } else { 1. });
+                assert_eq!(
+                    chrome.transparent_section_header.a,
+                    if native { 0. } else { 1. }
+                );
+                if native {
+                    assert!((chrome.surface.a - 0.45).abs() < 0.002);
+                } else {
+                    assert_eq!(chrome.surface.a, 1.);
+                }
+            });
+        }
+        cx.update_entity(&app, |app, cx| app.cancel_settings(cx));
     }
 
     #[test]

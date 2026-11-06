@@ -5,7 +5,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 use super::{DesktopController, WorkspaceWindow, tray_click_shows_window};
 use crate::app_shell::{AppShell, AppShellStartup};
 use crate::features::shell::tray::model::TrayAction;
-use crate::features::test_support::app_with_visible_local_session;
+use crate::features::test_support::app_with_visible_ssh_session;
 
 #[test]
 fn tray_click_policy_accepts_only_left_release_and_left_double_click() {
@@ -90,8 +90,10 @@ fn tray_routes_live_ownership_after_move_and_ignores_closed_sessions() {
         });
         shells.push(shell);
     }
-    let first_app = app_with_visible_local_session(&mut cx, &first_root, "first-session");
-    let second_app = app_with_visible_local_session(&mut cx, &second_root, "second-session");
+    // These sessions stand for "another workspace is holding a backend", which is
+    // what the cloud-sync blockers below protect; a local shell no longer counts.
+    let first_app = app_with_visible_ssh_session(&mut cx, &first_root, "first-session");
+    let second_app = app_with_visible_ssh_session(&mut cx, &second_root, "second-session");
     cx.update_entity(&shells[0], |shell, _| shell.app = Some(first_app.clone()));
     cx.update_entity(&shells[1], |shell, _| shell.app = Some(second_app.clone()));
     cx.update_entity(&controller, |controller, cx| {

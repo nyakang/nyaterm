@@ -1,12 +1,10 @@
-use std::collections::HashMap;
-
-use gpui::{ListAlignment, ListState, px};
-use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
-use nyaterm_transport::RecordingStatus;
-
 use crate::models::{
     RecordingEventReceiver, RecordingHistorySearchKey, RecordingWriteHandle, RecordingWritePipeline,
 };
+use gpui::{ListAlignment, ListState, px};
+use nyaterm_recording::recording::RecordingStatus;
+use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
+use std::collections::HashMap;
 
 pub(in crate::features) struct RecordingFeatureState {
     active_count: usize,
@@ -132,9 +130,9 @@ impl RecordingFeatureState {
     pub(in crate::features) fn apply_status(&mut self, status: RecordingStatus) {
         if matches!(
             status.state,
-            nyaterm_transport::RecordingStatusState::Recording
-                | nyaterm_transport::RecordingStatusState::Degraded
-                | nyaterm_transport::RecordingStatusState::Failed
+            nyaterm_recording::recording::RecordingStatusState::Recording
+                | nyaterm_recording::recording::RecordingStatusState::Degraded
+                | nyaterm_recording::recording::RecordingStatusState::Failed
         ) {
             self.statuses.insert(status.session_id.clone(), status);
         } else {

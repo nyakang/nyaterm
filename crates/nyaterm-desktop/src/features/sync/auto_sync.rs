@@ -56,25 +56,23 @@ pub(crate) enum AutoSyncResult {
     Synced(Box<CloudSyncResult>),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AutoSyncRequest {
+    pub trigger: AutoSyncTrigger,
+    pub change_elapsed: Duration,
+    pub pull_safe: bool,
+    pub remote_available: bool,
+}
+
 pub(crate) fn run_auto_sync(
     store: &StoreBlockingClient,
     runtime: &AppRuntime,
-    trigger: AutoSyncTrigger,
-    change_elapsed: Duration,
-    pull_safe: bool,
+    request: AutoSyncRequest,
     before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
     controls: &AutoSyncOperationControls,
 ) -> Result<AutoSyncResult, CloudSyncError> {
-    let mut scope = super::io_runtime::IoScope::new(trigger.history_name());
-    let result = run_auto_sync_inner(
-        store,
-        runtime,
-        trigger,
-        change_elapsed,
-        pull_safe,
-        before_apply,
-        controls,
-    );
+    let mut scope = super::io_runtime::IoScope::new(request.trigger.history_name());
+    let result = run_auto_sync_inner(store, runtime, request, before_apply, controls);
     scope.finish(&result);
     match &result {
         Ok(AutoSyncResult::Disabled) => scope.skipped("disabled"),
@@ -89,12 +87,16 @@ pub(crate) fn run_auto_sync(
 fn run_auto_sync_inner(
     store: &StoreBlockingClient,
     runtime: &AppRuntime,
-    trigger: AutoSyncTrigger,
-    change_elapsed: Duration,
-    pull_safe: bool,
+    request: AutoSyncRequest,
     before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
     controls: &AutoSyncOperationControls,
 ) -> Result<AutoSyncResult, CloudSyncError> {
+    let AutoSyncRequest {
+        trigger,
+        change_elapsed,
+        pull_safe,
+        remote_available,
+    } = request;
     controls.sync.checkpoint()?;
     let _operation = match crate::features::cloud_sync_operation_lock().try_lock() {
         Ok(guard) => guard,
@@ -131,7 +133,21 @@ fn run_auto_sync_inner(
         enabled: true,
     };
     if settings.protocol_version == 4 {
-        let preview = super::cloud_sync_v4::preview(store, &settings, &options, &controls.sync)?;
+        let preview = if trigger == AutoSyncTrigger::Change {
+            let Some(preview) = super::cloud_sync_v4::preview_on_change(
+                store,
+                &settings,
+                &options,
+                remote_available,
+                &controls.sync,
+            )?
+            else {
+                return Ok(AutoSyncResult::Skipped);
+            };
+            preview
+        } else {
+            super::cloud_sync_v4::preview(store, &settings, &options, &controls.sync)?
+        };
         if preview.migration
             || !pull_safe
             || !settings.auto_pull_remote_changes
@@ -308,9 +324,9 @@ fn now_ms() -> u64 {
 
 impl NyaTermApp {
     pub(crate) fn auto_cloud_sync_pull_blocked(&self) -> bool {
-        self.session.session_order_len() > 0
-            || self.session.start_has_pending()
-            || self.remote_desktop.has_active_sessions()
+        self.session.has_live_remote_sessions()
+            || self.session.start_is_busy()
+            || self.remote_desktop.blocks_configuration_replacement()
             || self.settings_draft_dirty()
     }
 
@@ -461,9 +477,12 @@ mod tests {
             result = super::run_auto_sync(
                 &store,
                 &runtime,
-                AutoSyncTrigger::Change,
-                Duration::from_secs(61),
-                true,
+                super::AutoSyncRequest {
+                    trigger: AutoSyncTrigger::Change,
+                    change_elapsed: Duration::from_secs(61),
+                    pull_safe: true,
+                    remote_available: false,
+                },
                 &|| Ok(()),
                 &AutoSyncOperationControls::default(),
             );

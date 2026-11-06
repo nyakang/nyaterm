@@ -3156,11 +3156,13 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     summary = saved;
     summary.diagnostics_level = "debug".to_string();
     summary.diagnostics_retention_days = 14;
+    summary.diagnostics_log_shard_bytes = 20 * 1024 * 1024;
     let saved = store
         .save_diagnostics_settings(&summary)
         .expect("save diagnostics");
     assert_eq!(saved.diagnostics_level, "debug");
     assert_eq!(saved.diagnostics_retention_days, 14);
+    assert_eq!(saved.diagnostics_log_shard_bytes, 20 * 1024 * 1024);
 
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(
@@ -3178,6 +3180,20 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     assert_eq!(
         raw["diagnostics"]["retention_days"],
         serde_json::Value::from(14)
+    );
+    assert_eq!(
+        raw["diagnostics"]["shard_bytes"],
+        serde_json::Value::from(20 * 1024 * 1024)
+    );
+
+    // An extreme persisted value is clamped instead of breaking logging.
+    summary.diagnostics_log_shard_bytes = 4096;
+    let saved = store
+        .save_diagnostics_settings(&summary)
+        .expect("save clamped diagnostics");
+    assert_eq!(
+        saved.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::MIN_LOG_SHARD_BYTES
     );
 
     std::fs::remove_dir_all(dir).ok();
@@ -3715,6 +3731,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(summary.terminal_low_latency_mode);
     // Legacy settings omit the new field and must keep zebra stripes enabled.
     assert!(summary.terminal_zebra_stripes_enabled);
+    assert!(!summary.terminal_zebra_stripes_by_row);
     assert_eq!(
         summary.ui_file_manager,
         nyaterm_core::FileManagerUiSettings::default()
@@ -3817,6 +3834,11 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(summary.recording_memory_limit_bytes, 1048576);
     assert_eq!(summary.diagnostics_level, "debug");
     assert_eq!(summary.diagnostics_retention_days, 3);
+    assert_eq!(
+        summary.diagnostics_log_shard_bytes,
+        nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+        "legacy documents without diagnostics.shard_bytes keep the 10 MiB default"
+    );
     assert!(summary.startup_restore);
     assert!(summary.minimize_to_tray);
     assert!(!summary.confirm_on_close);
@@ -4115,6 +4137,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     terminal_update.terminal_show_multi_line_paste_dialog = true;
     terminal_update.terminal_low_latency_mode = true;
     terminal_update.terminal_zebra_stripes_enabled = false;
+    terminal_update.terminal_zebra_stripes_by_row = true;
     terminal_update.ui_remote_stats_interval = 4;
     terminal_update.ui_remote_stats_show_users = true;
     terminal_update.ui_gpu_monitor_interval = 10;
@@ -4129,6 +4152,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(saved_terminal.terminal_show_multi_line_paste_dialog);
     assert!(saved_terminal.terminal_low_latency_mode);
     assert!(!saved_terminal.terminal_zebra_stripes_enabled);
+    assert!(saved_terminal.terminal_zebra_stripes_by_row);
     assert_eq!(saved_terminal.ui_remote_stats_interval, 4);
     assert!(saved_terminal.ui_remote_stats_show_users);
     assert_eq!(saved_terminal.ui_gpu_monitor_interval, 10);
@@ -4169,6 +4193,12 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
             .and_then(|value| value.as_bool()),
         Some(false)
     );
+
+    assert_eq!(stored["terminal"]["zebra_stripes_by_row"], true);
+    assert_eq!(stored["unrelated"]["preserve"], true);
+    let reloaded = store.load_app_settings_summary().unwrap();
+    assert!(reloaded.terminal_zebra_stripes_by_row);
+    assert!(!reloaded.terminal_zebra_stripes_enabled);
 
     let mut quick_command_update = saved_terminal.clone();
     quick_command_update.ui_quick_cmd_view_mode = "list".to_string();
@@ -7300,6 +7330,86 @@ fn portable_snapshot_restore_encrypts_connection_inline_password() {
 
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(target_dir).ok();
+}
+
+#[test]
+fn automatic_icons_preserve_saved_fields_passwords_and_manual_choices() {
+    let dir = unique_temp_dir("auto-icon-update");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let connection = serde_json::from_value(serde_json::json!({
+        "id":"auto-icon", "name":"Current name", "type":"ssh", "host":"example.test",
+        "auth":{"mode":"password","password":"fixture-secret"}
+    }))
+    .unwrap();
+    store.save_connection(&connection).unwrap();
+    let key = super::entity_key(super::CONNECTION_PREFIX, "auto-icon");
+    let mut before: serde_json::Value = store
+        .read_json_table(super::CONNECTIONS_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    before["future"] = serde_json::json!({"keep":true});
+    before["sftp"]["future_option"] = serde_json::json!(7);
+    let txn = store.db.begin_write().unwrap();
+    super::write_json_in_txn(&txn, super::CONNECTIONS_TABLE, &key, &before).unwrap();
+    txn.commit().unwrap();
+    let password = connection_password_record(&store, "auto-icon");
+    assert!(
+        store
+            .update_auto_detected_connection_icon("auto-icon", "linux")
+            .unwrap()
+    );
+    let after: serde_json::Value = store
+        .read_json_table(super::CONNECTIONS_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    let mut expected = before;
+    expected["icon"] = serde_json::json!("linux");
+    expected["icon_auto_detect"] = serde_json::json!(true);
+    assert_eq!(after, expected);
+    assert_eq!(
+        connection_password_record(&store, "auto-icon").password,
+        password.password
+    );
+    assert_eq!(
+        store
+            .get_connection("auto-icon")
+            .unwrap()
+            .unwrap()
+            .auth
+            .unwrap()
+            .password
+            .as_deref(),
+        Some("fixture-secret")
+    );
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("auto-icon", "linux")
+            .unwrap()
+    );
+
+    let mut manual = store.get_connection("auto-icon").unwrap().unwrap();
+    manual.icon = Some("manual".into());
+    manual.icon_auto_detect = Some(false);
+    store.save_connection(&manual).unwrap();
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("auto-icon", "windows")
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get_connection("auto-icon")
+            .unwrap()
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("manual")
+    );
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("missing", "linux")
+            .unwrap()
+    );
 }
 
 #[test]

@@ -49,13 +49,13 @@ impl RenderOnce for NyaDisclosure {
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
         let hover_group = self.id.clone();
-        let chevron = svg()
-            .path("icons/menu/chevron-right.svg")
-            .size(px(12.))
+        let caret = svg()
+            .path("icons/menu/caret.svg")
+            .size(px(10.))
             .text_color(muted)
             .flex_none()
             .with_spring(
-                "chevron",
+                "caret",
                 SpringAnimation::new(SpringConfig::new(2500., 100., 1.))
                     .to(if self.open { 0.25_f32 } else { 0. })
                     .with_epsilon(0.01),
@@ -78,7 +78,7 @@ impl RenderOnce for NyaDisclosure {
                     .text_size(px(11.))
                     .line_height(px(16.))
                     .group_hover(hover_group, move |style| style.text_color(foreground))
-                    .child(chevron)
+                    .child(caret)
                     .child(self.label),
             );
         if let Some(on_click) = self.on_click {
@@ -123,9 +123,9 @@ mod tests {
     impl AssetSource for IconAssets {
         fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
             let (bit, bytes): (usize, &'static [u8]) = match path {
-                "icons/menu/chevron-right.svg" => (
+                "icons/menu/caret.svg" => (
                     1,
-                    include_bytes!("../../nyaterm-app/assets/icons/menu/chevron-right.svg"),
+                    include_bytes!("../../nyaterm-app/assets/icons/menu/caret.svg"),
                 ),
                 "icons/conn/spinner-arc.svg" => (
                     2,

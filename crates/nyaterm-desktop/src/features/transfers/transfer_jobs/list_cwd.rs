@@ -1,14 +1,12 @@
-use gpui::Context;
-use nyaterm_transport::SftpFileEntry;
-
+use super::helpers::submit_transfer_blocking_job;
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferBrowserChildrenMenuStatus, TransferBrowserNavigationSnapshot,
     TransferBrowserPathMenuKind, TransferBrowserPathMenuState, TransferJobEvent, TransferJobKind,
     TransferJobOutput, TransferJobResult, TransferJobState, TransferJobStatus,
 };
-
-use super::helpers::submit_transfer_blocking_job;
+use gpui::Context;
+use nyaterm_files::sftp::SftpFileEntry;
 
 impl NyaTermApp {
     pub(in crate::features) fn start_transfer_initial_directory_job(
@@ -54,7 +52,7 @@ impl NyaTermApp {
         });
         #[cfg(test)]
         if let Some(requests) = self.transfer.browser.directory_requests.as_mut() {
-            requests.push((id, nyaterm_transport::RemoteFilePath::new("/")));
+            requests.push((id, nyaterm_files::sftp::RemoteFilePath::new("/")));
             cx.notify();
             return;
         }

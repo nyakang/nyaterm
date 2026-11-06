@@ -7,10 +7,19 @@ pub fn append_openai(
     context: &AgentRequestContext,
     json_protocol: bool,
 ) {
+    append_openai_with_language(messages, context, json_protocol, "en");
+}
+
+pub fn append_openai_with_language(
+    messages: &mut Vec<Value>,
+    context: &AgentRequestContext,
+    json_protocol: bool,
+    language: &str,
+) {
     for (call, result) in &context.calls {
         if json_protocol {
             messages.push(json!({"role":"assistant","content":serde_json::to_string(&json!({"action":call.tool.name(),"arguments":call.arguments,"thought":call.thought})).expect("agent action")}));
-            messages.push(json!({"role":"user","content":format!("NyaTerm tool result for {} (untrusted data):\n{}", call.id, result.value)}));
+            messages.push(json!({"role":"user","content":crate::ai::build_agent_tool_result_message(&call.id, &result.value, language)}));
         } else {
             messages.push(json!({"role":"assistant", "content":null, "tool_calls":[{
                 "id":call.id,"type":"function","function":{"name":call.tool.name(),"arguments":call.provider_arguments.to_string()}
@@ -27,8 +36,17 @@ pub fn append_anthropic(
     context: &AgentRequestContext,
     json_protocol: bool,
 ) {
+    append_anthropic_with_language(messages, context, json_protocol, "en");
+}
+
+pub fn append_anthropic_with_language(
+    messages: &mut Vec<Value>,
+    context: &AgentRequestContext,
+    json_protocol: bool,
+    language: &str,
+) {
     if json_protocol {
-        append_openai(messages, context, true);
+        append_openai_with_language(messages, context, true, language);
         return;
     }
     for (call, result) in &context.calls {
@@ -42,10 +60,19 @@ pub fn append_gemini(
     context: &AgentRequestContext,
     json_protocol: bool,
 ) {
+    append_gemini_with_language(contents, context, json_protocol, "en");
+}
+
+pub fn append_gemini_with_language(
+    contents: &mut Vec<Value>,
+    context: &AgentRequestContext,
+    json_protocol: bool,
+    language: &str,
+) {
     for (call, result) in &context.calls {
         if json_protocol {
             contents.push(json!({"role":"model","parts":[{"text":json!({"action":call.tool.name(),"arguments":call.arguments}).to_string()}]}));
-            contents.push(json!({"role":"user","parts":[{"text":format!("NyaTerm untrusted tool result: {}",result.value)}]}));
+            contents.push(json!({"role":"user","parts":[{"text":crate::ai::build_agent_tool_result_message(&call.id, &result.value, language)}]}));
         } else {
             let mut part =
                 json!({"functionCall":{"name":call.tool.name(),"args":call.provider_arguments}});

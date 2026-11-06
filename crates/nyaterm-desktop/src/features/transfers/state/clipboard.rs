@@ -1,10 +1,7 @@
-use std::path::PathBuf;
-
-use nyaterm_transport::SftpFileEntry;
-
-use crate::models::{TransferJobKind, TransferJobStatus};
-
 use super::TransferFeatureState;
+use crate::models::{TransferJobKind, TransferJobStatus};
+use nyaterm_files::sftp::SftpFileEntry;
+use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(in crate::features) struct TransferFileClipboard {

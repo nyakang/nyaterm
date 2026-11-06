@@ -1,10 +1,14 @@
-use rust_i18n::t;
-
+use super::command_suggestions::{
+    SUGGESTION_OVERLAY_FOOTER_HEIGHT, SUGGESTION_OVERLAY_HEADER_HEIGHT,
+    suggestion_overlay_desired_height,
+};
+use crate::features::NyaTermApp;
+use crate::models::{
+    ConnectionPasswordTarget, CredentialAutofillAction, CredentialAutofillMatchEvent,
+    CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey, CredentialAutofillTarget,
+    CredentialSuggestionState, PendingCredentialAutofill, credential_autofill_action,
+};
 use futures::StreamExt as _;
-
-use nyaterm_ui::NyaScrollable;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use gpui::{
     Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba,
     svg,
@@ -15,18 +19,9 @@ use nyaterm_core::{
 };
 use nyaterm_store::{ConnectionStore, StorageError, StoreDomain, store_request};
 use nyaterm_terminal::TerminalSnapshot;
-
-use crate::features::NyaTermApp;
-use crate::models::{
-    ConnectionPasswordTarget, CredentialAutofillAction, CredentialAutofillMatchEvent,
-    CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey, CredentialAutofillTarget,
-    CredentialSuggestionState, PendingCredentialAutofill, credential_autofill_action,
-};
-
-use super::command_suggestions::{
-    SUGGESTION_OVERLAY_FOOTER_HEIGHT, SUGGESTION_OVERLAY_HEADER_HEIGHT,
-    suggestion_overlay_desired_height,
-};
+use nyaterm_ui::NyaScrollable;
+use rust_i18n::t;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT: usize = 4096;
 const PENDING_PASSWORD_TTL_MS: u64 = 60_000;
@@ -1348,13 +1343,6 @@ fn credential_autofill_detect_prompt_kind(prompt: &str) -> Option<CredentialProm
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
-    use nyaterm_core::{
-        AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
-        CredentialPromptKind, SavedConnection,
-    };
-    use nyaterm_transport::SshSessionConfig;
-
     use super::{
         CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT, ConnectionPasswordResolve,
         CredentialAutofillRuntimeBacklog, connection_auth_inline_password,
@@ -1370,6 +1358,12 @@ mod tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{ConnectionPasswordTarget, CredentialAutofillTarget, SessionLaunchConfig};
     use crate::test_support::TestConfigDir;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{
+        AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
+        CredentialPromptKind, SavedConnection,
+    };
+    use nyaterm_transport::SshSessionConfig;
 
     fn backlog(
         queued_output_bytes: usize,
@@ -2392,11 +2386,12 @@ mod tests {
     #[test]
     fn credential_fills_skip_sync_peers_history_and_recording_without_prompt_detection() {
         use nyaterm_core::SecretString;
-        use nyaterm_store::ConnectionStore;
-        use nyaterm_transport::{
+        use nyaterm_recording::recording::{
             ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
-            RecordingRotationPolicy, TelnetSessionConfig,
+            RecordingRotationPolicy,
         };
+        use nyaterm_store::ConnectionStore;
+        use nyaterm_transport::TelnetSessionConfig;
         use std::io::Read;
         use std::net::TcpListener;
         use std::time::{Duration, Instant};

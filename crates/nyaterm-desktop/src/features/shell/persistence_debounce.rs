@@ -179,6 +179,8 @@ mod tests {
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
+        let store = app.update(&mut cx, |app, _| app.store_blocking_client());
+        let sync_generation = store.sync_mutation_generation();
         cx.update_entity(&app, |app, cx| {
             app.start_shell_persistence_debounce(cx);
             app.shell.mark_ui_layout_persist_pending();
@@ -201,6 +203,12 @@ mod tests {
                 "the debounce task must write a queued UI-layout save on its own"
             );
         });
+        store
+            .request(0, nyaterm_store::FlushBarrier)
+            .unwrap()
+            .outcome
+            .unwrap();
+        assert_eq!(store.sync_mutation_generation(), sync_generation);
     }
 
     /// A mark arriving while the task is already parked must still get written.

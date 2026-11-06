@@ -21,6 +21,36 @@ const EXTRA_END: u64 = u64::MAX;
 
 pub(crate) struct RowHasher(u64);
 
+/// Prepared once for a run of cells sharing rendering attributes.
+pub(crate) struct PackedCellStyle {
+    word: u64,
+    rgb: Option<(u64, u64)>,
+}
+
+impl PackedCellStyle {
+    pub(crate) fn new(style: &CellStyle) -> Self {
+        let has_rgb = style.fg_rgb.is_some() || style.bg_rgb.is_some();
+        let flags = u64::from(style.bold)
+            | u64::from(style.reverse) << 1
+            | u64::from(style.underline) << 2
+            | u64::from(style.strikeout) << 3
+            | u64::from(style.italic) << 4
+            | u64::from(style.hidden) << 5;
+        Self {
+            word: flags << 25
+                | style.fg.map_or(0, |index| u64::from(index) + 1) << 31
+                | style.bg.map_or(0, |index| u64::from(index) + 1) << 40
+                | u64::from(has_rgb) << 60,
+            rgb: has_rgb.then(|| {
+                (
+                    style.fg_rgb.map_or(0, |rgb| u64::from(rgb) + 1),
+                    style.bg_rgb.map_or(0, |rgb| u64::from(rgb) + 1),
+                )
+            }),
+        }
+    }
+}
+
 impl RowHasher {
     /// `significant_cells` is the row length after trailing trivial blanks.
     pub(crate) fn new(significant_cells: usize) -> Self {
@@ -37,6 +67,7 @@ impl RowHasher {
 
     /// `base` is the cell's character, or `None` for a blank. `extra` holds the
     /// zero-width characters combined onto it; they are ignored for blanks.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn cell(
         &mut self,
@@ -46,27 +77,29 @@ impl RowHasher {
         width: u8,
         hyperlink: Option<&str>,
     ) {
+        self.cell_with_style(base, extra, &PackedCellStyle::new(style), width, hyperlink);
+    }
+
+    #[inline]
+    pub(crate) fn cell_with_style(
+        &mut self,
+        base: Option<char>,
+        extra: impl Iterator<Item = char>,
+        style: &PackedCellStyle,
+        width: u8,
+        hyperlink: Option<&str>,
+    ) {
         let mut extra = extra.peekable();
         let has_extra = base.is_some() && extra.peek().is_some();
-        let has_rgb = style.fg_rgb.is_some() || style.bg_rgb.is_some();
-        let style_flags = u64::from(style.bold)
-            | u64::from(style.reverse) << 1
-            | u64::from(style.underline) << 2
-            | u64::from(style.strikeout) << 3
-            | u64::from(style.italic) << 4
-            | u64::from(style.hidden) << 5;
         let word = base.map_or(BLANK_BASE, |ch| u64::from(ch as u32))
             | u64::from(width) << 21
-            | style_flags << 25
-            | style.fg.map_or(0, |index| u64::from(index) + 1) << 31
-            | style.bg.map_or(0, |index| u64::from(index) + 1) << 40
-            | u64::from(has_rgb) << 60
+            | style.word
             | u64::from(has_extra) << 61
             | u64::from(hyperlink.is_some()) << 62;
         self.mix(word);
-        if has_rgb {
-            self.mix(style.fg_rgb.map_or(0, |rgb| u64::from(rgb) + 1));
-            self.mix(style.bg_rgb.map_or(0, |rgb| u64::from(rgb) + 1));
+        if let Some((fg, bg)) = style.rgb {
+            self.mix(fg);
+            self.mix(bg);
         }
         if has_extra {
             for ch in extra {

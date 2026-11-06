@@ -5,6 +5,7 @@ use std::ops::Range;
 use gpui::{Context, IntoElement};
 use rust_i18n::t;
 
+use crate::features::ai::panel::activity::AiActivitySummary;
 use crate::features::ai::panel::execution::AiExecutionGroup;
 use crate::features::ai::panel::messages::disclosure;
 use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
@@ -82,7 +83,7 @@ impl AiTranscriptRow {
                     // Its current plan belongs to the last request's history.
                     if group.messages.end == snapshot.messages.len()
                         && let Some(view) = &snapshot.native_run
-                        && ((open && (!view.plan.tasks.is_empty() || view.verification.is_some()))
+                        && ((open && view.verification.is_some())
                             || view.status
                                 == nyaterm_core::ai::harness::AgentRunStatus::WaitingForUser)
                     {
@@ -327,6 +328,8 @@ impl AiTranscriptRow {
             }
             (Self::Execution { group: a }, Self::Execution { group: b }) => {
                 a != b
+                    || AiActivitySummary::project(previous, a)
+                        != AiActivitySummary::project(next, b)
                     || a.is_live(previous) != b.is_live(next)
                     || (b.is_live(next) && previous.response_phase != next.response_phase)
                     || previous.expanded_execution_groups.contains(&a.id)

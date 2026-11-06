@@ -1,11 +1,3 @@
-use std::collections::HashSet;
-
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, deferred,
-};
-use nyaterm_store::{StoreDomain, store_request};
-
 use crate::features::{
     NyaTermApp, formatting::short_id, view_widgets::horizontal_resize_handle_visual,
     view_widgets::vertical_resize_handle_visual,
@@ -13,6 +5,12 @@ use crate::features::{
 use crate::models::{
     NavItem, WorkspacePaneNode, WorkspaceSplitDirection, WorkspaceSplitResizeState,
 };
+use gpui::{
+    Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, deferred,
+};
+use nyaterm_store::{StoreDomain, store_request};
+use std::collections::HashSet;
 
 impl NyaTermApp {
     pub(in crate::features) fn live_session_ids(&self) -> HashSet<String> {
@@ -630,15 +628,15 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod restore_activation_tests {
-    use gpui::{AppContext as _, TestAppContext};
-    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
-    use nyaterm_transport::{LocalSessionConfig, RemoteStats, SshSessionConfig};
-
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::models::{
         SessionLaunchConfig, SessionRuntimeMetadata, WorkspacePaneNode, WorkspaceSplitDirection,
     };
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
+    use nyaterm_remote_ops::stats::RemoteStats;
+    use nyaterm_transport::{LocalSessionConfig, SshSessionConfig};
 
     fn app(cx: &mut TestAppContext) -> gpui::Entity<NyaTermApp> {
         // A uuid rather than a clock reading: these tests run in parallel and

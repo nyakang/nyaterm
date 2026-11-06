@@ -1,16 +1,13 @@
-use std::path::Path;
-
+use super::NyaTermApp;
+use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
 use gpui::{
     AppContext as _, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, div,
 };
 use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode};
-use nyaterm_transport::LocalSessionConfig;
-
-use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
-use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
-
-use super::NyaTermApp;
+use nyaterm_transport::{LocalSessionConfig, SshSessionConfig};
+use std::path::Path;
 
 struct SessionFocusHost {
     app: Entity<NyaTermApp>,
@@ -50,6 +47,49 @@ pub(crate) fn app_with_visible_local_session(
     root: &Path,
     session_id: &str,
 ) -> gpui::Entity<NyaTermApp> {
+    app_with_visible_session(
+        cx,
+        root,
+        session_id,
+        SessionLaunchConfig::Local(LocalSessionConfig {
+            name: "Local session".to_string(),
+            ..LocalSessionConfig::default()
+        }),
+        None,
+    )
+}
+
+/// Build a visible SSH terminal session for GPUI tests.
+///
+/// Unlike a local shell this session holds a backend, so tests that need a
+/// session which configuration replacement must not disturb use this one.
+pub(crate) fn app_with_visible_ssh_session(
+    cx: &mut gpui::TestAppContext,
+    root: &Path,
+    session_id: &str,
+) -> gpui::Entity<NyaTermApp> {
+    let config = SshSessionConfig {
+        name: session_id.to_string(),
+        host: "example.test".to_string(),
+        username: "tester".to_string(),
+        ..SshSessionConfig::default()
+    };
+    app_with_visible_session(
+        cx,
+        root,
+        session_id,
+        SessionLaunchConfig::Ssh(Box::new(config.clone())),
+        Some(config),
+    )
+}
+
+fn app_with_visible_session(
+    cx: &mut gpui::TestAppContext,
+    root: &Path,
+    session_id: &str,
+    launch_config: SessionLaunchConfig,
+    ssh_config: Option<SshSessionConfig>,
+) -> gpui::Entity<NyaTermApp> {
     let runtime = AppRuntime::from_parts_for_test(
         RuntimeMode::Portable,
         root.to_path_buf(),
@@ -70,14 +110,11 @@ pub(crate) fn app_with_visible_local_session(
         app.session.register_session_metadata(
             session_id,
             SessionRuntimeMetadata {
-                ssh_config: None,
+                ssh_config,
                 ssh_multiplex_key: None,
                 source_connection_id: None,
                 ai_execution_profile: AiExecutionProfile::Posix,
-                launch_config: SessionLaunchConfig::Local(LocalSessionConfig {
-                    name: "Local session".to_string(),
-                    ..LocalSessionConfig::default()
-                }),
+                launch_config,
                 disconnected: false,
             },
         );
@@ -110,7 +147,7 @@ pub(crate) fn editor_document(
         search_query: String::new(),
         active_match: 0,
         revision: None,
-        generation: nyaterm_transport::RemoteTextGeneration::next(),
+        generation: nyaterm_files::remote_file::RemoteTextGeneration::next(),
         loading: false,
         saving: false,
         dirty: false,

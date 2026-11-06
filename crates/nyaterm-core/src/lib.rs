@@ -10,7 +10,9 @@ pub mod cloud_sync;
 pub mod command_draft;
 pub mod command_search;
 pub mod command_suggestion_suppression;
+pub mod completion;
 pub mod connection_route;
+pub mod connection_search;
 pub mod credential_autofill;
 pub mod credentials_crypto;
 pub mod diagnostics;
@@ -194,8 +196,12 @@ pub use remote_preview::{
 pub use runtime::{AppRuntime, RuntimeMode};
 pub use secret::{SecretBytes, SecretString};
 pub use session_import::{
-    PreparedSessionConnection, PreparedSessionImport, SessionImportError, prepare_session_import,
-    prepare_ssh_config_import, prepare_termius_session_import,
+    PreparedSessionConnection, PreparedSessionImport, SessionImportError, WindtermAccountAction,
+    WindtermAccountDecision, WindtermAccountPreview, WindtermImportOutcome, WindtermImportReport,
+    WindtermMissingOneKey, WindtermOneKeyConfigState, WindtermPreview, WindtermUnlinkedReason,
+    WindtermUnlinkedSession, prepare_session_import, prepare_ssh_config_import,
+    prepare_termius_session_import, prepare_windterm_import_with_decisions,
+    prepare_windterm_preview,
 };
 pub use terminal::file_drop::{
     format_local_terminal_drop_input, quote_local_path, terminal_drop_overlay_copy,

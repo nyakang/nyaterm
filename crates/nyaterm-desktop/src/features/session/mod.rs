@@ -1,13 +1,14 @@
 //! Session lifecycle, prompts, recording and file-transfer session runtimes.
 mod transfer_wire;
 
-use std::collections::HashMap;
-
 use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;
-use nyaterm_transport::RemoteFileService;
+use nyaterm_files::remote_file::RemoteFileService;
+use std::collections::HashMap;
 
 mod auth_runtime;
 mod duplicate_prompts;
+pub(in crate::features) mod notice_runtime;
+pub(in crate::features) mod notices;
 mod prompt_runtime;
 mod recording_runtime;
 pub(in crate::features) mod runtime_auth;

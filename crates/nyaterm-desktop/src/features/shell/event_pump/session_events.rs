@@ -1,17 +1,18 @@
-use std::time::{Duration, Instant};
-
-use gpui::Context;
-use nyaterm_transport::SessionEvent;
-
+use crate::features::session::notice_runtime::session_notice_text;
+use crate::features::session::notices::SessionNoticeKind;
 use crate::features::shell::event_pump::helpers::{
-    SESSION_EVENT_DRAIN_SLOW_CHUNK, SessionEventDrainBudget, SessionEventDrainTimings,
-    connect_settle_active, session_event_backlog_active, session_event_drain_budget,
-    session_event_drain_is_slow, session_event_drain_should_yield,
-    session_event_input_wake_drain_budget, terminal_frame_backlog_active_from_counts,
-    terminal_log_plain_text, terminal_output_dropped_marker,
+    SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET, SESSION_EVENT_DRAIN_SLOW_CHUNK,
+    SessionEventDrainBudget, SessionEventDrainTimings, connect_settle_active,
+    session_event_backlog_active, session_event_drain_budget, session_event_drain_is_slow,
+    session_event_drain_should_yield, session_event_input_wake_drain_budget,
+    terminal_frame_backlog_active_from_counts, terminal_log_plain_text,
+    terminal_output_dropped_marker,
 };
 use crate::features::{NyaTermApp, formatting::short_id};
 use crate::models::recording::ExecutionRecordingEvent;
+use gpui::Context;
+use nyaterm_transport::SessionEvent;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 enum SessionOutputDrainStep {
@@ -97,7 +98,9 @@ impl NyaTermApp {
         if settle {
             // First frames after connect: smaller wall budget leaves room for paint.
             drain_budget.wall_budget = Duration::from_millis(4);
-            drain_budget.max_output_bytes = drain_budget.max_output_bytes.min(4 * 1024);
+            drain_budget.max_output_bytes = drain_budget
+                .max_output_bytes
+                .min(SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET);
         }
         self.drain_session_events_with_budget(cx, drain_budget, true)
     }
@@ -265,6 +268,16 @@ impl NyaTermApp {
                         );
                         self.apply_session_cwd(&session_id, cwd, cx);
                     }
+                    SessionEvent::CommandContext {
+                        session_id,
+                        context,
+                    } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        self.commands.set_command_context(session_id, context);
+                    }
                     SessionEvent::CommandAccepted {
                         session_id,
                         command,
@@ -273,8 +286,22 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
+                        self.commands.take_completion_confirmed(&session_id);
+                        let sensitive = self.commands.take_completion_sensitive(&session_id)
+                            || self.recording_input_is_sensitive(&session_id);
+                        if !nyaterm_core::completion::privacy::command_may_be_learned(
+                            &command, sensitive,
+                        ) {
+                            continue;
+                        }
                         self.session.record_command_history(&session_id, &command);
-                        if !self.commands.queue_command_history(vec![command]) {
+                        let context = self.commands.command_context(&session_id).cloned();
+                        let queued = if let Some(context) = context {
+                            self.commands.observe_completion_command(context, command)
+                        } else {
+                            self.commands.queue_command_history(vec![command])
+                        };
+                        if !queued {
                             self.settings.update_store_status(
                                 "command history worker is unavailable",
                                 false,
@@ -303,6 +330,21 @@ impl NyaTermApp {
                             .set_status(format!("Local session cleanup failed: {operation:?}"));
                         root_chrome_dirty = true;
                     }
+                    SessionEvent::Notice { session_id, notice } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        if !self.terminal.session_id_is_retired(&session_id)
+                            && self.session.has_session(&session_id)
+                        {
+                            let kind = SessionNoticeKind::Transport(notice);
+                            let (title, detail) = session_notice_text(&kind);
+                            self.terminal
+                                .submit_system_recording(&session_id, format!("{title}: {detail}"));
+                            root_chrome_dirty |= self.publish_session_notice(&session_id, kind);
+                        }
+                    }
                     SessionEvent::Error {
                         session_id,
                         message,
@@ -311,7 +353,8 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
-                        root_chrome_dirty |= self.handle_session_error_event(session_id, message);
+                        root_chrome_dirty |=
+                            self.handle_session_error_event(session_id, message, cx);
                     }
                 }
                 if session_event_drain_should_yield(
@@ -441,7 +484,8 @@ impl NyaTermApp {
         let marker = terminal_output_dropped_marker(bytes);
         self.recording
             .write_local_message(session_id.clone(), marker.clone());
-        self.append_terminal_log_for_session(Some(&session_id), &marker, true);
+        root_chrome_dirty |=
+            self.publish_session_notice(&session_id, SessionNoticeKind::OutputDropped(bytes));
         if self.session.active_id() == Some(session_id.as_str()) {
             self.shell.set_status(format!(
                 "terminal output overloaded; dropped {} queued byte(s)",
@@ -465,16 +509,14 @@ impl NyaTermApp {
         tracing::warn!(
             diagnostic = "session_exited",
             session_id = %session_id,
-            reason = %reason,
             known_session,
             "session exited or disconnected"
         );
         let log_reason = terminal_log_plain_text(&reason);
         let log = format!("\n# session disconnected: {log_reason}\n");
-        if known_session {
-            self.recording
-                .write_local_message(session_id.clone(), log.clone());
-            self.append_terminal_log_for_session(Some(&session_id), &log, true);
+        if known_session && !self.session.is_disconnected(&session_id) {
+            self.recording.write_local_message(session_id.clone(), log);
+            self.publish_session_notice(&session_id, SessionNoticeKind::Disconnected(reason));
         }
         self.clear_trzsz_session(&session_id);
         self.clear_xymodem_session(&session_id);
@@ -494,7 +536,12 @@ impl NyaTermApp {
         true
     }
 
-    fn handle_session_error_event(&mut self, session_id: String, message: String) -> bool {
+    fn handle_session_error_event(
+        &mut self,
+        session_id: String,
+        message: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.terminal.session_id_is_retired(&session_id) {
             return false;
         }
@@ -502,7 +549,6 @@ impl NyaTermApp {
         tracing::warn!(
             diagnostic = "session_error",
             session_id = %session_id,
-            message = %message,
             "session error"
         );
         let log_message = terminal_log_plain_text(&message);
@@ -512,11 +558,15 @@ impl NyaTermApp {
             self.recording
                 .write_local_message(session_id.clone(), log.clone());
         }
-        if session_id.is_empty() || self.session.active_id() == Some(session_id.as_str()) {
-            self.shell.set_status(format!("session error: {message}"));
-            self.append_terminal_log(log);
+        if self.session.has_session(&session_id) {
+            self.publish_session_notice(&session_id, SessionNoticeKind::Error(message));
         } else {
-            self.append_terminal_log_for_session(Some(&session_id), &log, true);
+            self.notify_background_operation(
+                "session-error",
+                nyaterm_ui::notification::NyaNotificationKind::Error,
+                session_notice_text(&SessionNoticeKind::Error(message)).1,
+                cx,
+            );
         }
         true
     }
@@ -829,7 +879,7 @@ mod recording_tests {
     use crate::features::test_support::app_with_visible_local_session;
     use gpui::{AppContext as _, TestAppContext};
     use nyaterm_core::test_support::TestTempDir;
-    use nyaterm_transport::{
+    use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
         RecordingRotationPolicy,
     };
@@ -897,5 +947,126 @@ mod recording_tests {
                 assert_eq!(std::fs::read(path).unwrap(), expected);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use crate::features::session::notices::SessionNoticeKind;
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_transport::{SessionEvent, session_notice::SessionNotice};
+
+    #[test]
+    fn session_diagnostics_leave_terminal_content_unchanged_including_background_sessions() {
+        let root = TestTempDir::new("nyaterm-notice-isolation");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "active");
+        cx.update_entity(&app, |app, cx| {
+            let metadata = app.session.metadata("active").unwrap().clone();
+            app.session
+                .register_session_metadata("background", metadata);
+            for id in ["active", "background"] {
+                app.submit_terminal_frame_output(id, b"remote text\r\n".to_vec());
+            }
+            (app.terminal.recording_output_fence())().unwrap();
+            app.drain_terminal_frame_events(cx);
+            let output = app.terminal.session_output("active").unwrap().to_owned();
+            let background = app
+                .terminal
+                .session_output("background")
+                .unwrap()
+                .to_owned();
+            app.session.extend_pending_events([
+                SessionEvent::Error {
+                    session_id: "active".into(),
+                    message: "fixture-error".into(),
+                },
+                SessionEvent::Notice {
+                    session_id: "active".into(),
+                    notice: SessionNotice::X11ForwardingDenied,
+                },
+                SessionEvent::OutputDropped {
+                    session_id: "background".into(),
+                    bytes: 17,
+                },
+                SessionEvent::Notice {
+                    session_id: "background".into(),
+                    notice: SessionNotice::TmuxCommandFailed {
+                        message: "fixture-tmux".into(),
+                    },
+                },
+            ]);
+            app.drain_session_events(cx);
+            (app.terminal.recording_output_fence())().unwrap();
+            app.drain_terminal_frame_events(cx);
+            assert_eq!(app.terminal.session_output("active").unwrap(), output);
+            assert_eq!(
+                app.terminal.session_output("background").unwrap(),
+                background
+            );
+            assert_eq!(
+                app.session.notices.get("active").unwrap().visible().count(),
+                2
+            );
+            assert_eq!(
+                app.session
+                    .notices
+                    .get("background")
+                    .unwrap()
+                    .visible()
+                    .count(),
+                2
+            );
+            assert!(
+                app.write_session_protocol_response("active", b"\x1b[0n")
+                    .is_err()
+            );
+            assert_eq!(app.terminal.session_output("active").unwrap(), output);
+            assert!(
+                app.session
+                    .notices
+                    .get("active")
+                    .unwrap()
+                    .contains("write-failed")
+            );
+            app.terminal
+                .rekey_session_view("background", "new-background", "UTF-8");
+            assert!(
+                !app.publish_session_notice("background", SessionNoticeKind::Error("late".into()))
+            );
+        });
+    }
+
+    #[test]
+    fn duplicate_disconnects_append_one_banner_and_preserve_reason_as_notice() {
+        let root = TestTempDir::new("nyaterm-notice-disconnect");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "session");
+        cx.update_entity(&app, |app, cx| {
+            for _ in 0..2 {
+                app.session.extend_pending_events([SessionEvent::Exited {
+                    session_id: "session".into(),
+                    reason: "fixture-reason".into(),
+                }]);
+                app.drain_session_events(cx);
+            }
+            let output = app.terminal.session_output("session").unwrap();
+            assert_eq!(output.matches("[Session disconnected]").count(), 1);
+            assert_eq!(output.matches("[Press Enter to reconnect]").count(), 1);
+            assert!(!output.contains("fixture-reason"));
+            assert_eq!(
+                app.session
+                    .notices
+                    .get("session")
+                    .unwrap()
+                    .visible()
+                    .count(),
+                1
+            );
+        });
     }
 }

@@ -309,7 +309,9 @@ def copy_helpers(destination: Path, target: str) -> list[Path]:
 
 def copy_release_documents(destination: Path, version: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(LICENSE_PATH, destination / "LICENSE")
+    completion_licenses = ROOT_DIR / "crates/nyaterm-core/assets/completion"
+    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo"]
+    (destination / "LICENSE").write_text("\n\n".join(path.read_text(encoding="utf-8") for path in documents), encoding="utf-8")
     (destination / "VERSION").write_text(f"{version}\n", encoding="utf-8")
 
 

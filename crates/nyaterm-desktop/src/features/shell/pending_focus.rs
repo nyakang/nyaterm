@@ -41,20 +41,22 @@ impl NyaTermApp {
         cx.spawn(async move |this, cx| {
             loop {
                 // `update_in`: taking focus needs the window.
-                let Ok(still_pending) = this.update_in(cx, |this, window, cx| {
-                    if this.security.screen_locked() {
-                        this.shell.set_pending_focus_clock_armed(false);
-                        return false;
-                    }
-                    if this.drive_pending_focus(window, cx) {
-                        cx.notify();
-                    }
-                    let pending = this.has_pending_focus_request();
-                    if !pending {
-                        this.shell.set_pending_focus_clock_armed(false);
-                    }
-                    pending
-                }) else {
+                let Ok(still_pending) =
+                    NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                        if this.security.screen_locked() {
+                            this.shell.set_pending_focus_clock_armed(false);
+                            return false;
+                        }
+                        if this.drive_pending_focus(window, cx) {
+                            cx.notify();
+                        }
+                        let pending = this.has_pending_focus_request();
+                        if !pending {
+                            this.shell.set_pending_focus_clock_armed(false);
+                        }
+                        pending
+                    })
+                else {
                     break;
                 };
                 if !still_pending {

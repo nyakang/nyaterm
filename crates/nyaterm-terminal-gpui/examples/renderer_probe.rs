@@ -1,4 +1,7 @@
 //! Native, synthetic renderer probe. See docs/terminal-rendering.md.
+//! `ime-transparent` and `ime-wallpaper` exercise composition exclusions over
+//! cell graphics, shade tiles, text and opaque ANSI backgrounds. Supply a PNG
+//! path to assert on native GPU readback as well as capture the result.
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -8,7 +11,7 @@ use gpui::profiler::{FrameEvent, FrameTimingCollector, set_trace_enabled};
 use gpui::{
     App, AppContext, Bounds, Context, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, ParentElement, Pixels, Render, Styled, Window, WindowBounds,
-    WindowOptions, div, px, rgb, size,
+    WindowOptions, div, point, prelude::FluentBuilder, px, rgb, rgba, size,
 };
 use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
 use nyaterm_terminal_gpui::{NyaTerminalElement, NyaTerminalLayoutCache, TerminalLineDecorations};
@@ -105,6 +108,7 @@ struct Probe {
     minimum_contrast_ratio: f32,
     cold: bool,
     scale: Option<f32>,
+    ime_wallpaper: Option<bool>,
 }
 
 impl Render for Probe {
@@ -119,7 +123,7 @@ impl Render for Probe {
             self.cache.lock().unwrap().clear();
         }
         let palette = nyaterm_ui::theme_palette("github-dark");
-        let inner = NyaTerminalElement::new(
+        let mut inner = NyaTerminalElement::new(
             Arc::clone(&self.snapshot),
             Arc::new(Vec::new()),
             Vec::<TerminalLineDecorations>::new(),
@@ -136,13 +140,51 @@ impl Render for Probe {
         .with_minimum_contrast_ratio(self.minimum_contrast_ratio)
         .with_layout_cache(Arc::clone(&self.cache))
         .with_cell_glyph_rendering(self.cell_graphics);
+        if self.ime_wallpaper.is_some() {
+            inner = inner.with_paint_exclusion(Rc::new(Cell::new(Some(Bounds::new(
+                point(px(40.), px(16.)),
+                size(px(96.), px(CELL_H)),
+            )))));
+        }
         div()
             .size_full()
-            .bg(rgb(palette.terminal_bg))
-            .child(MeasuredTerminal {
-                inner,
-                measurements: Rc::clone(&self.measurements),
-                prepaint_us: 0,
+            .relative()
+            .bg(match self.ime_wallpaper {
+                Some(true) => rgb(0x964e22),
+                Some(false) => rgba(0),
+                None => rgb(palette.terminal_bg),
+            })
+            .child(
+                div()
+                    .size_full()
+                    .bg(match self.ime_wallpaper {
+                        Some(wallpaper) => {
+                            let mut color = rgba((palette.terminal_bg << 8) | 209);
+                            if wallpaper {
+                                // Match the opaque-window wallpaper shading.
+                                color.a += (1. - color.a) * color.a;
+                            }
+                            color
+                        }
+                        None => rgba(0),
+                    })
+                    .child(MeasuredTerminal {
+                        inner,
+                        measurements: Rc::clone(&self.measurements),
+                        prepaint_us: 0,
+                    }),
+            )
+            .when(self.ime_wallpaper.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left(px(40.))
+                        .top(px(16.))
+                        .font_family("Consolas")
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.terminal_fg))
+                        .child("中文"),
+                )
             })
     }
 }
@@ -154,6 +196,7 @@ fn fixture(kind: &str, cell_graphics: bool) -> Arc<TerminalSnapshot> {
         let text = match kind {
             "shade" => "▓".repeat(usize::from(COLS)),
             "blocks" => "█▀▄─".repeat(usize::from(COLS) / 4),
+            "ime-transparent" | "ime-wallpaper" => format!("\x1b[48;2;255;0;255m█░▒▓█░▒▓{}\x1b[0m", "M".repeat(12)),
             "text" => format!(
                 "row {row:02}  user@nyaterm  0123456789  CPU 25%  memory 512 MiB  /synthetic/path"
             ),
@@ -175,7 +218,7 @@ fn fixture(kind: &str, cell_graphics: bool) -> Arc<TerminalSnapshot> {
                 _ => "╔═╦═╗ ░▒▓ █▀▄",
             }
             .into(),
-            _ => panic!("fixture must be text, mixed, blocks, shade, decorations, or contrast"),
+            _ => panic!("fixture must be text, mixed, blocks, shade, decorations, contrast, ime-transparent, or ime-wallpaper"),
         };
         screen.advance(text.as_bytes());
     }
@@ -265,6 +308,11 @@ fn main() {
     assert!(matches!(args[0].as_str(), "cell" | "font"));
     let cell_graphics = args[0] == "cell";
     let kind = args[1].clone();
+    let ime_wallpaper = match kind.as_str() {
+        "ime-transparent" => Some(false),
+        "ime-wallpaper" => Some(true),
+        _ => None,
+    };
     let cold = match args.get(2).map(String::as_str).unwrap_or("hot") {
         "hot" => false,
         "cold" => true,
@@ -288,13 +336,15 @@ fn main() {
     gpui_platform::application().run(move |cx: &mut App| {
         let window = cx.open_window(WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(f32::from(COLS) * CELL_W), px(f32::from(ROWS) * CELL_H)), cx))),
-            show: true, focus: false, inactive_frame_interval: None, ..Default::default()
+            show: true, focus: false, inactive_frame_interval: None,
+            window_background: if ime_wallpaper == Some(false) { gpui::WindowBackgroundAppearance::Transparent } else { gpui::WindowBackgroundAppearance::Opaque },
+            ..Default::default()
         }, |window, cx| {
             if let Some(scale) = scale {
                 let ratio = scale / window.scale_factor();
                 window.resize(size(px(f32::from(COLS) * CELL_W * ratio), px(f32::from(ROWS) * CELL_H * ratio)));
             }
-            cx.new(|_| Probe { snapshot, cache: Arc::clone(&cache), measurements: Rc::clone(&measurements), running: Rc::clone(&running), cell_graphics, minimum_contrast_ratio, cold, scale })
+            cx.new(|_| Probe { snapshot, cache: Arc::clone(&cache), measurements: Rc::clone(&measurements), running: Rc::clone(&running), cell_graphics, minimum_contrast_ratio, cold, scale, ime_wallpaper })
         }).expect("native GPU window");
         cx.spawn(async move |cx| {
             let mut collector = FrameTimingCollector::new();
@@ -336,6 +386,17 @@ fn main() {
                 (screenshot_path.as_ref().map(|_| window.render_to_image().expect("native GPU readback")), window.scale_factor(), window.gpu_specs())
             }).unwrap();
             if let Some(image) = image {
+                if ime_wallpaper.is_some() {
+                    let sample = |x: f32, y: f32| image.get_pixel((x * actual_scale) as u32, (y * actual_scale) as u32);
+                    // Beyond the two composed glyphs, the replaced area must
+                    // match untouched terminal material, including alpha.
+                    for y in 16..32 {
+                        for x in 88..128 {
+                            assert_eq!(sample(x as f32, y as f32), sample(200., y as f32), "IME replacement must preserve the native material at ({x}, {y})");
+                        }
+                    }
+                    assert_ne!(sample(140., 20.), sample(200., 20.), "adjacent application cells must remain visible");
+                }
                 let path = screenshot_path.unwrap();
                 let required_width = (f32::from(COLS) * CELL_W * actual_scale).round() as u32;
                 let required_height = (f32::from(ROWS) * CELL_H * actual_scale).round() as u32;

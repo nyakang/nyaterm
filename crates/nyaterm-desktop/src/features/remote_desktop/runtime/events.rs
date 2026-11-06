@@ -3,35 +3,20 @@ use super::input::POINTER_MOVE_INTERVAL;
 use super::lifecycle::cancel_rdp_reconnect_schedule;
 use crate::features::NyaTermApp;
 use crate::features::remote_desktop::state::resize::should_disable_dynamic_resize_after_state;
-use crate::models::TransferJobKind;
-use crate::models::TransferJobState;
-use crate::models::TransferJobStatus;
+use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
 use futures::StreamExt as _;
-use gpui::ClipboardItem;
-use gpui::Context;
-use gpui::Window;
-use nyaterm_remote_desktop::ClipboardOrigin;
-use nyaterm_remote_desktop::RDP_FRAMEBUFFER_LIMITS;
-use nyaterm_remote_desktop::RdpCapability;
-use nyaterm_remote_desktop::RdpClipboardTransferStatus;
-use nyaterm_remote_desktop::RdpError;
-use nyaterm_remote_desktop::RdpErrorKind;
-use nyaterm_remote_desktop::RdpFrameEvent;
-use nyaterm_remote_desktop::RdpRuntimeEvent;
-use nyaterm_remote_desktop::RdpSessionState;
-use nyaterm_remote_desktop::RemoteDesktopError;
-use nyaterm_remote_desktop::RemoteDesktopViewState;
-use nyaterm_remote_desktop::VNC_FRAMEBUFFER_LIMITS;
-use nyaterm_remote_desktop::VncRuntimeEvent;
-use nyaterm_remote_desktop::VncServerCapabilities;
-use nyaterm_remote_desktop::VncSessionState;
+use gpui::{ClipboardItem, Context, Window};
+use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+use nyaterm_remote_desktop::{
+    ClipboardOrigin, RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpClipboardTransferStatus, RdpError,
+    RdpErrorKind, RdpFrameEvent, RdpRuntimeEvent, RdpSessionState, RemoteDesktopError,
+    RemoteDesktopViewState, VNC_FRAMEBUFFER_LIMITS, VncRuntimeEvent, VncServerCapabilities,
+    VncSessionState,
+};
 use nyaterm_store::StoreDomain;
-use nyaterm_store::store_request;
-use nyaterm_transport::SftpTransferProgress;
 #[cfg(windows)]
 use nyaterm_ui::NyaDialogWindowExt as _;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Cadence for remote-desktop maintenance when no pointer move is waiting.
 ///
@@ -84,7 +69,7 @@ impl NyaTermApp {
                 let drain_started_at = Instant::now();
                 // Arm before draining, so a frame enqueued in between still
                 // signals rather than waiting for the next one.
-                let drained = this.update_in(cx, |this, window, cx| {
+                let drained = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
                     this.remote_desktop.arm_event_wake();
                     // Any event means a session exists; the periodic clock is scoped
                     // to that, and every reconnect is scheduled from an event handler.
@@ -199,6 +184,10 @@ impl NyaTermApp {
                 })
             {
                 self.remote_desktop.routes.remove(&session_id);
+                // Keep the display-only tab, but release its backend ownership.
+                // A full reaper queue retains the record and maintenance retries.
+                let _ = self.remote_desktop.manager.close_detached(&session_id);
+                let _ = self.remote_desktop.vnc_manager.close_detached(&session_id);
             }
             if started.elapsed() >= Duration::from_millis(4) {
                 break;
@@ -255,12 +244,14 @@ impl NyaTermApp {
                 };
                 cx.background_executor().timer(delay).await;
                 // `update_in`: keyboard-capture sync needs the window.
-                let Ok(keep_running) = this.update_in(cx, |this, window, cx| {
-                    if this.drive_remote_desktop_periodic(window, cx) {
-                        cx.notify();
-                    }
-                    this.remote_desktop.has_sessions()
-                }) else {
+                let Ok(keep_running) =
+                    NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                        if this.drive_remote_desktop_periodic(window, cx) {
+                            cx.notify();
+                        }
+                        this.remote_desktop.has_sessions()
+                    })
+                else {
                     break;
                 };
                 #[cfg(windows)]
@@ -337,7 +328,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         for (id, session) in &self.remote_desktop.sessions {
-            if session.uploads_stopped {
+            if session.uploads_stopped
+                || matches!(
+                    session.state,
+                    RemoteDesktopViewState::Failed | RemoteDesktopViewState::Disconnected
+                )
+            {
                 let _ = self.remote_desktop.manager.close_detached(id);
                 let _ = self.remote_desktop.vnc_manager.close_detached(id);
             }
@@ -382,7 +378,7 @@ impl NyaTermApp {
                 if let Some(trust) = self.remote_desktop.vnc_manager.trust_state(session_id) {
                     self.submit_store_request(
                         0,
-                        store_request(StoreDomain::Security, move |store| {
+                        nyaterm_store::store_mutation(StoreDomain::Security, move |store| {
                             trust
                                 .commit_if_current(&request, |current| {
                                     store.remember_vnc_known_host_if_current(

@@ -1,5 +1,5 @@
 use super::pane::PaneEndpoint;
-use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
+use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 
 /// Captured before a dialog or deferred application callback can change focus.
 #[derive(Clone)]

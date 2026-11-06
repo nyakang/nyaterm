@@ -8,7 +8,8 @@ use anyhow::Context as _;
 use gpui::{App, AppContext};
 use nyaterm_app::{assets, crash_report};
 use nyaterm_core::app_identity::AppFlavor;
-use nyaterm_core::{ActivationRequest, AppRuntime, LOG_FILE_PREFIX, LOG_FILE_SUFFIX};
+use nyaterm_core::diagnostics::RotatingLogWriter;
+use nyaterm_core::{ActivationRequest, AppRuntime};
 use nyaterm_desktop::{AppShellStartup, DesktopController, DesktopControllerGlobal};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -94,35 +95,84 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// SDK/HTTP traces may include bodies, authentication, URLs and terminal input.
+// This filter applies to every sink and cannot be relaxed by RUST_LOG.
+fn ai_log_target_allowed(metadata: &tracing::Metadata<'_>) -> bool {
+    ![
+        "genai",
+        "reqwest",
+        "hyper",
+        "hyper_util",
+        "h2",
+        "tower_http",
+    ]
+    .iter()
+    .any(|target| {
+        metadata.target() == *target
+            || metadata
+                .target()
+                .strip_prefix(target)
+                .is_some_and(|suffix| suffix.starts_with("::"))
+    })
+}
+
+/// Renders event timestamps in the current local timezone (RFC 3339 with
+/// offset, e.g. `2026-10-30T16:05:54.538723+08:00`). The offset is resolved per
+/// event so a system timezone change applies to running logs; platforms that
+/// refuse to report a local offset fall back to UTC.
+#[derive(Clone, Copy, Debug, Default)]
+struct LocalLogTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalLogTimer {
+    fn format_time(
+        &self,
+        writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    ) -> std::fmt::Result {
+        let stamp = format_local_stamp(nyaterm_core::diagnostics::local_now())
+            .map_err(|_| std::fmt::Error)?;
+        write!(writer, "{stamp}")
+    }
+}
+
+fn format_local_stamp(local: time::OffsetDateTime) -> Result<String, time::error::Format> {
+    local.format(&time::format_description::well_known::Rfc3339)
+}
+
 fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "nyaterm=info,nyaterm_core=info,nyaterm_transport=info,nyaterm_windows_rdp=info,warn",
         )
     });
-    let file_appender = tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix(LOG_FILE_PREFIX)
-        .filename_suffix(LOG_FILE_SUFFIX)
-        .build(runtime.log_dir());
+    // Daily files keep the historical `nyaterm-diagnostics.<local-date>.jsonl`
+    // name; the writer adds `<local-date>.<NNN>.jsonl` shards once the configured
+    // byte budget is reached. File IO stays on the non-blocking appender thread.
+    let file_appender = RotatingLogWriter::new(runtime.log_dir());
 
     if let Ok(file_appender) = file_appender {
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer().compact())
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_timer(LocalLogTimer),
+            )
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
+                    .with_timer(LocalLogTimer)
                     .with_writer(file_writer),
             )
             .try_init()
             .context("initialize tracing subscriber and log bridge")?;
         Ok(Some(guard))
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .finish()
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
+            .with(tracing_subscriber::fmt::layer())
             .try_init()
             .context("initialize tracing subscriber and log bridge")?;
         if let Err(error) = file_appender {
@@ -134,11 +184,31 @@ fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
 
 #[cfg(test)]
 mod tests {
-    use super::init_tracing;
+    use super::{format_local_stamp, init_tracing};
     use nyaterm_core::AppRuntime;
     use nyaterm_core::runtime::RuntimeMode;
     use std::path::PathBuf;
     use std::process::Command;
+
+    #[test]
+    fn log_timestamps_render_in_the_local_timezone_and_roll_the_local_date() {
+        use time::{Date, Month, OffsetDateTime, UtcOffset};
+        let utc = Date::from_calendar_date(2026, Month::October, 30)
+            .expect("date")
+            .with_hms_milli(20, 30, 0, 123)
+            .expect("time")
+            .assume_utc();
+        let local = utc.to_offset(UtcOffset::from_hms(8, 0, 0).expect("offset"));
+        assert_eq!(
+            format_local_stamp(local).expect("format"),
+            "2026-10-31T04:30:00.123+08:00",
+            "a UTC evening instant must render as the next local date"
+        );
+        assert_eq!(
+            format_local_stamp(OffsetDateTime::UNIX_EPOCH).expect("format"),
+            "1970-01-01T00:00:00Z"
+        );
+    }
 
     #[test]
     fn logging_child() {
@@ -171,6 +241,8 @@ mod tests {
         log::debug!(target: "nyaterm", "debug-log-marker");
         tracing::error!(target: "nyaterm", "error-event-marker");
         log::error!(target: "nyaterm", "error-log-marker");
+        tracing::error!(target: "genai::adapter", "secret-body-marker");
+        log::error!(target: "reqwest::connect", "secret-body-marker");
         drop(guard);
     }
 
@@ -189,7 +261,7 @@ mod tests {
             command
                 .args(["--exact", "tests::logging_child", "--nocapture"])
                 .env("NYATERM_LOGGING_TEST_DIR", &root)
-                .env("RUST_LOG", filter);
+                .env("RUST_LOG", format!("{filter},genai=trace,reqwest=trace"));
             if fallback {
                 command.env("NYATERM_LOGGING_TEST_FALLBACK", "1");
             }
@@ -208,6 +280,8 @@ mod tests {
                     .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
                     .collect::<String>()
             };
+            assert!(!console.contains("secret-body-marker"));
+            assert!(!jsonl.contains("secret-body-marker"));
             for (level, expected) in [
                 ("trace", filter.ends_with("trace")),
                 ("debug", !filter.ends_with("error")),

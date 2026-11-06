@@ -1,16 +1,14 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::time::Instant;
-
-use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle, point, px};
-use nyaterm_core::{AiExecutionProfile, SavedConnection};
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFileBackendPreferenceStore, RemoteFileService, SessionEvent,
-    SessionInfo, SessionKind, SessionManager, SshMultiplexHandle, SshSessionConfig,
+use super::SessionProtocolRuntimeState;
+use super::auth_runtime::{
+    AgentPromptBroker, AgentPromptRequest, CredentialPromptBroker, CredentialPromptRequest,
+    CredentialPromptState, HostKeyPromptBroker, HostKeyPromptRequest,
+    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
 };
-
+use super::duplicate_prompts::{SftpDuplicatePromptBroker, SftpDuplicatePromptState};
+use super::notices::{SessionNoticeState, SessionNotices};
+use super::trzsz_runtime::TrzszSessionState;
+use super::zmodem_runtime::ZmodemSessionState;
+use crate::app_shell::session_hub::ssh_connections::{SshConnectionLease, SshConnectionPool};
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::features::shell::tab_mouse::TabActionTarget;
 use crate::models::event_wake::{ANY_INTEREST, EventWake};
@@ -20,18 +18,17 @@ use crate::models::{
     WorkspaceSplitDirection,
 };
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
-
-use crate::app_shell::session_hub::ssh_connections::{SshConnectionLease, SshConnectionPool};
-
-use super::SessionProtocolRuntimeState;
-use super::auth_runtime::{
-    AgentPromptBroker, AgentPromptRequest, CredentialPromptBroker, CredentialPromptRequest,
-    CredentialPromptState, HostKeyPromptBroker, HostKeyPromptRequest,
-    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle, point, px};
+use nyaterm_core::{AiExecutionProfile, SavedConnection};
+use nyaterm_files::file_browser::FileBrowserBackendKind;
+use nyaterm_files::remote_file::{RemoteFileBackendPreferenceStore, RemoteFileService};
+use nyaterm_transport::{
+    SessionEvent, SessionInfo, SessionKind, SessionManager, SshMultiplexHandle, SshSessionConfig,
 };
-use super::duplicate_prompts::{SftpDuplicatePromptBroker, SftpDuplicatePromptState};
-use super::trzsz_runtime::TrzszSessionState;
-use super::zmodem_runtime::ZmodemSessionState;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Instant;
 
 const COMMAND_HISTORY_LIMIT: usize = 128;
 const DEFAULT_DUPLICATE_STARTUP_DELAY_MS: u64 = 500;
@@ -42,6 +39,7 @@ const ACTIVE_HISTORY_LIMIT: usize = 64;
 
 pub(in crate::features) struct SessionFeatureState {
     pub(in crate::features) unsupported_restore_tabs: Vec<nyaterm_core::RestorableOpenTab>,
+    pub(in crate::features) notices: SessionNoticeState,
     manager: Arc<SessionManager>,
     ssh_connections: SshConnectionPool,
     event_bridge: SessionEventBridge,
@@ -86,6 +84,7 @@ pub(crate) struct SessionCatalogTransferBundle {
 struct SessionCatalogTransferEntry {
     session_id: String,
     metadata: SessionRuntimeMetadata,
+    notices: Option<SessionNotices>,
     start_tab_placement: Option<SessionStartTabPlacement>,
     custom_name: Option<String>,
     dynamic_title: Option<String>,
@@ -280,6 +279,7 @@ impl SessionFeatureState {
             let metadata = self.metadata.remove(session_id)?;
             entries.push(SessionCatalogTransferEntry {
                 session_id: session_id.clone(),
+                notices: self.notices.take(session_id),
                 metadata,
                 start_tab_placement: self
                     .start_tab_placements
@@ -317,10 +317,12 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
+                | SessionEvent::Notice { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id) {
@@ -350,6 +352,9 @@ impl SessionFeatureState {
         for entry in bundle.entries {
             let session_id = entry.session_id;
             self.metadata.insert(session_id.clone(), entry.metadata);
+            if let Some(notices) = entry.notices {
+                self.notices.insert(session_id.clone(), notices);
+            }
             if let Some(value) = entry.start_tab_placement {
                 self.start_tab_placements.insert(session_id.clone(), value);
             }
@@ -490,6 +495,7 @@ impl SessionFeatureState {
             active_search_draft: String::new(),
             active_list_scroll: UniformListScrollHandle::new(),
             busy_actions: HashMap::new(),
+            notices: SessionNoticeState::default(),
             active: ActiveSessionState::default(),
             order: Vec::new(),
             metadata: HashMap::new(),
@@ -513,6 +519,10 @@ impl SessionFeatureState {
     }
 
     pub(in crate::features) fn external_start_is_busy(&self) -> bool {
+        self.start.is_busy()
+    }
+
+    pub(in crate::features) fn start_is_busy(&self) -> bool {
         self.start.is_busy()
     }
 
@@ -962,10 +972,12 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
+                | SessionEvent::Notice { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if id == session_id {
@@ -1004,10 +1016,12 @@ impl SessionFeatureState {
                 | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandContext { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
+                | SessionEvent::Notice { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id.clone(),
             })
             .collect();
@@ -1868,6 +1882,27 @@ impl SessionFeatureState {
             .is_some_and(|metadata| metadata.disconnected)
     }
 
+    /// Whether a session a configuration replacement could disturb is still
+    /// running.
+    ///
+    /// Deliberately narrow, and only for configuration-replacement blockers
+    /// (cloud-sync pulls and backup imports): a tab kept for reconnect
+    /// (`disconnected`) holds no backend, and a local shell is spawned by the
+    /// local runtime rather than from the connection catalog being rewritten,
+    /// so neither one may stop the replacement. RDP/VNC have a separate runtime
+    /// owner; its replacement predicate is authoritative for those protocols.
+    pub(in crate::features) fn has_live_remote_sessions(&self) -> bool {
+        self.metadata.values().any(|metadata| {
+            !metadata.disconnected
+                && !matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Local(_)
+                        | crate::models::SessionLaunchConfig::Rdp(_)
+                        | crate::models::SessionLaunchConfig::Vnc(_)
+                )
+        })
+    }
+
     pub(in crate::features) fn tab_tooltip_lines(&self, session_id: &str) -> Vec<String> {
         let mut lines = Vec::new();
         if let Some(endpoint) = self.endpoint(session_id) {
@@ -1944,6 +1979,9 @@ impl SessionFeatureState {
         };
         let was_disconnected = metadata.disconnected;
         metadata.disconnected = false;
+        if was_disconnected {
+            self.notices.clear(session_id);
+        }
         was_disconnected
     }
 
@@ -2075,6 +2113,7 @@ impl SessionFeatureState {
         &mut self,
         session_id: &str,
     ) -> Option<String> {
+        self.notices.clear(session_id);
         self.event_bridge.release_session(session_id);
         self.remove_xymodem_session_runtime(session_id);
         self.remove_zmodem_session_runtime(session_id);

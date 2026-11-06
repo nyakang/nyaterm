@@ -165,9 +165,13 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let external_rdp =
+            matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc");
         let focus_target = session_start_focus_target(&connection.config);
         self.continue_saved_connection_start(connection, options, cx);
-        self.focus_user_started_session_surface(focus_target, window, cx);
+        if !external_rdp {
+            self.focus_user_started_session_surface(focus_target, window, cx);
+        }
     }
 
     pub(in crate::features::session) fn focus_user_started_session_surface(
@@ -191,6 +195,49 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn continue_saved_connection_start(
+        &mut self,
+        connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        cx: &mut Context<Self>,
+    ) {
+        self.continue_saved_connection_start_with_launcher(
+            connection,
+            options,
+            crate::platform::mstsc::launch,
+            cx,
+        );
+    }
+
+    fn continue_saved_connection_start_with_launcher(
+        &mut self,
+        connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        launcher: impl FnOnce(
+            crate::platform::mstsc::MstscTarget,
+        ) -> Result<(), crate::platform::mstsc::MstscError>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(connection.config, ConnectionType::LocalTerminal { .. })
+            && self.remote_start_blocked_by_configuration_replacement(cx)
+        {
+            self.complete_mcp_session_open_failure(
+                &connection.id,
+                &t!("settings.configurationReplacementInProgress"),
+            );
+            return;
+        }
+
+        // External clients own no application tab, credential request, or Relay.
+        if matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc") {
+            self.start_mstsc_connection(connection, launcher, cx);
+            return;
+        }
+        self.continue_saved_connection_start_in_app(connection, options, cx);
+    }
+
+    fn continue_saved_connection_start_in_app(
         &mut self,
         connection: SavedConnection,
         options: SavedConnectionStartOptions,
@@ -220,7 +267,14 @@ impl NyaTermApp {
                 return;
             }
         }
-        let Some(placement) = options.tab_placement else {
+        let placement = options.tab_placement.or_else(|| {
+            options.reconnect_session_id.as_ref().map(|id| {
+                self.session
+                    .start
+                    .allocate_tab_placement(self.session.session_index(id).unwrap_or(0))
+            })
+        });
+        let Some(placement) = placement else {
             self.complete_mcp_session_open_failure(
                 &connection.id,
                 "could not reserve a tab position",
@@ -592,59 +646,19 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            ConnectionType::Rdp {
-                host,
-                port,
-                username,
-                domain,
-                backend,
-                security,
-                display,
-                clipboard,
-                reconnect,
-            } => {
-                let backend = match parse_rdp_backend(&backend) {
-                    Ok(backend) => backend,
+            ConnectionType::Rdp { .. } => {
+                let config = match self.saved_remote_desktop_launch_config(&connection) {
+                    Ok(SessionLaunchConfig::Rdp(config)) => config,
+                    Ok(_) => unreachable!("RDP connection"),
                     Err(error) => {
-                        self.fail_retry_preparation(&options, error.to_string(), cx);
-                        self.complete_mcp_session_open_failure(&connection.id, &error.to_string());
+                        self.fail_retry_preparation(&options, error.clone(), cx);
+                        self.complete_mcp_session_open_failure(&connection.id, &error);
                         self.session.start_release_saved_connection(&connection.id);
-                        self.notify_operation(
-                            "rdp-backend",
-                            nyaterm_ui::notification::NyaNotificationKind::Error,
-                            error.to_string(),
-                            cx,
-                        );
+                        self.shell.set_status(error);
+                        cx.notify();
                         return;
                     }
                 };
-                let mut config = RdpSessionConfig {
-                    relay: self
-                        .remote_desktop
-                        .prepared_routes
-                        .get(&connection.id)
-                        .map(|route| route.endpoint.clone()),
-                    backend,
-                    windows_authentication: security.windows_authentication.clone(),
-                    name: connection.name.clone(),
-                    host,
-                    port,
-                    username,
-                    domain,
-                    password: inline_connection_password(connection.auth.as_ref()),
-                    use_nla: security.use_nla,
-                    certificate_policy: parse_rdp_certificate_policy(&security.certificate_policy),
-                    administrative_session: security.administrative_session,
-                    display: RdpDisplayConfig::from(&display),
-                    clipboard: RdpClipboardConfig {
-                        mode: parse_rdp_clipboard_mode(&clipboard.mode),
-                    },
-                    reconnect: RdpReconnectConfig {
-                        enabled: reconnect.enabled,
-                        max_attempts: reconnect.max_attempts,
-                    },
-                };
-                config.normalize_backend_settings();
                 let session_id = self.schedule_rdp_runtime(config.clone(), cx);
                 if let Some(route) = self.remote_desktop.prepared_routes.remove(&connection.id) {
                     self.remote_desktop.routes.insert(session_id.clone(), route);
@@ -687,43 +701,10 @@ impl NyaTermApp {
                 self.shell.show_workspace();
                 cx.notify();
             }
-            ConnectionType::Vnc {
-                username,
-                host,
-                port,
-                security,
-                display,
-                clipboard,
-                reconnect,
-                shared,
-                view_only,
-            } => {
-                let config = VncSessionConfig {
-                    username: username.clone(),
-                    relay: self
-                        .remote_desktop
-                        .prepared_routes
-                        .get(&connection.id)
-                        .map(|route| route.endpoint.clone()),
-                    name: connection.name.clone(),
-                    host,
-                    port,
-                    password: inline_connection_password(connection.auth.as_ref()),
-                    security: VncSecurityConfig {
-                        mode: parse_vnc_security_mode(&security.mode),
-                    },
-                    display: VncDisplayConfig {
-                        scale_mode: parse_vnc_scale_mode(&display.scale_mode),
-                    },
-                    clipboard: VncClipboardConfig {
-                        enabled: clipboard.enabled,
-                    },
-                    reconnect: VncReconnectConfig {
-                        enabled: reconnect.enabled,
-                        max_attempts: reconnect.max_attempts,
-                    },
-                    shared,
-                    view_only,
+            ConnectionType::Vnc { .. } => {
+                let config = match self.saved_remote_desktop_launch_config(&connection) {
+                    Ok(SessionLaunchConfig::Vnc(config)) => config,
+                    _ => unreachable!("VNC connection"),
                 };
                 match self.create_vnc_runtime(config.clone()) {
                     Ok(session_id) => {
@@ -810,6 +791,96 @@ impl NyaTermApp {
         self.session.start_release_saved_connection(&connection_id);
     }
 
+    pub(in crate::features) fn saved_remote_desktop_launch_config(
+        &self,
+        connection: &SavedConnection,
+    ) -> Result<SessionLaunchConfig, String> {
+        match connection.config.clone() {
+            ConnectionType::Rdp {
+                host,
+                port,
+                username,
+                domain,
+                backend,
+                security,
+                display,
+                clipboard,
+                reconnect,
+            } => {
+                let backend = parse_rdp_backend(&backend).map_err(|error| error.to_string())?;
+                let mut config = RdpSessionConfig {
+                    relay: self
+                        .remote_desktop
+                        .prepared_routes
+                        .get(&connection.id)
+                        .map(|route| route.endpoint.clone()),
+                    backend,
+                    windows_authentication: security.windows_authentication.clone(),
+                    name: connection.name.clone(),
+                    host,
+                    port,
+                    username,
+                    domain,
+                    password: inline_connection_password(connection.auth.as_ref()),
+                    use_nla: security.use_nla,
+                    certificate_policy: parse_rdp_certificate_policy(&security.certificate_policy),
+                    administrative_session: security.administrative_session,
+                    display: RdpDisplayConfig::from(&display),
+                    clipboard: RdpClipboardConfig {
+                        mode: parse_rdp_clipboard_mode(&clipboard.mode),
+                    },
+                    reconnect: RdpReconnectConfig {
+                        enabled: reconnect.enabled,
+                        max_attempts: reconnect.max_attempts,
+                    },
+                };
+                config.normalize_backend_settings();
+                Ok(SessionLaunchConfig::Rdp(config))
+            }
+            ConnectionType::Vnc {
+                username,
+                host,
+                port,
+                security,
+                display,
+                clipboard,
+                reconnect,
+                shared,
+                view_only,
+            } => {
+                let config = VncSessionConfig {
+                    username: username.clone(),
+                    relay: self
+                        .remote_desktop
+                        .prepared_routes
+                        .get(&connection.id)
+                        .map(|route| route.endpoint.clone()),
+                    name: connection.name.clone(),
+                    host,
+                    port,
+                    password: inline_connection_password(connection.auth.as_ref()),
+                    security: VncSecurityConfig {
+                        mode: parse_vnc_security_mode(&security.mode),
+                    },
+                    display: VncDisplayConfig {
+                        scale_mode: parse_vnc_scale_mode(&display.scale_mode),
+                    },
+                    clipboard: VncClipboardConfig {
+                        enabled: clipboard.enabled,
+                    },
+                    reconnect: VncReconnectConfig {
+                        enabled: reconnect.enabled,
+                        max_attempts: reconnect.max_attempts,
+                    },
+                    shared,
+                    view_only,
+                };
+                Ok(SessionLaunchConfig::Vnc(config))
+            }
+            _ => Err("connection is not a remote desktop".to_string()),
+        }
+    }
+
     pub(in crate::features) fn prepare_remote_route(
         &mut self,
         connection: SavedConnection,
@@ -863,6 +934,10 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         let SavedConnectionStartOptions {
             ssh_runtime_mode,
             custom_name,
@@ -1001,7 +1076,7 @@ impl NyaTermApp {
         let request_id = connection_id.clone();
         self.submit_store_request(
             0,
-            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
+            store_request(StoreDomain::Connections, move |store| {
                 store.mark_connection_used(&request_id)?;
                 store.get_connection(&request_id)
             }),
@@ -1510,6 +1585,9 @@ fn load_proxy_jump_config_with_context(
     visited_proxy_jumps.pop();
     Ok(Some(Box::new(jump_config)))
 }
+
+#[cfg(test)]
+mod mstsc_tests;
 
 #[cfg(test)]
 mod tests {

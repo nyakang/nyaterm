@@ -1,16 +1,11 @@
-use std::path::Path;
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
-
-use gpui::{AppContext as _, TestAppContext};
-use nyaterm_core::AiExecutionProfile;
-use nyaterm_transport::{
-    LocalSessionConfig, RemoteFileBackendPreference, RemoteFileBackendPreferenceStore,
-    SessionEvent, SessionKind, SessionManager, SshAgentPrompt, SshAgentPromptPhase,
-    SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason, SshHostKey,
-    SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest, SshSessionConfig,
+use super::{
+    CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
+    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
+    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
+    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
+    SessionStartFeatureState,
 };
-
+use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::features::session::{HostKeyPromptChoice, HostKeyPromptIssue};
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
@@ -20,16 +15,17 @@ use crate::models::{
 };
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use crate::test_support::{TestConfigDir, blocking_test_store};
-
-use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
-
-use super::{
-    CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
-    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
-    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
-    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
-    SessionStartFeatureState,
+use gpui::{AppContext as _, TestAppContext};
+use nyaterm_core::AiExecutionProfile;
+use nyaterm_files::remote_file::{RemoteFileBackendPreference, RemoteFileBackendPreferenceStore};
+use nyaterm_transport::{
+    LocalSessionConfig, SessionEvent, SessionKind, SessionManager, SshAgentPrompt,
+    SshAgentPromptPhase, SshCredentialPrompt, SshCredentialPromptKind, SshCredentialPromptReason,
+    SshHostKey, SshKeyboardInteractivePrompt, SshKeyboardInteractiveRequest, SshSessionConfig,
 };
+use std::path::Path;
+use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 #[test]
 fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
@@ -208,6 +204,39 @@ fn failed_start(
         false,
     );
     placement
+}
+
+#[test]
+fn saved_failed_retry_rejects_deleted_and_changed_sources_without_a_built_config() {
+    for changed_protocol in [false, true] {
+        let root = TestConfigDir::new("nyaterm-failed-retry-current-source");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut request = pending("failed");
+                request.kind = SessionKind::Ssh;
+                request.source_connection_id = Some("saved".into());
+                request.tab_placement = Some(app.session.start.allocate_tab_placement(1));
+                app.session.start.register_pending("failed".into(), request);
+                app.session.simulate_start_failure("failed");
+                if changed_protocol {
+                    let saved = serde_json::from_value(serde_json::json!({
+                        "id":"saved", "name":"Changed", "type":"telnet", "host":"127.0.0.1"
+                    }))
+                    .unwrap();
+                    app.connection_state.replace_loaded(vec![saved], vec![]);
+                }
+                app.retry_failed_session_start("failed".into(), window, cx);
+                assert!(!app.session.start_has_pending());
+                let failed = app.session.start.failed("failed").unwrap();
+                assert_ne!(failed.error, "failed");
+                assert!(failed.pending.launch_config.is_none());
+            })
+        });
+    }
 }
 
 #[test]
@@ -507,11 +536,10 @@ impl gpui::Render for FailureViewHost {
 
 #[test]
 fn selected_failed_and_retry_tabs_replace_the_previous_tab_highlight() {
-    use gpui::VisualTestContext;
-    use nyaterm_core::InternalEditorDisplay;
-
     use crate::features::test_support::editor_document;
     use crate::models::{QuickSwitchItem, WorkspaceTabId};
+    use gpui::VisualTestContext;
+    use nyaterm_core::InternalEditorDisplay;
 
     let draw_and_assert =
         |cx: &mut VisualTestContext, selected: &'static str, unselected: &[&'static str]| {
@@ -949,6 +977,23 @@ fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
         source_connection_id: Some(connection_id.to_string()),
         ai_execution_profile: AiExecutionProfile::Posix,
         launch_config: SessionLaunchConfig::Rdp(rdp_session_config("rdp")),
+        disconnected: false,
+    }
+}
+
+fn ssh_metadata(name: &str) -> SessionRuntimeMetadata {
+    let config = SshSessionConfig {
+        name: name.to_string(),
+        host: "example.test".to_string(),
+        username: "tester".to_string(),
+        ..SshSessionConfig::default()
+    };
+    SessionRuntimeMetadata {
+        ssh_config: Some(config.clone()),
+        ssh_multiplex_key: None,
+        source_connection_id: None,
+        ai_execution_profile: AiExecutionProfile::Posix,
+        launch_config: SessionLaunchConfig::Ssh(Box::new(config)),
         disconnected: false,
     }
 }
@@ -1505,6 +1550,19 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     source.set_custom_name("root".into(), "renamed".into());
     source.set_tab_color("root", Some(0x123456));
     source.set_tab_locked("root", true);
+    source.notices.push(
+        "root",
+        crate::features::session::notices::SessionNoticeKind::Error("move fixture".into()),
+    );
+    source.notices.dismiss("root", "session-error");
+    source.notices.push(
+        "leaf",
+        crate::features::session::notices::SessionNoticeKind::OutputDropped(17),
+    );
+    source.extend_pending_events([SessionEvent::Notice {
+        session_id: "leaf".into(),
+        notice: nyaterm_transport::session_notice::SessionNotice::TmuxPaneCloseFailed,
+    }]);
     source.extend_pending_events([SessionEvent::CwdChanged {
         session_id: "leaf".into(),
         cwd: "/workspace".into(),
@@ -1524,7 +1582,26 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     assert_eq!(target.tab_color("root"), Some(0x123456));
     assert!(target.tab_is_locked("root"));
     assert_eq!(source.pending_event_count(), 0);
-    assert_eq!(target.pending_event_count(), 1);
+    assert_eq!(target.pending_event_count(), 2);
+    assert!(source.notices.get("root").is_none());
+    assert!(source.notices.get("leaf").is_none());
+    assert!(!target.notices.push(
+        "root",
+        crate::features::session::notices::SessionNoticeKind::Error("move fixture".into())
+    ));
+    assert!(matches!(
+        target
+            .notices
+            .get("leaf")
+            .unwrap()
+            .visible()
+            .next()
+            .unwrap()
+            .kind,
+        crate::features::session::notices::SessionNoticeKind::OutputDropped(17)
+    ));
+    target.remove_session_catalog("leaf");
+    assert!(target.notices.get("leaf").is_none());
 }
 
 #[test]
@@ -1738,6 +1815,35 @@ fn session_disconnect_transition_is_idempotent() {
     sessions
         .mark_session_disconnected("session-b")
         .expect("shared session should transition");
+}
+
+#[test]
+fn disconnected_tabs_do_not_block_configuration_replacement() {
+    let test_dir = TestConfigDir::new("nyaterm-session-state-test");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, test_dir.path());
+
+    assert!(!sessions.has_live_remote_sessions());
+
+    // A local shell keeps a backend, but it is spawned by the local runtime,
+    // not from the connection catalog a cloud pull or backup import rewrites,
+    // so it must not block the replacement.
+    sessions.register_session_metadata("local", session_metadata("local", None));
+    assert!(!sessions.has_live_remote_sessions());
+
+    // A live remote session does block.
+    sessions.register_session_metadata("ssh", ssh_metadata("ssh"));
+    assert!(sessions.has_live_remote_sessions());
+
+    // A tab kept for reconnect holds no backend, so it must not.
+    sessions
+        .mark_session_disconnected("ssh")
+        .expect("registered session should transition");
+    sessions
+        .mark_session_disconnected("local")
+        .expect("registered session should transition");
+    assert!(!sessions.has_live_remote_sessions());
 }
 
 #[test]

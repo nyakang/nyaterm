@@ -204,13 +204,14 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.settings.theme_designer.clone();
-        let palette = self.theme_palette();
-        let list_width = if self.viewport_width < NARROW_WIDTH {
+        let chrome = self.settings_chrome();
+        let palette = chrome.palette;
+        let list_width = if self.pane_width < NARROW_WIDTH {
             COMPACT_LIST_WIDTH
         } else {
             LIST_WIDTH
         };
-        let editor_width = (self.viewport_width - list_width - 32.).max(0.);
+        let editor_width = (self.pane_width - list_width - 32.).max(0.);
 
         let list = self.theme_list(&state, palette, cx);
         let editor = self.theme_editor(&state, palette, editor_width, cx);
@@ -225,7 +226,7 @@ impl SettingsPanel {
                     .debug_selector(|| "theme-designer-list".to_string())
                     .flex_none()
                     .min_h_0()
-                    .bg(rgb(palette.surface))
+                    .bg(chrome.transparent_surface)
                     .border_color(rgb(palette.border))
                     .w(px(list_width))
                     .h_full()
@@ -240,7 +241,7 @@ impl SettingsPanel {
             .flex_col()
             .size_full()
             .min_h_0()
-            .bg(rgb(palette.bg))
+            .bg(chrome.surface)
             .text_color(rgb(palette.text))
             .child(self.theme_designer_header(&state, palette, cx))
             .child(body);
@@ -272,7 +273,7 @@ impl SettingsPanel {
             .py_2()
             .border_b_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(palette.section_header))
+            .bg(self.settings_chrome().transparent_section_header)
             .child(
                 NyaButton::new("theme-manager-back", t!("themeDesigner.returnAppearance"))
                     .icon("icons/menu/chevron-left.svg")
@@ -965,7 +966,7 @@ impl SettingsPanel {
             .min_h(px(48.))
             .border_t_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(palette.section_header))
+            .bg(self.settings_chrome().transparent_section_header)
             .child(
                 div()
                     .flex_1()

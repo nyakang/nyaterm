@@ -6,7 +6,7 @@
 - 分支：`fix/pr1098-correctness-performance`。
 - 原 PR：`021c0206bea72b6a51f0556cbc6465d0dfa22aee`。
 - 共同祖先：`a7f5382766e610f8d7943a4f767d5f820f1ced91`。
-- 没有合并 main 或 #1180，没有修改任何 fork 依赖版本。
+- 原始优化及本报告中的性能测量未合并 main 或 #1180，未单独修改 fork 依赖版本。后续为解决 PR 冲突合并了 main `cc6bfa12f`，沿用 main 的依赖锁定版本，见“后续集成验证”。
 - 原 main 工作区的业务源码不参与本次修改。对比工作区仅注入测试入口、API 适配器和测试依赖。
 
 保留角色高亮、统一输入快照、主题和设置。新内容先使用终端颜色；后台完成后补色。未变行和同一行仍有效的前缀继续复用颜色。
@@ -211,3 +211,18 @@ python scripts/bench/keyword_highlight_native_ab.py --ancestor E:/Projects/Rust/
 - 原生计时只把绘制开始于快照发布之后的呈现计入延迟，合并帧按其第一次显示等于或更新状态的绘制统计。它仍然是呈现提交指标，不是显示器已经显示的时间。
 
 持久化键及缺省语义未改变，不需要数据迁移。`Cargo.lock` 的变化仅为原生测试增加已有 `gpui_platform` 的 dev-dependency 边，没有新增依赖版本或 fork revision。
+
+## 后续集成验证
+
+为解决 PR 与 main 的冲突，在 PR 修复分支合并 main `cc6bfa12fce4367b720f75b63a189c3f933c75fa`，保留原有提交历史，主线工作区未改动。
+
+- `crates/nyaterm-desktop/Cargo.toml`：保留 main 新增的测试依赖，以及高亮探针所需的 GPUI profiler 和平台测试支持。
+- `terminal/state.rs`：同时保留行角色设置向 Surface 广播和系统录制提交接口。
+- `terminal_surface_entity/tests.rs`：同时保留高亮一致性、后台合并测试，以及 main 的历史滚屏、选择和行分配复用测试。
+- 自动合并后仍只有后台路径编译和解析高亮，没有恢复帧应用或绘制时的同步补算。
+
+本报告前述微基准、原生窗口性能数字和截图均来自合并 main **之前**的版本。main 带入了终端历史缓存及 GPUI 等依赖更新，本轮冲突修复没有重跑完整性能矩阵，不能直接将旧测量作为合并后版本的性能结论。
+
+集成验证在 Windows 上完成：`cargo check --workspace --locked`、`cargo test --workspace --locked`（60 个套件，5,598 通过、0 失败、47 忽略）、`cargo clippy --workspace --all-targets --locked`、`cargo fmt --all -- --check` 和架构检查均通过；架构检查器自身 5 项测试通过。日志保存在 `target/pr1098/merge-{check,test-final,clippy,fmt-final,architecture,architecture-tests}.log`。
+
+测试编译还发现自动合并带入的历史帧测试仍构造旧 `input_highlights` 字段；已按统一快照事件接口移除该无效字段，保留其历史帧行复用和过期实时帧拒绝断言，完整测试再次通过。高亮开关拒绝旧任务、128 帧合并收敛、绘制不解析，以及 main 的历史滚动与选择复用测试均通过。

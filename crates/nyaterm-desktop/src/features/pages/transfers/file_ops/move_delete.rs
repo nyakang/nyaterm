@@ -1,5 +1,3 @@
-use rust_i18n::t;
-
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
@@ -7,10 +5,12 @@ use crate::models::{
 };
 use gpui::{Context, Window};
 use nyaterm_core::truncate_preview;
-use nyaterm_transport::{
-    FileBrowserBackendKind, RemoteFilePath, file_browser_join, file_browser_name,
-    file_browser_parent, file_browser_path_is_root,
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, file_browser_join, file_browser_name, file_browser_parent,
+    file_browser_path_is_root,
 };
+use nyaterm_files::sftp::RemoteFilePath;
+use rust_i18n::t;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_transfer_move_dialog(
@@ -441,7 +441,7 @@ impl NyaTermApp {
                 entries: Vec::new(),
                 summary: None,
                 progress: None,
-                control: Some(nyaterm_transport::SftpTransferControl::new()),
+                control: Some(nyaterm_files::sftp::SftpTransferControl::new()),
                 speed: Default::default(),
             });
             let transfer_tx = self.transfer.transfer_event_sender();

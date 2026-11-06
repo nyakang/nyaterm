@@ -1,3 +1,4 @@
+use crate::completion::matching::TextMatcher;
 use crate::{CommandHistoryEntry, FuzzyResult, QuickCommand};
 use std::collections::HashSet;
 
@@ -12,53 +13,94 @@ pub fn search_command_sources(
     min_history_command_length: Option<usize>,
     max_history_command_length: Option<usize>,
 ) -> Vec<FuzzyResult> {
+    search_command_sources_using(
+        &mut TextMatcher::default(),
+        CommandSourceQuery {
+            history,
+            quick_commands,
+            pattern,
+            limit,
+            min_history_command_length,
+            max_history_command_length,
+        },
+    )
+}
+
+pub struct CommandSourceQuery<'a> {
+    pub history: &'a [CommandHistoryEntry],
+    pub quick_commands: &'a [QuickCommand],
+    pub pattern: &'a str,
+    pub limit: usize,
+    pub min_history_command_length: Option<usize>,
+    pub max_history_command_length: Option<usize>,
+}
+
+/// The background completion worker retains the matcher across history queries.
+pub fn search_command_sources_using(
+    matcher: &mut TextMatcher,
+    query: CommandSourceQuery<'_>,
+) -> Vec<FuzzyResult> {
+    let CommandSourceQuery {
+        history,
+        quick_commands,
+        pattern,
+        limit,
+        min_history_command_length,
+        max_history_command_length,
+    } = query;
     if limit == 0 {
         return Vec::new();
     }
-    let mut results = Vec::new();
-    let history_items: Vec<(&str, &str)> = history
-        .iter()
-        .map(|entry| (entry.command.as_str(), entry.command.as_str()))
-        .collect();
-    results.extend(fuzzy_search_items(
-        &history_items,
-        pattern,
-        "history",
-        history_items.len(),
-        min_history_command_length,
-        max_history_command_length,
-    ));
-
-    let quick_items: Vec<(&str, &str)> = quick_commands
-        .iter()
-        .map(|command| {
-            let display = if command.label.trim().is_empty() {
-                command.command.as_str()
-            } else {
-                command.label.as_str()
-            };
-            (display, command.command.as_str())
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+    matcher.set_query(
+        &pattern
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>(),
+    );
+    let mut scored = Vec::new();
+    for entry in history {
+        if command_within_length_limits(
+            &entry.command,
+            min_history_command_length,
+            max_history_command_length,
+        ) && let Some(score) = matcher.score(&entry.command)
+        {
+            scored.push((
+                entry.command.as_str(),
+                entry.command.as_str(),
+                "history",
+                score,
+            ));
+        }
+    }
+    for command in quick_commands {
+        let display = if command.label.trim().is_empty() {
+            command.command.as_str()
+        } else {
+            command.label.as_str()
+        };
+        if let Some(score) = matcher.score(display) {
+            scored.push((display, command.command.as_str(), "quickCommand", score));
+        }
+    }
+    scored.sort_by(|a, b| b.3.cmp(&a.3).then(a.2.cmp(b.2)).then(a.1.cmp(b.1)));
+    let mut seen = HashSet::new();
+    scored
+        .into_iter()
+        .filter(|(_, command, _, _)| seen.insert(*command))
+        .take(limit)
+        .map(|(display, command, source, score)| FuzzyResult {
+            command: command.to_string(),
+            display: display.to_string(),
+            source: source.to_string(),
+            score,
+            indices: matcher.indices(display),
         })
-        .collect();
-    results.extend(fuzzy_search_items(
-        &quick_items,
-        pattern,
-        "quickCommand",
-        quick_items.len(),
-        None,
-        None,
-    ));
-
-    results.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then(left.source.cmp(&right.source))
-            .then(left.command.cmp(&right.command))
-    });
-    deduplicate_commands(&mut results);
-    results.truncate(limit);
-    results
+        .collect()
 }
 
 pub fn manual_empty_command_suggestions(
@@ -141,34 +183,39 @@ pub fn fuzzy_search_items(
         return Vec::new();
     }
 
+    let mut matcher = TextMatcher::default();
+    matcher.set_query(
+        &pattern
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>(),
+    );
     let mut scored = Vec::new();
     for (index, (display, command)) in items.iter().enumerate() {
         let command_len = command.chars().count();
-        if min_command_length.is_some_and(|min| command_len < min) {
+        if min_command_length.is_some_and(|min| command_len < min)
+            || max_command_length.is_some_and(|max| command_len > max)
+        {
             continue;
         }
-        if max_command_length.is_some_and(|max| command_len > max) {
-            continue;
-        }
-        if let Some((score, indices)) = fuzzy_match(display, pattern) {
-            scored.push((
-                index,
-                FuzzyResult {
-                    command: (*command).to_string(),
-                    score,
-                    indices,
-                    source: source.to_string(),
-                    display: (*display).to_string(),
-                },
-            ));
+        if let Some(score) = matcher.score(display) {
+            scored.push((index, score));
         }
     }
-
-    scored.sort_by(|left, right| right.1.score.cmp(&left.1.score).then(right.0.cmp(&left.0)));
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
     scored
         .into_iter()
         .take(limit)
-        .map(|(_, result)| result)
+        .map(|(index, score)| {
+            let (display, command) = items[index];
+            FuzzyResult {
+                command: command.to_string(),
+                display: display.to_string(),
+                source: source.to_string(),
+                score,
+                indices: matcher.indices(display),
+            }
+        })
         .collect()
 }
 
@@ -193,60 +240,6 @@ fn quick_command_rank(command: &QuickCommand) -> u64 {
         .saturating_mul(1_000_000_000)
         .saturating_add(use_count.saturating_mul(1_000_000))
         .saturating_add(updated_at)
-}
-
-fn fuzzy_match(display: &str, pattern: &str) -> Option<(u32, Vec<u32>)> {
-    let haystack: Vec<char> = display.chars().collect();
-    let needle: Vec<char> = pattern.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if haystack.is_empty() || needle.is_empty() {
-        return None;
-    }
-
-    let haystack_lower: Vec<char> = haystack.iter().flat_map(|ch| ch.to_lowercase()).collect();
-    let needle_lower: Vec<char> = needle.iter().flat_map(|ch| ch.to_lowercase()).collect();
-    let mut search_from = 0;
-    let mut indices = Vec::new();
-    for needle_char in needle_lower {
-        let relative_index = haystack_lower[search_from..]
-            .iter()
-            .position(|haystack_char| *haystack_char == needle_char)?;
-        let index = search_from + relative_index;
-        indices.push(index as u32);
-        search_from = index.saturating_add(1);
-    }
-
-    let mut score = (indices.len() as u32).saturating_mul(100);
-    for pair in indices.windows(2) {
-        if pair[1] == pair[0].saturating_add(1) {
-            score = score.saturating_add(40);
-        } else {
-            score = score.saturating_sub(pair[1].saturating_sub(pair[0]).min(30));
-        }
-    }
-    if let Some(first) = indices.first().copied() {
-        score = score.saturating_add(80_u32.saturating_sub(first.min(80)));
-    }
-    for index in &indices {
-        if is_word_boundary(&haystack, *index as usize) {
-            score = score.saturating_add(20);
-        }
-    }
-    let display_lower = display.to_lowercase();
-    let pattern_lower = pattern.to_lowercase();
-    if display_lower.contains(&pattern_lower) {
-        score = score.saturating_add(160);
-    }
-
-    Some((score, indices))
-}
-
-fn is_word_boundary(chars: &[char], index: usize) -> bool {
-    if index == 0 {
-        return true;
-    }
-    let previous = chars[index - 1];
-    let current = chars[index];
-    !previous.is_alphanumeric() || (previous.is_lowercase() && current.is_uppercase())
 }
 
 #[cfg(test)]

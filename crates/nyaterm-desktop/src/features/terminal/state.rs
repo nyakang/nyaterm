@@ -115,6 +115,61 @@ pub(super) struct TerminalSelectionState {
     pub(super) mouse_report_position: Option<(u16, u16)>,
 }
 
+impl TerminalSelectionState {
+    /// Coordinate-only moves keep cached text and outstanding copy generations.
+    pub(super) fn advance_history(
+        &mut self,
+        session_id: &str,
+        current: nyaterm_terminal::TerminalHistoryState,
+    ) -> bool {
+        if self.session_id.as_deref() != Some(session_id) {
+            return false;
+        }
+        let Some(previous) = self.source_history else {
+            return false;
+        };
+        let Some(change) = current.changes_since(previous) else {
+            if previous.changes_since(current).is_some() {
+                return false;
+            }
+            self.selection = None;
+            self.click_anchor = None;
+            self.source_history = None;
+            self.dragging = false;
+            self.drag_pointer_position = None;
+            self.autoscroll = None;
+            self.text.invalidate();
+            self.text.status =
+                TerminalSelectionTextStatus::Failed(TerminalSelectionTextError::StaleHistory);
+            return false;
+        };
+        let old = self.selection;
+        let clipped = old.is_some_and(|selection| {
+            !selection.all_buffer && selection.ordered().0.line < change.evicted
+        });
+        self.selection = old.and_then(|selection| selection.after_eviction(change.evicted));
+        self.click_anchor = self
+            .click_anchor
+            .and_then(|anchor| anchor.after_eviction(change.evicted));
+        self.source_history = Some(current);
+        if clipped {
+            self.text.invalidate_preserving_copy();
+            if self.selection.is_none() {
+                self.dragging = false;
+                self.drag_pointer_position = None;
+                self.autoscroll = None;
+                self.text.pending_copy = None;
+            }
+        } else if let Some((_, cached)) = self.text.key.as_mut()
+            && Some(*cached) == old
+            && let Some(selection) = self.selection
+        {
+            *cached = selection;
+        }
+        clipped && self.selection.is_some() && self.text.pending_copy.is_some()
+    }
+}
+
 #[derive(Default)]
 pub(super) enum TerminalSelectionTextStatus {
     #[default]
@@ -147,6 +202,12 @@ pub(super) struct TerminalSelectionText {
 }
 
 impl TerminalSelectionText {
+    pub(super) fn invalidate_preserving_copy(&mut self) {
+        let pending_copy = self.pending_copy.take();
+        self.invalidate();
+        self.pending_copy = pending_copy;
+    }
+
     pub(super) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.status = TerminalSelectionTextStatus::Unrequested;
@@ -250,6 +311,12 @@ impl TerminalFeatureState {
         for surface in surfaces {
             surface.update(cx, |surface, cx| surface.set_line_roles(enabled, cx));
         }
+    }
+
+    pub(in crate::features) fn submit_system_recording(&self, session_id: &str, text: String) {
+        self.view
+            .frame_pipeline
+            .submit_system_recording(session_id, text);
     }
 
     pub(in crate::features) fn submit_execution_recording(

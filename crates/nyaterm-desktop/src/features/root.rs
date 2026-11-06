@@ -973,6 +973,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.quick_variable_open, |this| {
+                self.schedule_quick_command_variable_autofocus(window, cx);
                 this.child(full_window_overlay_layer(
                     "quick-command-variable-input-layer",
                     self.quick_command_variable_prompt_overlay(cx),
@@ -1015,11 +1016,12 @@ impl NyaTermApp {
             // `APP_OVERLAY_PRIORITY`, so insertion order decides, and a layer
             // painted above the lock screen would swallow the pointer input the
             // lock screen needs.
+            //
+            // Passive: the platform already blocks input to a modal owner. A modal
+            // layer would make the native-child overlay claim the whole client
+            // area with an owned input popup raised above the dialog itself.
             .when(modal_scrim_is_drawn() && overlay.modal_child_open, |this| {
-                this.child(full_window_overlay_layer(
-                    "modal-owner",
-                    self.modal_owner_scrim(),
-                ))
+                this.child(passive_overlay_layer(self.modal_owner_scrim()))
             })
             .when(overlay.locked, |this| {
                 // The lock screen owns its input boundary so Windows caption

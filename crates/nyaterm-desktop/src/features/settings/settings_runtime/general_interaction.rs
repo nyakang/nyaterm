@@ -185,6 +185,22 @@ impl NyaTermApp {
         self.save_diagnostics_settings(cx);
     }
 
+    pub(in crate::features) fn set_diagnostics_log_shard_bytes(
+        &mut self,
+        bytes: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings.set_diagnostics_log_shard_bytes(bytes) {
+            return;
+        }
+        // The log layer reads this atomically, so new shards honour the new
+        // budget without restarting the process.
+        nyaterm_core::diagnostics::set_log_shard_bytes(
+            self.settings.summary().diagnostics_log_shard_bytes,
+        );
+        self.save_diagnostics_settings(cx);
+    }
+
     pub(in crate::features) fn save_diagnostics_settings(&mut self, cx: &mut Context<Self>) {
         if self.defer_settings_domain_persistence(SettingsPersistenceDomain::Diagnostics, cx) {
             return;
@@ -367,22 +383,26 @@ impl NyaTermApp {
         snapshot: AppSettingsSummary,
         cx: &mut Context<Self>,
     ) {
-        let request =
-            nyaterm_store::store_mutation(StoreDomain::Settings, move |store| match kind {
-                SettingsSaveKind::Diagnostics => store.save_diagnostics_settings(&snapshot),
-                SettingsSaveKind::General => store.save_general_settings(&snapshot),
-                SettingsSaveKind::Interaction => store.save_interaction_settings(&snapshot),
-                SettingsSaveKind::ScreenLock => store.save_screen_lock_settings(&snapshot),
-                SettingsSaveKind::HostKey => store.save_host_key_policy(&snapshot.host_key_policy),
-                SettingsSaveKind::Recording => store.save_recording_settings(&snapshot),
-                SettingsSaveKind::Transfer => store.save_transfer_settings(&snapshot),
-                SettingsSaveKind::Terminal => store.save_terminal_settings(&snapshot),
-                SettingsSaveKind::QuickCommands => store.save_quick_command_ui_settings(&snapshot),
-                SettingsSaveKind::Appearance => store.save_appearance_settings(&snapshot),
-                SettingsSaveKind::UiLayout => store.save_ui_layout_settings(&snapshot),
-                SettingsSaveKind::Keybindings => store.save_keybindings(&snapshot.keybindings),
-                SettingsSaveKind::FileExplorer => store.save_file_explorer_favorite_dirs(&snapshot),
-            });
+        let operation = move |store: &nyaterm_store::ConnectionStore| match kind {
+            SettingsSaveKind::Diagnostics => store.save_diagnostics_settings(&snapshot),
+            SettingsSaveKind::General => store.save_general_settings(&snapshot),
+            SettingsSaveKind::Interaction => store.save_interaction_settings(&snapshot),
+            SettingsSaveKind::ScreenLock => store.save_screen_lock_settings(&snapshot),
+            SettingsSaveKind::HostKey => store.save_host_key_policy(&snapshot.host_key_policy),
+            SettingsSaveKind::Recording => store.save_recording_settings(&snapshot),
+            SettingsSaveKind::Transfer => store.save_transfer_settings(&snapshot),
+            SettingsSaveKind::Terminal => store.save_terminal_settings(&snapshot),
+            SettingsSaveKind::QuickCommands => store.save_quick_command_ui_settings(&snapshot),
+            SettingsSaveKind::Appearance => store.save_appearance_settings(&snapshot),
+            SettingsSaveKind::UiLayout => store.save_ui_layout_settings(&snapshot),
+            SettingsSaveKind::Keybindings => store.save_keybindings(&snapshot.keybindings),
+            SettingsSaveKind::FileExplorer => store.save_file_explorer_favorite_dirs(&snapshot),
+        };
+        let request = if matches!(kind, SettingsSaveKind::UiLayout) {
+            store_request(StoreDomain::Settings, operation)
+        } else {
+            nyaterm_store::store_mutation(StoreDomain::Settings, operation)
+        };
         let task = match self.store_ui.try_submit(generation, request) {
             Ok(task) => task,
             Err(error) => {

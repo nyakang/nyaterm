@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -23,14 +24,16 @@ use nyaterm_terminal_gpui::{
 use super::{
     TERMINAL_KEYWORD_HIGHLIGHT_PREFETCH_VIEWPORTS,
     TERMINAL_KEYWORD_HIGHLIGHT_PRESSURE_PREFETCH_VIEWPORTS,
-    TERMINAL_KEYWORD_HIGHLIGHT_PRESSURE_THROTTLE, TerminalKeywordHighlightRequestKey,
+    TERMINAL_KEYWORD_HIGHLIGHT_PRESSURE_THROTTLE, TERMINAL_SURFACE_RETAINED_ROW_BYTE_LIMIT,
+    TERMINAL_SURFACE_RETAINED_ROW_LIMIT, TerminalKeywordHighlightRequestKey,
     TerminalPaintedHitTestGeometry, TerminalScrollVisualState, TerminalSurface,
     TerminalSurfaceFrameSnapshot, TerminalSurfaceLocalScrollResult, TerminalVisualScrollGeometry,
     empty_terminal_keyword_rules, terminal_effective_visual_scroll_offset_px,
     terminal_gutter_metrics, terminal_keyword_highlight_prefetch_rows,
     terminal_keyword_highlight_prefetch_viewports, terminal_keyword_highlight_pressure_delay,
     terminal_keyword_highlight_request_key, terminal_keyword_highlight_visible_rows,
-    terminal_line_number_digits, terminal_snapshot_anchor_row_for_display_offset,
+    terminal_line_number_digits, terminal_retained_row_window_distance,
+    terminal_snapshot_absolute_window, terminal_snapshot_anchor_row_for_display_offset,
     terminal_snapshot_covers_display_offset, terminal_snapshot_row_estimated_bytes,
     terminal_surface_fractional_prefetch_offset, terminal_surface_synthesized_window_extra_rows,
     terminal_surface_text_first_repaint_ready, terminal_surface_visible_rows_for_viewport,
@@ -40,6 +43,151 @@ use super::{
 struct TerminalSurfaceLayoutTestView {
     surface: Entity<TerminalSurface>,
     mounted: bool,
+}
+
+#[test]
+fn ime_native_bounds_follow_fractional_horizontal_scroll_on_soft_wrapped_lines() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+    use gpui::EntityInputHandler;
+    use nyaterm_terminal_gpui::unwrapped::TerminalUnwrappedLayout;
+
+    let dir = TestConfigDir::new("nyaterm-ime-horizontal-anchor");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    let surface = cx.update_entity(&app, |app, cx| app.ensure_terminal_surface("s1", cx));
+    let (_, vcx) = cx.add_window_view(|_, _| TerminalSurfaceLayoutTestView {
+        surface: surface.clone(),
+        mounted: true,
+    });
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(&[b'x'; 45]);
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let grid = bounds(point(px(30.), px(50.)), size(px(160.), px(72.)));
+    vcx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.terminal
+                .layout
+                .session_surface_bounds
+                .insert("s1".into(), grid);
+            window.focus(&app.terminal.input.focus, cx);
+            app.replace_and_mark_text_in_range(None, "中", Some(0..0), window, cx);
+        });
+        for offset in [29.5, 35., 40.] {
+            surface.update(cx, |surface, _| {
+                // The same painted mapping consumed by grid rendering and hit
+                // testing, including a cursor on the third physical segment.
+                surface.painted_hit_test_snapshot = Some(snapshot.clone());
+                surface.painted_hit_test_geometry = Some(TerminalPaintedHitTestGeometry {
+                    grid_bounds: Some(grid),
+                    display_offset: 0,
+                    viewport_anchor_row: 0,
+                    snapshot_rows: snapshot.row_count(),
+                    viewport_rows: 4,
+                    visual_y_offset: 0.,
+                    cell_width: 8.,
+                    cell_height: 18.,
+                    revision: 0,
+                });
+                surface.painted_unwrapped =
+                    TerminalUnwrappedLayout::new(&snapshot, 0, 4, offset).map(Arc::new);
+            });
+            app.update(cx, |app, cx| {
+                let anchor = app.terminal_ime_anchor_bounds(grid, cx);
+                assert_eq!(anchor.left(), grid.left() + px((45. - offset) * 8.));
+                assert_eq!(anchor.top(), grid.top());
+                let native = app.bounds_for_range(0..0, grid, window, cx).unwrap();
+                assert_eq!(native.left(), anchor.left());
+                assert_eq!(native.top(), anchor.top());
+            });
+        }
+    });
+}
+
+#[test]
+fn row_stripes_repaint_grid_and_gutter_together_and_respect_protocol_modes() {
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"first\r\nsecond");
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let surface = cx.new(|_| TerminalSurface::new("row-stripes"));
+    cx.update_entity(&surface, |surface, _| {
+        surface.show_line_numbers = true;
+        surface.show_timestamps = true;
+        surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+            snapshot,
+            TerminalScrollVisualState {
+                history: screen.history_state(),
+                session_id: "row-stripes".into(),
+                scroll_offset: 0,
+                scroll_residual_lines: 0.0,
+                display_offset: 0,
+                scrollback_len: 0,
+                viewport_rows: 3,
+                has_new_while_scrolled: false,
+                performance_overlay: None,
+                skipped_output_chars: 0,
+            },
+        ));
+        assert!(surface.set_zebra_stripes(true, true, None));
+        assert!(!surface.set_zebra_stripes(true, true, None));
+    });
+    let window = cx.open_window(size(px(600.), px(240.)), {
+        let surface = surface.clone();
+        move |_, _| TerminalSurfaceLayoutTestView {
+            surface,
+            mounted: true,
+        }
+    });
+    for (protocol, enabled, by_row, expected) in [
+        (TerminalProtocolState::default(), true, true, 2),
+        (
+            TerminalProtocolState {
+                alternate_screen: true,
+                ..Default::default()
+            },
+            true,
+            true,
+            0,
+        ),
+        (
+            TerminalProtocolState {
+                mouse_reporting: true,
+                ..Default::default()
+            },
+            true,
+            true,
+            0,
+        ),
+        (TerminalProtocolState::default(), false, true, 0),
+        (TerminalProtocolState::default(), true, false, 0),
+        (TerminalProtocolState::default(), true, true, 2),
+    ] {
+        cx.update_entity(&surface, |surface, cx| {
+            surface.set_protocol_state(protocol);
+            surface.set_zebra_stripes(enabled, by_row, None);
+            cx.notify();
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let palette = crate::theme::theme_palette("github-dark");
+            let color = gpui::Background::from(gpui::rgba((palette.terminal_fg << 8) | 0x0f));
+            let stripes = window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| quad.background == color)
+                .collect::<Vec<_>>();
+            assert_eq!(stripes.len(), expected);
+            if expected == 2 {
+                assert_eq!(stripes[0].bounds.top(), stripes[1].bounds.top());
+                assert_eq!(stripes[0].bounds.size.height, stripes[1].bounds.size.height);
+            }
+        })
+        .unwrap();
+    }
 }
 
 #[test]
@@ -841,6 +989,61 @@ fn retained_row_cache_refreshes_only_changed_snapshot_rows() {
 }
 
 #[test]
+fn retained_row_cache_resets_when_numbering_base_changes() {
+    // A reflow or local clear can repin the numbering origin. Rows cached
+    // against the old base must never be stitched into the new window, or the
+    // gutter restarts mid-screen while content keeps counting.
+    let mut screen = TerminalScreen::default();
+    screen.advance_decoded_text(&terminal_test_output_lines(80));
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let rows = snapshot.row_count();
+    let scrollback_len = snapshot.scrollback_len;
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        snapshot.clone(),
+        0,
+        0.0,
+        0,
+        scrollback_len,
+        rows,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block",
+    );
+    assert!(!surface.retained_snapshots.is_empty());
+
+    let mut rebased = (*snapshot).clone();
+    rebased.line_number_base = snapshot.line_number_base.map(|base| base + 1);
+    let rebased = Arc::new(rebased);
+    apply_test_frame_snapshot!(
+        surface,
+        rebased.clone(),
+        0,
+        0.0,
+        0,
+        scrollback_len,
+        rows,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block",
+    );
+
+    assert_eq!(surface.retained_snapshots.len(), 1);
+    assert!(Arc::ptr_eq(
+        surface.retained_snapshots.first().unwrap(),
+        &rebased
+    ));
+    assert_eq!(surface.retained_rows.len(), rows);
+}
+
+#[test]
 fn retained_row_cache_respects_estimated_byte_budget() {
     let mut screen = TerminalScreen::default();
     screen.advance_decoded_text(&terminal_test_output_lines(80));
@@ -856,6 +1059,120 @@ fn retained_row_cache_respects_estimated_byte_budget() {
 
     assert!(surface.retained_row_estimated_bytes <= max_bytes);
     assert!(surface.retained_rows.len() < snapshot.row_count());
+}
+
+#[test]
+fn retained_row_window_distance_prefers_rows_outside_the_target() {
+    assert_eq!(terminal_retained_row_window_distance(50, 60, 100), 10);
+    assert_eq!(terminal_retained_row_window_distance(59, 60, 100), 1);
+    assert_eq!(terminal_retained_row_window_distance(70, 60, 100), 0);
+    assert_eq!(terminal_retained_row_window_distance(99, 60, 100), 0);
+    assert_eq!(terminal_retained_row_window_distance(105, 60, 100), 6);
+}
+
+#[test]
+fn retained_row_cache_follows_upward_scroll_target() {
+    let mut screen = TerminalScreen::new(40, 8);
+    screen.set_scrollback_limit(400);
+    screen.advance_decoded_text(&terminal_test_output_lines(400));
+
+    let viewport_rows = 8;
+    let live = screen.viewport_snapshot_with_window(0, 16, 16);
+    let scrollback_len = live.scrollback_len;
+    let real_total_rows = scrollback_len.saturating_add(viewport_rows);
+
+    let mut surface = TerminalSurface::new("upward-scroll-retention");
+    // Keep fewer rows than the total scrollback so eviction is exercised on
+    // every upward step, as it is on a terminal with a long scrollback.
+    let max_rows = 48;
+    surface.remember_retained_snapshot_rows_with_limits(&live, max_rows, usize::MAX);
+
+    let mut covered = 0usize;
+    let mut total = 0usize;
+    let mut offset = 8usize;
+    while offset <= scrollback_len.min(320) {
+        let snapshot = screen.viewport_snapshot_with_window(offset, 16, 16);
+        surface.remember_retained_snapshot_rows_with_limits(&snapshot, max_rows, usize::MAX);
+        let desired_end = real_total_rows.saturating_sub(offset);
+        let desired_start = desired_end.saturating_sub(viewport_rows);
+        total += 1;
+        if surface.retained_rows_cover_absolute_range(desired_start, desired_end) {
+            covered += 1;
+        }
+        offset += 16;
+    }
+
+    println!("retained upward scroll coverage: {covered}/{total}");
+    assert_eq!(
+        covered, total,
+        "the retained row cache must keep the upward scroll target covered"
+    );
+}
+
+#[test]
+#[ignore = "measurement: run with --ignored --nocapture on a 12k-line scrollback"]
+fn large_scrollback_upward_scroll_coverage_measurement() {
+    const VIEWPORT_ROWS: usize = 50;
+    const MAX_RETAINED_ROWS: usize = 4096;
+    const EXTRA_ROWS: usize = 192;
+    const SCROLLBACK_LINES: usize = 12_000;
+
+    let mut screen = TerminalScreen::new(200, VIEWPORT_ROWS as u16);
+    screen.set_scrollback_limit(SCROLLBACK_LINES + VIEWPORT_ROWS);
+    screen.advance_decoded_text(&terminal_test_output_lines(SCROLLBACK_LINES));
+
+    let live = screen.viewport_snapshot_with_window(0, EXTRA_ROWS, EXTRA_ROWS);
+    let scrollback_len = live.scrollback_len;
+    let real_total_rows = scrollback_len.saturating_add(VIEWPORT_ROWS);
+    let mut surface = TerminalSurface::new("large-scrollback-measurement");
+    surface.remember_retained_snapshot_rows_with_limits(&live, MAX_RETAINED_ROWS, usize::MAX);
+
+    // Reference model of the previous eviction policy (always drop the smallest
+    // absolute row), used only to quantify the improvement.
+    let mut old_rows = BTreeMap::new();
+    if let Some((start, end)) = terminal_snapshot_absolute_window(&live) {
+        for abs_row in start..end {
+            old_rows.insert(abs_row, ());
+        }
+    }
+
+    let mut new_covered = 0usize;
+    let mut old_covered = 0usize;
+    let mut total = 0usize;
+    let mut offset = 0usize;
+    while offset.saturating_add(8) <= scrollback_len {
+        offset += 8;
+        let snapshot = screen.viewport_snapshot_with_window(offset, EXTRA_ROWS, EXTRA_ROWS);
+        surface.remember_retained_snapshot_rows_with_limits(
+            &snapshot,
+            MAX_RETAINED_ROWS,
+            usize::MAX,
+        );
+        if let Some((start, end)) = terminal_snapshot_absolute_window(&snapshot) {
+            for abs_row in start..end {
+                old_rows.insert(abs_row, ());
+            }
+        }
+        while old_rows.len() > MAX_RETAINED_ROWS {
+            let Some(oldest) = old_rows.keys().next().copied() else {
+                break;
+            };
+            old_rows.remove(&oldest);
+        }
+
+        let desired_end = real_total_rows.saturating_sub(offset);
+        let desired_start = desired_end.saturating_sub(VIEWPORT_ROWS);
+        total += 1;
+        if surface.retained_rows_cover_absolute_range(desired_start, desired_end) {
+            new_covered += 1;
+        }
+        if (desired_start..desired_end).all(|abs_row| old_rows.contains_key(&abs_row)) {
+            old_covered += 1;
+        }
+    }
+    println!(
+        "12k scrollback upward scroll coverage: old={old_covered}/{total} new={new_covered}/{total}"
+    );
 }
 
 #[test]
@@ -1952,6 +2269,7 @@ fn promoting_current_scroll_window_does_not_retain_it_again() {
     let scrollback_len = snapshot.scrollback_len;
     let mut surface = TerminalSurface::new("session");
     surface.snapshot = Some(snapshot.clone());
+    surface.history = snapshot.history;
 
     assert!(surface.promote_snapshot_covering_display_offset(1, rows, scrollback_len));
     assert!(surface.retained_snapshots.is_empty());
@@ -3651,7 +3969,7 @@ fn surface_retained_scroll_state_resets_when_viewport_rows_change() {
 }
 
 #[test]
-fn full_history_rotation_discards_retained_rows_and_rejects_old_prefetch() {
+fn full_history_rotation_keeps_surviving_rows_and_converts_old_prefetch() {
     let mut screen = TerminalScreen::new(16, 3);
     screen.set_scrollback_limit(8);
     screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
@@ -3690,14 +4008,11 @@ fn full_history_rotation_discards_retained_rows_and_rejects_old_prefetch() {
         false,
         "block"
     );
-    assert_eq!(surface.retained_snapshots.len(), 1);
-    assert!(
-        surface
-            .retained_rows
-            .values()
-            .all(|row| !old_rows.values().any(|old| Arc::ptr_eq(old, row)))
-    );
-    assert!(!surface.retain_prefetched_snapshot(old));
+    assert_eq!(surface.retained_snapshots.len(), 2);
+    for (key, row) in old_rows {
+        assert!(Arc::ptr_eq(surface.retained_row(key - 2).unwrap(), &row));
+    }
+    assert!(surface.retain_prefetched_snapshot(old));
     assert!(!surface.has_snapshot_covering_display_offset(5, 3, 8));
     assert_eq!(surface.snapshot.as_ref().unwrap().history, fresh.history);
 }
@@ -3930,4 +4245,292 @@ fn changing_only_the_palette_invalidates_compiled_and_published_highlights() {
     surface.invalidate_keyword_highlight_config();
     assert!(surface.keyword_highlighter.is_none());
     assert!(surface.keyword_highlights.is_none());
+}
+
+#[test]
+fn full_history_repeated_rotation_keeps_text_selection_and_row_allocations() {
+    for limit in [128, 5000, 100000] {
+        assert_history_rotation_reuses_rows(limit);
+    }
+}
+
+fn assert_history_rotation_reuses_rows(limit: usize) {
+    let mut screen = TerminalScreen::new(32, 4);
+    screen.set_scrollback_limit(limit);
+    for index in 0..limit + 6 {
+        screen.advance_decoded_text(&format!("line {index}\r\n"));
+    }
+    let original = Arc::new(screen.viewport_snapshot_with_window(40, 8, 8));
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        original.clone(),
+        40,
+        0.0,
+        40,
+        limit,
+        4,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    let start = original.total_rows - original.display_offset - original.row_count();
+    let selection = TerminalSelection::from_range(
+        TerminalBufferCellPos::new(start + 8, 1),
+        TerminalBufferCellPos::new(start + 9, 3),
+    );
+    surface.set_selection_visual(Some(selection));
+    let cache_keys: Vec<_> = surface.retained_rows.keys().copied().collect();
+    for delta in 1..=20 {
+        screen.advance(b"new line\r\n");
+        let state = TerminalScrollVisualState {
+            history: screen.history_state(),
+            session_id: "session".into(),
+            scroll_offset: 40 + delta,
+            scroll_residual_lines: 0.0,
+            display_offset: 40 + delta,
+            scrollback_len: limit,
+            viewport_rows: 4,
+            has_new_while_scrolled: true,
+            performance_overlay: None,
+            skipped_output_chars: 0,
+        };
+        surface.apply_scroll_visual_state(state);
+        let retained = surface.snapshot.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&original.row_data, &retained.row_data));
+        assert_eq!(
+            retained.line(8),
+            screen.viewport_snapshot(40 + delta).line(0)
+        );
+        assert_eq!(surface.selection_visual, selection.after_eviction(delta));
+        assert_eq!(surface.retained_row_origin, delta);
+        assert_eq!(
+            surface.retained_rows.keys().copied().collect::<Vec<_>>(),
+            cache_keys
+        );
+        assert!(!surface.scroll_snapshot_pending);
+        assert!(surface.retained_rows.len() <= TERMINAL_SURFACE_RETAINED_ROW_LIMIT);
+        assert!(surface.retained_row_estimated_bytes <= TERMINAL_SURFACE_RETAINED_ROW_BYTE_LIMIT);
+    }
+}
+
+#[test]
+fn late_oldest_prefetch_supplies_retained_rows_without_committing_its_stale_window() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(128);
+    screen.advance(&b"history\r\n".repeat(134));
+    let paint = Arc::new(screen.viewport_snapshot(128));
+    let prefetch = screen.viewport_snapshot_with_window(128, 0, 16);
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        paint.clone(),
+        128,
+        0.0,
+        128,
+        128,
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    screen.advance(b"new\r\nnew\r\n");
+    let state = TerminalScrollVisualState {
+        history: screen.history_state(),
+        session_id: "session".into(),
+        scroll_offset: 128,
+        scroll_residual_lines: 0.0,
+        display_offset: 128,
+        scrollback_len: 128,
+        viewport_rows: 3,
+        has_new_while_scrolled: true,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    };
+    surface.apply_scroll_visual_state(state.clone());
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &paint));
+    assert!(!surface.retain_prefetched_snapshot(Arc::new(prefetch.clone())));
+    assert!(surface.retain_surviving_prefetched_rows(&prefetch));
+    surface.apply_scroll_visual_state(state);
+    let snapshot = surface.snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.history, screen.history_state());
+    assert!(Arc::ptr_eq(&snapshot.row_data[0], &prefetch.row_data[2]));
+    assert!(!surface.scroll_snapshot_pending);
+}
+
+#[test]
+fn late_oldest_logical_frame_paints_only_retained_rows_with_its_source_index() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(128);
+    screen.set_logical_line_snapshots(true);
+    screen.advance(&b"history\r\n".repeat(134));
+    let snapshot = Arc::new(screen.viewport_snapshot_with_window(128, 0, 16));
+    let mut surface = TerminalSurface::new("session");
+    surface.wrap_mode = nyaterm_core::models::settings::TerminalWrapMode::None;
+    screen.advance(b"new\r\nnew\r\n");
+    let state = TerminalScrollVisualState {
+        history: screen.history_state(),
+        session_id: "session".into(),
+        scroll_offset: 128,
+        scroll_residual_lines: 0.0,
+        display_offset: 128,
+        scrollback_len: 128,
+        viewport_rows: 3,
+        has_new_while_scrolled: true,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    };
+    assert!(surface.apply_retained_logical_frame(snapshot.clone(), &state));
+    assert_eq!(surface.history, state.history);
+    assert_eq!(surface.display_offset, 126);
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &snapshot));
+    assert!(!surface.has_snapshot_covering_display_offset(128, 3, 128));
+}
+
+#[test]
+fn full_history_missing_target_keeps_last_paint_and_its_decorations() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(8);
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let old = Arc::new(screen.viewport_snapshot(8));
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        old.clone(),
+        8,
+        0.0,
+        8,
+        8,
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    surface.decorations = Arc::from(vec![TerminalLineDecorations {
+        link_ranges: vec![(0, 1)],
+        ..Default::default()
+    }]);
+    let decorations = surface.decorations.clone();
+    screen.advance(b"11\r\n");
+    surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
+        session_id: "session".into(),
+        scroll_offset: 8,
+        scroll_residual_lines: 0.0,
+        display_offset: 8,
+        scrollback_len: 8,
+        viewport_rows: 3,
+        has_new_while_scrolled: true,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    });
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &old));
+    assert!(Arc::ptr_eq(&surface.decorations, &decorations));
+    assert!(!surface.has_snapshot_covering_display_offset(8, 3, 8));
+}
+
+#[test]
+fn full_history_mixed_live_prefetch_synthesizes_only_surviving_rows() {
+    let mut screen = TerminalScreen::new(32, 4);
+    screen.set_scrollback_limit(128);
+    for index in 0..134 {
+        screen.advance_decoded_text(&format!("line {index}\r\n"));
+    }
+    let original = Arc::new(screen.viewport_snapshot_with_window(20, 8, 20));
+    let reading = screen.viewport_snapshot(20).line(0).unwrap().to_string();
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        original.clone(),
+        20,
+        0.0,
+        20,
+        128,
+        4,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    screen.advance(b"new line\r\n");
+    surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
+        session_id: "session".into(),
+        scroll_offset: 21,
+        scroll_residual_lines: 0.0,
+        display_offset: 21,
+        scrollback_len: 128,
+        viewport_rows: 4,
+        has_new_while_scrolled: true,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    });
+    let fresh = surface.snapshot.as_ref().unwrap();
+    assert_eq!(fresh.history, screen.history_state());
+    let anchor = terminal_snapshot_anchor_row_for_display_offset(fresh, 21, 4, 128);
+    assert_eq!(fresh.line(anchor), Some(reading.as_str()));
+    assert!(
+        original
+            .rows()
+            .iter()
+            .any(|row| Arc::ptr_eq(row, &fresh.row_data[anchor]))
+    );
+}
+
+#[test]
+fn full_history_no_wrap_wait_keeps_long_line_frame_and_source_index() {
+    let mut screen = TerminalScreen::new(8, 3);
+    screen.set_scrollback_limit(128);
+    screen.set_logical_line_snapshots(true);
+    screen.advance("x".repeat(800).as_bytes());
+    screen.advance(b"\r\n");
+    for _ in 0..35 {
+        screen.advance(b"tail\r\n");
+    }
+    let old = Arc::new(screen.viewport_snapshot(50));
+    let mut surface = TerminalSurface::new("session");
+    surface.wrap_mode = nyaterm_core::models::settings::TerminalWrapMode::None;
+    apply_test_frame_snapshot!(
+        surface,
+        old.clone(),
+        50,
+        0.0,
+        50,
+        128,
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    screen.advance(b"new\r\n");
+    surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
+        session_id: "session".into(),
+        scroll_offset: 51,
+        scroll_residual_lines: 0.0,
+        display_offset: 51,
+        scrollback_len: 128,
+        viewport_rows: 3,
+        has_new_while_scrolled: true,
+        performance_overlay: None,
+        skipped_output_chars: 0,
+    });
+    assert!(Arc::ptr_eq(surface.snapshot.as_ref().unwrap(), &old));
+    assert!(surface.retained_rows.is_empty());
+    assert!(!surface.has_snapshot_covering_display_offset(51, 3, 128));
+    assert!(surface.unwrapped_layout(&old).is_some());
 }

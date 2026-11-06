@@ -1,9 +1,8 @@
-use gpui::{AppContext as _, Context, Entity, Window};
-use nyaterm_transport::RemoteFilePath;
-use nyaterm_ui::{NyaInputEvent, NyaInputState};
-
 use super::pane::PaneId;
 use super::workspace::FileManagerWorkspace;
+use gpui::{AppContext as _, Context, Entity, Window};
+use nyaterm_files::sftp::RemoteFilePath;
+use nyaterm_ui::{NyaInputEvent, NyaInputState};
 
 pub(super) struct FileManagerPaneInputs {
     pub path: Entity<NyaInputState>,

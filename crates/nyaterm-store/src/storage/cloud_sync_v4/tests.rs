@@ -1079,6 +1079,11 @@ fn runtime_usage_does_not_dirty_the_sync_projection_or_journal() {
         .load_v4_view("destination", "password", &SyncScope::default())
         .unwrap();
     store.mark_connection_used("server").unwrap();
+    assert!(
+        store
+            .update_auto_detected_connection_icon("server", "linux")
+            .unwrap()
+    );
     store
         .merge_connection_asset_from_monitoring(
             "server",

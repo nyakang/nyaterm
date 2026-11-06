@@ -252,6 +252,11 @@ impl ConnectionStore {
                 &["terminal", "zebra_stripes_enabled"],
                 true,
             ),
+            terminal_zebra_stripes_by_row: json_bool(
+                &value,
+                &["terminal", "zebra_stripes_by_row"],
+                false,
+            ),
             terminal_action_links_enabled: json_bool(
                 &value,
                 &["terminal", "action_links_enabled"],
@@ -617,6 +622,13 @@ impl ConnectionStore {
                     _ => 7,
                 }
             },
+            diagnostics_log_shard_bytes: nyaterm_core::diagnostics::normalize_log_shard_bytes(
+                json_u64(
+                    &value,
+                    &["diagnostics", "shard_bytes"],
+                    nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
+                ),
+            ),
             startup_restore: json_bool(&value, &["general", "startup_restore"], false),
             startup_restore_window_layout: json_bool(
                 &value,
@@ -1428,6 +1440,11 @@ impl ConnectionStore {
         );
         set_nested_json_value(
             &mut value,
+            &["terminal", "zebra_stripes_by_row"],
+            serde_json::Value::Bool(settings.terminal_zebra_stripes_by_row),
+        );
+        set_nested_json_value(
+            &mut value,
             &["terminal", "action_links_enabled"],
             serde_json::Value::Bool(settings.terminal_action_links_enabled),
         );
@@ -1655,6 +1672,13 @@ impl ConnectionStore {
             &mut value,
             &["diagnostics", "retention_days"],
             serde_json::Value::from(retention),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["diagnostics", "shard_bytes"],
+            serde_json::Value::from(nyaterm_core::diagnostics::normalize_log_shard_bytes(
+                settings.diagnostics_log_shard_bytes,
+            )),
         );
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()

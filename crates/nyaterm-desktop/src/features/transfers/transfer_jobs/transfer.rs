@@ -1,25 +1,21 @@
-use rust_i18n::t;
-
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::Duration;
-
-use gpui::{Context, Window};
-use nyaterm_transport::{
-    RemoteFilePath, SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
-    SftpTransferControl,
+use super::helpers::{
+    TransferProgressEventSender, log_sftp_upload_job_failure, transfer_job_remote_parent_path,
 };
-
 use crate::features::NyaTermApp;
 use crate::features::transfers::SftpJobSession;
 use crate::models::{
     NavItem, TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult,
     TransferJobState, TransferJobStatus,
 };
-
-use super::helpers::{
-    TransferProgressEventSender, log_sftp_upload_job_failure, transfer_job_remote_parent_path,
+use gpui::{Context, Window};
+use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
+use nyaterm_files::sftp_transfer_types::{
+    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
 };
+use rust_i18n::t;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::Duration;
 
 impl NyaTermApp {
     /// Use clone_for_download_batch on these options for sibling downloads.
@@ -49,7 +45,7 @@ impl NyaTermApp {
             return false;
         }
         if self.session.active_file_browser_backend()
-            != Some(nyaterm_transport::FileBrowserBackendKind::Remote)
+            != Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
         {
             self.shell
                 .set_status("source session is unavailable".to_string());
@@ -503,7 +499,7 @@ impl NyaTermApp {
                     finished_tx.clone(),
                     move || {
                         let _lifetime = if let Some(source) = promised_source {
-                            match nyaterm_transport::drag_export::DragSourceLifetime::new(
+                            match nyaterm_files::drag_export::DragSourceLifetime::new(
                                 source,
                                 vec![control.clone()],
                             ) {
@@ -732,12 +728,10 @@ fn lock_upload_target<'a>(
 
 #[cfg(test)]
 mod upload_target_tests {
+    use super::lock_upload_target;
+    use nyaterm_files::sftp::SftpTransferControl;
     use std::sync::Mutex;
     use std::time::Duration;
-
-    use nyaterm_transport::SftpTransferControl;
-
-    use super::lock_upload_target;
 
     #[test]
     fn queued_same_target_upload_can_be_cancelled_before_it_starts() {

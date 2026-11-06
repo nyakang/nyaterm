@@ -63,6 +63,130 @@ fn save(store: &StoreBlockingClient, id: &str, name: &str) {
 }
 
 #[test]
+fn opendal_services_migrate_native_v3_and_preserve_v4_multi_device_conflicts_and_cancellation() {
+    use crate::http::cloud_sync::{
+        CloudStorageFixture, NativeS3Remote, NativeWebdavRemote, OpenDalRemote,
+    };
+    for webdav in [true, false] {
+        let server = CloudStorageFixture::storage();
+        let a = TestConfigDir::new("nyaterm-opendal-v4-a");
+        let b = TestConfigDir::new("nyaterm-opendal-v4-b");
+        let remote_dir = TestConfigDir::new("nyaterm-opendal-v4-unused");
+        let (sa, mut settings, oa) = setup(&a, &remote_dir);
+        let (sb, _, ob) = setup(&b, &remote_dir);
+        settings.provider = if webdav { "webdav" } else { "s3" }.into();
+        settings.remote_root = "space".into();
+        settings.webdav = server.webdav();
+        settings.s3 = server.s3();
+        for store in [&sa, &sb] {
+            let saved = settings.clone();
+            store
+                .request_fn(StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_settings(saved)
+                })
+                .unwrap();
+        }
+        save(&sa, "server", "Legacy saved");
+        let native: Box<dyn CloudSyncRemote> = if webdav {
+            Box::new(NativeWebdavRemote::new(&settings.webdav).unwrap())
+        } else {
+            Box::new(NativeS3Remote::new(&settings.s3).unwrap())
+        };
+        let legacy = nyaterm_core::cloud_sync::push_snapshot_with_remote(
+            &sa,
+            &oa,
+            native.as_ref(),
+            &Default::default(),
+            true,
+        )
+        .unwrap();
+        let legacy_path = format!(
+            "space/{}",
+            nyaterm_core::cloud_sync::legacy_sync_snapshot_file(
+                &legacy.pointer.unwrap().revision_id
+            )
+        );
+        let old_bytes = native.read_if_exists(&legacy_path).unwrap().unwrap();
+        let initial = preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+        assert!(initial.migration);
+        assert!(
+            apply_and_publish(
+                &sa,
+                &settings,
+                &oa,
+                initial,
+                &CloudSyncOperationControl::default()
+            )
+            .unwrap()
+            .verified
+        );
+        let joined = preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        assert!(
+            apply_and_publish(
+                &sb,
+                &settings,
+                &ob,
+                joined,
+                &CloudSyncOperationControl::default()
+            )
+            .unwrap()
+            .verified
+        );
+        save(&sa, "server", "A offline edit");
+        save(&sb, "server", "B offline edit");
+        let pa = preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+        let pb = preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        apply_and_publish(
+            &sa,
+            &settings,
+            &oa,
+            pa,
+            &CloudSyncOperationControl::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_and_publish(
+                &sb,
+                &settings,
+                &ob,
+                pb,
+                &CloudSyncOperationControl::default()
+            ),
+            Err(CloudSyncError::LocalChangedDuringSync)
+        ));
+        let conflicted =
+            preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+        assert!(!conflicted.summary().conflicts.is_empty());
+        let cancelled = CloudSyncOperationControl::default();
+        cancelled.request_cancel();
+        assert!(matches!(
+            preview(&sb, &settings, &ob, &cancelled),
+            Err(CloudSyncError::Cancelled)
+        ));
+        assert_eq!(
+            native.read_if_exists(&legacy_path).unwrap().unwrap(),
+            old_bytes
+        );
+        let adapter = if webdav {
+            OpenDalRemote::webdav(&settings.webdav, Default::default())
+        } else {
+            OpenDalRemote::s3(&settings.s3, Default::default())
+        }
+        .unwrap();
+        assert!(
+            !native
+                .list_sync_files("space/sync/v4/registry")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            native.list_sync_files("space/sync/v4/registry").unwrap(),
+            adapter.list_sync_files("space/sync/v4/registry").unwrap()
+        );
+    }
+}
+
+#[test]
 fn rotated_password_publishes_a_new_space_preserves_credentials_and_leaves_old_objects_readable() {
     let a = TestConfigDir::new("nyaterm-v4-rotation-a");
     let b = TestConfigDir::new("nyaterm-v4-rotation-b");
@@ -972,4 +1096,164 @@ fn delayed_listing_retains_receipts_and_identity_forks_stop_before_business_appl
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn opendal_drives_import_native_v3_and_preserve_multi_device_conflicts_and_pending_recovery() {
+    use crate::http::cloud_sync::metrics::with_test_drive_http;
+    use crate::http::cloud_sync::{
+        DriveFixture, NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote,
+    };
+    use nyaterm_core::OAuthDriveSyncSettings;
+    use nyaterm_core::cloud_sync::credentials::DriveProvider;
+    for provider in [
+        DriveProvider::Google,
+        DriveProvider::OneDrive,
+        DriveProvider::Aliyun,
+    ] {
+        let fixture = DriveFixture::new();
+        with_test_drive_http(&fixture.server.endpoint, || {
+            let a = TestConfigDir::new("nyaterm-drive-v4-a");
+            let b = TestConfigDir::new("nyaterm-drive-v4-b");
+            let unused = TestConfigDir::new("nyaterm-drive-v4-unused");
+            let (sa, mut settings, oa) = setup(&a, &unused);
+            let (sb, _, ob) = setup(&b, &unused);
+            let oauth = OAuthDriveSyncSettings {
+                access_token: Some("access".into()),
+                ..Default::default()
+            };
+            settings.provider = match provider {
+                DriveProvider::Google => "google_drive",
+                DriveProvider::OneDrive => "onedrive",
+                DriveProvider::Aliyun => "aliyun_drive",
+            }
+            .into();
+            settings.remote_root = "space".into();
+            settings.google_drive = oauth.clone();
+            settings.onedrive = oauth.clone();
+            settings.aliyun_drive.access_token = oauth.access_token.clone();
+            for store in [&sa, &sb] {
+                let saved = settings.clone();
+                store
+                    .request_fn(StoreDomain::CloudSync, move |store| {
+                        store.save_cloud_sync_settings(saved)
+                    })
+                    .unwrap();
+            }
+            save(&sa, "server", "Native legacy");
+            let native: Box<dyn CloudSyncRemote> = match provider {
+                DriveProvider::Google => {
+                    Box::new(NativeGoogleDriveRemote::new(&settings.google_drive).unwrap())
+                }
+                DriveProvider::OneDrive => {
+                    Box::new(NativeOneDriveRemote::new(&settings.onedrive).unwrap())
+                }
+                DriveProvider::Aliyun => {
+                    Box::new(NativeAliyunDriveRemote::new(&settings.aliyun_drive).unwrap())
+                }
+            };
+            let legacy = nyaterm_core::cloud_sync::push_snapshot_with_remote(
+                &sa,
+                &oa,
+                native.as_ref(),
+                &Default::default(),
+                true,
+            )
+            .unwrap();
+            let legacy_path = format!(
+                "space/{}",
+                nyaterm_core::cloud_sync::legacy_sync_snapshot_file(
+                    &legacy.pointer.unwrap().revision_id
+                )
+            );
+            let old_bytes = native.read_if_exists(&legacy_path).unwrap().unwrap();
+            let initial =
+                preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+            assert!(initial.migration);
+            // Lost publication reply after the local commit must leave durable pending.
+            fixture.state.lock().unwrap().lose_move_reply = true;
+            let pending = apply_and_publish(
+                &sa,
+                &settings,
+                &oa,
+                initial,
+                &CloudSyncOperationControl::default(),
+            )
+            .unwrap();
+            assert!(!pending.verified);
+            assert!(pending.publication_error.is_some());
+            let recovery =
+                preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+            let recovered = apply_and_publish(
+                &sa,
+                &settings,
+                &oa,
+                recovery,
+                &CloudSyncOperationControl::default(),
+            )
+            .unwrap();
+            assert!(
+                recovered.verified,
+                "{provider:?}: {:?}",
+                recovered.publication_error
+            );
+            let joined =
+                preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+            assert!(
+                apply_and_publish(
+                    &sb,
+                    &settings,
+                    &ob,
+                    joined,
+                    &CloudSyncOperationControl::default()
+                )
+                .unwrap()
+                .verified
+            );
+            save(&sa, "server", "A offline edit");
+            save(&sb, "server", "B offline edit");
+            let pa = preview(&sa, &settings, &oa, &CloudSyncOperationControl::default()).unwrap();
+            let pb = preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+            assert!(
+                apply_and_publish(
+                    &sa,
+                    &settings,
+                    &oa,
+                    pa,
+                    &CloudSyncOperationControl::default()
+                )
+                .unwrap()
+                .verified
+            );
+            assert!(matches!(
+                apply_and_publish(
+                    &sb,
+                    &settings,
+                    &ob,
+                    pb,
+                    &CloudSyncOperationControl::default()
+                ),
+                Err(CloudSyncError::LocalChangedDuringSync)
+            ));
+            let conflicted =
+                preview(&sb, &settings, &ob, &CloudSyncOperationControl::default()).unwrap();
+            assert!(!conflicted.summary().conflicts.is_empty());
+            let cancelled = CloudSyncOperationControl::default();
+            cancelled.request_cancel();
+            assert!(matches!(
+                preview(&sb, &settings, &ob, &cancelled),
+                Err(CloudSyncError::Cancelled)
+            ));
+            assert_eq!(
+                native.read_if_exists(&legacy_path).unwrap().unwrap(),
+                old_bytes
+            );
+            assert!(
+                !native
+                    .list_files("space/sync/v4/registry")
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
 }

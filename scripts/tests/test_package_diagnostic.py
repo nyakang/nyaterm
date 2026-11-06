@@ -30,8 +30,15 @@ SOURCE_FILES = [
 ]
 
 
+def source_files(revision: str | None = None) -> list[str]:
+    if revision is not None:
+        return SOURCE_FILES
+    return [name.replace("crates/nyaterm-transport/src/lib.rs", "crates/nyaterm-transport/src/session.rs")
+            for name in SOURCE_FILES]
+
+
 def populate(source: Path, revision: str | None = None) -> None:
-    for name in SOURCE_FILES:
+    for name in source_files(revision):
         data = ((ROOT / name).read_bytes() if revision is None else subprocess.check_output(
             ["git", "show", f"{revision}:{name}"], cwd=ROOT))
         path = source / name
@@ -46,7 +53,7 @@ class DiagnosticSourceTests(unittest.TestCase):
                 source = Path(directory)
                 populate(source, revision)
                 changed = diagnostic_source.apply_overlay(source)
-                self.assertEqual(set(changed), set(SOURCE_FILES) | {
+                self.assertEqual(set(changed), set(source_files(revision)) | {
                     "crates/nyaterm-core/src/diagnostic_probe.rs",
                     "crates/nyaterm-app/src/diagnostic_build.rs",
                 })
@@ -65,11 +72,26 @@ class DiagnosticSourceTests(unittest.TestCase):
             populate(source)
             file = source / SOURCE_FILES[-1]
             file.write_text(file.read_text(encoding="utf-8").replace("fn prepaint(", "fn renamed_prepaint("), encoding="utf-8")
-            before = {name: (source / name).read_bytes() for name in SOURCE_FILES}
+            before = {name: (source / name).read_bytes() for name in source_files()}
             with self.assertRaisesRegex(ValueError, "prepaint"):
                 diagnostic_source.apply_overlay(source)
-            self.assertEqual(before, {name: (source / name).read_bytes() for name in SOURCE_FILES})
+            self.assertEqual(before, {name: (source / name).read_bytes() for name in source_files()})
             self.assertFalse((source / "crates/nyaterm-core/src/diagnostic_probe.rs").exists())
+
+    def test_missing_or_duplicate_pty_implementation_leaves_sources_untouched(self) -> None:
+        for duplicate in [False, True]:
+            with self.subTest(duplicate=duplicate), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory)
+                populate(source)
+                transport = source / "crates/nyaterm-transport/src/session.rs"
+                if duplicate:
+                    transport.with_name("duplicate.rs").write_bytes(transport.read_bytes())
+                else:
+                    transport.write_text("// PTY implementation moved unexpectedly\n", encoding="utf-8")
+                before = {path: path.read_bytes() for path in source.rglob("*.rs")}
+                with self.assertRaisesRegex(ValueError, "expected one implementation"):
+                    diagnostic_source.apply_overlay(source)
+                self.assertEqual(before, {path: path.read_bytes() for path in source.rglob("*.rs")})
 
     def test_original_release_uses_its_own_helper_list_including_activex(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,8 +2,8 @@ use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as 
 use std::collections::HashSet;
 
 use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, FontWeight, IntoElement, MouseButton,
-    MouseDownEvent, SharedString, Window, div, prelude::*, px, rgb,
+    AnyElement, App, ClickEvent, ClipboardItem, Context, FontWeight, IntoElement, SharedString,
+    Window, div, prelude::*, px, relative, rgb,
 };
 use nyaterm_core::ai::{AiAgentStepStatus, AiCommandCard, AiMessage, AiMessageRole, RiskLevel};
 use nyaterm_ui::chat::{NyaDisclosure, NyaShimmerText, running_indicator};
@@ -11,16 +11,16 @@ use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use crate::features::ai::is_agent_command_card;
-use crate::features::ai::panel::components::ai_command_target_label;
+use crate::features::ai::panel::components::{agent_kind_display_name, ai_command_target_label};
+use crate::features::ai::panel::texts::TextOwner;
+use crate::features::ai::panel::tool_call::{AiToolCallView, tool_call_title};
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiAgentStepPresentation, AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
 use crate::features::runtime_jobs::AiAgentStepView;
 use crate::features::shell::gpui_code_font_family;
-use crate::features::view_widgets::markdown::prepared_markdown_view;
-use crate::models::AiMessageMenuState;
 
-fn localized_risk(risk: Option<&RiskLevel>) -> String {
+pub(super) fn localized_risk(risk: Option<&RiskLevel>) -> String {
     t!(match risk {
         Some(RiskLevel::Low) => "ai.riskLow",
         Some(RiskLevel::Medium) => "ai.riskMedium",
@@ -171,6 +171,17 @@ impl AiPanelSnapshot {
             });
         source.is_some_and(|id| self.index.message(self, id).is_some())
     }
+
+    /// Reasoning inside Activity stays open while it streams, then folds unless
+    /// the user opened it. Rendering and text order must agree on this.
+    pub(super) fn activity_thought_open(&self, message_id: &str) -> bool {
+        self.expanded_message_thoughts
+            .iter()
+            .any(|id| id == message_id)
+            || (self.running
+                && self.streaming_assistant_id.as_deref() == Some(message_id)
+                && self.response_phase.shows_thinking())
+    }
 }
 
 pub(super) fn disclosure(
@@ -233,7 +244,7 @@ fn thinking_indicator(id: &str, label: impl Into<SharedString>) -> AnyElement {
 }
 
 /// Bounded, Unicode-safe text for previews; the original payload remains expandable.
-fn text_preview(text: &str, lines: usize, characters: usize) -> String {
+pub(super) fn text_preview(text: &str, lines: usize, characters: usize) -> String {
     let joined = text.lines().take(lines).collect::<Vec<_>>().join("\n");
     let preview: String = joined.chars().take(characters).collect();
     if preview.len() < text.trim_end().len() {
@@ -243,7 +254,7 @@ fn text_preview(text: &str, lines: usize, characters: usize) -> String {
     }
 }
 
-fn command_heading(card: &AiCommandCard) -> String {
+pub(super) fn command_heading(card: &AiCommandCard) -> String {
     if !matches!(card.title.trim(), "" | "Agent Command") {
         return card.title.clone();
     }
@@ -304,7 +315,53 @@ impl AiPanel {
         reasoning_only: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx)
+        div()
+            .w_full()
+            .min_w_0()
+            .child(self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx))
+            .into_any_element()
+    }
+
+    pub(super) fn ai_agent_turn_header(
+        &self,
+        snapshot: &AiPanelSnapshot,
+        live: bool,
+    ) -> AnyElement {
+        let palette = snapshot.chrome.palette;
+        let name = agent_kind_display_name(&snapshot.agent_kind);
+        let title = if snapshot.agent_mode {
+            format!("{name} {}", t!("ai.modeAgent"))
+        } else {
+            name.to_string()
+        };
+        let status = if live {
+            t!("ai.activity.running")
+        } else {
+            t!("ai.activity.completed")
+        };
+        div()
+            .debug_selector(|| "ai-agent-turn".to_string())
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(if live {
+                        palette.link
+                    } else {
+                        palette.text_muted
+                    }))
+                    .child(status),
+            )
+            .into_any_element()
     }
 
     pub(super) fn ai_final_message(
@@ -342,12 +399,6 @@ impl AiPanel {
             .map(|content| content.display.as_str())
             .unwrap_or_default();
         let reasoning = prepared.and_then(|content| content.reasoning.as_deref());
-        let menu_text = if display.is_empty() {
-            message.content.clone()
-        } else {
-            display.to_string()
-        };
-        let menu_id = message.id.clone();
         let mut body = div()
             .id(SharedString::from(format!("ai-msg-{}", message.id)))
             .debug_selector({
@@ -355,7 +406,7 @@ impl AiPanel {
                 move || format!("ai-message-{id}")
             })
             .min_w_0()
-            .w_full()
+            .when(!is_user, |body| body.w_full())
             .flex()
             .flex_col()
             .gap_2()
@@ -363,25 +414,16 @@ impl AiPanel {
             .line_height(px(18.))
             .text_color(rgb(palette.text))
             .when(is_user, |body| {
-                body.rounded_md()
+                body.max_w(relative(0.85))
+                    .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(rgb(palette.hover))
                     .p_2()
-            })
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let menu = AiMessageMenuState {
-                        message_id: menu_id.clone(),
-                        text: menu_text.clone(),
-                        x: event.position.x,
-                        y: event.position.y,
-                    };
-                    panel.with_app(cx, move |app, _| app.ai.open_message_menu(menu));
-                }),
-            );
+            });
+        if !is_user && !activity && !final_answer {
+            body = body.child(self.ai_agent_turn_header(snapshot, streaming && snapshot.running));
+        }
         if activity {
             if let Some(_reasoning) = reasoning.filter(|text| {
                 text.trim() != display.trim()
@@ -390,11 +432,44 @@ impl AiPanel {
                         .iter()
                         .any(|card| card.explanation.trim() == text.trim())
             }) {
-                body = body.child(prepared_markdown_view(
-                    palette,
-                    &prepared.expect("prepared reasoning").thought,
-                    false,
-                ));
+                let open = snapshot.activity_thought_open(&message.id);
+                let id = message.id.clone();
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_color(rgb(palette.text_muted))
+                        .child(disclosure(
+                            format!("ai-thought-toggle-{id}"),
+                            t!("ai.thoughtProcess"),
+                            open,
+                            cx.listener(move |panel, _, _, cx| {
+                                let id = id.clone();
+                                panel.with_app(cx, move |app, cx| {
+                                    app.ai.toggle_message_thought(id);
+                                    app.defer_ai_panel_snapshot_flush(cx);
+                                });
+                            }),
+                        ))
+                        .when(thinking, |header| {
+                            header.child(thinking_indicator(&message.id, activity_label.clone()))
+                        }),
+                );
+                if open {
+                    body = body.child(
+                        div()
+                            .min_w_0()
+                            .w_full()
+                            .text_color(rgb(palette.text_muted))
+                            .child(self.selectable_text(
+                                TextOwner::Message(message.id.clone()),
+                                "thought",
+                                false,
+                                cx,
+                            )),
+                    );
+                }
             }
         } else if let Some(_reasoning) = reasoning.filter(|_| !final_answer) {
             let open = snapshot.expanded_message_thoughts.contains(&message.id);
@@ -428,10 +503,11 @@ impl AiPanel {
                         .min_w_0()
                         .w_full()
                         .text_color(rgb(palette.text_muted))
-                        .child(prepared_markdown_view(
-                            palette,
-                            &prepared.expect("prepared reasoning").thought,
+                        .child(self.selectable_text(
+                            TextOwner::Message(message.id.clone()),
+                            "thought",
                             false,
+                            cx,
                         )),
                 );
             }
@@ -451,7 +527,7 @@ impl AiPanel {
             });
         if !reasoning_only && !display.is_empty() && !duplicate_explanation {
             body = body.child(if is_user {
-                crate::features::ai::panel::components::ai_user_pre_wrap_text(palette, display)
+                self.selectable_text(TextOwner::Message(message.id.clone()), "answer", false, cx)
             } else {
                 div()
                     .debug_selector({
@@ -460,10 +536,11 @@ impl AiPanel {
                     })
                     .min_w_0()
                     .w_full()
-                    .child(prepared_markdown_view(
-                        palette,
-                        &prepared.expect("prepared answer").answer,
+                    .child(self.selectable_text(
+                        TextOwner::Message(message.id.clone()),
+                        "answer",
                         true,
+                        cx,
                     ))
                     .into_any_element()
             });
@@ -481,6 +558,19 @@ impl AiPanel {
         }
         for step in snapshot.message_steps(&message.id) {
             body = body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
+        }
+        if is_user {
+            // The transcript already leaves 8px under every row. A user bubble
+            // needs a little more air so it separates from the turns around it.
+            return div()
+                .w_full()
+                .min_w_0()
+                .pt(px(6.))
+                .pb(px(6.))
+                .flex()
+                .justify_end()
+                .child(body)
+                .into_any_element();
         }
         body.into_any_element()
     }
@@ -516,6 +606,9 @@ impl AiPanel {
             .gap_1()
             .text_size(px(12.))
             .line_height(px(18.));
+        if step.command.is_some() || step.observation.is_some() {
+            row = AiToolCallView::from_step(&step).apply_frame(row, palette);
+        }
         // Unlinked progress stays compact; commands and answers are explicit payload kinds.
         let mut title = div()
             .flex()
@@ -562,7 +655,7 @@ impl AiPanel {
         }
         if step.kind == AiAgentStepKind::FinalAnswer {
             return row
-                .child(self.cached_markdown(palette, &step.detail, true))
+                .child(self.selectable_text(TextOwner::Step(index), "detail", true, cx))
                 .into_any_element();
         }
         if let Some(thought) = step.thought.as_ref().filter(|text| !text.trim().is_empty()) {
@@ -582,7 +675,12 @@ impl AiPanel {
                 // Planning metadata is an internal progress hint. Provider reasoning
                 // is already displayed as prose in the owning activity message.
                 if step.kind != AiAgentStepKind::Planning && !duplicate {
-                    row = row.child(self.cached_markdown(palette, thought, false));
+                    row = row.child(self.selectable_text(
+                        TextOwner::Step(index),
+                        "thought",
+                        false,
+                        cx,
+                    ));
                 }
             } else {
                 row = row.child(disclosure(
@@ -596,11 +694,16 @@ impl AiPanel {
                     }),
                 ));
                 if presentation.thought_open {
-                    row = row.child(self.cached_markdown(palette, thought, false));
+                    row = row.child(self.selectable_text(
+                        TextOwner::Step(index),
+                        "thought",
+                        false,
+                        cx,
+                    ));
                 }
             }
         }
-        if let Some(command) = &step.command {
+        if let Some(_command) = &step.command {
             let source = step.source_message_id.clone();
             let key = snapshot.step_command_key(&step);
             let open = step.status == AiAgentStepStatus::NeedsApproval
@@ -634,11 +737,11 @@ impl AiPanel {
                         .debug_selector(move || format!("ai-step-command-body-{index}"))
                         .font_family(gpui_code_font_family())
                         .text_color(rgb(palette.text))
-                        .child(self.highlighted_command(command)),
+                        .child(self.selectable_text(TextOwner::Step(index), "script", false, cx)),
                 );
             }
         }
-        if let Some(output) = step.observation {
+        if let Some(_output) = step.observation {
             row = row.child(disclosure(
                 format!("ai-agent-output-{index}"),
                 t!("ai.executionOutput"),
@@ -654,11 +757,15 @@ impl AiPanel {
                     div()
                         .font_family(gpui_code_font_family())
                         .text_color(rgb(palette.text_muted))
-                        .child(output),
+                        .child(self.selectable_text(TextOwner::Step(index), "output", false, cx)),
                 );
             }
         } else if step.kind == AiAgentStepKind::Diagnostic && !step.detail.is_empty() {
-            row = row.child(div().text_color(rgb(palette.text_muted)).child(step.detail));
+            row = row.child(
+                div()
+                    .text_color(rgb(palette.text_muted))
+                    .child(self.selectable_text(TextOwner::Step(index), "detail", false, cx)),
+            );
         }
         row.into_any_element()
     }
@@ -681,18 +788,16 @@ impl AiPanel {
         let key = card.id.clone();
         let phase = snapshot.command_phase(&card);
         let open = phase.offers_approval() || snapshot.expanded_command_scripts.contains(&key);
-        let explanation = if card.explanation.trim().is_empty() {
-            command_heading(&card)
-        } else {
-            card.explanation.clone()
-        };
-        let mut row = div()
-            .min_w_0()
-            .w_full()
+        let mut row = AiToolCallView::from_phase(phase)
+            .frame(snapshot.chrome.palette)
+            .debug_selector({
+                let key = key.clone();
+                move || format!("ai-tool-call-{key}")
+            })
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.cached_markdown(snapshot.chrome.palette, &explanation, false));
+            .child(self.selectable_text(TextOwner::Command(key.clone()), "explanation", false, cx));
         if phase.offers_approval() {
             return row
                 .child(self.render_command_card(snapshot, card, true, cx))
@@ -708,7 +813,11 @@ impl AiPanel {
         }
         row = row.child(command_header.child(disclosure(
             format!("ai-command-toggle-{key}"),
-            format!("{} · {}", t!("ai.terminalCommand"), t!(phase.label_key())),
+            format!(
+                "{} · {}",
+                tool_call_title(&ai_command_target_label(&card)),
+                t!(phase.label_key())
+            ),
             open,
             cx.listener(move |panel, _, _, cx| {
                 let anchor = panel.transcript_rows.iter().position(|row| {
@@ -745,13 +854,8 @@ impl AiPanel {
         let phase = snapshot.command_phase(&card);
         let linked = snapshot.command_step(&card.id);
         let key = card.id.clone();
-        let color = match phase {
-            AiCommandPhase::NeedsApproval => palette.warning,
-            AiCommandPhase::Failed => palette.danger,
-            AiCommandPhase::Running | AiCommandPhase::Preparing => palette.link,
-            AiCommandPhase::Completed => palette.success,
-            _ => palette.text_muted,
-        };
+        let tool = AiToolCallView::from_phase(phase);
+        let color = tool.status_color(palette);
         let target = ai_command_target_label(&card);
         let heading = command_heading(&card);
         let script_open = in_timeline
@@ -766,9 +870,7 @@ impl AiPanel {
             })
             .min_w_0()
             .w_full()
-            .when(!in_timeline, |block| {
-                block.rounded_md().bg(rgb(palette.surface)).p_2()
-            })
+            .when(!in_timeline, |block| tool.apply_frame(block, palette))
             .flex()
             .flex_col()
             .gap(px(6.))
@@ -789,7 +891,12 @@ impl AiPanel {
                                 .text_size(px(13.))
                                 .text_color(rgb(palette.text))
                                 .font_weight(FontWeight(600.))
-                                .child(heading.clone()),
+                                .child(self.selectable_text(
+                                    TextOwner::Command(key.clone()),
+                                    "heading",
+                                    false,
+                                    cx,
+                                )),
                         )
                         .child(
                             div()
@@ -831,7 +938,12 @@ impl AiPanel {
                         .line_height(px(14.))
                         .text_color(rgb(palette.text_muted))
                         .text_ellipsis()
-                        .child(target),
+                        .child(self.selectable_text(
+                            TextOwner::Command(key.clone()),
+                            "target-label",
+                            false,
+                            cx,
+                        )),
                 )
             });
         if !in_timeline && !card.explanation.trim().is_empty() && heading != card.explanation.trim()
@@ -842,21 +954,26 @@ impl AiPanel {
                 .map(|rest| rest.trim_start_matches(['，', '。', ',', ';', '；', ' ']))
                 .unwrap_or(explanation);
             if !remainder.is_empty() {
-                block = block.child(
-                    div()
-                        .text_color(rgb(palette.text_muted))
-                        .child(remainder.to_string()),
-                );
+                block = block.child(div().text_color(rgb(palette.text_muted)).child(
+                    self.selectable_text(TextOwner::Command(key.clone()), "remainder", false, cx),
+                ));
             }
         }
         if phase == AiCommandPhase::NeedsApproval {
-            block = block.child(div().text_color(rgb(palette.warning)).child(format!(
-                "{}: {}",
-                t!("ai.commandRisk"),
-                localized_risk(card.risk_level.as_ref())
-            )));
-            if let Some(reason) = &card.risk_reason {
-                block = block.child(div().text_color(rgb(palette.warning)).child(reason.clone()));
+            block = block.child(
+                div()
+                    .text_color(rgb(palette.warning))
+                    .child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "risk",
+                        false,
+                        cx,
+                    )),
+            );
+            if let Some(_reason) = &card.risk_reason {
+                block = block.child(div().text_color(rgb(palette.warning)).child(
+                    self.selectable_text(TextOwner::Command(key.clone()), "risk-reason", false, cx),
+                ));
             }
         }
         if let Some(presentation) = linked {
@@ -867,7 +984,12 @@ impl AiPanel {
             ) && step.observation.is_none()
                 && !step.detail.trim().is_empty()
             {
-                block = block.child(div().text_color(rgb(color)).child(step.detail.clone()));
+                block = block.child(div().text_color(rgb(color)).child(self.selectable_text(
+                    TextOwner::Command(key.clone()),
+                    "detail",
+                    false,
+                    cx,
+                )));
             }
             let thought_in_message = step.source_message_id.as_ref().is_some_and(|id| {
                 snapshot.index.message(snapshot, id).is_some_and(|message| {
@@ -878,7 +1000,7 @@ impl AiPanel {
                                 .is_some_and(|prepared| prepared.reasoning.is_some()))
                 })
             });
-            if let Some(thought) = step.thought.as_ref().filter(|thought| {
+            if let Some(_thought) = step.thought.as_ref().filter(|thought| {
                 !in_timeline
                     && !thought_in_message
                     && !thought.trim().is_empty()
@@ -896,10 +1018,15 @@ impl AiPanel {
                     }),
                 ));
                 if presentation.thought_open {
-                    block = block.child(self.cached_markdown(palette, thought, false));
+                    block = block.child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "thought",
+                        false,
+                        cx,
+                    ));
                 }
             }
-            if let Some(output) = &step.observation {
+            if let Some(_output) = &step.observation {
                 block = block.child(
                     div()
                         .debug_selector({
@@ -909,19 +1036,22 @@ impl AiPanel {
                         .min_w_0()
                         .w_full()
                         .text_color(rgb(palette.text_muted))
-                        .child(if output.trim().is_empty() {
-                            t!("ai.commandOutputEmpty").to_string()
-                        } else {
-                            text_preview(output.trim(), 2, 180)
-                        }),
+                        .child(self.selectable_text(
+                            TextOwner::Command(key.clone()),
+                            "output-preview",
+                            false,
+                            cx,
+                        )),
                 );
-                if let Some(code) = step.exit_code {
-                    block = block.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(color))
-                            .child(t!("ai.commandExitCode", code = code)),
-                    );
+                if step.exit_code.is_some() {
+                    block = block.child(div().text_size(px(11.)).text_color(rgb(color)).child(
+                        self.selectable_text(
+                            TextOwner::Command(key.clone()),
+                            "exit-code",
+                            false,
+                            cx,
+                        ),
+                    ));
                 }
                 let index = step.step_index;
                 block = block.child(disclosure(
@@ -941,11 +1071,12 @@ impl AiPanel {
                             .w_full()
                             .text_color(rgb(palette.text_muted))
                             .font_family(gpui_code_font_family())
-                            .children(output.split('\n').map(|line| {
-                                div()
-                                    .min_w_0()
-                                    .child(if line.is_empty() { " " } else { line }.to_string())
-                            })),
+                            .child(self.selectable_text(
+                                TextOwner::Command(key.clone()),
+                                "output",
+                                false,
+                                cx,
+                            )),
                     );
                 }
             }
@@ -958,15 +1089,12 @@ impl AiPanel {
                 })
                 .min_w_0()
                 .w_full()
-                .border_l_2()
-                .border_color(rgb(palette.border))
-                .pl_2()
                 .py_1()
                 .font_family(gpui_code_font_family())
                 .when(long_command && !script_open, |body| {
                     body.max_h(px(62.)).overflow_hidden()
                 })
-                .child(self.highlighted_command(&card.command)),
+                .child(self.selectable_text(TextOwner::Command(key.clone()), "script", false, cx)),
         );
         if long_command && !phase.offers_approval() && !in_timeline {
             let id = key.clone();
@@ -1015,37 +1143,55 @@ impl AiPanel {
                     .text_size(px(11.))
                     .line_height(px(16.))
                     .text_color(rgb(palette.text_muted));
-                if let Some(session_id) = &card.target_terminal_session_id {
-                    details = details.child(
-                        div()
-                            .min_w_0()
-                            .child(format!("{}: {session_id}", t!("ai.targetSession"))),
-                    );
+                if let Some(_session_id) = &card.target_terminal_session_id {
+                    details = details.child(div().min_w_0().child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "target-session",
+                        false,
+                        cx,
+                    )));
                 }
                 if let Some(host) = card.target.as_ref().and_then(|target| target.host.as_ref())
                     && !host.is_empty()
                 {
-                    details = details.child(host.clone());
+                    details = details.child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "host",
+                        false,
+                        cx,
+                    ));
                 }
                 if phase != AiCommandPhase::NeedsApproval {
-                    details = details.child(format!(
-                        "{}: {}",
-                        t!("ai.commandRisk"),
-                        localized_risk(card.risk_level.as_ref())
+                    details = details.child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "risk",
+                        false,
+                        cx,
                     ));
-                    if let Some(reason) = &card.risk_reason {
-                        details = details.child(reason.clone());
+                    if let Some(_reason) = &card.risk_reason {
+                        details = details.child(self.selectable_text(
+                            TextOwner::Command(key.clone()),
+                            "risk-reason",
+                            false,
+                            cx,
+                        ));
                     }
                 }
                 if !card.expected_effect.is_empty() {
-                    details = details.child(format!(
-                        "{}: {}",
-                        t!("ai.expectedEffect"),
-                        card.expected_effect
+                    details = details.child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "expected-effect",
+                        false,
+                        cx,
                     ));
                 }
-                if let Some(rollback) = &card.rollback {
-                    details = details.child(format!("{}: {rollback}", t!("ai.rollback")));
+                if let Some(_rollback) = &card.rollback {
+                    details = details.child(self.selectable_text(
+                        TextOwner::Command(key.clone()),
+                        "rollback",
+                        false,
+                        cx,
+                    ));
                 }
                 block = block.child(details);
             }

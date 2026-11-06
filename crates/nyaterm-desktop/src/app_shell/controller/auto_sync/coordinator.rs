@@ -26,6 +26,7 @@ pub(super) struct AutoSyncJob {
     pub(super) trigger: AutoSyncTrigger,
     pub(super) change_elapsed: Duration,
     pub(super) pull_safe: bool,
+    pub(super) remote_available: bool,
 }
 
 impl AutoSyncCoordinator {
@@ -77,6 +78,7 @@ impl AutoSyncCoordinator {
         Some(AutoSyncJob {
             trigger,
             pull_safe,
+            remote_available: self.remote_available,
             change_elapsed: self.change_since.map_or(Duration::ZERO, |since| {
                 // Zero means there is no pending mutation. A generation
                 // first observed during this tick still needs debounce,
@@ -359,9 +361,10 @@ impl AutoSyncCoordinator {
 
 fn permanent_auto_sync_error(error: &nyaterm_core::CloudSyncError) -> bool {
     match error {
+        nyaterm_core::CloudSyncError::Storage { kind, .. } => kind.is_permanent(),
         nyaterm_core::CloudSyncError::Authentication { .. }
         | nyaterm_core::CloudSyncError::Http {
-            status: 401 | 403,
+            status: 401 | 403 | 501,
             retry_after_seconds: None,
             ..
         }
