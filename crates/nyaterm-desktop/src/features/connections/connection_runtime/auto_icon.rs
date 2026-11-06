@@ -101,29 +101,27 @@ impl NyaTermApp {
             return;
         }
 
-        let mut updated = connection.clone();
-        updated.icon = Some(icon_key.to_string());
-        updated.icon_auto_detect = Some(true);
-
-        let persisted = updated.clone();
         let icon_key = icon_key.to_string();
+        let persisted_icon = icon_key.clone();
         self.submit_store_request(
             0,
-            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
-                store.save_connection(&persisted)?;
-                Ok(persisted)
+            nyaterm_store::store_request(StoreDomain::Connections, move |store| {
+                if !store.update_auto_detected_connection_icon(&connection_id, &persisted_icon)? {
+                    return Ok(None);
+                }
+                store.get_connection(&connection_id)
             }),
             move |this, event, cx| match event.outcome {
-                Ok(connection) => {
-                    this.connection_state.update_connection(connection.clone());
+                Ok(Some(connection)) => {
                     this.shell
                         .set_status(format!("detected {icon_key} icon for {}", connection.name));
+                    this.connection_state.update_connection(connection);
                     cx.notify();
                 }
+                Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(
                         target: "nyaterm::connections",
-                        connection_id = %connection_id,
                         category = error.category(),
                         "failed to persist auto-detected connection icon"
                     );

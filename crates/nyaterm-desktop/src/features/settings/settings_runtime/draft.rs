@@ -342,6 +342,7 @@ impl NyaTermApp {
             })
             .flatten()
             .map(nyaterm_core::SecretString::from);
+        let sync_configuration_changed = cloud_changed || master_password_update.is_some();
         if password_rotation.is_some() && cloud_changed {
             let message = t!("settings.syncV3RotateSeparately").to_string();
             self.settings.update_store_status(message.clone(), false);
@@ -497,6 +498,15 @@ impl NyaTermApp {
                 )) => {
                     this.apply_gpui_settings(saved_settings.clone(), cx);
                     this.publish_shared_settings(saved_settings, cx);
+                    if sync_configuration_changed
+                        && let Some(controller) = this.desktop_controller.clone()
+                    {
+                        cx.defer(move |cx| {
+                            let _ = controller.update(cx, |controller, _| {
+                                controller.cloud_sync_settings_changed();
+                            });
+                        });
+                    }
                     this.request_shared_state_refresh(crate::app_shell::SharedStateDomain::All, cx);
                     this.settings.rebase_master_password();
                     this.ai.replace_settings_config(saved_ai_settings, true);

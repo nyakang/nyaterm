@@ -1,4 +1,5 @@
 //! Blocking V4 orchestration. Prepare is read-only; the Store owns atomic Apply.
+mod local;
 mod rotation;
 pub(in crate::features) use rotation::rotate_master_password;
 use std::collections::{BTreeMap, BTreeSet};
@@ -282,6 +283,35 @@ pub(super) fn preview(
     preview_with_import(store, settings, options, control, false)
 }
 
+pub(super) fn preview_on_change(
+    store: &StoreBlockingClient,
+    settings: &CloudSyncSettings,
+    options: &LocalCloudSyncOptions,
+    remote_available: bool,
+    control: &CloudSyncOperationControl,
+) -> Result<Option<Preview>, CloudSyncError> {
+    control.checkpoint()?;
+    let view = local::load(store, settings, options)?;
+    let caches =
+        super::io_runtime::CloudSyncIoRuntime::shared().caches(store, settings, Some(options))?;
+    if !remote_available
+        && !caches
+            .pending_remote
+            .load(std::sync::atomic::Ordering::Acquire)
+        && !local::needs_remote(&view, &settings.v4_scope)?
+    {
+        control.checkpoint()?;
+        return Ok(None);
+    }
+    validate_provider(settings)?;
+    control.checkpoint()?;
+    super::cloud_sync_provider::with_remote(store, settings, options, "v4_prepare", |remote, _| {
+        let remote = control.remote(remote);
+        prepare_remote_with_view(store, settings, options, &remote, false, view)
+    })
+    .map(Some)
+}
+
 pub(super) fn preview_manual(
     store: &StoreBlockingClient,
     settings: &CloudSyncSettings,
@@ -298,6 +328,14 @@ fn preview_with_import(
     control: &CloudSyncOperationControl,
     allow_legacy_import: bool,
 ) -> Result<Preview, CloudSyncError> {
+    validate_provider(settings)?;
+    super::cloud_sync_provider::with_remote(store, settings, options, "v4_prepare", |remote, _| {
+        let remote = control.remote(remote);
+        prepare_remote(store, settings, options, &remote, allow_legacy_import)
+    })
+}
+
+fn validate_provider(settings: &CloudSyncSettings) -> Result<(), CloudSyncError> {
     if !ProviderCapabilities::for_provider(&settings.provider)
         .is_some_and(|capabilities| capabilities.supports_v4())
     {
@@ -305,10 +343,7 @@ fn preview_with_import(
             "This provider has not yet passed V4 capability validation".into(),
         ));
     }
-    super::cloud_sync_provider::with_remote(store, settings, options, "v4_prepare", |remote, _| {
-        let remote = control.remote(remote);
-        prepare_remote(store, settings, options, &remote, allow_legacy_import)
-    })
+    Ok(())
 }
 
 fn prepare_remote(
@@ -318,15 +353,19 @@ fn prepare_remote(
     remote: &dyn CloudSyncRemote,
     allow_legacy_import: bool,
 ) -> Result<Preview, CloudSyncError> {
+    let view = local::load(store, settings, options)?;
+    prepare_remote_with_view(store, settings, options, remote, allow_legacy_import, view)
+}
+
+fn prepare_remote_with_view(
+    store: &StoreBlockingClient,
+    settings: &CloudSyncSettings,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    allow_legacy_import: bool,
+    view: nyaterm_store::sync_v4::LocalView,
+) -> Result<Preview, CloudSyncError> {
     let destination = destination(settings, options);
-    let dest = destination.clone();
-    let password = options.master_password.clone();
-    let scope = settings.v4_scope.clone();
-    let view = store
-        .request_fn(StoreDomain::CloudSync, move |store| {
-            store.load_v4_view(&dest, password.expose_secret(), &scope)
-        })
-        .map_err(store_error)?;
     let mut local = view.record;
     let previous_observations = local.observed.clone();
     // All legacy branches are decoded before any mutation; no absent resource
@@ -775,5 +814,7 @@ fn publish_bytes(
     Ok(())
 }
 
+#[cfg(test)]
+mod change_tests;
 #[cfg(test)]
 mod tests;

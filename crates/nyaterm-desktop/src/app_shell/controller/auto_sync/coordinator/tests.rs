@@ -350,6 +350,28 @@ fn recent_manual_checks_suppress_focus_and_noop_changes_do_not_postpone_periodic
 }
 
 #[test]
+fn skipped_preflight_keeps_new_mutations_remote_work_and_error_history() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    sync.pending = None;
+    sync.remote_available = true;
+    sync.had_error = true;
+    sync.record_sync_mutation(1);
+    let job = sync.next_job(sync.next_due, 1, || true).unwrap();
+    assert!(job.remote_available);
+    let periodic = sync.next_periodic;
+    assert!(
+        sync.history_entry(job.trigger, &Ok(AutoSyncResult::Skipped))
+            .is_none()
+    );
+    sync.complete(job.trigger, &Ok(AutoSyncResult::Skipped), Some(2));
+    assert!(sync.had_error);
+    assert!(sync.remote_available);
+    assert_eq!(sync.pending, Some(AutoSyncTrigger::Change));
+    assert!(sync.change_since.is_some());
+    assert_eq!(sync.next_periodic, periodic);
+}
+
+#[test]
 fn startup_and_retry_requests_survive_local_notifications() {
     let mut sync = AutoSyncCoordinator::new(0);
     sync.record_sync_mutation(1);
@@ -419,4 +441,55 @@ fn successful_manual_inspection_consumes_a_due_periodic_request_without_losing_c
     sync.observed_remote_check(Instant::now());
     assert_eq!(sync.pending, Some(AutoSyncTrigger::Change));
     assert!(sync.change_since.is_some());
+}
+
+#[test]
+fn shared_settings_broadcast_does_not_bypass_change_debounce_or_local_preflight() {
+    use crate::app_shell::AppShellStartup;
+    use crate::app_shell::controller::DesktopController;
+    use crate::features::{AutoSyncResult, AutoSyncTrigger};
+    use crate::test_support::TestAppCleanup;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{AppRuntime, RuntimeMode, WorkspaceId, test_support::TestTempDir};
+    use std::time::{Duration, Instant};
+
+    let root = TestTempDir::new("nyaterm-settings-sync-broadcast");
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        root.path().into(),
+        root.join("config"),
+        root.join("logs"),
+        root.join("cache"),
+        None,
+    );
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let startup = AppShellStartup::prepare(&runtime);
+    let controller = cx.new(|cx| DesktopController::new(runtime, startup, cx));
+    controller.update(&mut cx, |controller, cx| {
+        let now = Instant::now();
+        let initial = controller
+            .auto_sync
+            .next_job(now + Duration::from_secs(3), 0, || true)
+            .unwrap();
+        controller
+            .auto_sync
+            .complete(initial.trigger, &Ok(AutoSyncResult::Skipped), Some(0));
+        controller.publish_settings(WorkspaceId::new(), Default::default(), cx);
+        assert!(
+            controller
+                .auto_sync
+                .next_job(now + Duration::from_secs(5), 0, || true)
+                .is_none()
+        );
+        controller.cloud_sync_settings_changed();
+        assert_eq!(
+            controller
+                .auto_sync
+                .next_job(now + Duration::from_secs(5), 0, || true)
+                .unwrap()
+                .trigger,
+            AutoSyncTrigger::Settings
+        );
+    });
 }

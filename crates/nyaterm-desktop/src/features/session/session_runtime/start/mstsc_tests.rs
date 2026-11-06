@@ -49,6 +49,7 @@ fn mstsc_launch_result_updates_usage_only_on_success_and_never_registers_a_sessi
             })
             .unwrap();
         let called = Arc::new(AtomicBool::new(false));
+        let sync_generation = store.sync_mutation_generation();
         let launched = called.clone();
         app.update(&mut cx, |app, cx| {
             app.connection_state
@@ -119,6 +120,7 @@ fn mstsc_launch_result_updates_usage_only_on_success_and_never_registers_a_sessi
             .unwrap()
             .unwrap();
         assert_eq!(persisted.last_used_at_ms.is_some(), succeeds);
+        assert_eq!(store.sync_mutation_generation(), sync_generation);
     }
 }
 

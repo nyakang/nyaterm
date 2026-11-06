@@ -321,7 +321,6 @@ impl DesktopController {
         exclude_source: bool,
         cx: &mut Context<Self>,
     ) {
-        self.auto_sync.settings_changed();
         let Some(process_state) = self.process_state.clone() else {
             return;
         };

@@ -632,6 +632,37 @@ impl ConnectionStore {
         Ok(())
     }
 
+    /// Update only an automatically detected icon, preserving concurrent user
+    /// edits, unknown fields, timestamps and the separately stored password.
+    pub fn update_auto_detected_connection_icon(
+        &self,
+        connection_id: &str,
+        icon: &str,
+    ) -> Result<bool, StorageError> {
+        let txn = self.db.begin_write()?;
+        let key = entity_key(CONNECTION_PREFIX, connection_id);
+        let mut value: serde_json::Value = {
+            let table = txn.open_table(CONNECTIONS_TABLE)?;
+            let Some(raw) = table.get(key.as_str())? else {
+                return Ok(false);
+            };
+            deserialize_json(raw.value())?
+        };
+        let connection: SavedConnection = serde_json::from_value(value.clone())?;
+        if !matches!(connection.config, ConnectionType::Ssh { .. })
+            || connection.ssh_profile == nyaterm_core::SshProfile::NetworkDevice
+            || !connection.icon_auto_detect_enabled()
+            || connection.icon.as_deref() == Some(icon)
+        {
+            return Ok(false);
+        }
+        value["icon"] = serde_json::Value::String(icon.to_string());
+        value["icon_auto_detect"] = serde_json::Value::Bool(true);
+        write_json_in_txn(&txn, CONNECTIONS_TABLE, &key, &value)?;
+        txn.commit()?;
+        Ok(true)
+    }
+
     /// Merges a monitoring-derived asset patch into one connection atomically.
     ///
     /// Reads the stored connection, applies [`AssetMetadata::merge_monitoring_patch`],
