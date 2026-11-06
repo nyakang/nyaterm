@@ -973,6 +973,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.quick_variable_open, |this| {
+                self.schedule_quick_command_variable_autofocus(window, cx);
                 this.child(full_window_overlay_layer(
                     "quick-command-variable-input-layer",
                     self.quick_command_variable_prompt_overlay(cx),

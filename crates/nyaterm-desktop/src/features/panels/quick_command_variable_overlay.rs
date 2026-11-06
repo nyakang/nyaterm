@@ -1,14 +1,33 @@
 use rust_i18n::t;
 
 use gpui::{
-    Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba,
+    Context, FontWeight, IntoElement, KeyDownEvent, SharedString, Window, div, prelude::*, px, rgb,
+    rgba,
 };
 use nyaterm_ui::{NyaScrollable, NyaSelectOption};
 
 use crate::features::view_widgets::dialog_action_button;
-use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
+use crate::features::{
+    NyaTermApp,
+    text_inputs::{TextInputSetup, ordinary_input_box},
+};
 use crate::models::QuickCommandVariablePromptState;
 use crate::widgets::small_button;
+
+fn quick_command_variable_input_key(index: usize) -> String {
+    format!("quick-command.variable.{index}")
+}
+
+/// The first parameter that renders a text box. Option-backed parameters are
+/// selects, so they are skipped; display order is the iterated order.
+fn quick_command_variable_first_text_index(
+    prompt: &QuickCommandVariablePromptState,
+) -> Option<usize> {
+    prompt
+        .variables
+        .iter()
+        .position(|variable| variable.options.is_empty())
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn quick_command_variable_prompt_overlay(
@@ -39,14 +58,11 @@ impl NyaTermApp {
         for (index, variable) in prompt.variables.iter().cloned().enumerate() {
             let variable_name = variable.name.clone();
             let field_id = format!("quick-command-variable-{index}");
+            let key = quick_command_variable_input_key(index);
             let field = if variable.options.is_empty() {
-                self.text_input_box(
-                    format!("quick-command.variable.{index}"),
-                    &variable.value,
-                    TextInputSetup::default(),
-                    cx,
-                )
-                .into_any_element()
+                let input =
+                    self.text_input(key.clone(), &variable.value, TextInputSetup::default(), cx);
+                ordinary_input_box(palette, key, input, cx).into_any_element()
             } else {
                 // Tauri offers the whole option list at once. Stepping through it with
                 // arrows hid every value but the current one.
@@ -62,14 +78,8 @@ impl NyaTermApp {
                         NyaSelectOption::new(option.clone(), label.to_string())
                     })
                     .collect::<Vec<_>>();
-                self.form_select_control(
-                    format!("quick-command.variable.{index}"),
-                    options,
-                    Some(variable.value.clone()),
-                    false,
-                    cx,
-                )
-                .into_any_element()
+                self.form_select_control(key, options, Some(variable.value.clone()), false, cx)
+                    .into_any_element()
             };
             rows = rows.child(
                 div()
@@ -226,5 +236,44 @@ impl NyaTermApp {
                             )),
                     ),
             )
+    }
+
+    /// Schedule the first-field focus once the overlay has mounted.
+    ///
+    /// `Window::defer` runs after the current frame's effects, so nothing steals
+    /// focus during render, and consuming the flag means later renders never
+    /// re-grab it.
+    pub(in crate::features) fn schedule_quick_command_variable_autofocus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.commands.take_quick_variable_prompt_autofocus() {
+            return;
+        }
+        let app = cx.weak_entity();
+        window.defer(cx, move |window, cx| {
+            let _ = app.update(cx, |this, cx| {
+                this.focus_first_quick_command_variable(window, cx);
+            });
+        });
+    }
+
+    fn focus_first_quick_command_variable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .commands
+            .quick_variable_prompt()
+            .and_then(quick_command_variable_first_text_index)
+        else {
+            return;
+        };
+        let Some(field) = self.existing_text_input(quick_command_variable_input_key(index)) else {
+            return;
+        };
+        window.focus(&field.read(cx).focus_handle(), cx);
+        field.update(cx, |field, cx| {
+            field.focus_with_cursor_at_end(window, cx);
+        });
+        cx.notify();
     }
 }
