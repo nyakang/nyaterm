@@ -22,7 +22,13 @@ fn swatch(id: &str) -> u32 {
 fn single_snapshot_colours_the_input_row_and_the_output_row() {
     // The input row is no longer a separate overlay: one snapshot covers both the
     // submitted line and the completion output under it.
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut screen = TerminalScreen::new(40, 3);
     screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\ncompletion list");
     let snapshot = screen.snapshot();
@@ -63,7 +69,13 @@ fn bracketed_prompt_detection_requires_a_host_and_an_adjacent_sign() {
 }
 
 fn colors(line: &str, input: bool) -> Vec<Option<u32>> {
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: true,
         input: if input {
@@ -95,7 +107,13 @@ fn typed_command_colours_without_integration() {
     // A plain bash prompt with no OSC 133: the typed line must still be coloured
     // (prompt + command), otherwise the input row looks plain white while the
     // submitted copy above it is green.
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(false), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(false),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: false,
         ..SemanticContext::default()
@@ -122,7 +140,13 @@ fn typed_command_colours_without_integration() {
 fn typed_command_colours_when_integration_lacks_input_columns() {
     // bash marked the prompt (integration on) but never published the command
     // start, so `context.input` is empty. The prompt fallback must still run.
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(false), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(false),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: true,
         input_anchor_missing: true,
@@ -146,7 +170,13 @@ fn typed_command_colours_when_integration_lacks_input_columns() {
 #[test]
 fn brackets_and_pipes_are_coloured() {
     let line = "nginx-ui | [0.106ms] [rows:1] SELECT * FROM sites";
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(false), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(false),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: false,
         ..SemanticContext::default()
@@ -164,7 +194,13 @@ fn brackets_and_pipes_are_coloured() {
 #[test]
 fn docker_compose_header_stays_plain() {
     let line = "NAME                IMAGE               COMMAND                  SERVICE   CREATED   STATUS    PORTS";
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(false), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(false),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: false,
         ..SemanticContext::default()
@@ -176,7 +212,13 @@ fn docker_compose_header_stays_plain() {
 #[test]
 fn shell_variables_colour_without_integration() {
     let line = "echo $HOME ${PATH}";
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(false), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(false),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: false,
         ..SemanticContext::default()
@@ -198,7 +240,13 @@ fn shell_variables_colour_without_integration() {
 fn line_roles_work_without_shell_integration() {
     // Telnet sessions have no OSC 133, so `integrated` stays false. The role
     // path must not depend on shell integration.
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: false,
         ..SemanticContext::default()
@@ -222,7 +270,13 @@ fn line_roles_work_without_shell_integration() {
 
 #[test]
 fn line_roles_colour_socket_state_and_disk_usage() {
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let context = SemanticContext {
         integrated: true,
         ..SemanticContext::default()
@@ -296,7 +350,13 @@ fn output_options_require_a_standalone_start_and_keep_help_flags() {
         .into_iter()
         .filter(|r| r.id == "builtin-option")
         .collect();
-    let options = SemanticHighlighter::compile(&rules, true);
+    let options = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for text in ["foo-bar", "foo--bar", "file/-flag", "key=-flag", "(--flag)"] {
         assert!(
             options
@@ -312,7 +372,13 @@ fn output_options_require_a_standalone_start_and_keep_help_flags() {
         .find(|r| r.id == "builtin-option")
         .unwrap()
         .enabled = false;
-    let disabled = SemanticHighlighter::compile(&rules, true);
+    let disabled = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let matches = disabled.ranges("--all", &SemanticContext::default(), &[]);
     assert_eq!(matches, vec![(0, 2, swatch("builtin-operator"))]);
 }
@@ -394,7 +460,13 @@ fn listing_datetime_and_numbers_keep_windterm_colors_without_single_digit_noise(
 #[test]
 fn ping_sequence_counters_highlight_single_digits_without_coloring_the_field_name() {
     for dark in [true, false] {
-        let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(dark), true);
+        let highlighter = SemanticHighlighter::compile(
+            &get_builtin_keyword_rules(dark),
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
         let color = parse_hex_rgb(builtin_keyword_rule_swatch("builtin-number", dark)).unwrap();
         for sequence in 0..=10 {
             let line = format!("64 bytes from 1.1.1.1: icmp_seq={sequence} ttl=51 time=74.1 ms");
@@ -420,7 +492,13 @@ fn ping_sequence_single_digit_exception_respects_boundaries_context_and_number_s
         .into_iter()
         .filter(|rule| rule.id == "builtin-number")
         .collect();
-    let highlighter = SemanticHighlighter::compile(&rules, true);
+    let highlighter = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for line in [
         "prefixicmp_seq=1",
         "prefix_icmp_seq=1",
@@ -469,9 +547,15 @@ fn ping_sequence_single_digit_exception_respects_boundaries_context_and_number_s
     let mut disabled = rules;
     disabled[0].enabled = false;
     assert!(
-        SemanticHighlighter::compile(&disabled, true)
-            .ranges(line, &SemanticContext::default(), &[])
-            .is_empty()
+        SemanticHighlighter::compile(
+            &disabled,
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi
+            }
+        )
+        .ranges(line, &SemanticContext::default(), &[])
+        .is_empty()
     );
     for (token, id) in [
         ("\"icmp_seq=1\"", "builtin-string"),
@@ -500,7 +584,13 @@ fn ping_sequence_context_survives_soft_wraps_without_crossing_hard_newlines() {
 #[test]
 fn numeric_literals_and_durations_keep_their_complete_ranges_in_both_themes() {
     for dark in [true, false] {
-        let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(dark), true);
+        let highlighter = SemanticHighlighter::compile(
+            &get_builtin_keyword_rules(dark),
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
         for (id, tokens) in [
             (
                 "builtin-number",
@@ -542,7 +632,13 @@ fn numeric_boundaries_reject_names_and_incomplete_literals_without_single_digit_
         .into_iter()
         .filter(|rule| matches!(rule.id.as_str(), "builtin-number" | "builtin-duration"))
         .collect();
-    let highlighter = SemanticHighlighter::compile(&rules, true);
+    let highlighter = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for token in [
         "0",
         "7",
@@ -583,7 +679,13 @@ fn numeric_boundaries_reject_names_and_incomplete_literals_without_single_digit_
 
 #[test]
 fn operators_yield_to_signed_numeric_tokens_and_respect_category_switches() {
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for (line, start, end, id) in [
         ("value=-12", 6, 9, "builtin-number"),
         ("(-12)", 1, 4, "builtin-number"),
@@ -613,7 +715,13 @@ fn operators_yield_to_signed_numeric_tokens_and_respect_category_switches() {
                 _ => {}
             }
         }
-        let highlighter = SemanticHighlighter::compile(&rules, true);
+        let highlighter = SemanticHighlighter::compile(
+            &rules,
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
         for (token, enabled, id) in [
             ("-12", number, "builtin-number"),
             ("-.5ms", duration, "builtin-duration"),
@@ -679,7 +787,13 @@ fn ping_ps_and_ls_keep_specialized_tokens_and_existing_number_colors() {
     let mut screen = TerminalScreen::new(96, 8);
     screen.advance(ping.join("\r\n").as_bytes());
     let snapshot = screen.snapshot();
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let palette = nyaterm_ui::theme_palette("github-dark");
     let previous = precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
     let (_, stats) = precompute_terminal_keyword_highlights_for_rows_with_stats(
@@ -703,14 +817,26 @@ fn signed_numbers_preserve_whole_token_conflicts_with_specialized_and_user_rules
         ("550e8400-e29b-41d4-a716-446655440000", "builtin-uuid"),
         ("\"value=-12.5%\"", "builtin-string"),
     ] {
-        let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+        let highlighter = SemanticHighlighter::compile(
+            &get_builtin_keyword_rules(true),
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
         assert_eq!(
             highlighter.ranges(token, &SemanticContext::default(), &[]),
             vec![(0, token.len(), swatch(id))],
             "{token}"
         );
     }
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let context = SemanticContext::default();
     assert_eq!(
         highlighter.ranges("-12", &context, &[(0, 3, 0x123456)]),
@@ -800,7 +926,13 @@ fn ipv6_candidates_require_rust_address_validation() {
         .into_iter()
         .filter(|r| r.id == "builtin-address")
         .collect();
-    let addresses = SemanticHighlighter::compile(&rules, true);
+    let addresses = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for token in [
         "::",
         "::1",
@@ -835,7 +967,13 @@ fn datetime_formats_preserve_valid_time_ranges() {
         .into_iter()
         .filter(|r| r.id == "builtin-datetime")
         .collect();
-    let dates = SemanticHighlighter::compile(&rules, true);
+    let dates = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     for token in [
         "2026-10-07",
         "2026/10/07",
@@ -910,7 +1048,13 @@ fn output_word_boundaries_leave_delimiters_uncolored_by_status() {
 }
 
 fn snapshot_colors(snapshot: &TerminalSnapshot) -> Vec<Option<u32>> {
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let highlights = precompute_terminal_keyword_highlights(
         snapshot,
         &highlighter,
@@ -996,7 +1140,6 @@ fn readline_completion_pages_are_output_while_osc133_input_remains_active() {
 }
 
 #[test]
-#[ignore = "premise changed: a cursor row that looks like a prompt now keeps input colours even after 133;C"]
 fn fallback_is_isolated_from_integrated_output_and_soft_wrapped_input() {
     let mut screen = TerminalScreen::new(20, 4);
     screen.advance(b"$ cat file | grep error");
@@ -1017,16 +1160,22 @@ fn fallback_is_isolated_from_integrated_output_and_soft_wrapped_input() {
         .iter()
         .position(|row| row.text == "$ echo ERROR")
         .unwrap();
-    // The cursor sits on this row, and it looks like a prompt, so it keeps input
-    // colours; the error token must still be coloured either way.
+    // An explicit output boundary wins over the prompt-shaped text, including
+    // when the cursor still sits on that line.
     assert_eq!(colors[output_row * 20 + 7], Some(swatch("builtin-error")));
-    screen.advance(b"\x1b[?1049h$ echo ERROR");
+    screen.advance(b"\x1b[?1049h\x1b[H$ echo ERROR");
     let alternate = screen.snapshot();
     assert!(alternate.rows().iter().all(|row| row.shell_integration));
-    // The alternate screen's cursor row still looks like a prompt, so it keeps
-    // the input colours; only its finished output rows must stay plain.
+    // Alternate-screen text is output, even when it resembles a shell prompt.
+    let (row, byte) = alternate
+        .rows()
+        .iter()
+        .enumerate()
+        .find_map(|(row, source)| source.text.find("ERROR").map(|byte| (row, byte)))
+        .expect("alternate output");
+    let col = nyaterm_terminal::terminal_cell_col_for_byte_index(&alternate.rows()[row].text, byte);
     assert_eq!(
-        snapshot_colors(&alternate)[7],
+        snapshot_colors(&alternate)[row * alternate.cols + col],
         Some(swatch("builtin-error"))
     );
 }
@@ -1040,7 +1189,13 @@ fn whole_strings_survive_soft_wrap_and_precompute_cancellation_does_not_publish(
     assert_eq!(colors[5], Some(swatch("builtin-string")));
     assert_eq!(&colors[11..13], &[Some(swatch("builtin-string")); 2]);
     assert_eq!(&colors[13..15], &[Some(swatch("builtin-string")); 2]);
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut groups = 0;
     let cancelled = precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel(
         &snapshot,
@@ -1059,7 +1214,13 @@ fn whole_strings_survive_soft_wrap_and_precompute_cancellation_does_not_publish(
 #[test]
 fn unchanged_text_semantic_changes_invalidate_reuse_and_stale_results() {
     let palette = nyaterm_ui::theme_palette("github-dark");
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut screen = TerminalScreen::new(30, 2);
     screen.advance(b"ERROR");
     let output = screen.snapshot();
@@ -1130,14 +1291,27 @@ fn semantic_foreground_respects_ansi_color_and_hidden_text() {
 #[test]
 fn whole_match_ties_are_deterministic_and_user_marks_do_not_split_strings() {
     let mut rules = get_builtin_keyword_rules(true);
-    let expected = SemanticHighlighter::compile(&rules, true);
+    let expected = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let line = "ERROR 192.168.1.1 128MiB 2026-10-07";
     let context = SemanticContext::default();
     let first = expected.ranges(line, &context, &[]);
     rules.reverse();
     assert_eq!(
         first,
-        SemanticHighlighter::compile(&rules, true).ranges(line, &context, &[])
+        SemanticHighlighter::compile(
+            &rules,
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi
+            }
+        )
+        .ranges(line, &context, &[])
     );
     rules.insert(
         0,
@@ -1149,7 +1323,13 @@ fn whole_match_ties_are_deterministic_and_user_marks_do_not_split_strings() {
             enabled: true,
         },
     );
-    let highlighter = compile_terminal_keyword_highlighter(&rules, true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut screen = TerminalScreen::new(40, 1);
     screen.advance(b"\x1b]133;B\x07echo \"ERROR\"");
     let snapshot = screen.snapshot();
@@ -1202,7 +1382,13 @@ fn category_switches_disable_structured_children_and_light_colors_remain_distinc
             "builtin-permissions" | "builtin-string" | "builtin-command" | "builtin-path"
         );
     }
-    let highlighter = SemanticHighlighter::compile(&rules, true);
+    let highlighter = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let line = "cat /tmp \"ERROR\n%s\"";
     let context = SemanticContext {
         input: std::iter::once(0..line.len()).collect(),
@@ -1345,8 +1531,20 @@ fn line_role_cost_benchmark() {
             let snapshot = screen.snapshot();
             // 交替测：每轮 off 与 on 紧挨着跑，机器漂移同时影响两者，
             // 取「每轮增量」的中位数，比分段跑稳得多。
-            let off_h = compile_terminal_keyword_highlighter(&rules, false);
-            let on_h = compile_terminal_keyword_highlighter(&rules, true);
+            let off_h = compile_terminal_keyword_highlighter(
+                &rules,
+                crate::keywords::TerminalKeywordHighlightConfig {
+                    line_roles: false,
+                    ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+                },
+            );
+            let on_h = compile_terminal_keyword_highlighter(
+                &rules,
+                crate::keywords::TerminalKeywordHighlightConfig {
+                    line_roles: true,
+                    ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+                },
+            );
             for h in [&off_h, &on_h] {
                 let _ = precompute_terminal_keyword_highlights_for_rows_with_stats(
                     &snapshot,
@@ -1408,8 +1606,20 @@ fn line_role_cost_benchmark() {
                 .as_bytes(),
         );
         let snapshot = screen.snapshot();
-        let off_h = compile_terminal_keyword_highlighter(&rules, false);
-        let on_h = compile_terminal_keyword_highlighter(&rules, true);
+        let off_h = compile_terminal_keyword_highlighter(
+            &rules,
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: false,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
+        let on_h = compile_terminal_keyword_highlighter(
+            &rules,
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles: true,
+                ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            },
+        );
         let mut deltas = Vec::new();
         let mut offs = Vec::new();
         for _ in 0..ROUNDS {
@@ -1454,7 +1664,13 @@ fn line_role_cost_benchmark() {
 fn palette_coloured_rules_keep_their_own_child_colours() {
     let palette = nyaterm_ui::theme_palette("github-dark");
     let rules = nyaterm_core::get_builtin_keyword_rules_with_ansi(palette.terminal_ansi, true);
-    let highlighter = SemanticHighlighter::compile(&rules, true);
+    let highlighter = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
 
     for id in [
         "builtin-info",
@@ -1486,7 +1702,13 @@ fn palette_coloured_rules_keep_their_own_child_colours() {
 #[test]
 #[ignore = "manual fixture-only background precompute benchmark"]
 fn semantic_precompute_benchmark() {
-    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let palette = nyaterm_ui::theme_palette("github-dark");
     for (case, fixture) in [
         ("plain", "ordinary output with calm filler"),
@@ -1538,7 +1760,13 @@ fn prompt_prefix_survives_the_row_leaving_the_live_input_state() {
     // anchors are gone while `integrated` stays true, so the prompt used to fall
     // through to plain output and its text turned black. The prompt shape alone
     // has to keep colouring it, exactly like the live row.
-    let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(true), true);
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let line = "[root@nginx-wan ~]# ";
     let context = SemanticContext {
         integrated: true,
@@ -1596,4 +1824,171 @@ fn scrolled_view_keeps_the_prompt_coloured() {
         "{:?}",
         &colors[base..base + 19]
     );
+}
+
+#[test]
+fn disabled_child_rules_fall_back_to_the_supplied_palette() {
+    let mut rules = get_builtin_keyword_rules(true);
+    for id in [
+        "builtin-info",
+        "builtin-warn",
+        "builtin-error",
+        "builtin-debug",
+        "builtin-operator",
+    ] {
+        rules.iter_mut().find(|rule| rule.id == id).unwrap().enabled = false;
+    }
+    let mut config = crate::keywords::TerminalKeywordHighlightConfig::default();
+    for (slot, color) in config.ansi.iter_mut().enumerate() {
+        *color = 0x112200 + slot as u32;
+    }
+    let highlighter = SemanticHighlighter::compile(&rules, config);
+    for id in [
+        "builtin-info",
+        "builtin-warn",
+        "builtin-error",
+        "builtin-debug",
+        "builtin-operator",
+    ] {
+        assert_eq!(
+            highlighter.child_color(id),
+            config.ansi[usize::from(
+                nyaterm_core::keyword_highlight_presets::builtin_keyword_rule_ansi(id)
+            )]
+        );
+    }
+}
+
+#[test]
+fn explicit_output_keeps_prompt_shaped_text_out_of_the_input_parser() {
+    let highlighter = SemanticHighlighter::compile(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig::default(),
+    );
+    let context = SemanticContext {
+        integrated: true,
+        output: true,
+        ..SemanticContext::default()
+    };
+    let line = "$ echo ERROR";
+    let result = highlighter.ranges(line, &context, &[]);
+    assert!(
+        !result.iter().any(|&(start, end, color)| start <= 2
+            && end >= 6
+            && color == swatch("builtin-command"))
+    );
+    assert!(result.iter().any(
+        |&(start, end, color)| &line[start..end] == "ERROR" && color == swatch("builtin-error")
+    ));
+}
+
+#[test]
+fn continuous_unicode_echo_backspace_and_wrapping_keep_output_colours() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig::default(),
+    );
+    let mut screen = TerminalScreen::new(16, 6);
+    screen.advance(b"ERROR output\r\n\x1b]133;A\x07$ \x1b]133;B\x07");
+    let mut previous = None;
+    for input in [
+        "echo ",
+        "中文",
+        "e\u{301}",
+        " long-wrapped-text",
+        "\u{8} \u{8}",
+        "x",
+    ] {
+        screen.advance(input.as_bytes());
+        let snapshot = screen.snapshot();
+        let next = precompute_terminal_keyword_highlights(
+            &snapshot,
+            &highlighter,
+            palette,
+            previous.as_ref(),
+        );
+        assert!(
+            next.lookup(0, &snapshot)
+                .and_then(|lookup| lookup.ranges())
+                .is_some()
+        );
+        let cold = precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
+        for row in 0..snapshot.row_count() {
+            assert_eq!(
+                next.lookup(row, &snapshot)
+                    .and_then(|lookup| lookup.ranges()),
+                cold.lookup(row, &snapshot)
+                    .and_then(|lookup| lookup.ranges())
+            );
+        }
+        previous = Some(next);
+    }
+}
+
+#[test]
+fn submission_completion_resize_and_screen_switch_reuse_match_cold_results() {
+    let highlighter = compile_terminal_keyword_highlighter(
+        &get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig::default(),
+    );
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut screen = TerminalScreen::new(24, 8);
+    let mut previous = None;
+    for (bytes, width) in [
+        ("\x1b]133;A\x07$ \x1b]133;B\x07echo 中文e\u{301}", 24),
+        (
+            "\r\nERROR completion.txt\r\n$ echo 中文e\u{301} --long-option",
+            24,
+        ),
+        ("\x1b]133;C\x07\r\nERROR 128MiB\r\n", 16),
+        ("\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls -l", 32),
+        ("\x1b[?1049h\x1b[H$ echo ERROR", 16),
+        ("\x1b[?1049l", 40),
+    ] {
+        screen.advance(bytes.as_bytes());
+        screen.resize(width, 8);
+        let snapshot = screen.snapshot();
+        let reused = precompute_terminal_keyword_highlights(
+            &snapshot,
+            &highlighter,
+            palette,
+            previous.as_ref(),
+        );
+        let cold = precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
+        assert!(reused.matches_snapshot(&snapshot, palette));
+        for row in 0..snapshot.row_count() {
+            assert_eq!(
+                reused
+                    .lookup(row, &snapshot)
+                    .and_then(|value| value.ranges()),
+                cold.lookup(row, &snapshot).and_then(|value| value.ranges()),
+                "{bytes:?}, row={row}"
+            );
+        }
+        previous = Some(reused);
+    }
+}
+
+#[test]
+fn degraded_oversized_fragments_keep_generic_and_user_rules() {
+    let rules = get_builtin_keyword_rules(true);
+    let config = crate::keywords::TerminalKeywordHighlightConfig::default();
+    let enabled = SemanticHighlighter::compile(&rules, config);
+    let disabled = SemanticHighlighter::compile(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: false,
+            ..config
+        },
+    );
+    let line = "-rw-r--r-- 1 root root 123 Oct 30 10:00 ERROR.txt";
+    let context = SemanticContext {
+        suppress_line_roles: true,
+        ..SemanticContext::default()
+    };
+    let user = [(11, 12, 0xabcdef)];
+    let actual = enabled.ranges(line, &context, &user);
+    assert!(!actual.is_empty());
+    assert_eq!(actual, disabled.ranges(line, &context, &user));
 }

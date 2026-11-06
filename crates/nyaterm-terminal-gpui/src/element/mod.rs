@@ -28,7 +28,8 @@ use crate::glyphs::{
 };
 use crate::keywords::{
     TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
-    terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
+    terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys_for_rows,
+    terminal_keyword_rules_key,
 };
 use crate::paint::{
     apply_search_ranges, line_strike_color, push_col_range_bg, terminal_cell_text_at_col,
@@ -1741,7 +1742,12 @@ impl Element for NyaTerminalElement {
             .keyword_highlights
             .as_ref()
             .filter(|_| visible_has_wrapped_group)
-            .map(|_| terminal_keyword_row_reuse_keys(self.snapshot.as_ref()));
+            .map(|_| {
+                terminal_keyword_row_reuse_keys_for_rows(
+                    self.snapshot.as_ref(),
+                    wrapped_scan_start..wrapped_scan_end,
+                )
+            });
         // Follow the editor model: once the visible viewport is entirely hot,
         // spend at most one subsequent frame shaping the nearest retained row.
         // Any changed visible row suppresses this work, keeping input/output
@@ -1756,7 +1762,10 @@ impl Element for NyaTerminalElement {
                     |row| {
                         let keyword_reuse_key = keyword_row_reuse_keys
                             .as_deref()
-                            .and_then(|keys| keys.get(row))
+                            .and_then(|keys| {
+                                row.checked_sub(wrapped_scan_start)
+                                    .and_then(|index| keys.get(index))
+                            })
                             .copied()
                             .flatten()
                             .or_else(|| {
@@ -1820,7 +1829,10 @@ impl Element for NyaTerminalElement {
             let row_revision = snapshot_row.map(|row| row.revision);
             let keyword_reuse_key = keyword_row_reuse_keys
                 .as_deref()
-                .and_then(|keys| keys.get(row))
+                .and_then(|keys| {
+                    row.checked_sub(wrapped_scan_start)
+                        .and_then(|index| keys.get(index))
+                })
                 .copied()
                 .flatten()
                 .or_else(|| {

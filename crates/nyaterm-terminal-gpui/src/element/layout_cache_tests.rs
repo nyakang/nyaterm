@@ -48,8 +48,13 @@ fn edit_snapshot_row(
 #[test]
 fn current_keyword_layout_key_changes_when_osc133_changes_identical_text() {
     let palette = nyaterm_ui::theme_palette("github-dark");
-    let highlighter =
-        compile_terminal_keyword_highlighter(&nyaterm_core::get_builtin_keyword_rules(true), true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &nyaterm_core::get_builtin_keyword_rules(true),
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut screen = TerminalScreen::new(30, 2);
     screen.advance(b"ERROR");
     let output = screen.snapshot();
@@ -1501,7 +1506,13 @@ fn precomputed_keyword_match_does_not_reuse_plain_pending_row() {
         color: "#ff0000".to_string(),
         enabled: true,
     }];
-    let highlighter = compile_terminal_keyword_highlighter(&rules, true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let palette = nyaterm_ui::theme_palette("github-dark");
     let highlights = Arc::new(precompute_terminal_keyword_highlights(
         &snapshot,
@@ -1550,7 +1561,13 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
         color: "#ff2244".into(),
         enabled: true,
     }];
-    let highlighter = compile_terminal_keyword_highlighter(&rules, true);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: true,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let palette = nyaterm_ui::theme_palette("github-dark");
     let old = Arc::new(precompute_terminal_keyword_highlights(
         &original,
@@ -1624,7 +1641,13 @@ fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
         color: "#ff2244".into(),
         enabled: true,
     }];
-    let highlighter = compile_terminal_keyword_highlighter(&rules, false);
+    let highlighter = compile_terminal_keyword_highlighter(
+        &rules,
+        crate::keywords::TerminalKeywordHighlightConfig {
+            line_roles: false,
+            ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+        },
+    );
     let mut screen = TerminalScreen::new(8, 4);
     screen.set_logical_line_snapshots(true);
     screen.advance(b"ERROR       ");

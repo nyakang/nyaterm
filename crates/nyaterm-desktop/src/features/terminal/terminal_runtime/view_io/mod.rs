@@ -913,7 +913,7 @@ impl NyaTermApp {
             };
             changed |= surface.reveal_input_cursor(horizontal_input_at);
             let selection_changed = surface.set_selection_visual(terminal_selection);
-            if frame_applied || paint_details_changed {
+            if changed || frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
                     clear_keyword_highlights,
                     keyword_output_pressure,
@@ -1266,6 +1266,7 @@ impl NyaTermApp {
                 changed |= surface.set_zebra_stripes(zebra_stripes_enabled, target_line);
                 changed |= surface.update_scroll_chrome_without_snapshot(&scroll_state);
                 if changed {
+                    surface.schedule_keyword_highlights(false, false, cx);
                     cx.notify();
                 }
             });
@@ -1590,7 +1591,7 @@ impl NyaTermApp {
             };
             changed |= surface.reveal_input_cursor(horizontal_input_at);
             let selection_changed = surface.set_selection_visual(terminal_selection);
-            if frame_applied || paint_details_changed {
+            if changed || frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
                     clear_keyword_highlights,
                     render_output_pressure,

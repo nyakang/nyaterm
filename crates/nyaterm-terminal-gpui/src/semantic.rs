@@ -7,19 +7,23 @@ use std::ops::Range;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use nyaterm_core::keyword_highlight_presets::{
     BuiltinKeywordMatcher, ResolvedKeywordHighlightRule, builtin_keyword_matcher,
-    builtin_keyword_rule_swatch,
+    builtin_keyword_rule_ansi,
 };
 use nyaterm_terminal::terminal_is_zero_width_mark;
 
 use crate::semantic_roles::{self, LineRole};
 
-use crate::keywords::{is_whole_word_match, parse_hex_rgb};
+use crate::keywords::{TerminalKeywordHighlightConfig, is_whole_word_match, parse_hex_rgb};
 
 #[derive(Default)]
 pub(super) struct SemanticContext {
     pub input: Vec<Range<usize>>,
     pub prompt: Vec<Range<usize>>,
     pub integrated: bool,
+    /// Explicit shell output and alternate screens must not become prompt input by shape.
+    pub output: bool,
+    /// A degraded fragment of an oversized logical line cannot establish a role.
+    pub suppress_line_roles: bool,
     /// Shell integration is active but never published the command start, so the
     /// prompt fallback still has to describe the input region.
     pub input_anchor_missing: bool,
@@ -87,32 +91,20 @@ impl SemanticHighlighter {
         self.colors.is_empty()
     }
 
-    pub fn compile(rules: &[ResolvedKeywordHighlightRule], line_roles: bool) -> Self {
+    pub fn compile(
+        rules: &[ResolvedKeywordHighlightRule],
+        config: TerminalKeywordHighlightConfig,
+    ) -> Self {
         let mut colors = HashMap::new();
         let mut regex = Vec::new();
         let mut words = Vec::new();
         let mut patterns = Vec::new();
-        // Only a fallback now: sub-match colours prefer the rule's own colour, which
-        // carries the theme palette. This inference is kept for the case where that
-        // rule is disabled, and is why it is not the primary source any more.
-        let dark = rules
-            .iter()
-            .find(|r| r.id == "builtin-string")
-            .or_else(|| rules.iter().find(|r| r.id == "builtin-permissions"))
-            .or_else(|| {
-                rules
-                    .iter()
-                    .find(|r| builtin_keyword_matcher(&r.id).is_some())
-            })
-            .is_none_or(|r| {
-                r.color
-                    .eq_ignore_ascii_case(builtin_keyword_rule_swatch(&r.id, true))
-            });
         for rule in rules.iter().filter(|r| r.enabled) {
             let Some(matcher) = builtin_keyword_matcher(&rule.id) else {
                 continue;
             };
-            let color = parse_hex_rgb(&rule.color).unwrap_or(0x6796e6);
+            let color = parse_hex_rgb(&rule.color)
+                .unwrap_or(config.ansi[usize::from(builtin_keyword_rule_ansi(&rule.id))]);
             colors.insert(rule.id.clone(), color);
             match matcher {
                 BuiltinKeywordMatcher::LiteralWords => {
@@ -170,14 +162,13 @@ impl SemanticHighlighter {
                 .build(patterns)
                 .expect("built-in literal matcher")
         });
-        let swatch =
-            |id| parse_hex_rgb(builtin_keyword_rule_swatch(id, dark)).expect("semantic swatch");
+        let swatch = |id| config.ansi[usize::from(builtin_keyword_rule_ansi(id))];
         Self {
             colors,
             regex,
             words,
             automaton,
-            line_roles,
+            line_roles: config.line_roles,
             children: ChildColors {
                 read: swatch("builtin-info"),
                 write: swatch("builtin-warn"),
@@ -197,8 +188,8 @@ impl SemanticHighlighter {
     /// The colour for a sub-match of a rule.
     ///
     /// Prefers the rule's own colour, which already came from the palette the rest
-    /// of the highlighting uses, so nested values match their parent. The fixed
-    /// swatches are only a fallback for when that rule is disabled.
+    /// of the highlighting uses, so nested values match their parent. The
+    /// current ANSI palette supplies child colours when that rule is disabled.
     fn child_color(&self, id: &str) -> u32 {
         if let Some(color) = self.color(id) {
             return color;
@@ -287,7 +278,7 @@ impl SemanticHighlighter {
         // cursor leaves it, they disappear and the very same prompt would flip to
         // plain output. Classifying the text keeps the prompt identical in every
         // state, which is what OxideTerm does.
-        let fallback = (!context.continuation)
+        let fallback = (!context.continuation && !context.output)
             .then(|| fallback_prompt(line))
             .flatten();
         // Without usable anchors the prompt also has to describe the input
@@ -324,7 +315,7 @@ impl SemanticHighlighter {
         // Recognised command output is parsed field by field before the generic
         // rules run, so an `ip addr` address is an address rather than whatever
         // the number rule happens to grab first (issue: highlight precision).
-        let role = if self.line_roles {
+        let role = if self.line_roles && !context.suppress_line_roles {
             semantic_roles::detect(line)
         } else {
             LineRole::Unknown
@@ -332,13 +323,13 @@ impl SemanticHighlighter {
         if role.is_known() {
             let in_input = &in_input;
             let in_prompt = &in_prompt;
-            let role_matches: Vec<SemanticMatch> = semantic_roles::fields(role, line)
+            let role_matches = semantic_roles::fields(role, line)
                 .into_iter()
-                .filter(|field| {
+                .filter(move |field| {
                     !in_prompt(field.range.start, field.range.end)
                         && !in_input(field.range.start, field.range.end)
                 })
-                .filter_map(|field| {
+                .filter_map(move |field| {
                     self.color(field.rule).map(|color| SemanticMatch {
                         start: field.range.start,
                         end: field.range.end,
@@ -346,11 +337,8 @@ impl SemanticHighlighter {
                         priority: field.priority,
                         permissions: field.rule == "builtin-permissions",
                     })
-                })
-                .collect();
-            if !role_matches.is_empty() {
-                sources.push(Box::new(role_matches.into_iter()));
-            }
+                });
+            sources.push(Box::new(role_matches));
         }
         if let Some(color) = self.color("builtin-number") {
             let in_input = &in_input;
