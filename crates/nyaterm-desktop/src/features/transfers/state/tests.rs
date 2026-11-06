@@ -26,6 +26,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod browser_navigation;
 mod delete_jobs;
 
 fn transfer_focus(cx: &TestAppContext) -> TransferFeatureFocus {

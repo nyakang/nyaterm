@@ -7,6 +7,9 @@ use std::sync::Arc;
 
 use super::browser_logic::BrowserFilterKey;
 use super::{TransferBrowserState, TransferBrowserView, TransferFeatureState};
+use crate::features::transfers::browser_paths::{
+    remote_ancestor_selection, transfer_browser_path_is_root,
+};
 #[cfg(test)]
 use crate::models::TransferBrowserPendingRenameState;
 use crate::models::{
@@ -117,6 +120,13 @@ impl TransferFeatureState {
         entries: Vec<SftpFileEntry>,
     ) {
         self.browser.entries = Arc::new(entries);
+    }
+
+    #[cfg(test)]
+    pub(in crate::features) fn browser_directory_requests_for_test(
+        &mut self,
+    ) -> &mut Vec<(String, RemoteFilePath)> {
+        self.browser.directory_requests.get_or_insert_with(Vec::new)
     }
 
     #[cfg(test)]
@@ -248,6 +258,57 @@ impl TransferFeatureState {
         self.browser
             .list_scroll
             .scroll_to_item_strict(offset, ScrollStrategy::Top);
+    }
+
+    /// Resolve navigation intent against the same filtered, sorted rows the view draws.
+    /// Return an operation path, never the token-based selection identity.
+    pub(in crate::features) fn restore_browser_navigation_selection(
+        &mut self,
+        requested: &str,
+        show_hidden: bool,
+    ) -> Option<String> {
+        self.clear_browser_selection();
+        let visible = self.visible_browser_entries(show_hidden);
+        let exact = visible
+            .iter()
+            .position(|entry| entry.identity_key() == requested);
+        let index = exact.or_else(|| {
+            // Legacy callers pass display paths. Do not guess when decoding made
+            // two remote names indistinguishable.
+            let mut matches = visible
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.path == requested);
+            let (index, _) = matches.next()?;
+            matches.next().is_none().then_some(index)
+        })?;
+        let entry = &visible[index];
+        self.select_browser_entry(entry.identity_key());
+        let parent_count = usize::from(!transfer_browser_path_is_root(&self.browser.path));
+        self.browser
+            .list_scroll
+            .scroll_to_item(index + parent_count, ScrollStrategy::Nearest);
+        Some(entry.path.clone())
+    }
+
+    /// An inactive session loads its stable cache before receiving a listing.
+    /// Recover the ancestor's token instead of pairing the new path with that cache's old token.
+    pub(in crate::features) fn restore_browser_ancestor_path_token(
+        &mut self,
+        job_id: &str,
+        requested: &str,
+    ) {
+        let Some(snapshot) = self.browser.pending_navigations.get(job_id) else {
+            return;
+        };
+        let source = RemoteFilePath {
+            display_path: snapshot.browser_path.clone(),
+            raw_path_token: snapshot.browser_raw_path_token.clone(),
+        };
+        let mut destination = RemoteFilePath::new(self.browser.path.clone());
+        if remote_ancestor_selection(source, &mut destination).as_deref() == Some(requested) {
+            self.browser.raw_path_token = destination.raw_path_token;
+        }
     }
 
     pub(in crate::features) fn start_browser_column_resize(
