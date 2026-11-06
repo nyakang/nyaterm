@@ -674,7 +674,6 @@ impl NyaTermApp {
             // A transparent border reserves the line's space outside a drag.
             .border_t_2()
             .border_color(rgba(0x00000000))
-            .cursor_move()
             .on_drag(
                 ActivityBarDragPayload {
                     entry_id: entry_id.clone(),
