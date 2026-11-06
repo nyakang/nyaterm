@@ -5,10 +5,12 @@
 //! `ip addr`, `ls -l` and `ps aux` output from sharing rules with unrelated
 //! text, which is where most false positives come from.
 //!
-//! P1 covers three roles. Anything unrecognised keeps the existing generic
-//! rules, so this is a purely additive change.
+//! Without command identity these are conservative shape checks, not proof of
+//! command provenance. Unrecognised or oversized lines keep generic rules.
 
 use std::ops::Range;
+
+const MAX_LINE_ROLE_BYTES: usize = 8 * 1024;
 
 /// What kind of output a line belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,13 +71,18 @@ impl LineRole {
 /// Headers are the strongest signal: `ip addr` prints `1: lo: <LOOPBACK...>`,
 /// `ls -l` lines start with a mode string, and `ps aux` has a `USER PID` header.
 pub(super) fn detect(line: &str) -> LineRole {
+    if line.len() > MAX_LINE_ROLE_BYTES {
+        return LineRole::Unknown;
+    }
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return LineRole::Unknown;
     }
 
     // `ps aux` / `ps -ef` header and rows: USER PID %CPU ...
-    let first = trimmed.split_whitespace().next().unwrap_or("");
+    let mut columns = trimmed.split_whitespace();
+    let first = columns.next().unwrap_or("");
+    let process_row = columns.next().is_some_and(is_uint);
     // `ps -ef` has PPID/STIME columns; `ps aux` has %CPU/%MEM.
     if matches!(first, "UID" | "USER") && trimmed.contains("PPID") {
         return LineRole::PsFullOutput;
@@ -89,10 +96,10 @@ pub(super) fn detect(line: &str) -> LineRole {
     // Data rows carry the same column layout as their header. Recognising them
     // by shape is the only option for a per-line classifier, and without it the
     // `ps` field parser never runs on real output.
-    if looks_like_ps_aux_row(trimmed) {
+    if process_row && looks_like_ps_aux_row(trimmed) {
         return LineRole::PsOutput;
     }
-    if looks_like_ps_full_row(trimmed) {
+    if process_row && looks_like_ps_full_row(trimmed) {
         return LineRole::PsFullOutput;
     }
     // `git diff`: file headers and hunk headers.
@@ -187,7 +194,7 @@ pub(super) fn detect(line: &str) -> LineRole {
     }
 
     // `main.c:10:5: error: ...` / `main.c: In function 'main':`
-    if looks_like_compiler_location(trimmed) {
+    if first.contains(':') && looks_like_compiler_location(trimmed) {
         return LineRole::CCompilerOutput;
     }
     // Cargo progress: `   Compiling serde v1.0.0`
@@ -352,6 +359,7 @@ fn looks_like_ip_heading(line: &str) -> bool {
 }
 
 /// A parsed field: byte range plus the built-in rule id that colours it.
+#[derive(Debug)]
 pub(super) struct RoleField {
     pub range: Range<usize>,
     /// Built-in rule id, resolved to a colour by `SemanticHighlighter::add`.
@@ -361,7 +369,10 @@ pub(super) struct RoleField {
 
 /// Field-level parse for a recognised role.
 pub(super) fn fields(role: LineRole, line: &str) -> Vec<RoleField> {
-    match role {
+    if line.len() > MAX_LINE_ROLE_BYTES {
+        return Vec::new();
+    }
+    let fields = match role {
         LineRole::IpOutput => ip_fields(line),
         LineRole::FileListingOutput => file_listing_fields(line),
         LineRole::PsOutput => ps_fields(line),
@@ -384,7 +395,16 @@ pub(super) fn fields(role: LineRole, line: &str) -> Vec<RoleField> {
         LineRole::LogOutput => log_fields(line),
         LineRole::NetworkConfigOutput => network_config_fields(line),
         LineRole::Unknown => Vec::new(),
+    };
+    // Terminal text is untrusted UTF-8. A malformed shape must never supply a
+    // partial character range to either the semantic matcher or the painter.
+    if fields
+        .iter()
+        .any(|field| field.range.is_empty() || line.get(field.range.clone()).is_none())
+    {
+        return Vec::new();
     }
+    fields
 }
 
 // ── ip addr ──────────────────────────────────────────────────────────────
@@ -475,10 +495,21 @@ fn ip_fields(line: &str) -> Vec<RoleField> {
 // ── ls -l ────────────────────────────────────────────────────────────────
 
 fn file_listing_fields(line: &str) -> Vec<RoleField> {
-    let mut out = Vec::new();
-    if line.len() < 10 {
-        return out;
+    let body = line.trim_start();
+    if !looks_like_file_listing(body) {
+        return Vec::new();
     }
+    let offset = line.len() - body.len();
+    let mut fields = file_listing_body_fields(body);
+    for field in &mut fields {
+        field.range.start += offset;
+        field.range.end += offset;
+    }
+    fields
+}
+
+fn file_listing_body_fields(line: &str) -> Vec<RoleField> {
+    let mut out = Vec::new();
     // Mode string: the type byte, then r/w/x/s/t each get their own colour so a
     // listing reads like `ls -l --color` (OxideTerm does the same).
     if line.len() >= 10 {
@@ -503,47 +534,32 @@ fn file_listing_fields(line: &str) -> Vec<RoleField> {
             });
         }
     }
-    // numeric columns: links, size, month, day, time
-    let mut cursor = 10;
-    // Skip the SELinux `.` / ACL `+` marker so the columns stay aligned.
-    if matches!(line.as_bytes().get(cursor), Some(b'.' | b'+' | b'@')) {
-        cursor += 1;
-    }
-    let mut column = 0;
-    while cursor < line.len() && column < 5 {
-        while cursor < line.len() && line.as_bytes()[cursor] == b' ' {
-            cursor += 1;
-        }
-        let start = cursor;
-        while cursor < line.len() && line.as_bytes()[cursor] != b' ' {
-            cursor += 1;
-        }
-        if start == cursor {
-            break;
-        }
-        let token = &line[start..cursor];
+    let body = line.get(10..).unwrap_or_default();
+    let body = body.strip_prefix(['.', '+', '@']).unwrap_or(body);
+    let mut offset = line.len() - body.len();
+    for (column, token) in body.split_whitespace().take(5).enumerate() {
+        let start = offset + line[offset..].find(token).unwrap_or(0);
+        let end = start + token.len();
+        offset = end;
         let rule = match column {
-            0 => "builtin-number",   // links
-            3 => "builtin-number",   // size
-            4 => "builtin-datetime", // month/day/time
+            0 | 3 => "builtin-number", // links and size
+            4 => "builtin-datetime",
             _ => "",
         };
         if !rule.is_empty() {
             out.push(RoleField {
-                range: start..cursor,
+                range: start..end,
                 rule,
                 priority: 92,
             });
         }
-        // month names get their own rule when present
         if column == 4 && is_month(token) {
             out.push(RoleField {
-                range: start..cursor,
+                range: start..end,
                 rule: "builtin-month",
                 priority: 93,
             });
         }
-        column += 1;
     }
     out
 }
@@ -1187,8 +1203,7 @@ fn log_fields(line: &str) -> Vec<RoleField> {
 
     // Leading timestamp, either `YYYY/MM/DD` (nginx) or `YYYY-MM-DD` (apps).
     let trimmed_start = line.len() - line.trim_start().len();
-    if line.len() >= trimmed_start + 19 {
-        let head = &line[trimmed_start..trimmed_start + 19];
+    if let Some(head) = line.get(trimmed_start..trimmed_start + 19) {
         let bytes = head.as_bytes();
         if (bytes[4] == b'/' && bytes[7] == b'/') || (bytes[4] == b'-' && bytes[7] == b'-') {
             push(trimmed_start, trimmed_start + 19, "builtin-datetime", 95);
@@ -1220,7 +1235,7 @@ fn log_fields(line: &str) -> Vec<RoleField> {
         if let Some(pos) = line.find(extension) {
             let start = line[..pos]
                 .rfind(char::is_whitespace)
-                .map(|idx| idx + 1)
+                .map(|idx| idx + line[idx..].chars().next().map_or(0, char::len_utf8))
                 .unwrap_or(0);
             let after = pos + extension.len();
             let digits = line[after..].bytes().take_while(u8::is_ascii_digit).count();
@@ -1246,7 +1261,7 @@ fn log_fields(line: &str) -> Vec<RoleField> {
                 };
                 push(after, after + 3, rule, 96);
             }
-            search = after + digits.max(1);
+            search = after + digits;
         }
         for method in ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] {
             if let Some(pos) = find_level_word(line, method) {
@@ -1917,13 +1932,13 @@ fn c_compiler_fields(line: &str) -> Vec<RoleField> {
     }
 
     for (needle, rule) in [
-        ("error", "builtin-error"),
-        ("warning", "builtin-warn"),
-        ("note", "builtin-info"),
+        ("error: ", "builtin-error"),
+        ("warning: ", "builtin-warn"),
+        ("note: ", "builtin-info"),
     ] {
-        if let Some(pos) = body.find(&format!("{needle}: ")) {
+        if let Some(pos) = body.find(needle) {
             let start = trimmed_start + pos;
-            push(start, start + needle.len(), rule, 96);
+            push(start, start + needle.len() - 2, rule, 96);
             break;
         }
     }
@@ -1933,11 +1948,13 @@ fn c_compiler_fields(line: &str) -> Vec<RoleField> {
 // ── SQL ──────────────────────────────────────────────────────────────────
 
 fn looks_like_sql_statement(line: &str) -> bool {
-    let upper = line.to_ascii_uppercase();
     const STARTERS: &[&str] = &[
         "SELECT ", "INSERT ", "UPDATE ", "DELETE ", "CREATE ", "ALTER ", "DROP ", "WITH ",
     ];
-    STARTERS.iter().any(|starter| upper.starts_with(starter))
+    STARTERS.iter().any(|starter| {
+        line.get(..starter.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(starter))
+    })
 }
 
 fn sql_fields(line: &str) -> Vec<RoleField> {
@@ -2009,7 +2026,10 @@ fn sql_fields(line: &str) -> Vec<RoleField> {
         if cleaned.is_empty() {
             continue;
         }
-        if KEYWORDS.contains(&cleaned.to_ascii_uppercase().as_str()) {
+        if KEYWORDS
+            .iter()
+            .any(|keyword| cleaned.eq_ignore_ascii_case(keyword))
+        {
             let inner = token.find(cleaned).unwrap_or(0);
             let at = start + inner;
             out.push(RoleField {
@@ -2928,3 +2948,6 @@ mod row_check_equivalence_tests {
         assert!(!looks_like_docker_ps("0123456789ag web"));
     }
 }
+
+#[cfg(test)]
+mod robustness_tests;
