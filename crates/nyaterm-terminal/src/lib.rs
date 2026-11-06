@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::ops::Range;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -14,6 +14,7 @@ use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::{Color, Handler as _, NamedColor, NamedPrivateMode, Rgb};
 
 pub mod agent_capture;
+mod cell_string;
 mod cells;
 pub mod command_navigation;
 pub mod editing;
@@ -29,6 +30,7 @@ mod scroll_region;
 pub mod selection;
 mod signature;
 mod sixel;
+pub use cell_string::CellText;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
     terminal_cell_count, terminal_char_cell_width, terminal_is_zero_width_mark,
@@ -191,7 +193,7 @@ pub struct CursorSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderCell {
-    pub text: Arc<str>,
+    pub text: CellText,
     pub style: CellStyle,
     pub width: u8,
     pub hyperlink: Option<Arc<str>>,
@@ -199,7 +201,7 @@ pub struct RenderCell {
 
 impl RenderCell {
     pub fn text(&self) -> &str {
-        self.text.as_ref()
+        self.text.as_str()
     }
 
     pub fn hyperlink_uri(&self) -> Option<&str> {
@@ -2868,7 +2870,7 @@ fn snapshot_row_from_term(
     } else {
         (0..cols)
             .map(|_| RenderCell {
-                text: empty_render_cell_text(),
+                text: CellText::EMPTY,
                 style: CellStyle::default(),
                 width: 1,
                 hyperlink: None,
@@ -3071,20 +3073,16 @@ fn unix_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn cell_text(cell: &Cell) -> Arc<str> {
+fn cell_text(cell: &Cell) -> CellText {
     if cell_text_is_blank(cell) {
-        return empty_render_cell_text();
+        return CellText::EMPTY;
     }
-    if cell.c.is_ascii() && cell.zerowidth().is_none_or(|chars| chars.is_empty()) {
-        // Nearly every cell is plain ASCII; share one `Arc` per character
-        // instead of allocating a `String` and an `Arc<str>` for each cell.
-        return ascii_cell_text(cell.c as u8);
-    }
+    let Some(zerowidth) = cell.zerowidth().filter(|chars| !chars.is_empty()) else {
+        return CellText::from_char(cell.c);
+    };
     let mut text = cell.c.to_string();
-    if let Some(zerowidth) = cell.zerowidth() {
-        text.extend(zerowidth.iter().copied());
-    }
-    Arc::from(text)
+    text.extend(zerowidth.iter().copied());
+    CellText::from(text)
 }
 
 fn cell_text_is_blank(cell: &Cell) -> bool {
@@ -3113,22 +3111,6 @@ fn push_render_cell_text(output: &mut String, cell: &RenderCell) {
     } else {
         output.push_str(cell.text());
     }
-}
-
-fn ascii_cell_text(byte: u8) -> Arc<str> {
-    static TABLE: OnceLock<[Arc<str>; 128]> = OnceLock::new();
-    let table = TABLE.get_or_init(|| {
-        std::array::from_fn(|index| {
-            let mut encoded = [0; 4];
-            Arc::from((index as u8 as char).encode_utf8(&mut encoded) as &str)
-        })
-    });
-    Arc::clone(&table[usize::from(byte)])
-}
-
-fn empty_render_cell_text() -> Arc<str> {
-    static EMPTY: OnceLock<Arc<str>> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::from("")))
 }
 
 fn intern_render_cell_hyperlink(intern: &mut HashMap<Arc<str>, Arc<str>>, uri: &str) -> Arc<str> {
