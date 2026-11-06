@@ -446,6 +446,11 @@ impl NyaTermApp {
             #[cfg(test)]
             _test_config_dir: None,
         };
+        // Floating overlays dismiss themselves when keyboard focus leaves
+        // them, so each side needs its own focus owner.
+        app.shell
+            .panels
+            .set_floating_focus_handles(cx.focus_handle(), cx.focus_handle());
         app.update_custom_icons(custom_icons, cx);
         app.sync_quick_command_selected_category(cx);
         app

@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{AnyView, Entity, Pixels, RenderImage, ScrollHandle, SharedString};
+use gpui::{
+    AnyView, Entity, FocusHandle, Pixels, Point, RenderImage, ScrollHandle, SharedString,
+    Subscription,
+};
 use nyaterm_ui::{NyaAppMenuBar, NyaWindowHandle};
 
 use super::super::app_state::SettingsDraftSnapshot;
@@ -142,6 +145,18 @@ pub(super) struct ShellSettingsNavigationState {
     pub(super) draft_snapshot: Option<SettingsDraftSnapshot>,
 }
 
+/// A left-button press that started outside every open floating panel.
+///
+/// The panel identity is snapshotted so a click that toggles a panel (the
+/// activity bar) invalidates the record instead of dismissing a panel the same
+/// gesture opened.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::features) struct FloatingOutsidePress {
+    pub(super) side: PanelSide,
+    pub(super) panel: NavItem,
+    pub(super) position: Point<Pixels>,
+}
+
 /// Side-panel selection, stack layout and resize interaction state.
 pub(in crate::features) struct ShellPanelState {
     pub(in crate::features) active_left: Option<NavItem>,
@@ -156,6 +171,19 @@ pub(in crate::features) struct ShellPanelState {
     pub(super) floating_left: Option<NavItem>,
     pub(super) floating_right: Option<NavItem>,
     pub(super) last_floating_side: Option<PanelSide>,
+    /// Focus owners for the floating overlay containers.
+    ///
+    /// They are created with an app context after shell construction, so pure
+    /// state tests can build this struct without a GPUI app.
+    floating_left_focus: Option<FocusHandle>,
+    floating_right_focus: Option<FocusHandle>,
+    /// Window focus listeners that dismiss an unfocused floating overlay.
+    floating_focus_subscriptions: Vec<Subscription>,
+    /// Side whose floating container should take focus on the next render.
+    pending_floating_focus: Option<PanelSide>,
+    /// Pending primary-button press outside the floating overlay, consumed by
+    /// the root click handler. Never persisted.
+    floating_outside_press: Option<FloatingOutsidePress>,
     pub(super) right_focus: RightFocus,
     pub(in crate::features) left_collapsed: bool,
     pub(in crate::features) right_collapsed: bool,
@@ -287,6 +315,11 @@ impl ShellFeatureState {
                 floating_left: None,
                 floating_right: None,
                 last_floating_side: None,
+                floating_left_focus: None,
+                floating_right_focus: None,
+                floating_focus_subscriptions: Vec::new(),
+                pending_floating_focus: None,
+                floating_outside_press: None,
                 right_focus: RightFocus::Default,
                 left_collapsed: init.left_sidebar_collapsed,
                 right_collapsed: init.right_inspector_collapsed,
@@ -1036,14 +1069,25 @@ impl ShellPanelState {
         side: PanelSide,
         panel: Option<NavItem>,
     ) {
+        // Any state change invalidates a press from the gesture that caused it,
+        // so an opening/toggling click cannot dismiss what it just opened.
+        self.floating_outside_press = None;
         match side {
             PanelSide::Left => self.floating_left = panel,
             PanelSide::Right => self.floating_right = panel,
         }
         if panel.is_some() {
             self.last_floating_side = Some(side);
-        } else if self.floating_left.is_none() && self.floating_right.is_none() {
-            self.last_floating_side = None;
+            // A newly shown overlay is the focus owner; the next render moves
+            // keyboard focus into it so leaving it can dismiss it.
+            self.pending_floating_focus = Some(side);
+        } else {
+            if self.pending_floating_focus == Some(side) {
+                self.pending_floating_focus = None;
+            }
+            if self.floating_left.is_none() && self.floating_right.is_none() {
+                self.last_floating_side = None;
+            }
         }
     }
 
@@ -1051,6 +1095,64 @@ impl ShellPanelState {
         self.floating_left = None;
         self.floating_right = None;
         self.last_floating_side = None;
+        self.pending_floating_focus = None;
+        self.floating_outside_press = None;
+    }
+
+    pub(super) fn set_floating_outside_press(
+        &mut self,
+        side: PanelSide,
+        panel: NavItem,
+        position: Point<Pixels>,
+    ) {
+        self.floating_outside_press = Some(FloatingOutsidePress {
+            side,
+            panel,
+            position,
+        });
+    }
+
+    pub(super) fn take_floating_outside_press(&mut self) -> Option<FloatingOutsidePress> {
+        self.floating_outside_press.take()
+    }
+
+    pub(super) fn clear_floating_outside_press(&mut self) {
+        self.floating_outside_press = None;
+    }
+
+    /// Stores the focus owners for the two floating overlay containers.
+    ///
+    /// Called once with an app context after shell construction; state-only
+    /// tests keep the handles unset.
+    pub(in crate::features) fn set_floating_focus_handles(
+        &mut self,
+        left: FocusHandle,
+        right: FocusHandle,
+    ) {
+        self.floating_left_focus = Some(left);
+        self.floating_right_focus = Some(right);
+    }
+
+    pub(in crate::features) fn floating_focus_handle(
+        &self,
+        side: PanelSide,
+    ) -> Option<&FocusHandle> {
+        match side {
+            PanelSide::Left => self.floating_left_focus.as_ref(),
+            PanelSide::Right => self.floating_right_focus.as_ref(),
+        }
+    }
+
+    pub(super) fn take_pending_floating_focus(&mut self) -> Option<PanelSide> {
+        self.pending_floating_focus.take()
+    }
+
+    pub(super) fn floating_focus_listeners_are_installed(&self) -> bool {
+        !self.floating_focus_subscriptions.is_empty()
+    }
+
+    pub(super) fn set_floating_focus_subscriptions(&mut self, subscriptions: Vec<Subscription>) {
+        self.floating_focus_subscriptions = subscriptions;
     }
     const LEFT_WIDTH_MAX: f32 = 720.;
     const RIGHT_WIDTH_MIN: f32 = 200.;

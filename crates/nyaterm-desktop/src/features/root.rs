@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use crate::models::{NavItem, PanelResizeSide, PanelSide};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, IntoElement, KeyDownEvent, MouseButton,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render, SharedString, Stateful,
-    Window, canvas, deferred, div, img, prelude::*, px, rgb, rgba, svg,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render,
+    SharedString, Stateful, Window, canvas, deferred, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use rust_i18n::t;
 
@@ -330,6 +330,7 @@ impl NyaTermApp {
         // result of this paint; arming here is both cheap and the earliest correct
         // point.
         self.ensure_pending_focus_clock(cx);
+        self.install_floating_panel_focus_dismiss(window, cx);
         self.ensure_post_start_work_clock(cx);
         self.resume_startup_restore_if_unlocked(window, cx);
 
@@ -357,7 +358,26 @@ impl NyaTermApp {
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.cancel_internal_drag_on_escape(event, window, cx);
             }))
-            .on_click(cx.listener(|this, _, _, _| {
+            // Capture runs before the activity bar's own click handler, so the
+            // press is recorded before a toggle can change the panel state.
+            // Only the primary button arms dismissal; drags are filtered by the
+            // slop check in `finish_floating_panel_outside_click`.
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                if event.button == MouseButton::Left {
+                    this.note_floating_panel_outside_press(event.position);
+                }
+            }))
+            // Capture up runs before the target's click handler; the work is
+            // deferred so the follow-up click can toggle the panel first.
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                if event.button == MouseButton::Left {
+                    this.defer_floating_panel_outside_click(event.position, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if let Some(position) = event.mouse_position() {
+                    this.finish_floating_panel_outside_click(position, cx);
+                }
                 this.mark_user_activity();
             }))
             .on_mouse_down(
@@ -568,6 +588,10 @@ impl NyaTermApp {
             let right_floating = floating_mode
                 .then(|| self.shell.floating_panel(PanelSide::Right))
                 .flatten();
+            // A floating overlay owns keyboard focus while it is shown, so a
+            // focus-out can dismiss it. The request is set when the overlay
+            // opens and consumed by the first render that paints it.
+            self.apply_pending_floating_focus(window, cx);
             let left_drawer_open = has_left_activity_items
                 && left_overlay_mode
                 && self.shell.mobile_left_panel_open()
@@ -613,9 +637,15 @@ impl NyaTermApp {
 
             if let Some(panel) = left_floating {
                 let width = self.shell.left_panel_width();
+                let focus = self
+                    .shell
+                    .panels
+                    .floating_focus_handle(PanelSide::Left)
+                    .cloned();
                 surface = surface.child(
                     div()
                         .id("floating-left-panel")
+                        .when_some(focus, |this, focus| this.track_focus(&focus))
                         .absolute()
                         .top_0()
                         .bottom_0()
@@ -639,9 +669,15 @@ impl NyaTermApp {
 
             if let Some(panel) = right_floating {
                 let width = self.shell.right_panel_width();
+                let focus = self
+                    .shell
+                    .panels
+                    .floating_focus_handle(PanelSide::Right)
+                    .cloned();
                 surface = surface.child(
                     div()
                         .id("floating-right-panel")
+                        .when_some(focus, |this, focus| this.track_focus(&focus))
                         .absolute()
                         .top_0()
                         .bottom_0()
