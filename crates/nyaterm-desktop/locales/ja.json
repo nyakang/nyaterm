@@ -1272,6 +1272,7 @@
     "connectToSession": "接続してファイルを参照",
     "copyDirPath": "ディレクトリパスをコピー",
     "cwdTrackingUnavailable": "パス同期は利用できません",
+    "currentTerminalDirectory": "ターミナルの現在のディレクトリ",
     "cwdNotReported": "端末から作業ディレクトリがまだ通知されていません。ディレクトリの更新後にパスを同期できます。",
     "delete": "削除",
     "deleteConfirmHint": "Enter で確定するか、削除をクリックしてください。",

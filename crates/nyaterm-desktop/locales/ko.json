@@ -1272,6 +1272,7 @@
     "connectToSession": "연결하여 파일을 탐색하세요",
     "copyDirPath": "디렉터리 경로 복사",
     "cwdTrackingUnavailable": "경로 동기화를 사용할 수 없습니다",
+    "currentTerminalDirectory": "터미널의 현재 디렉터리",
     "cwdNotReported": "터미널에서 현재 작업 디렉터리를 아직 보고하지 않았습니다. 디렉터리 업데이트를 받으면 경로를 동기화할 수 있습니다.",
     "delete": "삭제",
     "deleteConfirmHint": "Enter를 눌러 확인하거나 삭제를 클릭하세요.",

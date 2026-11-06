@@ -1272,6 +1272,7 @@
     "connectToSession": "連線工作階段以瀏覽檔案",
     "copyDirPath": "複製目錄路徑",
     "cwdTrackingUnavailable": "該工作階段不支援終端路徑同步",
+    "currentTerminalDirectory": "終端目前目錄",
     "cwdNotReported": "終端尚未回報目前工作目錄，收到目錄更新後即可同步路徑。",
     "delete": "刪除",
     "deleteConfirmHint": "按 Enter 確認，或點選刪除按鈕。",

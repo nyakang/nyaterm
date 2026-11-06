@@ -120,17 +120,20 @@ impl TransferTreeState {
             state.rows = rows.into();
             let visible: HashSet<&str> = state.rows.iter().map(|row| row.key.as_str()).collect();
             state.selected.retain(|id| visible.contains(id.as_str()));
-            if state
-                .focused
-                .as_deref()
-                .is_some_and(|id| !visible.contains(id))
+            // Missing ancestor listings can hide the reveal target between replies.
+            if !state.scroll_to_selection
+                && state
+                    .focused
+                    .as_deref()
+                    .is_some_and(|id| !visible.contains(id))
             {
                 state.focused = None;
             }
-            if state
-                .anchor
-                .as_deref()
-                .is_some_and(|id| !visible.contains(id))
+            if !state.scroll_to_selection
+                && state
+                    .anchor
+                    .as_deref()
+                    .is_some_and(|id| !visible.contains(id))
             {
                 state.anchor = None;
             }
@@ -315,6 +318,7 @@ impl TransferTreeState {
         let Some(target) = state.rows.iter().position(|row| row.key == id) else {
             return;
         };
+        state.scroll_to_selection = false;
         state.focused = Some(id.clone());
         if state.rows[target].root {
             if !additive && !range {
@@ -352,6 +356,7 @@ impl TransferTreeState {
         let Some(state) = self.sessions.get_mut(session) else {
             return;
         };
+        state.scroll_to_selection = false;
         state.selected = state
             .rows
             .iter()
@@ -373,6 +378,7 @@ impl TransferTreeState {
         let Some(row) = state.rows.iter().find(|row| row.key == id) else {
             return;
         };
+        state.scroll_to_selection = false;
         state.focused = Some(id.clone());
         if row.root {
             state.selected.clear();
@@ -385,6 +391,7 @@ impl TransferTreeState {
 
     pub(super) fn clear_selection(&mut self, session: &str) {
         if let Some(state) = self.sessions.get_mut(session) {
+            state.scroll_to_selection = false;
             state.selected.clear();
             state.anchor = None;
         }
@@ -398,6 +405,7 @@ impl TransferTreeState {
     ) -> Option<RemoteFilePath> {
         let state = self.sessions.get_mut(session)?;
         let node = state.nodes.get_mut(id)?;
+        state.scroll_to_selection = false;
         state.focused = Some(id.to_string());
         let expand = expand.unwrap_or(!state.expanded.contains(id));
         if expand {
@@ -423,6 +431,7 @@ impl TransferTreeState {
             .and_then(|id| state.rows.iter().position(|row| &row.key == id))
             .unwrap_or(0);
         let next = index.saturating_add_signed(delta).min(state.rows.len() - 1);
+        state.scroll_to_selection = false;
         state.focused = Some(state.rows[next].key.clone());
         state.selected.clear();
         if !state.rows[next].root {
@@ -460,6 +469,7 @@ impl TransferTreeState {
         let Some(index) = state.rows.iter().position(|row| row.key == id) else {
             return;
         };
+        state.scroll_to_selection = false;
         let depth = state.rows[index].depth;
         if let Some(row) = state.rows[..index]
             .iter()
@@ -934,6 +944,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["/", "/a"]
         );
+        let view = tree.presentation(Some("a"), false);
+        assert_eq!(view.focused.as_deref(), Some("/a/b"));
         assert!(tree.sessions["a"].scroll_to_selection);
         tree.seed(
             "a",
@@ -941,6 +953,9 @@ mod tests {
             RemoteFilePath::new("/"),
             Arc::new(vec![directory("a", "/a")]),
         );
+        let view = tree.presentation(Some("a"), false);
+        assert_eq!(view.focused.as_deref(), Some("/a/b"));
+        assert!(tree.sessions["a"].scroll_to_selection);
         tree.seed(
             "a",
             FileBrowserBackendKind::Remote,
@@ -948,6 +963,30 @@ mod tests {
             Arc::new(vec![directory("b", "/a/b")]),
         );
         tree.presentation(Some("a"), false);
+        assert!(!tree.sessions["a"].scroll_to_selection);
+    }
+
+    #[test]
+    fn manual_selection_cancels_a_reveal_waiting_for_ancestors() {
+        let mut tree = TransferTreeState::default();
+        let backend = FileBrowserBackendKind::Remote;
+        tree.reveal("a", backend, RemoteFilePath::new("/a/b"));
+        tree.seed(
+            "a",
+            backend,
+            RemoteFilePath::new("/"),
+            Arc::new(vec![directory("a", "/a"), directory("other", "/other")]),
+        );
+        tree.presentation(Some("a"), false);
+        tree.select("a", "/other".into(), false, false);
+        tree.seed(
+            "a",
+            backend,
+            RemoteFilePath::new("/a"),
+            Arc::new(vec![directory("b", "/a/b")]),
+        );
+        let view = tree.presentation(Some("a"), false);
+        assert_eq!(view.focused.as_deref(), Some("/other"));
         assert!(!tree.sessions["a"].scroll_to_selection);
     }
 

@@ -29,6 +29,15 @@ impl NyaTermApp {
         let Some(backend) = self.session.active_file_browser_backend() else {
             return;
         };
+        // Every tree entry point must defer to the navigation already fetching this directory.
+        if self.transfer.browser_view().loading
+            && self
+                .transfer
+                .browser_navigation_job_running_for_session(&session_id)
+            && self.transfer_tree_current_path(backend) == path
+        {
+            return;
+        }
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(_) => return,
@@ -77,6 +86,21 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    fn transfer_tree_current_path(&self, backend: FileBrowserBackendKind) -> RemoteFilePath {
+        let mut path = self.transfer.browser_remote_file_path();
+        if backend == FileBrowserBackendKind::Remote && !path.display_path.starts_with('/') {
+            let home = self.transfer.browser_view().home_dir;
+            if home.starts_with('/') && path.raw_path_token.is_none() {
+                path = RemoteFilePath::new(if path.display_path == "." {
+                    home.to_string()
+                } else {
+                    file_browser_join(backend, home, &path.display_path)
+                });
+            }
+        }
+        path
+    }
+
     pub(in crate::features) fn reveal_transfer_tree_current_path(
         &mut self,
         cx: &mut Context<Self>,
@@ -92,17 +116,7 @@ impl NyaTermApp {
         let Some(backend) = self.session.active_file_browser_backend() else {
             return;
         };
-        let mut path = self.transfer.browser_remote_file_path();
-        if backend == FileBrowserBackendKind::Remote && !path.display_path.starts_with('/') {
-            let home = self.transfer.browser_view().home_dir;
-            if home.starts_with('/') && path.raw_path_token.is_none() {
-                path = RemoteFilePath::new(if path.display_path == "." {
-                    home.to_string()
-                } else {
-                    file_browser_join(backend, home, &path.display_path)
-                });
-            }
-        }
+        let path = self.transfer_tree_current_path(backend);
         let missing = self.transfer.reveal_tree_path(&session_id, backend, path);
         for path in missing {
             self.request_transfer_tree_listing(path, cx);
@@ -207,8 +221,8 @@ impl NyaTermApp {
         let Some(row) = self.transfer.selected_tree_row(&session) else {
             return;
         };
-        if row.directory && row.expanded {
-            self.expand_transfer_tree_row(&row.key, Some(false), cx);
+        if row.expandable {
+            self.expand_transfer_tree_row(&row.key, None, cx);
         } else {
             self.navigate_transfer_tree_row(window, cx);
         }
