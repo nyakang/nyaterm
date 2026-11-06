@@ -11,7 +11,59 @@ use serde::Deserialize;
 use zed_reqwest::StatusCode;
 use zed_reqwest::blocking::{Client, Response};
 
-use crate::models::{GithubGistAuthEvent, GithubGistAuthJobEvent};
+pub enum GithubGistAuthEvent {
+    Started {
+        user_code: String,
+        verification_uri: String,
+    },
+    Polling {
+        slow_down: bool,
+    },
+    Succeeded {
+        access_token: nyaterm_core::SecretString,
+        gist_id: String,
+        login: String,
+    },
+    Failed(String),
+    Cancelled,
+}
+
+#[derive(Debug)]
+pub struct GithubGistAuthJobEvent {
+    pub job_id: u64,
+    pub event: GithubGistAuthEvent,
+}
+
+impl std::fmt::Debug for GithubGistAuthEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Started {
+                user_code: _,
+                verification_uri,
+            } => formatter
+                .debug_struct("Started")
+                .field("user_code", &"<redacted>")
+                .field("verification_uri", verification_uri)
+                .finish(),
+            Self::Polling { slow_down } => formatter
+                .debug_struct("Polling")
+                .field("slow_down", slow_down)
+                .finish(),
+            Self::Succeeded {
+                access_token: _,
+                gist_id,
+                login,
+            } => formatter
+                .debug_struct("Succeeded")
+                .field("access_token", &"<redacted>")
+                .field("gist_id", gist_id)
+                .field("login", login)
+                .finish(),
+            Self::Failed(_) => formatter.write_str("Failed(<redacted>)"),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+        }
+    }
+}
 
 const GITHUB_GIST_CLIENT_ID: Option<&str> = option_env!("NYATERM_GITHUB_GIST_CLIENT_ID");
 const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
@@ -52,7 +104,7 @@ struct GithubGistResponse {
     id: String,
 }
 
-pub(crate) fn run_github_gist_device_flow(
+pub fn run_github_gist_device_flow(
     job_id: u64,
     existing_gist_id: Option<String>,
     cancel: Arc<AtomicBool>,
@@ -308,7 +360,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
-    use super::{has_gist_scope, wait_cancelled};
+    use super::{GithubGistAuthEvent, GithubGistAuthJobEvent, has_gist_scope, wait_cancelled};
 
     #[test]
     fn gist_scope_parser_accepts_space_or_comma_separated_values() {
@@ -323,5 +375,28 @@ mod tests {
         let started = Instant::now();
         assert!(wait_cancelled(Duration::from_secs(30), &cancel));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn authorization_events_redact_tokens_user_codes_and_failure_details() {
+        let secret = "nya-desktop-secret-never-log";
+        let events = [
+            GithubGistAuthEvent::Started {
+                user_code: secret.to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+            },
+            GithubGistAuthEvent::Succeeded {
+                access_token: secret.to_owned().into(),
+                gist_id: "gist".to_owned(),
+                login: "user".to_owned(),
+            },
+            GithubGistAuthEvent::Failed(secret.to_owned()),
+        ];
+        for event in events {
+            let event = GithubGistAuthJobEvent { job_id: 1, event };
+            let output = format!("{event:?}");
+            assert!(!output.contains(secret));
+            assert!(output.contains("redacted"));
+        }
     }
 }

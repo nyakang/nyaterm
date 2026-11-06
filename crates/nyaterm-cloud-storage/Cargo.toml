@@ -1,0 +1,33 @@
+[package]
+name = "nyaterm-cloud-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+httpdate.workspace = true
+md5.workspace = true
+nyaterm-core.workspace = true
+opendal.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+zed_reqwest.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14"
+rustls.workspace = true
+tempfile.workspace = true

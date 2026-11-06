@@ -20,7 +20,16 @@ must include explicit conversion logic and tests.
   contracts, and shared pure logic. Do not add GPUI dependencies here.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
-  coordination, native HTTP adapters, and GPUI Entity stores.
+  coordination, service adapters, and GPUI Entity stores.
+* `crates/nyaterm-ai-client`: UI-independent native AI provider HTTP clients,
+  request and streaming-response adapters, model discovery, and proxy handling.
+  Runtime/task ownership and AI feature orchestration remain in desktop.
+* `crates/nyaterm-cloud-storage`: UI-independent native and OpenDAL cloud-storage
+  adapters, OAuth device authorization, token-refresh sinks, and HTTP I/O counters.
+  Sync orchestration, caches, and credential persistence remain in desktop/store.
+  Its default-off `test-support` feature exposes local fixtures only for tests.
+  Both adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
+  store, other business crates, or each other, including in development dependencies.
 * `crates/nyaterm-terminal`: terminal state machine, snapshots,
   control-sequence handling, encoding, and graphics protocols. It must remain
   independent of UI frameworks.

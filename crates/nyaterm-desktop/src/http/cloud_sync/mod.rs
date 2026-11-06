@@ -1,33 +1,16 @@
-mod aliyun;
-mod github_gist_auth;
-mod google_drive;
-mod helpers;
-mod listing;
-pub(crate) mod metrics;
-mod onedrive;
-mod opendal;
-mod s3;
-mod snippet;
-mod webdav;
+//! Compatibility facade for native cloud-storage adapters.
+pub(crate) use nyaterm_cloud_storage::auth::run_github_gist_device_flow;
+pub(crate) use nyaterm_cloud_storage::{CloudTokenSink, OpenDalDriveRemote, OpenDalRemote};
+pub use nyaterm_cloud_storage::{
+    NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote, NativeS3Remote,
+    NativeSnippetHttpClient, NativeWebdavRemote,
+};
 
-pub use aliyun::NativeAliyunDriveRemote;
-pub(crate) use github_gist_auth::run_github_gist_device_flow;
-pub use google_drive::NativeGoogleDriveRemote;
-pub use onedrive::NativeOneDriveRemote;
-#[cfg(test)]
-pub(crate) use opendal::{CloudStorageFixture, DriveFixture};
-pub(crate) use opendal::{OpenDalDriveRemote, OpenDalRemote};
-pub use s3::NativeS3Remote;
-pub use snippet::NativeSnippetHttpClient;
-pub use webdav::NativeWebdavRemote;
+pub(crate) mod metrics {
+    pub(crate) use nyaterm_cloud_storage::metrics::{begin_scope, end_scope};
+    #[cfg(test)]
+    pub(crate) use nyaterm_cloud_storage::test_support::with_test_drive_http;
+}
 
 #[cfg(test)]
-mod tests;
-
-pub(crate) type CloudTokenSink = std::sync::Arc<
-    dyn Fn(
-            nyaterm_core::cloud_sync::credentials::CloudCredentialUpdate,
-        ) -> Result<(), nyaterm_core::CloudSyncError>
-        + Send
-        + Sync,
->;
+pub(crate) use nyaterm_cloud_storage::test_support::{CloudStorageFixture, DriveFixture};

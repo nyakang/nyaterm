@@ -5,10 +5,9 @@ use nyaterm_core::cloud_sync::io::CloudObjectRead;
 use nyaterm_core::{CloudSyncError, CloudSyncRemote, OAuthDriveSyncSettings};
 
 use super::OpenDalDriveRemote;
-use crate::http::cloud_sync::CloudTokenSink;
+use crate::CloudTokenSink;
 
-pub(crate) mod fixture;
-use fixture::DriveFixture;
+use crate::test_support::DriveFixture;
 
 pub(crate) fn remote(fixture: &DriveFixture, provider: DriveProvider) -> OpenDalDriveRemote {
     configured(fixture, provider, "access", Arc::new(|_| Ok(())))
@@ -277,10 +276,8 @@ fn onedrive_final_accepted_fragment_is_not_a_completed_publication() {
 
 #[test]
 fn native_and_opendal_drive_services_read_each_others_existing_formats() {
-    use crate::http::cloud_sync::metrics::with_test_drive_http;
-    use crate::http::cloud_sync::{
-        NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote,
-    };
+    use crate::metrics::with_test_drive_http;
+    use crate::{NativeAliyunDriveRemote, NativeGoogleDriveRemote, NativeOneDriveRemote};
     for provider in PROVIDERS {
         let fixture = DriveFixture::new();
         with_test_drive_http(&fixture.server.endpoint, || {
@@ -433,7 +430,7 @@ fn drive_failed_upload_is_not_replayed_or_published_and_explicit_recovery_is_saf
 
 #[test]
 fn drive_transport_rejects_untrusted_bearer_targets_and_strips_auth_on_download_redirects() {
-    use crate::http::cloud_sync::opendal::drive_http::request;
+    use crate::opendal::drive_http::request;
     use opendal::HttpTransport;
     for provider in PROVIDERS {
         let fixture = DriveFixture::new();
@@ -490,7 +487,7 @@ fn onedrive_listing_rejects_cross_origin_next_link_before_sending_bearer() {
 
 #[test]
 fn signed_upload_on_api_origin_does_not_inherit_bearer_credentials() {
-    use crate::http::cloud_sync::opendal::tests::fixture::{Reply, Server};
+    use crate::test_support::http::{Reply, Server};
     use opendal::{Buffer, HttpTransport};
     use serde_json::json;
     let fixture = DriveFixture::new();

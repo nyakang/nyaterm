@@ -1,14 +1,5 @@
-mod adapter;
-mod async_proxy;
-mod client;
-mod error;
-mod frames;
-mod ollama_compat;
-mod request;
-mod response;
-pub use adapter::{complete_chat, stream_chat};
-pub use client::AiProviderSession;
-mod discovery;
-pub use discovery::{discover_provider_models, test_model_connection};
-#[cfg(test)]
-mod tests;
+//! Compatibility facade for the native AI provider client.
+
+pub use nyaterm_ai_client::{
+    AiProviderSession, complete_chat, discover_provider_models, stream_chat, test_model_connection,
+};

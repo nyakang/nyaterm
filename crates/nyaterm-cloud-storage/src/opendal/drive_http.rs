@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use super::error::Failure;
 use super::transport::Transport;
-use crate::http::cloud_sync::CloudTokenSink;
-use crate::http::cloud_sync::helpers::{form_urlencoded, oauth_failure, retry_after_seconds};
-use crate::http::cloud_sync::listing::{ListingProgress, name};
+use crate::CloudTokenSink;
+use crate::helpers::{form_urlencoded, oauth_failure, retry_after_seconds};
+use crate::listing::{ListingProgress, name};
 
 pub(super) const GOOGLE_FILES: &str = "https://www.googleapis.com/drive/v3/files";
 pub(super) const GRAPH: &str = "https://graph.microsoft.com/v1.0/me/drive";
@@ -523,8 +523,7 @@ impl DriveHttp {
                 text(file, "mimeType")?;
                 names.push(name(file).map_err(|_| invalid())?);
             }
-            let next = crate::http::cloud_sync::listing::next(&value, "nextPageToken")
-                .map_err(|_| invalid())?;
+            let next = crate::listing::next(&value, "nextPageToken").map_err(|_| invalid())?;
             progress
                 .observe(&names, next.as_deref())
                 .map_err(|_| invalid())?;

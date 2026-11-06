@@ -11,28 +11,7 @@ pub(crate) struct GithubGistAuthState {
     pub(crate) message: Option<String>,
 }
 
-pub(crate) enum GithubGistAuthEvent {
-    Started {
-        user_code: String,
-        verification_uri: String,
-    },
-    Polling {
-        slow_down: bool,
-    },
-    Succeeded {
-        access_token: nyaterm_core::SecretString,
-        gist_id: String,
-        login: String,
-    },
-    Failed(String),
-    Cancelled,
-}
-
-#[derive(Debug)]
-pub(crate) struct GithubGistAuthJobEvent {
-    pub(crate) job_id: u64,
-    pub(crate) event: GithubGistAuthEvent,
-}
+pub(crate) use nyaterm_cloud_storage::auth::{GithubGistAuthEvent, GithubGistAuthJobEvent};
 
 impl std::fmt::Debug for GithubGistAuthState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,37 +23,6 @@ impl std::fmt::Debug for GithubGistAuthState {
             .field("login", &self.login)
             .field("message", &self.message)
             .finish()
-    }
-}
-
-impl std::fmt::Debug for GithubGistAuthEvent {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Started {
-                user_code: _,
-                verification_uri,
-            } => formatter
-                .debug_struct("Started")
-                .field("user_code", &"<redacted>")
-                .field("verification_uri", verification_uri)
-                .finish(),
-            Self::Polling { slow_down } => formatter
-                .debug_struct("Polling")
-                .field("slow_down", slow_down)
-                .finish(),
-            Self::Succeeded {
-                access_token: _,
-                gist_id,
-                login,
-            } => formatter
-                .debug_struct("Succeeded")
-                .field("access_token", &"<redacted>")
-                .field("gist_id", gist_id)
-                .field("login", login)
-                .finish(),
-            Self::Failed(_) => formatter.write_str("Failed(<redacted>)"),
-            Self::Cancelled => formatter.write_str("Cancelled"),
-        }
     }
 }
 
@@ -557,8 +505,8 @@ pub(crate) enum QuickCommandImportPathPromptResult {
 #[cfg(test)]
 mod snapshot_password_prompt_tests {
     use super::{
-        CloudSyncSecretDraft, GithubGistAuthEvent, SnapshotPasswordPromptKind,
-        SnapshotPasswordPromptState, TranslationSecretDraft,
+        CloudSyncSecretDraft, SnapshotPasswordPromptKind, SnapshotPasswordPromptState,
+        TranslationSecretDraft,
     };
 
     #[test]
@@ -574,7 +522,7 @@ mod snapshot_password_prompt_tests {
     }
 
     #[test]
-    fn cloud_and_oauth_debug_output_redacts_secrets() {
+    fn cloud_and_translation_debug_output_redacts_secrets() {
         let secret = "nya-desktop-secret-never-log";
         let cloud = CloudSyncSecretDraft {
             github_token: secret.to_string().into(),
@@ -584,17 +532,7 @@ mod snapshot_password_prompt_tests {
             deepl_api_key: secret.to_string().into(),
             ..TranslationSecretDraft::default()
         };
-        let oauth = GithubGistAuthEvent::Succeeded {
-            access_token: secret.to_string().into(),
-            gist_id: "gist".to_string(),
-            login: "user".to_string(),
-        };
-
-        for output in [
-            format!("{cloud:?}"),
-            format!("{translation:?}"),
-            format!("{oauth:?}"),
-        ] {
+        for output in [format!("{cloud:?}"), format!("{translation:?}")] {
             assert!(!output.contains(secret));
             assert!(output.contains("redacted"));
         }

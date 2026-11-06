@@ -15,3 +15,6 @@ pub(in crate::features) use cloud_sync_provider::{
     recover_provider_snapshot, test_provider_connection,
 };
 pub(in crate::features) use state::{CloudSyncFeatureState, CloudSyncLiveState, SyncHistoryFilter};
+
+#[cfg(test)]
+mod legacy_compat_tests;

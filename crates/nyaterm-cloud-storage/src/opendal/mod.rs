@@ -32,11 +32,9 @@ enum DirectoryAdapter {
     S3(NativeS3Remote),
 }
 
-pub(crate) use drive::OpenDalDriveRemote;
-#[cfg(test)]
-pub(crate) use drive::tests::fixture::DriveFixture;
+pub use drive::OpenDalDriveRemote;
 
-pub(crate) struct OpenDalRemote {
+pub struct OpenDalRemote {
     operator: Operator,
     transport: Transport,
     stats: Arc<Mutex<CloudSyncIoStats>>,
@@ -45,7 +43,7 @@ pub(crate) struct OpenDalRemote {
 }
 
 impl OpenDalRemote {
-    pub(crate) fn webdav(
+    pub fn webdav(
         settings: &WebdavSyncSettings,
         stats: Arc<Mutex<CloudSyncIoStats>>,
     ) -> Result<Self, CloudSyncError> {
@@ -74,7 +72,7 @@ impl OpenDalRemote {
         Self::new(operator, transport, "webdav", worker, stats)
     }
 
-    pub(crate) fn s3(
+    pub fn s3(
         settings: &S3SyncSettings,
         stats: Arc<Mutex<CloudSyncIoStats>>,
     ) -> Result<Self, CloudSyncError> {
@@ -510,6 +508,3 @@ fn endpoint(value: &str, provider: &'static str) -> Result<String, CloudSyncErro
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-pub(crate) use tests::fixture::Server as CloudStorageFixture;

@@ -27,7 +27,7 @@ impl<C: Send + 'static> Worker<C> {
     ) -> Result<Self, CloudSyncError> {
         let (sender, receiver) = sync_channel::<Job<C>>(1);
         let (ready, initialized) = sync_channel(1);
-        let thread = crate::thread_owner::spawn_joinable("cloud-storage", move || {
+        let thread = crate::thread::spawn_joinable("cloud-storage", move || {
             let runtime = match Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(_) => {
@@ -110,4 +110,57 @@ impl<C> Drop for Worker<C> {
 
 fn unavailable() -> CloudSyncError {
     CloudSyncError::Remote("cloud storage worker unavailable".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{File, OpenOptions};
+    use std::sync::mpsc;
+    use std::thread::{self, ThreadId};
+
+    use super::Worker;
+
+    struct OwnedFile {
+        file: Option<File>,
+        closed: mpsc::Sender<ThreadId>,
+    }
+
+    impl Drop for OwnedFile {
+        fn drop(&mut self) {
+            drop(self.file.take());
+            self.closed.send(thread::current().id()).unwrap();
+        }
+    }
+
+    #[test]
+    fn dropping_worker_joins_its_thread_and_releases_thread_owned_file_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("worker-owned");
+        let worker_path = path.clone();
+        let (closed, receiver) = mpsc::channel();
+        let worker = Worker::with_context(move || {
+            let mut options = OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                options.share_mode(0);
+            }
+            Ok(OwnedFile {
+                file: Some(options.open(worker_path).unwrap()),
+                closed,
+            })
+        })
+        .unwrap();
+        let owner = worker.blocking(|_| Ok(thread::current().id())).unwrap();
+        assert_ne!(owner, thread::current().id());
+        #[cfg(windows)]
+        assert!(std::fs::remove_file(&path).is_err());
+
+        drop(worker);
+
+        // Drop returns only after the owner's destructor and thread have exited.
+        assert_eq!(receiver.try_recv().unwrap(), owner);
+        std::fs::remove_file(path).unwrap();
+    }
 }
