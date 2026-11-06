@@ -247,6 +247,14 @@ fn terminal_key_bytes_send_control_c_and_control_v() {
 }
 
 #[test]
+fn ctrl_insert_retains_its_terminal_control_sequence_when_encoded() {
+    assert_eq!(
+        key_bytes("insert", None, mods(false, false, true)),
+        b"\x1b[2;5~"
+    );
+}
+
+#[test]
 fn terminal_key_bytes_reserve_platform_only_shortcuts() {
     let event = key_event(
         "c",

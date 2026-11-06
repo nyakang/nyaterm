@@ -1448,8 +1448,84 @@ mod tests {
     /// Ctrl+Insert must be consumed by the terminal copy action. The canvas
     /// `on_key_down` handler is the PTY fallback, so reaching it writes
     /// `\x1b[2;5~` to the session.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn ctrl_insert_is_consumed_before_the_terminal_key_fallback() {
+        assert_terminal_shortcut_dispatch(&HashMap::new(), "ctrl-insert", TestShortcutEffect::Copy);
+    }
+
+    #[test]
+    fn local_copy_shortcuts_are_consumed_before_the_terminal_key_fallback() {
+        let chord = if cfg!(target_os = "macos") {
+            "cmd-shift-c"
+        } else {
+            "ctrl-shift-c"
+        };
+        assert_terminal_shortcut_dispatch(&HashMap::new(), chord, TestShortcutEffect::Copy);
+    }
+
+    #[test]
+    fn local_paste_shortcuts_send_only_clipboard_bytes() {
+        let chord = if cfg!(target_os = "macos") {
+            "cmd-shift-v"
+        } else {
+            "ctrl-shift-v"
+        };
+        for chord in [chord, "shift-insert"] {
+            assert_terminal_shortcut_dispatch(&HashMap::new(), chord, TestShortcutEffect::Paste);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ctrl_insert_copy_override_and_file_explorer_binding_keep_local_copy() {
+        for rename in [false, true] {
+            let mut overrides = HashMap::from([("terminal.copy".into(), "ctrl+alt+c".into())]);
+            if rename {
+                overrides.insert("fileExplorer.rename".into(), "ctrl+insert".into());
+            }
+            assert_terminal_shortcut_dispatch(&overrides, "ctrl-insert", TestShortcutEffect::Copy);
+            assert_terminal_shortcut_dispatch(&overrides, "ctrl-alt-c", TestShortcutEffect::Copy);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ctrl_insert_assigned_to_another_terminal_action_does_not_copy_or_leak() {
+        for (id, effect) in [
+            ("terminal.paste", TestShortcutEffect::Paste),
+            ("terminal.selectAll", TestShortcutEffect::SelectAll),
+        ] {
+            let overrides = HashMap::from([
+                ("terminal.copy".into(), "ctrl+shift+c".into()),
+                (id.into(), "ctrl+insert".into()),
+            ]);
+            assert_terminal_shortcut_dispatch(&overrides, "ctrl-insert", effect);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ctrl_insert_in_nested_input_preserves_input_shortcuts_without_terminal_bytes() {
+        let overrides = HashMap::from([("terminal.copy".into(), "ctrl+alt+c".into())]);
+        assert_terminal_shortcut_dispatch(&overrides, "ctrl-insert", TestShortcutEffect::InputCopy);
+    }
+
+    #[derive(Clone, Copy)]
+    enum TestShortcutEffect {
+        Copy,
+        Paste,
+        #[cfg(not(target_os = "macos"))]
+        SelectAll,
+        #[cfg(not(target_os = "macos"))]
+        InputCopy,
+    }
+
+    fn assert_terminal_shortcut_dispatch(
+        overrides: &HashMap<String, String>,
+        chord: &str,
+        effect: TestShortcutEffect,
+    ) {
         use std::io::Read;
         use std::net::TcpListener;
         use std::time::Duration;
@@ -1458,6 +1534,7 @@ mod tests {
             AppContext as _, Bounds, Entity, Point, Render, Size, TestAppContext, Window, px,
         };
         use nyaterm_transport::TelnetSessionConfig;
+        use nyaterm_ui::{NyaInput, NyaInputState};
 
         use crate::features::NyaTermApp;
         use crate::features::test_support::app_with_visible_local_session;
@@ -1466,6 +1543,7 @@ mod tests {
 
         struct TerminalKeyDispatchView {
             app: Entity<NyaTermApp>,
+            input: Option<Entity<NyaInputState>>,
         }
 
         impl Render for TerminalKeyDispatchView {
@@ -1477,6 +1555,7 @@ mod tests {
                 use gpui::prelude::*;
 
                 let app = self.app.clone();
+                let input = self.input.clone();
                 let terminal = app.update(cx, |app, cx| {
                     let focus = app.terminal.input.focus.clone();
                     gpui::div()
@@ -1489,6 +1568,14 @@ mod tests {
                                 app.handle_terminal_surface_key_down(event, window, cx);
                             },
                         ))
+                        .when_some(input, |terminal, input| {
+                            terminal.child(
+                                gpui::div()
+                                    .w(px(300.0))
+                                    .h(px(32.0))
+                                    .child(NyaInput::new(&input)),
+                            )
+                        })
                 });
                 app.update(cx, |app, cx| {
                     app.with_shortcut_action_handlers(
@@ -1506,6 +1593,7 @@ mod tests {
         let dir = TestConfigDir::new("nyaterm-terminal-ctrl-insert-dispatch");
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
+        cx.update(nyaterm_ui::init_components);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         let manager = cx.update_entity(&app, |app, _| app.session.manager_handle());
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1533,34 +1621,96 @@ mod tests {
             app.terminal
                 .seed_session_view(info.id.clone(), "root@host:~# ls\n".into(), "UTF-8");
         });
-        cx.update(|cx| rebuild_keymap(&HashMap::new(), cx));
-        let (_, vcx) = cx.add_window_view(|_, _| TerminalKeyDispatchView { app: app.clone() });
+        cx.update(|cx| rebuild_keymap(overrides, cx));
+        #[cfg(not(target_os = "macos"))]
+        let input = matches!(effect, TestShortcutEffect::InputCopy)
+            .then(|| cx.new(|cx| NyaInputState::new(cx, "search input text")));
+        #[cfg(target_os = "macos")]
+        let input: Option<Entity<NyaInputState>> = None;
+        let (_, vcx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| TerminalKeyDispatchView {
+                app: app.clone(),
+                input: input.clone(),
+            });
+            nyaterm_ui::nya_root(view, window, cx)
+        });
+        vcx.update(|window, cx| {
+            let main = window.window_handle().downcast().unwrap();
+            app.update(cx, |app, cx| {
+                app.shell.remember_main_window(main);
+                app.ensure_shortcut_interceptor(cx);
+            });
+        });
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
             let focus = app.read(cx).terminal.input.focus.clone();
             window.focus(&focus, cx);
+            if let Some(input) = input.as_ref() {
+                input.update(cx, |input, cx| {
+                    input.select_all_with_cursor_at_end(window, cx)
+                });
+            }
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste payload".into()));
         });
         vcx.run_until_parked();
-        vcx.simulate_keystrokes("ctrl-insert");
+        vcx.simulate_keystrokes(chord);
         vcx.run_until_parked();
 
+        #[cfg(not(target_os = "macos"))]
+        if matches!(effect, TestShortcutEffect::InputCopy) {
+            // NyaInput's current baseline uses Ctrl+C, not Ctrl+Insert. An
+            // unbound Ctrl+Insert must leave both clipboard and session alone.
+            assert_eq!(
+                vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                    .as_deref(),
+                Some("paste payload")
+            );
+            vcx.simulate_keystrokes("ctrl-c");
+            vcx.run_until_parked();
+        }
+
         let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert!(
-            copied.unwrap_or_default().contains("root@host"),
-            "Ctrl+Insert did not run the local copy action"
-        );
+        match effect {
+            TestShortcutEffect::Copy => assert!(
+                copied.unwrap_or_default().contains("root@host"),
+                "{chord} did not copy terminal text"
+            ),
+            TestShortcutEffect::Paste => assert_eq!(copied.as_deref(), Some("paste payload")),
+            #[cfg(not(target_os = "macos"))]
+            TestShortcutEffect::SelectAll => {
+                assert_eq!(
+                    copied.as_deref(),
+                    Some("paste payload"),
+                    "{chord} unexpectedly copied"
+                );
+                assert!(vcx.update(|_, cx| {
+                    app.read(cx)
+                        .terminal
+                        .selection
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.all_buffer)
+                }));
+            }
+            #[cfg(not(target_os = "macos"))]
+            TestShortcutEffect::InputCopy => {
+                assert_eq!(copied.as_deref(), Some("search input text"))
+            }
+        }
 
         cx.update_entity(&app, |app, _| {
             app.write_session_protocol_response(&info.id, b"CLICK")
                 .unwrap();
         });
-        let mut received = [0u8; 5];
+        let expected = if matches!(effect, TestShortcutEffect::Paste) {
+            b"paste payloadCLICK".as_slice()
+        } else {
+            b"CLICK".as_slice()
+        };
+        let mut received = vec![0u8; expected.len()];
         peer.read_exact(&mut received)
             .unwrap_or_else(|error| panic!("session received no sentinel bytes: {error}"));
-        assert_eq!(
-            &received, b"CLICK",
-            "Ctrl+Insert leaked {received:?} to the PTY"
-        );
+        assert_eq!(received, expected, "{chord} wrote unexpected session bytes");
         manager.close(&info.id).unwrap();
     }
 }
