@@ -3327,6 +3327,7 @@
     "memUsage": "記憶體佔用"
   },
   "suggestions": {
+    "acceptSelected": "接受所選",
     "legacyHistory": "舊全域歷史",
     "unsafeSuffix": "無法安全追加，請手動編輯",
     "deleteHistory": "刪除歷史命令",

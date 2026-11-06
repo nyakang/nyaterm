@@ -3320,6 +3320,7 @@
     "memUsage": "内存占用"
   },
   "suggestions": {
+    "acceptSelected": "接受所选",
     "legacyHistory": "旧全局历史",
     "unsafeSuffix": "无法安全追加，请手动编辑",
     "deleteHistory": "删除历史命令",

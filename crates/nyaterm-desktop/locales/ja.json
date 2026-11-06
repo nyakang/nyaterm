@@ -3327,6 +3327,7 @@
     "memUsage": "メモリ使用率"
   },
   "suggestions": {
+    "acceptSelected": "選択候補を確定",
     "legacyHistory": "以前のグローバル履歴",
     "unsafeSuffix": "安全に追記できません。手動で編集してください",
     "deleteHistory": "履歴コマンドを削除",

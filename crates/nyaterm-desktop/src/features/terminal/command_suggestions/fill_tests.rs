@@ -3,7 +3,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext as _, Context, Entity, KeyDownEvent, KeyUpEvent, TestAppContext};
+use gpui::{
+    AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
+    TestAppContext, Window,
+};
 use nyaterm_core::terminal::editing::EditPhase;
 use nyaterm_transport::{SessionManager, TelnetSessionConfig};
 
@@ -22,6 +25,16 @@ struct Fixture {
     id: String,
     _cleanup: TestAppCleanup,
     _dir: TestConfigDir,
+}
+
+struct PopupView(Entity<NyaTermApp>);
+
+impl Render for PopupView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.0.update(cx, |app, cx| {
+            app.command_suggestions_overlay(cx).into_any_element()
+        })
+    }
 }
 
 impl Fixture {
@@ -527,23 +540,149 @@ fn search_results_cannot_reuse_a_pattern_after_its_input_version_changes() {
 
 #[test]
 fn no_selection_preserves_normal_enter_and_tab_handling() {
-    let mut f = Fixture::new();
-    f.suggest("display ver", "display version");
-    f.update(|app, cx, _| {
-        app.terminal
-            .assist
-            .command_suggestions
-            .as_mut()
-            .unwrap()
-            .selected_index = None;
-        assert_eq!(
-            app.submit_selected_command_suggestion(true, cx),
-            SuggestionSubmitResult::NotHandled
-        );
-        assert!(!app.handle_command_suggestion_key(&key("enter"), cx));
-        assert!(!app.handle_command_suggestion_key(&key("tab"), cx));
-    });
-    f.assert_quiet();
+    for mode in [
+        nyaterm_core::completion::types::CompletionMode::Token,
+        nyaterm_core::completion::types::CompletionMode::History,
+    ] {
+        let mut f = Fixture::new();
+        f.suggest("display ver", "display version");
+        f.update(|app, cx, id| {
+            let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+            popup.mode = mode;
+            popup.selected_index = None;
+            let version = app.terminal.editing.state().unwrap().model.version;
+            for name in ["enter", "tab"] {
+                app.terminal
+                    .view
+                    .views
+                    .get_mut(id)
+                    .unwrap()
+                    .pressed_keys
+                    .insert(name.into());
+                assert_eq!(
+                    app.submit_selected_command_suggestion(name == "enter", cx),
+                    SuggestionSubmitResult::NotHandled,
+                );
+                let press = key(name);
+                assert!(!app.handle_command_suggestion_key(&press, cx));
+                let mut repeat = press;
+                repeat.is_held = true;
+                assert!(!app.handle_command_suggestion_key(&repeat, cx));
+                assert!(
+                    app.terminal
+                        .view
+                        .views
+                        .get(id)
+                        .unwrap()
+                        .pressed_keys
+                        .contains(name)
+                );
+            }
+            assert_eq!(app.terminal.editing.state().unwrap().model.version, version);
+            assert!(
+                app.terminal
+                    .editing
+                    .state()
+                    .unwrap()
+                    .suggestion_fill
+                    .is_none()
+            );
+        });
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
+    for kitty in [false, true] {
+        for name in ["enter", "tab"] {
+            let mut f = Fixture::new();
+            f.suggest("dock", "docker");
+            let expected = f.update(|app, cx, id| {
+                let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+                popup.mode = nyaterm_core::completion::types::CompletionMode::Token;
+                popup.selected_index = None;
+                app.terminal
+                    .view
+                    .views
+                    .get_mut(id)
+                    .unwrap()
+                    .protocol_state
+                    .kitty_keyboard_report_all_keys_as_esc = kitty;
+                let press = key(name);
+                assert!(!app.handle_command_suggestion_key(&press, cx));
+                let expected = app
+                    .terminal_key_bytes_for_event_for_session(Some(id), &press)
+                    .unwrap();
+                assert!(app.send_terminal_key_event(&press, true, cx));
+                assert!(
+                    app.terminal
+                        .view
+                        .views
+                        .get(id)
+                        .unwrap()
+                        .pressed_keys
+                        .contains(name)
+                );
+                assert!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .suggestion_fill
+                        .is_none()
+                );
+                if name == "enter" {
+                    assert_eq!(app.session.command_history_for(id).unwrap(), ["dock"]);
+                } else {
+                    assert!(app.session.command_history_for(id).is_none());
+                }
+                expected
+            });
+            f.receive(&expected);
+            f.assert_quiet();
+        }
+    }
+}
+
+#[test]
+fn typing_and_backspace_clear_selection_before_the_debounced_refresh() {
+    for (input, expected) in [(b"x".as_slice(), "dockx"), (b"\x7f".as_slice(), "doc")] {
+        let mut f = Fixture::new();
+        f.suggest("dock", "docker");
+        f.update(|app, cx, _| {
+            app.terminal
+                .assist
+                .command_suggestions
+                .as_mut()
+                .unwrap()
+                .mode = nyaterm_core::completion::types::CompletionMode::Token;
+            app.note_shell_editing_input(input, cx);
+            app.note_command_suggestion_input(input, cx);
+            assert_eq!(
+                app.terminal.editing.state().unwrap().model.input.value,
+                expected
+            );
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestion_refresh_task
+                    .is_some()
+            );
+            assert_eq!(
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_ref()
+                    .unwrap()
+                    .selected_index,
+                None
+            );
+            assert!(!app.handle_command_suggestion_key(&key("enter"), cx));
+            assert!(!app.handle_command_suggestion_key(&key("tab"), cx));
+        });
+        f.assert_quiet();
+    }
 }
 
 #[test]
@@ -637,7 +776,7 @@ fn token_enter_fills_without_requesting_execution() {
             .command_suggestions
             .as_mut()
             .unwrap()
-            .selected_index = None;
+            .selected_index = Some(0);
         assert!(app.handle_command_suggestion_key(&key("enter"), cx));
         assert!(
             !app.terminal
@@ -654,6 +793,37 @@ fn token_enter_fills_without_requesting_execution() {
     });
     fixture.receive(b"er");
     fixture.assert_quiet();
+}
+
+#[test]
+fn clicking_a_token_description_accepts_that_candidate_without_execution() {
+    let mut f = Fixture::new();
+    f.suggest("dock", "docker");
+    let position = f.update(|app, _, id| {
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        popup.mode = nyaterm_core::completion::types::CompletionMode::Token;
+        popup.selected_index = None;
+        popup.items[0].display = "docker".into();
+        popup.items[0].description = "A self-sufficient runtime for containers".into();
+        let placement = app
+            .suggestion_overlay_position_for_session(Some(id), 0, 0, 380., 76.)
+            .unwrap();
+        gpui::point(
+            gpui::px(placement.x + 350.),
+            gpui::px(placement.y + super::SUGGESTION_OVERLAY_HEADER_HEIGHT + 14.),
+        )
+    });
+    let app = f.app.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app));
+    cx.simulate_click(position, gpui::Modifiers::default());
+    f.update(|app, _, _| {
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        let state = app.terminal.editing.state().unwrap();
+        assert_eq!(state.model.input.value, "docker");
+        assert!(!state.suggestion_fill.as_ref().unwrap().execute_requested);
+    });
+    f.receive(b"er");
+    f.assert_quiet();
 }
 
 #[test]

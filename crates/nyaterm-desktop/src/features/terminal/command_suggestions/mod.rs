@@ -277,6 +277,14 @@ impl NyaTermApp {
             finish!("empty_text", 0);
         }
 
+        // Typing invalidates an explicit choice before the debounced search can
+        // publish its replacement. Enter/Tab must not accept the old selection.
+        if let Some(popup) = self.terminal.assist.command_suggestions.as_mut()
+            && popup.selected_index.take().is_some()
+        {
+            cx.notify();
+        }
+
         if self.terminal.assist.command_suggestions_suppressed {
             let hide_started_at = Instant::now();
             self.terminal.assist.command_suggestion_search_gen = self
@@ -712,7 +720,7 @@ impl NyaTermApp {
                 .into_iter()
                 .map(|item| completion_suggestion_item(item, &pattern, mode))
                 .collect(),
-            selected_index: (mode == CompletionMode::Token).then_some(0),
+            selected_index: None,
             cursor_row,
             cursor_col,
         };
@@ -877,13 +885,8 @@ impl NyaTermApp {
             return false;
         }
         let session_id = state.session_id.clone();
-        let accepting = command_suggestion_item_for_selection(
-            &state.items,
-            state
-                .selected_index
-                .or_else(|| (state.mode == CompletionMode::Token).then_some(0)),
-        )
-        .is_some()
+        let accepting = command_suggestion_item_for_selection(&state.items, state.selected_index)
+            .is_some()
             && matches!(event.keystroke.key.as_str(), "tab" | "enter")
             && !event.keystroke.modifiers.modified();
         if self.session.active_id() != Some(session_id.as_str())
@@ -994,12 +997,8 @@ impl NyaTermApp {
             return SuggestionSubmitResult::NotHandled;
         };
         let execute_requested = execute_requested && popup.mode == CompletionMode::History;
-        let Some(item) = command_suggestion_item_for_selection(
-            &popup.items,
-            popup
-                .selected_index
-                .or_else(|| (popup.mode == CompletionMode::Token).then_some(0)),
-        ) else {
+        let Some(item) = command_suggestion_item_for_selection(&popup.items, popup.selected_index)
+        else {
             return SuggestionSubmitResult::NotHandled;
         };
         if !item.fillable {
@@ -1168,7 +1167,7 @@ impl NyaTermApp {
         let footer = format!(
             "↑↓ {} · Tab / Enter {} · Esc {}",
             t!("suggestions.select"),
-            t!("suggestions.fill"),
+            t!("suggestions.acceptSelected"),
             t!("suggestions.dismiss")
         );
         let Some(placement) = self.suggestion_overlay_position_for_session(
@@ -1208,6 +1207,7 @@ impl NyaTermApp {
             let full_command = item.command.clone();
             let is_history = matches!(item.source.as_str(), "history" | "legacyHistory");
             let description = item.description.clone();
+            let show_description = state.mode == CompletionMode::Token && !description.is_empty();
             let fillable = item.fillable;
             let delete_command = item.command.clone();
             let mut row = div()
@@ -1254,6 +1254,7 @@ impl NyaTermApp {
                     div()
                         .min_w_0()
                         .flex_1()
+                        .when(show_description, |this| this.min_w(px(140.)))
                         .font_family(crate::features::shell::gpui_code_font_family())
                         .flex()
                         .items_center()
@@ -1265,6 +1266,23 @@ impl NyaTermApp {
                             selected,
                         )),
                 );
+            if show_description {
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "command-suggestion-description-{index}"
+                        )))
+                        .min_w_0()
+                        .max_w(px(180.))
+                        .flex_initial()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_right()
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(description.clone()),
+                );
+            }
             if show_full_command || !description.is_empty() || !fillable {
                 row = row.tooltip(move |window, cx| {
                     let label = if !fillable {
@@ -1881,6 +1899,67 @@ mod tests {
             app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
             assert!(app.apply_selected_command_suggestion(true, cx));
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+    }
+
+    #[test]
+    fn published_candidates_require_explicit_selection_even_for_a_single_match() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-explicit-selection");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.note_shell_editing_input(b"docker r", cx);
+            for mode in [
+                nyaterm_core::completion::types::CompletionMode::Token,
+                nyaterm_core::completion::types::CompletionMode::History,
+            ] {
+                for count in [1, 3] {
+                    let request_id = app.terminal.assist.command_suggestion_search_gen;
+                    let mut result = history_search_fixture(
+                        "docker run",
+                        "docker r",
+                        app.commands.completion_runtime().revision(),
+                    );
+                    result
+                        .candidates
+                        .resize(count, result.candidates[0].clone());
+                    for _ in 0..2 {
+                        let request = app
+                            .prepare_command_suggestion_search(request_id, mode, cx)
+                            .unwrap();
+                        app.publish_command_suggestion_search(
+                            request,
+                            nyaterm_core::completion::types::CompletionResult {
+                                candidates: result.candidates.clone(),
+                                revision: result.revision,
+                            },
+                            Duration::ZERO,
+                            cx,
+                        );
+                        let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+                        assert_eq!(popup.items.len(), count);
+                        assert_eq!(popup.selected_index, None);
+                        let mut down = escape_key_event();
+                        down.keystroke.key = "down".into();
+                        assert!(app.handle_command_suggestion_key(&down, cx));
+                        assert_eq!(
+                            app.terminal
+                                .assist
+                                .command_suggestions
+                                .as_ref()
+                                .unwrap()
+                                .selected_index,
+                            Some(0),
+                        );
+                    }
+                }
+            }
         });
     }
 

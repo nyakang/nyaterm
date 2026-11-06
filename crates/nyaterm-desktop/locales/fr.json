@@ -3327,6 +3327,7 @@
     "memUsage": "Utilisation de la mémoire"
   },
   "suggestions": {
+    "acceptSelected": "accepter la sélection",
     "legacyHistory": "Ancien historique global",
     "unsafeSuffix": "Ajout sûr impossible ; modifiez manuellement",
     "deleteHistory": "Supprimer la commande de l'historique",

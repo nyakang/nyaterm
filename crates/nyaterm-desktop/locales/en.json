@@ -3320,6 +3320,7 @@
     "memUsage": "Memory Usage"
   },
   "suggestions": {
+    "acceptSelected": "accept selected",
     "legacyHistory": "Legacy global history",
     "unsafeSuffix": "Cannot safely append; edit manually",
     "deleteHistory": "Delete history command",
