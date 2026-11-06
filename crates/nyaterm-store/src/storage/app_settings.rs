@@ -915,11 +915,6 @@ impl ConnectionStore {
         );
         set_nested_json_value(
             &mut value,
-            &["ui", "highlight_line_roles"],
-            serde_json::Value::Bool(settings.ui_highlight_line_roles),
-        );
-        set_nested_json_value(
-            &mut value,
             &["ui", "file_explorer_favorite_dirs_by_connection_id"],
             string_vec_map_json_value(
                 &settings.ui_file_explorer_favorite_dirs_by_connection_id,
@@ -1152,6 +1147,16 @@ impl ConnectionStore {
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
         read_window_appearance(&value)?;
+        // Preserve a newer representation when the safe default is unchanged.
+        let unsupported_line_roles =
+            json_path(&value, &["ui", "highlight_line_roles"]).is_some_and(|raw| !raw.is_boolean());
+        if !unsupported_line_roles || !settings.ui_highlight_line_roles {
+            set_nested_json_value(
+                &mut value,
+                &["ui", "highlight_line_roles"],
+                serde_json::Value::Bool(settings.ui_highlight_line_roles),
+            );
+        }
         set_nested_json_string(
             &mut value,
             &["appearance", "window_decorations"],
