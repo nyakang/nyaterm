@@ -21,6 +21,7 @@ pub(crate) enum TransferJobKind {
     InitialDirectory,
     ListDir {
         remote_path: String,
+        /// Entry identity to reveal after navigation; legacy display paths are also accepted.
         select_after: Option<String>,
     },
     ListChildren {

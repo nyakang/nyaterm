@@ -1,9 +1,13 @@
 use super::{normalized_transfer_browser_path, remote_file_name, remote_parent_path};
 use crate::features::NyaTermApp;
+use crate::features::transfers::browser_paths::remote_ancestor_selection;
 use crate::models::{TransferBrowserNavigationSnapshot, TransferBrowserSessionCacheState};
 use gpui::{Context, Window};
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::VecDeque;
+
+#[cfg(test)]
+mod tests;
 
 impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn toggle_transfer_browser_view_mode(
@@ -193,11 +197,24 @@ impl NyaTermApp {
 
     fn open_transfer_browser_directory_with_history_and_rollback(
         &mut self,
-        path: RemoteFilePath,
+        mut path: RemoteFilePath,
         record_history: bool,
         rollback: TransferBrowserNavigationSnapshot,
         cx: &mut Context<Self>,
     ) {
+        let select_after = if self.session.active_file_browser_backend()
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
+        {
+            remote_ancestor_selection(
+                RemoteFilePath {
+                    display_path: rollback.browser_path.clone(),
+                    raw_path_token: rollback.browser_raw_path_token.clone(),
+                },
+                &mut path,
+            )
+        } else {
+            None
+        };
         self.forget_text_inputs("transfer.browser.path");
         let display_path = path.display_path.clone();
         self.transfer.set_remote_path(display_path.clone());
@@ -207,7 +224,7 @@ impl NyaTermApp {
         } else {
             self.record_transfer_browser_visited_history(display_path);
         }
-        self.start_sftp_list_job(None, rollback, cx);
+        self.start_sftp_list_job(select_after, rollback, cx);
     }
 
     pub(in crate::features) fn open_transfer_browser_history(
@@ -462,6 +479,17 @@ impl NyaTermApp {
             self.transfer
                 .set_browser_status("remote parent directory is unavailable");
             cx.notify();
+            return;
+        }
+        if self.session.active_file_browser_backend()
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
+        {
+            self.open_transfer_browser_directory_with_history_and_rollback(
+                parent_identity,
+                true,
+                rollback,
+                cx,
+            );
             return;
         }
         self.transfer.set_remote_path(parent.clone());

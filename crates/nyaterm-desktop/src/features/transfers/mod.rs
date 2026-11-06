@@ -1,5 +1,6 @@
 //! Transfer jobs, transfer options, path prompts and transfer widgets.
 
+pub(in crate::features) mod browser_paths;
 pub(in crate::features) mod clipboard_copy;
 mod cwd_sync;
 mod delete_runtime;

@@ -663,16 +663,29 @@ impl NyaTermApp {
                     .retain(|identity| {
                         entries.iter().any(|entry| entry.matches_identity(identity))
                     });
-                if let Some(select_after) = select_after
-                    && entries.iter().any(|entry| entry.path == select_after)
-                {
-                    self.transfer.browser.selected_remote_path = Some(select_after.clone());
-                    self.transfer.browser.selected_remote_paths.clear();
-                    self.transfer
-                        .browser
-                        .selected_remote_paths
-                        .insert(select_after.clone());
-                    remote_path_to_set = Some(select_after);
+                if let Some(select_after) = select_after {
+                    let remote_browser = job_session_id.as_deref().is_some_and(|session_id| {
+                        self.session
+                            .file_browser_backend_support_for_session(session_id)
+                            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
+                    });
+                    if remote_browser {
+                        // Inactive listings update the session cache, whose scroll/selection
+                        // are not retained. Never mutate the active session's scroll handle.
+                        if inactive_browser_snapshot.is_none() {
+                            remote_path_to_set =
+                                self.transfer.restore_browser_navigation_selection(
+                                    &select_after,
+                                    self.settings.summary().ui_file_explorer_show_hidden_files,
+                                );
+                        } else {
+                            self.transfer
+                                .restore_browser_ancestor_path_token(&event_id, &select_after);
+                        }
+                    } else if entries.iter().any(|entry| entry.path == select_after) {
+                        self.transfer.select_browser_entry(select_after.clone());
+                        remote_path_to_set = Some(select_after);
+                    }
                 }
                 job.entries = entries;
                 job.summary = None;
