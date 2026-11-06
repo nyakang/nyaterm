@@ -315,13 +315,9 @@ impl AiPanel {
         reasoning_only: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = snapshot.chrome.palette;
         div()
             .w_full()
             .min_w_0()
-            .pl_2()
-            .border_l_2()
-            .border_color(rgb(palette.border))
             .child(self.ai_message_bubble_inner(snapshot, message, true, reasoning_only, false, cx))
             .into_any_element()
     }
@@ -564,9 +560,13 @@ impl AiPanel {
             body = body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
         }
         if is_user {
+            // The transcript already leaves 8px under every row. A user bubble
+            // needs a little more air so it separates from the turns around it.
             return div()
                 .w_full()
                 .min_w_0()
+                .pt(px(6.))
+                .pb(px(6.))
                 .flex()
                 .justify_end()
                 .child(body)
@@ -1089,9 +1089,6 @@ impl AiPanel {
                 })
                 .min_w_0()
                 .w_full()
-                .border_l_2()
-                .border_color(rgb(palette.border))
-                .pl_2()
                 .py_1()
                 .font_family(gpui_code_font_family())
                 .when(long_command && !script_open, |body| {

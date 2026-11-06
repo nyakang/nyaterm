@@ -46,14 +46,6 @@ use components::ai_setup_step;
 use layout::AiPanelLayout;
 use transcript::{AiTranscriptRow, AiTranscriptUpdate};
 
-/// How the panel's owning terminal is reachable, shown beside its name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::features) enum AiTerminalContextState {
-    Connected,
-    Disconnected,
-    Local,
-}
-
 #[derive(Clone, Copy)]
 pub(in crate::features) struct AiPanelChrome {
     pub palette: ThemePalette,
@@ -147,8 +139,6 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub history_running_ids: Arc<[String]>,
     pub current_ai_session_id: String,
     pub owner_terminal_id: Option<String>,
-    pub owner_terminal_label: Option<String>,
-    pub owner_terminal_state: AiTerminalContextState,
     pub owner_connection_id: Option<String>,
     pub last_agent_kind: AiAgentKind,
     pub history_pending: bool,
@@ -406,7 +396,6 @@ impl AiPanel {
                     })
                 });
             })
-            .child(self.ai_context_bar(&snapshot, cx))
             .when_some(snapshot.detected_error.clone(), |this, detected| {
                 this.child(self.ai_detected_error_banner(&snapshot, detected, cx))
             })

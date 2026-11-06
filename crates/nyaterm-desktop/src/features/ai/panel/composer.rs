@@ -1,10 +1,9 @@
-//! Prompt box, run status, and the mode, agent, model and execution controls.
+//! Prompt box, and the mode, agent, model and execution controls.
 
 use gpui::{
     AnyElement, Context, IntoElement, MouseButton, deferred, div, prelude::*, px, rgb, svg,
 };
 use nyaterm_core::{AgentCommandExecutionMode, AiAgentKind, AiMode};
-use nyaterm_ui::chat::running_indicator;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem,
     NyaSearchInput,
@@ -13,7 +12,6 @@ use rust_i18n::t;
 
 use super::components::{agent_kind_display_name, ai_send_button, execution_mode_label};
 use super::{AiPanel, AiPanelSnapshot, ai_agent_status_badge};
-use crate::features::ai::presentation::AiResponsePhase;
 use crate::features::view_widgets::APP_OVERLAY_PRIORITY;
 
 const CONTROL_HEIGHT: f32 = 28.;
@@ -114,11 +112,11 @@ impl AiPanel {
             .flex()
             .flex_col()
             .gap_2()
-            .when(snapshot.running, |this| {
-                this.child(self.ai_run_status_strip(snapshot, cx))
-            })
             .when_some(snapshot.quoted_text.clone(), |this, quoted_text| {
                 this.child(self.ai_quote_bar(palette, quoted_text, cx))
+            })
+            .when(!snapshot.target_sessions.is_empty(), |this| {
+                this.child(self.ai_extra_targets(snapshot, cx))
             })
             .child(
                 div()
@@ -154,75 +152,6 @@ impl AiPanel {
                         .with_priority(APP_OVERLAY_PRIORITY),
                 )
             })
-            .into_any_element()
-    }
-
-    /// The live run in one line, with a Stop that does not depend on finding
-    /// the send button's icon state.
-    fn ai_run_status_strip(
-        &self,
-        snapshot: &AiPanelSnapshot,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let palette = snapshot.chrome.palette;
-        let phase = match snapshot.response_phase {
-            AiResponsePhase::Waiting => t!("ai.runStatus.waiting"),
-            AiResponsePhase::Thinking => t!("ai.thinking"),
-            AiResponsePhase::ToolArguments => t!("ai.commandPreparing"),
-            AiResponsePhase::Responding => t!("ai.runStatus.responding"),
-            AiResponsePhase::Ended => t!("ai.runStatus.working"),
-        };
-        let label = match self.live_activity_progress(snapshot) {
-            Some((completed, total)) if total > 0 => format!(
-                "{phase} · {}",
-                t!("ai.activity.progress", completed = completed, total = total)
-            ),
-            _ => phase.to_string(),
-        };
-        div()
-            .debug_selector(|| "ai-run-status".to_string())
-            .w_full()
-            .min_w_0()
-            .h(px(30.))
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.hover))
-            .child(running_indicator(
-                "ai-run-status-spinner",
-                rgb(palette.link),
-            ))
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .text_size(px(11.))
-                    .text_ellipsis()
-                    .text_color(rgb(palette.text))
-                    .child(label),
-            )
-            .child(
-                div().debug_selector(|| "ai-run-stop".to_string()).child(
-                    NyaButton::new("ai-run-stop", t!("ai.stop"))
-                        .small()
-                        .compact()
-                        .height(px(22.))
-                        .icon("icons/ai/stop.svg")
-                        .variant(NyaButtonVariant::Danger)
-                        .tooltip(t!("ai.cancelTask"))
-                        .on_click(cx.listener(|panel, _, window, cx| {
-                            panel.with_app(cx, |app, cx| {
-                                app.cancel_ai_chat(cx);
-                                app.focus_text_input_if_present("ai.chat.prompt", window, cx);
-                            });
-                        })),
-                ),
-            )
             .into_any_element()
     }
 
