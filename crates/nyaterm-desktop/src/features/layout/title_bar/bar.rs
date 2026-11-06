@@ -118,6 +118,11 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let macos = cfg!(target_os = "macos");
         let chrome = WindowChrome::main(window);
+        let linux_server = cfg!(target_os = "linux")
+            && matches!(
+                window.window_decorations(),
+                gpui::Decorations::Server
+            );
         let compact_layout = !cfg!(target_os = "macos");
         let narrow_left = compact_layout && self.shell.viewport_size().0 < 1024.;
         let narrow_right = compact_layout && self.shell.viewport_size().0 < 768.;
@@ -151,7 +156,7 @@ impl NyaTermApp {
                             on_event,
                         )
                     })
-                    .when(!macos, |this| {
+                    .when(!macos && !linux_server, |this| {
                         this.child(
                             div()
                                 .flex()
