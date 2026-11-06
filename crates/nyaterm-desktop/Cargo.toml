@@ -56,7 +56,8 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support", "profiler"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
 nyaterm-core = { workspace = true, features = ["test-support"] }
 redb.workspace = true
 

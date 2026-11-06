@@ -3296,3 +3296,6 @@ mod tests;
 
 #[cfg(test)]
 mod wheel_zoom_tests;
+
+#[cfg(test)]
+mod native_probe;
