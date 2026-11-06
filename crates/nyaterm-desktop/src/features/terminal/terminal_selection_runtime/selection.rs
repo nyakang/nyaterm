@@ -27,6 +27,7 @@ const TERMINAL_SELECTION_AUTOSCROLL_DELAY: Duration = Duration::from_millis(24);
 const TERMINAL_SELECTED_OCCURRENCE_DEBOUNCE: Duration = Duration::from_millis(100);
 const TERMINAL_SELECTED_OCCURRENCE_LIMIT: usize = 2000;
 const TERMINAL_SELECTED_OCCURRENCE_MAX_CHARS: usize = 256;
+const TERMINAL_SELECTION_IMMEDIATE_CELL_LIMIT: usize = 4096;
 
 impl NyaTermApp {
     pub(in crate::features) fn clear_terminal_selection_state_for_session(
@@ -102,7 +103,11 @@ impl NyaTermApp {
     pub(in crate::features) fn select_all_terminal(&mut self, cx: &mut Context<Self>) {
         let (_, cols) = self.active_terminal_grid_size();
         self.terminal.selection.click_anchor = None;
-        self.terminal.selection.text.invalidate();
+        if cols > 0 && self.terminal.selection.session_id.as_deref() == self.session.active_id() {
+            self.terminal.selection.text.invalidate_preserving_copy();
+        } else {
+            self.terminal.selection.text.invalidate();
+        }
         self.terminal.selection.source_history = None;
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
@@ -163,6 +168,20 @@ impl NyaTermApp {
         terminal_selected_text_from_screen(*selection, &self.terminal.view.screen)
     }
 
+    fn terminal_selection_endpoint_in_current_history(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+        geometry: &TerminalHitTestGeometry,
+        session_id: Option<&str>,
+    ) -> Option<TerminalSelectionEndpoint> {
+        let endpoint = Self::terminal_selection_endpoint_for_visual_geometry(position, geometry)?;
+        let current = session_id
+            .and_then(|id| self.terminal.view.views.get(id))
+            .map(|view| view.history_state())
+            .unwrap_or(geometry.snapshot.history);
+        endpoint.after_eviction(current.changes_since(geometry.snapshot.history)?.evicted)
+    }
+
     pub(in crate::features) fn start_terminal_selection_for_session(
         &mut self,
         session_id: Option<&str>,
@@ -194,6 +213,9 @@ impl NyaTermApp {
         else {
             return;
         };
+        if let Some(id) = selection_session_id.as_deref() {
+            self.reanchor_terminal_selection_for_session(id, cx);
+        }
         let previous_selection_session_id = self.terminal.selection.session_id.clone();
         if (self.terminal.selection.selection.is_some()
             || self.terminal.selection.click_anchor.is_some())
@@ -216,9 +238,11 @@ impl NyaTermApp {
         // including while a double/triple-click selection is being formed.
         self.clear_terminal_selected_occurrence(cx);
         let cell = terminal_cell_for_visual_geometry(event.position, &geometry);
-        let Some(endpoint) =
-            Self::terminal_selection_endpoint_for_visual_geometry(event.position, &geometry)
-        else {
+        let Some(endpoint) = self.terminal_selection_endpoint_in_current_history(
+            event.position,
+            &geometry,
+            selection_session_id.as_deref(),
+        ) else {
             return;
         };
         // Applications with mouse tracking (vim/less/tmux) consume left presses.
@@ -256,9 +280,15 @@ impl NyaTermApp {
             }
         }
         let cols = geometry.cols;
-        self.terminal.selection.text.invalidate();
+        self.terminal.selection.text.invalidate_preserving_copy();
         if !event.modifiers.shift || self.terminal.selection.source_history.is_none() {
-            self.terminal.selection.source_history = Some(geometry.snapshot.history);
+            self.terminal.selection.source_history = Some(
+                selection_session_id
+                    .as_deref()
+                    .and_then(|id| self.terminal.view.views.get(id))
+                    .map(|view| view.history_state())
+                    .unwrap_or(geometry.snapshot.history),
+            );
         }
         self.begin_smart_input_selection();
         let click_anchor = self.terminal.selection.click_anchor.take();
@@ -275,7 +305,7 @@ impl NyaTermApp {
         {
             selection.all_buffer = false;
             selection.head = endpoint;
-            self.terminal.selection.text.invalidate();
+            self.terminal.selection.text.invalidate_preserving_copy();
             if self.terminal.selection.session_id.is_none() {
                 self.terminal.selection.session_id = selection_session_id;
             }
@@ -294,7 +324,12 @@ impl NyaTermApp {
                 None
             };
             let logical_line = geometry.unwrapped.as_ref().and_then(|_| {
-                terminal_logical_selection_at_pointer(event.position, &geometry, None)
+                let selection =
+                    terminal_logical_selection_at_pointer(event.position, &geometry, None)?;
+                selection.reanchored_history(
+                    geometry.snapshot.history,
+                    self.terminal.selection.source_history?,
+                )
             });
             self.terminal.selection.selection = editable.or(logical_line).or_else(|| {
                 Some(TerminalSelection::from_range(
@@ -319,7 +354,10 @@ impl NyaTermApp {
                 Some(&self.settings.summary().interaction_word_separators),
             )
         {
-            self.terminal.selection.selection = Some(selection);
+            self.terminal.selection.selection =
+                self.terminal.selection.source_history.and_then(|history| {
+                    selection.reanchored_history(geometry.snapshot.history, history)
+                });
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
             self.notify_terminal_selection_owner_surface(cx);
@@ -449,6 +487,9 @@ impl NyaTermApp {
             .or(self.session.active_id())
             .filter(|session_id| !session_id.is_empty())
             .map(str::to_string);
+        if let Some(id) = selection_session_id.as_deref() {
+            self.reanchor_terminal_selection_for_session(id, cx);
+        }
         let Some(geometry) =
             self.terminal_hit_test_geometry_for_session(selection_session_id.as_deref(), cx)
         else {
@@ -464,20 +505,31 @@ impl NyaTermApp {
             );
         }
         if let Some(session_id) = selection_session_id.as_deref()
-            && geometry.display_offset != self.terminal_display_offset_for_session(Some(session_id))
+            && self
+                .terminal
+                .view
+                .views
+                .get(session_id)
+                .map_or(geometry.display_offset, |view| {
+                    view.history_state()
+                        .reanchor_offset(geometry.snapshot.history, geometry.display_offset)
+                })
+                != self.terminal_display_offset_for_session(Some(session_id))
         {
             return;
         }
-        let Some(endpoint) =
-            Self::terminal_selection_endpoint_for_visual_geometry(event.position, &geometry)
-        else {
+        let Some(endpoint) = self.terminal_selection_endpoint_in_current_history(
+            event.position,
+            &geometry,
+            selection_session_id.as_deref(),
+        ) else {
             return;
         };
         if let Some(selection) = self.terminal.selection.selection.as_mut()
             && selection.head != endpoint
         {
             selection.head = endpoint;
-            self.terminal.selection.text.invalidate();
+            self.terminal.selection.text.invalidate_preserving_copy();
             if self.terminal.selection.session_id.is_none() {
                 self.terminal.selection.session_id = selection_session_id;
             }
@@ -502,6 +554,9 @@ impl NyaTermApp {
         if self.finish_terminal_mouse_report(event, cx) {
             self.clear_terminal_selection(cx);
             return;
+        }
+        if let Some(id) = self.terminal.selection.session_id.clone() {
+            self.reanchor_terminal_selection_for_session(&id, cx);
         }
         if !self.terminal.selection.dragging {
             if self
@@ -536,11 +591,19 @@ impl NyaTermApp {
             .filter(|session_id| !session_id.is_empty());
         if let Some(geometry) =
             self.terminal_hit_test_geometry_for_session(selection_session_id, cx)
-            && geometry.display_offset
+            && selection_session_id
+                .and_then(|id| self.terminal.view.views.get(id))
+                .map_or(geometry.display_offset, |view| {
+                    view.history_state()
+                        .reanchor_offset(geometry.snapshot.history, geometry.display_offset)
+                })
                 == self.terminal_display_offset_for_session(selection_session_id)
         {
-            let endpoint =
-                Self::terminal_selection_endpoint_for_visual_geometry(event.position, &geometry);
+            let endpoint = self.terminal_selection_endpoint_in_current_history(
+                event.position,
+                &geometry,
+                selection_session_id,
+            );
             if let Some(selection) = self.terminal.selection.selection.as_mut()
                 && let Some(endpoint) = endpoint
             {
@@ -844,20 +907,33 @@ impl NyaTermApp {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.reanchor_terminal_selection_for_session(session_id, cx);
         let Some(geometry) = self.terminal_hit_test_geometry_for_session(Some(session_id), cx)
         else {
             return false;
         };
-        if self.terminal_display_offset_for_session(Some(session_id)) != geometry.display_offset {
+        if self.terminal_display_offset_for_session(Some(session_id))
+            != self
+                .terminal
+                .view
+                .views
+                .get(session_id)
+                .map_or(geometry.display_offset, |view| {
+                    view.history_state()
+                        .reanchor_offset(geometry.snapshot.history, geometry.display_offset)
+                })
+        {
             return false;
         }
-        if let Some(endpoint) =
-            Self::terminal_selection_endpoint_for_visual_geometry(position, &geometry)
-            && let Some(selection) = self.terminal.selection.selection.as_mut()
+        if let Some(endpoint) = self.terminal_selection_endpoint_in_current_history(
+            position,
+            &geometry,
+            Some(session_id),
+        ) && let Some(selection) = self.terminal.selection.selection.as_mut()
             && selection.head != endpoint
         {
             selection.head = endpoint;
-            self.terminal.selection.text.invalidate();
+            self.terminal.selection.text.invalidate_preserving_copy();
             self.queue_terminal_selection_drag_visual_notify(cx);
         }
         true
@@ -949,7 +1025,7 @@ impl NyaTermApp {
         );
         if line != selection.head.position.line {
             selection.head.position.line = line;
-            self.terminal.selection.text.invalidate();
+            self.terminal.selection.text.invalidate_preserving_copy();
             self.queue_terminal_selection_drag_visual_notify(cx);
         }
     }
@@ -1096,6 +1172,13 @@ fn terminal_selected_text_for_view(
     {
         let (absolute_start, _) = terminal_snapshot_absolute_range(snapshot);
         let (start, end) = selection.cell_range(snapshot.cols)?;
+        // A logical line may span many physical rows. Bound extraction before
+        // touching cells; larger selections are read on the frame worker.
+        if end.line.saturating_sub(start.line).saturating_add(1)
+            > TERMINAL_SELECTION_IMMEDIATE_CELL_LIMIT / snapshot.cols.max(1)
+        {
+            return None;
+        }
         let mut text = String::new();
         let mut first_line = true;
         for line in start.line..=end.line {
@@ -1127,6 +1210,15 @@ fn terminal_selected_text_from_screen(
     selection: TerminalSelection,
     screen: &TerminalScreen,
 ) -> Option<String> {
+    let rows = if selection.all_buffer {
+        screen.scrollback_len().saturating_add(screen.rows())
+    } else {
+        let (start, end) = selection.cell_range(screen.cols())?;
+        end.line.saturating_sub(start.line).saturating_add(1)
+    };
+    if rows > TERMINAL_SELECTION_IMMEDIATE_CELL_LIMIT / screen.cols().max(1) {
+        return None;
+    }
     screen.text_for_selection(selection).ok().flatten()
 }
 
@@ -1275,6 +1367,65 @@ mod tests {
         terminal_selection_line_after_scroll, terminal_snapshot_covering_selection,
         terminal_text_cell_is_word, terminal_word_bounds_for_visual_geometry,
     };
+
+    #[test]
+    fn mouse_endpoint_from_a_painted_history_frame_follows_eviction() {
+        let dir = TestConfigDir::new("nyaterm-history-mouse-endpoint");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, _| {
+            let mut screen = TerminalScreen::new(16, 3);
+            screen.set_scrollback_limit(8);
+            screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+            let snapshot = Arc::new(screen.viewport_snapshot(5));
+            let geometry = TerminalHitTestGeometry {
+                bounds: gpui::bounds(gpui::point(px(0.), px(0.)), gpui::size(px(128.), px(54.))),
+                snapshot: snapshot.clone(),
+                cell_w: 8.,
+                cell_h: 18.,
+                padding_left: 0.,
+                padding_top: 0.,
+                gutter: 0.,
+                rows: 3,
+                cols: 16,
+                display_offset: 5,
+                viewport_anchor_row: 0,
+                snapshot_rows: 3,
+                viewport_rows: 3,
+                visual_y_offset: 0.,
+                unwrapped: None,
+            };
+            let pointer = gpui::point(px(9.), px(9.));
+            let old =
+                NyaTermApp::terminal_selection_endpoint_for_visual_geometry(pointer, &geometry)
+                    .unwrap();
+            screen.advance(b"11\r\n12\r\n");
+            app.terminal
+                .view
+                .views
+                .get_mut("s1")
+                .unwrap()
+                .frame_snapshot = Some(Arc::new(screen.viewport_snapshot(0)));
+            let current = app
+                .terminal_selection_endpoint_in_current_history(pointer, &geometry, Some("s1"))
+                .unwrap();
+            assert_eq!(current.position.line, old.position.line - 2);
+            assert_eq!(current.position.col, old.position.col);
+            assert_eq!(current.side, old.side);
+            screen.advance(b"13\r\n14\r\n");
+            app.terminal
+                .view
+                .views
+                .get_mut("s1")
+                .unwrap()
+                .frame_snapshot = Some(Arc::new(screen.viewport_snapshot(0)));
+            assert!(
+                app.terminal_selection_endpoint_in_current_history(pointer, &geometry, Some("s1"))
+                    .is_none()
+            );
+        });
+    }
 
     #[test]
     fn horizontal_hit_testing_selects_and_copies_words_across_soft_wraps() {

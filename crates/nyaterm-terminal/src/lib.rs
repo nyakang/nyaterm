@@ -257,7 +257,25 @@ pub struct TerminalHistoryState {
     pub viewport_rows: usize,
 }
 
+/// A continuous history observation; retained absolute rows move by `evicted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalHistoryChange {
+    pub scrolled: usize,
+    pub grown: usize,
+    pub evicted: usize,
+}
+
 impl TerminalHistoryState {
+    pub fn changes_since(self, previous: Self) -> Option<TerminalHistoryChange> {
+        let scrolled = self.scrolled_since(previous)?;
+        let grown = self.scrollback_len.checked_sub(previous.scrollback_len)?;
+        Some(TerminalHistoryChange {
+            scrolled,
+            grown,
+            evicted: scrolled.checked_sub(grown)?,
+        })
+    }
+
     /// None denotes reset, reflow, screen switch, or a backwards observation.
     pub fn scrolled_since(self, previous: Self) -> Option<usize> {
         if self.epoch != previous.epoch
@@ -347,6 +365,52 @@ pub struct TerminalSnapshot {
 }
 
 impl TerminalSnapshot {
+    /// The immutable, still-retained physical rows of a historical frame.
+    /// This metadata-only range lets callers recover part of a late prefetch
+    /// without copying cells or treating an old logical index as current.
+    pub fn retained_history_row_range(
+        &self,
+        history: TerminalHistoryState,
+    ) -> Option<std::ops::Range<usize>> {
+        let change = history.changes_since(self.history)?;
+        if self.logical_lines.is_some() {
+            return None;
+        }
+        let end = self.total_rows.checked_sub(self.display_offset)?;
+        let start = end.checked_sub(self.row_count())?;
+        let retained_start = start.max(change.evicted);
+        let retained_end = end.min(self.history.scrollback_len);
+        (retained_start < retained_end)
+            .then_some(retained_start - start..retained_end.saturating_sub(start))
+    }
+
+    /// Rebase a retained physical window without copying rows or their cells.
+    /// Logical indexes belong to their source history and must be rebuilt by
+    /// the worker. Output also forbids reusing mutable live rows.
+    pub fn reanchored_history(&self, history: TerminalHistoryState) -> Option<Self> {
+        let change = history.changes_since(self.history)?;
+        if history == self.history {
+            return Some(self.clone());
+        }
+        // Native selection text is tied to its source viewport and may be large.
+        if self.logical_lines.is_some() || self.selection.is_some() {
+            return None;
+        }
+        let end = self.total_rows.checked_sub(self.display_offset)?;
+        let start = end.checked_sub(self.row_count())?;
+        if start < change.evicted || (change.scrolled > 0 && end > self.history.scrollback_len) {
+            return None;
+        }
+        let mut snapshot = self.clone();
+        snapshot.history = history;
+        snapshot.scrollback_len = history.scrollback_len;
+        // Prefetched windows include newer rows in their synthetic total. Keep
+        // that displacement so row_data retains the same absolute window.
+        snapshot.total_rows = self.total_rows.checked_add(change.grown)?;
+        snapshot.display_offset = self.display_offset.checked_add(change.scrolled)?;
+        Some(snapshot)
+    }
+
     /// Presentation-only displacement; protocol and selection coordinates stay intact.
     pub fn leading_cleared_rows(&self, viewport_anchor_row: usize) -> usize {
         let count = self

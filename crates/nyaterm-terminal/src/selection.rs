@@ -1,6 +1,6 @@
 //! UI-independent absolute-buffer selection boundaries.
 
-use crate::{RenderCell, TerminalSnapshot};
+use crate::{RenderCell, TerminalHistoryState, TerminalSnapshot};
 
 mod text;
 
@@ -34,6 +34,16 @@ pub struct TerminalSelectionEndpoint {
 }
 
 impl TerminalSelectionEndpoint {
+    pub fn after_eviction(self, evicted: usize) -> Option<Self> {
+        Some(Self {
+            position: TerminalBufferCellPos {
+                line: self.position.line.checked_sub(evicted)?,
+                col: self.position.col,
+            },
+            side: self.side,
+        })
+    }
+
     pub fn new(position: TerminalBufferCellPos, side: TerminalCellSide) -> Self {
         Self { position, side }
     }
@@ -62,6 +72,31 @@ pub struct TerminalSelection {
 }
 
 impl TerminalSelection {
+    /// Preserve endpoint direction and sides, clipping only actually lost rows.
+    pub fn after_eviction(self, evicted: usize) -> Option<Self> {
+        if self.all_buffer || evicted == 0 {
+            return Some(self);
+        }
+        let first = TerminalSelectionEndpoint::new(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalCellSide::Left,
+        );
+        let selection = Self {
+            anchor: self.anchor.after_eviction(evicted).unwrap_or(first),
+            head: self.head.after_eviction(evicted).unwrap_or(first),
+            all_buffer: false,
+        };
+        (!selection.is_empty()).then_some(selection)
+    }
+
+    pub fn reanchored_history(
+        self,
+        previous: TerminalHistoryState,
+        current: TerminalHistoryState,
+    ) -> Option<Self> {
+        self.after_eviction(current.changes_since(previous)?.evicted)
+    }
+
     pub fn with_anchor(anchor: impl Into<TerminalSelectionEndpoint>) -> Self {
         let anchor = anchor.into();
         Self {
@@ -241,6 +276,62 @@ mod tests {
         TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
         expand_selection_range, selected_row_text,
     };
+
+    #[test]
+    fn eviction_preserves_selected_wide_glyphs_and_soft_wrapped_text() {
+        let mut screen = TerminalScreen::new(8, 3);
+        screen.set_scrollback_limit(8);
+        screen.advance("宽字符abc\r\n".repeat(12).as_bytes());
+        let history = screen.history_state();
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(3, 0),
+            TerminalBufferCellPos::new(5, 5),
+        );
+        let text = screen.text_for_selection(selection).unwrap();
+        screen.advance(b"next\r\n");
+        let rebased = selection
+            .reanchored_history(history, screen.history_state())
+            .unwrap();
+        assert_eq!(screen.text_for_selection(rebased).unwrap(), text);
+    }
+
+    #[test]
+    fn eviction_clips_only_lost_cells_and_preserves_selection_direction() {
+        for (anchor, head) in [
+            (
+                TerminalBufferCellPos::new(1, 2),
+                TerminalBufferCellPos::new(5, 3),
+            ),
+            (
+                TerminalBufferCellPos::new(5, 3),
+                TerminalBufferCellPos::new(1, 2),
+            ),
+        ] {
+            let selection = TerminalSelection::from_range(anchor, head);
+            let clipped = selection.after_eviction(3).unwrap();
+            assert_eq!(
+                clipped.ordered(),
+                (
+                    TerminalBufferCellPos::new(0, 0),
+                    TerminalBufferCellPos::new(2, 3)
+                )
+            );
+            assert_eq!(
+                clipped.anchor.position.line > clipped.head.position.line,
+                anchor.line > head.line
+            );
+            assert_eq!(clipped.cols_for_absolute_line(0), Some((0, usize::MAX)));
+            assert!(selection.after_eviction(6).is_none());
+        }
+        let boundary = TerminalSelection {
+            anchor: TerminalSelectionEndpoint::from(TerminalBufferCellPos::new(1, 0)),
+            head: TerminalSelectionEndpoint::from(TerminalBufferCellPos::new(3, 0)),
+            all_buffer: false,
+        };
+        assert!(boundary.after_eviction(3).is_none());
+        let all = TerminalSelection::all_buffer(16);
+        assert_eq!(all.after_eviction(100), Some(all));
+    }
 
     #[test]
     fn half_cell_boundaries_select_identically_in_both_directions() {

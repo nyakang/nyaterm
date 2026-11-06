@@ -900,45 +900,32 @@ impl TerminalViewState {
         )
     }
 
-    fn clone_snapshot_with_scrollback_delta(
-        snapshot: &Arc<TerminalSnapshot>,
-        delta: usize,
-        history: nyaterm_terminal::TerminalHistoryState,
-    ) -> Arc<TerminalSnapshot> {
-        let mut snapshot = (**snapshot).clone();
-        snapshot.history = history;
-        snapshot.scrollback_len = snapshot.scrollback_len.saturating_add(delta);
-        snapshot.total_rows = snapshot.total_rows.saturating_add(delta);
-        snapshot.display_offset = snapshot.display_offset.saturating_add(delta);
-        Arc::new(snapshot)
-    }
-
-    fn rekey_scrollback_query_caches_for_growth(&mut self, delta: usize) {
-        if delta == 0 {
-            return;
-        }
-        let history = self.history_state();
+    fn rekey_scrollback_query_caches_after_output(
+        &mut self,
+        current: nyaterm_terminal::TerminalHistoryState,
+    ) {
+        let mut links = std::mem::take(&mut self.scrollback_action_links);
         self.scrollback_snapshots = self
             .scrollback_snapshots
             .drain()
-            // A logical frame indexes the whole retained buffer. Its row Arcs
-            // remain valid, but its rank/select mapping cannot be reanchored by
-            // adding a physical delta. Request a fresh worker frame instead.
-            .filter(|(_, snapshot)| snapshot.logical_lines.is_none())
-            .map(|(offset, snapshot)| {
-                (
-                    offset.saturating_add(delta),
-                    Self::clone_snapshot_with_scrollback_delta(&snapshot, delta, history),
-                )
+            .filter_map(|(offset, snapshot)| {
+                let change = current.changes_since(snapshot.history)?;
+                let rebased = snapshot.reanchored_history(current)?;
+                let next_offset = current.reanchor_offset(snapshot.history, offset);
+                if let Some(mut decorations) = links.remove(&offset)
+                    && let (Some(start), Some(end)) = (
+                        decorations.absolute_start_row.checked_sub(change.evicted),
+                        decorations.absolute_end_row.checked_sub(change.evicted),
+                    )
+                {
+                    decorations.absolute_start_row = start;
+                    decorations.absolute_end_row = end;
+                    self.scrollback_action_links
+                        .insert(next_offset, decorations);
+                }
+                Some((next_offset, Arc::new(rebased)))
             })
             .collect();
-        self.scrollback_action_links = self
-            .scrollback_action_links
-            .drain()
-            .map(|(offset, links)| (offset.saturating_add(delta), links))
-            .collect();
-        // In-flight worker requests carry the old literal offset. Once output
-        // grows scrollback, the anchored target needs a new offset request.
         self.pending_snapshot_offsets.clear();
         self.priority_pending_snapshot_offsets.clear();
     }
@@ -949,12 +936,14 @@ impl TerminalViewState {
     ) {
         let current = self.history_state();
         let scrolled = current.scrolled_since(previous);
-        if !current.preserves_coordinates_from(previous) {
+        if current.changes_since(previous).is_none() {
             self.clear_scrollback_query_caches();
-        } else if self.scroll_offset > 0 {
-            self.rekey_scrollback_query_caches_for_growth(scrolled.unwrap_or(0));
         } else if scrolled.is_some_and(|rows| rows > 0) {
-            self.clear_scrollback_query_caches();
+            if self.scroll_offset > 0 {
+                self.rekey_scrollback_query_caches_after_output(current);
+            } else {
+                self.clear_scrollback_query_caches();
+            }
         }
         self.scroll_offset = current.reanchor_offset(previous, self.scroll_offset);
         if self.scroll_offset > 0 && scrolled.is_some_and(|rows| rows > 0) {
@@ -1787,6 +1776,7 @@ impl TerminalFramePipeline {
         let _ = self.command_tx.send_many(commands);
     }
 
+    #[cfg(test)]
     pub(crate) fn request_snapshot(
         &self,
         session_id: impl Into<String>,
@@ -1796,7 +1786,10 @@ impl TerminalFramePipeline {
     ) {
         self.request_snapshot_with_priority(
             session_id,
-            offset,
+            TerminalFrameScrollTarget {
+                offset,
+                history: None,
+            },
             action_links_enabled,
             action_link_matchers,
             false,
@@ -1811,7 +1804,10 @@ impl TerminalFramePipeline {
     ) {
         self.request_snapshot_with_priority(
             session_id,
-            0,
+            TerminalFrameScrollTarget {
+                offset: 0,
+                history: None,
+            },
             true,
             action_link_matchers,
             false,
@@ -1819,6 +1815,7 @@ impl TerminalFramePipeline {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn request_priority_snapshot(
         &self,
         session_id: impl Into<String>,
@@ -1830,7 +1827,10 @@ impl TerminalFramePipeline {
             .arm_wake(TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT);
         self.request_snapshot_with_priority(
             session_id,
-            offset,
+            TerminalFrameScrollTarget {
+                offset,
+                history: None,
+            },
             action_links_enabled,
             action_link_matchers,
             true,
@@ -1838,18 +1838,49 @@ impl TerminalFramePipeline {
         );
     }
 
+    pub(crate) fn request_anchored_snapshot(
+        &self,
+        session_id: String,
+        offset: usize,
+        history: nyaterm_terminal::TerminalHistoryState,
+        action_links_enabled: bool,
+        matchers: ActionLinksMatcherSettings,
+        priority: bool,
+    ) {
+        if priority {
+            self.event_queue
+                .arm_wake(TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT);
+        }
+        self.request_snapshot_with_priority(
+            session_id,
+            TerminalFrameScrollTarget {
+                offset,
+                history: Some(history),
+            },
+            action_links_enabled,
+            matchers,
+            priority,
+            TerminalFrameSnapshotPurpose::Paint,
+        );
+    }
+
     fn request_snapshot_with_priority(
         &self,
         session_id: impl Into<String>,
-        offset: usize,
+        target: TerminalFrameScrollTarget,
         action_links_enabled: bool,
         action_link_matchers: ActionLinksMatcherSettings,
         priority: bool,
         purpose: TerminalFrameSnapshotPurpose,
     ) {
+        let TerminalFrameScrollTarget {
+            offset,
+            history: source_history,
+        } = target;
         let _ = self.command_tx.send(TerminalFrameCommand::RequestSnapshot {
             session_id: session_id.into(),
             offset,
+            source_history,
             action_links_enabled,
             action_link_matchers,
             priority,
@@ -1866,12 +1897,24 @@ impl TerminalFramePipeline {
         response_rx
     }
 
-    pub(crate) fn request_selection_text(
+    #[cfg(test)]
+    pub(crate) async fn request_selection_text(
         &self,
         session_id: String,
         selection: TerminalSelection,
         history: nyaterm_terminal::TerminalHistoryState,
-    ) -> oneshot::Receiver<Result<Option<String>, TerminalSelectionTextError>> {
+    ) -> Result<Result<Option<String>, TerminalSelectionTextError>, oneshot::Canceled> {
+        self.request_selection_text_frame(session_id, selection, history)
+            .await
+            .map(|result| result.map(|frame| frame.text))
+    }
+
+    pub(crate) fn request_selection_text_frame(
+        &self,
+        session_id: String,
+        selection: TerminalSelection,
+        history: nyaterm_terminal::TerminalHistoryState,
+    ) -> oneshot::Receiver<Result<TerminalSelectionTextResult, TerminalSelectionTextError>> {
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self
             .command_tx
@@ -2014,6 +2057,12 @@ impl Default for TerminalFramePipeline {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TerminalFrameScrollTarget {
+    offset: usize,
+    history: Option<nyaterm_terminal::TerminalHistoryState>,
+}
+
 #[derive(Debug)]
 enum TerminalFrameCommand {
     SetLogicalLineSnapshots {
@@ -2095,6 +2144,7 @@ enum TerminalFrameCommand {
     RequestSnapshot {
         session_id: String,
         offset: usize,
+        source_history: Option<nyaterm_terminal::TerminalHistoryState>,
         action_links_enabled: bool,
         action_link_matchers: ActionLinksMatcherSettings,
         priority: bool,
@@ -2107,7 +2157,8 @@ enum TerminalFrameCommand {
     RequestSelectionText {
         session_id: String,
         request: Box<TerminalSelectionTextRequest>,
-        response_tx: oneshot::Sender<Result<Option<String>, TerminalSelectionTextError>>,
+        response_tx:
+            oneshot::Sender<Result<TerminalSelectionTextResult, TerminalSelectionTextError>>,
     },
     RequestSearch {
         session_id: String,
@@ -2125,6 +2176,12 @@ enum TerminalFrameCommand {
     Fence {
         complete_tx: std::sync::mpsc::SyncSender<()>,
     },
+}
+
+pub(crate) struct TerminalSelectionTextResult {
+    pub(crate) text: Option<String>,
+    pub(crate) selection: TerminalSelection,
+    pub(crate) history: nyaterm_terminal::TerminalHistoryState,
 }
 
 #[derive(Debug)]
@@ -3517,6 +3574,7 @@ fn push_terminal_frame_command(
         TerminalFrameCommand::RequestSnapshot {
             session_id,
             offset,
+            source_history,
             action_links_enabled,
             action_link_matchers,
             priority: true,
@@ -3555,6 +3613,7 @@ fn push_terminal_frame_command(
                 TerminalFrameCommand::RequestSnapshot {
                     session_id,
                     offset,
+                    source_history,
                     action_links_enabled,
                     action_link_matchers,
                     priority: true,
@@ -3586,6 +3645,7 @@ fn compact_stale_terminal_frame_commands(commands: &mut VecDeque<TerminalFrameCo
     }
     let mut seen_snapshots: HashSet<(String, usize)> = HashSet::new();
     let mut seen_priority_snapshots: HashSet<String> = HashSet::new();
+    let mut seen_anchored_history_snapshots: HashSet<String> = HashSet::new();
     let mut seen_searches: HashSet<(String, u8)> = HashSet::new();
     let mut kept_snapshot_priority = false;
     let mut compacted = VecDeque::with_capacity(commands.len());
@@ -3594,6 +3654,7 @@ fn compact_stale_terminal_frame_commands(commands: &mut VecDeque<TerminalFrameCo
         if terminal_frame_command_is_fence(&command) {
             seen_snapshots.clear();
             seen_priority_snapshots.clear();
+            seen_anchored_history_snapshots.clear();
             seen_searches.clear();
             kept_snapshot_priority = false;
             compacted.push_front(command);
@@ -3605,6 +3666,12 @@ fn compact_stale_terminal_frame_commands(commands: &mut VecDeque<TerminalFrameCo
                 priority: true,
                 ..
             } => seen_priority_snapshots.insert(session_id.clone()),
+            TerminalFrameCommand::RequestSnapshot {
+                session_id,
+                offset,
+                source_history: Some(_),
+                ..
+            } if *offset > 0 => seen_anchored_history_snapshots.insert(session_id.clone()),
             TerminalFrameCommand::RequestSnapshot {
                 session_id, offset, ..
             } => seen_snapshots.insert((session_id.clone(), *offset)),
@@ -4079,12 +4146,30 @@ fn run_terminal_frame_processor(
             TerminalFrameCommand::RequestSnapshot {
                 session_id,
                 offset,
+                source_history,
                 action_links_enabled,
                 action_link_matchers,
                 priority,
                 purpose,
             } => {
                 if let Some(session) = sessions.get_mut(&session_id) {
+                    if offset > 0
+                        && source_history.is_some_and(|history| {
+                            session
+                                .screen
+                                .history_state()
+                                .changes_since(history)
+                                .is_none()
+                        })
+                    {
+                        continue;
+                    }
+                    let offset = source_history.map_or(offset, |history| {
+                        session
+                            .screen
+                            .history_state()
+                            .reanchor_offset(history, offset)
+                    });
                     let event = session.snapshot_event(
                         session_id,
                         offset,
@@ -4134,18 +4219,26 @@ fn run_terminal_frame_processor(
                         .get(&session_id)
                         .ok_or(TerminalSelectionTextError::MissingSession)
                         .and_then(|session| {
-                            if !selection.all_buffer
-                                && !session
-                                    .screen
-                                    .history_state()
-                                    .preserves_coordinates_from(history)
-                            {
-                                return Err(TerminalSelectionTextError::StaleHistory);
-                            }
-                            session
+                            let current = session.screen.history_state();
+                            let selection = if selection.all_buffer {
+                                selection
+                            } else {
+                                current
+                                    .changes_since(history)
+                                    .ok_or(TerminalSelectionTextError::StaleHistory)?;
+                                selection
+                                    .reanchored_history(history, current)
+                                    .ok_or(TerminalSelectionTextError::InvalidRange)?
+                            };
+                            let text = session
                                 .screen
                                 .text_for_selection(selection)
-                                .map_err(|_| TerminalSelectionTextError::InvalidRange)
+                                .map_err(|_| TerminalSelectionTextError::InvalidRange)?;
+                            Ok(TerminalSelectionTextResult {
+                                text,
+                                selection,
+                                history: current,
+                            })
                         });
                     let _ = response_tx.send(text);
                 }

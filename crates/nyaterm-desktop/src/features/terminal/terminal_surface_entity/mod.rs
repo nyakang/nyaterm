@@ -334,6 +334,20 @@ pub(in crate::features) fn terminal_surface_paint_count() -> u64 {
     TERMINAL_SURFACE_PAINT_COUNT.load(Ordering::Relaxed)
 }
 
+/// Estimate once when retaining a row; eviction never scans its cells.
+#[derive(Clone)]
+struct TerminalRetainedRow {
+    row: Arc<nyaterm_terminal::TerminalSnapshotRow>,
+    estimated_bytes: usize,
+}
+
+impl std::ops::Deref for TerminalRetainedRow {
+    type Target = Arc<nyaterm_terminal::TerminalSnapshotRow>;
+    fn deref(&self) -> &Self::Target {
+        &self.row
+    }
+}
+
 /// Per-session GPUI entity that owns terminal grid paint state.
 ///
 /// Output frames notify this entity only; chrome (tabs/sidebars/status) stays
@@ -345,7 +359,8 @@ pub(in crate::features) struct TerminalSurface {
     snapshot: Option<Arc<TerminalSnapshot>>,
     retained_snapshots: Vec<Arc<TerminalSnapshot>>,
     history: nyaterm_terminal::TerminalHistoryState,
-    retained_rows: BTreeMap<usize, Arc<nyaterm_terminal::TerminalSnapshotRow>>,
+    retained_row_origin: usize,
+    retained_rows: BTreeMap<usize, TerminalRetainedRow>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
@@ -361,6 +376,7 @@ pub(in crate::features) struct TerminalSurface {
     keyword_highlighter: Option<Arc<TerminalKeywordHighlighter>>,
     decorations: Arc<[TerminalLineDecorations]>,
     selection_visual: Option<TerminalSelection>,
+    selection_visual_history: nyaterm_terminal::TerminalHistoryState,
     palette: ThemePalette,
     font_family: String,
     font_fallbacks: Option<FontFallbacks>,
@@ -432,6 +448,7 @@ impl TerminalSurface {
             snapshot: None,
             retained_snapshots: Vec::new(),
             history: Default::default(),
+            retained_row_origin: 0,
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
@@ -448,6 +465,7 @@ impl TerminalSurface {
             keyword_highlighter: None,
             decorations: Arc::from(Vec::<TerminalLineDecorations>::new()),
             selection_visual: None,
+            selection_visual_history: Default::default(),
             palette: crate::theme::theme_palette("github-dark"),
             font_family: "monospace".to_string(),
             font_fallbacks: None,
@@ -576,6 +594,13 @@ impl TerminalSurface {
         true
     }
 
+    fn snapshot_has_current_coordinates(&self, snapshot: &TerminalSnapshot) -> bool {
+        self.history == snapshot.history
+            || (self.history.preserves_coordinates_from(snapshot.history)
+                && snapshot.total_rows.saturating_sub(snapshot.display_offset)
+                    <= snapshot.history.scrollback_len)
+    }
+
     pub(in crate::features) fn snapshot_covering_display_offset(
         &self,
         display_offset: usize,
@@ -585,24 +610,26 @@ impl TerminalSurface {
         self.snapshot
             .as_ref()
             .filter(|snapshot| {
-                terminal_snapshot_covers_display_offset(
-                    snapshot,
-                    display_offset,
-                    viewport_rows,
-                    scrollback_len,
-                )
+                self.snapshot_has_current_coordinates(snapshot)
+                    && terminal_snapshot_covers_display_offset(
+                        snapshot,
+                        display_offset,
+                        viewport_rows,
+                        scrollback_len,
+                    )
             })
             .cloned()
             .or_else(|| {
                 self.retained_snapshots
                     .iter()
                     .filter(|snapshot| {
-                        terminal_snapshot_covers_display_offset(
-                            snapshot,
-                            display_offset,
-                            viewport_rows,
-                            scrollback_len,
-                        )
+                        self.snapshot_has_current_coordinates(snapshot)
+                            && terminal_snapshot_covers_display_offset(
+                                snapshot,
+                                display_offset,
+                                viewport_rows,
+                                scrollback_len,
+                            )
                     })
                     .min_by_key(|snapshot| snapshot.display_offset.abs_diff(display_offset))
                     .cloned()
@@ -625,24 +652,26 @@ impl TerminalSurface {
         self.snapshot
             .as_ref()
             .filter(|snapshot| {
-                terminal_snapshot_covers_display_offset(
-                    snapshot,
-                    display_offset,
-                    viewport_rows,
-                    scrollback_len,
-                )
+                self.snapshot_has_current_coordinates(snapshot)
+                    && terminal_snapshot_covers_display_offset(
+                        snapshot,
+                        display_offset,
+                        viewport_rows,
+                        scrollback_len,
+                    )
             })
             .cloned()
             .or_else(|| {
                 self.retained_snapshots
                     .iter()
                     .filter(|snapshot| {
-                        terminal_snapshot_covers_display_offset(
-                            snapshot,
-                            display_offset,
-                            viewport_rows,
-                            scrollback_len,
-                        )
+                        self.snapshot_has_current_coordinates(snapshot)
+                            && terminal_snapshot_covers_display_offset(
+                                snapshot,
+                                display_offset,
+                                viewport_rows,
+                                scrollback_len,
+                            )
                     })
                     .min_by_key(|snapshot| snapshot.display_offset.abs_diff(display_offset))
                     .cloned()
@@ -683,10 +712,15 @@ impl TerminalSurface {
         &mut self,
         snapshot: Arc<TerminalSnapshot>,
     ) -> bool {
+        let snapshot = if self.history.cols > 0 && snapshot.history != self.history {
+            let Some(rebased) = snapshot.reanchored_history(self.history) else {
+                return false;
+            };
+            Arc::new(rebased)
+        } else {
+            snapshot
+        };
         if snapshot.row_count() == 0
-            || (self.history.cols > 0
-                && !snapshot.history.preserves_coordinates_from(self.history)
-                && !self.history.preserves_coordinates_from(snapshot.history))
             || self.snapshot.as_ref().is_some_and(|current| {
                 current.cols != snapshot.cols
                     || current.viewport_rows != snapshot.viewport_rows
@@ -709,6 +743,28 @@ impl TerminalSurface {
 
     pub(in crate::features) fn set_app(&mut self, app: Entity<NyaTermApp>) {
         self.app = Some(app.downgrade());
+    }
+
+    pub(in crate::features) fn retain_surviving_prefetched_rows(
+        &mut self,
+        snapshot: &TerminalSnapshot,
+    ) -> bool {
+        let Some(range) = snapshot.retained_history_row_range(self.history) else {
+            return false;
+        };
+        let Some(change) = self.history.changes_since(snapshot.history) else {
+            return false;
+        };
+        let Some((start, _)) = terminal_snapshot_absolute_window(snapshot) else {
+            return false;
+        };
+        let start = start + range.start - change.evicted;
+        self.remember_retained_rows_with_limits(
+            &snapshot.rows()[range],
+            start.saturating_add(self.retained_row_origin),
+            TERMINAL_SURFACE_RETAINED_ROW_LIMIT,
+            TERMINAL_SURFACE_RETAINED_ROW_BYTE_LIMIT,
+        ) > 0
     }
 
     pub(in crate::features) fn apply_frame_snapshot(
@@ -740,6 +796,7 @@ impl TerminalSurface {
         } = scroll.clone();
         let desired_show_cursor = show_cursor
             && !terminal_visual_scroll_active_for_state(scroll_offset, scroll_residual_lines);
+        self.advance_history(history);
         let retained_rows_should_reset = self.retained_rows_should_reset(
             snapshot.as_ref(),
             history,
@@ -847,6 +904,129 @@ impl TerminalSurface {
         Some(state)
     }
 
+    /// Rebase the small snapshot catalog and lazily translate retained row keys.
+    /// The last paint remains intact if its window/index needs a worker refresh.
+    pub(in crate::features) fn advance_history(
+        &mut self,
+        history: nyaterm_terminal::TerminalHistoryState,
+    ) {
+        if history == self.history {
+            return;
+        }
+        if self.history.cols == 0 {
+            self.history = history;
+            self.selection_visual_history = history;
+            return;
+        }
+        let Some(change) = history.changes_since(self.history) else {
+            self.clear_retained_scroll_state();
+            self.snapshot = None;
+            self.history = history;
+            return;
+        };
+        if change.evicted > 0
+            && !self.visual_scroll_active()
+            && !self.has_pending_local_scroll_sync()
+        {
+            // Following live output does not need a growing history-row cache.
+            // Keep paint/selection while dropping query state without rescanning cells.
+            self.retained_snapshots.clear();
+            self.retained_rows.clear();
+            self.retained_row_origin = 0;
+            self.retained_row_estimated_bytes = 0;
+            self.pending_scroll_snapshot_offsets.clear();
+        } else if change.scrolled > 0 {
+            let Some(origin) = self.retained_row_origin.checked_add(change.evicted) else {
+                self.clear_retained_scroll_state();
+                self.history = history;
+                return;
+            };
+            // Old live rows are mutable and cannot be promoted into immutable history.
+            let live_start = self
+                .retained_row_origin
+                .saturating_add(self.history.scrollback_len);
+            let live = self.retained_rows.split_off(&live_start);
+            for row in live.values() {
+                self.retained_row_estimated_bytes = self
+                    .retained_row_estimated_bytes
+                    .saturating_sub(row.estimated_bytes);
+            }
+            self.retained_row_origin = origin;
+            while self
+                .retained_rows
+                .first_key_value()
+                .is_some_and(|(key, _)| *key < origin)
+            {
+                if let Some((_, row)) = self.retained_rows.pop_first() {
+                    self.retained_row_estimated_bytes = self
+                        .retained_row_estimated_bytes
+                        .saturating_sub(row.estimated_bytes);
+                }
+            }
+            self.retained_snapshots = self
+                .retained_snapshots
+                .drain(..)
+                .filter_map(|snapshot| snapshot.reanchored_history(history).map(Arc::new))
+                .collect();
+            if let Some(snapshot) = self.snapshot.as_ref()
+                && let Some(rebased) = snapshot.reanchored_history(history)
+            {
+                self.display_offset =
+                    history.reanchor_offset(snapshot.history, self.display_offset);
+                self.snapshot = Some(Arc::new(rebased));
+            }
+            self.pending_scroll_snapshot_offsets.clear();
+        }
+        if let Some(change) = history.changes_since(self.selection_visual_history) {
+            self.selection_visual = self
+                .selection_visual
+                .and_then(|selection| selection.after_eviction(change.evicted));
+            self.selection_visual_history = history;
+        }
+        self.history = history;
+    }
+
+    pub(in crate::features) fn apply_retained_logical_frame(
+        &mut self,
+        snapshot: Arc<TerminalSnapshot>,
+        state: &TerminalScrollVisualState,
+    ) -> bool {
+        let Some(change) = state.history.changes_since(snapshot.history) else {
+            return false;
+        };
+        let Some(offset) = state.display_offset.checked_sub(change.scrolled) else {
+            return false;
+        };
+        let Some(index) = snapshot.logical_lines.as_ref() else {
+            return false;
+        };
+        let top = index
+            .logical_row(snapshot.history.scrollback_len.saturating_sub(offset))
+            .min(index.logical_rows().saturating_sub(state.viewport_rows));
+        let start = index.physical_row(top);
+        let end = index.physical_row((top + state.viewport_rows).min(index.logical_rows()));
+        if start < change.evicted
+            || end > snapshot.history.scrollback_len
+            || !terminal_snapshot_covers_display_offset(
+                &snapshot,
+                offset,
+                state.viewport_rows,
+                snapshot.scrollback_len,
+            )
+        {
+            return false;
+        }
+        self.update_scroll_chrome_without_snapshot(state);
+        // Keep the complete source index and source offset together. It is paint
+        // state only: current-history lookups still request a fresh worker index.
+        self.snapshot = Some(snapshot);
+        self.display_offset = offset;
+        self.show_cursor = false;
+        self.set_scroll_snapshot_pending(true);
+        self.revision = self.revision.saturating_add(1);
+        true
+    }
+
     fn retained_rows_should_reset(
         &self,
         snapshot: &TerminalSnapshot,
@@ -855,7 +1035,7 @@ impl TerminalSurface {
         viewport_rows: usize,
     ) -> bool {
         let viewport_rows = viewport_rows.max(1);
-        if self.history.cols > 0 && !history.preserves_coordinates_from(self.history) {
+        if self.history.cols > 0 && history.changes_since(self.history).is_none() {
             return true;
         }
         let Some(previous) = self.snapshot.as_ref() else {
@@ -873,6 +1053,7 @@ impl TerminalSurface {
     fn clear_retained_scroll_state(&mut self) {
         self.retained_snapshots.clear();
         self.retained_rows.clear();
+        self.retained_row_origin = 0;
         self.retained_row_estimated_bytes = 0;
         self.decorations = Arc::from(Vec::<TerminalLineDecorations>::new());
         self.selection_visual = None;
@@ -886,11 +1067,7 @@ impl TerminalSurface {
         &mut self,
         state: &TerminalScrollVisualState,
     ) -> bool {
-        if !state.history.preserves_coordinates_from(self.history) {
-            self.clear_retained_scroll_state();
-            self.snapshot = None;
-        }
-        self.history = state.history;
+        self.advance_history(state.history);
         let scroll_offset = state.scroll_offset;
         let scroll_residual_lines = state.scroll_residual_lines;
         let display_offset = state.display_offset;
@@ -943,11 +1120,7 @@ impl TerminalSurface {
         &mut self,
         state: &TerminalScrollVisualState,
     ) -> bool {
-        if !state.history.preserves_coordinates_from(self.history) {
-            self.clear_retained_scroll_state();
-            self.snapshot = None;
-        }
-        self.history = state.history;
+        self.advance_history(state.history);
         let scroll_offset = state.scroll_offset;
         let scroll_residual_lines = state.scroll_residual_lines;
         let display_offset = state.display_offset;
@@ -958,12 +1131,13 @@ impl TerminalSurface {
         let skipped_output_chars = state.skipped_output_chars;
         let viewport_rows = viewport_rows.max(1);
         let snapshot_covers_display_offset = self.snapshot.as_ref().is_some_and(|snapshot| {
-            terminal_snapshot_covers_display_offset(
-                snapshot.as_ref(),
-                display_offset,
-                viewport_rows,
-                scrollback_len,
-            )
+            self.snapshot_has_current_coordinates(snapshot)
+                && terminal_snapshot_covers_display_offset(
+                    snapshot.as_ref(),
+                    display_offset,
+                    viewport_rows,
+                    scrollback_len,
+                )
         });
         let state_matches = snapshot_covers_display_offset
             && self.scroll_offset == scroll_offset
@@ -978,11 +1152,13 @@ impl TerminalSurface {
         if state_matches {
             return false;
         }
-        self.promote_snapshot_covering_display_offset(
+        if !self.promote_snapshot_covering_display_offset(
             display_offset,
             viewport_rows,
             scrollback_len,
-        );
+        ) {
+            return self.update_scroll_chrome_without_snapshot(state);
+        }
         // This is the scroll-only path. Keep stale decorations attached until a
         // full surface sync computes replacements, matching Zed/editor style
         // stale-until-recomputed highlights and avoiding a flash to plain text.
@@ -1145,13 +1321,21 @@ impl TerminalSurface {
         let Some((window_start, _)) = terminal_snapshot_absolute_window(snapshot) else {
             return 0;
         };
-        let window_end = window_start.saturating_add(snapshot.row_count());
+        let window_start = window_start.saturating_add(self.retained_row_origin);
+        self.remember_retained_rows_with_limits(snapshot.rows(), window_start, max_rows, max_bytes)
+    }
+
+    fn remember_retained_rows_with_limits(
+        &mut self,
+        rows: &[Arc<nyaterm_terminal::TerminalSnapshotRow>],
+        window_start: usize,
+        max_rows: usize,
+        max_bytes: usize,
+    ) -> usize {
+        let window_end = window_start.saturating_add(rows.len());
         let mut refreshed_rows = 0usize;
-        for row in 0..snapshot.row_count() {
+        for (row, snapshot_row) in rows.iter().enumerate() {
             let Some(abs_row) = window_start.checked_add(row) else {
-                continue;
-            };
-            let Some(snapshot_row) = snapshot.rows().get(row) else {
                 continue;
             };
             if self.retained_rows.get(&abs_row).is_some_and(|retained| {
@@ -1159,14 +1343,21 @@ impl TerminalSurface {
             }) {
                 continue;
             }
-            if let Some(replaced) = self.retained_rows.insert(abs_row, Arc::clone(snapshot_row)) {
+            let estimated_bytes = terminal_snapshot_row_estimated_bytes(snapshot_row);
+            if let Some(replaced) = self.retained_rows.insert(
+                abs_row,
+                TerminalRetainedRow {
+                    row: Arc::clone(snapshot_row),
+                    estimated_bytes,
+                },
+            ) {
                 self.retained_row_estimated_bytes = self
                     .retained_row_estimated_bytes
-                    .saturating_sub(terminal_snapshot_row_estimated_bytes(&replaced));
+                    .saturating_sub(replaced.estimated_bytes);
             }
             self.retained_row_estimated_bytes = self
                 .retained_row_estimated_bytes
-                .saturating_add(terminal_snapshot_row_estimated_bytes(snapshot_row));
+                .saturating_add(estimated_bytes);
             refreshed_rows = refreshed_rows.saturating_add(1);
         }
         while self.retained_rows.len() > max_rows || self.retained_row_estimated_bytes > max_bytes {
@@ -1189,7 +1380,7 @@ impl TerminalSurface {
             if let Some(removed) = self.retained_rows.remove(&drop_key) {
                 self.retained_row_estimated_bytes = self
                     .retained_row_estimated_bytes
-                    .saturating_sub(terminal_snapshot_row_estimated_bytes(&removed));
+                    .saturating_sub(removed.estimated_bytes);
             }
         }
         refreshed_rows
@@ -1205,12 +1396,13 @@ impl TerminalSurface {
         // to the surface. Keep that Arc in place: rebuilding retained rows here
         // clones the entire viewport on every pixel-wheel event.
         if self.snapshot.as_ref().is_some_and(|snapshot| {
-            terminal_snapshot_covers_display_offset(
-                snapshot,
-                display_offset,
-                viewport_rows,
-                scrollback_len,
-            )
+            self.snapshot_has_current_coordinates(snapshot)
+                && terminal_snapshot_covers_display_offset(
+                    snapshot,
+                    display_offset,
+                    viewport_rows,
+                    scrollback_len,
+                )
         }) {
             return true;
         }
@@ -1247,8 +1439,14 @@ impl TerminalSurface {
             || self.snapshot_sources_cover_absolute_range(desired_start, desired_end)
     }
 
+    fn retained_row(&self, row: usize) -> Option<&Arc<nyaterm_terminal::TerminalSnapshotRow>> {
+        self.retained_rows
+            .get(&row.checked_add(self.retained_row_origin)?)
+            .map(|retained| &retained.row)
+    }
+
     fn retained_rows_cover_absolute_range(&self, desired_start: usize, desired_end: usize) -> bool {
-        let Some(first_row) = self.retained_rows.get(&desired_start) else {
+        let Some(first_row) = self.retained_row(desired_start) else {
             return false;
         };
         let cols = first_row.cells.len();
@@ -1256,8 +1454,7 @@ impl TerminalSurface {
             return false;
         }
         (desired_start..desired_end).all(|abs_row| {
-            self.retained_rows
-                .get(&abs_row)
+            self.retained_row(abs_row)
                 .is_some_and(|row| row.cells.len() == cols)
         })
     }
@@ -1271,6 +1468,7 @@ impl TerminalSurface {
             .snapshot
             .iter()
             .chain(self.retained_snapshots.iter())
+            .filter(|snapshot| self.snapshot_has_current_coordinates(snapshot))
             .filter(|snapshot| {
                 terminal_snapshot_absolute_window(snapshot)
                     .is_some_and(|(start, end)| start < desired_end && desired_start < end)
@@ -1284,6 +1482,7 @@ impl TerminalSurface {
             .snapshot
             .iter()
             .chain(self.retained_snapshots.iter())
+            .filter(|snapshot| self.snapshot_has_current_coordinates(snapshot))
             .any(|snapshot| snapshot.cols > 0 && snapshot.cols != cols)
         {
             return false;
@@ -1292,6 +1491,7 @@ impl TerminalSurface {
             self.snapshot
                 .iter()
                 .chain(self.retained_snapshots.iter())
+                .filter(|snapshot| self.snapshot_has_current_coordinates(snapshot))
                 .any(|snapshot| {
                     terminal_snapshot_row_for_absolute_row(snapshot, abs_row).is_some_and(|row| {
                         snapshot
@@ -1336,7 +1536,9 @@ impl TerminalSurface {
             return Some(snapshot);
         }
         let mut sources: Vec<&Arc<TerminalSnapshot>> = Vec::new();
-        if let Some(snapshot) = self.snapshot.as_ref() {
+        if let Some(snapshot) = self.snapshot.as_ref()
+            && self.snapshot_has_current_coordinates(snapshot)
+        {
             sources.push(snapshot);
         }
         sources.extend(self.retained_snapshots.iter());
@@ -1401,7 +1603,7 @@ impl TerminalSurface {
         window_start: usize,
         window_end: usize,
     ) -> Option<Arc<TerminalSnapshot>> {
-        let first_row = self.retained_rows.get(&window_start)?;
+        let first_row = self.retained_row(window_start)?;
         let cols = first_row.cells.len();
         let rows = window_end.checked_sub(window_start)?;
         if cols == 0 || rows < viewport_rows.max(1) {
@@ -1412,7 +1614,7 @@ impl TerminalSurface {
         let mut row_data = Vec::with_capacity(rows);
 
         for abs_row in window_start..window_end {
-            let row = self.retained_rows.get(&abs_row)?;
+            let row = self.retained_row(abs_row)?;
             if row.cells.len() != cols {
                 return None;
             }
@@ -1449,10 +1651,9 @@ impl TerminalSurface {
         if !self.retained_rows_cover_absolute_range(desired_start, desired_end) {
             return None;
         }
-        let cols = self.retained_rows.get(&desired_start)?.cells.len();
+        let cols = self.retained_row(desired_start)?.cells.len();
         let row_is_compatible = |absolute_row: usize| {
-            self.retained_rows
-                .get(&absolute_row)
+            self.retained_row(absolute_row)
                 .is_some_and(|row| row.cells.len() == cols)
         };
 
@@ -1980,6 +2181,7 @@ impl TerminalSurface {
             return false;
         }
         self.selection_visual = selection;
+        self.selection_visual_history = self.history;
         self.revision = self.revision.saturating_add(1);
         true
     }
@@ -2005,12 +2207,13 @@ impl TerminalSurface {
 
     fn scroll_position_state_matches(&self, state: &TerminalScrollVisualState) -> bool {
         self.snapshot.as_ref().is_some_and(|snapshot| {
-            terminal_snapshot_covers_display_offset(
-                snapshot.as_ref(),
-                state.display_offset,
-                state.viewport_rows,
-                state.scrollback_len,
-            )
+            self.snapshot_has_current_coordinates(snapshot)
+                && terminal_snapshot_covers_display_offset(
+                    snapshot.as_ref(),
+                    state.display_offset,
+                    state.viewport_rows,
+                    state.scrollback_len,
+                )
         }) && self.scroll_visual_state_matches(state)
             && self.display_offset == state.display_offset
             && !self.scroll_snapshot_pending
@@ -2080,6 +2283,7 @@ impl TerminalSurface {
         &mut self,
         state: TerminalScrollVisualState,
     ) -> bool {
+        self.advance_history(state.history);
         if state.history.preserves_coordinates_from(self.history)
             && self.has_snapshot_covering_display_offset(
                 state.display_offset,
@@ -3044,10 +3248,24 @@ impl Render for TerminalSurface {
             .with_paint_exclusion(std::rc::Rc::clone(&composition_exclusion))
             .with_bold_default_foreground(self.bold_default_foreground)
             .with_minimum_contrast_ratio(self.minimum_contrast_ratio)
-            .with_selection(
-                self.selection_visual
-                    .map(TerminalGridSelection::from_selection),
-            )
+            .with_selection(self.selection_visual.and_then(|mut selection| {
+                if let Some(change) = self
+                    .selection_visual_history
+                    .changes_since(snapshot.history)
+                {
+                    if !selection.all_buffer {
+                        selection.anchor.position.line =
+                            selection.anchor.position.line.checked_add(change.evicted)?;
+                        selection.head.position.line =
+                            selection.head.position.line.checked_add(change.evicted)?;
+                    }
+                    Some(TerminalGridSelection::from_selection(selection))
+                } else {
+                    selection
+                        .reanchored_history(self.selection_visual_history, snapshot.history)
+                        .map(TerminalGridSelection::from_selection)
+                }
+            }))
             .with_font_fallbacks(self.font_fallbacks.clone())
             .with_layout_cache(self.layout_cache.clone())
             .with_layout_rows(self.viewport_rows)
@@ -3317,6 +3535,9 @@ impl Render for TerminalSurface {
             .child(scrollbar)
     }
 }
+
+#[cfg(test)]
+mod history_rotation_bench;
 
 #[cfg(test)]
 mod tests;
