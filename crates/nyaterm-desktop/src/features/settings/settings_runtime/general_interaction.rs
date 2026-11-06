@@ -383,22 +383,26 @@ impl NyaTermApp {
         snapshot: AppSettingsSummary,
         cx: &mut Context<Self>,
     ) {
-        let request =
-            nyaterm_store::store_mutation(StoreDomain::Settings, move |store| match kind {
-                SettingsSaveKind::Diagnostics => store.save_diagnostics_settings(&snapshot),
-                SettingsSaveKind::General => store.save_general_settings(&snapshot),
-                SettingsSaveKind::Interaction => store.save_interaction_settings(&snapshot),
-                SettingsSaveKind::ScreenLock => store.save_screen_lock_settings(&snapshot),
-                SettingsSaveKind::HostKey => store.save_host_key_policy(&snapshot.host_key_policy),
-                SettingsSaveKind::Recording => store.save_recording_settings(&snapshot),
-                SettingsSaveKind::Transfer => store.save_transfer_settings(&snapshot),
-                SettingsSaveKind::Terminal => store.save_terminal_settings(&snapshot),
-                SettingsSaveKind::QuickCommands => store.save_quick_command_ui_settings(&snapshot),
-                SettingsSaveKind::Appearance => store.save_appearance_settings(&snapshot),
-                SettingsSaveKind::UiLayout => store.save_ui_layout_settings(&snapshot),
-                SettingsSaveKind::Keybindings => store.save_keybindings(&snapshot.keybindings),
-                SettingsSaveKind::FileExplorer => store.save_file_explorer_favorite_dirs(&snapshot),
-            });
+        let operation = move |store: &nyaterm_store::ConnectionStore| match kind {
+            SettingsSaveKind::Diagnostics => store.save_diagnostics_settings(&snapshot),
+            SettingsSaveKind::General => store.save_general_settings(&snapshot),
+            SettingsSaveKind::Interaction => store.save_interaction_settings(&snapshot),
+            SettingsSaveKind::ScreenLock => store.save_screen_lock_settings(&snapshot),
+            SettingsSaveKind::HostKey => store.save_host_key_policy(&snapshot.host_key_policy),
+            SettingsSaveKind::Recording => store.save_recording_settings(&snapshot),
+            SettingsSaveKind::Transfer => store.save_transfer_settings(&snapshot),
+            SettingsSaveKind::Terminal => store.save_terminal_settings(&snapshot),
+            SettingsSaveKind::QuickCommands => store.save_quick_command_ui_settings(&snapshot),
+            SettingsSaveKind::Appearance => store.save_appearance_settings(&snapshot),
+            SettingsSaveKind::UiLayout => store.save_ui_layout_settings(&snapshot),
+            SettingsSaveKind::Keybindings => store.save_keybindings(&snapshot.keybindings),
+            SettingsSaveKind::FileExplorer => store.save_file_explorer_favorite_dirs(&snapshot),
+        };
+        let request = if matches!(kind, SettingsSaveKind::UiLayout) {
+            store_request(StoreDomain::Settings, operation)
+        } else {
+            nyaterm_store::store_mutation(StoreDomain::Settings, operation)
+        };
         let task = match self.store_ui.try_submit(generation, request) {
             Ok(task) => task,
             Err(error) => {

@@ -2,7 +2,7 @@ use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use gpui::{Context, IntoElement, div, prelude::*, rgb};
+use gpui::{Context, IntoElement};
 use rust_i18n::t;
 
 use crate::features::ai::panel::activity::AiActivitySummary;
@@ -459,18 +459,6 @@ impl AiTranscriptUpdate {
     }
 }
 
-/// Rows that belong to an expanded Activity section hang off its header.
-fn activity_indent(snapshot: &AiPanelSnapshot, row: gpui::AnyElement) -> gpui::AnyElement {
-    div()
-        .w_full()
-        .min_w_0()
-        .pl_2()
-        .border_l_2()
-        .border_color(rgb(snapshot.chrome.palette.border))
-        .child(row)
-        .into_any_element()
-}
-
 impl AiPanel {
     pub(super) fn ai_transcript_row(
         &self,
@@ -487,10 +475,9 @@ impl AiPanel {
                 index,
                 reasoning_only,
                 ..
-            } => activity_indent(
-                snapshot,
-                self.ai_activity_message(snapshot, &snapshot.messages[*index], *reasoning_only, cx),
-            ),
+            } => {
+                self.ai_activity_message(snapshot, &snapshot.messages[*index], *reasoning_only, cx)
+            }
             AiTranscriptRow::FinalMessage { index, .. } => {
                 self.ai_final_message(snapshot, &snapshot.messages[*index], cx)
             }
@@ -498,21 +485,14 @@ impl AiPanel {
             AiTranscriptRow::NativeApproval { index, .. } => self
                 .native_approval_card(snapshot, &snapshot.native_approvals[*index], cx)
                 .into_any_element(),
-            AiTranscriptRow::NativeRun { history, .. } => {
-                let card = self
-                    .native_run_card(
-                        snapshot,
-                        snapshot.native_run.clone().expect("projected native run"),
-                        *history,
-                        cx,
-                    )
-                    .into_any_element();
-                if *history {
-                    activity_indent(snapshot, card)
-                } else {
-                    card
-                }
-            }
+            AiTranscriptRow::NativeRun { history, .. } => self
+                .native_run_card(
+                    snapshot,
+                    snapshot.native_run.clone().expect("projected native run"),
+                    *history,
+                    cx,
+                )
+                .into_any_element(),
             AiTranscriptRow::PendingCommand {
                 message_index,
                 card_index,

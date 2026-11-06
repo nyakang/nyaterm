@@ -589,13 +589,14 @@ fn narrow_ai_panel_centers_empty_state_and_keeps_compact_controls_inside_compose
     let model = vcx.debug_bounds("ai-model-control").unwrap();
     let send = vcx.debug_bounds("ai-send-control").unwrap();
     assert!(
-        prompt.size.height < px(48.),
-        "an empty prompt is a single auto-grow row, got {:?}",
+        prompt.size.height >= px(48.),
+        "an empty prompt starts at three rows, got {:?}",
         prompt.size.height
     );
     assert!(
-        composer.size.height <= px(140.),
-        "compact composer is one prompt row and two control rows"
+        composer.size.height <= px(220.),
+        "compact composer is a three-row prompt and two control rows, got {:?}",
+        composer.size.height
     );
     for control in [mode, model, send] {
         assert!(control.top() >= prompt.bottom());
@@ -625,9 +626,14 @@ fn ai_prompt_grows_with_its_lines_up_to_six_rows() {
     };
     let one = prompt_height("one", vcx);
     let three = prompt_height("1\n2\n3", vcx);
+    let four = prompt_height("1\n2\n3\n4", vcx);
     let six = prompt_height("1\n2\n3\n4\n5\n6", vcx);
     let many = prompt_height(&vec!["line"; 20].join("\n"), vcx);
-    assert!(one < three && three < six, "{one:?} {three:?} {six:?}");
+    assert_eq!(
+        one, three,
+        "the prompt starts at three rows: {one:?} {three:?}"
+    );
+    assert!(three < four && four < six, "{three:?} {four:?} {six:?}");
     assert_eq!(six, many, "the prompt stops growing at six rows");
 }
 
@@ -656,7 +662,6 @@ fn narrowest_ai_panel_keeps_context_and_composer_controls_inside() {
     );
     let host = vcx.debug_bounds("ai-compact-host").unwrap();
     for id in [
-        "ai-context-bar",
         "ai-composer",
         "ai-work-mode-toggle",
         "ai-agent-kind-control",
@@ -771,9 +776,10 @@ fn enter_while_running_keeps_the_draft_and_starts_nothing() {
         assert_eq!(app.ai.chat_prompt_draft(), "follow-up");
         assert_eq!(app.ai.chat_messages().len(), messages_before);
     });
+    assert!(vcx.debug_bounds("ai-run-status").is_none());
     assert!(
-        vcx.debug_bounds("ai-run-stop").is_some(),
-        "a running request offers Stop in the composer"
+        vcx.debug_bounds("ai-send-control").is_some(),
+        "a running request keeps Stop on the send button"
     );
 }
 

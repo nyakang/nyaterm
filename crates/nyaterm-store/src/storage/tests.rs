@@ -7333,6 +7333,86 @@ fn portable_snapshot_restore_encrypts_connection_inline_password() {
 }
 
 #[test]
+fn automatic_icons_preserve_saved_fields_passwords_and_manual_choices() {
+    let dir = unique_temp_dir("auto-icon-update");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let connection = serde_json::from_value(serde_json::json!({
+        "id":"auto-icon", "name":"Current name", "type":"ssh", "host":"example.test",
+        "auth":{"mode":"password","password":"fixture-secret"}
+    }))
+    .unwrap();
+    store.save_connection(&connection).unwrap();
+    let key = super::entity_key(super::CONNECTION_PREFIX, "auto-icon");
+    let mut before: serde_json::Value = store
+        .read_json_table(super::CONNECTIONS_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    before["future"] = serde_json::json!({"keep":true});
+    before["sftp"]["future_option"] = serde_json::json!(7);
+    let txn = store.db.begin_write().unwrap();
+    super::write_json_in_txn(&txn, super::CONNECTIONS_TABLE, &key, &before).unwrap();
+    txn.commit().unwrap();
+    let password = connection_password_record(&store, "auto-icon");
+    assert!(
+        store
+            .update_auto_detected_connection_icon("auto-icon", "linux")
+            .unwrap()
+    );
+    let after: serde_json::Value = store
+        .read_json_table(super::CONNECTIONS_TABLE, &key)
+        .unwrap()
+        .unwrap();
+    let mut expected = before;
+    expected["icon"] = serde_json::json!("linux");
+    expected["icon_auto_detect"] = serde_json::json!(true);
+    assert_eq!(after, expected);
+    assert_eq!(
+        connection_password_record(&store, "auto-icon").password,
+        password.password
+    );
+    assert_eq!(
+        store
+            .get_connection("auto-icon")
+            .unwrap()
+            .unwrap()
+            .auth
+            .unwrap()
+            .password
+            .as_deref(),
+        Some("fixture-secret")
+    );
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("auto-icon", "linux")
+            .unwrap()
+    );
+
+    let mut manual = store.get_connection("auto-icon").unwrap().unwrap();
+    manual.icon = Some("manual".into());
+    manual.icon_auto_detect = Some(false);
+    store.save_connection(&manual).unwrap();
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("auto-icon", "windows")
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get_connection("auto-icon")
+            .unwrap()
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("manual")
+    );
+    assert!(
+        !store
+            .update_auto_detected_connection_icon("missing", "linux")
+            .unwrap()
+    );
+}
+
+#[test]
 fn merge_connection_asset_from_monitoring_creates_and_merges_atomically() {
     let dir = unique_temp_dir("asset-merge");
     let store = ConnectionStore::open(&dir).expect("store");

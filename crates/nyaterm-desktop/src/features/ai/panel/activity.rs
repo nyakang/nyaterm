@@ -7,9 +7,8 @@ use std::collections::HashSet;
 
 use nyaterm_core::ai::harness::{AgentRunStatus, AgentTaskStatus};
 
+use crate::features::ai::panel::AiPanelSnapshot;
 use crate::features::ai::panel::execution::AiExecutionGroup;
-use crate::features::ai::panel::transcript::AiTranscriptRow;
-use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
 use crate::features::runtime_jobs::AiAgentStepStatus;
 
@@ -220,26 +219,6 @@ fn first_line(text: &str) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or_default()
         .to_string()
-}
-
-impl AiPanel {
-    /// Progress of the live request, read from the already projected rows.
-    pub(super) fn live_activity_progress(
-        &self,
-        snapshot: &AiPanelSnapshot,
-    ) -> Option<(usize, usize)> {
-        self.transcript_rows
-            .iter()
-            .rev()
-            .find_map(|row| match row {
-                AiTranscriptRow::Execution { group } if group.is_live(snapshot) => {
-                    Some(AiActivitySummary::project(snapshot, group))
-                }
-                _ => None,
-            })
-            .filter(|summary| summary.total > 0)
-            .map(|summary| (summary.completed, summary.total))
-    }
 }
 
 #[cfg(test)]

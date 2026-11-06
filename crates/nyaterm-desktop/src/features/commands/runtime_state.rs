@@ -56,7 +56,7 @@ impl CommandRuntimeState {
                     CommandPersistenceRequest::IncrementQuickCommand(command_id) => {
                         let persisted_id = command_id.clone();
                         let result = store
-                            .request_mutation_fn(StoreDomain::Commands, move |database| {
+                            .request_fn(StoreDomain::Commands, move |database| {
                                 database.increment_quick_command_use_count(&persisted_id)
                             })
                             .map_err(|error| error.to_string());
@@ -120,7 +120,7 @@ mod tests {
         let test_dir = TestConfigDir::new("nyaterm-command-runtime-test");
         let store = blocking_test_store(test_dir.path());
         let scheduler = BlockingJobScheduler::new();
-        let mut runtime = CommandRuntimeState::new(store, scheduler.clone());
+        let mut runtime = CommandRuntimeState::new(store.clone(), scheduler.clone());
 
         assert!(runtime.is_idle());
         assert!(runtime.queue(CommandPersistenceRequest::AppendHistory(vec![
@@ -139,6 +139,38 @@ mod tests {
         ));
         runtime.note_event_delivered();
         assert!(runtime.is_idle());
+
+        store
+            .request_fn(nyaterm_store::StoreDomain::Commands, |store| {
+                store.upsert_quick_command(
+                    serde_json::from_value(serde_json::json!({
+                        "id":"fixture", "label":"Fixture", "command":"pwd"
+                    }))?,
+                    None,
+                )
+            })
+            .unwrap();
+        let generation = store.sync_mutation_generation();
+        assert!(
+            runtime.queue(CommandPersistenceRequest::IncrementQuickCommand(
+                "fixture".into()
+            ))
+        );
+        assert!(matches!(
+            futures::executor::block_on(result_rx.next()).unwrap(),
+            CommandPersistenceResult::QuickCommandUseCount { result: Ok(()), .. }
+        ));
+        runtime.note_event_delivered();
+        assert_eq!(store.sync_mutation_generation(), generation);
+        assert_eq!(
+            store
+                .request_fn(nyaterm_store::StoreDomain::Commands, |store| store
+                    .load_quick_commands())
+                .unwrap()
+                .commands[0]
+                .use_count,
+            Some(1)
+        );
 
         scheduler.shutdown();
         assert!(!runtime.queue(CommandPersistenceRequest::AppendHistory(Vec::new())));
