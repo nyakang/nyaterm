@@ -119,6 +119,9 @@ impl NyaTermApp {
             local_backend: self.session.active_file_browser_backend()
                 == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local),
             path: browser.path.clone(),
+            terminal_cwd: active_session_id
+                .as_deref()
+                .and_then(|session| self.transfer_browser_cwd_for_session(session)),
             home_dir: browser.home_dir.clone(),
             path_editing: browser.path_editing,
             expanded_children_path: browser

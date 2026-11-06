@@ -1,12 +1,19 @@
 use super::panel::TransferPanel;
+use crate::features::transfers::TransferTreePresentation;
 use crate::features::view_widgets::transfer_entry_icon;
+use crate::theme::ThemePalette;
 use gpui::{
-    Context, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _,
-    SharedString, Styled as _, div, prelude::*, px, rgb, uniform_list,
+    AnyElement, App, Bounds, BoxShadow, Context, FontWeight, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, SharedString, Styled as _,
+    UniformListDecoration, Window, div, prelude::*, px, rgb, svg, uniform_list,
+};
+use nyaterm_files::file_browser::{
+    FileBrowserBackendKind, file_browser_parent, file_browser_path_eq,
 };
 use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaContextMenu, NyaUniformListScrollbar};
 use rust_i18n::t;
+use std::ops::Range;
 
 pub(super) fn transfer_tree_view(
     panel: &TransferPanel,
@@ -17,6 +24,11 @@ pub(super) fn transfer_tree_view(
     let count = tree.rows.len();
     let scroll = tree.scroll.clone();
     let menu_app = panel.app_handle();
+    let position_hint = TreePositionHint {
+        tree: tree.clone(),
+        local_backend: snapshot.browser.local_backend,
+        palette: snapshot.chrome.palette,
+    };
     div()
         .id("transfer-directory-tree")
         .w_full()
@@ -34,6 +46,7 @@ pub(super) fn transfer_tree_view(
             NyaContextMenu::new_dynamic(
                 div()
                     .id("transfer-tree-viewport")
+                    .debug_selector(|| "transfer-tree-viewport".to_string())
                     .relative()
                     .size_full()
                     .min_h_0()
@@ -63,6 +76,8 @@ pub(super) fn transfer_tree_view(
                             let Some(snapshot) = panel.snapshot() else {
                                 return Vec::new();
                             };
+                            #[cfg(test)]
+                            panel.note_rows_built(range.len());
                             let palette = snapshot.chrome.palette;
                             let tree = &snapshot.browser.tree;
                             let rows = tree.rows.clone();
@@ -79,6 +94,18 @@ pub(super) fn transfer_tree_view(
                                     let context_is_root = row.root;
                                     let is_selected = selected.contains(&row.key);
                                     let is_focused = focused.as_ref() == Some(&row.key);
+                                    let is_terminal_cwd = row.directory
+                                        && snapshot.browser.terminal_cwd.as_deref().is_some_and(|cwd| {
+                                            file_browser_path_eq(
+                                                if snapshot.browser.local_backend {
+                                                    FileBrowserBackendKind::Local
+                                                } else {
+                                                    FileBrowserBackendKind::Remote
+                                                },
+                                                &row.path.display_path,
+                                                cwd,
+                                            )
+                                        });
                                     let is_symlink = row
                                         .entry
                                         .as_ref()
@@ -107,16 +134,15 @@ pub(super) fn transfer_tree_view(
                                     let drag_app = panel.app_handle();
                                     let drag_name = row.label.clone();
                                     let drag_entry = row.entry.clone().filter(|_| !is_renaming && crate::features::transfers::drag_export::transfer_drag_supported(snapshot.browser.local_backend, window.supports_virtual_file_drag(), window.supports_file_promise_drag())).filter(|entry| matches!(entry.file_type, SftpFileType::File | SftpFileType::Directory));
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "transfer-tree-row:{}",
-                                            row.key
-                                        )))
+                                    let row_group = SharedString::from(format!("transfer-tree-row:{}", row.key));
+                                    let content = div()
+                                        .id(row_group.clone())
+                                        .group(row_group.clone())
                                         .debug_selector({
                                             let key = row.key.clone();
                             move || format!("transfer-tree-row:{key}")
                                         })
-                                        .h(px(28.))
+                                        .h(px(24.))
                                         .w_full()
                                         .min_w_0()
                                         .flex()
@@ -124,10 +150,17 @@ pub(super) fn transfer_tree_view(
                                         .gap_1()
                                         .pl(px((row.depth.min(8) * 12) as f32))
                                         .pr_1()
+                                        .rounded_md()
+                                        .border_l_2()
+                                        .border_color(if is_terminal_cwd || is_focused {
+                                            rgb(palette.primary)
+                                        } else {
+                                            gpui::rgba(0)
+                                        })
                                         .bg(if is_selected {
-                                            gpui::rgba((palette.primary << 8) | 0x1a)
-                                        } else if is_focused {
-                                            rgb(palette.hover)
+                                            gpui::rgba((palette.primary << 8) | 0x30)
+                                        } else if is_focused || is_terminal_cwd {
+                                            gpui::rgba((palette.primary << 8) | 0x16)
                                         } else {
                                             gpui::rgba(0)
                                         })
@@ -138,8 +171,20 @@ pub(super) fn transfer_tree_view(
                                             rgb(palette.text)
                                         })
                                         .cursor_pointer()
-                                        .when(!is_selected, |this| {
-                                            this.hover(|this| this.bg(rgb(palette.hover)))
+                                        .hover(|this| {
+                                            this.bg(if is_selected {
+                                                gpui::rgba((palette.primary << 8) | 0x38)
+                                            } else {
+                                                rgb(palette.surface_elevated)
+                                                    .blend(rgb(palette.text).alpha(0.045))
+                                            })
+                                            // Keep hover neutral; the primary accent denotes selection and focus.
+                                            .shadow(vec![
+                                                BoxShadow::new(px(0.), px(0.), rgb(palette.text).alpha(0.08).into())
+                                                    .spread_radius(px(1.)),
+                                                BoxShadow::new(px(0.), px(2.), gpui::rgba(palette.shadow).opacity(0.8).into())
+                                                    .blur_radius(px(8.)),
+                                            ])
                                         })
                                         .when_some(drag_entry, |this, entry| {
                                             let drag = crate::features::transfers::drag_export::DraggedSelection::new_tree(entry);
@@ -229,13 +274,28 @@ pub(super) fn transfer_tree_view(
                                                 )
                                             },
                                         ))
-                                        .child(transfer_entry_icon(
-                                            palette,
-                                            &row.label,
-                                            row.directory,
-                                            is_symlink,
-                                            is_selected,
-                                        ))
+                                        .child(
+                                            div()
+                                                .size(px(20.))
+                                                .flex_none()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_sm()
+                                                .group_hover(row_group, |this| {
+                                                    this.bg(rgb(palette.text).alpha(0.08))
+                                                        .shadow(vec![BoxShadow::new(
+                                                            px(0.), px(1.), gpui::rgba(palette.shadow).opacity(0.45).into(),
+                                                        ).blur_radius(px(2.))])
+                                                })
+                                                .child(transfer_entry_icon(
+                                                    palette,
+                                                    &row.label,
+                                                    row.directory,
+                                                    is_symlink,
+                                                    is_selected,
+                                                )),
+                                        )
                                         .when(is_renaming, |this| {
                                             this.child(
                                                 div()
@@ -268,6 +328,30 @@ pub(super) fn transfer_tree_view(
                                                     .child(row.label),
                                             )
                                         })
+                                        .when(is_terminal_cwd, |this| {
+                                            this.child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "tree-terminal-cwd:{}", row.key
+                                                    )))
+                                                    .debug_selector({
+                                                        let key = row.key.clone();
+                                                        move || format!("tree-terminal-cwd:{key}")
+                                                    })
+                                                    .flex_none()
+                                                    .flex()
+                                                    .items_center()
+                                                    .px_1()
+                                                    .text_color(rgb(palette.primary))
+                                                    .child(svg().path("icons/conn/terminal.svg").size(px(14.)))
+                                                    .tooltip(|window, cx| {
+                                                        nyaterm_ui::NyaTooltip::new(
+                                                            t!("fileExplorer.currentTerminalDirectory").to_string(),
+                                                        )
+                                                        .build(window, cx)
+                                                    }),
+                                            )
+                                        })
                                         .when_some(row.error, |this, error| {
                                             this.child(
                                                 div()
@@ -286,16 +370,26 @@ pub(super) fn transfer_tree_view(
                                         })
                                         .when_some(hover_details, |this, details| {
                                             this.tooltip(move |window, cx| {
-                                                nyaterm_ui::NyaTooltip::new(details.clone())
-                                                    .build(window, cx)
+                                                let details = details.clone();
+                                                nyaterm_ui::NyaTooltip::element(move |_, _| {
+                                                    transfer_tree_hover_card(&details, palette)
+                                                })
+                                                .build(window, cx)
                                             })
-                                        })
+                                        });
+                                    div()
+                                        .h(px(28.))
+                                        .w_full()
+                                        .px(px(4.))
+                                        .py(px(2.))
+                                        .child(content)
                                         .into_any_element()
                                 })
                                 .collect()
                         }),
                     )
                     .size_full()
+                    .with_decoration(position_hint)
                     .track_scroll(&scroll),
                 )
                     .child(
@@ -317,7 +411,158 @@ pub(super) fn transfer_tree_view(
         )
 }
 
-fn transfer_tree_hover_details(entry: &SftpFileEntry) -> String {
+struct TreePositionHint {
+    tree: TransferTreePresentation,
+    local_backend: bool,
+    palette: ThemePalette,
+}
+
+impl UniformListDecoration for TreePositionHint {
+    fn compute(
+        &self,
+        visible_range: Range<usize>,
+        bounds: Bounds<Pixels>,
+        scroll_offset: Point<Pixels>,
+        _item_height: Pixels,
+        _item_count: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> AnyElement {
+        let Some(row) = self
+            .tree
+            .rows
+            .get(visible_range.start)
+            .filter(|_| visible_range.start > 0)
+        else {
+            return div().into_any_element();
+        };
+        let path = if row.directory {
+            row.path.display_path.clone()
+        } else {
+            file_browser_parent(
+                if self.local_backend {
+                    FileBrowserBackendKind::Local
+                } else {
+                    FileBrowserBackendKind::Remote
+                },
+                &row.path.display_path,
+            )
+        };
+        // Decorations use content coordinates; cancel the offset to pin this to the viewport.
+        div()
+            .relative()
+            .size_full()
+            .child(
+                div()
+                    .id("transfer-tree-position")
+                    .debug_selector(|| "transfer-tree-position".to_string())
+                    .absolute()
+                    .left(-scroll_offset.x + px(8.))
+                    .top(-scroll_offset.y + bounds.size.height - px(26.))
+                    .h(px(20.))
+                    .max_w((bounds.size.width - px(24.)).max(px(0.)))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(self.palette.border))
+                    .bg(rgb(self.palette.surface))
+                    .text_size(px(11.))
+                    .text_color(rgb(self.palette.text_muted))
+                    .child(
+                        svg()
+                            .path("icons/conn/folder.svg")
+                            .size(px(12.))
+                            .flex_none(),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(path),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
+#[derive(Clone)]
+struct TransferTreeHoverDetails {
+    name: String,
+    kind: String,
+    metadata: Vec<(String, String)>,
+}
+
+fn transfer_tree_hover_card(
+    details: &TransferTreeHoverDetails,
+    palette: ThemePalette,
+) -> AnyElement {
+    div()
+        .id("transfer-tree-details")
+        .debug_selector(|| "transfer-tree-details".to_string())
+        .w(px(208.))
+        .py_1()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .text_size(px(11.))
+        .text_color(rgb(palette.text))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .w_full()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight(600.))
+                        .child(details.name.clone()),
+                )
+                .child(
+                    div().flex().child(
+                        div()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(rgb(palette.hover))
+                            .text_size(px(10.))
+                            .text_color(rgb(palette.text_muted))
+                            .child(details.kind.clone()),
+                    ),
+                ),
+        )
+        .when(!details.metadata.is_empty(), |this| {
+            this.child(
+                div()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgb(palette.border))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(details.metadata.iter().map(|(label, value)| {
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(72.))
+                                    .flex_none()
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(label.clone()),
+                            )
+                            .child(div().min_w_0().flex_1().child(value.clone()))
+                    })),
+            )
+        })
+        .into_any_element()
+}
+
+fn transfer_tree_hover_details(entry: &SftpFileEntry) -> TransferTreeHoverDetails {
     let kind = match entry.file_type {
         SftpFileType::File => t!("fileExplorer.typeFile"),
         SftpFileType::Directory => t!("fileExplorer.typeDirectory"),
@@ -327,39 +572,36 @@ fn transfer_tree_hover_details(entry: &SftpFileEntry) -> String {
         SftpFileType::Symlink => t!("fileExplorer.typeSymlink"),
         SftpFileType::Other => t!("fileExplorer.typeOther"),
     };
-    let mut lines = vec![entry.name.clone(), kind.to_string()];
+    let mut metadata = Vec::new();
     if let Some(size) = entry.size.filter(|_| !entry.is_directory()) {
-        lines.push(
-            t!(
-                "fileExplorer.detailSize",
-                value = crate::features::transfers::format_file_size(Some(size))
-            )
-            .to_string(),
-        );
+        metadata.push((
+            t!("fileExplorer.size").to_string(),
+            crate::features::transfers::format_file_size(Some(size)),
+        ));
     }
     if let Some(mode) = entry.permissions {
-        lines.push(
-            t!(
-                "fileExplorer.detailPermissions",
-                value = crate::features::formatting::format_permissions_octal(mode)
-            )
-            .to_string(),
-        );
+        metadata.push((
+            t!("fileExplorer.permissions").to_string(),
+            crate::features::formatting::format_permissions_octal(mode),
+        ));
     }
     if !entry.owner.is_empty() || !entry.group.is_empty() {
-        lines.push(
-            t!(
-                "fileExplorer.detailOwner",
-                value = format!("{}:{}", entry.owner, entry.group)
-            )
-            .to_string(),
-        );
+        metadata.push((
+            t!("fileExplorer.ownership").to_string(),
+            format!("{}: {}", entry.owner, entry.group),
+        ));
     }
-    let modified = super::format_sftp_modified(entry.modified_at);
-    if !modified.is_empty() {
-        lines.push(t!("fileExplorer.detailModified", value = modified).to_string());
+    if entry.modified_at.is_some() {
+        metadata.push((
+            t!("fileExplorer.mtime").to_string(),
+            super::format_sftp_modified(entry.modified_at),
+        ));
     }
-    lines.join("\n")
+    TransferTreeHoverDetails {
+        name: entry.name.clone(),
+        kind: kind.to_string(),
+        metadata,
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +609,26 @@ mod tests {
 
     use super::transfer_tree_hover_details;
     use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
+
+    #[test]
+    fn hover_details_omit_unknown_metadata_and_directory_sizes() {
+        let entry = SftpFileEntry {
+            name: "folder".into(),
+            path: "/folder".into(),
+            file_type: SftpFileType::Directory,
+            size: Some(4096),
+            permissions: None,
+            owner: String::new(),
+            group: String::new(),
+            modified_at: None,
+            raw_path_token: None,
+            symlink_target_is_directory: false,
+        };
+        let details = transfer_tree_hover_details(&entry);
+        assert_eq!(details.name, "folder");
+        assert!(!details.kind.is_empty());
+        assert!(details.metadata.is_empty());
+    }
 
     #[test]
     fn hover_details_use_only_cached_entry_metadata() {
@@ -383,9 +645,12 @@ mod tests {
             symlink_target_is_directory: false,
         };
         let details = transfer_tree_hover_details(&entry);
-        assert!(details.starts_with("report.txt\n"));
-        assert!(details.contains("1.5 KiB"));
-        assert!(details.contains("0640"));
-        assert!(details.contains("alice:staff"));
+        assert_eq!(details.name, "report.txt");
+        assert!(!details.kind.is_empty());
+        assert_eq!(details.metadata.len(), 4);
+        assert_eq!(details.metadata[0].1, "1.5 KiB");
+        assert_eq!(details.metadata[1].1, "0640");
+        assert_eq!(details.metadata[2].1, "alice: staff");
+        assert!(!details.metadata[3].1.is_empty());
     }
 }

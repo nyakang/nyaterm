@@ -169,6 +169,102 @@ fn assert_directory(
     });
 }
 
+fn entry(name: &str, path: &str, file_type: SftpFileType) -> SftpFileEntry {
+    SftpFileEntry {
+        name: name.into(),
+        path: path.into(),
+        file_type,
+        size: None,
+        permissions: None,
+        owner: String::new(),
+        group: String::new(),
+        modified_at: None,
+        raw_path_token: None,
+        // A symlink keeps its own type; every other entry is already resolved.
+        symlink_target_is_directory: file_type == SftpFileType::Symlink,
+    }
+}
+
+fn seed_tree_listing(app: &mut NyaTermApp, path: &str, entries: Vec<SftpFileEntry>) {
+    app.transfer.seed_tree_listing(
+        SESSION,
+        FileBrowserBackendKind::Local,
+        RemoteFilePath::new(path),
+        Arc::new(entries),
+    );
+}
+
+/// Model the server's ancestor listings so a deep target can be revealed.
+fn seed_ancestor_tree_listings(app: &mut NyaTermApp, target: &Path) {
+    for child in target.ancestors() {
+        let Some(parent) = child.parent() else {
+            continue;
+        };
+        let Some(name) = child.file_name() else {
+            continue;
+        };
+        seed_tree_listing(
+            app,
+            &parent.to_string_lossy(),
+            vec![entry(
+                &name.to_string_lossy(),
+                &child.to_string_lossy(),
+                SftpFileType::Directory,
+            )],
+        );
+    }
+}
+
+fn enable_tree_mode(app: &mut NyaTermApp) {
+    let mut summary = app.settings.summary().clone();
+    summary.ui_file_explorer_view_mode = TransferBrowserViewMode::Tree;
+    app.settings.replace_summary(summary);
+}
+
+/// The row key and expansion flag of the tree row at `target`.
+fn tree_row(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext, target: &str) -> (String, bool) {
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.transfer
+                .tree_presentation(Some(SESSION), true)
+                .rows
+                .iter()
+                .find(|row| row.path.display_path == target)
+                .map(|row| (row.key.clone(), row.expanded))
+                .unwrap_or_else(|| panic!("missing tree row for {target}"))
+        })
+    })
+}
+
+fn tree_focused(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.transfer
+                .tree_presentation(Some(SESSION), true)
+                .focused
+                .clone()
+        })
+    })
+}
+
+fn browser_path(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext) -> String {
+    cx.update(|_, cx| app.read(cx).transfer.browser_view().path.to_string())
+}
+
+fn select_tree_row(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext, key: String) {
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.select_transfer_tree_row(key, false, false, window, cx)
+        })
+    });
+}
+
+fn double_click_tree_row(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.double_click_transfer_tree_row(window, cx))
+    });
+}
+
 #[test]
 fn manual_browsing_survives_time_and_repeated_cwd_reports_then_follows_a_real_change() {
     with_browser(|app, cx, root| {
@@ -866,6 +962,190 @@ fn tree_mode_follows_cwd_and_seeds_the_target_directory_listing() {
                 );
             })
         });
+    });
+}
+
+#[test]
+fn double_clicking_a_cached_tree_directory_toggles_in_place_and_only_links_navigate() {
+    with_browser(|app, cx, root| {
+        let target = root.join("tree").to_string_lossy().into_owned();
+        let child = root
+            .join("tree")
+            .join("child")
+            .to_string_lossy()
+            .into_owned();
+        let link = root.join("tree-link").to_string_lossy().into_owned();
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                enable_tree_mode(app);
+                seed_ancestor_tree_listings(app, Path::new(&target));
+                seed_tree_listing(
+                    app,
+                    &root.to_string_lossy(),
+                    vec![
+                        entry("tree", &target, SftpFileType::Directory),
+                        entry("tree-link", &link, SftpFileType::Symlink),
+                    ],
+                );
+                // Every listing on the way to the target is already cached.
+                seed_tree_listing(
+                    app,
+                    &target,
+                    vec![entry("child", &child, SftpFileType::Directory)],
+                );
+                // Reveal only the parent so the cached target starts collapsed.
+                app.transfer.reveal_tree_path(
+                    SESSION,
+                    FileBrowserBackendKind::Local,
+                    RemoteFilePath::new(root.to_string_lossy().into_owned()),
+                );
+            })
+        });
+        let baseline = request_count(app, cx);
+        let path_before = browser_path(app, cx);
+        let (tree_key, expanded) = tree_row(app, cx, &target);
+        assert!(!expanded);
+        select_tree_row(app, cx, tree_key);
+        double_click_tree_row(app, cx);
+        assert!(tree_row(app, cx, &target).1);
+        double_click_tree_row(app, cx);
+        assert!(!tree_row(app, cx, &target).1);
+        double_click_tree_row(app, cx);
+        assert!(tree_row(app, cx, &target).1);
+        // Cached expand/collapse neither navigates nor refetches.
+        assert_eq!(request_count(app, cx), baseline);
+        assert_eq!(browser_path(app, cx), path_before);
+
+        // A directory symlink is not expandable, so double click still navigates.
+        let (link_key, _) = tree_row(app, cx, &link);
+        select_tree_row(app, cx, link_key);
+        double_click_tree_row(app, cx);
+        assert_eq!(request_count(app, cx), baseline + 1);
+        cx.update(|_, cx| {
+            let requests = app
+                .read(cx)
+                .transfer
+                .browser
+                .directory_requests
+                .clone()
+                .unwrap();
+            let (id, requested) = requests.last().unwrap();
+            assert_eq!(requested.display_path, link);
+            assert!(matches!(
+                app.read(cx).transfer.transfer_job(id).unwrap().kind,
+                TransferJobKind::ListDir { .. }
+            ));
+        });
+        assert_eq!(browser_path(app, cx), link);
+    });
+}
+
+#[test]
+fn explicit_tree_sync_reveals_a_loaded_cwd_without_refetching() {
+    with_browser(|app, cx, root| {
+        let target = path(root, "shell");
+        let sibling = path(root, "manual");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                enable_tree_mode(app);
+                seed_ancestor_tree_listings(app, Path::new(&target));
+                seed_tree_listing(
+                    app,
+                    &root.to_string_lossy(),
+                    vec![
+                        entry("shell", &target, SftpFileType::Directory),
+                        entry("manual", &sibling, SftpFileType::Directory),
+                    ],
+                );
+                app.reveal_transfer_tree_current_path(cx);
+            });
+        });
+        let (target_key, _) = tree_row(app, cx, &target);
+        let (sibling_key, _) = tree_row(app, cx, &sibling);
+        select_tree_row(app, cx, sibling_key.clone());
+        let count = request_count(app, cx);
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.sync_transfer_browser_to_cwd(TransferCwdSyncReason::Automatic, cx);
+            });
+        });
+        assert_eq!(tree_focused(app, cx).as_deref(), Some(sibling_key.as_str()));
+        cx.update(|_, cx| app.update(cx, |app, cx| app.start_transfer_sync_cwd_job(cx)));
+        assert_eq!(tree_focused(app, cx).as_deref(), Some(target_key.as_str()));
+        assert_eq!(request_count(app, cx), count);
+        assert_eq!(browser_path(app, cx), target);
+    });
+}
+
+#[test]
+fn tree_mode_reveals_the_cwd_target_before_its_listing_and_keeps_a_manual_selection() {
+    with_browser(|app, cx, root| {
+        let target = root.join("instant").to_string_lossy().into_owned();
+        let sibling = root.join("manual").to_string_lossy().into_owned();
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                enable_tree_mode(app);
+                seed_ancestor_tree_listings(app, Path::new(&target));
+                seed_tree_listing(
+                    app,
+                    &root.to_string_lossy(),
+                    vec![
+                        entry("instant", &target, SftpFileType::Directory),
+                        entry("manual", &sibling, SftpFileType::Directory),
+                    ],
+                );
+                // The target itself stays uncached: the pending navigation supplies it.
+                app.transfer.browser.directory_requests = Some(Vec::new());
+            })
+        });
+        report(app, cx, target.clone());
+        // A concurrent completion can revisit missing nodes before navigation finishes.
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| app.request_missing_expanded_tree_listings(cx));
+        });
+        // The navigation owns the target listing; its tree row must not be requested twice.
+        let sync_id = cx.update(|_, cx| {
+            let app = app.read(cx);
+            let requests = app.transfer.browser.directory_requests.as_ref().unwrap();
+            let mut target_requests = requests
+                .iter()
+                .filter(|(_, requested)| requested.display_path == target);
+            let (id, _) = target_requests
+                .next()
+                .expect("the cwd target is requested once by navigation");
+            assert!(
+                target_requests.next().is_none(),
+                "the cwd target must not also be listed as a tree row"
+            );
+            assert!(matches!(
+                app.transfer.transfer_job(id).unwrap().kind,
+                TransferJobKind::SyncCwd { .. }
+            ));
+            // Any other request may only be a still-missing ancestor listing.
+            for (other_id, requested) in requests {
+                if requested.display_path == target {
+                    continue;
+                }
+                assert!(matches!(
+                    app.transfer.transfer_job(other_id).unwrap().kind,
+                    TransferJobKind::ListTree { .. }
+                ));
+            }
+            id.clone()
+        });
+        // The cached target is already focused and expanded before its listing returns.
+        let (target_key, expanded) = tree_row(app, cx, &target);
+        assert!(expanded);
+        assert_eq!(tree_focused(app, cx).as_deref(), Some(target_key.as_str()));
+        // A manual tree selection made while the listing is pending must survive it.
+        let (sibling_key, _) = tree_row(app, cx, &sibling);
+        select_tree_row(app, cx, sibling_key.clone());
+        let count = request_count(app, cx);
+        finish(app, cx, &sync_id, Ok("child"));
+        assert_directory(app, cx, &target, "child");
+        assert_eq!(request_count(app, cx), count);
+        assert_eq!(tree_focused(app, cx).as_deref(), Some(sibling_key.as_str()));
+        assert!(tree_row(app, cx, &target).1);
     });
 }
 

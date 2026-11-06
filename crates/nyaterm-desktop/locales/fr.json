@@ -1267,6 +1267,7 @@
     "connectToSession": "Connectez-vous pour parcourir les fichiers",
     "copyDirPath": "Copier le chemin du dossier",
     "cwdTrackingUnavailable": "Synchronisation du chemin indisponible",
+    "currentTerminalDirectory": "Répertoire actuel du terminal",
     "cwdNotReported": "Le terminal n’a pas encore signalé son répertoire de travail. La synchronisation sera disponible après une mise à jour du répertoire.",
     "delete": "Supprimer",
     "deleteConfirmHint": "Appuyez sur Entrée pour confirmer ou cliquez sur Supprimer.",

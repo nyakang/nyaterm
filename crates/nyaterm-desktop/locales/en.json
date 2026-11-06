@@ -1267,6 +1267,7 @@
     "connectToSession": "Connect to browse files",
     "copyDirPath": "Copy Dir Path",
     "cwdTrackingUnavailable": "Path sync unavailable",
+    "currentTerminalDirectory": "Current terminal directory",
     "cwdNotReported": "The terminal has not reported its working directory. Path sync will be available after a directory update.",
     "delete": "Delete",
     "deleteConfirmHint": "Press Enter to confirm, or click Delete.",

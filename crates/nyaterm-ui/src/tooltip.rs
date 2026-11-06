@@ -1,9 +1,9 @@
-use gpui::{AnyView, App, SharedString, Styled as _, Window};
+use gpui::{AnyView, App, IntoElement, SharedString, Styled as _, Window};
 use gpui_kit::component::tooltip::Tooltip;
 
 use crate::theme_bridge::component_typography;
 
-/// Theme-aware text tooltip backed by `gpui-kit`.
+/// Theme-aware tooltip backed by `gpui-kit`.
 pub struct NyaTooltip {
     inner: Tooltip,
 }
@@ -12,6 +12,12 @@ impl NyaTooltip {
     pub fn new(text: impl Into<SharedString>) -> Self {
         Self {
             inner: Tooltip::new(text.into()),
+        }
+    }
+
+    pub fn element<E: IntoElement>(builder: impl Fn(&mut Window, &mut App) -> E + 'static) -> Self {
+        Self {
+            inner: Tooltip::element(builder),
         }
     }
 
@@ -25,7 +31,8 @@ impl NyaTooltip {
 #[cfg(test)]
 mod tests {
     use gpui::{
-        Context, FontFallbacks, IntoElement, Render, Styled as _, TestAppContext, Window, font, px,
+        Context, FontFallbacks, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, Window, font, px,
     };
     use gpui_kit::component::tooltip::Tooltip;
 
@@ -78,15 +85,19 @@ mod tests {
             );
         });
         cx.update(|window, cx| {
-            let tooltip = NyaTooltip::new("安全认证")
-                .build(window, cx)
-                .downcast::<Tooltip>()
-                .expect("NyaTooltip should build a gpui-kit tooltip");
-            tooltip.update(cx, |tooltip, _| {
-                let style = &tooltip.style().text;
-                assert_eq!(style.font_family.as_deref(), Some("Noto Sans SC"));
-                assert_eq!(style.font_fallbacks, changed_font.fallbacks);
-            });
+            for tooltip in [
+                NyaTooltip::new("安全认证").build(window, cx),
+                NyaTooltip::element(|_, _| gpui::div().child("安全认证")).build(window, cx),
+            ] {
+                let tooltip = tooltip
+                    .downcast::<Tooltip>()
+                    .expect("NyaTooltip should build a gpui-kit tooltip");
+                tooltip.update(cx, |tooltip, _| {
+                    let style = &tooltip.style().text;
+                    assert_eq!(style.font_family.as_deref(), Some("Noto Sans SC"));
+                    assert_eq!(style.font_fallbacks, changed_font.fallbacks);
+                });
+            }
         });
     }
 }
