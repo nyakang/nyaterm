@@ -6757,6 +6757,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-ai-client"
+version = "2.0.2"
+dependencies = [
+ "futures",
+ "genai",
+ "httpdate",
+ "nyaterm-core",
+ "reqwest 0.13.5",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "nyaterm-app"
 version = "2.0.2"
 dependencies = [
@@ -6781,6 +6797,31 @@ dependencies = [
  "usvg 0.46.0",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nyaterm-cloud-storage"
+version = "2.0.2"
+dependencies = [
+ "futures",
+ "hex",
+ "http",
+ "httpdate",
+ "md5",
+ "nyaterm-core",
+ "opendal",
+ "quick-xml 0.40.1",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "zed-reqwest",
 ]
 
 [[package]]
@@ -6840,18 +6881,17 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "futures",
- "genai",
  "gpui",
  "gpui_platform",
  "gtk",
  "hayro",
  "hex",
- "http",
- "httpdate",
  "image",
  "keyring",
  "md5",
  "minisign-verify",
+ "nyaterm-ai-client",
+ "nyaterm-cloud-storage",
  "nyaterm-core",
  "nyaterm-files",
  "nyaterm-mcp-protocol",
@@ -6867,17 +6907,12 @@ dependencies = [
  "nyaterm-transport",
  "nyaterm-ui",
  "nyaterm-windows-rdp",
- "opendal",
- "quick-xml 0.40.1",
  "rand 0.10.3",
  "raw-window-handle",
- "rcgen",
  "redb",
  "regex",
- "reqwest 0.13.5",
  "rqrr",
  "rust-i18n",
- "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -11,7 +11,7 @@ use std::time::Duration;
 use nyaterm_core::{S3SyncSettings, WebdavSyncSettings};
 use sha2::{Digest, Sha256};
 
-pub(crate) struct Request {
+pub struct Request {
     pub method: String,
     pub target: String,
     pub headers: BTreeMap<String, String>,
@@ -54,7 +54,7 @@ impl Request {
     }
 }
 
-pub(crate) struct Reply {
+pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -89,15 +89,15 @@ impl Reply {
     }
 }
 
-pub(crate) struct Server {
-    pub(crate) endpoint: String,
-    pub(crate) requests: Arc<Mutex<Vec<Request>>>,
+pub struct Server {
+    pub endpoint: String,
+    pub requests: Arc<Mutex<Vec<Request>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Server {
-    pub(crate) fn new(mut respond: impl FnMut(&Request) -> Reply + Send + 'static) -> Self {
+    pub fn new(mut respond: impl FnMut(&Request) -> Reply + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -105,7 +105,7 @@ impl Server {
         let stopped = stop.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let received = requests.clone();
-        let thread = crate::thread_owner::spawn_joinable("cloud-fixture", move || {
+        let thread = crate::thread::spawn_joinable("cloud-fixture", move || {
             while !stopped.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {

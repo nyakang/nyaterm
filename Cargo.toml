@@ -9,6 +9,8 @@ default-members = [
 ]
 members = [
     "crates/nyaterm-app",
+    "crates/nyaterm-ai-client",
+    "crates/nyaterm-cloud-storage",
     "crates/nyaterm-core",
     "crates/nyaterm-desktop",
     "crates/nyaterm-mcp",
@@ -98,6 +100,8 @@ md5 = "0.8"
 nyaterm-core = { path = "crates/nyaterm-core" }
 nyaterm-mcp-protocol = { path = "crates/nyaterm-mcp-protocol" }
 nyaterm-desktop = { path = "crates/nyaterm-desktop" }
+nyaterm-ai-client = { path = "crates/nyaterm-ai-client" }
+nyaterm-cloud-storage = { path = "crates/nyaterm-cloud-storage" }
 nyaterm-otp = { path = "crates/nyaterm-otp" }
 nyaterm-plugin-api = { path = "crates/nyaterm-plugin-api" }
 nyaterm-plugin-host = { path = "crates/nyaterm-plugin-host" }

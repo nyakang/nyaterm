@@ -11,18 +11,18 @@ thread_local! {
     static CURRENT: RefCell<Option<Arc<Mutex<CloudSyncIoStats>>>> = const { RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static DRIVE_ENDPOINT: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn test_drive_endpoint() -> Option<String> {
     DRIVE_ENDPOINT.with_borrow(Clone::clone)
 }
 
-#[cfg(test)]
-pub(crate) fn with_test_drive_http<T>(endpoint: &str, operation: impl FnOnce() -> T) -> T {
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_test_drive_http<T>(endpoint: &str, operation: impl FnOnce() -> T) -> T {
     struct Restore(Option<String>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -33,7 +33,11 @@ pub(crate) fn with_test_drive_http<T>(endpoint: &str, operation: impl FnOnce() -
     operation()
 }
 
-pub(crate) fn begin_scope() -> (Arc<Mutex<CloudSyncIoStats>>, bool) {
+/// Join this thread's counters, or install a new root scope.
+///
+/// Only the caller receiving `true` must call [`end_scope`], after nested
+/// operations have finished. Adapters bind the same counters to their workers.
+pub fn begin_scope() -> (Arc<Mutex<CloudSyncIoStats>>, bool) {
     CURRENT.with_borrow_mut(|current| match current {
         Some(stats) => (stats.clone(), false),
         None => {
@@ -44,7 +48,8 @@ pub(crate) fn begin_scope() -> (Arc<Mutex<CloudSyncIoStats>>, bool) {
     })
 }
 
-pub(crate) fn end_scope() {
+/// Clear a root scope installed by [`begin_scope`] on the calling thread.
+pub fn end_scope() {
     CURRENT.with_borrow_mut(|current| *current = None);
 }
 
@@ -83,7 +88,7 @@ impl CountedRequest for zed_reqwest::blocking::RequestBuilder {
     fn send_counted(self) -> Result<zed_reqwest::blocking::Response, zed_reqwest::Error> {
         let (client, request) = self.build_split();
         let request = request?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let request = {
             let mut request = request;
             if let Some(endpoint) = test_drive_endpoint() {
@@ -153,8 +158,7 @@ impl CountedResponse for zed_reqwest::blocking::Response {
 #[cfg(test)]
 mod tests {
     use super::{CountedRequest, CountedResponse};
-    use crate::features::sync::io_runtime::IoScope;
-    use crate::http::cloud_sync::NativeWebdavRemote;
+    use crate::NativeWebdavRemote;
     use nyaterm_core::{CloudSyncRemote, WebdavSyncSettings};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -196,7 +200,15 @@ mod tests {
                 }
             }
         });
-        let _scope = IoScope::new("fixture");
+        struct Scope;
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                super::end_scope();
+            }
+        }
+        let _scope = Scope;
+        let (_, root) = super::begin_scope();
+        assert!(root);
         let (stats, root) = super::begin_scope();
         assert!(!root);
         let remote = NativeWebdavRemote::new(&WebdavSyncSettings {

@@ -76,6 +76,8 @@ def dependency_errors() -> list[str]:
     errors: list[str] = []
     dependency = re.compile(r"(?m)^\s*(gpui|gpui_platform|gpui-kit)\s*=")
     low_level = (
+        "nyaterm-ai-client",
+        "nyaterm-cloud-storage",
         "nyaterm-core",
         "nyaterm-transport",
         "nyaterm-files",
@@ -100,6 +102,8 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-ai-client", set()),
+        ("nyaterm-cloud-storage", set()),
         ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
         ("nyaterm-transport", {"nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-files", {"nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
@@ -124,7 +128,12 @@ def dependency_errors() -> list[str]:
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
             )
-            if wrong_sync_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_adapter_direction = (
+                crate in {"nyaterm-ai-client", "nyaterm-cloud-storage"}
+                and package.startswith("nyaterm-")
+                and package != "nyaterm-core"
+            )
+            if wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
     return errors
 

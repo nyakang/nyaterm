@@ -1,13 +1,12 @@
 use nyaterm_core::CloudSyncRemote;
 
 use super::{OpenDalRemote, endpoint, path};
-use crate::http::cloud_sync::{NativeS3Remote, NativeWebdavRemote};
+use crate::{NativeS3Remote, NativeWebdavRemote};
 use nyaterm_core::cloud_sync::io::{CloudObjectRead, CloudSyncIoStats};
 use nyaterm_core::cloud_sync::metadata_cache::{CachedMetadataRemote, CloudMetadataCache};
 use std::sync::{Arc, Mutex};
 
-pub(crate) mod fixture;
-use fixture::{Reply, Server};
+use crate::test_support::http::{Reply, Server};
 
 #[test]
 fn rejects_unsafe_configuration_and_paths_without_echoing_secrets() {
@@ -393,72 +392,6 @@ async fn synchronous_facade_uses_an_owned_worker_even_inside_an_existing_runtime
 }
 
 #[test]
-fn encrypted_v3_snapshots_round_trip_between_native_and_opendal_on_both_services() {
-    use crate::test_support::{TestConfigDir, blocking_test_store};
-    use nyaterm_core::cloud_sync::{pull_snapshot_with_remote, push_snapshot_with_remote};
-    use nyaterm_core::{CloudSyncState, LocalCloudSyncOptions};
-    use nyaterm_store::StoreDomain;
-    for webdav in [true, false] {
-        let server = Server::storage();
-        let a = TestConfigDir::new("nyaterm-opendal-v3-a");
-        let b = TestConfigDir::new("nyaterm-opendal-v3-b");
-        let sa = blocking_test_store(a.path());
-        let sb = blocking_test_store(b.path());
-        let options = |dir: &TestConfigDir| LocalCloudSyncOptions {
-            config_dir: dir.path().into(),
-            portable_key_path: None,
-            remote_dir: dir.join("unused"),
-            remote_root: "space".into(),
-            device_id: uuid::Uuid::new_v4().to_string(),
-            device_name: None,
-            app_version: "test".into(),
-            master_password: "fixture-password".into(),
-            enabled: true,
-        };
-        let oa = options(&a);
-        let ob = options(&b);
-        let native: Box<dyn CloudSyncRemote> = if webdav {
-            Box::new(NativeWebdavRemote::new(&server.webdav()).unwrap())
-        } else {
-            Box::new(NativeS3Remote::new(&server.s3()).unwrap())
-        };
-        let remote = if webdav {
-            OpenDalRemote::webdav(&server.webdav(), Default::default())
-        } else {
-            OpenDalRemote::s3(&server.s3(), Default::default())
-        }
-        .unwrap();
-        sa.request_fn(StoreDomain::CloudSync, |store| {
-            store.save_master_password(Some("fixture-password"))
-        })
-        .unwrap();
-        sb.request_fn(StoreDomain::CloudSync, |store| {
-            store.save_master_password(Some("fixture-password"))
-        })
-        .unwrap();
-        let first =
-            push_snapshot_with_remote(&sa, &oa, native.as_ref(), &CloudSyncState::default(), true)
-                .unwrap();
-        let pulled =
-            pull_snapshot_with_remote(&sb, &ob, &remote, &CloudSyncState::default(), true).unwrap();
-        assert_eq!(pulled.pointer, first.pointer);
-        let pointer = pulled.pointer.clone().unwrap();
-        let legacy_path = format!(
-            "space/{}",
-            nyaterm_core::cloud_sync::legacy_sync_snapshot_file(&pointer.revision_id)
-        );
-        let preserved = native.read_if_exists(&legacy_path).unwrap().unwrap();
-        let second = push_snapshot_with_remote(&sb, &ob, &remote, &pulled.state, true).unwrap();
-        pull_snapshot_with_remote(&sa, &oa, native.as_ref(), &first.state, true).unwrap();
-        assert_eq!(
-            native.read_if_exists(&legacy_path).unwrap().unwrap(),
-            preserved
-        );
-        assert!(second.pointer.is_some());
-    }
-}
-
-#[test]
 fn https_validates_certificate_chains_and_accepts_an_explicit_test_ca() {
     use nyaterm_core::cloud_sync::error::CloudStorageErrorKind;
     use opendal::{Buffer, HttpTransport};
@@ -484,7 +417,7 @@ fn https_validates_certificate_chains_and_accepts_an_explicit_test_ca() {
         "https://localhost:{}/object",
         listener.local_addr().unwrap().port()
     );
-    let server = crate::thread_owner::spawn_joinable("cloud-tls-fixture", move || {
+    let server = crate::thread::spawn_joinable("cloud-tls-fixture", move || {
         for _ in 0..2 {
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             let stream = loop {

@@ -10,11 +10,11 @@ use zed_reqwest::StatusCode;
 use zed_reqwest::header::{AUTHORIZATION, LOCATION};
 
 use super::error::{Failure, transport_error};
-use crate::http::cloud_sync::helpers::{
+use crate::helpers::{
     build_digest_authorization, digest_challenge_headers, path_and_query, retry_after_seconds,
     webdav_cnonce,
 };
-use crate::http::cloud_sync::webdav::redirect_target;
+use crate::webdav::redirect_target;
 
 #[derive(Clone)]
 pub(super) struct Transport {
@@ -22,7 +22,7 @@ pub(super) struct Transport {
     webdav: Option<(String, Option<SecretString>)>,
     stats: Arc<Mutex<CloudSyncIoStats>>,
     pub(super) drive: Option<Arc<super::drive_http::DriveHttp>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) test_endpoint: Option<String>,
 }
 
@@ -61,7 +61,7 @@ impl Transport {
                 .map(|settings| (settings.username.trim().into(), settings.password.clone())),
             stats,
             drive: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             test_endpoint: None,
         })
     }
@@ -93,7 +93,7 @@ impl Transport {
     ) -> opendal::Result<Response<Buffer>> {
         let (parts, body) = request.into_parts();
         let target = parts.uri.to_string();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let target = if let Some(endpoint) = &self.test_endpoint {
             let parsed = url::Url::parse(&target).map_err(|_| super::drive_http::invalid())?;
             format!(

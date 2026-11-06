@@ -6,7 +6,7 @@ use nyaterm_core::{CloudSyncError, CloudSyncRemote, WebdavSyncSettings};
 use zed_reqwest::{Method, StatusCode};
 
 use super::{NativeWebdavRemote, redirect_target};
-use crate::http::cloud_sync::helpers::{build_digest_authorization, parse_digest_challenge};
+use crate::helpers::{build_digest_authorization, parse_digest_challenge};
 
 struct Request {
     head: String,

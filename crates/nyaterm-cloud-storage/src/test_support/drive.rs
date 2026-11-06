@@ -5,17 +5,17 @@ use std::sync::{Arc, Mutex};
 use nyaterm_core::cloud_sync::credentials::DriveProvider;
 use serde_json::{Value, json};
 
-use crate::http::cloud_sync::opendal::tests::fixture::{Reply, Request, Server};
+use crate::test_support::http::{Reply, Request, Server};
 
 #[derive(Clone)]
-pub(crate) struct Node {
+pub struct Node {
     pub parent: String,
     pub name: String,
     pub folder: bool,
     pub bytes: Vec<u8>,
     pub complete: bool,
 }
-pub(crate) struct State {
+pub struct State {
     pub nodes: BTreeMap<String, Node>,
     next_id: usize,
     pub required_token: String,
@@ -56,12 +56,17 @@ impl Default for State {
         }
     }
 }
-pub(crate) struct DriveFixture {
+pub struct DriveFixture {
     pub server: Server,
     pub state: Arc<Mutex<State>>,
 }
+impl Default for DriveFixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl DriveFixture {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let state = Arc::new(Mutex::new(State::default()));
         let cloned = state.clone();
         let server = Server::new(move |req| cloned.lock().unwrap().respond(req));
@@ -79,13 +84,7 @@ fn missing() -> Reply {
     )
 }
 impl State {
-    pub(crate) fn insert(
-        &mut self,
-        parent: &str,
-        name: &str,
-        folder: bool,
-        bytes: Vec<u8>,
-    ) -> String {
+    pub fn insert(&mut self, parent: &str, name: &str, folder: bool, bytes: Vec<u8>) -> String {
         let id = format!("id{}", self.next_id);
         self.next_id += 1;
         self.nodes.insert(

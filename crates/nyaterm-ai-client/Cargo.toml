@@ -1,0 +1,19 @@
+[package]
+name = "nyaterm-ai-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures.workspace = true
+genai.workspace = true
+httpdate.workspace = true
+nyaterm-core.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid.workspace = true

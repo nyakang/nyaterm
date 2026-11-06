@@ -20,9 +20,9 @@ use super::error::{Failure, failure, map_error, storage_error};
 use super::path as validate_path;
 use super::transport::Transport;
 use super::worker::Worker;
-use crate::http::cloud_sync::CloudTokenSink;
-use crate::http::cloud_sync::helpers::percent_encode_path;
-use crate::http::cloud_sync::listing::{ListingProgress, name, next, validate_next_link};
+use crate::CloudTokenSink;
+use crate::helpers::percent_encode_path;
+use crate::listing::{ListingProgress, name, next, validate_next_link};
 use nyaterm_core::cloud_sync::error::CloudStorageErrorKind;
 
 const FOLDER: &str = "application/vnd.google-apps.folder";
@@ -35,26 +35,26 @@ struct Session {
     transport: Transport,
 }
 
-pub(crate) struct OpenDalDriveRemote {
+pub struct OpenDalDriveRemote {
     session: Session,
     worker: Worker<()>,
 }
 impl OpenDalDriveRemote {
-    pub(crate) fn google_drive(
+    pub fn google_drive(
         settings: &OAuthDriveSyncSettings,
         sink: CloudTokenSink,
         stats: Arc<Mutex<CloudSyncIoStats>>,
     ) -> Result<Self, CloudSyncError> {
         Self::new(DriveProvider::Google, settings, "default", sink, stats)
     }
-    pub(crate) fn onedrive(
+    pub fn onedrive(
         settings: &OAuthDriveSyncSettings,
         sink: CloudTokenSink,
         stats: Arc<Mutex<CloudSyncIoStats>>,
     ) -> Result<Self, CloudSyncError> {
         Self::new(DriveProvider::OneDrive, settings, "default", sink, stats)
     }
-    pub(crate) fn aliyun_drive(
+    pub fn aliyun_drive(
         settings: &AliyunDriveSyncSettings,
         sink: CloudTokenSink,
         stats: Arc<Mutex<CloudSyncIoStats>>,
@@ -91,9 +91,9 @@ impl OpenDalDriveRemote {
         let mut transport =
             Transport::new(stats, None).map_err(|e| map_error(label, "configure", e))?;
         transport.drive = Some(DriveHttp::new(provider, settings, sink));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
-            transport.test_endpoint = crate::http::cloud_sync::metrics::test_drive_endpoint();
+            transport.test_endpoint = crate::metrics::test_drive_endpoint();
         }
         Ok(Self {
             session: Session {
