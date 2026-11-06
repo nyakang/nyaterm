@@ -57,10 +57,12 @@ The terminal itself also accepts `Ctrl / Cmd + V` and context-menu paste.
 | `Ctrl / Cmd + -` | Zoom out |
 | `Ctrl / Cmd + 0` | Reset zoom |
 | `Ctrl / Cmd + ,` | Open settings |
-| `Ctrl / Cmd + Alt + I` | Open AI chat |
-| `Ctrl / Cmd + Shift + P` | Open the bottom quick commands panel |
+| `Ctrl / Cmd + Alt + I` | Open AI assistant |
+| `Ctrl / Cmd + Shift + P` | Show/hide the bottom quick commands panel |
 
-`Ctrl / Cmd + Shift + P` is labeled **Show all commands** in settings. It opens the bottom quick commands panel, not the Command Palette overlay — that one is `Ctrl / Cmd + Shift + S`.
+`Ctrl / Cmd + Shift + P` is labeled **Show/Hide Quick Commands Panel** in settings. Opening it focuses the search field; pressing the shortcut again hides the panel and returns focus to the workspace. Reopening preserves filters and panel height. The welcome screen’s **Open Quick Commands** action only opens the panel.
+
+`Ctrl / Cmd + Shift + S` opens the Command Palette overlay to search workspace tabs, connecting sessions, and saved connections.
 
 ## File explorer
 

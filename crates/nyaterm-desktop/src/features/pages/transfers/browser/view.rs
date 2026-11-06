@@ -597,6 +597,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                     .child(
                         div()
                             .id(SharedString::from("transfer-browser-table-scroll"))
+                            .debug_selector(|| "transfer-browser-table-scroll".into())
                             .size_full()
                             .min_w_0()
                             .overflow_x_scroll()

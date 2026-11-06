@@ -486,8 +486,9 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use gpui::{
-        AppContext as _, ClipboardItem, IntoElement, Modifiers, ParentElement as _, Render,
-        Styled as _, TestAppContext, VisualTestContext, div, point, px,
+        AppContext as _, ClipboardItem, IntoElement, Modifiers, MouseButton, MouseDownEvent,
+        MouseUpEvent, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
+        div, point, px,
     };
     use gpui_kit::component::input::{Paste, SelectAll};
 
@@ -531,6 +532,44 @@ mod tests {
             _ = window.draw(cx);
         });
         (field, cx)
+    }
+
+    #[gpui::test]
+    fn scrollback_number_selection_keeps_editor_focus_with_accessibility_active(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) = number_fixture(
+            cx,
+            "10000",
+            NyaNumberInputOptions::default()
+                .range(100., 100_000.)
+                .step(100.)
+                .decimal_places(0),
+        );
+        assert!(cx.activate_accessibility());
+        cx.update(|window, cx| window.blur(cx));
+        cx.simulate_click(point(px(100.), px(16.)), Modifiers::default());
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(100.), px(16.)),
+            modifiers: Modifiers::default(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: point(px(100.), px(16.)),
+            modifiers: Modifiers::default(),
+            click_count: 2,
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            assert!(window.is_a11y_active());
+            assert!(field.read(cx).component_focus_handle(cx).is_focused(window));
+            let input = field.read(cx).component_state().unwrap();
+            assert_eq!(input.read(cx).selected_value(), "10000");
+            assert_eq!(field.read(cx).value(cx), "10000");
+        });
     }
 
     #[gpui::test]

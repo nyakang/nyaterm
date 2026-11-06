@@ -19,7 +19,7 @@ use crate::models::{
     SettingsTab,
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::NyaTooltip;
+use nyaterm_ui::{NyaDialogWindowExt as _, NyaTooltip, nya_popup_is_active};
 
 use super::state::PANEL_STACK_MIN_HEIGHT;
 
@@ -32,8 +32,6 @@ const NON_PANEL_IDS: &[&str] = &["settings", "lock", "quickCmdBar", "serialSend"
 /// title bar sits above the workspace surface, and the activity rail is inset.
 const FLOATING_PANEL_TITLE_BAR_HEIGHT: f32 = 40.;
 const FLOATING_PANEL_ACTIVITY_BAR_WIDTH: f32 = 40.;
-/// Press/release displacement above this is a drag, not a click.
-const FLOATING_PANEL_CLICK_SLOP: f32 = 4.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SidePanelStackRenderMode {
@@ -248,62 +246,98 @@ impl NyaTermApp {
         ))
     }
 
-    /// Records a primary-button press that started outside the open overlays.
-    ///
-    /// Called from the root capture handler, before any child can toggle a
-    /// panel. A press inside either open overlay clears the record instead, so
-    /// panel controls, dropdown triggers and window-deferred bullets never arm
-    /// a dismissal.
+    fn position_inside_floating_panel(&self, position: Point<Pixels>) -> bool {
+        [PanelSide::Left, PanelSide::Right]
+            .into_iter()
+            .filter_map(|side| self.floating_panel_window_bounds(side))
+            .any(|bounds| bounds.contains(&position))
+    }
+
+    /// Popups get the first dismissal click, including menus painted beyond
+    /// the panel bounds. Read their existing owners before mouse-down can
+    /// dismiss them or move focus back to the workspace.
+    pub(in crate::features) fn floating_panel_dismissal_is_blocked(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        window.has_active_prompt()
+            || window.has_active_nya_dialog(cx)
+            || nya_popup_is_active(window, cx)
+            || self.ai.transient_menus_are_open()
+            || self.remote_ops.docker_menus_open()
+            || self.shell.open_tabs_menu_is_open()
+            || self.shell.new_session_menu_is_open()
+            || self.shell.header_status_menu_is_open()
+            || self.shell.activity_bar_context_menu().is_some()
+            || self.transfer.browser_view().favorites_menu.is_some()
+            || self.transfer.browser_view().path_menu.is_some()
+            || self.transfer.browser_view().upload_menu.is_some()
+    }
+
     pub(in crate::features) fn note_floating_panel_outside_press(
         &mut self,
         position: Point<Pixels>,
     ) {
-        if !self.shell.panel_is_floating() {
-            self.shell.panels.clear_floating_outside_press();
+        self.shell.panels.clear_floating_outside_press();
+        if !self.shell.panel_is_floating() || self.position_inside_floating_panel(position) {
             return;
         }
-        let inside_panel = [PanelSide::Left, PanelSide::Right]
+        if [PanelSide::Left, PanelSide::Right]
             .into_iter()
-            .filter(|side| self.shell.panels.floating_panel(*side).is_some())
-            .filter_map(|side| self.floating_panel_window_bounds(side))
-            .any(|bounds| bounds.contains(&position));
-        if inside_panel {
-            self.shell.panels.clear_floating_outside_press();
-            return;
+            .any(|side| self.floating_panel_window_bounds(side).is_some())
+        {
+            self.shell.panels.set_floating_outside_press(position);
         }
-        let Some(side) = self.shell.panels.last_floating_side else {
-            return;
-        };
-        let Some(panel) = self.shell.panels.floating_panel(side) else {
-            return;
-        };
-        self.shell
-            .panels
-            .set_floating_outside_press(side, panel, position);
     }
 
-    /// Schedules the outside-click check for after the current input dispatch.
-    ///
-    /// The root capture mouse-up runs before the activity bar button's own
-    /// click handler. Deferring keeps the panel state snapshot accurate, so a
-    /// click that opens, closes or switches a panel never dismisses it again.
+    /// Terminal pointer handlers can stop bubbling before the root's menu
+    /// dismissal runs. Preserve popup priority while closing AI's own menus
+    /// from their own outside handlers, using the menu's bounds rather than
+    /// the panel's. Component popups and dialogs handle their own dismissal.
+    pub(in crate::features) fn dismiss_floating_ai_menu_on_outside_press(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.panel_is_floating()
+            || !self.ai.transient_menus_are_open()
+            || window.has_active_prompt()
+            || window.has_active_nya_dialog(cx)
+            || nya_popup_is_active(window, cx)
+        {
+            return;
+        }
+        self.shell.panels.clear_floating_outside_press();
+        if self.ai.history_is_open() {
+            self.close_ai_history(window, cx);
+        }
+        self.ai.close_transient_menus();
+        self.defer_ai_panel_snapshot_flush(cx);
+        cx.notify();
+    }
+
+    /// Capture runs before the activity icon's click. Defer until that click
+    /// has invalidated the press if it opened, closed or replaced a panel.
     pub(in crate::features) fn defer_floating_panel_outside_click(
         &mut self,
         position: Point<Pixels>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) {
-        self.defer_app_update(cx, move |this, cx| {
-            this.finish_floating_panel_outside_click(position, cx);
+        let app = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let _ = app.update(cx, |this, cx| {
+                if this.floating_panel_dismissal_is_blocked(window, cx) {
+                    this.shell.panels.clear_floating_outside_press();
+                } else {
+                    this.finish_floating_panel_outside_click(position, cx);
+                }
+            });
         });
     }
 
-    /// Closes the floating overlay after a completed click outside it.
-    ///
-    /// Runs after the activity bar button's own click, so a click that opens or
-    /// toggles a panel has already changed the panel state and cleared the
-    /// pending record. Movement beyond `FLOATING_PANEL_CLICK_SLOP` or a release
-    /// inside the panel is a drag, not a click.
-    pub(in crate::features) fn finish_floating_panel_outside_click(
+    fn finish_floating_panel_outside_click(
         &mut self,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
@@ -311,90 +345,21 @@ impl NyaTermApp {
         let Some(press) = self.shell.panels.take_floating_outside_press() else {
             return;
         };
-        if self.shell.panels.floating_panel(press.side) != Some(press.panel) {
+        if !self.shell.panel_is_floating()
+            || press.panels
+                != [
+                    self.shell.panels.floating_left,
+                    self.shell.panels.floating_right,
+                ]
+            || self.position_inside_floating_panel(position)
+            || !press.is_click_at(position)
+        {
             return;
         }
-        let Some(bounds) = self.floating_panel_window_bounds(press.side) else {
-            return;
-        };
-        if bounds.contains(&position) {
-            return;
-        }
-        let dx = f32::from(position.x - press.position.x);
-        let dy = f32::from(position.y - press.position.y);
-        if dx.abs().max(dy.abs()) > FLOATING_PANEL_CLICK_SLOP {
-            return;
-        }
-        self.close_floating_panel(press.side, cx);
-    }
-
-    /// Installs the window focus listeners that dismiss unfocused floating overlays.
-    ///
-    /// Called once per window after the shell focus handles exist.
-    pub(in crate::features) fn install_floating_panel_focus_dismiss(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.shell.panels.floating_focus_listeners_are_installed() {
-            return;
-        }
-        let (Some(left), Some(right)) = (
-            self.shell
-                .panels
-                .floating_focus_handle(PanelSide::Left)
-                .cloned(),
-            self.shell
-                .panels
-                .floating_focus_handle(PanelSide::Right)
-                .cloned(),
-        ) else {
-            return;
-        };
-        let left_subscription = cx.on_focus_out(&left, window, |this, _, window, cx| {
-            this.close_floating_panel_after_focus_out(PanelSide::Left, window, cx);
-        });
-        let right_subscription = cx.on_focus_out(&right, window, |this, _, window, cx| {
-            this.close_floating_panel_after_focus_out(PanelSide::Right, window, cx);
-        });
-        self.shell
-            .panels
-            .set_floating_focus_subscriptions(vec![left_subscription, right_subscription]);
-    }
-
-    /// Moves keyboard focus into a floating overlay shown since the last render.
-    ///
-    /// Focus must start inside the overlay so that leaving it can be observed
-    /// as a focus-out of the overlay container.
-    pub(in crate::features) fn apply_pending_floating_focus(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(side) = self.shell.panels.take_pending_floating_focus() else {
-            return;
-        };
-        if !self.shell.panel_is_floating() || self.shell.panels.floating_panel(side).is_none() {
-            return;
-        }
-        if let Some(handle) = self.shell.panels.floating_focus_handle(side).cloned() {
-            window.focus(&handle, cx);
-        }
-    }
-
-    fn close_floating_panel_after_focus_out(
-        &mut self,
-        side: PanelSide,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Switching apps or opening a child window deactivates this window and
-        // would otherwise read as a focus loss. The overlay must survive it so
-        // it is still there when the window becomes active again.
-        if !window.is_window_active() {
-            return;
-        }
-        self.close_floating_panel(side, cx);
+        let browser_was_visible = self.transfer_browser_is_visible();
+        self.shell.panels.clear_floating();
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        cx.notify();
     }
 
     pub(in crate::features) fn side_open_panel_ids(&self, side: PanelSide) -> Vec<String> {
@@ -1490,10 +1455,12 @@ fn header_svg_icon_button_with_color(
 
 #[cfg(test)]
 mod tests {
+    mod floating;
+
     use gpui::{
-        Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
-        MouseMoveEvent, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
-        Window, deferred, div, point, prelude::FluentBuilder as _, px,
+        Context, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
+        MouseMoveEvent, ParentElement as _, Render, Styled as _, TestAppContext, Window, div,
+        point, px,
     };
 
     use crate::features::NyaTermApp;
@@ -1522,62 +1489,6 @@ mod tests {
                     .h_full()
                     .child(panel),
             )
-        }
-    }
-
-    /// Minimal window that mirrors the real floating overlay: one container
-    /// owns the shell's floating focus handle, with focusable children and a
-    /// deferred popup-like layer inside it.
-    struct FloatingFocusFixture {
-        app: Entity<NyaTermApp>,
-        side: PanelSide,
-        inside_a: FocusHandle,
-        inside_b: FocusHandle,
-        popup: FocusHandle,
-        outside: FocusHandle,
-    }
-
-    impl Render for FloatingFocusFixture {
-        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let panel_focus = self
-                .app
-                .read(cx)
-                .shell
-                .panels
-                .floating_focus_handle(self.side)
-                .cloned();
-            div()
-                .size_full()
-                .child(
-                    div()
-                        .id("floating-focus-outside")
-                        .track_focus(&self.outside)
-                        .h(px(40.))
-                        .w_full(),
-                )
-                .child(
-                    div()
-                        .id("floating-focus-container")
-                        .when_some(panel_focus, |this, focus| this.track_focus(&focus))
-                        .child(
-                            div()
-                                .id("floating-focus-inside-a")
-                                .track_focus(&self.inside_a)
-                                .h(px(40.)),
-                        )
-                        .child(
-                            div()
-                                .id("floating-focus-inside-b")
-                                .track_focus(&self.inside_b)
-                                .h(px(40.)),
-                        )
-                        .child(deferred(
-                            div()
-                                .id("floating-focus-popup")
-                                .track_focus(&self.popup)
-                                .h(px(40.)),
-                        )),
-                )
         }
     }
 
@@ -1780,101 +1691,6 @@ mod tests {
     }
 
     #[test]
-    fn floating_panel_dismisses_when_focus_leaves_but_not_between_inner_elements() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-panel-focus");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "focus-test");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.toggle_floating_panel(NavItem::AiAssistant, PanelSide::Left, cx);
-        });
-        let panel_handle = app.update(&mut cx, |app, _| {
-            app.shell
-                .panels
-                .floating_focus_handle(PanelSide::Left)
-                .cloned()
-                .expect("floating focus handle")
-        });
-
-        let inside_a = cx.update(|cx| cx.focus_handle());
-        let inside_b = cx.update(|cx| cx.focus_handle());
-        let popup = cx.update(|cx| cx.focus_handle());
-        let outside = cx.update(|cx| cx.focus_handle());
-        let (_fixture, cx) = cx.add_window_view(|_, _| FloatingFocusFixture {
-            app: app.clone(),
-            side: PanelSide::Left,
-            inside_a: inside_a.clone(),
-            inside_b: inside_b.clone(),
-            popup: popup.clone(),
-            outside: outside.clone(),
-        });
-
-        cx.update(|window, _| window.activate_window());
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            app.update(cx, |app, cx| {
-                app.install_floating_panel_focus_dismiss(window, cx);
-            });
-            _ = window.draw(cx);
-        });
-
-        // Opening the overlay hands keyboard focus to it; otherwise leaving it
-        // could never be observed.
-        cx.update(|window, cx| {
-            app.update(cx, |app, cx| app.apply_pending_floating_focus(window, cx));
-            _ = window.draw(cx);
-        });
-        cx.update(|window, cx| {
-            assert_eq!(
-                window.focused(cx),
-                Some(panel_handle.clone()),
-                "a freshly opened floating overlay owns focus"
-            );
-        });
-
-        let panel_is_open = |cx: &mut VisualTestContext| {
-            cx.update(|_, cx| app.read(cx).shell.floating_panel(PanelSide::Left).is_some())
-        };
-        let focus_and_draw = |cx: &mut VisualTestContext, handle: &FocusHandle| {
-            let handle = handle.clone();
-            cx.update(|window, cx| {
-                window.focus(&handle, cx);
-                _ = window.draw(cx);
-            });
-        };
-
-        focus_and_draw(cx, &inside_a);
-        assert!(panel_is_open(cx), "focus inside overlay must keep it open");
-
-        focus_and_draw(cx, &inside_b);
-        assert!(
-            panel_is_open(cx),
-            "focus moving between overlay children must keep it open"
-        );
-
-        focus_and_draw(cx, &popup);
-        assert!(
-            panel_is_open(cx),
-            "focus inside a deferred popup layer must keep it open"
-        );
-
-        focus_and_draw(cx, &outside);
-        assert!(
-            !panel_is_open(cx),
-            "focus leaving the overlay must dismiss it"
-        );
-
-        // A second focus-out after dismissal must not produce a second close.
-        focus_and_draw(cx, &inside_a);
-        focus_and_draw(cx, &outside);
-        assert!(
-            !panel_is_open(cx),
-            "repeated focus-out must not re-open or re-close the overlay"
-        );
-    }
-
-    #[test]
     fn exclusive_panel_overlay_takes_precedence_over_stack_construction() {
         assert_eq!(
             side_panel_stack_render_mode(Some(NavItem::AiAssistant)),
@@ -1914,195 +1730,5 @@ mod tests {
             app.close_floating_panel(PanelSide::Right, cx);
             assert!(!app.panel_is_rendered(NavItem::GpuMonitor));
         });
-    }
-
-    #[test]
-    fn floating_panel_outside_press_and_click_closes_it() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-outside");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-            let bounds = app
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            let outside = point(bounds.right() + px(40.), bounds.center().y);
-            app.note_floating_panel_outside_press(outside);
-            app.finish_floating_panel_outside_click(outside, cx);
-            assert_eq!(app.shell.panels.floating_left, None);
-        });
-    }
-
-    #[test]
-    fn floating_panel_inside_press_and_click_keeps_it_open() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-inside");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-            let bounds = app
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            // A dropdown trigger, switch or window-deferred bullet inside the
-            // container must never arm a dismissal.
-            let inside = point(bounds.right() - px(2.), bounds.center().y);
-            app.note_floating_panel_outside_press(inside);
-            app.finish_floating_panel_outside_click(inside, cx);
-            assert_eq!(
-                app.shell.panels.floating_left,
-                Some(NavItem::AiAssistant),
-                "clicks inside the floating container must not dismiss it"
-            );
-            assert!(
-                app.shell.panels.take_floating_outside_press().is_none(),
-                "an inside press must not leave a pending record"
-            );
-        });
-    }
-
-    #[test]
-    fn opening_click_does_not_close_the_panel_it_opens() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-open");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-            let bounds = app
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            let outside = point(bounds.right() + px(40.), bounds.center().y);
-            // Replay the activity-bar click: press while closed, open on click,
-            // then the root click handler runs.
-            app.shell.panels.set_floating_panel(PanelSide::Left, None);
-            app.note_floating_panel_outside_press(outside);
-            app.toggle_floating_panel(NavItem::AiAssistant, PanelSide::Left, cx);
-            app.finish_floating_panel_outside_click(outside, cx);
-            assert_eq!(app.shell.panels.floating_left, Some(NavItem::AiAssistant));
-        });
-    }
-
-    #[test]
-    fn outside_press_after_panel_toggle_does_not_close_twice() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-toggle");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-            let bounds = app
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            let outside = point(bounds.right() + px(40.), bounds.center().y);
-            app.note_floating_panel_outside_press(outside);
-            // Same activity-bar icon pressed again: its click closes the panel
-            // and invalidates the pending record.
-            app.toggle_floating_panel(NavItem::AiAssistant, PanelSide::Left, cx);
-            app.finish_floating_panel_outside_click(outside, cx);
-            assert_eq!(app.shell.panels.floating_left, None);
-            assert!(
-                app.shell.panels.take_floating_outside_press().is_none(),
-                "the toggle must consume the pending record so the path stays idempotent"
-            );
-        });
-    }
-
-    #[test]
-    fn dragging_outside_does_not_dismiss_floating_panel() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-drag");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-            let bounds = app
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            let outside = point(bounds.right() + px(40.), bounds.center().y);
-
-            // A press further away from its release is a drag.
-            app.note_floating_panel_outside_press(outside);
-            app.finish_floating_panel_outside_click(point(outside.x + px(20.), outside.y), cx);
-            assert_eq!(app.shell.panels.floating_left, Some(NavItem::AiAssistant));
-
-            // Dragging from outside into the panel must not dismiss it either.
-            app.note_floating_panel_outside_press(outside);
-            app.finish_floating_panel_outside_click(bounds.center(), cx);
-            assert_eq!(app.shell.panels.floating_left, Some(NavItem::AiAssistant));
-        });
-    }
-
-    #[test]
-    fn outside_click_event_dismisses_floating_panel_but_inside_does_not() {
-        let test_dir = TestConfigDir::new("nyaterm-floating-click-window");
-        let mut cx = TestAppContext::single();
-        let _cleanup = TestAppCleanup::new(&cx);
-        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "floating-click");
-        app.update(&mut cx, |app, cx| {
-            // The full root renders component widgets that read the global
-            // component theme, which production installs during startup.
-            app.sync_component_theme(cx);
-            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
-            app.shell
-                .panels
-                .set_floating_panel(PanelSide::Left, Some(NavItem::AiAssistant));
-        });
-        let (_root, vcx) = cx.add_window_view({
-            let app = app.clone();
-            move |window, cx| nyaterm_ui::nya_root(app.clone(), window, cx)
-        });
-        let viewport = vcx.update(|window, _| window.viewport_size());
-        vcx.update(|_, cx| {
-            app.update(cx, |app, _| {
-                app.shell.set_viewport_size_for_test((
-                    f32::from(viewport.width),
-                    f32::from(viewport.height),
-                ));
-            });
-        });
-        let (inside, outside) = vcx.update(|_, cx| {
-            let bounds = app
-                .read(cx)
-                .floating_panel_window_bounds(PanelSide::Left)
-                .expect("the left floating panel is open");
-            (
-                point(bounds.right() - px(2.), bounds.center().y),
-                point(bounds.right() + px(40.), bounds.center().y),
-            )
-        });
-        vcx.update(|window, cx| {
-            _ = window.draw(cx);
-        });
-
-        vcx.simulate_click(inside, Modifiers::default());
-        assert_eq!(
-            vcx.update(|_, cx| app.read(cx).shell.panels.floating_left),
-            Some(NavItem::AiAssistant),
-            "a click inside the rendered container must not dismiss it"
-        );
-
-        vcx.simulate_click(outside, Modifiers::default());
-        assert_eq!(
-            vcx.update(|_, cx| app.read(cx).shell.panels.floating_left),
-            None,
-            "a click outside the container must dismiss the floating panel"
-        );
     }
 }

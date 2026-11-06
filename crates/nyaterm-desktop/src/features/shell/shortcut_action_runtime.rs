@@ -1,7 +1,7 @@
 use gpui::{Context, Div, InteractiveElement, Stateful, Window};
 
 use crate::features::NyaTermApp;
-use crate::models::{BottomPanelMode, NavItem, StartupCommandAction};
+use crate::models::{NavItem, StartupCommandAction};
 use crate::shortcuts::{
     CloseTab, CopySelectedConnections, DuplicateSession, DuplicateSessionWithCommand, LockScreen,
     ManageSyncGroups, MultiplexSsh, MultiplexSshWithCommand, NewLocalTerminal, NewSession, NextTab,
@@ -257,9 +257,7 @@ impl NyaTermApp {
                 cx.notify();
             }
             ShortcutId::ShowAllCommands => {
-                self.set_bottom_panel_mode(BottomPanelMode::QuickCommands);
-                self.shell.set_status("quick commands opened".to_string());
-                cx.notify();
+                self.toggle_quick_commands_panel(window, cx);
             }
             ShortcutId::RenameFile => {
                 if self.selected_transfer_entries().len() == 1

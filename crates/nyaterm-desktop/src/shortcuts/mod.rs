@@ -796,7 +796,7 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 41] = [
         "ctrl+shift+p",
         "meta+shift+p",
         Supported,
-        "Opens quick commands."
+        "Shows or hides the bottom quick commands panel."
     ),
     shortcut!(
         RenameFile,
