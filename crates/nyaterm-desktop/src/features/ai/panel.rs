@@ -806,6 +806,15 @@ impl AiPanel {
             .p_1()
             .flex()
             .flex_col()
+            .on_mouse_down_out(
+                cx.listener(|panel, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Left {
+                        panel.with_app(cx, |app, cx| {
+                            app.dismiss_floating_ai_menu_on_outside_press(window, cx);
+                        });
+                    }
+                }),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         if snapshot.enabled_models.is_empty() {
             return menu
@@ -922,6 +931,10 @@ impl AiPanel {
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("ai-model-choice-{}", model.id)))
+                    .debug_selector({
+                        let model_id = model.id.clone();
+                        move || format!("ai-model-choice-{model_id}")
+                    })
                     .h(px(34.))
                     .flex_none()
                     .px_2()
@@ -1183,6 +1196,15 @@ impl AiPanel {
             .py_1()
             .flex()
             .flex_col()
+            .on_mouse_down_out(
+                cx.listener(|panel, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Left {
+                        panel.with_app(cx, |app, cx| {
+                            app.dismiss_floating_ai_menu_on_outside_press(window, cx);
+                        });
+                    }
+                }),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -1642,6 +1664,15 @@ impl AiPanel {
             .flex_col()
             .overflow_hidden()
             .occlude()
+            .on_mouse_down_out(
+                cx.listener(|panel, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Left {
+                        panel.with_app(cx, |app, cx| {
+                            app.dismiss_floating_ai_menu_on_outside_press(window, cx);
+                        });
+                    }
+                }),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .when_some(search_input, |this, search_input| {
                 this.child(

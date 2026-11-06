@@ -386,7 +386,7 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 41] = [
         "settings.shortcutLabels.copy",
         Terminal,
         ShortcutKind::Direct,
-        "ctrl+shift+c",
+        "ctrl+insert,ctrl+shift+c",
         "meta+shift+c",
         Supported,
         "Copies the current selection, otherwise the visible terminal text."
@@ -1067,6 +1067,30 @@ fn gpui_bindings(resolved: &ResolvedKeymap, cx: &App) -> Vec<KeyBinding> {
             }
         }
     }
+    // Windows terminals reserve Ctrl+Insert for local copy. Keep it bound even
+    // when the user customized `terminal.copy`: otherwise the chord falls
+    // through to the terminal key encoder and leaks `CSI 2;5~` to the PTY.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let ctrl_insert_claimed = resolved.shortcuts.iter().any(|shortcut| {
+            shortcut.binding.chords().iter().any(|chord| {
+                let keystroke = chord.keystroke();
+                keystroke.key == "insert"
+                    && keystroke.modifiers.control
+                    && !keystroke.modifiers.shift
+                    && !keystroke.modifiers.alt
+                    && !keystroke.modifiers.platform
+            })
+        });
+        if !ctrl_insert_claimed {
+            bindings.push(dynamic_key_binding(
+                "ctrl-insert",
+                TerminalCopy,
+                ShortcutScope::Terminal.context(),
+                cx,
+            ));
+        }
+    }
     bindings
 }
 
@@ -1648,6 +1672,64 @@ mod tests {
         // complete replacement remains possible without appending stale entries.
         keymap.clear();
         assert_eq!(keymap.bindings().len(), 0);
+    }
+
+    /// Windows terminals treat Ctrl+Insert as local copy. The terminal surface
+    /// forwards any key the keymap does not consume, so an unbound Ctrl+Insert
+    /// reaches the PTY as `CSI 2;5~`.
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn ctrl_insert_copies_locally_without_displacing_existing_copy_chords(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let resolved = ResolvedKeymap::resolve(&HashMap::new());
+        let keymap = Keymap::new(cx.update(|cx| gpui_bindings(&resolved, cx)));
+        let terminal_contexts = [
+            KeyContext::parse(WORKSPACE_KEY_CONTEXT).unwrap(),
+            KeyContext::parse("Terminal").unwrap(),
+        ];
+
+        let ctrl_insert = gpui::Keystroke::parse("ctrl-insert").unwrap();
+        let (actions, pending) =
+            keymap.bindings_for_input(std::slice::from_ref(&ctrl_insert), &terminal_contexts);
+        assert!(!pending);
+        assert!(actions[0].action().partial_eq(&TerminalCopy));
+        assert_eq!(
+            resolve_invocation(&resolved, &ctrl_insert, &terminal_contexts),
+            Some(ShortcutInvocation {
+                id: ShortcutId::TerminalCopy,
+                tab_index: None,
+            })
+        );
+
+        // Adding the Windows alternative must keep the existing chords bound.
+        let ctrl_shift_c = gpui::Keystroke::parse("ctrl-shift-c").unwrap();
+        let (actions, pending) =
+            keymap.bindings_for_input(std::slice::from_ref(&ctrl_shift_c), &terminal_contexts);
+        assert!(!pending);
+        assert!(actions[0].action().partial_eq(&TerminalCopy));
+
+        // Nested search inputs keep Ctrl+Insert for their own editing.
+        let input_contexts = [
+            KeyContext::parse(WORKSPACE_KEY_CONTEXT).unwrap(),
+            KeyContext::parse("Terminal").unwrap(),
+            KeyContext::parse("Input").unwrap(),
+        ];
+        assert_eq!(
+            resolve_invocation(&resolved, &ctrl_insert, &input_contexts),
+            None
+        );
+
+        // A persisted override of terminal.copy replaces the default chords but
+        // must not restore the PTY leak: Ctrl+Insert has to stay bound to copy.
+        let overridden = ResolvedKeymap::resolve(&HashMap::from([(
+            "terminal.copy".to_string(),
+            "ctrl-shift-c".to_string(),
+        )]));
+        let keymap = Keymap::new(cx.update(|cx| gpui_bindings(&overridden, cx)));
+        let (actions, pending) = keymap.bindings_for_input(&[ctrl_insert], &terminal_contexts);
+        assert!(!pending);
+        assert!(actions[0].action().partial_eq(&TerminalCopy));
     }
 
     #[test]

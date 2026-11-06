@@ -613,6 +613,10 @@ impl NyaTermApp {
 
         div()
             .id(SharedString::from(format!("activity-{entry_id}")))
+            .debug_selector({
+                let entry_id = entry_id.clone();
+                move || format!("activity-{entry_id}")
+            })
             .relative()
             .when(show_labels, |this| {
                 this.w_full()

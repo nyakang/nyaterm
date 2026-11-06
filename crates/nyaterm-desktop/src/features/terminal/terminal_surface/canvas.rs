@@ -1444,4 +1444,123 @@ mod tests {
             false, false, false, false
         ));
     }
+
+    /// Ctrl+Insert must be consumed by the terminal copy action. The canvas
+    /// `on_key_down` handler is the PTY fallback, so reaching it writes
+    /// `\x1b[2;5~` to the session.
+    #[test]
+    fn ctrl_insert_is_consumed_before_the_terminal_key_fallback() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        use gpui::{
+            AppContext as _, Bounds, Entity, Point, Render, Size, TestAppContext, Window, px,
+        };
+        use nyaterm_transport::TelnetSessionConfig;
+
+        use crate::features::NyaTermApp;
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::shortcuts::{WORKSPACE_KEY_CONTEXT, rebuild_keymap};
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+        struct TerminalKeyDispatchView {
+            app: Entity<NyaTermApp>,
+        }
+
+        impl Render for TerminalKeyDispatchView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                use gpui::prelude::*;
+
+                let app = self.app.clone();
+                let terminal = app.update(cx, |app, cx| {
+                    let focus = app.terminal.input.focus.clone();
+                    gpui::div()
+                        .id("terminal-key-surface")
+                        .size_full()
+                        .key_context(super::TERMINAL_KEY_CONTEXT)
+                        .track_focus(&focus)
+                        .on_key_down(cx.listener(
+                            |app: &mut NyaTermApp, event: &gpui::KeyDownEvent, window, cx| {
+                                app.handle_terminal_surface_key_down(event, window, cx);
+                            },
+                        ))
+                });
+                app.update(cx, |app, cx| {
+                    app.with_shortcut_action_handlers(
+                        gpui::div()
+                            .id("terminal-key-root")
+                            .size_full()
+                            .key_context(WORKSPACE_KEY_CONTEXT)
+                            .child(terminal),
+                        cx,
+                    )
+                })
+            }
+        }
+
+        let dir = TestConfigDir::new("nyaterm-terminal-ctrl-insert-dispatch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        let manager = cx.update_entity(&app, |app, _| app.session.manager_handle());
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let info = manager
+            .create_telnet_session(TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                raw_tcp: true,
+                ..TelnetSessionConfig::default()
+            })
+            .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        cx.update_entity(&app, |app, _| {
+            let metadata = app.session.metadata("s1").unwrap().clone();
+            app.session.register_session_metadata(&info.id, metadata);
+            app.session.select_active_session(&info.id);
+            app.terminal.layout.surface_bounds = Some(Bounds {
+                origin: Point::default(),
+                size: Size {
+                    width: px(800.0),
+                    height: px(600.0),
+                },
+            });
+            app.terminal
+                .seed_session_view(info.id.clone(), "root@host:~# ls\n".into(), "UTF-8");
+        });
+        cx.update(|cx| rebuild_keymap(&HashMap::new(), cx));
+        let (_, vcx) = cx.add_window_view(|_, _| TerminalKeyDispatchView { app: app.clone() });
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let focus = app.read(cx).terminal.input.focus.clone();
+            window.focus(&focus, cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("ctrl-insert");
+        vcx.run_until_parked();
+
+        let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert!(
+            copied.unwrap_or_default().contains("root@host"),
+            "Ctrl+Insert did not run the local copy action"
+        );
+
+        cx.update_entity(&app, |app, _| {
+            app.write_session_protocol_response(&info.id, b"CLICK")
+                .unwrap();
+        });
+        let mut received = [0u8; 5];
+        peer.read_exact(&mut received)
+            .unwrap_or_else(|error| panic!("session received no sentinel bytes: {error}"));
+        assert_eq!(
+            &received, b"CLICK",
+            "Ctrl+Insert leaked {received:?} to the PTY"
+        );
+        manager.close(&info.id).unwrap();
+    }
 }

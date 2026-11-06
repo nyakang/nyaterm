@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use crate::models::{NavItem, PanelResizeSide, PanelSide};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, IntoElement, KeyDownEvent, MouseButton,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render, SharedString, Stateful,
-    Window, canvas, deferred, div, img, prelude::*, px, rgb, rgba, svg,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render,
+    SharedString, Stateful, Window, canvas, deferred, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use rust_i18n::t;
 
@@ -357,6 +357,25 @@ impl NyaTermApp {
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.cancel_internal_drag_on_escape(event, window, cx);
             }))
+            // Observe presses before child controls dismiss popups or toggle
+            // panels. Popup dismissal and panel dismissal are separate clicks.
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                this.shell.panels.clear_floating_outside_press();
+                if event.button == MouseButton::Left
+                    && !this.floating_panel_dismissal_is_blocked(window, cx)
+                {
+                    this.note_floating_panel_outside_press(event.position);
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                if event.button == MouseButton::Left {
+                    if cx.has_internal_drag() {
+                        this.shell.panels.clear_floating_outside_press();
+                    } else {
+                        this.defer_floating_panel_outside_click(event.position, window, cx);
+                    }
+                }
+            }))
             .on_click(cx.listener(|this, _, _, _| {
                 this.mark_user_activity();
             }))
@@ -403,6 +422,9 @@ impl NyaTermApp {
                 }
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.shell
+                    .panels
+                    .cancel_floating_outside_drag(event.position);
                 this.reconcile_root_pointer_interactions(event, cx);
                 if event.dragging() {
                     this.update_transfer_browser_column_resize(event, cx);
@@ -616,6 +638,7 @@ impl NyaTermApp {
                 surface = surface.child(
                     div()
                         .id("floating-left-panel")
+                        .debug_selector(|| "floating-left-panel".into())
                         .absolute()
                         .top_0()
                         .bottom_0()
@@ -642,6 +665,7 @@ impl NyaTermApp {
                 surface = surface.child(
                     div()
                         .id("floating-right-panel")
+                        .debug_selector(|| "floating-right-panel".into())
                         .absolute()
                         .top_0()
                         .bottom_0()
@@ -1246,6 +1270,7 @@ impl NyaTermApp {
         if event.dragging() {
             return;
         }
+        self.shell.panels.clear_floating_outside_press();
         self.finish_transfer_browser_column_resize(cx);
         self.finish_asset_column_resize(cx);
         self.finish_panel_resize(cx);
@@ -1264,6 +1289,7 @@ impl NyaTermApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell.panels.clear_floating_outside_press();
         if let Some(controller) = &self.desktop_controller {
             let _ = controller.update(cx, |controller, _| {
                 controller.update_tab_drag(|drag| drag.cancel());

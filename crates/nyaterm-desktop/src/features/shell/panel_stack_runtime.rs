@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, canvas, deferred, div,
-    prelude::FluentBuilder as _, px, rgb, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Point, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, canvas, deferred, div, point,
+    prelude::FluentBuilder as _, px, rgb, size, svg,
 };
 use nyaterm_core::truncate_preview;
 
@@ -19,7 +19,7 @@ use crate::models::{
     SettingsTab,
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::NyaTooltip;
+use nyaterm_ui::{NyaDialogWindowExt as _, NyaTooltip, nya_popup_is_active};
 
 use super::state::PANEL_STACK_MIN_HEIGHT;
 
@@ -27,6 +27,11 @@ type PanelStackMeasurements = Rc<RefCell<Vec<(String, f32)>>>;
 
 const EXCLUSIVE_PANEL_IDS: &[&str] = &["aiAssistant"];
 const NON_PANEL_IDS: &[&str] = &["settings", "lock", "quickCmdBar", "serialSend"];
+
+/// Fixed chrome sizes the floating containers are positioned against: the
+/// title bar sits above the workspace surface, and the activity rail is inset.
+const FLOATING_PANEL_TITLE_BAR_HEIGHT: f32 = 40.;
+const FLOATING_PANEL_ACTIVITY_BAR_WIDTH: f32 = 40.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SidePanelStackRenderMode {
@@ -210,6 +215,151 @@ impl NyaTermApp {
         };
         self.close_floating_panel(side, cx);
         true
+    }
+
+    /// Window-coordinate rectangle of an open floating overlay.
+    ///
+    /// Derived from the same fixed offsets the render code uses
+    /// (`top_0/left(px(40.))` inside the surface that starts below the 40px
+    /// title bar), so the input path never reads layout.
+    fn floating_panel_window_bounds(&self, side: PanelSide) -> Option<Bounds<Pixels>> {
+        if !self.shell.panel_is_floating() {
+            return None;
+        }
+        self.shell.panels.floating_panel(side)?;
+        let (viewport_width, viewport_height) = self.shell.viewport_size();
+        if viewport_width <= 0. || viewport_height <= 0. {
+            return None;
+        }
+        let panel_width = match side {
+            PanelSide::Left => self.shell.left_panel_width(),
+            PanelSide::Right => self.shell.right_panel_width(),
+        };
+        let left = match side {
+            PanelSide::Left => FLOATING_PANEL_ACTIVITY_BAR_WIDTH,
+            PanelSide::Right => viewport_width - FLOATING_PANEL_ACTIVITY_BAR_WIDTH - panel_width,
+        };
+        let height = (viewport_height - FLOATING_PANEL_TITLE_BAR_HEIGHT).max(0.);
+        Some(Bounds::new(
+            point(px(left), px(FLOATING_PANEL_TITLE_BAR_HEIGHT)),
+            size(px(panel_width), px(height)),
+        ))
+    }
+
+    fn position_inside_floating_panel(&self, position: Point<Pixels>) -> bool {
+        [PanelSide::Left, PanelSide::Right]
+            .into_iter()
+            .filter_map(|side| self.floating_panel_window_bounds(side))
+            .any(|bounds| bounds.contains(&position))
+    }
+
+    /// Popups get the first dismissal click, including menus painted beyond
+    /// the panel bounds. Read their existing owners before mouse-down can
+    /// dismiss them or move focus back to the workspace.
+    pub(in crate::features) fn floating_panel_dismissal_is_blocked(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        window.has_active_prompt()
+            || window.has_active_nya_dialog(cx)
+            || nya_popup_is_active(window, cx)
+            || self.ai.transient_menus_are_open()
+            || self.remote_ops.docker_menus_open()
+            || self.shell.open_tabs_menu_is_open()
+            || self.shell.new_session_menu_is_open()
+            || self.shell.header_status_menu_is_open()
+            || self.shell.activity_bar_context_menu().is_some()
+            || self.transfer.browser_view().favorites_menu.is_some()
+            || self.transfer.browser_view().path_menu.is_some()
+            || self.transfer.browser_view().upload_menu.is_some()
+    }
+
+    pub(in crate::features) fn note_floating_panel_outside_press(
+        &mut self,
+        position: Point<Pixels>,
+    ) {
+        self.shell.panels.clear_floating_outside_press();
+        if !self.shell.panel_is_floating() || self.position_inside_floating_panel(position) {
+            return;
+        }
+        if [PanelSide::Left, PanelSide::Right]
+            .into_iter()
+            .any(|side| self.floating_panel_window_bounds(side).is_some())
+        {
+            self.shell.panels.set_floating_outside_press(position);
+        }
+    }
+
+    /// Terminal pointer handlers can stop bubbling before the root's menu
+    /// dismissal runs. Preserve popup priority while closing AI's own menus
+    /// from their own outside handlers, using the menu's bounds rather than
+    /// the panel's. Component popups and dialogs handle their own dismissal.
+    pub(in crate::features) fn dismiss_floating_ai_menu_on_outside_press(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.panel_is_floating()
+            || !self.ai.transient_menus_are_open()
+            || window.has_active_prompt()
+            || window.has_active_nya_dialog(cx)
+            || nya_popup_is_active(window, cx)
+        {
+            return;
+        }
+        self.shell.panels.clear_floating_outside_press();
+        if self.ai.history_is_open() {
+            self.close_ai_history(window, cx);
+        }
+        self.ai.close_transient_menus();
+        self.defer_ai_panel_snapshot_flush(cx);
+        cx.notify();
+    }
+
+    /// Capture runs before the activity icon's click. Defer until that click
+    /// has invalidated the press if it opened, closed or replaced a panel.
+    pub(in crate::features) fn defer_floating_panel_outside_click(
+        &mut self,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let app = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let _ = app.update(cx, |this, cx| {
+                if this.floating_panel_dismissal_is_blocked(window, cx) {
+                    this.shell.panels.clear_floating_outside_press();
+                } else {
+                    this.finish_floating_panel_outside_click(position, cx);
+                }
+            });
+        });
+    }
+
+    fn finish_floating_panel_outside_click(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(press) = self.shell.panels.take_floating_outside_press() else {
+            return;
+        };
+        if !self.shell.panel_is_floating()
+            || press.panels
+                != [
+                    self.shell.panels.floating_left,
+                    self.shell.panels.floating_right,
+                ]
+            || self.position_inside_floating_panel(position)
+            || !press.is_click_at(position)
+        {
+            return;
+        }
+        let browser_was_visible = self.transfer_browser_is_visible();
+        self.shell.panels.clear_floating();
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        cx.notify();
     }
 
     pub(in crate::features) fn side_open_panel_ids(&self, side: PanelSide) -> Vec<String> {
@@ -1305,6 +1455,8 @@ fn header_svg_icon_button_with_color(
 
 #[cfg(test)]
 mod tests {
+    mod floating;
+
     use gpui::{
         Context, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
         MouseMoveEvent, ParentElement as _, Render, Styled as _, TestAppContext, Window, div,

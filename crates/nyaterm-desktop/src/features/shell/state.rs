@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{AnyView, Entity, Pixels, RenderImage, ScrollHandle, SharedString};
+use gpui::{AnyView, Entity, Pixels, Point, RenderImage, ScrollHandle, SharedString};
 use nyaterm_ui::{NyaAppMenuBar, NyaWindowHandle};
 
 use super::super::app_state::SettingsDraftSnapshot;
@@ -23,6 +23,7 @@ use crate::models::{
 
 pub(in crate::features) const RESIZE_HANDLE_HOVER_DELAY: Duration = Duration::from_millis(250);
 pub(super) const PANEL_STACK_MIN_HEIGHT: f32 = 48.;
+pub(super) const FLOATING_PANEL_CLICK_SLOP: f32 = 4.;
 
 /// The tab-strip trigger that owns the currently open new-session menu.
 ///
@@ -142,6 +143,25 @@ pub(super) struct ShellSettingsNavigationState {
     pub(super) draft_snapshot: Option<SettingsDraftSnapshot>,
 }
 
+/// A left-button press that started outside every open floating panel.
+///
+/// Both panel identities are snapshotted so a click that toggles a panel (the
+/// activity bar) invalidates the record instead of dismissing a panel the same
+/// gesture opened.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::features) struct FloatingOutsidePress {
+    pub(super) panels: [Option<NavItem>; 2],
+    pub(super) position: Point<Pixels>,
+}
+
+impl FloatingOutsidePress {
+    pub(super) fn is_click_at(self, position: Point<Pixels>) -> bool {
+        let dx = f32::from(position.x - self.position.x);
+        let dy = f32::from(position.y - self.position.y);
+        dx.abs().max(dy.abs()) <= FLOATING_PANEL_CLICK_SLOP
+    }
+}
+
 /// Side-panel selection, stack layout and resize interaction state.
 pub(in crate::features) struct ShellPanelState {
     pub(in crate::features) active_left: Option<NavItem>,
@@ -156,6 +176,9 @@ pub(in crate::features) struct ShellPanelState {
     pub(super) floating_left: Option<NavItem>,
     pub(super) floating_right: Option<NavItem>,
     pub(super) last_floating_side: Option<PanelSide>,
+    /// Pending primary-button press outside the floating overlay, consumed by
+    /// the deferred mouse-up handler. Never persisted.
+    floating_outside_press: Option<FloatingOutsidePress>,
     pub(super) right_focus: RightFocus,
     pub(in crate::features) left_collapsed: bool,
     pub(in crate::features) right_collapsed: bool,
@@ -287,6 +310,7 @@ impl ShellFeatureState {
                 floating_left: None,
                 floating_right: None,
                 last_floating_side: None,
+                floating_outside_press: None,
                 right_focus: RightFocus::Default,
                 left_collapsed: init.left_sidebar_collapsed,
                 right_collapsed: init.right_inspector_collapsed,
@@ -663,7 +687,6 @@ impl ShellFeatureState {
         self.chrome.open_tabs_menu_open
     }
 
-    #[cfg(windows)]
     pub(in crate::features) fn header_status_menu_is_open(&self) -> bool {
         self.chrome.header_status_menu_open
     }
@@ -1045,14 +1068,21 @@ impl ShellPanelState {
         side: PanelSide,
         panel: Option<NavItem>,
     ) {
+        // Any state change invalidates a press from the gesture that caused it,
+        // so an opening/toggling click cannot dismiss what it just opened.
+        self.floating_outside_press = None;
         match side {
             PanelSide::Left => self.floating_left = panel,
             PanelSide::Right => self.floating_right = panel,
         }
         if panel.is_some() {
             self.last_floating_side = Some(side);
-        } else if self.floating_left.is_none() && self.floating_right.is_none() {
-            self.last_floating_side = None;
+        } else if self.last_floating_side == Some(side) {
+            self.last_floating_side = match (self.floating_left, self.floating_right) {
+                (Some(_), _) => Some(PanelSide::Left),
+                (_, Some(_)) => Some(PanelSide::Right),
+                _ => None,
+            };
         }
     }
 
@@ -1060,7 +1090,33 @@ impl ShellPanelState {
         self.floating_left = None;
         self.floating_right = None;
         self.last_floating_side = None;
+        self.floating_outside_press = None;
     }
+
+    pub(super) fn set_floating_outside_press(&mut self, position: Point<Pixels>) {
+        self.floating_outside_press = Some(FloatingOutsidePress {
+            panels: [self.floating_left, self.floating_right],
+            position,
+        });
+    }
+
+    pub(super) fn take_floating_outside_press(&mut self) -> Option<FloatingOutsidePress> {
+        self.floating_outside_press.take()
+    }
+
+    pub(in crate::features) fn clear_floating_outside_press(&mut self) {
+        self.floating_outside_press = None;
+    }
+
+    pub(in crate::features) fn cancel_floating_outside_drag(&mut self, position: Point<Pixels>) {
+        if self
+            .floating_outside_press
+            .is_some_and(|press| !press.is_click_at(position))
+        {
+            self.clear_floating_outside_press();
+        }
+    }
+
     const LEFT_WIDTH_MAX: f32 = 720.;
     const RIGHT_WIDTH_MIN: f32 = 200.;
     const RIGHT_WIDTH_MAX: f32 = 720.;
@@ -1365,6 +1421,28 @@ mod tests {
     }
 
     #[test]
+    fn closing_the_last_floating_side_leaves_the_other_side_dismissible() {
+        for (first, last) in [
+            (PanelSide::Left, PanelSide::Right),
+            (PanelSide::Right, PanelSide::Left),
+        ] {
+            let mut shell = shell(BottomPanelMode::Hidden);
+            shell
+                .panels
+                .set_floating_panel(first, Some(NavItem::Connections));
+            shell
+                .panels
+                .set_floating_panel(last, Some(NavItem::AiAssistant));
+            shell.panels.set_floating_panel(last, None);
+            assert_eq!(shell.panels.last_floating_side, Some(first));
+            shell.panels.set_floating_panel(last, None);
+            assert_eq!(shell.panels.last_floating_side, Some(first));
+            shell.panels.set_floating_panel(first, None);
+            assert_eq!(shell.panels.last_floating_side, None);
+        }
+    }
+
+    #[test]
     fn quick_commands_toggle_hides_instead_of_restoring_the_previous_bottom_panel() {
         for initial in [BottomPanelMode::Hidden, BottomPanelMode::CommandSend] {
             let mut shell = shell(initial);
@@ -1375,6 +1453,22 @@ mod tests {
             assert_eq!(shell.quick_commands_height(), 120.);
             assert_eq!(shell.command_send_height(), 180.);
         }
+    }
+
+    #[test]
+    fn a_panel_closed_and_reopened_during_a_press_cannot_be_dismissed_by_that_press() {
+        let mut shell = shell(BottomPanelMode::Hidden);
+        shell
+            .panels
+            .set_floating_panel(PanelSide::Left, Some(NavItem::Connections));
+        shell
+            .panels
+            .set_floating_outside_press(gpui::point(px(500.), px(200.)));
+        shell.panels.set_floating_panel(PanelSide::Left, None);
+        shell
+            .panels
+            .set_floating_panel(PanelSide::Left, Some(NavItem::Connections));
+        assert!(shell.panels.take_floating_outside_press().is_none());
     }
 
     #[test]
