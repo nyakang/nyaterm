@@ -440,6 +440,43 @@ pub fn merge_keyword_highlight_rules_for_paint(
     out
 }
 
+/// ANSI palette slot (0..=15) a built-in rule follows when painted against a theme.
+pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
+    match id {
+        "builtin-command" | "builtin-prompt" | "builtin-datetime" => 2,
+        "builtin-path" => 4,
+        "builtin-permissions" | "builtin-url" => 14,
+        "builtin-version" | "builtin-size" | "builtin-option" => 6,
+        "builtin-address" | "builtin-success" => 10,
+        "builtin-string" | "builtin-duration" => 3,
+        "builtin-uuid" | "builtin-constant" => 13,
+        "builtin-error" => 9,
+        "builtin-warn" | "builtin-operator" => 11,
+        "builtin-info" => 12,
+        "builtin-debug" => 8,
+        "builtin-number" => 5,
+        _ => 7,
+    }
+}
+
+/// Like [`merge_keyword_highlight_rules_for_paint`], but built-in colors come from the
+/// terminal's own ANSI palette so highlights follow the theme. User rules keep their colors.
+pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
+    user_rules: &[KeywordHighlightRule],
+    builtin_settings: &HashMap<String, bool>,
+    is_dark: bool,
+    ansi: [u32; 16],
+) -> Vec<ResolvedKeywordHighlightRule> {
+    let user_count = user_rules.len();
+    let mut rules = merge_keyword_highlight_rules_for_paint(user_rules, builtin_settings, is_dark);
+    // Built-ins are appended after the user rules, so skipping them leaves user colors alone.
+    for rule in rules.iter_mut().skip(user_count) {
+        let slot = usize::from(builtin_keyword_rule_ansi(&rule.id).min(15));
+        rule.color = format!("#{:06x}", ansi[slot] & 0x00ff_ffff);
+    }
+    rules
+}
+
 /// Curated swatches for rule color pickers (Tauri DARK_PALETTE / LIGHT_PALETTE subset).
 pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str] {
     if is_dark {
@@ -459,8 +496,31 @@ pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str]
 mod tests {
     use super::{
         KeywordHighlightRule, get_builtin_keyword_rules, merge_keyword_highlight_rules_for_paint,
+        merge_keyword_highlight_rules_for_paint_with_ansi,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn ansi_paint_colors_builtins_from_palette_and_keeps_user_colors() {
+        let mut ansi = [0u32; 16];
+        for (index, slot) in ansi.iter_mut().enumerate() {
+            *slot = 0x0100_0000 | (index as u32 + 1) * 0x0001_0101;
+        }
+        let user = KeywordHighlightRule {
+            id: "user-1".into(),
+            name: "user".into(),
+            patterns: vec!["foo".into()],
+            color_dark: "#123456".into(),
+            color_light: "#654321".into(),
+            enabled: true,
+        };
+        let rules =
+            merge_keyword_highlight_rules_for_paint_with_ansi(&[user], &HashMap::new(), true, ansi);
+        assert_eq!(rules[0].color, "#123456");
+        let error = rules.iter().find(|r| r.id == "builtin-error").unwrap();
+        assert_eq!(error.color, "#0a0a0a"); // slot 9, alpha byte masked off
+        assert_eq!(rules.len(), 22);
+    }
 
     #[test]
     fn builtin_catalog_is_stable() {

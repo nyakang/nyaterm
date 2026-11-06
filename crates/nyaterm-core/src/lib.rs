@@ -177,9 +177,10 @@ pub use diagnostics::{
     LOG_FILE_PREFIX, LOG_FILE_SUFFIX, export_diagnostics_archive,
 };
 pub use keyword_highlight_presets::{
-    ResolvedKeywordHighlightRule, builtin_keyword_rule_ids, builtin_keyword_rule_label,
-    builtin_keyword_rule_swatch, get_builtin_keyword_rules, keyword_highlight_color_palette,
-    merge_keyword_highlight_rules_for_paint,
+    ResolvedKeywordHighlightRule, builtin_keyword_rule_ansi, builtin_keyword_rule_ids,
+    builtin_keyword_rule_label, builtin_keyword_rule_swatch, get_builtin_keyword_rules,
+    keyword_highlight_color_palette, merge_keyword_highlight_rules_for_paint,
+    merge_keyword_highlight_rules_for_paint_with_ansi,
 };
 pub use models::*;
 pub use natural_order::natural_compare;
