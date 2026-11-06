@@ -13,7 +13,7 @@ use nyaterm_remote_desktop::{
     RemoteDesktopViewState, VNC_FRAMEBUFFER_LIMITS, VncRuntimeEvent, VncServerCapabilities,
     VncSessionState,
 };
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 #[cfg(windows)]
 use nyaterm_ui::NyaDialogWindowExt as _;
 use std::time::{Duration, Instant};
@@ -378,7 +378,7 @@ impl NyaTermApp {
                 if let Some(trust) = self.remote_desktop.vnc_manager.trust_state(session_id) {
                     self.submit_store_request(
                         0,
-                        store_request(StoreDomain::Security, move |store| {
+                        nyaterm_store::store_mutation(StoreDomain::Security, move |store| {
                             trust
                                 .commit_if_current(&request, |current| {
                                     store.remember_vnc_known_host_if_current(

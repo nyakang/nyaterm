@@ -3,6 +3,7 @@ use crate::app_shell::configuration_replacement::ConfigurationReplacementLease;
 use crate::features::AutoSyncResult;
 use crate::features::AutoSyncTrigger;
 use crate::features::run_auto_sync;
+use crate::features::sync::AutoSyncRequest;
 use crate::features::sync::operation::{
     AutoSyncOperationControls, CloudSyncOperationRegistration, await_cloud_sync_job,
 };
@@ -22,6 +23,10 @@ pub(super) use coordinator::AutoSyncCoordinator;
 use coordinator::AutoSyncJob;
 
 impl DesktopController {
+    pub(crate) fn cloud_sync_settings_changed(&mut self) {
+        self.auto_sync.settings_changed();
+    }
+
     pub(super) fn start_auto_sync_runtime(&mut self, cx: &mut Context<Self>) {
         if let Some(mut events) = self
             .startup
@@ -75,6 +80,7 @@ impl DesktopController {
             trigger,
             change_elapsed,
             pull_safe,
+            remote_available,
         }) = self.auto_sync.next_job(now, generation, || {
             windows_allow_auto_sync_pull(windows, cx)
         })
@@ -130,9 +136,12 @@ impl DesktopController {
             run_auto_sync(
                 &store,
                 &runtime,
-                trigger,
-                change_elapsed,
-                pull_safe,
+                AutoSyncRequest {
+                    trigger,
+                    change_elapsed,
+                    pull_safe,
+                    remote_available,
+                },
                 &before_apply,
                 &worker_controls,
             )

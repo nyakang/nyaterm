@@ -288,7 +288,7 @@ impl NyaTermApp {
         let patch = entry.last_asset_patch;
         self.submit_store_request(
             0,
-            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_request(StoreDomain::Connections, move |store| {
                 if !store.merge_connection_asset_from_monitoring(&persisted_id, patch)? {
                     return Ok(None);
                 }
