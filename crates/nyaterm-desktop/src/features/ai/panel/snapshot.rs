@@ -1,6 +1,7 @@
+use super::components::agent_kind_display_name;
 use super::{
     AiAgentStepPresentation, AiHeaderPresentation, AiMentionCandidate, AiModelChoice,
-    AiPanelChrome, AiPanelSnapshot, AiTargetSession, harness,
+    AiPanelChrome, AiPanelSnapshot, AiTargetSession, AiTerminalContextState, harness,
 };
 use crate::features::NyaTermApp;
 use crate::features::formatting::short_id;
@@ -14,6 +15,7 @@ use nyaterm_core::AiModelConfigItem;
 use nyaterm_core::AiProviderKind;
 use nyaterm_core::AiReasoningEffort;
 use nyaterm_core::truncate_preview;
+use nyaterm_transport::SessionKind;
 use rust_i18n::t;
 use std::sync::Arc;
 
@@ -69,8 +71,18 @@ impl NyaTermApp {
                 label
             };
         }
+        let mode_label = if self.ai.chat_run_mode() == AiMode::Agent {
+            format!(
+                "{} · {}",
+                t!("ai.modeAgent"),
+                agent_kind_display_name(&self.ai.chat_agent_kind())
+            )
+        } else {
+            t!("ai.modeAsk").to_string()
+        };
         AiHeaderPresentation {
             running: self.ai.chat_or_agent_is_running(),
+            mode_label,
             selected_model_id,
             model_label,
             execution_mode: self
@@ -222,9 +234,23 @@ impl NyaTermApp {
             .existing_text_input("ai.chat.prompt")
             .expect("AI prompt input was just built");
 
+        // A running request keeps the box editable so the next instruction can
+        // be drafted; sending stays blocked until the run settles.
         prompt_input.update(cx, |input, cx| {
-            input.set_disabled(running || !enabled, cx);
+            input.set_disabled(!enabled, cx);
+            input.set_auto_grow(1, 6, cx);
             input.set_placeholder(prompt_placeholder, cx);
+        });
+        let owner_terminal = self.session.active_id().and_then(|session_id| {
+            let info = self.session.session_info(session_id)?;
+            let state = if self.session.is_disconnected(session_id) {
+                AiTerminalContextState::Disconnected
+            } else if info.kind == SessionKind::LocalPty {
+                AiTerminalContextState::Local
+            } else {
+                AiTerminalContextState::Connected
+            };
+            Some((self.session.display_name_by_info(&info), state))
         });
 
         let model_search_input = if self.ai.discovery_menu_is_open() {
@@ -425,6 +451,11 @@ impl NyaTermApp {
                 .into(),
             current_ai_session_id: self.ai.chat_session_id().to_string(),
             owner_terminal_id: self.session.active_id().map(str::to_string),
+            owner_terminal_label: owner_terminal.as_ref().map(|(label, _)| label.clone()),
+            owner_terminal_state: owner_terminal
+                .map(|(_, state)| state)
+                .unwrap_or(AiTerminalContextState::Disconnected),
+            last_agent_kind: self.ai.last_agent_kind(),
             owner_connection_id: self
                 .session
                 .active_id()

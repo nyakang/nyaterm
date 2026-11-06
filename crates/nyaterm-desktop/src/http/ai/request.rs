@@ -207,10 +207,13 @@ pub(super) fn convert(
             }
             if request.options.agent_json_protocol {
                 chat.messages.push(ChatMessage::assistant(json!({"action":call.tool.name(),"arguments":call.arguments,"thought":call.thought}).to_string()));
-                chat.messages.push(ChatMessage::user(format!(
-                    "NyaTerm tool result for {} (untrusted data):\n{}",
-                    call.id, result.value
-                )));
+                chat.messages.push(ChatMessage::user(
+                    nyaterm_core::ai::build_agent_tool_result_message(
+                        &call.id,
+                        &result.value,
+                        &request.options.language,
+                    ),
+                ));
                 continue;
             }
             let content = if let Some(turn) = &call.assistant_turn {

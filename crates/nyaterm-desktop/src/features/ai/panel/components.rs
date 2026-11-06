@@ -2,12 +2,31 @@ use rust_i18n::t;
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_core::ai::AiCommandCard;
+use nyaterm_core::{AgentCommandExecutionMode, AiAgentKind};
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
 use crate::features::formatting::compact_id;
 use crate::theme::ThemePalette;
 
 use super::AiPanel;
+
+/// Product names of the agent runtimes; they are not translated.
+pub(super) fn agent_kind_display_name(kind: &AiAgentKind) -> &'static str {
+    match kind {
+        AiAgentKind::Nyaterm => "NyaTerm",
+        AiAgentKind::Codex => "Codex",
+        AiAgentKind::ClaudeCode => "Claude Code",
+    }
+}
+
+pub(super) fn execution_mode_label(mode: &AgentCommandExecutionMode) -> String {
+    t!(match mode {
+        AgentCommandExecutionMode::ConfirmEach => "ai.executionModeConfirmEach",
+        AgentCommandExecutionMode::Smart => "ai.executionModeSmart",
+        AgentCommandExecutionMode::Auto => "ai.executionModeAuto",
+    })
+    .to_string()
+}
 
 pub(super) fn ai_command_target_label(card: &AiCommandCard) -> String {
     card.target

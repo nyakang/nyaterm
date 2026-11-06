@@ -342,6 +342,31 @@
     "mentionSession": "Select Session",
     "modeAgent": "Agent",
     "modeAsk": "Ask",
+    "stop": "Stop",
+    "agentKind": "Agent runtime",
+    "agentKindDisabled": "(disabled)",
+    "context": {
+      "noTerminal": "No terminal selected",
+      "currentTerminal": "Terminal",
+      "connected": "Connected",
+      "local": "Local",
+      "disconnected": "Disconnected",
+      "addTarget": "Add a target terminal"
+    },
+    "runStatus": {
+      "waiting": "Waiting for model",
+      "responding": "Responding",
+      "working": "Working"
+    },
+    "activity": {
+      "title": "Activity",
+      "progress": "%{completed}/%{total}",
+      "running": "Working",
+      "needsApproval": "Waiting for approval",
+      "waitingForUser": "Waiting for you",
+      "failed": "Finished with errors",
+      "completed": "Done"
+    },
     "model": "Model",
     "modelList": "Models from this provider",
     "modelListDesc": "Refresh pulls known models from rust-genai. New models are disabled by default.",

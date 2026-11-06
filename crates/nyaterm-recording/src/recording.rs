@@ -1,5 +1,7 @@
 use nyaterm_core::terminal::input_tracker::{TerminalInputState, resync_from_terminal_line};
-use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
+use nyaterm_terminal::recording_sanitizer::{
+    RecordingEvent, RecordingLineEditor, RecordingSanitizer,
+};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -488,10 +490,18 @@ struct SessionCaptureState {
     provisional_raw_output: VecDeque<u8>,
     live_echo_buffer: String,
     submitted_line_echo: Option<String>,
+    /// Byte offset where interactive echo started on the pending row.
+    input_echo_start: Option<usize>,
+    input_echo_observed: bool,
+    submitted_echo_start: Option<usize>,
     suppress_next_newline: bool,
     next_line_id: u64,
+    // Separate streaming parsers and editable rows for interactive and
+    // background output; neither stream can consume the other's control bytes.
     sanitizer: RecordingSanitizer,
     execution_sanitizer: RecordingSanitizer,
+    output_edit: RecordingLineEditor,
+    execution_edit: RecordingLineEditor,
     history_truncated: bool,
     history_include_input: bool,
     batch_timestamp: String,
@@ -517,10 +527,15 @@ impl SessionCaptureState {
             provisional_raw_output: VecDeque::new(),
             live_echo_buffer: String::new(),
             submitted_line_echo: None,
+            input_echo_start: None,
+            input_echo_observed: false,
+            submitted_echo_start: None,
             suppress_next_newline: false,
             next_line_id: 1,
             sanitizer: RecordingSanitizer::default(),
             execution_sanitizer: RecordingSanitizer::default(),
+            output_edit: RecordingLineEditor::default(),
+            execution_edit: RecordingLineEditor::default(),
             history_truncated: false,
             history_include_input: false,
             batch_timestamp: chrono_timestamp(),
@@ -541,7 +556,7 @@ impl SessionCaptureState {
         self.recording_state = RecordingStatusState::Starting;
         self.last_error = None;
         self.dropped_bytes = 0;
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         self.provisional_raw_output.clear();
         self.commit_partial_input();
         self.recording = Some(recording);
@@ -565,7 +580,7 @@ impl SessionCaptureState {
             self.recording_state = RecordingStatusState::Stopping;
         }
         self.commit_partial_input();
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         let mut recording = self
             .recording
             .take()
@@ -593,13 +608,18 @@ impl SessionCaptureState {
 
     fn report_dropped(&mut self, bytes: usize) {
         self.commit_partial_input();
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         self.dropped_bytes = self.dropped_bytes.saturating_add(bytes as u64);
         self.sanitizer.reset();
         self.execution_sanitizer.reset();
+        self.output_edit.clear();
+        self.execution_edit.clear();
         self.pending_input_escape = None;
         self.live_echo_buffer.clear();
         self.submitted_line_echo = None;
+        self.submitted_echo_start = None;
+        self.input_echo_start = None;
+        self.input_echo_observed = false;
         self.history_truncated = true;
         if self.recording_state != RecordingStatusState::Failed {
             self.recording_state = RecordingStatusState::Degraded;
@@ -660,12 +680,18 @@ impl SessionCaptureState {
                 }
                 byte if byte.is_ascii() => {
                     let ch = byte as char;
+                    if self.input_buffer.is_empty() && self.input_echo_start.is_none() {
+                        self.input_echo_start = Some(self.output_edit.pending().len());
+                    }
                     self.input_buffer.push(ch);
                     self.live_echo_buffer.push(ch);
                     index += 1;
                 }
                 _ => match next_utf8_char(data, index) {
                     Some((ch, next_index)) if !ch.is_control() => {
+                        if self.input_buffer.is_empty() && self.input_echo_start.is_none() {
+                            self.input_echo_start = Some(self.output_edit.pending().len());
+                        }
                         self.input_buffer.push(ch);
                         self.live_echo_buffer.push(ch);
                         index = next_index;
@@ -710,7 +736,7 @@ impl SessionCaptureState {
         }
 
         self.commit_partial_input();
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         self.append_record("RAW_INPUT", format_raw_input_bytes(data));
     }
 
@@ -731,8 +757,12 @@ impl SessionCaptureState {
             self.live_echo_buffer.clear();
             self.output_buffer.clear();
             self.output_scan_from = 0;
+            self.output_edit.clear();
+            self.execution_edit.clear();
             self.input_needs_terminal_resync = false;
             self.input_before_tab = None;
+            self.input_echo_start = Some(0);
+            self.input_echo_observed = false;
             if self.input_buffer.len() >= self.fragment_limit() {
                 self.commit_partial_input();
             }
@@ -765,50 +795,92 @@ impl SessionCaptureState {
 
     fn write_output(&mut self, data: &str) {
         self.batch_timestamp = chrono_timestamp();
-        let mut sanitized = self.sanitizer.feed(data);
-        if sanitized.is_empty() {
-            return;
-        }
-
-        if self.suppress_next_newline {
-            sanitized = strip_one_leading_newline(&sanitized).to_string();
-            self.suppress_next_newline = false;
-            if sanitized.is_empty() {
-                return;
+        // Move the parser out so event delivery can mutate the capture state.
+        // Its fixed parameter storage and streaming state survive every chunk.
+        let mut sanitizer = mem::take(&mut self.sanitizer);
+        let limit = self.fragment_limit();
+        sanitizer.feed_events(data, |event| {
+            if self.suppress_next_newline {
+                self.suppress_next_newline = false;
+                if matches!(event, RecordingEvent::CarriageReturn) {
+                    self.suppress_next_newline = true;
+                    return;
+                }
+                if matches!(event, RecordingEvent::Newline) {
+                    return;
+                }
             }
-        }
-
-        sanitized = self.consume_live_echo(&sanitized);
-        if sanitized.is_empty() {
-            return;
-        }
-
-        let (mut sanitized, consumed_submitted_echo) = self.consume_submitted_echo(&sanitized);
-        if sanitized.is_empty() {
-            return;
-        }
-
-        if !consumed_submitted_echo && self.submitted_line_echo.is_some() {
-            sanitized = strip_one_leading_newline(&sanitized).to_string();
-            self.submitted_line_echo = None;
-            if sanitized.is_empty() {
-                return;
+            if let Some(line) = self.output_edit.feed(event) {
+                self.observe_input_echo(&line);
+                self.commit_edited_line(line, true);
+                self.input_echo_start = (!self.input_buffer.is_empty()).then_some(0);
+                self.input_echo_observed = false;
+            } else {
+                if !self.input_echo_observed
+                    && !self.input_buffer.is_empty()
+                    && self
+                        .input_echo_start
+                        .and_then(|start| self.output_edit.pending().get(start..))
+                        .is_some_and(|tail| tail.starts_with(self.input_buffer.as_str()))
+                {
+                    self.input_echo_observed = true;
+                }
+                if self.output_edit.pending().len() >= limit {
+                    let fragment = self.output_edit.take_pending();
+                    self.commit_edited_line(fragment, false);
+                }
             }
-        }
-
-        self.append_output(&sanitized);
+        });
+        self.sanitizer = sanitizer;
+        self.trim_records();
     }
 
-    fn append_output(&mut self, text: &str) {
-        for chunk in utf8_fragments(text, self.fragment_limit()) {
-            self.output_buffer.push_str(chunk);
-            self.flush_output_lines(false);
-            self.trim_records();
+    fn observe_input_echo(&mut self, line: &str) {
+        if !self.input_echo_observed
+            && !self.input_buffer.is_empty()
+            && self
+                .input_echo_start
+                .and_then(|start| line.get(start..))
+                .is_some_and(|tail| tail.starts_with(self.input_buffer.as_str()))
+        {
+            self.input_echo_observed = true;
         }
+    }
+
+    fn commit_edited_line(&mut self, mut line: String, newline: bool) {
+        // A submitted echo is eligible only on its original row, and only if
+        // output before Enter established that the peer was echoing this input.
+        let submitted = self.submitted_line_echo.take();
+        let start = self.submitted_echo_start.take();
+        let stripped_submitted = submitted
+            .as_ref()
+            .is_some_and(|text| start.and_then(|offset| line.get(offset..)) == Some(text.as_str()));
+        if stripped_submitted {
+            line.truncate(start.unwrap());
+        } else if self.input_echo_observed
+            && let Some(start) = self.input_echo_start
+            && line.get(start..) == Some(self.live_echo_buffer.as_str())
+        {
+            line.truncate(start);
+        }
+        if !line.is_empty() {
+            self.output_buffer.push_str(&line);
+        }
+        if newline {
+            // A prompt prefix is a separate OUTPUT record even when its
+            // trailing command echo has been suppressed.
+            if !stripped_submitted || !line.is_empty() {
+                self.output_buffer.push('\n');
+            }
+        } else if stripped_submitted {
+            self.suppress_next_newline = true;
+        }
+        self.flush_output_lines(false);
+        self.trim_records();
     }
 
     fn execution_boundary(&mut self, command: Option<&str>) {
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         self.execution_sanitizer.reset();
         if self.includes_input()
             && !self
@@ -827,15 +899,27 @@ impl SessionCaptureState {
 
     fn write_execution_output(&mut self, text: &str) {
         self.batch_timestamp = chrono_timestamp();
-        let text = self.execution_sanitizer.feed(text);
-        // Background execution can overlap manual typing and output. Its output
-        // must neither consume keyboard echo nor share partial control strings.
-        self.append_output(&text);
+        // Background output has a separate parser and row and never consumes
+        // interactive echo. Flush its records independently of a manual prompt.
+        let mut sanitizer = mem::take(&mut self.execution_sanitizer);
+        let limit = self.fragment_limit();
+        sanitizer.feed_events(text, |event| {
+            if let Some(line) = self.execution_edit.feed(event) {
+                self.flush_output_lines(true);
+                self.append_record("OUTPUT", line);
+            } else if self.execution_edit.pending().len() >= limit {
+                let fragment = self.execution_edit.take_pending();
+                self.flush_output_lines(true);
+                self.append_record("OUTPUT", fragment);
+            }
+        });
+        self.execution_sanitizer = sanitizer;
+        self.trim_records();
     }
 
     fn finish(&mut self) {
         self.commit_partial_input();
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         if let Some(recording) = self.recording.as_mut()
             && let Err(error) = recording.finish()
         {
@@ -851,10 +935,13 @@ impl SessionCaptureState {
         }
         self.disconnected = true;
         self.commit_partial_input();
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         self.pending_input_escape = None;
         self.live_echo_buffer.clear();
         self.submitted_line_echo = None;
+        self.submitted_echo_start = None;
+        self.input_echo_start = None;
+        self.input_echo_observed = false;
         self.suppress_next_newline = false;
         self.append_record("SYSTEM", "Session disconnected".to_string());
         if let Some(recording) = self.recording.as_mut()
@@ -866,7 +953,7 @@ impl SessionCaptureState {
 
     fn absorb_early_state(&mut self, mut early: Self) {
         early.commit_partial_input();
-        early.flush_output_lines(true);
+        early.release_pending_output_lines();
         if let Some(recording) = self.recording.as_mut()
             && recording.profile.mode == RecordingMode::Raw
             && let Err(error) = recording.write_raw(early.provisional_raw_output.make_contiguous())
@@ -894,21 +981,49 @@ impl SessionCaptureState {
 
     fn snapshot_records(&self) -> Vec<TranscriptRecord> {
         let mut records: Vec<_> = self.records.iter().cloned().collect();
-        if !self.output_buffer.is_empty() {
+        let mut next_line_id = self.next_line_id;
+        let mut tail = self.output_buffer.clone();
+        tail.push_str(&self.suppressed_pending_output_tail());
+        if !tail.is_empty() {
+            records.push(TranscriptRecord::new(next_line_id, "OUTPUT", tail));
+            next_line_id += 1;
+        }
+        let execution_tail = self.execution_edit.pending().trim_end_matches(' ');
+        if !execution_tail.is_empty() {
             records.push(TranscriptRecord::new(
-                self.next_line_id,
+                next_line_id,
                 "OUTPUT",
-                self.output_buffer.clone(),
+                execution_tail.to_string(),
             ));
+            next_line_id += 1;
         }
         if self.includes_input() && !self.input_buffer.trim().is_empty() {
             records.push(TranscriptRecord::new(
-                self.next_line_id + 1,
+                next_line_id,
                 "INPUT",
                 self.input_buffer.clone(),
             ));
         }
         records
+    }
+
+    /// Read-only view of the pending interactive line with echoed input
+    /// suppressed, mirroring what releasing the line would record.
+    fn suppressed_pending_output_tail(&self) -> String {
+        let mut line = self.output_edit.pending().trim_end_matches(' ').to_string();
+        let matched_start = if let Some(submitted) = &self.submitted_line_echo {
+            self.submitted_echo_start
+                .filter(|&start| line.get(start..) == Some(submitted.as_str()))
+        } else if self.input_echo_observed && !self.live_echo_buffer.is_empty() {
+            self.input_echo_start
+                .filter(|&start| line.get(start..) == Some(self.live_echo_buffer.as_str()))
+        } else {
+            None
+        };
+        if let Some(start) = matched_start {
+            line.truncate(start);
+        }
+        line
     }
 
     fn append_record(&mut self, label: &'static str, data: String) {
@@ -950,6 +1065,8 @@ impl SessionCaptureState {
             + self.input_before_tab.as_ref().map_or(0, String::len)
             + self.submitted_line_echo.as_ref().map_or(0, String::len)
             + self.provisional_raw_output.len()
+            + self.output_edit.pending().len()
+            + self.execution_edit.pending().len()
     }
 
     fn trim_records(&mut self) {
@@ -970,8 +1087,14 @@ impl SessionCaptureState {
                 self.live_echo_buffer.clear();
                 self.input_before_tab = None;
                 self.submitted_line_echo = None;
-            } else if !self.output_buffer.is_empty() {
-                self.flush_output_lines(true);
+                self.submitted_echo_start = None;
+                self.input_echo_start = None;
+                self.input_echo_observed = false;
+            } else if !self.output_buffer.is_empty()
+                || !self.output_edit.is_empty()
+                || !self.execution_edit.is_empty()
+            {
+                self.release_pending_output_lines();
             } else if !self.input_buffer.is_empty() {
                 self.commit_partial_input();
             } else {
@@ -990,61 +1113,47 @@ impl SessionCaptureState {
     }
 
     fn commit_input_line(&mut self) {
-        self.flush_output_lines(true);
+        // CRLF input must not cancel an outstanding echo on its LF half.
+        if self.input_buffer.is_empty() && self.submitted_line_echo.is_some() {
+            return;
+        }
+        // Keep a row editable only when it actually contains in-flight echo.
+        // With echo disabled, release the existing prompt before command output.
+        let keep_echo = self.input_echo_observed && !self.input_buffer.trim().is_empty();
+        if !keep_echo {
+            self.release_pending_output_lines();
+        } else {
+            self.flush_output_lines(true);
+        }
         let line = mem::take(&mut self.input_buffer);
         self.input_needs_terminal_resync = false;
         self.input_before_tab = None;
         self.live_echo_buffer.clear();
-
-        if line.trim().is_empty() {
-            self.submitted_line_echo = None;
-            return;
+        self.submitted_line_echo = keep_echo.then(|| line.clone());
+        self.submitted_echo_start = keep_echo.then_some(self.input_echo_start).flatten();
+        self.input_echo_start = None;
+        self.input_echo_observed = false;
+        if !line.trim().is_empty() {
+            self.append_record("INPUT", line);
         }
-
-        self.append_record("INPUT", line.clone());
-        self.submitted_line_echo = Some(line);
     }
 
     fn commit_partial_input(&mut self) {
-        self.flush_output_lines(true);
+        self.release_pending_output_lines();
         let line = mem::take(&mut self.input_buffer);
         self.input_needs_terminal_resync = false;
         self.input_before_tab = None;
         self.live_echo_buffer.clear();
         self.submitted_line_echo = None;
+        self.submitted_echo_start = None;
+        self.input_echo_start = None;
+        self.input_echo_observed = false;
 
         if line.trim().is_empty() {
             return;
         }
 
         self.append_record("INPUT", line);
-    }
-
-    fn consume_live_echo(&mut self, text: &str) -> String {
-        let consumed = consume_matching_prefix(&mut self.live_echo_buffer, text);
-        text[consumed..].to_string()
-    }
-
-    fn consume_submitted_echo(&mut self, text: &str) -> (String, bool) {
-        let Some(line) = self.submitted_line_echo.as_ref() else {
-            return (text.to_string(), false);
-        };
-
-        if !text.starts_with(line) {
-            return (text.to_string(), false);
-        }
-
-        let mut remaining = text[line.len()..].to_string();
-        self.submitted_line_echo = None;
-
-        let stripped = strip_one_leading_newline(&remaining);
-        if stripped.len() != remaining.len() {
-            remaining = stripped.to_string();
-        } else {
-            self.suppress_next_newline = true;
-        }
-
-        (remaining, true)
     }
 
     fn flush_output_lines(&mut self, flush_partial: bool) {
@@ -1078,6 +1187,24 @@ impl SessionCaptureState {
                 break;
             }
         }
+    }
+
+    /// Releases the pending (still editable) output lines at a flush point
+    /// and flushes partial records. Once released, the text can no longer be
+    /// retracted by later line edits, so this is only called where the output
+    /// stream reaches an ordering boundary (execution, disconnect, rotation,
+    /// memory pressure, or input submission without observed in-flight echo).
+    fn release_pending_output_lines(&mut self) {
+        let line = self.output_edit.take_pending();
+        if !line.is_empty() {
+            self.commit_edited_line(line, false);
+        }
+        let line = self.execution_edit.take_pending();
+        if !line.is_empty() {
+            self.flush_output_lines(true);
+            self.append_record("OUTPUT", line);
+        }
+        self.flush_output_lines(true);
     }
 }
 
@@ -2141,34 +2268,6 @@ fn next_utf8_char(data: &[u8], index: usize) -> Option<(char, usize)> {
     Some((ch, index + ch.len_utf8()))
 }
 
-fn consume_matching_prefix(prefix_buffer: &mut String, text: &str) -> usize {
-    let mut prefix_idx = 0;
-    let mut text_idx = 0;
-
-    while prefix_idx < prefix_buffer.len() && text_idx < text.len() {
-        let prefix_char = prefix_buffer[prefix_idx..].chars().next();
-        let text_char = text[text_idx..].chars().next();
-
-        match (prefix_char, text_char) {
-            (Some(left), Some(right)) if left == right => {
-                prefix_idx += left.len_utf8();
-                text_idx += right.len_utf8();
-            }
-            _ => break,
-        }
-    }
-
-    if prefix_idx > 0 {
-        prefix_buffer.drain(..prefix_idx);
-    }
-
-    text_idx
-}
-
-fn strip_one_leading_newline(text: &str) -> &str {
-    text.strip_prefix('\n').unwrap_or(text)
-}
-
 fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -2302,9 +2401,7 @@ fn strip_terminal_control_sequences(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        consume_matching_prefix, strip_one_leading_newline, strip_terminal_control_sequences,
-    };
+    use super::strip_terminal_control_sequences;
     use crate::recording::{RecordingManager, safe_recording_name};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2499,21 +2596,6 @@ mod tests {
         let raw = format!("before\x1b{}after\n", char::REPLACEMENT_CHARACTER);
         let cleaned = strip_terminal_control_sequences(&raw);
         assert_eq!(cleaned, "beforeafter\n");
-    }
-
-    #[test]
-    fn consumes_matching_echo_prefix() {
-        let mut prefix = "ps -ef".to_string();
-        let consumed = consume_matching_prefix(&mut prefix, "ps -ef\nUID");
-        assert_eq!(consumed, "ps -ef".len());
-        assert!(prefix.is_empty());
-    }
-
-    #[test]
-    fn strips_only_one_leading_newline() {
-        assert_eq!(strip_one_leading_newline("\nhello"), "hello");
-        assert_eq!(strip_one_leading_newline("hello"), "hello");
-        assert_eq!(strip_one_leading_newline("\n\nhello"), "\nhello");
     }
 
     #[test]
@@ -2772,6 +2854,70 @@ mod tests {
         assert!(!transcript.contains("<0;"));
         assert!(!transcript.contains("clipboard"));
         assert!(!transcript.contains("\x1b"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transcript_applies_backspace_editing_to_serial_echo() {
+        let manager = RecordingManager::new();
+        for chunk in [
+            "PS> ",
+            "pingng",
+            "\u{8} \u{8}",
+            "\u{8} \u{8}",
+            " qq.com",
+            "\r\n",
+            "Pinging qq.com\r\n",
+        ] {
+            manager.write_output("s1", chunk);
+        }
+
+        let path = unique_path("backspace-echo");
+        manager.save_transcript("s1", &path, false, false).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+
+        assert_eq!(saved, "PS> ping qq.com\nPinging qq.com\n");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transcript_applies_cursor_left_and_repaint_editing() {
+        let manager = RecordingManager::new();
+        for chunk in ["pingng", "\x1b[2D", " qq.com\r\n", " 10%\r", " 99%\r\n"] {
+            manager.write_output("s1", chunk);
+        }
+
+        let path = unique_path("cursor-left-echo");
+        manager.save_transcript("s1", &path, false, false).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+
+        assert_eq!(saved, "ping qq.com\n 99%\n");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transcript_echoes_edited_input_without_stale_characters() {
+        let manager = input_enabled_manager();
+        manager.write_output("s1", "PS> ");
+        manager.write_input("s1", b"pingng");
+        manager.write_output("s1", "pingng");
+        manager.write_input("s1", b"\x08\x08");
+        manager.write_output("s1", "\u{8} \u{8}\u{8} \u{8}");
+        manager.write_input("s1", b" qq.com\r");
+        manager.write_output("s1", " qq.com\r\n");
+        manager.write_output("s1", "Pinging qq.com\r\n");
+
+        let path = unique_path("edited-input-echo");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+
+        assert_eq!(
+            saved,
+            "[INPUT] ping qq.com\n[OUTPUT] PS> \n[OUTPUT] Pinging qq.com\n"
+        );
 
         let _ = fs::remove_file(path);
     }

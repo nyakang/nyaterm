@@ -154,7 +154,7 @@ impl AgentToolRegistry {
             let candidate =
                 crate::ai::extract_json_object(text).unwrap_or_else(|| text.trim().into());
             let mut value: Value = serde_json::from_str(&candidate)
-                .map_err(|_| invalid("invalid agent JSON".into()))?;
+                .map_err(|_| AiModelError::InvalidAgentJsonFallback)?;
             let name = value
                 .get("action")
                 .and_then(Value::as_str)
@@ -286,7 +286,7 @@ impl AgentToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::{AgentTool, AgentToolRegistry};
-    use crate::ai::{AiToolCall, RiskLevel};
+    use crate::ai::{AiModelError, AiToolCall, RiskLevel};
     use serde_json::json;
 
     #[test]
@@ -316,6 +316,28 @@ mod tests {
         let call =
             AgentToolRegistry::parse(&[], r#"{"action":"final_answer","answer":"done"}"#).unwrap();
         assert_eq!(call.arguments["verification"]["status"], "unverified");
+    }
+
+    #[test]
+    fn missing_tools_with_unparseable_text_have_a_distinct_protocol_error() {
+        for text in [
+            "",
+            "ordinary answer",
+            "{\"action\":",
+            "```json\n{broken}\n```",
+        ] {
+            let error = AgentToolRegistry::parse(&[], text).unwrap_err();
+            assert_eq!(error, AiModelError::InvalidAgentJsonFallback);
+            assert!(!error.to_string().starts_with("invalid AI chat JSON"));
+        }
+        assert_ne!(
+            AgentToolRegistry::parse(&[], r#"{"action":"unknown"}"#).unwrap_err(),
+            AiModelError::InvalidAgentJsonFallback
+        );
+        assert_ne!(
+            AgentToolRegistry::parse(&[], r#"{"answer":"missing action"}"#).unwrap_err(),
+            AiModelError::InvalidAgentJsonFallback
+        );
     }
 
     #[test]

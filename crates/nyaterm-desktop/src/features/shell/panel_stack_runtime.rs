@@ -11,7 +11,7 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Window, canvas, deferred, div,
     prelude::FluentBuilder as _, px, rgb, svg,
 };
-use nyaterm_core::{AgentCommandExecutionMode, truncate_preview};
+use nyaterm_core::truncate_preview;
 
 use crate::features::{NyaTermApp, view_widgets::panel_header_with_actions};
 use crate::models::{
@@ -800,7 +800,7 @@ impl NyaTermApp {
     fn side_panel_meta(&self, _side: PanelSide, panel: NavItem) -> SharedString {
         match panel {
             NavItem::Connections => SharedString::from(""),
-            NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().model_label),
+            NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().mode_label),
             NavItem::ActiveSessions => SharedString::from(""),
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
@@ -920,26 +920,6 @@ impl NyaTermApp {
                         // their mouse-down away from the root outside-click
                         // handler so a second click can toggle the menu closed.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(header_svg_icon_button_with_color(
-                            palette,
-                            "ai-header-execution-mode-toggle",
-                            match self.ai.settings_config().agent_command_execution_mode {
-                                AgentCommandExecutionMode::Auto => "icons/ai/exec-auto.svg",
-                                AgentCommandExecutionMode::Smart => "icons/ai/exec-smart.svg",
-                                AgentCommandExecutionMode::ConfirmEach => {
-                                    "icons/ai/exec-confirm.svg"
-                                }
-                            },
-                            t!("ai.agentCommandExecutionMode"),
-                            (self.ai.settings_config().agent_command_execution_mode
-                                == AgentCommandExecutionMode::Auto)
-                                .then_some(palette.warning),
-                            !ai_running,
-                            cx.listener(|this, _, _, cx| {
-                                this.ai.toggle_execution_menu();
-                                this.defer_ai_panel_snapshot_flush(cx);
-                            }),
-                        ))
                         .child(header_svg_icon_button(
                             palette,
                             "ai-header-history-toggle",
@@ -1528,8 +1508,11 @@ mod tests {
                 let panel = cx.debug_bounds("floating-panel-fixture").unwrap();
                 let close = cx.debug_bounds(close_id).unwrap();
                 assert!(close.left() >= panel.left() && close.right() <= panel.right());
+                assert!(
+                    cx.debug_bounds("ai-header-execution-mode-toggle").is_none(),
+                    "execution mode lives in the composer, not the header"
+                );
                 for id in [
-                    "ai-header-execution-mode-toggle",
                     "ai-header-history-toggle",
                     "ai-header-open-settings",
                     "ai-header-new-chat",

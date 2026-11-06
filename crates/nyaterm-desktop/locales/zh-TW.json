@@ -355,6 +355,31 @@
     "mentionSession": "選擇工作階段",
     "modeAgent": "Agent",
     "modeAsk": "Ask",
+    "stop": "停止",
+    "agentKind": "Agent 執行環境",
+    "agentKindDisabled": "（未啟用）",
+    "context": {
+      "noTerminal": "未選擇終端機",
+      "currentTerminal": "終端機",
+      "connected": "已連線",
+      "local": "本機",
+      "disconnected": "已中斷",
+      "addTarget": "新增目標終端機"
+    },
+    "runStatus": {
+      "waiting": "等待模型回應",
+      "responding": "正在回覆",
+      "working": "執行中"
+    },
+    "activity": {
+      "title": "活動",
+      "progress": "%{completed}/%{total}",
+      "running": "執行中",
+      "needsApproval": "等待核准",
+      "waitingForUser": "等待你的回答",
+      "failed": "已結束（有錯誤）",
+      "completed": "已完成"
+    },
     "model": "模型名稱",
     "modelList": "來自此供應商的模型",
     "modelListDesc": "重新整理會從 rust-genai 取得已知模型；新模型預設不啟用。",

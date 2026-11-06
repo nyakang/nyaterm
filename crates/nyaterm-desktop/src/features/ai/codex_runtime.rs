@@ -7,9 +7,10 @@ use std::time::Duration;
 use futures::channel::mpsc::UnboundedSender;
 use nyaterm_core::ai::{
     CodexMcpConfig, CodexServerEvent, build_codex_agent_prompt, codex_decline_server_request,
-    codex_initialize_request, codex_initialized_notification, codex_thread_resume_request,
-    codex_thread_start_request, codex_turn_interrupt_request, codex_turn_start_request,
-    parse_codex_server_line, sanitize_codex_log_line,
+    codex_initialize_request, codex_initialized_notification,
+    codex_thread_resume_request_with_language, codex_thread_start_request_with_language,
+    codex_turn_interrupt_request, codex_turn_start_request, parse_codex_server_line,
+    sanitize_codex_log_line,
 };
 use nyaterm_core::{AiChatRequest, AiSettings, CodexThreadMode};
 use serde_json::Value;
@@ -151,17 +152,21 @@ fn run_protocol(
     };
     let reusable = existing_thread_id.filter(|value| !value.trim().is_empty());
     let thread_id = if let Some(thread_id) = reusable {
-        send(writer, &codex_thread_resume_request(2, thread_id))?;
+        send(
+            writer,
+            &codex_thread_resume_request_with_language(2, thread_id, &request.options.language),
+        )?;
         wait_response(2, writer, lines, cancel, child)?;
         thread_id.to_string()
     } else {
         send(
             writer,
-            &codex_thread_start_request(
+            &codex_thread_start_request_with_language(
                 2,
                 model,
                 settings.codex.thread_mode == CodexThreadMode::Ephemeral,
                 &mcp,
+                &request.options.language,
             ),
         )?;
         let result = wait_response(2, writer, lines, cancel, child)?;

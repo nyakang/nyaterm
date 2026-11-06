@@ -9,6 +9,9 @@ use nyaterm_ui::chat::running_indicator;
 use rust_i18n::t;
 
 use crate::features::ai::is_agent_command_card;
+use crate::features::ai::panel::activity::{
+    AiActivityItemState, AiActivityStatus, AiActivitySummary,
+};
 use crate::features::ai::panel::messages::disclosure;
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiPanel, AiPanelSnapshot};
@@ -173,51 +176,153 @@ impl AiPanel {
     ) -> gpui::AnyElement {
         let id = group.id.clone();
         let palette = snapshot.chrome.palette;
-        let live = group.is_live(snapshot);
         let open = snapshot.expanded_execution_groups.contains(&id);
-        let count = group.step_count(snapshot);
-        let label = if live {
-            t!("ai.executionInProgress", count = count)
+        let summary = AiActivitySummary::project(snapshot, group);
+        let total = if summary.total > 0 {
+            summary.total
         } else {
-            t!("ai.executionSteps", count = count)
+            group.step_count(snapshot)
         };
-        div()
+        let completed = summary.completed.min(total);
+        let (status_label, status_color) = match summary.status {
+            AiActivityStatus::Running => (t!("ai.activity.running"), palette.link),
+            AiActivityStatus::NeedsApproval => (t!("ai.activity.needsApproval"), palette.warning),
+            AiActivityStatus::WaitingUser => (t!("ai.activity.waitingForUser"), palette.link),
+            AiActivityStatus::Failed => (t!("ai.activity.failed"), palette.danger),
+            AiActivityStatus::Completed => (t!("ai.activity.completed"), palette.success),
+        };
+        let label = if total > 0 {
+            format!(
+                "{} · {}",
+                t!("ai.activity.title"),
+                t!("ai.activity.progress", completed = completed, total = total)
+            )
+        } else {
+            t!("ai.activity.title").to_string()
+        };
+        let detail = summary
+            .current_label
+            .clone()
+            .unwrap_or(status_label.to_string());
+        let live = group.is_live(snapshot);
+        let mut card = div()
+            .debug_selector({
+                let id = id.clone();
+                move || format!("ai-activity-{id}")
+            })
             .min_w_0()
             .w_full()
             .flex()
-            .items_center()
+            .flex_col()
             .gap_1()
             .pb_2()
             .border_b_1()
             .border_color(rgb(palette.border))
-            .when(live && !open, |row| {
-                row.child(running_indicator(
-                    format!("ai-execution-running-{id}"),
-                    rgb(palette.link),
-                ))
-            })
-            .child(disclosure(
-                format!("ai-execution-toggle-{id}"),
-                label,
-                open,
-                cx.listener(move |panel, _, _, cx| {
-                    let anchor = panel.transcript_rows.iter().position(
-                        |row| matches!(row, AiTranscriptRow::Execution { group } if group.id == id),
-                    );
-                    if !open && let Some(index) = anchor {
-                        // Anchor the reading position before inserting history rows.
-                        panel.transcript_scroll.update(cx, |scroll, cx| {
-                            scroll.scroll_to_item(index, cx);
-                        });
-                    }
-                    let id = id.clone();
-                    panel.with_app(cx, move |app, cx| {
-                        app.ai.toggle_execution_group(id);
-                        app.defer_ai_panel_snapshot_flush(cx);
-                    });
-                }),
-            ))
-            .text_size(px(12.))
-            .into_any_element()
+            .child(self.ai_agent_turn_header(snapshot, live))
+            .child(
+                div()
+                    .min_w_0()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(px(12.))
+                    .child(if summary.status == AiActivityStatus::Running {
+                        running_indicator(format!("ai-execution-running-{id}"), rgb(palette.link))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .flex_none()
+                            .size(px(6.))
+                            .mx_1()
+                            .rounded_full()
+                            .bg(rgb(status_color))
+                            .into_any_element()
+                    })
+                    .child(disclosure(
+                        format!("ai-execution-toggle-{id}"),
+                        label,
+                        open,
+                        cx.listener(move |panel, _, _, cx| {
+                            let anchor = panel.transcript_rows.iter().position(
+                                |row| matches!(row, AiTranscriptRow::Execution { group } if group.id == id),
+                            );
+                            if !open && let Some(index) = anchor {
+                                // Anchor the reading position before inserting history rows.
+                                panel.transcript_scroll.update(cx, |scroll, cx| {
+                                    scroll.scroll_to_item(index, cx);
+                                });
+                            }
+                            let id = id.clone();
+                            panel.with_app(cx, move |app, cx| {
+                                app.ai.toggle_execution_group(id);
+                                app.defer_ai_panel_snapshot_flush(cx);
+                            });
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .debug_selector({
+                                let id = group.id.clone();
+                                move || format!("ai-activity-detail-{id}")
+                            })
+                            .min_w_0()
+                            .flex_1()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_size(px(11.))
+                            .text_color(rgb(
+                                if summary.status == AiActivityStatus::NeedsApproval {
+                                    palette.warning
+                                } else {
+                                    palette.text_muted
+                                },
+                            ))
+                            .child(detail),
+                    ),
+            );
+        if open && summary.from_plan && !summary.items.is_empty() {
+            let mut list = div()
+                .debug_selector({
+                    let id = group.id.clone();
+                    move || format!("ai-activity-plan-{id}")
+                })
+                .w_full()
+                .min_w_0()
+                .pl_2()
+                .flex()
+                .flex_col()
+                .gap_1();
+            for item in &summary.items {
+                let (marker, color) = match item.state {
+                    AiActivityItemState::Pending => ("○", palette.text_muted),
+                    AiActivityItemState::Running => ("→", palette.link),
+                    AiActivityItemState::NeedsApproval => ("!", palette.warning),
+                    AiActivityItemState::Completed => ("✓", palette.success),
+                    AiActivityItemState::Failed => ("!", palette.danger),
+                    AiActivityItemState::Skipped => ("–", palette.text_dimmed),
+                };
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_size(px(11.))
+                        .text_color(rgb(color))
+                        .child(div().flex_none().w(px(12.)).child(marker))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .text_ellipsis()
+                                .text_color(rgb(palette.text))
+                                .child(item.label.clone()),
+                        ),
+                );
+            }
+            card = card.child(list);
+        }
+        card.into_any_element()
     }
 }

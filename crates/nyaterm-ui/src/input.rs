@@ -311,6 +311,7 @@ pub struct NyaInputState {
     code: bool,
     language: Option<SharedString>,
     rows: Option<usize>,
+    auto_grow: Option<(usize, usize)>,
     disabled: bool,
     readonly: bool,
     error: bool,
@@ -344,6 +345,7 @@ impl NyaInputState {
             code: false,
             language: None,
             rows: None,
+            auto_grow: None,
             disabled: false,
             readonly: false,
             error: false,
@@ -362,6 +364,28 @@ impl NyaInputState {
         self.multi_line = true;
         self.rows = rows;
         self
+    }
+
+    /// A multi-line box whose height follows its content between `min_rows`
+    /// and `max_rows`, scrolling beyond that. Its shell must not fix a height.
+    pub fn auto_grow(mut self, min_rows: usize, max_rows: usize) -> Self {
+        self.multi_line = true;
+        self.auto_grow = Some((min_rows.max(1), max_rows.max(min_rows.max(1))));
+        self
+    }
+
+    /// [`Self::auto_grow`] for a field that already exists, applied to its
+    /// mounted textarea as well.
+    pub fn set_auto_grow(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
+        let rows = (min_rows.max(1), max_rows.max(min_rows.max(1)));
+        if !self.multi_line || self.code || self.auto_grow == Some(rows) {
+            return;
+        }
+        self.auto_grow = Some(rows);
+        if let Some(ComponentState::Textarea(state)) = &self.state {
+            state.update(cx, |state, cx| state.set_auto_grow(rows.0, rows.1, cx));
+        }
+        cx.notify();
     }
 
     /// Send plain Enter through the multi-line input; Shift+Enter inserts a newline.
@@ -596,6 +620,7 @@ impl NyaInputState {
         // The shell supplies a definite height, including a resizable footer.
         // Kit 0.7.1 treats rows as a minimum and would force that viewport taller.
         let rows = self.rows.unwrap_or(1).min(1);
+        let auto_grow = self.auto_grow;
         let submit_on_enter = self.submit_on_enter;
         let (state, subscription) = if multi_line && self.code {
             let state = cx.new(|cx| {
@@ -616,11 +641,14 @@ impl NyaInputState {
             (ComponentState::Editor(state), subscription)
         } else if multi_line {
             let state = cx.new(|cx| {
-                TextareaState::new(window, cx)
+                let state = TextareaState::new(window, cx)
                     .default_value(value)
                     .placeholder(placeholder)
-                    .submit_on_enter(submit_on_enter)
-                    .rows(rows)
+                    .submit_on_enter(submit_on_enter);
+                match auto_grow {
+                    Some((min_rows, max_rows)) => state.auto_grow(min_rows, max_rows),
+                    None => state.rows(rows),
+                }
             });
             let subscription = cx.subscribe(&state, |this, input, event: &InputEvent, cx| {
                 forward_input_event(this, input.read(cx).value().to_string(), event, cx)
@@ -1054,6 +1082,7 @@ impl RenderOnce for NyaInputShell {
         let owner = state.clone();
         let kind = owner.read(cx).kind;
         let masked = owner.read(cx).masked;
+        let content_height = owner.read(cx).auto_grow.is_some() && height.is_none() && !fill_height;
         let (state, disabled, readonly, state_multi_line) =
             prepare_input_component(&state, window, cx);
         state.set_context_menu_enabled(context_menu_labels.is_none(), cx);
@@ -1135,6 +1164,12 @@ impl RenderOnce for NyaInputShell {
                     .child(footer.unwrap())
                     .into_any_element()
             }
+            ComponentState::Textarea(state) if content_height => Textarea::new(&state)
+                .appearance(framed)
+                .bordered(framed)
+                .disabled(disabled)
+                .readonly(readonly)
+                .into_any_element(),
             ComponentState::Textarea(state) => Textarea::new(&state)
                 .appearance(framed)
                 .bordered(framed)
@@ -1653,6 +1688,55 @@ mod tests {
                 assert_eq!(field.value(cx), "draft\nsecond line");
             });
         }
+    }
+
+    struct AutoGrowFixture {
+        field: gpui::Entity<NyaInputState>,
+    }
+
+    impl Render for AutoGrowFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .w(px(320.))
+                .flex()
+                .flex_col()
+                .child(NyaInputShell::new("auto-grow-textarea", &self.field).multi_line())
+        }
+    }
+
+    #[gpui::test]
+    fn auto_grow_textarea_follows_its_lines_up_to_the_row_limit(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| AutoGrowFixture {
+            field: cx.new(|cx| NyaInputState::new(cx, "one").auto_grow(1, 4)),
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        let height_for = |text: &str, cx: &mut gpui::VisualTestContext| {
+            field.update(cx, |field, cx| field.set_content(text, cx));
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.refresh();
+                    _ = window.draw(cx);
+                });
+            }
+            cx.debug_bounds("auto-grow-textarea").unwrap().size.height
+        };
+        let one = height_for("one", cx);
+        let three = height_for("one\ntwo\nthree", cx);
+        let many = height_for("1\n2\n3\n4\n5\n6\n7\n8", cx);
+        let four = height_for("1\n2\n3\n4", cx);
+        assert!(one < three, "one={one:?} three={three:?}");
+        assert!(three < four, "three={three:?} four={four:?}");
+        assert_eq!(
+            many, four,
+            "rows beyond the limit scroll instead of growing"
+        );
+        assert_eq!(height_for("one", cx), one);
     }
 
     struct InputContextMenuFixture {

@@ -291,11 +291,8 @@ impl NyaTermApp {
         observation: CommandObservation,
         cx: &mut Context<Self>,
     ) {
-        let observation_message = build_observation_message(
-            &observation,
-            &state.command,
-            &self.settings.summary().language,
-        );
+        let observation_message =
+            build_observation_message(&observation, &state.command, self.ai.agent_task_language());
         self.start_ai_agent_continuation_with_message(state, observation_message, cx);
     }
 
@@ -360,6 +357,7 @@ impl NyaTermApp {
             user_input: observation_message,
             context,
             options: nyaterm_core::AiRequestOptions {
+                language: self.ai.agent_task_language().to_string(),
                 history_turns: state.max_steps.saturating_mul(2).saturating_add(2),
                 agent_json_protocol: self.ai.agent_uses_json_protocol(),
                 ..Default::default()
@@ -457,7 +455,10 @@ impl NyaTermApp {
         };
         self.start_ai_agent_continuation_with_message(
             state,
-            format!("The user rejected command `{}`. It was not executed. Choose a safe alternative or finish the task.", card.command),
+            nyaterm_core::ai::build_agent_rejection_message(
+                &card.command,
+                self.ai.agent_task_language(),
+            ),
             cx,
         );
     }

@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use gpui::Context;
 use nyaterm_core::ai::completion::AiProviderErrorKind;
-use nyaterm_core::ai::{AiChatRequest, AiMessage};
-use tokio::sync::{mpsc, oneshot};
+use nyaterm_core::ai::harness::AgentToolRegistry;
+use nyaterm_core::ai::{
+    AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiMode, AiModelError,
+};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::app_shell::DesktopControllerGlobal;
@@ -15,6 +18,15 @@ use nyaterm_store::StoreBlockingClient;
 
 use super::ai_jobs::{finish_native_job, prepare_native_job};
 use super::state::AiChatLaunch;
+
+// One queue orders attempt boundaries after all preceding deltas and before
+// any new response. Separate notification channels can race queued text.
+enum NativeJobEvent {
+    Delta(Box<AiChatStreamDelta>),
+    ProtocolFallback,
+    ProtocolRepair,
+    Finished(Box<Result<AiChatJobOutput, String>>),
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn launch_native_chat(
@@ -51,8 +63,6 @@ impl NyaTermApp {
         let jobs = self.blocking_jobs.clone();
         let store = self.store_blocking_client();
         let (tx, mut rx) = mpsc::channel(64);
-        let (result_tx, result_rx) = oneshot::channel();
-        let (fallback_tx, mut fallback_rx) = oneshot::channel();
         let task_cancel = cancel.clone();
         let run_id = request
             .options
@@ -67,45 +77,77 @@ impl NyaTermApp {
                 request,
                 history,
                 persist,
-                tx,
-                fallback_tx,
+                &tx,
                 &task_cancel,
             )
             .await;
-            let _ = result_tx.send(result);
+            let _ = tx.send(NativeJobEvent::Finished(Box::new(result))).await;
         });
         self.ai.own_native_task(task);
         cx.spawn(async move |this, cx| {
-            let mut fallback_pending = true;
-            loop {
-                let delta = tokio::select! {
-                    biased;
-                    fallback = &mut fallback_rx, if fallback_pending => {
-                        fallback_pending = false;
-                        if fallback.is_ok() && this.update(cx, |this, cx| this.dispatch_ai_chat_event(AiChatWorkerEvent::AgentProtocolFallback { job_id, session_id: session_id.clone() }, cx)).is_err() { return; }
-                        continue;
-                    }
-                    delta = rx.recv() => match delta { Some(delta) => delta, None => break },
-                };
+            while let Some(event) = rx.recv().await {
                 let result = this.update(cx, |this, cx| {
-                    if run_id.as_ref().is_some_and(|run| !this.ai.native_run_is_live(run, &session_id)) { return; }
-                    if !delta.text_delta.is_empty() || delta.reasoning_delta.is_some() {
-                        this.dispatch_ai_chat_event(AiChatWorkerEvent::Delta { job_id, session_id: session_id.clone(), text_delta: delta.text_delta, reasoning_delta: delta.reasoning_delta }, cx);
+                    if run_id
+                        .as_ref()
+                        .is_some_and(|run| !this.ai.native_run_is_live(run, &session_id))
+                    {
+                        return;
                     }
-                    for tool in delta.tool_call_deltas {
-                        this.dispatch_ai_chat_event(AiChatWorkerEvent::AgentToolCallDelta { job_id, session_id: session_id.clone(), tool_name: tool.name_delta, arguments_delta_len: tool.arguments_delta.len() }, cx);
+                    match event {
+                        NativeJobEvent::Delta(delta) => {
+                            if !delta.text_delta.is_empty() || delta.reasoning_delta.is_some() {
+                                this.dispatch_ai_chat_event(
+                                    AiChatWorkerEvent::Delta {
+                                        job_id,
+                                        session_id: session_id.clone(),
+                                        text_delta: delta.text_delta,
+                                        reasoning_delta: delta.reasoning_delta,
+                                    },
+                                    cx,
+                                );
+                            }
+                            for tool in delta.tool_call_deltas {
+                                this.dispatch_ai_chat_event(
+                                    AiChatWorkerEvent::AgentToolCallDelta {
+                                        job_id,
+                                        session_id: session_id.clone(),
+                                        tool_name: tool.name_delta,
+                                        arguments_delta_len: tool.arguments_delta.len(),
+                                    },
+                                    cx,
+                                );
+                            }
+                        }
+                        NativeJobEvent::ProtocolFallback => this.dispatch_ai_chat_event(
+                            AiChatWorkerEvent::AgentProtocolFallback {
+                                job_id,
+                                session_id: session_id.clone(),
+                            },
+                            cx,
+                        ),
+                        NativeJobEvent::ProtocolRepair => this.dispatch_ai_chat_event(
+                            AiChatWorkerEvent::AgentProtocolRepair {
+                                job_id,
+                                session_id: session_id.clone(),
+                            },
+                            cx,
+                        ),
+                        NativeJobEvent::Finished(result) => this.dispatch_ai_chat_event(
+                            AiChatWorkerEvent::Finished(Box::new(AiChatJobResult {
+                                job_id,
+                                session_id: session_id.clone(),
+                                result: *result,
+                            })),
+                            cx,
+                        ),
                     }
                 });
-                if result.is_err() { return; }
+                if result.is_err() {
+                    return;
+                }
             }
-            if let Ok(result) = result_rx.await {
-                let _ = this.update(cx, |this, cx| {
-                    if run_id.as_ref().is_none_or(|run| this.ai.native_run_is_live(run, &session_id)) {
-                        this.dispatch_ai_chat_event(AiChatWorkerEvent::Finished(Box::new(AiChatJobResult { job_id, session_id, result })), cx);
-                    }
-                });
-            }
-        }).detach();
+        })
+        .detach();
     }
 }
 
@@ -117,8 +159,7 @@ async fn run_native_job(
     mut request: AiChatRequest,
     history: Option<Vec<AiMessage>>,
     persist: bool,
-    tx: mpsc::Sender<nyaterm_core::ai::AiChatStreamDelta>,
-    fallback_tx: oneshot::Sender<()>,
+    tx: &mpsc::Sender<NativeJobEvent>,
     cancel: &CancellationToken,
 ) -> Result<AiChatJobOutput, String> {
     let prep_store = store.clone();
@@ -141,26 +182,7 @@ async fn run_native_job(
         .map_err(|error| error.to_string())?
         .await
         .map_err(|error| error.to_string())??;
-    let completion = match stream_chat(&session, &request, &history, tx.clone(), cancel).await {
-        Err(error)
-            if error.kind == AiProviderErrorKind::UnsupportedCapability
-                && error.tool_protocol_unsupported
-                && !error.generated_content
-                && request.mode == nyaterm_core::ai::AiMode::Agent
-                && !request.options.agent_json_protocol
-                && request
-                    .options
-                    .agent_context
-                    .as_ref()
-                    .is_none_or(|context| context.calls.is_empty()) =>
-        {
-            request.options.agent_json_protocol = true;
-            let _ = fallback_tx.send(());
-            stream_chat(&session, &request, &history, tx, cancel).await
-        }
-        result => result,
-    }
-    .map_err(|error| error.to_string())?;
+    let completion = completion_with_repair(&session, &mut request, &history, tx, cancel).await?;
     if cancel.is_cancelled() {
         return Err("AI request cancelled".into());
     }
@@ -175,3 +197,127 @@ async fn run_native_job(
     .await
     .map_err(|error| error.to_string())?
 }
+
+async fn completion_with_repair(
+    session: &Arc<AiProviderSession>,
+    request: &mut AiChatRequest,
+    history: &[AiMessage],
+    tx: &mpsc::Sender<NativeJobEvent>,
+    cancel: &CancellationToken,
+) -> Result<AiChatCompletion, String> {
+    // Protocol fallback and response correction share one extra model POST.
+    // Only model responses are retried; no tool has been dispatched here.
+    for attempt in 1..=2 {
+        let completion = match stream_attempt(session, request, history, tx, cancel).await {
+            Err(error)
+                if attempt == 1
+                    && error.kind == AiProviderErrorKind::UnsupportedCapability
+                    && error.tool_protocol_unsupported
+                    && !error.generated_content
+                    && request.mode == AiMode::Agent
+                    && !request.options.agent_json_protocol
+                    && request
+                        .options
+                        .agent_context
+                        .as_ref()
+                        .is_none_or(|context| context.calls.is_empty()) =>
+            {
+                request.options.agent_json_protocol = true;
+                send_event(tx, NativeJobEvent::ProtocolFallback, cancel).await?;
+                continue;
+            }
+            result => result.map_err(|error| error.to_string())?,
+        };
+        if cancel.is_cancelled() {
+            return Err("AI request cancelled".into());
+        }
+        if request.mode == AiMode::Agent
+            && request.options.agent_context.is_some()
+            && let Err(error) = AgentToolRegistry::parse(&completion.tool_calls, &completion.text)
+        {
+            warn_agent_protocol_failure(&completion, attempt, &error);
+            if attempt == 1 && error == AiModelError::InvalidAgentJsonFallback {
+                request.options.agent_protocol_repair = true;
+                send_event(tx, NativeJobEvent::ProtocolRepair, cancel).await?;
+                continue;
+            }
+            return Err(error.to_string());
+        }
+        return Ok(completion);
+    }
+    unreachable!("the second attempt always returns a result")
+}
+
+fn warn_agent_protocol_failure(
+    completion: &AiChatCompletion,
+    attempt: usize,
+    error: &AiModelError,
+) {
+    let classification = match error {
+        AiModelError::InvalidAgentJsonFallback => "missing_tool_call_invalid_json",
+        _ => "invalid_agent_tool_call",
+    };
+    tracing::warn!(
+        classification,
+        attempt,
+        protocol = ?completion.metadata.assistant_turn.protocol,
+        responses = completion.metadata.assistant_turn.responses,
+        tool_count = completion.tool_calls.len(),
+        text_empty = completion.text.is_empty(),
+        text_chars = completion.text.chars().count(),
+        "AI Agent response failed protocol validation"
+    );
+}
+
+async fn send_event(
+    tx: &mpsc::Sender<NativeJobEvent>,
+    event: NativeJobEvent,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("AI request cancelled".into()),
+        result = tx.send(event) => result.map_err(|_| "AI response consumer closed".into()),
+    }
+}
+
+async fn stream_attempt(
+    session: &Arc<AiProviderSession>,
+    request: &AiChatRequest,
+    history: &[AiMessage],
+    tx: &mpsc::Sender<NativeJobEvent>,
+    cancel: &CancellationToken,
+) -> Result<AiChatCompletion, nyaterm_core::ai::completion::AiProviderError> {
+    use nyaterm_core::ai::completion::AiProviderError;
+
+    let (delta_tx, mut delta_rx) = mpsc::channel(64);
+    let response = stream_chat(session, request, history, delta_tx, cancel);
+    tokio::pin!(response);
+    let mut deltas_open = true;
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(AiProviderError::new(AiProviderErrorKind::Cancelled)),
+            delta = delta_rx.recv(), if deltas_open => {
+                if let Some(delta) = delta {
+                    send_event(tx, NativeJobEvent::Delta(Box::new(delta)), cancel).await
+                        .map_err(|_| AiProviderError::new(AiProviderErrorKind::Cancelled))?;
+                } else {
+                    deltas_open = false;
+                }
+            }
+            result = &mut response => {
+                // The SDK has finished sending, but its bounded queue may still
+                // contain deltas. Drain them before exposing the attempt boundary.
+                while let Ok(delta) = delta_rx.try_recv() {
+                    send_event(tx, NativeJobEvent::Delta(Box::new(delta)), cancel).await
+                        .map_err(|_| AiProviderError::new(AiProviderErrorKind::Cancelled))?;
+                }
+                return result;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

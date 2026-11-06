@@ -355,6 +355,31 @@
     "mentionSession": "セッションを選択",
     "modeAgent": "Agent",
     "modeAsk": "Ask",
+    "stop": "停止",
+    "agentKind": "エージェントランタイム",
+    "agentKindDisabled": "（無効）",
+    "context": {
+      "noTerminal": "ターミナルが選択されていません",
+      "currentTerminal": "ターミナル",
+      "connected": "接続済み",
+      "local": "ローカル",
+      "disconnected": "切断",
+      "addTarget": "対象ターミナルを追加"
+    },
+    "runStatus": {
+      "waiting": "モデルの応答を待機中",
+      "responding": "応答中",
+      "working": "実行中"
+    },
+    "activity": {
+      "title": "アクティビティ",
+      "progress": "%{completed}/%{total}",
+      "running": "実行中",
+      "needsApproval": "承認待ち",
+      "waitingForUser": "回答待ち",
+      "failed": "エラーで終了",
+      "completed": "完了"
+    },
     "model": "モデル",
     "modelList": "モデル一覧",
     "modelListDesc": "更新すると rust-genai から既知のモデルを取得します。新しいモデルは既定で無効です。",

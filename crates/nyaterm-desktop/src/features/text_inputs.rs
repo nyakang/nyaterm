@@ -281,7 +281,9 @@ impl NyaTermApp {
                         } else if subscription_id.as_ref() == "ai.chat.prompt" {
                             if app.ai.chat_mention_is_open() {
                                 app.select_ai_mention_candidate(cx);
-                            } else {
+                            } else if !app.ai.chat_or_agent_is_running() {
+                                // The draft stays editable during a run; Enter
+                                // must neither start nor queue a second request.
                                 app.start_ai_ask(cx);
                             }
                         }

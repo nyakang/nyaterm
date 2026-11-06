@@ -355,6 +355,31 @@
     "mentionSession": "Sélectionner une session",
     "modeAgent": "Agent",
     "modeAsk": "Question",
+    "stop": "Arrêter",
+    "agentKind": "Environnement de l’agent",
+    "agentKindDisabled": "(désactivé)",
+    "context": {
+      "noTerminal": "Aucun terminal sélectionné",
+      "currentTerminal": "Terminal",
+      "connected": "Connecté",
+      "local": "Local",
+      "disconnected": "Déconnecté",
+      "addTarget": "Ajouter un terminal cible"
+    },
+    "runStatus": {
+      "waiting": "En attente du modèle",
+      "responding": "Réponse en cours",
+      "working": "En cours"
+    },
+    "activity": {
+      "title": "Activité",
+      "progress": "%{completed}/%{total}",
+      "running": "En cours",
+      "needsApproval": "En attente d’approbation",
+      "waitingForUser": "En attente de votre réponse",
+      "failed": "Terminé avec des erreurs",
+      "completed": "Terminé"
+    },
     "model": "Modèle",
     "modelList": "Liste des modèles",
     "modelListDesc": "L'actualisation récupère les modèles connus depuis rust-genai. Les nouveaux modèles sont désactivés par défaut.",

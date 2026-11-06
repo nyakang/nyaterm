@@ -11,6 +11,7 @@ use rust_i18n::t;
 
 use super::components::ai_command_target_label;
 use super::messages::{command_heading, localized_risk, text_preview};
+use super::tool_call::tool_call_title;
 
 mod order;
 use super::transcript::AiTranscriptRow;
@@ -135,7 +136,7 @@ impl AiPanel {
                 owner.clone(),
                 "target-label",
                 NyaTextFormat::Plain,
-                &ai_command_target_label(card),
+                &tool_call_title(&ai_command_target_label(card)),
             );
             put(
                 owner.clone(),

@@ -33,7 +33,7 @@ impl SettingsPanel {
         let palette = self.theme_palette();
         let settings = self.ai.settings_config().clone();
         let status = self.ai.agent_management.clone();
-        let columns = if self.viewport_width >= 1024. { 2 } else { 1 };
+        let columns = if self.content_width >= 1024. { 2 } else { 1 };
         let mut codex_options = vec![NyaSelectOption::new(
             "__none__",
             t!("ai.useCodexDefaultModel"),
@@ -145,13 +145,14 @@ impl SettingsPanel {
                     .grid()
                     .grid_cols(columns)
                     .gap_4()
-                    .child(ai_field(palette, t!("ai.codex.threadMode"), None, thread))
-                    .child(ai_field(
-                        palette,
-                        t!("ai.codexDefaultModel"),
-                        None,
-                        codex_model,
-                    ))
+                    .child(
+                        ai_field(palette, t!("ai.codex.threadMode"), None, thread)
+                            .debug_selector(|| "ai-agent-thread-field".into()),
+                    )
+                    .child(
+                        ai_field(palette, t!("ai.codexDefaultModel"), None, codex_model)
+                            .debug_selector(|| "ai-agent-model-field".into()),
+                    )
                     .child(ai_field(
                         palette,
                         t!("ai.permission.title"),

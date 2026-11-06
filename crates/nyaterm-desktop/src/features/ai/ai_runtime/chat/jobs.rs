@@ -146,7 +146,11 @@ impl NyaTermApp {
             action,
             user_input: request_prompt.clone(),
             context,
-            options: Default::default(),
+            options: nyaterm_core::AiRequestOptions {
+                language: crate::i18n::normalize_locale(&self.settings.summary().language)
+                    .into_owned(),
+                ..Default::default()
+            },
         };
         let external_agent = matches!(
             request.agent_kind,
@@ -194,9 +198,12 @@ impl NyaTermApp {
         };
         let before = self.ai_header_presentation();
         let store = self.store_blocking_client();
-        let launch =
-            self.ai
-                .begin_chat_request(request_prompt, mode.clone(), source_label.as_deref());
+        let launch = self.ai.begin_chat_request_with_language(
+            request_prompt,
+            mode.clone(),
+            source_label.as_deref(),
+            request.options.language.clone(),
+        );
         self.reset_text_input("ai.chat.prompt", "", cx);
         let mut agent_history = None;
         if request.mode == AiMode::Agent && request.agent_kind == AiAgentKind::Nyaterm {
@@ -736,7 +743,7 @@ impl NyaTermApp {
 
     /// Apply an edit from the AI prompt box.
     pub(in crate::features) fn apply_ai_prompt(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.ai.chat_or_agent_is_running() || !self.ai.settings_enabled() {
+        if !self.ai.settings_enabled() {
             return;
         }
         self.ai.set_chat_prompt_draft(text);
@@ -849,6 +856,9 @@ impl NyaTermApp {
             }
             AiChatWorkerEvent::AgentProtocolFallback { job_id, .. } => {
                 dirty = self.ai.apply_agent_protocol_fallback(job_id);
+            }
+            AiChatWorkerEvent::AgentProtocolRepair { job_id, .. } => {
+                dirty = self.ai.apply_agent_protocol_repair(job_id);
             }
             AiChatWorkerEvent::Finished(event) => {
                 let native_call = event
