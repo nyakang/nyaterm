@@ -16,9 +16,9 @@ use crate::models::{
 };
 use crate::theme::ThemePalette;
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, canvas, div, prelude::*, px, rgb,
+    AnyElement, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, WeakEntity, Window, canvas, div, prelude::*, px, rgb,
 };
 use nyaterm_core::{
     AiSettings, AppSettingsSummary, CloudSyncHistoryEntry, CloudSyncSettings, CloudSyncState,
@@ -462,6 +462,7 @@ impl FontSelectOptionCache {
 }
 
 pub(in crate::features) struct SettingsPanel {
+    focus: FocusHandle,
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
     pub(in crate::features::pages::settings) pane_width: f32,
     pub(in crate::features::pages::settings) content_width: f32,
@@ -536,6 +537,7 @@ impl SettingsPanel {
             pane_width: 0.,
             content_width: 0.,
             app,
+            focus: cx.focus_handle(),
             snapshot: None,
             settings: SettingsPresentation::empty(cx),
             ai: AiSettingsPresentation::empty(cx),
@@ -1056,6 +1058,12 @@ impl SettingsPanel {
     }
 }
 
+impl Focusable for SettingsPanel {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for SettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
@@ -1064,7 +1072,10 @@ impl Render for SettingsPanel {
         }
 
         let Some(snapshot) = self.snapshot.clone() else {
-            return div().size_full().into_any_element();
+            return div()
+                .track_focus(&self.focus)
+                .size_full()
+                .into_any_element();
         };
 
         let panel = cx.weak_entity();
@@ -1090,6 +1101,7 @@ impl Render for SettingsPanel {
         .inset_0();
 
         let root = div()
+            .track_focus(&self.focus)
             .relative()
             .min_w_0()
             .min_h_0()

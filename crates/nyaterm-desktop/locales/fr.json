@@ -555,9 +555,9 @@
   "app": {
     "newConnection": "Nouv. conn.",
     "noActiveSessions": "Aucune session active",
-    "openChat": "Ouvrir la conversation",
-    "showAllCommands": "Afficher toutes les commandes",
-    "switchTerminal": "Changer de terminal"
+    "openChat": "Ouvrir l’assistant IA",
+    "showAllCommands": "Ouvrir les commandes rapides",
+    "switchTerminal": "Ouvrir la palette de commandes"
   },
   "common": {
     "operationSucceeded": "Opération terminée",
@@ -3077,13 +3077,13 @@
       "nextTab": "Onglet suivant",
       "nextTerminalGroup": "Groupe de terminaux suivant",
       "previousTerminalGroup": "Groupe de terminaux précédent",
-      "openChat": "Ouvrir la conversation",
+      "openChat": "Ouvrir l’assistant IA",
       "openSettings": "Ouvrir les paramètres",
       "prevTab": "Onglet précédent",
       "quickSwitch": "Ouvrir la palette de commandes",
       "renameFile": "Renommer le fichier/dossier",
       "resetZoom": "Réinitialiser le zoom",
-      "showAllCommands": "Afficher toutes les commandes",
+      "showAllCommands": "Afficher/masquer le panneau des commandes rapides",
       "switchTab": "Basculer vers l'onglet 1-9",
       "temporarySshLink": "Lien temporaire",
       "toggleLeftSidebar": "Basculer la barre latérale gauche",

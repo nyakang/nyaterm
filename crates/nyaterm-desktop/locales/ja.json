@@ -555,9 +555,9 @@
   "app": {
     "newConnection": "新規接続",
     "noActiveSessions": "アクティブなセッションがありません",
-    "openChat": "チャットを開く",
-    "showAllCommands": "すべてのコマンドを表示",
-    "switchTerminal": "ターミナルを切り替え"
+    "openChat": "AI アシスタントを開く",
+    "showAllCommands": "クイックコマンドを開く",
+    "switchTerminal": "コマンドパレットを開く"
   },
   "common": {
     "operationSucceeded": "操作が完了しました",
@@ -3077,13 +3077,13 @@
       "nextTab": "次のタブ",
       "nextTerminalGroup": "次のターミナルグループ",
       "previousTerminalGroup": "前のターミナルグループ",
-      "openChat": "チャットを開く",
+      "openChat": "AI アシスタントを開く",
       "openSettings": "設定を開く",
       "prevTab": "前のタブ",
       "quickSwitch": "コマンドパレットを開く",
       "renameFile": "ファイル/フォルダーの名前を変更",
       "resetZoom": "ズームをリセット",
-      "showAllCommands": "すべてのコマンドを表示",
+      "showAllCommands": "クイックコマンドパネルを表示／非表示",
       "switchTab": "タブ 1-9 に切り替え",
       "temporarySshLink": "一時リンク",
       "toggleLeftSidebar": "左サイドバーの切り替え",

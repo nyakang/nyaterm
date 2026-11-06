@@ -957,6 +957,15 @@ impl ShellBottomPanelState {
     const COMMAND_SEND_HEIGHT_MIN: f32 = 120.;
     const HEIGHT_MAX: f32 = 520.;
 
+    pub(super) fn toggle_quick_commands(&mut self) {
+        self.mode = match self.mode {
+            BottomPanelMode::QuickCommands => BottomPanelMode::Hidden,
+            BottomPanelMode::CommandSend | BottomPanelMode::Hidden => {
+                BottomPanelMode::QuickCommands
+            }
+        };
+    }
+
     pub(super) fn clamp_command_send_height(height: f32) -> f32 {
         height.clamp(Self::COMMAND_SEND_HEIGHT_MIN, Self::HEIGHT_MAX)
     }
@@ -1353,6 +1362,19 @@ mod tests {
                 .map(|(id, height)| ((*id).to_string(), *height))
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn quick_commands_toggle_hides_instead_of_restoring_the_previous_bottom_panel() {
+        for initial in [BottomPanelMode::Hidden, BottomPanelMode::CommandSend] {
+            let mut shell = shell(initial);
+            shell.bottom_panel.toggle_quick_commands();
+            assert_eq!(shell.bottom_panel_mode(), BottomPanelMode::QuickCommands);
+            shell.bottom_panel.toggle_quick_commands();
+            assert_eq!(shell.bottom_panel_mode(), BottomPanelMode::Hidden);
+            assert_eq!(shell.quick_commands_height(), 120.);
+            assert_eq!(shell.command_send_height(), 180.);
+        }
     }
 
     #[test]

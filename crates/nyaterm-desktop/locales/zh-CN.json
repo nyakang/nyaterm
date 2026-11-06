@@ -555,9 +555,9 @@
   "app": {
     "newConnection": "新建连接",
     "noActiveSessions": "暂无活动会话",
-    "openChat": "打开聊天",
-    "showAllCommands": "显示所有命令",
-    "switchTerminal": "切换终端"
+    "openChat": "打开 AI 助手",
+    "showAllCommands": "打开快捷命令",
+    "switchTerminal": "打开命令面板"
   },
   "common": {
     "operationSucceeded": "操作完成",
@@ -3070,13 +3070,13 @@
       "nextTab": "下一个标签",
       "nextTerminalGroup": "下一个终端区域",
       "previousTerminalGroup": "上一个终端区域",
-      "openChat": "打开聊天",
+      "openChat": "打开 AI 助手",
       "openSettings": "打开设置",
       "prevTab": "上一个标签",
       "quickSwitch": "打开命令面板",
       "renameFile": "重命名文件/目录",
       "resetZoom": "重置缩放",
-      "showAllCommands": "显示所有命令",
+      "showAllCommands": "显示／隐藏快捷命令面板",
       "switchTab": "切换到标签 1-9",
       "temporarySshLink": "临时链接",
       "toggleLeftSidebar": "切换左侧边栏",
