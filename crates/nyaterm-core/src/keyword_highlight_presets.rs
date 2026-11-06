@@ -504,7 +504,7 @@ mod tests {
     fn ansi_paint_colors_builtins_from_palette_and_keeps_user_colors() {
         let mut ansi = [0u32; 16];
         for (index, slot) in ansi.iter_mut().enumerate() {
-            *slot = 0x0100_0000 | (index as u32 + 1) * 0x0001_0101;
+            *slot = 0x0100_0000 | ((index as u32 + 1) * 0x0001_0101);
         }
         let user = KeywordHighlightRule {
             id: "user-1".into(),
