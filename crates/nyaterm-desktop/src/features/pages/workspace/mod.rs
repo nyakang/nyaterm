@@ -7,6 +7,7 @@ use crate::models::WorkspacePaneNode;
 #[cfg(test)]
 mod group_tests;
 mod panes;
+mod session_notices;
 #[cfg(test)]
 mod tab_docking_tests;
 mod terminal_windows;

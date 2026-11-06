@@ -829,6 +829,9 @@ impl NyaTermApp {
                     true
                 };
                 if let Some(old_id) = reconnect_session_id.as_deref() {
+                    if old_id == session_id {
+                        self.session.notices.clear(old_id);
+                    }
                     self.recording.rekey_session(old_id, &session_id);
                     self.register_session_for_reconnect(&session_id, metadata);
                 } else {
@@ -979,12 +982,6 @@ impl NyaTermApp {
                 }
                 self.shell
                     .set_status(format!("failed to start {connection_name}: {error}"));
-                if self.session.active_id().is_none() {
-                    self.append_terminal_log(format!(
-                        "\n# failed to start {}: {error}\n",
-                        connection_name
-                    ));
-                }
                 self.shell.select_nav(NavItem::Workspace);
                 let request_to_ui_duration = requested_at
                     .map(|requested_at| requested_at.elapsed())

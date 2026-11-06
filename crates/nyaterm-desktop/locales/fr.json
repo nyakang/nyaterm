@@ -4086,5 +4086,27 @@
     "matchTitle": "Choisir une connexion",
     "matchDescription": "Plusieurs connexions enregistrées correspondent. Choisissez-en une ou ouvrez une connexion temporaire.",
     "useTemporary": "Ouvrir une connexion temporaire"
+  },
+  "sessionNotice": {
+    "disconnected": "Session déconnectée",
+    "error": "Erreur de session",
+    "writeFailed": "Impossible d’envoyer la saisie du terminal",
+    "outputDropped": "Des données du terminal ont été abandonnées",
+    "droppedBytes": "%{bytes} octet(s) de sortie en attente ont été abandonnés.",
+    "x11Denied": "Le transfert X11 a été refusé",
+    "x11DeniedHelp": "Activez X11Forwarding dans sshd_config et installez xauth sur le serveur.",
+    "x11Unavailable": "Connexion au serveur X11 local impossible",
+    "x11Target": "Cible d’affichage : %{target}",
+    "x11WindowsHelp": "Windows : installez et démarrez VcXsrv ou Xming, puis réessayez.",
+    "x11MacosHelp": "macOS : installez et démarrez XQuartz, puis réessayez.",
+    "x11LinuxHelp": "Linux : vérifiez DISPLAY et assurez-vous que Xorg/Xwayland fonctionne.",
+    "tmuxUnconfirmed": "Impossible de confirmer le mode de contrôle tmux",
+    "tmuxUnconfirmedHelp": "Aucune commande de récupération n’a été envoyée car le protocole distant est inconnu. Reconnectez-vous si la saisie est indisponible.",
+    "tmuxFlowUnsupported": "Le contrôle de flux tmux n’est pas pris en charge",
+    "tmuxFlowUnsupportedHelp": "Détachement de tmux car le contrôle de flux du mode de contrôle n’est pas pris en charge.",
+    "tmuxCloseFailed": "Impossible de fermer le volet tmux",
+    "tmuxCommandFailed": "Échec de la commande tmux",
+    "details": "Détails (%{count})",
+    "repeated": "Occurrences : %{count}"
   }
 }

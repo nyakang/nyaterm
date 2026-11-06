@@ -20,6 +20,7 @@ use super::control::{BlockId, ControlMessage, ControlParser, LayoutCell, TmuxUiN
 use super::input::{InputParser, InputSegment};
 use super::mailbox::{PendingCommand, Permit};
 use crate::session_event_queue::SessionEventQueue;
+use crate::session_notice::SessionNotice;
 use crate::session_types::{SessionEvent, SessionInfo, SessionKind};
 use crate::{
     ManagedSession, SessionManager, SshCommand, TmuxCommandReceiver, TmuxCommandSender, ssh_mailbox,
@@ -1347,11 +1348,10 @@ impl<'a> ControlSession<'a> {
         });
     }
 
-    /// Visible status text on the host terminal behind the control session.
-    fn emit_visible_text(&self, text: &str) {
-        self.event_queue.push(SessionEvent::Output {
+    fn emit_notice(&self, notice: SessionNotice) {
+        self.event_queue.push(SessionEvent::Notice {
             session_id: self.control_session_id.to_string(),
-            data: text.as_bytes().to_vec(),
+            notice,
         });
     }
 
@@ -1432,9 +1432,7 @@ impl<'a> ControlSession<'a> {
         match kind {
             PendingKind::FlowControl => {
                 if failed {
-                    self.emit_visible_text(
-                        "\r\n[tmux] Control-mode flow control is unsupported; detaching.\r\n",
-                    );
+                    self.emit_notice(SessionNotice::TmuxFlowControlUnsupported);
                     self.request_detach(channel, ExitMode::Detach).await;
                 }
             }
@@ -1543,16 +1541,15 @@ impl<'a> ControlSession<'a> {
                     {
                         transport.close_requested = false;
                     }
-                    self.emit_visible_text("\r\n[tmux] Could not close pane.\r\n");
+                    self.emit_notice(SessionNotice::TmuxPaneCloseFailed);
                 }
                 self.arm_refresh();
             }
             PendingKind::UserCommand { .. } => {
                 if failed && !lines.is_empty() {
-                    // Surface the tmux error on the host terminal so a failed
-                    // `select-window`/`new-window` is not silently lost.
-                    let text = format!("\r\n[tmux] {}\r\n", lines.join("\n"));
-                    self.emit_visible_text(&text);
+                    self.emit_notice(SessionNotice::TmuxCommandFailed {
+                        message: lines.join("\n"),
+                    });
                 }
             }
             PendingKind::SeedContinue { .. } | PendingKind::Ignore => {}

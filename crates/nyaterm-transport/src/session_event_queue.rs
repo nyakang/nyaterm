@@ -647,6 +647,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::TmuxState { .. }
+                | SessionEvent::Notice { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -718,6 +719,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::TmuxState { .. }
+                | SessionEvent::Notice { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -751,6 +753,7 @@ fn event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::Exited { session_id, .. }
         | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::TmuxState { session_id, .. }
+        | SessionEvent::Notice { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }

@@ -4080,5 +4080,27 @@
     "matchTitle": "选择连接",
     "matchDescription": "找到多个匹配的已保存连接，请选择一个或打开临时连接。",
     "useTemporary": "打开临时连接"
+  },
+  "sessionNotice": {
+    "disconnected": "会话已断开",
+    "error": "会话错误",
+    "writeFailed": "终端输入发送失败",
+    "outputDropped": "终端输出已丢弃",
+    "droppedBytes": "已丢弃 %{bytes} 字节的排队输出。",
+    "x11Denied": "X11 转发请求被拒绝",
+    "x11DeniedHelp": "请在服务器 sshd_config 中启用 X11Forwarding，并安装 xauth。",
+    "x11Unavailable": "无法连接本地 X11 服务器",
+    "x11Target": "显示目标：%{target}",
+    "x11WindowsHelp": "Windows：请安装并启动 VcXsrv 或 Xming 后重试。",
+    "x11MacosHelp": "macOS：请安装并启动 XQuartz 后重试。",
+    "x11LinuxHelp": "Linux：请检查 DISPLAY，并确认 Xorg/Xwayland 正在运行。",
+    "tmuxUnconfirmed": "无法确认 tmux 控制模式",
+    "tmuxUnconfirmedHelp": "远端协议未知，因此未发送恢复命令。如果终端无法输入，请重新连接。",
+    "tmuxFlowUnsupported": "tmux 不支持流量控制",
+    "tmuxFlowUnsupportedHelp": "由于不支持控制模式流量控制，已从 tmux 分离。",
+    "tmuxCloseFailed": "无法关闭 tmux 窗格",
+    "tmuxCommandFailed": "tmux 命令失败",
+    "details": "详情（%{count}）",
+    "repeated": "发生次数：%{count}"
   }
 }

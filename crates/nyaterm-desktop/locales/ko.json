@@ -4087,5 +4087,27 @@
     "matchTitle": "연결 선택",
     "matchDescription": "일치하는 저장된 연결이 여러 개 있습니다. 연결을 선택하거나 임시 연결을 여세요.",
     "useTemporary": "임시 연결 열기"
+  },
+  "sessionNotice": {
+    "disconnected": "세션 연결이 끊어졌습니다",
+    "error": "세션 오류",
+    "writeFailed": "터미널 입력을 보낼 수 없습니다",
+    "outputDropped": "터미널 출력이 삭제되었습니다",
+    "droppedBytes": "대기 중인 출력 %{bytes}바이트가 삭제되었습니다.",
+    "x11Denied": "X11 전달이 거부되었습니다",
+    "x11DeniedHelp": "서버 sshd_config에서 X11Forwarding을 활성화하고 xauth를 설치하세요.",
+    "x11Unavailable": "로컬 X11 서버에 연결할 수 없습니다",
+    "x11Target": "디스플레이 대상: %{target}",
+    "x11WindowsHelp": "Windows: VcXsrv 또는 Xming을 설치하고 실행한 후 다시 시도하세요.",
+    "x11MacosHelp": "macOS: XQuartz를 설치하고 실행한 후 다시 시도하세요.",
+    "x11LinuxHelp": "Linux: DISPLAY를 확인하고 Xorg/Xwayland가 실행 중인지 확인하세요.",
+    "tmuxUnconfirmed": "tmux 제어 모드를 확인할 수 없습니다",
+    "tmuxUnconfirmedHelp": "원격 프로토콜을 알 수 없어 복구 명령을 보내지 않았습니다. 터미널에 입력할 수 없으면 다시 연결하세요.",
+    "tmuxFlowUnsupported": "tmux 흐름 제어가 지원되지 않습니다",
+    "tmuxFlowUnsupportedHelp": "제어 모드의 흐름 제어가 지원되지 않아 tmux에서 분리되었습니다.",
+    "tmuxCloseFailed": "tmux 창을 닫을 수 없습니다",
+    "tmuxCommandFailed": "tmux 명령이 실패했습니다",
+    "details": "상세 정보 (%{count})",
+    "repeated": "발생 횟수: %{count}"
   }
 }

@@ -309,6 +309,17 @@ impl NyaTermApp {
             return;
         }
         self.close_terminal_executions_for_session(session_id, cx);
+        if self
+            .session
+            .notices
+            .get(session_id)
+            .is_none_or(|notices| !notices.contains("disconnected"))
+        {
+            self.publish_session_notice(
+                session_id,
+                crate::features::session::notices::SessionNoticeKind::Disconnected(String::new()),
+            );
+        }
         let banner = "\r\n\x1b[31m[Session disconnected]\x1b[0m\r\n\x1b[33m[Press Enter to reconnect]\x1b[0m\r\n";
         let encoding = self
             .session
@@ -598,6 +609,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.session.start.clear_reconnect_failure(old_id);
+        if old_id != new_id {
+            self.session.notices.clear(old_id);
+        }
         let encoding = self
             .session
             .metadata(new_id)

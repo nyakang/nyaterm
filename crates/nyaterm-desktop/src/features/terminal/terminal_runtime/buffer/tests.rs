@@ -14,7 +14,7 @@ use super::{
     TERMINAL_FRAME_INPUT_WAKE_EVENT_DRAIN_WALL_BUDGET, TerminalFrameSearchKeys,
     TerminalSurfaceFrameNotify, limit_osc52_clipboard_reply_text,
     queue_osc52_clipboard_load_replies, terminal_apply_search_result_to_view,
-    terminal_effects_need_ui_apply, terminal_find_request_still_pending, terminal_local_log_text,
+    terminal_effects_need_ui_apply, terminal_find_request_still_pending,
     terminal_output_frame_needs_chrome_notify, terminal_output_frame_surface_notify,
     terminal_search_frame_apply_result, terminal_selected_occurrence_frame_is_current,
     terminal_snapshot_priority_session_ids, terminal_window_node_visible_tab_ids,
@@ -436,21 +436,6 @@ fn split_visible_inactive_is_not_background_hidden_tab() {
 }
 
 #[test]
-fn terminal_local_log_text_preserves_framing_but_escapes_controls() {
-    let text = "\n# started evil\x1b]52;c;AAAA\x07\tpath\r\n";
-    let escaped = terminal_local_log_text(text);
-
-    assert_eq!(
-        escaped.as_ref(),
-        "\n# started evil\\x1b]52;c;AAAA\\u{7}\tpath\r\n"
-    );
-    assert!(!escaped.contains('\x1b'));
-    assert!(!escaped.contains('\x07'));
-    assert!(escaped.starts_with('\n'));
-    assert!(escaped.ends_with("\r\n"));
-}
-
-#[test]
 fn session_exit_preserves_history_with_settled_or_pending_output_frames() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::TerminalFrameEvent;
@@ -506,7 +491,6 @@ fn session_exit_preserves_history_with_settled_or_pending_output_frames() {
                 "HISTORY-END",
                 "# exit",
                 "logout",
-                "SSH channel EOF",
                 "[Session disconnected]",
                 "[Press Enter to reconnect]",
             ] {
@@ -516,6 +500,8 @@ fn session_exit_preserves_history_with_settled_or_pending_output_frames() {
                 );
             }
 
+            assert!(!visible.contains("SSH channel EOF"));
+            assert!(app.session.notices.get("old").unwrap().visible().any(|entry| matches!(&entry.kind, crate::features::session::notices::SessionNoticeKind::Disconnected(reason) if reason == "SSH channel EOF")));
             app.terminal
                 .append_existing_session_text("old", "\r\n[Reconnecting]\r\n");
             assert!(
@@ -560,7 +546,6 @@ fn session_exit_preserves_history_with_settled_or_pending_output_frames() {
             for expected in [
                 "HISTORY-END",
                 "logout",
-                "SSH channel EOF",
                 "[Session disconnected]",
                 "[Reconnecting]",
             ] {

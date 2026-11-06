@@ -2,6 +2,7 @@
 use crate::X11ForwardingConfig;
 use crate::session::ManagedSession;
 use crate::session_event_queue::SessionEventQueue;
+use crate::session_notice::SessionNotice;
 use crate::ssh_connection::{PrimarySessionClaim, SharedSshHandle};
 use crate::ssh_connection::{
     SshClientHandler, effective_agent_forwarding_config,
@@ -14,7 +15,7 @@ use crate::ssh_shell_integration::{
     detect_ssh_shell_type,
 };
 use crate::x11::X11ChannelOpen;
-use crate::x11::{MIT_MAGIC_COOKIE, X11Forwarder, enable_x11_failed_message, spawn_x11_forwarder};
+use crate::x11::{MIT_MAGIC_COOKIE, X11Forwarder, spawn_x11_forwarder};
 use crate::{
     SessionEvent, SftpCwdFollowMode, ShellEnvironmentCache, SshMultiplexHandle, SshSessionConfig,
     connection_attempt, prepare_x11_forwarding, ssh_mailbox, ssh_shell_integration, tmux,
@@ -78,7 +79,8 @@ pub(crate) struct OpenSshShellSession {
     pub(crate) disconnect_on_close: bool,
     pub(crate) x11_forwarder: Option<X11Forwarder>,
     pub(crate) x11_multiplex_registration: Option<SshMultiplexHandle>,
-    pub(crate) local_notice: Option<Vec<u8>>,
+    pub(crate) local_notice: Option<SessionNotice>,
+    pub(crate) early_output: Vec<u8>,
     pub(crate) prepared_shell_integration: Option<PreparedSshShellIntegration>,
     pub(crate) ready_marker: String,
     pub(crate) legacy_ready_marker: Option<String>,
@@ -372,10 +374,6 @@ pub(crate) async fn run_sftp_only_session(
     events: &SessionEventQueue,
     multiplex: Option<&SshMultiplexHandle>,
 ) {
-    events.push(SessionEvent::Output {
-        session_id: session_id.to_owned(),
-        data: b"\r\nSFTP file session ready.\r\n".to_vec(),
-    });
     // The caller retains the multiplexed SSH connection. Writes queued before
     // capability detection are discarded, never replayed as shell commands.
     loop {
@@ -462,6 +460,7 @@ pub(crate) async fn run_open_ssh_shell_session(
         x11_forwarder,
         x11_multiplex_registration,
         local_notice,
+        early_output,
         prepared_shell_integration,
         ready_marker,
         legacy_ready_marker,
@@ -486,14 +485,7 @@ pub(crate) async fn run_open_ssh_shell_session(
         ready_marker,
         legacy_ready_marker,
     );
-    if let Some(notice) = local_notice {
-        event_queue
-            .push_async(SessionEvent::Output {
-                session_id: session_id.clone(),
-                data: notice,
-            })
-            .await;
-    }
+    emit_ssh_startup_events(&event_queue, &session_id, local_notice, early_output).await;
     if let Some(forwarder) = x11_forwarder {
         spawn_x11_forwarder(event_queue.clone(), session_id.clone(), forwarder);
     }
@@ -623,19 +615,13 @@ pub(crate) async fn run_open_ssh_shell_session(
                 let was_armed = tmux_detector.expiry_is_attempt();
                 let bytes = tmux_detector.expire_candidate();
                 if !bytes.is_empty() {
-                    // The candidate expired while a `tmux -CC` submission was
-                    // still armed — control-ish bytes arrived but the handshake
-                    // never confirmed. Old tmux speaks a partial protocol and
-                    // leaves its client owning the tty; say how to get out.
-                    // Replay and hint go out as one write so the hint cannot
-                    // cancel the in-flight replay.
-                    let mut display = bytes;
                     if was_armed {
-                        if !display.ends_with(b"\n") {
-                            display.extend_from_slice(b"\r\n");
-                        }
-                        display.extend_from_slice(&tmux_unsupported_hint());
+                        event_queue.push_async(SessionEvent::Notice {
+                            session_id: session_id.clone(),
+                            notice: SessionNotice::TmuxControlUnconfirmed,
+                        }).await;
                     }
+                    let display = bytes;
                     let output = shell_integration.filter_output(&display);
                     pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
                 }
@@ -650,8 +636,10 @@ pub(crate) async fn run_open_ssh_shell_session(
                 // Advisory only: detection stays armed so a slow attach can
                 // still take over afterwards.
                 if tmux_detector.expire_silence() {
-                    let output = shell_integration.filter_output(&tmux_unsupported_hint());
-                    pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
+                    event_queue.push_async(SessionEvent::Notice {
+                        session_id: session_id.clone(),
+                        notice: SessionNotice::TmuxControlUnconfirmed,
+                    }).await;
                 }
             }
             command = command_rx.recv() => {
@@ -729,16 +717,6 @@ pub(crate) async fn run_open_ssh_shell_session(
                                             "tmux control mode confirmed; taking over SSH channel"
                                         );
                                         tmux_active.store(true, Ordering::Release);
-                                        // Dim banner in the host buffer (the
-                                        // Tauri port's look): after detach the
-                                        // shell screen still shows where the
-                                        // channel went while panes took over.
-                                        let stamp = tmux_local_stamp();
-                                        let banner = format!(
-                                            "\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
-                                        );
-                                        let output = shell_integration.filter_output(banner.as_bytes());
-                                        ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
                                         let exit = tmux::run_control_session(
                                             &event_queue,
                                             &sessions,
@@ -754,16 +732,6 @@ pub(crate) async fn run_open_ssh_shell_session(
                                         tmux_active.store(false, Ordering::Release);
                                         match exit {
                                             tmux::ControlExit::ReturnToShell { leftover } => {
-                                                // Shell is back; the exit
-                                                // banner lands before replayed
-                                                // bytes so it reads like a log
-                                                // line ahead of the prompt.
-                                                let stamp = tmux_local_stamp();
-                                                let banner = format!(
-                                                    "\x1b[2m[{stamp}] [nyaterm] tmux detached; back to shell\x1b[0m\r\n"
-                                                );
-                                                let output = shell_integration.filter_output(banner.as_bytes());
-                                                ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
                                                 // Replay the bytes tmux left
                                                 // after %exit and reset
                                                 // detection for a possible
@@ -895,24 +863,30 @@ pub(crate) async fn run_open_ssh_shell_session(
     .await;
 }
 
-/// An advisory is not evidence that the remote process accepts control commands.
-/// Never send a speculative detach/interrupt into a potentially ordinary shell.
-pub(crate) fn tmux_unsupported_hint() -> Vec<u8> {
-    let stamp = tmux_local_stamp();
-    format!(
-        "\x1b[2m[{stamp}] [nyaterm] tmux control mode could not be confirmed; no recovery command was sent because the remote protocol is unknown. Reconnect if terminal input is unavailable.\x1b[0m\r\n"
-    )
-    .into_bytes()
-}
-
-/// `[YYYY-MM-DD HH:MM:SS]` in local time for the tmux takeover/detach banners.
-pub(crate) fn tmux_local_stamp() -> String {
-    time::OffsetDateTime::now_local()
-        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
-        .format(time::macros::format_description!(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ))
-        .unwrap_or_default()
+async fn emit_ssh_startup_events(
+    queue: &SessionEventQueue,
+    session_id: &str,
+    notice: Option<SessionNotice>,
+    early_output: Vec<u8>,
+) {
+    if let Some(notice) = notice {
+        queue
+            .push_async(SessionEvent::Notice {
+                session_id: session_id.to_string(),
+                notice,
+            })
+            .await;
+    }
+    // Request-reply waits consume real server bytes before starting the reader.
+    // Preserve their charset and ANSI framing separately from local notices.
+    if !early_output.is_empty() {
+        queue
+            .push_async(SessionEvent::Output {
+                session_id: session_id.to_string(),
+                data: early_output,
+            })
+            .await;
+    }
 }
 
 pub(crate) fn ssh_output_future(
@@ -1099,7 +1073,7 @@ pub(crate) async fn open_ssh_shell_from_pending(
         profile = ?config.profile,
         "opened SSH session channel"
     );
-    let (x11_forwarder, x11_multiplex_registration, mut local_notice) =
+    let (x11_forwarder, x11_multiplex_registration, local_notice) =
         if let (Some(config), Some(rx)) = (x11_config, x11_rx) {
             if let Some(multiplex) = multiplex.as_ref() {
                 let Some(tx) = x11_tx.clone() else {
@@ -1130,7 +1104,7 @@ pub(crate) async fn open_ssh_shell_from_pending(
                         let _ = channel.close().await;
                         return Err(error.into());
                     }
-                    (None, None, Some(enable_x11_failed_message().into_bytes()))
+                    (None, None, Some(SessionNotice::X11ForwardingDenied))
                 }
             }
         } else {
@@ -1182,11 +1156,6 @@ pub(crate) async fn open_ssh_shell_from_pending(
     }
     attempt.record_shell_reply(true);
     config.attempt.record_shell_reply(true);
-    if !early_output.is_empty() {
-        local_notice
-            .get_or_insert_with(Vec::new)
-            .extend(early_output);
-    }
     // The explicit reply wait completed, so `sshd` has already run
     // `do_exec` for this channel and flushed the login banner into it. Anything
     // else on this connection is free to open its own channel now.
@@ -1244,6 +1213,7 @@ pub(crate) async fn open_ssh_shell_from_pending(
         x11_forwarder,
         x11_multiplex_registration,
         local_notice,
+        early_output,
         prepared_shell_integration,
         ready_marker,
         legacy_ready_marker,
@@ -1343,5 +1313,46 @@ impl SshPtyDimensions {
             config.pixel_width,
             config.pixel_height,
         )
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::{emit_ssh_startup_events, run_sftp_only_session};
+    use crate::session_event_queue::SessionEventQueue;
+    use crate::session_notice::SessionNotice;
+    use crate::{SessionEvent, ssh_mailbox};
+
+    #[tokio::test]
+    async fn startup_notice_preserves_server_bytes_and_does_not_end_the_session() {
+        let queue = SessionEventQueue::new();
+        let bytes = b"Welcome\r\n\x1b[31mserver\xff\x1b[0m".to_vec();
+        emit_ssh_startup_events(
+            &queue,
+            "ssh",
+            Some(SessionNotice::X11ForwardingDenied),
+            bytes.clone(),
+        )
+        .await;
+        assert!(!queue.session_ended("ssh"));
+        let drain = queue.drain(10);
+        assert_eq!(drain.stats.drained_output_bytes, bytes.len());
+        assert!(matches!(
+            &drain.events[0],
+            SessionEvent::Notice {
+                notice: SessionNotice::X11ForwardingDenied,
+                ..
+            }
+        ));
+        assert!(matches!(&drain.events[1], SessionEvent::Output { data, .. } if data == &bytes));
+    }
+
+    #[tokio::test]
+    async fn sftp_only_session_does_not_emit_a_terminal_ready_banner() {
+        let queue = SessionEventQueue::new();
+        let (sender, receiver) = ssh_mailbox::channel();
+        drop(sender);
+        run_sftp_only_session("sftp", receiver, &queue, None).await;
+        assert!(queue.drain(10).events.is_empty());
     }
 }

@@ -4086,5 +4086,27 @@
     "matchTitle": "接続を選択",
     "matchDescription": "一致する保存済み接続が複数あります。接続を選ぶか一時接続を開いてください。",
     "useTemporary": "一時接続を開く"
+  },
+  "sessionNotice": {
+    "disconnected": "セッションが切断されました",
+    "error": "セッションエラー",
+    "writeFailed": "端末入力を送信できませんでした",
+    "outputDropped": "端末出力が破棄されました",
+    "droppedBytes": "待機中の出力 %{bytes} バイトを破棄しました。",
+    "x11Denied": "X11 転送が拒否されました",
+    "x11DeniedHelp": "サーバーの sshd_config で X11Forwarding を有効にし、xauth をインストールしてください。",
+    "x11Unavailable": "ローカル X11 サーバーに接続できません",
+    "x11Target": "表示先：%{target}",
+    "x11WindowsHelp": "Windows：VcXsrv または Xming をインストールして起動し、再試行してください。",
+    "x11MacosHelp": "macOS：XQuartz をインストールして起動し、再試行してください。",
+    "x11LinuxHelp": "Linux：DISPLAY を確認し、Xorg/Xwayland が動作していることを確認してください。",
+    "tmuxUnconfirmed": "tmux 制御モードを確認できません",
+    "tmuxUnconfirmedHelp": "リモートプロトコルが不明なため、復旧コマンドは送信していません。端末に入力できない場合は再接続してください。",
+    "tmuxFlowUnsupported": "tmux のフロー制御は未対応です",
+    "tmuxFlowUnsupportedHelp": "制御モードのフロー制御が未対応のため、tmux からデタッチしました。",
+    "tmuxCloseFailed": "tmux ペインを閉じられません",
+    "tmuxCommandFailed": "tmux コマンドが失敗しました",
+    "details": "詳細（%{count}）",
+    "repeated": "発生回数：%{count}"
   }
 }

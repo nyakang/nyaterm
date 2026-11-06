@@ -240,6 +240,12 @@ pub(in crate::features) struct TerminalOverlayVisibility {
 }
 
 impl TerminalFeatureState {
+    pub(in crate::features) fn submit_system_recording(&self, session_id: &str, text: String) {
+        self.view
+            .frame_pipeline
+            .submit_system_recording(session_id, text);
+    }
+
     pub(in crate::features) fn submit_execution_recording(
         &self,
         session_id: &str,

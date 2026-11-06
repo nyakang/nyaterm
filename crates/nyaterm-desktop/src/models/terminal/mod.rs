@@ -1601,6 +1601,14 @@ impl TerminalFramePipeline {
         });
     }
 
+    /// Preserve diagnostic recording order without advancing either decoder or grid.
+    pub(crate) fn submit_system_recording(&self, session_id: &str, text: String) {
+        let _ = self.command_tx.send(TerminalFrameCommand::SystemRecording {
+            session_id: session_id.to_string(),
+            text,
+        });
+    }
+
     pub(crate) fn append_local_text(&self, session_id: impl Into<String>, text: impl Into<String>) {
         let _ = self.command_tx.send(TerminalFrameCommand::AppendLocalText {
             session_id: session_id.into(),
@@ -2050,6 +2058,10 @@ enum TerminalFrameCommand {
         session_id: String,
     },
     AppendLocalText {
+        session_id: String,
+        text: String,
+    },
+    SystemRecording {
         session_id: String,
         text: String,
     },
@@ -3671,7 +3683,8 @@ fn terminal_frame_command_output_bytes(command: &TerminalFrameCommand) -> usize 
         TerminalFrameCommand::ExecutionRecording { event, .. } => event.payload_bytes(),
         TerminalFrameCommand::Output { data, .. } => data.len(),
         TerminalFrameCommand::DecodedOutput { text, .. }
-        | TerminalFrameCommand::SyntheticOutput { text, .. } => text.len(),
+        | TerminalFrameCommand::SyntheticOutput { text, .. }
+        | TerminalFrameCommand::SystemRecording { text, .. } => text.len(),
         _ => 0,
     }
 }
@@ -3870,6 +3883,9 @@ fn run_terminal_frame_processor(
                     let event = session.resized_live_snapshot_event(session_id, started_at);
                     push_event(&event_queue, TerminalFrameEvent::Snapshot(event));
                 }
+            }
+            TerminalFrameCommand::SystemRecording { session_id, text } => {
+                recording_writer.write_local_message(session_id, text);
             }
             TerminalFrameCommand::AppendLocalText { session_id, text } => {
                 if let Some(session) = sessions.get_mut(&session_id) {

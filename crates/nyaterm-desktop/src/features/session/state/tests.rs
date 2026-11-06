@@ -1550,6 +1550,19 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     source.set_custom_name("root".into(), "renamed".into());
     source.set_tab_color("root", Some(0x123456));
     source.set_tab_locked("root", true);
+    source.notices.push(
+        "root",
+        crate::features::session::notices::SessionNoticeKind::Error("move fixture".into()),
+    );
+    source.notices.dismiss("root", "session-error");
+    source.notices.push(
+        "leaf",
+        crate::features::session::notices::SessionNoticeKind::OutputDropped(17),
+    );
+    source.extend_pending_events([SessionEvent::Notice {
+        session_id: "leaf".into(),
+        notice: nyaterm_transport::session_notice::SessionNotice::TmuxPaneCloseFailed,
+    }]);
     source.extend_pending_events([SessionEvent::CwdChanged {
         session_id: "leaf".into(),
         cwd: "/workspace".into(),
@@ -1569,7 +1582,26 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     assert_eq!(target.tab_color("root"), Some(0x123456));
     assert!(target.tab_is_locked("root"));
     assert_eq!(source.pending_event_count(), 0);
-    assert_eq!(target.pending_event_count(), 1);
+    assert_eq!(target.pending_event_count(), 2);
+    assert!(source.notices.get("root").is_none());
+    assert!(source.notices.get("leaf").is_none());
+    assert!(!target.notices.push(
+        "root",
+        crate::features::session::notices::SessionNoticeKind::Error("move fixture".into())
+    ));
+    assert!(matches!(
+        target
+            .notices
+            .get("leaf")
+            .unwrap()
+            .visible()
+            .next()
+            .unwrap()
+            .kind,
+        crate::features::session::notices::SessionNoticeKind::OutputDropped(17)
+    ));
+    target.remove_session_catalog("leaf");
+    assert!(target.notices.get("leaf").is_none());
 }
 
 #[test]

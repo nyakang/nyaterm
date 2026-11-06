@@ -29,6 +29,11 @@ pub enum SessionKind {
 // `Eq` is impossible: `TmuxState` carries `f64` layout ratios.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
+    /// Application notice; does not contribute terminal output bytes.
+    Notice {
+        session_id: String,
+        notice: crate::session_notice::SessionNotice,
+    },
     /// In-process ordering fence; never sent to the terminal or persisted.
     OutputBoundary {
         session_id: String,

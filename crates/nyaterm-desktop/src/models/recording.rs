@@ -1887,6 +1887,55 @@ mod tests {
     }
 
     #[test]
+    fn frame_system_diagnostics_preserve_recording_order_charset_and_raw_stream() {
+        use crate::models::TerminalFramePipeline;
+        for mode in [RecordingMode::Transcript, RecordingMode::Raw] {
+            let root =
+                nyaterm_core::test_support::TestTempDir::new("nyaterm-system-frame-recording");
+            let path = root.join("session.log");
+            let mut recording = RecordingWritePipeline::spawn(4096);
+            let writer = recording.writer();
+            let mut profile = recording_profile(&path);
+            profile.mode = mode;
+            writer
+                .start(
+                    "s1".into(),
+                    recording_context("s1"),
+                    profile,
+                    Some(path.clone()),
+                    4096,
+                )
+                .unwrap();
+            let mut frames = TerminalFramePipeline::spawn(writer.clone());
+            frames.submit_output("s1", b"before\r\n\xe4".to_vec(), "UTF-8", 100);
+            frames.submit_system_recording("s1", "fixture diagnostic".into());
+            frames.submit_output("s1", b"\xb8\xad\r\nafter\r\n".to_vec(), "UTF-8", 100);
+            let text = futures::executor::block_on(frames.request_all_text("s1".into()))
+                .unwrap()
+                .unwrap();
+            assert!(text.contains("中"));
+            assert!(!text.contains("fixture diagnostic"));
+            frames.shutdown();
+            recording.shutdown();
+            let bytes = fs::read(&path).unwrap();
+            if mode == RecordingMode::Raw {
+                assert_eq!(bytes, b"before\r\n\xe4\xb8\xad\r\nafter\r\n");
+            } else {
+                let transcript = String::from_utf8(bytes).unwrap();
+                assert!(transcript.contains("[SYSTEM] fixture diagnostic"));
+                assert!(
+                    transcript.find("before").unwrap()
+                        < transcript.find("fixture diagnostic").unwrap()
+                );
+                assert!(
+                    transcript.find("fixture diagnostic").unwrap()
+                        < transcript.find("after").unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn completed_history_replies_are_coalesced_per_session() {
         let mut pipeline = RecordingWritePipeline::spawn(4096);
         let mut events = pipeline.take_event_receiver().unwrap();

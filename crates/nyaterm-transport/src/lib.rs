@@ -73,6 +73,7 @@ mod local_shell_integration;
 mod reconnect_cwd;
 mod session_config;
 mod session_event_queue;
+pub mod session_notice;
 mod session_types;
 mod ssh_agent;
 mod ssh_agent_broker;

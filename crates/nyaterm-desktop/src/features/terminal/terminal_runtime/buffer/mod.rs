@@ -1,6 +1,4 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
-use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use gpui::{ClipboardItem, Context};
@@ -1515,65 +1513,6 @@ impl NyaTermApp {
         view.recording_decoder.decode_output_text(data)
     }
 
-    pub(in crate::features) fn append_terminal_log_for_session(
-        &mut self,
-        session_id: Option<&str>,
-        text: &str,
-        mark_unread: bool,
-    ) {
-        self.append_terminal_log_for_session_with_context(session_id, text, mark_unread, None);
-    }
-
-    pub(in crate::features) fn append_terminal_log_for_session_with_context(
-        &mut self,
-        session_id: Option<&str>,
-        text: &str,
-        mark_unread: bool,
-        cx: Option<&mut Context<Self>>,
-    ) {
-        if text.is_empty() {
-            return;
-        }
-        let text = terminal_local_log_text(text);
-        if let Some(session_id) = session_id {
-            let is_active = self.session.active_id() == Some(session_id);
-            let encoding = self.effective_session_encoding(session_id);
-            let scrollback_limit = self.terminal_scrollback_line_limit();
-            self.terminal.append_session_text_or_create(
-                session_id,
-                &encoding,
-                scrollback_limit,
-                text.as_ref(),
-            );
-            if mark_unread && !is_active {
-                self.terminal
-                    .view
-                    .views
-                    .get_mut(session_id)
-                    .expect("session view exists")
-                    .has_unread = true;
-            }
-            return;
-        }
-        self.terminal
-            .view
-            .screen
-            .advance_decoded_text(text.as_ref());
-        self.terminal.view.output.push_str(text.as_ref());
-        let max_bytes = self.terminal_scrollback_max_bytes();
-        trim_terminal_output_to(&mut self.terminal.view.output, max_bytes);
-        let effects = self.terminal.view.screen.take_effects();
-        let mut pending_pty_writes = effects.pty_write;
-        let mut clipboard_store = effects.clipboard_store;
-        let mut clipboard_loads = effects.clipboard_loads;
-        self.handle_terminal_clipboard_effects(
-            &mut clipboard_store,
-            &mut clipboard_loads,
-            &mut pending_pty_writes,
-            cx,
-        );
-    }
-
     fn write_terminal_pty_responses(&mut self, session_id: &str, responses: Vec<Vec<u8>>) {
         for response in responses {
             if response.is_empty() {
@@ -2862,29 +2801,6 @@ const TERMINAL_FRAME_INPUT_WAKE_EVENT_DRAIN_WALL_BUDGET: Duration = Duration::fr
 const TERMINAL_FRAME_EVENT_DRAIN_SLOW_TOTAL: Duration = Duration::from_millis(12);
 const TERMINAL_FRAME_EVENT_APPLY_SLOW: Duration = Duration::from_millis(8);
 const TERMINAL_FRAME_APPLY_VISIBLE_TEXT_TAIL_CAP: usize = 16 * 1024;
-
-fn terminal_local_log_text(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(terminal_local_log_control_needs_escape) {
-        return Cow::Borrowed(text);
-    }
-
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\n' | '\r' | '\t' => out.push(ch),
-            '\x1b' => out.push_str("\\x1b"),
-            ch if ch.is_control() => {
-                let _ = write!(out, "\\u{{{:x}}}", ch as u32);
-            }
-            ch => out.push(ch),
-        }
-    }
-    Cow::Owned(out)
-}
-
-fn terminal_local_log_control_needs_escape(ch: char) -> bool {
-    ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')
-}
 
 fn limit_osc52_clipboard_reply_text(text: &str) -> std::borrow::Cow<'_, str> {
     match text.char_indices().nth(MAX_OSC52_REPLY_CHARS) {

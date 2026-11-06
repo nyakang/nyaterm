@@ -4080,5 +4080,27 @@
     "matchTitle": "Choose a connection",
     "matchDescription": "Several saved connections match. Choose one or open a temporary connection.",
     "useTemporary": "Open temporary connection"
+  },
+  "sessionNotice": {
+    "disconnected": "Session disconnected",
+    "error": "Session error",
+    "writeFailed": "Could not send terminal input",
+    "outputDropped": "Terminal output was dropped",
+    "droppedBytes": "Dropped %{bytes} queued output byte(s).",
+    "x11Denied": "X11 forwarding was denied",
+    "x11DeniedHelp": "Enable X11Forwarding in sshd_config and install xauth on the server.",
+    "x11Unavailable": "Could not connect to the local X11 server",
+    "x11Target": "Display target: %{target}",
+    "x11WindowsHelp": "Windows: install and start VcXsrv or Xming, then try again.",
+    "x11MacosHelp": "macOS: install and start XQuartz, then try again.",
+    "x11LinuxHelp": "Linux: check DISPLAY and make sure Xorg/Xwayland is running.",
+    "tmuxUnconfirmed": "Could not confirm tmux control mode",
+    "tmuxUnconfirmedHelp": "No recovery command was sent because the remote protocol is unknown. Reconnect if terminal input is unavailable.",
+    "tmuxFlowUnsupported": "tmux flow control is unsupported",
+    "tmuxFlowUnsupportedHelp": "Detached from tmux because control-mode flow control is unsupported.",
+    "tmuxCloseFailed": "Could not close the tmux pane",
+    "tmuxCommandFailed": "tmux command failed",
+    "details": "Details (%{count})",
+    "repeated": "Occurrences: %{count}"
   }
 }

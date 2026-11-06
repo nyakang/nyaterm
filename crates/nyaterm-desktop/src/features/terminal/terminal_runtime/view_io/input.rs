@@ -1298,12 +1298,10 @@ impl NyaTermApp {
         context: &str,
         error: &str,
     ) {
-        let safe_error = terminal_session_write_failure_safe_text(error);
         tracing::warn!(
             diagnostic = "session_write_failed",
             session_id = %session_id,
             context,
-            error = %safe_error,
             "terminal session write failed"
         );
         if session_id.is_empty() {
@@ -1312,7 +1310,13 @@ impl NyaTermApp {
         let log = terminal_session_write_failure_log(context, error);
         self.recording
             .write_local_message(session_id.to_string(), log.clone());
-        self.append_terminal_log_for_session(Some(session_id), &log, true);
+        self.publish_session_notice(
+            session_id,
+            crate::features::session::notices::SessionNoticeKind::WriteFailed {
+                context: context.to_string(),
+                error: terminal_session_write_failure_safe_text(error),
+            },
+        );
     }
 
     /// Encode UTF-8 host input for the session wire charset (UTF-8/GBK/…).
