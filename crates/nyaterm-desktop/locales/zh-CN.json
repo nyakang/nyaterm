@@ -3100,6 +3100,7 @@
     "syncBackup": "云同步",
     "syncBackupTitle": "云同步",
     "syncCloseActiveSessionBeforePull": "请先关闭活动会话再拉取云同步。",
+    "syncCloseActiveSessionInAnotherWindow": "另一个窗口还有活动会话，请先在那个窗口关闭后再继续。",
     "syncConnectionTestStarted": "云端同步连接测试已开始。",
     "syncConflictSection": "冲突处理",
     "syncConflictSectionDesc": "处理本地与云端快照分别发生变化时产生的同步冲突。",
