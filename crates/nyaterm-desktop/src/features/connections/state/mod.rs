@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Pixels, SharedString, Subscription,
 };
+use nyaterm_core::connection_search::normalize_connection_search_query;
 use nyaterm_core::{AppSettingsSummary, ConnectionType, Group, SavedConnection};
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
@@ -1798,7 +1799,7 @@ impl ConnectionFeatureState {
 
 impl ConnectionListState {
     pub fn search_query(&self) -> String {
-        self.search_draft.trim().to_ascii_lowercase()
+        normalize_connection_search_query(&self.search_draft)
     }
 
     pub fn search_is_empty(&self) -> bool {

@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use nyaterm_core::connection_search::ConnectionSearch;
 use nyaterm_core::{Group, SavedConnection, natural_compare};
 
 use crate::features::{
@@ -62,9 +63,10 @@ pub(super) fn visible_connection_ids_for_list_state(
 ) -> Vec<String> {
     // Must order exactly like the rendered tree, or Shift-range selection and
     // keyboard navigation walk a different list than the one on screen.
+    let search = ConnectionSearch::new(query, groups);
     let mut by_group: HashMap<Option<String>, Vec<&SavedConnection>> = HashMap::new();
     for connection in connections {
-        if !connection_matches_query(connection, query) {
+        if !search.matches_connection(connection) {
             continue;
         }
         by_group
@@ -128,22 +130,6 @@ fn group_tree_ids(groups: &[Group], group_id: &str) -> HashSet<String> {
         }
     }
     group_ids
-}
-
-fn connection_matches_query(connection: &SavedConnection, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let haystack = format!(
-        "{} {} {} {} {}",
-        connection.name,
-        connection.endpoint(),
-        connection.kind_label(),
-        connection.description.clone().unwrap_or_default(),
-        connection.id
-    )
-    .to_ascii_lowercase();
-    haystack.contains(query)
 }
 
 fn sort_connection_refs(connections: &mut [&SavedConnection], mode: ConnectionSortMode) {

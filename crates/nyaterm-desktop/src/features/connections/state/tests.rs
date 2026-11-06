@@ -26,6 +26,9 @@ use super::{
 };
 use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
+use crate::features::pages::connections::list::{
+    ConnectionListRow, connection_sections, flatten_connection_rows,
+};
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDropPosition,
     connections::ConnectionDropTarget, connections::ConnectionEditorToggle,
@@ -426,6 +429,173 @@ fn visible_connection_ids_for_list_state_tracks_expanded_tree_order() {
     );
 
     assert_eq!(visible, vec!["child", "parent", "root"]);
+}
+
+#[test]
+fn group_search_navigation_and_range_selection_follow_rendered_connection_order() {
+    let connections = vec![
+        saved_connection("direct", "Server 10", Some("parent"), 0),
+        saved_connection("nested-b", "Server 20", Some("child"), 0),
+        saved_connection("nested-a", "Server 2", Some("child"), 1),
+        saved_connection("outside", "Production gateway", None, 0),
+        saved_connection("excluded", "Other", Some("unrelated"), 0),
+    ];
+    let groups = vec![
+        group("parent", "Production", None, 0),
+        group("child", "Services", Some("parent"), 0),
+        group("unrelated", "Staging", None, 1),
+    ];
+    for mode in [
+        ConnectionSortMode::Default,
+        ConnectionSortMode::NameAsc,
+        ConnectionSortMode::NameDesc,
+    ] {
+        for expanded in [
+            HashSet::from(["parent".to_owned(), "child".to_owned()]),
+            HashSet::from(["parent".to_owned()]),
+            HashSet::new(),
+        ] {
+            let sections = connection_sections(&connections, &groups, "prod", mode);
+            let rendered = flatten_connection_rows(&sections, &expanded, None)
+                .into_iter()
+                .filter_map(|row| match row {
+                    ConnectionListRow::Connection { connection_id, .. } => Some(connection_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let visible = visible_connection_ids_for_list_state(
+                &connections,
+                &groups,
+                "prod",
+                mode,
+                &expanded,
+            );
+            assert_eq!(visible, rendered);
+            assert!(!visible.contains(&"excluded".to_owned()));
+            let mut selected = HashSet::new();
+            let mut anchor = visible.first().cloned();
+            select_connection_ids(
+                &mut selected,
+                &mut anchor,
+                visible.last().unwrap().clone(),
+                &visible,
+                false,
+                true,
+            );
+            assert_eq!(selected, rendered.into_iter().collect());
+        }
+    }
+}
+
+#[test]
+fn group_name_search_expands_the_subtree_respects_collapse_and_restores_expansion() {
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    seed_cached_connections(&mut cx, &app);
+    cx.update_entity(&app, |app, _| {
+        app.connection_state.set_all_catalog_groups_expanded(false);
+        app.connection_state
+            .expand_list_group("child-group".to_owned());
+        let original = app.connection_state.list_expanded_group_ids().clone();
+        app.connection_state
+            .set_list_search_text(" Parent Group ".to_owned());
+        let snapshot = app.connection_state.connection_list_model();
+        assert_eq!(
+            app.connection_state.visible_connection_ids(),
+            vec!["child", "parent"]
+        );
+        assert_eq!(
+            snapshot
+                .rows
+                .iter()
+                .filter(|row| matches!(row, ConnectionListRow::Connection { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            app.connection_state
+                .list_expanded_group_ids()
+                .contains("parent-group")
+        );
+
+        app.connection_state
+            .toggle_list_group_expanded("parent-group".to_owned());
+        app.connection_state.connection_list_model();
+        assert!(app.connection_state.visible_connection_ids().is_empty());
+        assert!(
+            !app.connection_state
+                .list_expanded_group_ids()
+                .contains("parent-group")
+        );
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+
+        app.connection_state.set_list_search_text(String::new());
+        app.connection_state.connection_list_model();
+        assert_eq!(app.connection_state.list_expanded_group_ids(), &original);
+        assert_eq!(app.connection_state.visible_connection_ids(), vec!["root"]);
+    });
+}
+
+#[test]
+fn fixed_group_query_refreshes_after_rename_move_and_catalog_reload() {
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, _| {
+        let mut groups = vec![
+            group("region", "Region", None, 0),
+            group("target", "Staging", Some("region"), 0),
+            group("empty", "Empty", Some("target"), 0),
+        ];
+        let mut connections = vec![saved_connection("host", "Database", None, 0)];
+        app.connection_state
+            .replace_loaded(connections.clone(), groups.clone());
+        app.connection_state
+            .set_list_search_text("production".to_owned());
+        assert!(app.connection_state.connection_list_model().rows.is_empty());
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+
+        groups[1].name = "Production".to_owned();
+        app.connection_state
+            .replace_loaded(connections.clone(), groups.clone());
+        let renamed = app.connection_state.connection_list_model();
+        assert!(!renamed.stats.cache_hit);
+        assert_eq!(
+            renamed
+                .rows
+                .iter()
+                .filter(|row| matches!(row, ConnectionListRow::GroupHeader(_)))
+                .count(),
+            3
+        );
+        for id in ["region", "target", "empty"] {
+            assert!(app.connection_state.list_expanded_group_ids().contains(id));
+        }
+        assert!(app.connection_state.visible_connection_ids().is_empty());
+
+        connections[0].group_id = Some("target".to_owned());
+        assert!(
+            app.connection_state
+                .update_connection(connections[0].clone())
+        );
+        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+        assert_eq!(app.connection_state.visible_connection_ids(), vec!["host"]);
+
+        groups.push(group("new", "New child", Some("empty"), 0));
+        connections.push(saved_connection("new-host", "Worker", Some("new"), 0));
+        app.connection_state.replace_loaded(connections, groups);
+        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+        assert!(
+            app.connection_state
+                .list_expanded_group_ids()
+                .contains("new")
+        );
+        assert_eq!(
+            app.connection_state.visible_connection_ids(),
+            vec!["new-host", "host"]
+        );
+    });
 }
 
 #[test]
