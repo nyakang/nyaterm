@@ -19,7 +19,9 @@ fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
     // This action must run in the keymap instead, or the terminal sends ^L twice.
     !matches!(
         id,
-        ShortcutId::TerminalClear
+        ShortcutId::TerminalCopy
+            | ShortcutId::TerminalPaste
+            | ShortcutId::TerminalClear
             | ShortcutId::TerminalClearAll
             | ShortcutId::TerminalCommandPrevious
             | ShortcutId::TerminalCommandNext
@@ -385,5 +387,15 @@ mod tests {
     fn terminal_clear_is_dispatched_only_by_the_keymap() {
         assert!(!shortcut_interceptor_dispatches(ShortcutId::TerminalClear));
         assert!(shortcut_interceptor_dispatches(ShortcutId::TerminalFind));
+    }
+
+    #[test]
+    fn local_copy_and_paste_are_dispatched_only_by_the_keymap() {
+        // An interceptor `stop_propagation()` still delivers KeyDown to the
+        // terminal surface, which re-encodes the key for the PTY. Copy and
+        // paste must consume the chord in the keymap so the canvas fallback
+        // never writes `CSI 2;5~` / `CSI 2;2~`.
+        assert!(!shortcut_interceptor_dispatches(ShortcutId::TerminalCopy));
+        assert!(!shortcut_interceptor_dispatches(ShortcutId::TerminalPaste));
     }
 }

@@ -1339,6 +1339,8 @@ fn terminal_selected_occurrence_query(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+    use std::net::TcpListener;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1357,7 +1359,7 @@ mod tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{TerminalBufferCellPos, TerminalSelection, TerminalViewState};
     use crate::terminal::{TerminalTextCell, terminal_text_cells};
-    use crate::test_support::TestConfigDir;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
     use nyaterm_terminal::terminal_text_cell_slice;
 
     use super::{
@@ -1483,6 +1485,18 @@ mod tests {
         shift: bool,
         cx: &mut Context<NyaTermApp>,
     ) {
+        click_terminal_cell_with_click_count(app, session_id, row, col, shift, 1, cx);
+    }
+
+    fn click_terminal_cell_with_click_count(
+        app: &mut NyaTermApp,
+        session_id: &str,
+        row: usize,
+        col: usize,
+        shift: bool,
+        click_count: usize,
+        cx: &mut Context<NyaTermApp>,
+    ) {
         let geometry = app
             .terminal_hit_test_geometry_for_session(Some(session_id), cx)
             .unwrap();
@@ -1506,7 +1520,7 @@ mod tests {
                 button: MouseButton::Left,
                 position,
                 modifiers,
-                click_count: 1,
+                click_count,
                 ..MouseDownEvent::default()
             },
             cx,
@@ -2239,5 +2253,82 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Selection and copy must consume the gesture locally. Anything written
+    /// here reaches the remote shell, where an unbound Ctrl+Insert shows up as
+    /// stray `5~`.
+    #[test]
+    fn double_click_and_copy_write_no_session_bytes() {
+        let dir = TestConfigDir::new("nyaterm-terminal-copy-zero-bytes");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        let manager = cx.update_entity(&app, |app, _| app.session.manager_handle());
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let info = manager
+            .create_telnet_session(nyaterm_transport::TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                raw_tcp: true,
+                ..nyaterm_transport::TelnetSessionConfig::default()
+            })
+            .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        cx.update_entity(&app, |app, _| {
+            let metadata = app.session.metadata("s1").unwrap().clone();
+            app.session.register_session_metadata(&info.id, metadata);
+            app.session.select_active_session(&info.id);
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_mouse_events_require_alt = false;
+            app.settings.replace_summary(settings);
+            app.terminal.layout.surface_bounds = Some(Bounds {
+                origin: Point::default(),
+                size: Size {
+                    width: px(800.0),
+                    height: px(600.0),
+                },
+            });
+            app.terminal
+                .seed_session_view(info.id.clone(), "root@host:~# ls".into(), "UTF-8");
+        });
+
+        let read_sentinel = |app: &gpui::Entity<NyaTermApp>,
+                             cx: &mut TestAppContext,
+                             peer: &mut std::net::TcpStream,
+                             sentinel: &[u8],
+                             stage: &str| {
+            cx.update_entity(app, |app, _| {
+                app.write_session_protocol_response(&info.id, sentinel)
+                    .unwrap();
+            });
+            let mut received = vec![0; sentinel.len()];
+            peer.read_exact(&mut received).unwrap_or_else(|error| {
+                panic!("{stage}: session received no sentinel bytes: {error}")
+            });
+            assert_eq!(
+                received, sentinel,
+                "{stage}: the gesture wrote {received:?} to the session before the sentinel"
+            );
+        };
+
+        cx.update_entity(&app, |app, cx| {
+            click_terminal_cell_with_click_count(app, &info.id, 0, 13, false, 1, cx);
+            click_terminal_cell_with_click_count(app, &info.id, 0, 13, false, 2, cx);
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("ls"));
+        });
+        cx.run_until_parked();
+        read_sentinel(&app, &mut cx, &mut peer, b"CLICK", "double click");
+
+        // The copy action is the pure-local consumer of Ctrl+Insert.
+        let copied = cx.update_entity(&app, |app, cx| {
+            app.copy_terminal_selection_or_visible(cx);
+            cx.read_from_clipboard().and_then(|item| item.text())
+        });
+        assert_eq!(copied.as_deref(), Some("ls"));
+        cx.run_until_parked();
+        read_sentinel(&app, &mut cx, &mut peer, b"COPY!", "copy");
+        manager.close(&info.id).unwrap();
     }
 }
