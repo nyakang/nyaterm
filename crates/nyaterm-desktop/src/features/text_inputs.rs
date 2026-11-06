@@ -15,12 +15,12 @@ use std::collections::HashMap;
 
 use gpui::{
     App, AppContext, BoxShadow, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Rgba, SharedString, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _, px, rgb,
+    ParentElement as _, Rgba, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div, prelude::FluentBuilder as _, px, rgb,
 };
 use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaInputEvent, NyaInputKind, NyaInputShell, NyaInputState,
-    NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState,
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaInput, NyaInputEvent, NyaInputKind, NyaInputShell,
+    NyaInputState, NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState,
     NyaSearchInput,
 };
 
@@ -765,6 +765,49 @@ impl NyaTermApp {
             .number_subscriptions
             .retain(|id, _| !id.starts_with(prefix));
     }
+}
+
+/// The bordered box used by ordinary single-line form fields.
+///
+/// Same shell as the connection editor: the box is the hit target, the inner
+/// input only paints the text line.
+pub(in crate::features) fn ordinary_input_box(
+    palette: crate::theme::ThemePalette,
+    id: impl Into<SharedString>,
+    field: Entity<NyaInputState>,
+    cx: &Context<NyaTermApp>,
+) -> impl IntoElement {
+    let handle = field.read(cx).focus_handle();
+    let focused = field.read(cx).has_focus();
+    let id = id.into();
+    let debug_selector = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || debug_selector)
+        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+        .min_w_0()
+        .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
+        .flex()
+        .items_center()
+        .rounded_sm()
+        .border_1()
+        .border_color(ordinary_input_shell_border_color(palette, focused))
+        .when(focused, |this| {
+            this.shadow(ordinary_input_focus_ring(palette))
+        })
+        .bg(rgb(palette.input))
+        .cursor_text()
+        .on_click(move |_, window, cx| {
+            window.focus(&handle, cx);
+        })
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_xs()
+                .text_color(rgb(palette.text))
+                .child(NyaInput::new(&field)),
+        )
 }
 
 fn parse_u16_input(text: &str) -> Option<u16> {

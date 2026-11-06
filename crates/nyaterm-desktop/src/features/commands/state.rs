@@ -998,16 +998,25 @@ impl CommandFeatureState {
         prompt: QuickCommandVariablePromptState,
     ) {
         self.quick.dialogs.variable_prompt = Some(prompt);
+        self.quick.dialogs.variable_autofocus_pending = true;
     }
 
     pub(in crate::features) fn take_quick_variable_prompt(
         &mut self,
     ) -> Option<QuickCommandVariablePromptState> {
+        self.quick.dialogs.variable_autofocus_pending = false;
         self.quick.dialogs.variable_prompt.take()
     }
 
     pub(in crate::features) fn clear_quick_variable_prompt(&mut self) {
+        self.quick.dialogs.variable_autofocus_pending = false;
         self.quick.dialogs.variable_prompt = None;
+    }
+
+    /// Consume the request to focus the first variable field. Only a fresh
+    /// prompt request sets it, so focus is grabbed exactly once per open.
+    pub(in crate::features) fn take_quick_variable_prompt_autofocus(&mut self) -> bool {
+        std::mem::take(&mut self.quick.dialogs.variable_autofocus_pending)
     }
 
     pub(in crate::features) fn set_quick_variable_value(
@@ -1228,6 +1237,8 @@ struct QuickCommandDialogState {
     category_create: Option<QuickCommandCategoryCreateState>,
     category_rename: Option<QuickCommandCategoryRenameState>,
     variable_prompt: Option<QuickCommandVariablePromptState>,
+    /// Set when a prompt opens, cleared by the first autofocus or on close.
+    variable_autofocus_pending: bool,
     variable_focus: FocusHandle,
 }
 
@@ -1277,6 +1288,7 @@ impl QuickCommandFeatureState {
                 category_create: None,
                 category_rename: None,
                 variable_prompt: None,
+                variable_autofocus_pending: false,
                 variable_focus: focus.variable,
             },
             import: QuickCommandImportState { path_prompt: None },
