@@ -36,7 +36,10 @@ impl NyaTermApp {
         if self.block_import_for_settings_draft(cx) {
             return;
         }
-        if self.session.active_id().is_some() || self.session.start_has_pending() {
+        // Same live-remote criterion as the cloud-sync pulls: a local shell is
+        // spawned by the local runtime, and a disconnected tab holds no
+        // backend, so neither one is disturbed by rewriting the catalog.
+        if self.session.has_live_remote_sessions() || self.session.start_has_pending() {
             self.shell
                 .set_status(t!("settings.closeActiveSessionBeforeImport"));
             cx.notify();

@@ -3140,6 +3140,7 @@
     "syncStatus": "ステータス",
     "syncTestSuccess": "クラウドテストに合格しました。",
     "syncCloseActiveSessionBeforePull": "クラウド同期をプルする前にアクティブなセッションを閉じてください。",
+    "syncCloseActiveSessionInAnotherWindow": "別のウィンドウでセッションが開いています。先にそちらで閉じてください。",
     "syncConnectionTestStarted": "クラウド同期の接続テストを開始しました。",
     "syncForcePullingLocal": "ローカルのクラウド同期スナップショットを強制的にプルしています。",
     "syncForcePullingProvider": "%{provider} 経由でクラウド同期スナップショットを強制的にプルしています。",

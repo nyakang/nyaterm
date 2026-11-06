@@ -3107,6 +3107,7 @@
     "syncBackup": "雲端同步",
     "syncBackupTitle": "雲端同步",
     "syncCloseActiveSessionBeforePull": "請先關閉作用中的工作階段再拉取雲端同步。",
+    "syncCloseActiveSessionInAnotherWindow": "另一個視窗還有作用中的工作階段，請先在那個視窗關閉後再繼續。",
     "syncConnectionTestStarted": "雲端同步連線測試已開始。",
     "syncConflictSection": "衝突處理",
     "syncConflictSectionDesc": "處理本機快照與雲端同步快照分別發生變化時產生的同步衝突。",
