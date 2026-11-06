@@ -389,7 +389,7 @@ impl NyaTermApp {
             &self.settings.keyword_config().rules,
             &self.settings.keyword_config().builtin_rules,
             self.terminal_theme_is_dark(),
-            self.theme_palette().terminal_ansi,
+            self.terminal_theme_palette().terminal_ansi,
         ))
     }
 
@@ -409,7 +409,7 @@ impl NyaTermApp {
                 &self.settings.keyword_config().rules,
                 &self.settings.keyword_config().builtin_rules,
                 self.terminal_theme_is_dark(),
-                self.theme_palette().terminal_ansi,
+                self.terminal_theme_palette().terminal_ansi,
             ))
         };
         self.terminal.cache_keyword_highlight_rules(rules);
