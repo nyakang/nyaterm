@@ -1267,6 +1267,7 @@
     "connectToSession": "连接会话以浏览文件",
     "copyDirPath": "复制目录路径",
     "cwdTrackingUnavailable": "该会话不支持终端路径同步",
+    "currentTerminalDirectory": "终端当前目录",
     "cwdNotReported": "终端尚未上报当前工作目录，收到目录更新后即可同步路径。",
     "delete": "删除",
     "deleteConfirmHint": "按 Enter 确认，或点击删除按钮。",

@@ -15,8 +15,9 @@ use crate::shortcuts::{
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
-    // GPUI still delivers KeyDown after an interceptor stops propagation.
-    // This action must run in the keymap instead, or the terminal sends ^L twice.
+    // In the pinned GPUI fork, stopping an interceptor skips the keymap but
+    // still enters low-level key dispatch. Consuming these actions in the
+    // keymap returns before that path, avoiding duplicate terminal input.
     !matches!(
         id,
         ShortcutId::TerminalCopy
@@ -389,10 +390,9 @@ mod tests {
 
     #[test]
     fn local_copy_and_paste_are_dispatched_only_by_the_keymap() {
-        // An interceptor `stop_propagation()` still delivers KeyDown to the
-        // terminal surface, which re-encodes the key for the PTY. Copy and
-        // paste must consume the chord in the keymap so the canvas fallback
-        // never writes `CSI 2;5~` / `CSI 2;2~`.
+        // Keymap consumption returns before low-level key dispatch. Keep copy
+        // and paste on that path so the canvas cannot encode their local chords
+        // as `CSI 2;5~` / `CSI 2;2~`.
         assert!(!shortcut_interceptor_dispatches(ShortcutId::TerminalCopy));
         assert!(!shortcut_interceptor_dispatches(ShortcutId::TerminalPaste));
     }

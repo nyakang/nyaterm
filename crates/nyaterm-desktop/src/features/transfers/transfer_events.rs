@@ -413,7 +413,6 @@ impl NyaTermApp {
             &job.kind,
             TransferJobKind::InitialDirectory
                 | TransferJobKind::ListDir { .. }
-                | TransferJobKind::SyncCwd { .. }
                 | TransferJobKind::ResolveHome
         ) || job_session_id
             .as_deref()
