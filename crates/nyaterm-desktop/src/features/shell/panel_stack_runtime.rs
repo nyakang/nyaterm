@@ -291,6 +291,30 @@ impl NyaTermApp {
         }
     }
 
+    /// Arms the shared outside-press record from the native child surface,
+    /// which reports a press without a matching release.
+    pub(in crate::features) fn note_native_floating_panel_outside_press(
+        &mut self,
+        position: Point<Pixels>,
+    ) {
+        self.note_floating_panel_outside_press(position);
+        self.shell.panels.mark_native_floating_outside_press();
+    }
+
+    /// Runs after the current dispatch. A real press clears both records in the
+    /// owner scene's capture handler, so a surviving marker is the native-child
+    /// case; the shared click validation then performs the one dismissal.
+    pub(in crate::features) fn finish_native_floating_panel_outside_press(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.panels.take_native_floating_outside_press() {
+            return;
+        }
+        self.finish_floating_panel_outside_click(position, cx);
+    }
+
     /// Terminal pointer handlers can stop bubbling before the root's menu
     /// dismissal runs. Preserve popup priority while closing AI's own menus
     /// from their own outside handlers, using the menu's bounds rather than

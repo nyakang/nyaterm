@@ -225,6 +225,24 @@ impl RemoteDesktopFeatureState {
             })
     }
 
+    /// Whether this feature still requires the native child-window presentation
+    /// scope.
+    ///
+    /// Workspace panels read the same answer: while the scope exists the ActiveX
+    /// child window is composed above the owner's GPUI scene, so anything that
+    /// overlaps it must be painted in the owned overlay popup instead.
+    #[cfg(windows)]
+    pub(in crate::features) fn native_presentation_needed(&self) -> bool {
+        !self.native_shutting_down
+            && self.sessions.values().any(|session| {
+                native_surface_needed(
+                    session.native_rdp_config.is_some(),
+                    session.native_rdp.is_some(),
+                    session.state,
+                )
+            })
+    }
+
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
         let (wake, wake_rx) = EventWake::new();
         let manager = Arc::new(RdpSessionManager::new());
@@ -381,6 +399,35 @@ impl RemoteDesktopFeatureState {
     }
 }
 
+/// Whether a native RDP surface is expected to be on screen.
+///
+/// This stays independent of the Windows-only control type so the presentation
+/// scope rule is testable on every platform.
+#[cfg(any(windows, test))]
+pub(in crate::features) fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
+    matches!(
+        state,
+        RemoteDesktopViewState::Connecting
+            | RemoteDesktopViewState::Connected
+            | RemoteDesktopViewState::Reconnecting
+    )
+}
+
+/// Whether a native presentation scope is still required.
+///
+/// The scope exists so application overlays and workspace panels can be painted
+/// above the ActiveX child window. Once a native session reaches a
+/// non-displayable state its surface is hidden, so keeping the scope alive only
+/// leaves an input popup and a global mouse hook behind.
+#[cfg(any(windows, test))]
+pub(in crate::features) fn native_surface_needed(
+    config_pending: bool,
+    control_present: bool,
+    state: RemoteDesktopViewState,
+) -> bool {
+    config_pending || (control_present && native_rdp_state_is_displayable(state))
+}
+
 #[cfg(test)]
 mod tests {
     use nyaterm_remote_desktop::{RdpErrorKind, RemoteDesktopViewState};
@@ -452,5 +499,84 @@ mod tests {
         );
         assert!(session.pending_pointer.is_none());
         assert!(session.pending_resize.is_none());
+    }
+
+    #[test]
+    fn native_surface_is_only_displayable_while_the_session_can_paint() {
+        use super::native_rdp_state_is_displayable;
+        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Disconnecting, Failed};
+
+        assert!(native_rdp_state_is_displayable(Connecting));
+        assert!(native_rdp_state_is_displayable(Connected));
+        assert!(!native_rdp_state_is_displayable(Disconnecting));
+        assert!(!native_rdp_state_is_displayable(Disconnected));
+        assert!(!native_rdp_state_is_displayable(Failed));
+    }
+
+    #[test]
+    fn native_surface_scope_ends_with_its_last_visible_session() {
+        use super::native_surface_needed;
+        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Failed};
+
+        // Nothing native left: the owned input popup and mouse hook must go,
+        // otherwise they cover later modal child windows.
+        assert!(!native_surface_needed(false, false, Connected));
+        assert!(!native_surface_needed(false, false, Disconnected));
+        assert!(!native_surface_needed(false, true, Failed));
+        assert!(!native_surface_needed(false, true, Disconnected));
+
+        // A pending config or a still-displayable control keeps the scope.
+        assert!(native_surface_needed(true, false, Failed));
+        assert!(native_surface_needed(false, true, Connecting));
+        assert!(native_surface_needed(false, true, Connected));
+    }
+
+    /// A floating panel joins the native overlay exactly while a native session
+    /// needs the presentation scope. `native_presentation_needed` is the only
+    /// gate `workspace_surface` reads before wrapping the panel.
+    #[cfg(windows)]
+    #[test]
+    fn floating_panels_join_the_native_scope_only_while_a_native_session_needs_it() {
+        use nyaterm_remote_desktop::{
+            RdpBackend, RdpCertificatePolicy, RdpClipboardConfig, RdpDisplayConfig,
+            RdpReconnectConfig, RdpSessionConfig,
+        };
+
+        let cx = gpui::TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let focus = cx.update(|cx| cx.focus_handle());
+        let mut state = RemoteDesktopFeatureState::new(focus);
+        state.insert_disconnected("native".to_string());
+
+        let session = state.sessions.get_mut("native").expect("native session");
+        session.native_rdp_config = Some(RdpSessionConfig {
+            relay: None,
+            backend: RdpBackend::Windows,
+            windows_authentication: None,
+            name: "native".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            username: String::new(),
+            domain: String::new(),
+            password: None,
+            use_nla: false,
+            certificate_policy: RdpCertificatePolicy::default(),
+            administrative_session: false,
+            display: RdpDisplayConfig::default(),
+            clipboard: RdpClipboardConfig::default(),
+            reconnect: RdpReconnectConfig::default(),
+        });
+        assert!(
+            state.native_presentation_needed(),
+            "a pending native config still needs the overlay for the floating panel"
+        );
+
+        // Closing the session drops the config and the retained control; the
+        // panel must return to the owner scene instead of staying in an overlay
+        // popup that outlives the ActiveX surface.
+        let session = state.sessions.get_mut("native").expect("native session");
+        session.native_rdp_config = None;
+        session.state = RemoteDesktopViewState::Disconnected;
+        assert!(!state.native_presentation_needed());
     }
 }
