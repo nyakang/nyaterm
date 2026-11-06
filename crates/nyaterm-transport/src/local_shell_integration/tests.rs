@@ -5,10 +5,194 @@ use super::{
     wsl_target,
 };
 
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
+
 fn shell(program: &str, args: &[&str]) -> ResolvedLocalShell {
     ResolvedLocalShell {
         program: program.into(),
         args: args.iter().map(|arg| (*arg).into()).collect(),
+    }
+}
+
+#[cfg(unix)]
+fn run_integrated_zsh(home: &Path, args: &[&str]) -> (String, String, String) {
+    let (launch, integration) = LocalShellIntegration::prepare(&shell("zsh", args), "history")
+        .expect("interactive zsh receives the startup script");
+    let startup_dir = integration
+        .startup_files
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_owned();
+    let mut child = Command::new(&launch.program)
+        .args(&launch.args)
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("TERM", "dumb")
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"print -r -- \"NYATERM_HISTFILE=${HISTFILE-}\"\nprint -r -- \"NYATERM_ZDOTDIR=${ZDOTDIR-}\"\nexit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "zsh startup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(integration);
+    assert!(!startup_dir.exists());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let value = |key: &str| {
+        stdout
+            .lines()
+            .find_map(|line| line.split_once(key).map(|(_, value)| value.to_owned()))
+            .unwrap_or_else(|| panic!("missing {key} in zsh output: {stdout:?}"))
+    };
+    (
+        value("NYATERM_HISTFILE="),
+        value("NYATERM_ZDOTDIR="),
+        stdout,
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn zsh_default_history_follows_user_zdotdir_for_login_and_non_login_shells() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        eprintln!("zsh is unavailable; skipping shell startup regression");
+        return;
+    }
+
+    for custom_zdotdir in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let config_dir = if custom_zdotdir {
+            home.join("zsh-config")
+        } else {
+            home.to_owned()
+        };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let zshenv = if custom_zdotdir {
+            "print -r -- zshenv >> \"$HOME/rc-order\"\nHISTFILE=\"$NYATERM_LOCAL_DIR/.zsh_history\"\nZDOTDIR=\"$HOME/zsh-config\"\n"
+        } else {
+            "print -r -- zshenv >> \"$HOME/rc-order\"\nHISTFILE=\"$NYATERM_LOCAL_DIR/.zsh_history\"\n"
+        };
+        std::fs::write(home.join(".zshenv"), zshenv).unwrap();
+        for rc in ["zprofile", "zshrc", "zlogin"] {
+            let history_options = if rc == "zshrc" {
+                "HISTSIZE=50\nSAVEHIST=50\n"
+            } else {
+                ""
+            };
+            std::fs::write(
+                config_dir.join(format!(".{rc}")),
+                format!("print -r -- {rc} >> \"$HOME/rc-order\"\n{history_options}"),
+            )
+            .unwrap();
+        }
+
+        for (args, expected_order) in [
+            (&["-i"][..], "zshenv\nzshrc\n"),
+            (&["-il"][..], "zshenv\nzprofile\nzshrc\nzlogin\n"),
+        ] {
+            let (history, zdotdir, output) = run_integrated_zsh(home, args);
+            let history_file = config_dir.join(".zsh_history");
+            assert_eq!(history, history_file.to_string_lossy());
+            assert!(
+                std::fs::read_to_string(history_file)
+                    .unwrap()
+                    .contains("NYATERM_HISTFILE="),
+                "command history must be saved outside the temporary startup directory"
+            );
+            assert_eq!(
+                zdotdir,
+                if custom_zdotdir {
+                    config_dir.to_str().unwrap()
+                } else {
+                    ""
+                }
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join("rc-order")).unwrap(),
+                expected_order
+            );
+            assert!(output.contains("\x1b]7;file://localhost"));
+            std::fs::remove_file(home.join("rc-order")).unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn zsh_preserves_explicit_history_paths_and_user_rc_overrides() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        eprintln!("zsh is unavailable; skipping shell startup regression");
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    std::fs::write(
+        home.join(".zshenv"),
+        "HISTFILE=\"$HOME/explicit-history\"\n",
+    )
+    .unwrap();
+    // macOS /etc/zshrc overrides .zshenv's HISTFILE before our .zshrc wrapper runs.
+    let expected_history = if cfg!(target_os = "macos") {
+        home.join(".zsh_history")
+    } else {
+        home.join("explicit-history")
+    };
+    assert_eq!(
+        run_integrated_zsh(home, &["-i"]).0,
+        expected_history.to_string_lossy()
+    );
+
+    std::fs::write(
+        home.join(".zshenv"),
+        "HISTFILE=\"$NYATERM_LOCAL_DIR/.zsh_history\"\n",
+    )
+    .unwrap();
+    std::fs::write(home.join(".zshrc"), "HISTFILE=\"$HOME/rc-history\"\n").unwrap();
+    assert_eq!(
+        run_integrated_zsh(home, &["-i"]).0,
+        home.join("rc-history").to_string_lossy()
+    );
+
+    std::fs::write(home.join(".zlogin"), "HISTFILE=\"$HOME/login-history\"\n").unwrap();
+    assert_eq!(
+        run_integrated_zsh(home, &["-il"]).0,
+        home.join("login-history").to_string_lossy()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn zsh_leaves_unset_or_empty_history_unmodified() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        eprintln!("zsh is unavailable; skipping shell startup regression");
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    for zshenv in ["unset HISTFILE\n", "HISTFILE=\"\"\n"] {
+        std::fs::write(home.join(".zshenv"), zshenv).unwrap();
+        assert_eq!(run_integrated_zsh(home, &["-i"]).0, "");
     }
 }
 
