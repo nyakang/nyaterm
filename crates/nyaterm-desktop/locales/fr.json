@@ -2387,6 +2387,9 @@
     "unread": "Non lu"
   },
   "settings": {
+    "configurationSessionInAnotherWindow": "Une connexion distante est active ou démarre dans une autre fenêtre. Déconnectez-la avant de remplacer la configuration.",
+    "configurationReplacementInProgress": "Remplacement de la configuration en cours. Réessayez la connexion une fois terminé.",
+    "configurationRefreshRequired": "La configuration n’a pas été actualisée. Réessayez la connexion ou l’importation/synchronisation pour l’actualiser.",
     "terminalWrapMode": "Retour à la ligne",
     "terminalWrapModeDesc": "Sans retour, les lignes repliées sont réunies avec défilement horizontal. Les écrans interactifs utilisent la grille standard.",
     "terminalWrapCharacter": "Par caractère",
@@ -3604,6 +3607,8 @@
     "unsupportedOption": "Les liens temporaires ne prennent en charge que les connexions directes."
   },
   "terminal": {
+    "savedConnectionDeleted": "La connexion enregistrée a été supprimée. Ouvrez une connexion depuis la liste.",
+    "savedConnectionProtocolChanged": "Le protocole de la connexion enregistrée a changé. Rouvrez-la depuis la liste.",
     "macCopy": "Copier",
     "macInsert": "Insérer",
     "macCopied": "Adresse MAC copiée",

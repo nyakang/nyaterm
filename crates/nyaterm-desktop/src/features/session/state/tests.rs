@@ -207,6 +207,39 @@ fn failed_start(
 }
 
 #[test]
+fn saved_failed_retry_rejects_deleted_and_changed_sources_without_a_built_config() {
+    for changed_protocol in [false, true] {
+        let root = TestConfigDir::new("nyaterm-failed-retry-current-source");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut request = pending("failed");
+                request.kind = SessionKind::Ssh;
+                request.source_connection_id = Some("saved".into());
+                request.tab_placement = Some(app.session.start.allocate_tab_placement(1));
+                app.session.start.register_pending("failed".into(), request);
+                app.session.simulate_start_failure("failed");
+                if changed_protocol {
+                    let saved = serde_json::from_value(serde_json::json!({
+                        "id":"saved", "name":"Changed", "type":"telnet", "host":"127.0.0.1"
+                    }))
+                    .unwrap();
+                    app.connection_state.replace_loaded(vec![saved], vec![]);
+                }
+                app.retry_failed_session_start("failed".into(), window, cx);
+                assert!(!app.session.start_has_pending());
+                let failed = app.session.start.failed("failed").unwrap();
+                assert_ne!(failed.error, "failed");
+                assert!(failed.pending.launch_config.is_none());
+            })
+        });
+    }
+}
+
+#[test]
 fn failed_retry_keeps_one_tab_and_preserves_presentation_on_preparation_failure() {
     let root = TestConfigDir::new("nyaterm-failed-retry");
     let mut cx = TestAppContext::single();

@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use gpui::{Context, Window};
-use nyaterm_core::uuid;
+use nyaterm_core::{ConnectionType, uuid};
+use nyaterm_transport::SessionKind;
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
@@ -18,6 +19,13 @@ impl NyaTermApp {
         let Some(failed) = self.session.start.failed(&request_id) else {
             return;
         };
+        let remote = failed.pending.kind != SessionKind::LocalPty;
+        if remote && self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+        let Some(failed) = self.session.start.failed(&request_id) else {
+            return;
+        };
         let connection = failed
             .pending
             .source_connection_id
@@ -29,6 +37,36 @@ impl NyaTermApp {
                     .find(|connection| &connection.id == id)
             })
             .cloned();
+        if failed.pending.source_connection_id.is_some() && connection.is_none() {
+            self.session.start.set_failed_error(
+                &request_id,
+                t!("terminal.savedConnectionDeleted").to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        let same_protocol = connection.as_ref().is_none_or(|connection| {
+            matches!(
+                (&connection.config, failed.pending.kind),
+                (ConnectionType::LocalTerminal { .. }, SessionKind::LocalPty)
+                    | (ConnectionType::Ssh { .. }, SessionKind::Ssh)
+                    | (
+                        ConnectionType::Telnet { .. },
+                        SessionKind::Telnet | SessionKind::RawTcp
+                    )
+                    | (ConnectionType::Serial { .. }, SessionKind::Serial)
+                    | (ConnectionType::Rdp { .. }, SessionKind::Rdp)
+                    | (ConnectionType::Vnc { .. }, SessionKind::Vnc)
+            )
+        });
+        if !same_protocol {
+            self.session.start.set_failed_error(
+                &request_id,
+                t!("terminal.savedConnectionProtocolChanged").to_string(),
+            );
+            cx.notify();
+            return;
+        }
         if connection.is_none()
             && !failed
                 .pending

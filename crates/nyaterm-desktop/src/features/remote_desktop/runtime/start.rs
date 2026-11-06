@@ -126,6 +126,21 @@ impl NyaTermApp {
         session_id: &str,
         mut config: RdpSessionConfig,
     ) {
+        if self
+            .cloud_sync
+            .operations
+            .replacement_gate()
+            .block_reason()
+            .is_some()
+        {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                nyaterm_remote_desktop::RdpErrorKind::Transport,
+                rust_i18n::t!("settings.configurationReplacementInProgress").to_string(),
+            );
+            return;
+        }
+
         #[cfg(windows)]
         if config.backend == RdpBackend::Windows && self.remote_desktop.native_shutting_down {
             return;

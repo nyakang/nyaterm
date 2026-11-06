@@ -309,8 +309,8 @@ fn now_ms() -> u64 {
 impl NyaTermApp {
     pub(crate) fn auto_cloud_sync_pull_blocked(&self) -> bool {
         self.session.has_live_remote_sessions()
-            || self.session.start_has_pending()
-            || self.remote_desktop.has_active_sessions()
+            || self.session.start_is_busy()
+            || self.remote_desktop.blocks_configuration_replacement()
             || self.settings_draft_dirty()
     }
 

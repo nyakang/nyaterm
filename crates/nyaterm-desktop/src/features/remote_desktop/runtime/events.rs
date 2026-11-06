@@ -184,6 +184,10 @@ impl NyaTermApp {
                 })
             {
                 self.remote_desktop.routes.remove(&session_id);
+                // Keep the display-only tab, but release its backend ownership.
+                // A full reaper queue retains the record and maintenance retries.
+                let _ = self.remote_desktop.manager.close_detached(&session_id);
+                let _ = self.remote_desktop.vnc_manager.close_detached(&session_id);
             }
             if started.elapsed() >= Duration::from_millis(4) {
                 break;
@@ -324,7 +328,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         for (id, session) in &self.remote_desktop.sessions {
-            if session.uploads_stopped {
+            if session.uploads_stopped
+                || matches!(
+                    session.state,
+                    RemoteDesktopViewState::Failed | RemoteDesktopViewState::Disconnected
+                )
+            {
                 let _ = self.remote_desktop.manager.close_detached(id);
                 let _ = self.remote_desktop.vnc_manager.close_detached(id);
             }

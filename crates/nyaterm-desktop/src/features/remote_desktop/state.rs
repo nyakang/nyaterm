@@ -197,9 +197,34 @@ impl RemoteDesktopFeatureState {
         }
     }
 
-    pub(in crate::features) fn has_active_sessions(&self) -> bool {
-        !self.sessions.is_empty()
+    pub(in crate::features) fn blocks_configuration_replacement(&self) -> bool {
+        self.restore_pending.is_some()
+            || !self.prepared_routes.is_empty()
+            || !self.routes.is_empty()
+            || self.sessions.iter().any(|(id, session)| {
+                let pending = session.deferred_start.is_some()
+                    || session.reconnect_at.is_some()
+                    || session.certificate_request.is_some()
+                    || session.vnc_key_request.is_some();
+                #[cfg(windows)]
+                let pending =
+                    pending || session.native_rdp.is_some() || session.native_rdp_config.is_some();
+                pending
+                    || matches!(
+                        session.state,
+                        RemoteDesktopViewState::Connecting
+                            | RemoteDesktopViewState::Connected
+                            | RemoteDesktopViewState::Reconnecting
+                            | RemoteDesktopViewState::Disconnecting
+                    )
+                    // A terminal state can arrive before the helper is reaped.
+                    // Production teardown removes the manager record through
+                    // close_detached; until then it still owns backend resources.
+                    || self.manager.state(id).is_some()
+                    || self.vnc_manager.state(id).is_some()
+            })
     }
+
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
         let (wake, wake_rx) = EventWake::new();
         let manager = Arc::new(RdpSessionManager::new());
@@ -361,6 +386,37 @@ mod tests {
     use nyaterm_remote_desktop::{RdpErrorKind, RemoteDesktopViewState};
 
     use super::RemoteDesktopFeatureState;
+
+    #[test]
+    fn configuration_replacement_ignores_display_only_tabs_but_protects_pending_work() {
+        let cx = gpui::TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let focus = cx.update(|cx| cx.focus_handle());
+        let mut state = RemoteDesktopFeatureState::new(focus);
+        state.insert_disconnected("disconnected".into());
+        state.insert_failed_session(
+            "failed".into(),
+            RdpErrorKind::HelperMissing,
+            "fixture".into(),
+        );
+        assert!(!state.blocks_configuration_replacement());
+        state.sessions.get_mut("failed").unwrap().reconnect_at = Some(std::time::Instant::now());
+        assert!(state.blocks_configuration_replacement());
+        state.sessions.get_mut("failed").unwrap().reconnect_at = None;
+        assert!(!state.blocks_configuration_replacement());
+        for view in [
+            RemoteDesktopViewState::Connecting,
+            RemoteDesktopViewState::Connected,
+            RemoteDesktopViewState::Reconnecting,
+            RemoteDesktopViewState::Disconnecting,
+        ] {
+            state.sessions.get_mut("failed").unwrap().state = view;
+            assert!(state.blocks_configuration_replacement(), "{view:?}");
+        }
+        state.sessions.get_mut("failed").unwrap().state = RemoteDesktopViewState::Failed;
+        state.restore_pending = Some("failed".into());
+        assert!(state.blocks_configuration_replacement());
+    }
 
     #[test]
     fn removing_the_last_session_wakes_disposal_without_protocol_events() {

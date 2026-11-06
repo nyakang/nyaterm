@@ -9,6 +9,7 @@ use gpui::{
     },
     px, rgb, svg,
 };
+use nyaterm_core::connection_search::ConnectionSearch;
 use nyaterm_core::{Group, SavedConnection, natural_compare};
 use rust_i18n::t;
 
@@ -195,9 +196,10 @@ pub(in crate::features) fn connection_sections(
     query: &str,
     sort_mode: ConnectionSortMode,
 ) -> Vec<ConnectionSection> {
+    let search = ConnectionSearch::new(query, groups);
     let mut by_group: HashMap<Option<String>, Vec<SavedConnection>> = HashMap::new();
     for connection in connections {
-        if !connection_matches(connection, query) {
+        if !search.matches_connection(connection) {
             continue;
         }
         by_group
@@ -235,7 +237,7 @@ pub(in crate::features) fn connection_sections(
             0,
             &children_by_parent,
             &mut by_group,
-            query,
+            &search,
             &mut visited,
         );
         sections.append(&mut group_sections);
@@ -268,7 +270,7 @@ fn build_connection_group_sections(
     depth: usize,
     children_by_parent: &HashMap<Option<String>, Vec<Group>>,
     by_group: &mut HashMap<Option<String>, Vec<SavedConnection>>,
-    query: &str,
+    search: &ConnectionSearch,
     visited: &mut std::collections::HashSet<String>,
 ) -> (Vec<ConnectionSection>, usize) {
     if !visited.insert(group.id.clone()) {
@@ -288,14 +290,14 @@ fn build_connection_group_sections(
             depth + 1,
             children_by_parent,
             by_group,
-            query,
+            search,
             visited,
         );
         total_count += child_count;
         child_sections.append(&mut sections);
     }
 
-    if !query.is_empty() && total_count == 0 {
+    if !search.includes_group(&group.id) && total_count == 0 && child_sections.is_empty() {
         return (Vec::new(), 0);
     }
 
@@ -330,22 +332,6 @@ fn sort_groups(groups: &mut [Group], mode: ConnectionSortMode) {
             groups.sort_by(|left, right| natural_compare(&right.name, &left.name));
         }
     }
-}
-
-pub(super) fn connection_matches(connection: &SavedConnection, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let haystack = format!(
-        "{} {} {} {} {}",
-        connection.name,
-        connection.endpoint(),
-        connection.kind_label(),
-        connection.description.clone().unwrap_or_default(),
-        connection.id
-    )
-    .to_ascii_lowercase();
-    haystack.contains(query)
 }
 
 pub(super) fn sort_connections(connections: &mut [SavedConnection], mode: ConnectionSortMode) {
@@ -523,11 +509,115 @@ mod tests {
 
     use nyaterm_core::{Group, SavedConnection};
 
-    use crate::models::{ConnectionGroupEditorMode, ConnectionGroupEditorState};
+    use crate::models::{
+        ConnectionGroupEditorMode, ConnectionGroupEditorState, ConnectionSortMode,
+    };
 
     use super::{
         ConnectionListRow, connection_sections, flatten_connection_rows, widest_connection_row,
     };
+
+    #[test]
+    fn group_search_includes_the_whole_subtree_and_unions_connection_hits() {
+        let groups = vec![
+            group("region", "Region", None, 0),
+            group("prod", "Production", Some("region"), 0),
+            group("child", "Services", Some("prod"), 0),
+            group("empty", "Empty", Some("child"), 0),
+            group("staging", "Staging", Some("region"), 1),
+        ];
+        let connections = vec![
+            connection("direct", "Production host", Some("prod"), 0),
+            connection("nested", "Database", Some("child"), 0),
+            connection("other", "Staging host", Some("staging"), 0),
+            connection("root-hit", "Production gateway", None, 0),
+        ];
+        let sections = connection_sections(
+            &connections,
+            &groups,
+            "  PrOD  ",
+            ConnectionSortMode::Default,
+        );
+        assert_eq!(
+            sections
+                .iter()
+                .filter_map(|s| s.group_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["region", "prod", "child", "empty"]
+        );
+        assert_eq!(sections[0].total_count, 2);
+        assert_eq!(sections[1].total_count, 2);
+        assert_eq!(sections[2].total_count, 1);
+        assert_eq!(sections[3].total_count, 0);
+        let expanded = groups.iter().map(|g| g.id.clone()).collect();
+        let rows = flatten_connection_rows(&sections, &expanded, None);
+        let ids = rows
+            .iter()
+            .filter_map(|row| match row {
+                ConnectionListRow::Connection { connection_id, .. } => Some(connection_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["nested", "direct", "root-hit"]);
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, ConnectionListRow::EmptyGroup { depth: 4 }))
+        );
+    }
+
+    #[test]
+    fn empty_group_search_keeps_ancestors_without_unrelated_branches() {
+        let groups = vec![
+            group("region", "Region", None, 0),
+            group("parent", "Parent", Some("region"), 0),
+            group("empty", "生产环境", Some("parent"), 0),
+            group("sibling", "Sibling", Some("parent"), 1),
+        ];
+        let connections = vec![connection("other", "Host", Some("parent"), 0)];
+        let sections =
+            connection_sections(&connections, &groups, "生产", ConnectionSortMode::Default);
+        assert_eq!(
+            sections
+                .iter()
+                .filter_map(|s| s.group_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["region", "parent", "empty"]
+        );
+        assert!(
+            sections
+                .iter()
+                .all(|s| s.total_count == 0 && s.connections.is_empty())
+        );
+        assert!(sections[0].has_child_groups);
+        assert!(sections[1].has_child_groups);
+    }
+
+    #[test]
+    fn connection_only_search_keeps_its_path_without_including_other_connections() {
+        let groups = vec![
+            group("parent", "Parent", None, 0),
+            group("child", "Child", Some("parent"), 0),
+            group("empty", "Empty", Some("parent"), 1),
+        ];
+        let connections = vec![
+            connection("hit", "Bastion", Some("child"), 0),
+            connection("other", "Database", Some("child"), 1),
+        ];
+        let sections = connection_sections(
+            &connections,
+            &groups,
+            "bastion",
+            ConnectionSortMode::Default,
+        );
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].group_id.as_deref(), Some("parent"));
+        assert_eq!(sections[0].total_count, 1);
+        assert_eq!(sections[1].connections.len(), 1);
+        assert_eq!(sections[1].connections[0].id, "hit");
+        let no_hits =
+            connection_sections(&connections, &groups, "absent", ConnectionSortMode::Default);
+        assert!(flatten_connection_rows(&no_hits, &HashSet::new(), None).is_empty());
+    }
 
     #[test]
     fn nested_groups_render_children_before_connections_and_root_last() {

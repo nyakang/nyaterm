@@ -8,8 +8,13 @@ use futures::channel::oneshot;
 use nyaterm_core::CloudSyncError;
 use nyaterm_core::cloud_sync::control::CloudSyncOperationControl;
 
+// The controller supplies this registry to every window. Backup imports share
+// its admission gate and completion barrier with sync jobs, including shutdown.
 #[derive(Clone, Default)]
-pub(crate) struct CloudSyncOperationRegistry(Arc<Mutex<RegistryState>>);
+pub(crate) struct CloudSyncOperationRegistry(
+    Arc<Mutex<RegistryState>>,
+    crate::app_shell::configuration_replacement::ConfigurationReplacementGate,
+);
 
 #[derive(Default)]
 struct RegistryState {
@@ -37,6 +42,12 @@ struct Registration {
 }
 
 impl CloudSyncOperationRegistry {
+    pub(crate) fn replacement_gate(
+        &self,
+    ) -> crate::app_shell::configuration_replacement::ConfigurationReplacementGate {
+        self.1.clone()
+    }
+
     pub(crate) fn accepting(&self) -> bool {
         !self
             .0

@@ -236,6 +236,12 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if !matches!(launch_config, SessionLaunchConfig::Local(_))
+            && self.remote_start_blocked_by_configuration_replacement(cx)
+        {
+            return;
+        }
+
         if let Some(label) = launch_config.encoding()
             && let Err(error) = nyaterm_core::character_encoding::CharacterEncoding::parse(label)
         {
@@ -346,6 +352,10 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         if !self.session.start.retry_is_pending(&options) {
             return;
         }
@@ -473,6 +483,10 @@ impl NyaTermApp {
         request: MultiplexSshStartRequest,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         let MultiplexSshStartRequest {
             connection_name,
             mut config,
