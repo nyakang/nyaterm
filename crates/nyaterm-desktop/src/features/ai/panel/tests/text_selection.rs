@@ -188,7 +188,7 @@ fn streaming_reuses_text_state_and_switching_conversation_releases_selection(
         let scope = app.read(cx).ai_panel.read(cx).texts.scope.clone();
         assert_eq!(scope.selected_text(window, cx), "first");
     });
-    vcx.simulate_keystrokes("ctrl-c");
+    vcx.simulate_keystrokes("secondary-c");
     vcx.update(|_, cx| {
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "first");
     });

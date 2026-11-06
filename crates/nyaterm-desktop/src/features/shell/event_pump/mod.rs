@@ -624,7 +624,8 @@ mod tests {
     };
 
     use super::helpers::{
-        SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET, TERMINAL_FRAME_APPLY_PRESSURE_INTERVAL,
+        SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET, SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET,
+        TERMINAL_FRAME_APPLY_PRESSURE_INTERVAL,
     };
 
     const SESSION_ID: &str = "event-pump-session";
@@ -873,9 +874,9 @@ mod tests {
     /// The other route to a stranded tail: the drain hit a budget rather than the
     /// end of the queue, so no further push is coming to wake anyone.
     ///
-    /// `drain_event_bridge` is capped at `SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET`
-    /// bytes, so queueing more than that deterministically leaves the trailing
-    /// entry behind. The task must notice and come back on
+    /// Queue more than the idle budget and enter connect settling explicitly:
+    /// an asynchronously arriving first frame can otherwise change the budget
+    /// mid-test. The task must notice and come back on
     /// `TERMINAL_FRAME_APPLY_PRESSURE_INTERVAL` -- this is the pacing the runtime
     /// tick used to provide, which this change keeps rather than removes. If
     /// `runtime_data_plane_wake_delay` returned `None` while work remained, the
@@ -885,7 +886,9 @@ mod tests {
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = quiet_app_with_visible_session(&mut cx);
+        let output_bytes = 2 * SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET;
         cx.update_entity(&app, |app, cx| {
+            app.enter_connect_settle();
             app.start_runtime_data_plane_drain(cx);
             // Twice the idle output budget, so one cycle cannot reach the tail.
             let chunk = vec![b'x'; SESSION_EVENT_DRAIN_IDLE_OUTPUT_BUDGET / 2];
@@ -913,7 +916,11 @@ mod tests {
         });
 
         // Nothing will push again. Only the task's own re-arm can finish the queue.
-        for _ in 0..8 {
+        // Settling drains only 4 KiB per cycle; advancing GPUI's clock does not
+        // expire the real-time settling window. Leave one cycle for the tail.
+        let paced_cycles =
+            output_bytes.div_ceil(SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET) + 1;
+        for _ in 0..paced_cycles {
             cx.executor()
                 .advance_clock(TERMINAL_FRAME_APPLY_PRESSURE_INTERVAL);
             cx.run_until_parked();

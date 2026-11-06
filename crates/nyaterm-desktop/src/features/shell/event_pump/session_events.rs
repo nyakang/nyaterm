@@ -1,11 +1,12 @@
 use crate::features::session::notice_runtime::session_notice_text;
 use crate::features::session::notices::SessionNoticeKind;
 use crate::features::shell::event_pump::helpers::{
-    SESSION_EVENT_DRAIN_SLOW_CHUNK, SessionEventDrainBudget, SessionEventDrainTimings,
-    connect_settle_active, session_event_backlog_active, session_event_drain_budget,
-    session_event_drain_is_slow, session_event_drain_should_yield,
-    session_event_input_wake_drain_budget, terminal_frame_backlog_active_from_counts,
-    terminal_log_plain_text, terminal_output_dropped_marker,
+    SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET, SESSION_EVENT_DRAIN_SLOW_CHUNK,
+    SessionEventDrainBudget, SessionEventDrainTimings, connect_settle_active,
+    session_event_backlog_active, session_event_drain_budget, session_event_drain_is_slow,
+    session_event_drain_should_yield, session_event_input_wake_drain_budget,
+    terminal_frame_backlog_active_from_counts, terminal_log_plain_text,
+    terminal_output_dropped_marker,
 };
 use crate::features::{NyaTermApp, formatting::short_id};
 use crate::models::recording::ExecutionRecordingEvent;
@@ -97,7 +98,9 @@ impl NyaTermApp {
         if settle {
             // First frames after connect: smaller wall budget leaves room for paint.
             drain_budget.wall_budget = Duration::from_millis(4);
-            drain_budget.max_output_bytes = drain_budget.max_output_bytes.min(4 * 1024);
+            drain_budget.max_output_bytes = drain_budget
+                .max_output_bytes
+                .min(SESSION_EVENT_DRAIN_CONNECT_SETTLE_OUTPUT_BUDGET);
         }
         self.drain_session_events_with_budget(cx, drain_budget, true)
     }

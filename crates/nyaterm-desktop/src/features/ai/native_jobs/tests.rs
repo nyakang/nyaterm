@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::{NativeJobEvent, completion_with_repair, run_native_job, warn_agent_protocol_failure};
 use crate::blocking_jobs::BlockingJobScheduler;
 use crate::http::ai::AiProviderSession;
+use crate::thread_owner::spawn_joinable;
 
 fn request() -> AiChatRequest {
     let mut request: AiChatRequest = serde_json::from_value(json!({
@@ -144,7 +145,7 @@ fn mock_provider(replies: Vec<String>) -> (String, thread::JoinHandle<Vec<Value>
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
-    let server = thread::spawn(move || {
+    let server = spawn_joinable("mock-ai-provider", move || {
         let mut requests = Vec::new();
         let mut deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -171,7 +172,8 @@ fn mock_provider(replies: Vec<String>) -> (String, thread::JoinHandle<Vec<Value>
             }
         }
         requests
-    });
+    })
+    .expect("spawn mock provider");
     (base, server)
 }
 

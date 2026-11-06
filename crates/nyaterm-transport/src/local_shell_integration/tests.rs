@@ -261,6 +261,9 @@ fn assert_real_local_shell_context(
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join(".bashrc"), "PS1='fixture> '\n").unwrap();
     std::fs::write(home.path().join(".zshrc"), "PROMPT='fixture> '\n").unwrap();
+    // Ubuntu's global zshrc runs compinit before our prompt hooks. Its cold
+    // completion scan (or security prompt) is unrelated to this isolated fixture.
+    std::fs::write(home.path().join(".zshenv"), "skip_global_compinit=1\n").unwrap();
     let fish_config = home.path().join(".config/fish");
     std::fs::create_dir_all(&fish_config).unwrap();
     std::fs::write(
