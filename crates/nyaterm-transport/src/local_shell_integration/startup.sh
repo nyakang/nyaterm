@@ -133,6 +133,9 @@ if [[ $NYATERM_LOCAL_USER_ZDOTDIR_SET = x ]]; then
 else
     unset ZDOTDIR
 fi
+if [[ -n $NYATERM_LOCAL_DIR && $HISTFILE == "$NYATERM_LOCAL_DIR/.zsh_history" ]]; then
+    HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history
+fi
 [[ ! -r "${ZDOTDIR:-$HOME}/.zshrc" ]] || source "${ZDOTDIR:-$HOME}/.zshrc"
 __NYATERM_ZSH_FULL__
 __nyaterm_install_prompt full || true
