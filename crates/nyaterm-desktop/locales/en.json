@@ -2380,6 +2380,9 @@
     "unread": "Unread"
   },
   "settings": {
+    "configurationSessionInAnotherWindow": "Another window has a remote connection running or starting. Disconnect it before replacing configuration.",
+    "configurationReplacementInProgress": "Configuration replacement is in progress. Try connecting again after it finishes.",
+    "configurationRefreshRequired": "Configuration refresh did not finish. Retry the connection or import/sync action to refresh configuration first.",
     "terminalWrapMode": "Line wrapping",
     "terminalWrapModeDesc": "No wrap joins soft-wrapped rows and scrolls horizontally. Interactive screens use the standard grid.",
     "terminalWrapCharacter": "Wrap by character",
@@ -3597,6 +3600,8 @@
     "unsupportedOption": "Temporary links only support direct connections."
   },
   "terminal": {
+    "savedConnectionDeleted": "The saved connection was deleted. Open a connection from the connection list.",
+    "savedConnectionProtocolChanged": "The saved connection protocol changed. Open it again from the connection list.",
     "macCopy": "Copy",
     "macInsert": "Insert",
     "macCopied": "MAC address copied",

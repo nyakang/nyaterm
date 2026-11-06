@@ -2380,6 +2380,9 @@
     "unread": "未读"
   },
   "settings": {
+    "configurationSessionInAnotherWindow": "其他窗口有远程连接正在运行或启动，请先断开再替换配置。",
+    "configurationReplacementInProgress": "正在替换配置，请在完成后重试连接。",
+    "configurationRefreshRequired": "配置刷新尚未完成。请重试连接或导入/同步操作，以先重新刷新配置。",
     "terminalWrapMode": "换行模式",
     "terminalWrapModeDesc": "不换行时合并自动折行并横向滚动；交互界面自动恢复网格。",
     "terminalWrapCharacter": "按字符换行",
@@ -3597,6 +3600,8 @@
     "unsupportedOption": "临时链接仅支持直连。"
   },
   "terminal": {
+    "savedConnectionDeleted": "已保存的连接已被删除，请从连接列表打开连接。",
+    "savedConnectionProtocolChanged": "已保存连接的协议已改变，请从连接列表重新打开。",
     "macCopy": "复制",
     "macInsert": "插入",
     "macCopied": "MAC 地址已复制",

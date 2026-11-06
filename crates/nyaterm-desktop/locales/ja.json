@@ -2387,6 +2387,9 @@
     "unread": "未読"
   },
   "settings": {
+    "configurationSessionInAnotherWindow": "別のウィンドウでリモート接続が実行中または開始中です。設定を置き換える前に切断してください。",
+    "configurationReplacementInProgress": "設定を置き換えています。完了後に接続を再試行してください。",
+    "configurationRefreshRequired": "設定の再読み込みが完了していません。接続またはインポート・同期を再試行して設定を再読み込みしてください。",
     "terminalWrapMode": "折り返しモード",
     "terminalWrapModeDesc": "折り返しなしでは自動折り返し行を結合し横にスクロールします。対話画面では標準グリッドを使用します。",
     "terminalWrapCharacter": "文字単位で折り返す",
@@ -3604,6 +3607,8 @@
     "unsupportedOption": "一時リンクは直接接続のみサポートします。"
   },
   "terminal": {
+    "savedConnectionDeleted": "保存された接続は削除されました。接続一覧から接続を開いてください。",
+    "savedConnectionProtocolChanged": "保存された接続のプロトコルが変更されました。接続一覧から開き直してください。",
     "macCopy": "コピー",
     "macInsert": "挿入",
     "macCopied": "MAC アドレスをコピーしました",

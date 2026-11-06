@@ -2,6 +2,7 @@
 
 mod catalog;
 mod config_runtime;
+mod configuration_replacement;
 mod lock_diagnostics_runtime;
 mod security_runtime;
 mod security_state;

@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 mod auto_sync;
 mod bootstrap;
+mod configuration_replacement;
 pub(crate) mod native_menu;
 mod shutdown;
 #[cfg(test)]

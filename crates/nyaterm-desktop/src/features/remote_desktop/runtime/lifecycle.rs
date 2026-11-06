@@ -111,9 +111,10 @@ impl NyaTermApp {
                                 } else {
                                     return true;
                                 }
-                                app.retry_rdp_runtime(&session_id, cx);
+                                // The target was resolved before opening this prompt.
+                                // Rebuilding it here would discard the entered password.
+                                app.restart_remote_desktop_runtime(&session_id, reset_attempts, cx);
                                 app.settle_remote_desktop_restore(cx);
-                                let _ = reset_attempts;
                                 true
                             },
                             move |app, cx| {
@@ -140,6 +141,18 @@ impl NyaTermApp {
         &mut self,
         config: VncSessionConfig,
     ) -> Result<String, VncError> {
+        if self
+            .cloud_sync
+            .operations
+            .replacement_gate()
+            .block_reason()
+            .is_some()
+        {
+            return Err(VncError::new(
+                nyaterm_remote_desktop::VncErrorKind::Transport,
+                rust_i18n::t!("settings.configurationReplacementInProgress"),
+            ));
+        }
         self.remote_desktop.create_vnc_session(config)
     }
 
@@ -157,6 +170,13 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+        if self.retry_saved_remote_desktop(session_id, true, cx) {
+            return;
+        }
+
         if let Some(metadata) = self.session.metadata_mut(session_id)
             && let crate::models::SessionLaunchConfig::Rdp(config) = &mut metadata.launch_config
         {
@@ -272,12 +292,154 @@ impl NyaTermApp {
         }
     }
 
+    /// Rebuild saved targets and routes before retrying; runtime metadata is only
+    /// a fallback for genuinely temporary connections.
+    fn retry_saved_remote_desktop(
+        &mut self,
+        session_id: &str,
+        reset_attempts: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(metadata) = self.session.metadata(session_id).cloned() else {
+            return false;
+        };
+        let Some(id) = metadata.source_connection_id.as_ref() else {
+            return false;
+        };
+        let connection = self
+            .connection_state
+            .connections()
+            .iter()
+            .find(|connection| &connection.id == id)
+            .cloned();
+        let result = match connection.as_ref() {
+            None => Err(rust_i18n::t!("terminal.savedConnectionDeleted").to_string()),
+            Some(connection)
+                if !metadata
+                    .launch_config
+                    .matches_saved_protocol(&connection.config) =>
+            {
+                Err(rust_i18n::t!("terminal.savedConnectionProtocolChanged").to_string())
+            }
+            Some(connection) => self
+                .saved_remote_desktop_launch_config(connection)
+                .and_then(|config| {
+                    if let crate::models::SessionLaunchConfig::Rdp(config) = &config {
+                        let has_relay = connection.network.as_ref().is_some_and(|network| {
+                            network.proxy_id.is_some() || network.proxy_jump_id.is_some()
+                        });
+                        config
+                            .backend
+                            .validate_config(config)
+                            .and_then(|()| config.backend.validate_route(has_relay))
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok(config)
+                }),
+        };
+        let mut config = match result {
+            Ok(config) => config,
+            Err(message) => {
+                if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+                    cancel_rdp_reconnect_schedule(session);
+                    session.state = RemoteDesktopViewState::Failed;
+                }
+                self.shell.set_status(message);
+                self.settle_remote_desktop_restore(cx);
+                cx.notify();
+                return true;
+            }
+        };
+        let connection = connection.expect("validated saved connection");
+        self.remote_desktop.routes.remove(session_id);
+        match &mut config {
+            crate::models::SessionLaunchConfig::Rdp(config) => config.relay = None,
+            crate::models::SessionLaunchConfig::Vnc(config) => config.relay = None,
+            _ => unreachable!("remote desktop protocol"),
+        }
+        if let Some(metadata) = self.session.metadata_mut(session_id) {
+            metadata.launch_config = config;
+        }
+        if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+            session.state = RemoteDesktopViewState::Connecting;
+            session.reconnect_at = None;
+        }
+        if connection
+            .network
+            .as_ref()
+            .is_some_and(|network| network.proxy_id.is_some() || network.proxy_jump_id.is_some())
+        {
+            let session_id = session_id.to_string();
+            self.prepare_remote_route(
+                connection,
+                move |app, result, cx| {
+                    if !app.session.has_session(&session_id) {
+                        return;
+                    }
+                    match result {
+                        Ok(route) => {
+                            if let Some(metadata) = app.session.metadata_mut(&session_id) {
+                                match &mut metadata.launch_config {
+                                    crate::models::SessionLaunchConfig::Rdp(config) => {
+                                        config.relay = Some(route.endpoint.clone())
+                                    }
+                                    crate::models::SessionLaunchConfig::Vnc(config) => {
+                                        config.relay = Some(route.endpoint.clone())
+                                    }
+                                    _ => return,
+                                }
+                            }
+                            app.remote_desktop.routes.insert(session_id.clone(), route);
+                            app.restart_remote_desktop_runtime(&session_id, reset_attempts, cx);
+                        }
+                        Err(error) => {
+                            app.remote_desktop.insert_failed_session(
+                                session_id.clone(),
+                                RdpErrorKind::Transport,
+                                error.clone(),
+                            );
+                            app.shell.set_status(error);
+                            app.settle_remote_desktop_restore(cx);
+                            cx.notify();
+                        }
+                    }
+                },
+                cx,
+            );
+        } else {
+            self.restart_remote_desktop_runtime(session_id, reset_attempts, cx);
+        }
+        true
+    }
+
+    fn restart_remote_desktop_runtime(
+        &mut self,
+        session_id: &str,
+        reset_attempts: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Vnc(_)
+            )
+        }) {
+            self.restart_vnc_runtime(session_id, reset_attempts, cx);
+        } else {
+            self.restart_rdp_runtime(session_id, reset_attempts, cx);
+        }
+    }
+
     pub(super) fn restart_rdp_runtime(
         &mut self,
         session_id: &str,
         reset_attempts: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         let Some(metadata) = self.session.metadata(session_id).cloned() else {
             return;
         };
@@ -396,6 +558,10 @@ impl NyaTermApp {
         reset_attempts: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_start_blocked_by_configuration_replacement(cx) {
+            return;
+        }
+
         let Some((config, password_id)) = self.resolve_vnc_restart_config(session_id) else {
             return;
         };
@@ -657,6 +823,12 @@ impl NyaTermApp {
             .map(|(session_id, _)| session_id.clone())
             .collect::<Vec<_>>();
         for session_id in &due {
+            if self.remote_start_blocked_by_configuration_replacement(cx) {
+                break;
+            }
+            if self.retry_saved_remote_desktop(session_id, false, cx) {
+                continue;
+            }
             if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                 session.reconnect_at = None;
             }

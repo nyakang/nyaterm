@@ -24,6 +24,136 @@ use super::{
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
 #[test]
+fn saved_rdp_retry_rebuilds_target_and_drops_previous_inline_password() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    let root = TestConfigDir::new("nyaterm-rdp-retry-current-catalog");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "rdp");
+    app.update(&mut cx, |app, cx| {
+        let mut old = fit_window_rdp_config("Old");
+        old.password = Some("old-fixture-password".into());
+        let metadata = app.session.metadata_mut("rdp").unwrap();
+        metadata.launch_config = SessionLaunchConfig::Rdp(old);
+        metadata.source_connection_id = Some("saved".into());
+        metadata.disconnected = true;
+        let saved = serde_json::from_value(serde_json::json!({
+            "id":"saved", "name":"Updated", "type":"rdp", "host":"127.0.0.2", "port":3391,
+            "username":"updated-user", "backend":"builtin"
+        }))
+        .unwrap();
+        app.connection_state.replace_loaded(vec![saved], vec![]);
+        app.remote_desktop.insert_disconnected("rdp".into());
+        app.retry_rdp_runtime("rdp", cx);
+        let SessionLaunchConfig::Rdp(config) = &app.session.metadata("rdp").unwrap().launch_config
+        else {
+            panic!("RDP");
+        };
+        assert_eq!(config.host, "127.0.0.2");
+        assert_eq!(config.port, 3391);
+        assert_eq!(config.username, "updated-user");
+        assert!(config.password.is_none());
+        assert!(config.relay.is_none());
+        assert_eq!(app.session.session_order_len(), 1);
+    });
+}
+
+#[test]
+fn saved_rdp_retry_keeps_the_password_entered_in_its_prompt() {
+    use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
+    use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    struct EmptyView;
+    impl Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    let root = TestConfigDir::new("nyaterm-rdp-retry-prompt-password");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "rdp");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| EmptyView);
+        nya_root(view, window, cx)
+    });
+    cx.update(|window, cx| {
+        let handle = window.window_handle().downcast().unwrap();
+        app.update(cx, |app, cx| {
+            app.shell.remember_main_window(handle);
+            let metadata = app.session.metadata_mut("rdp").unwrap();
+            metadata.launch_config = SessionLaunchConfig::Rdp(fit_window_rdp_config("Saved"));
+            metadata.source_connection_id = Some("saved".into());
+            metadata.disconnected = true;
+            let saved = serde_json::from_value(serde_json::json!({
+                "id":"saved", "name":"Saved", "type":"rdp", "host":"127.0.0.1",
+                "port":0, "backend":"builtin", "display":{"mode":"fit-window"}
+            }))
+            .unwrap();
+            app.connection_state.replace_loaded(vec![saved], vec![]);
+            app.remote_desktop.insert_disconnected("rdp".into());
+            app.retry_rdp_runtime("rdp", cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.has_active_nya_dialog(cx));
+        let _ = window.draw(cx);
+    });
+    cx.simulate_keystrokes("p a s s");
+    let confirm = cx.debug_bounds("nya-dialog-action-button").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        let SessionLaunchConfig::Rdp(config) =
+            &app.read(cx).session.metadata("rdp").unwrap().launch_config
+        else {
+            panic!("RDP");
+        };
+        assert_eq!(config.password.as_deref(), Some("pass"));
+    });
+}
+
+#[test]
+fn deleted_saved_remote_desktop_cancels_automatic_reconnect() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    let root = TestConfigDir::new("nyaterm-rdp-retry-deleted");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "rdp");
+    app.update(&mut cx, |app, cx| {
+        let metadata = app.session.metadata_mut("rdp").unwrap();
+        metadata.launch_config = SessionLaunchConfig::Rdp(fit_window_rdp_config("Old"));
+        metadata.source_connection_id = Some("deleted".into());
+        metadata.disconnected = true;
+        app.remote_desktop.insert_disconnected("rdp".into());
+        app.remote_desktop
+            .sessions
+            .get_mut("rdp")
+            .unwrap()
+            .reconnect_at = Some(Instant::now());
+        assert!(app.drive_rdp_reconnects(cx));
+        let session = &app.remote_desktop.sessions["rdp"];
+        assert_eq!(session.state, RemoteDesktopViewState::Failed);
+        assert!(session.reconnect_at.is_none());
+        assert!(!app.remote_desktop.blocks_configuration_replacement());
+    });
+}
+
+#[test]
 fn fit_window_connect_waits_for_the_panel_then_asks_for_its_size() {
     use super::start::{RdpStartPlan, plan_rdp_start};
     use nyaterm_remote_desktop::{RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode};

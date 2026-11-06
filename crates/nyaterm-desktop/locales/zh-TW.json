@@ -2387,6 +2387,9 @@
     "unread": "未讀"
   },
   "settings": {
+    "configurationSessionInAnotherWindow": "其他視窗有遠端連線正在執行或啟動，請先中斷再取代設定。",
+    "configurationReplacementInProgress": "正在取代設定，請在完成後重試連線。",
+    "configurationRefreshRequired": "設定重新整理尚未完成。請重試連線或匯入/同步操作，以先重新整理設定。",
     "terminalWrapMode": "換行模式",
     "terminalWrapModeDesc": "不換行時合併自動折行並橫向捲動；互動介面自動恢復網格。",
     "terminalWrapCharacter": "按字元換行",
@@ -3604,6 +3607,8 @@
     "unsupportedOption": "該 SSH 輸入使用了臨時連結暫不支援的選項。"
   },
   "terminal": {
+    "savedConnectionDeleted": "已儲存的連線已被刪除，請從連線清單開啟連線。",
+    "savedConnectionProtocolChanged": "已儲存連線的協定已變更，請從連線清單重新開啟。",
     "macCopy": "複製",
     "macInsert": "插入",
     "macCopied": "MAC 位址已複製",

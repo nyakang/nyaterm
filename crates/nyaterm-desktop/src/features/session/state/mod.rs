@@ -513,6 +513,10 @@ impl SessionFeatureState {
         self.start.is_busy()
     }
 
+    pub(in crate::features) fn start_is_busy(&self) -> bool {
+        self.start.is_busy()
+    }
+
     pub(in crate::features) fn start_has_pending(&self) -> bool {
         self.start.has_pending()
     }
@@ -1874,13 +1878,16 @@ impl SessionFeatureState {
     /// (cloud-sync pulls and backup imports): a tab kept for reconnect
     /// (`disconnected`) holds no backend, and a local shell is spawned by the
     /// local runtime rather than from the connection catalog being rewritten,
-    /// so neither one may stop the replacement.
+    /// so neither one may stop the replacement. RDP/VNC have a separate runtime
+    /// owner; its replacement predicate is authoritative for those protocols.
     pub(in crate::features) fn has_live_remote_sessions(&self) -> bool {
         self.metadata.values().any(|metadata| {
             !metadata.disconnected
                 && !matches!(
                     metadata.launch_config,
                     crate::models::SessionLaunchConfig::Local(_)
+                        | crate::models::SessionLaunchConfig::Rdp(_)
+                        | crate::models::SessionLaunchConfig::Vnc(_)
                 )
         })
     }

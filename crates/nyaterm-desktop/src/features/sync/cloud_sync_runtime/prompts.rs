@@ -1,5 +1,3 @@
-use rust_i18n::t;
-
 use gpui::{Context, Window};
 
 use crate::features::NyaTermApp;
@@ -7,45 +5,22 @@ use crate::features::NyaTermApp;
 impl NyaTermApp {
     pub(crate) fn cloud_sync_session_restore_blocked(&self) -> bool {
         cloud_sync_restore_is_blocked(
-            self.session.has_live_remote_sessions() || self.remote_desktop.has_active_sessions(),
-            self.session.start_has_pending(),
+            self.session.has_live_remote_sessions()
+                || self.remote_desktop.blocks_configuration_replacement(),
+            self.session.start_is_busy(),
         )
     }
 
-    pub(in crate::features) fn cloud_sync_restore_blocked(&self, cx: &gpui::App) -> bool {
-        self.cloud_sync_session_restore_blocked()
-            || self
-                .desktop_controller
-                .as_ref()
-                .and_then(gpui::WeakEntity::upgrade)
-                .is_some_and(|controller| {
-                    controller
-                        .read(cx)
-                        .cloud_sync_pull_blocked_excluding(self.workspace_id, cx)
-                })
-    }
-
-    /// The status to show when a restore-style cloud-sync action is refused
-    /// because a session is still alive.
-    ///
-    /// The blocking session can live in another window: every workspace shares
-    /// one store, so a pull rewrites the connections that window is using. The
-    /// message has to say where the session is — otherwise the user is told to
-    /// close "the active session" in a window that has none open.
     pub(in crate::features) fn cloud_sync_restore_block_message(
-        &self,
+        &mut self,
         local_key: &str,
-        cx: &gpui::App,
+        cx: &mut Context<Self>,
     ) -> Option<String> {
-        if !self.cloud_sync_restore_blocked(cx) {
-            return None;
+        let message = self.configuration_replacement_message(local_key, cx);
+        if message.is_some() {
+            self.retry_configuration_refresh(cx);
         }
-        let key = if self.cloud_sync_session_restore_blocked() {
-            local_key
-        } else {
-            "settings.syncCloseActiveSessionInAnotherWindow"
-        };
-        Some(t!(key).to_string())
+        message
     }
 
     pub(crate) fn cloud_sync_job_running(&self) -> bool {

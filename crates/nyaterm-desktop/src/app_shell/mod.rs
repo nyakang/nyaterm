@@ -2,6 +2,7 @@
 
 use nyaterm_core::activation::ParsedActivationRequest;
 
+pub(crate) mod configuration_replacement;
 mod controller;
 pub(crate) use controller::native_menu;
 mod process_state;
