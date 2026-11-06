@@ -2079,7 +2079,7 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
     let first = screen.viewport_snapshot(0);
     let original = first.rows()[0].clone();
     let mut conflicting = (*original).clone();
-    conflicting.cells[0].text = Arc::from("z");
+    conflicting.cells[0].text = "z".into();
     conflicting.text = "zlpha".to_string();
     let conflicting = Arc::new(conflicting);
     let key = TerminalSnapshotRowCacheKey {
@@ -2160,13 +2160,13 @@ fn snapshot_keeps_blank_cell_storage_allocation_free() {
             .flat_map(|row| row.cells.iter())
             .all(|cell| cell.text.is_empty())
     );
-    let first_empty_text = snapshot.cell(0, 0).expect("first blank cell").text.clone();
+    // Blank cells hold the inline empty text: no allocation, nothing shared.
     assert!(
         snapshot
             .rows()
             .iter()
             .flat_map(|row| row.cells.iter())
-            .all(|cell| Arc::ptr_eq(&cell.text, &first_empty_text))
+            .all(|cell| cell.text == crate::CellText::EMPTY)
     );
     assert!(snapshot.rows().iter().all(|row| row.text.is_empty()));
     assert!(snapshot.rows().iter().all(|row| {
