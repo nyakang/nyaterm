@@ -35,6 +35,7 @@ pub use transport_io::TmuxPaneTransport;
 use transport_io::TransportWriterCommand;
 #[cfg(test)]
 use transport_io::spawn_reader_thread;
+mod proxy_command;
 mod ssh_connection;
 #[cfg(test)]
 use ssh_connection::expand_proxy_command;

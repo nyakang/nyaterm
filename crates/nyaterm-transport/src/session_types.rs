@@ -148,6 +148,11 @@ pub enum SessionError {
         addr: String,
         source: std::io::Error,
     },
+    #[error("failed to connect TCP session to {addr}: {source}")]
+    ConnectRoute {
+        addr: String,
+        source: crate::network_route::RouteConnectError,
+    },
     #[error("failed to clone TCP stream for session {session_id}: {source}")]
     CloneTcp {
         session_id: String,

@@ -969,6 +969,8 @@
     "telnetLocalEchoDesc": "デバイスがエコーを返さない場合に、入力した内容をローカルで表示します。",
     "telnetLocalLineEdit": "ローカル行編集 / Enter で行を送信",
     "telnetLocalLineEditDesc": "入力をローカルで編集し、Enter を押したときにコマンド全体を送信します。リモート Backspace に対応しないデバッグポートに便利です。",
+    "telnetNetworkRouteDescription": "踏み台ホストを選択すると、このプロキシより優先されます。踏み台への接続に必要なプロキシは、その SSH 接続で設定してください。",
+    "telnetNetworkPlaintextDescription": "SSH は踏み台ホストまでの接続を暗号化します。踏み台から Telnet または Raw TCP デバイスへの接続は暗号化されません。",
     "telnetRawTcpCli": "組み込みデバッグポート / Raw TCP CLI",
     "telnetRawTcpCliDesc": "Telnet ネゴシエーションを無効にし、入力をそのまま送信します。組み込みデバッグポートなどの非標準サービス向けです。",
     "telnetRawTcpCliLongDesc": "Telnet ネゴシエーションを無効にし、テレビ・ルーター・スイッチ・組み込みデバッグポート向けに入力をそのまま通します。",

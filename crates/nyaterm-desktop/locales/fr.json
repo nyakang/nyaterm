@@ -969,6 +969,8 @@
     "telnetLocalEchoDesc": "Afficher la saisie localement lorsque l'appareil ne renvoie pas d'écho.",
     "telnetLocalLineEdit": "Édition de ligne locale / Envoyer la ligne à Entrée",
     "telnetLocalLineEditDesc": "Modifier la saisie localement et envoyer la commande complète lorsque Entrée est pressée. Utile pour les ports de débogage qui ne prennent pas en charge le Retour arrière distant.",
+    "telnetNetworkRouteDescription": "Si un hôte de rebond est sélectionné, il est prioritaire sur ce proxy. Configurez le proxy nécessaire pour accéder au rebond dans sa connexion SSH.",
+    "telnetNetworkPlaintextDescription": "SSH chiffre la connexion vers le rebond. La connexion du rebond vers le périphérique Telnet ou Raw TCP reste en clair.",
     "telnetRawTcpCli": "Port de débogage embarqué / CLI TCP brut",
     "telnetRawTcpCliDesc": "Désactiver la négociation Telnet et transmettre la saisie directement pour les services non standard, tels que les ports de débogage embarqués.",
     "telnetRawTcpCliLongDesc": "Désactive la négociation Telnet et transmet la saisie directement pour les téléviseurs, routeurs, commutateurs et ports de débogage embarqués.",

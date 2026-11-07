@@ -88,6 +88,7 @@ pub(super) fn connection_editor_telnet_section(
             .child(telnet_basic(section, cx))
             .child(telnet_authentication(section, cx)),
         ConnectionEditorSection::Terminal => telnet_terminal(section, cx),
+        ConnectionEditorSection::Network => telnet_network(section, cx),
         ConnectionEditorSection::Compatibility => telnet_compatibility(section, cx),
         ConnectionEditorSection::AutoLogin => telnet_auto_login(section, cx),
         _ => div(),
@@ -98,6 +99,51 @@ pub(super) fn connection_editor_telnet_section(
         .flex_col()
         .gap_3()
         .child(content)
+}
+
+fn telnet_network(
+    section: ConnectionEditorSectionContext<'_>,
+    cx: &mut Context<NyaTermApp>,
+) -> gpui::Div {
+    let ConnectionEditorSectionContext {
+        palette, fields, ..
+    } = section;
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(connection_editor_select(
+            ConnectionEditorRenderContext {
+                palette,
+                fields,
+                cx,
+            },
+            "connection-editor-telnet-proxy",
+            t!("dialog.proxySelect"),
+            ConnectionEditorSelect::Proxy,
+        ))
+        .child(connection_editor_select(
+            ConnectionEditorRenderContext {
+                palette,
+                fields,
+                cx,
+            },
+            "connection-editor-telnet-jump",
+            t!("dialog.proxyJump"),
+            ConnectionEditorSelect::ProxyJump,
+        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("dialog.telnetNetworkRouteDescription")),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("dialog.telnetNetworkPlaintextDescription")),
+        )
 }
 
 fn telnet_basic(

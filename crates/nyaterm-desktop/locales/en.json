@@ -969,6 +969,8 @@
     "telnetLocalEchoDesc": "Show typed input locally when the device does not echo.",
     "telnetLocalLineEdit": "Local line editing / Send line on Enter",
     "telnetLocalLineEditDesc": "Edit input locally and send the full command when Enter is pressed. Useful for debug ports that do not support remote Backspace.",
+    "telnetNetworkRouteDescription": "When a jump host is selected, it takes precedence over this proxy. Configure any proxy needed to reach the jump host on its SSH connection.",
+    "telnetNetworkPlaintextDescription": "SSH encrypts the connection to the jump host. The connection from the jump host to the Telnet or Raw TCP device remains unencrypted.",
     "telnetRawTcpCli": "Embedded debug port / Raw TCP CLI",
     "telnetRawTcpCliDesc": "Disable Telnet negotiation and pass input through directly for non-standard services such as embedded debug ports.",
     "telnetRawTcpCliLongDesc": "Disables Telnet negotiation and passes input directly through for TVs, routers, switches, and embedded debug ports.",

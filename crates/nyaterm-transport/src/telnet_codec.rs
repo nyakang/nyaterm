@@ -75,43 +75,54 @@ pub(super) fn unescape_iac_iac(data: &[u8]) -> Vec<u8> {
     visible
 }
 
-pub(super) fn strip_telnet_commands(data: &[u8], on_negotiate: &mut impl FnMut(u8, u8)) -> Vec<u8> {
-    let mut visible = Vec::with_capacity(data.len());
-    let mut index = 0;
-    while index < data.len() {
-        if data[index] == IAC && index + 1 < data.len() {
-            let command = data[index + 1];
-            match command {
-                IAC => {
-                    visible.push(IAC);
-                    index += 2;
+#[derive(Default)]
+enum DecodeState {
+    #[default]
+    Data,
+    Command,
+    Negotiate(u8),
+    Subnegotiation,
+    SubnegotiationCommand,
+}
+
+/// TCP and relay copies may split anywhere, including inside IAC commands.
+/// Subnegotiation is discarded incrementally without buffering server data.
+#[derive(Default)]
+pub(super) struct TelnetCommandDecoder {
+    state: DecodeState,
+}
+
+impl TelnetCommandDecoder {
+    pub(super) fn decode(&mut self, data: &[u8], on_negotiate: &mut impl FnMut(u8, u8)) -> Vec<u8> {
+        let mut visible = Vec::with_capacity(data.len());
+        for &byte in data {
+            self.state = match self.state {
+                DecodeState::Data if byte == IAC => DecodeState::Command,
+                DecodeState::Data => {
+                    visible.push(byte);
+                    DecodeState::Data
                 }
-                WILL | WONT | DO | DONT => {
-                    if index + 2 < data.len() {
-                        on_negotiate(command, data[index + 2]);
-                        index += 3;
-                    } else {
-                        index += 2;
+                DecodeState::Command => match byte {
+                    IAC => {
+                        visible.push(IAC);
+                        DecodeState::Data
                     }
+                    WILL | WONT | DO | DONT => DecodeState::Negotiate(byte),
+                    SB => DecodeState::Subnegotiation,
+                    _ => DecodeState::Data,
+                },
+                DecodeState::Negotiate(command) => {
+                    on_negotiate(command, byte);
+                    DecodeState::Data
                 }
-                SB => {
-                    index += 2;
-                    while index < data.len() {
-                        if data[index] == IAC && index + 1 < data.len() && data[index + 1] == SE {
-                            index += 2;
-                            break;
-                        }
-                        index += 1;
-                    }
-                }
-                _ => index += 2,
-            }
-        } else {
-            visible.push(data[index]);
-            index += 1;
+                DecodeState::Subnegotiation if byte == IAC => DecodeState::SubnegotiationCommand,
+                DecodeState::Subnegotiation => DecodeState::Subnegotiation,
+                DecodeState::SubnegotiationCommand if byte == SE => DecodeState::Data,
+                DecodeState::SubnegotiationCommand => DecodeState::Subnegotiation,
+            };
         }
+        visible
     }
-    visible
 }
 
 /// Telnet protocol escaping without text-input normalization.
@@ -141,5 +152,37 @@ mod raw_input_tests {
             [0, 13, 10, 127, 255, 255, 128]
         );
         assert_eq!(escape_telnet_application_data(&bytes, true), bytes);
+    }
+}
+
+#[cfg(test)]
+mod decoder_tests {
+    use super::{DO, IAC, OPT_ECHO, OPT_NAWS, SB, SE, TelnetCommandDecoder, WILL};
+
+    #[test]
+    fn negotiation_escaped_data_and_subnegotiation_survive_every_tcp_split() {
+        let wire = [
+            b'a', IAC, WILL, OPT_ECHO, IAC, IAC, IAC, SB, OPT_NAWS, 0, IAC, IAC, 0, IAC, SE, IAC,
+            DO, OPT_NAWS, b'b',
+        ];
+        for split in 0..=wire.len() {
+            let mut decoder = TelnetCommandDecoder::default();
+            let mut negotiations = Vec::new();
+            let mut negotiated = |command, option| negotiations.push((command, option));
+            let mut visible = decoder.decode(&wire[..split], &mut negotiated);
+            visible.extend(decoder.decode(&wire[split..], &mut negotiated));
+            assert_eq!(visible, [b'a', IAC, b'b']);
+            assert_eq!(negotiations, [(WILL, OPT_ECHO), (DO, OPT_NAWS)]);
+        }
+        let mut decoder = TelnetCommandDecoder::default();
+        let mut visible = Vec::new();
+        let mut negotiations = Vec::new();
+        for byte in wire {
+            visible.extend(decoder.decode(&[byte], &mut |command, option| {
+                negotiations.push((command, option))
+            }));
+        }
+        assert_eq!(visible, [b'a', IAC, b'b']);
+        assert_eq!(negotiations, [(WILL, OPT_ECHO), (DO, OPT_NAWS)]);
     }
 }

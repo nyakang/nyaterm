@@ -969,6 +969,8 @@
     "telnetLocalEchoDesc": "当设备端不回显输入时，在本地显示用户输入。",
     "telnetLocalLineEdit": "本地行编辑 / 按行发送",
     "telnetLocalLineEditDesc": "输入先在本地编辑，按 Enter 后发送完整命令，适用于不支持远端 Backspace 的调试口。",
+    "telnetNetworkRouteDescription": "选择跳板机时优先使用跳板，本页代理不参与连接。访问跳板所需的代理请在该 SSH 连接上配置。",
+    "telnetNetworkPlaintextDescription": "SSH 加密客户端到跳板机的连接；跳板机到 Telnet 或 Raw TCP 设备的链路仍为明文。",
     "telnetRawTcpCli": "兼容嵌入式调试口 / Raw TCP CLI",
     "telnetRawTcpCliDesc": "关闭 Telnet 协商并直传输入，适用于嵌入式调试口等非标准服务。",
     "telnetRawTcpCliLongDesc": "关闭 Telnet 协商并直接透传输入，适用于 TV、路由器、交换机、嵌入式调试端口等非标准 Telnet 服务。",

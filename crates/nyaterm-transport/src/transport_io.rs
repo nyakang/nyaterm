@@ -5,7 +5,7 @@ use crate::session_event_queue::SessionEventQueue;
 use crate::ssh_shell_integration::SshIntegrationOutput;
 use crate::ssh_worker::{SshCommand, TmuxCommandSender, send_session_error};
 use crate::telnet_codec::{
-    maybe_build_naws, negotiate_response, strip_telnet_commands, unescape_iac_iac,
+    TelnetCommandDecoder, maybe_build_naws, negotiate_response, unescape_iac_iac,
 };
 use crate::telnet_input::{TelnetInputState, telnet_auto_login_line_bytes};
 use crate::telnet_prompts::{
@@ -45,6 +45,7 @@ pub struct LocalPtyTransport {
 }
 
 pub struct TelnetTransport {
+    pub(crate) route: Option<Arc<crate::network_route::NetworkRoute>>,
     pub(crate) info: SessionInfo,
     pub(crate) writer: QueuedTransportWriter,
     pub(crate) reader_stream: TcpStream,
@@ -518,6 +519,9 @@ impl TerminalTransport for TelnetTransport {
 
     fn close(&mut self) -> anyhow::Result<()> {
         let _ = self.reader_stream.shutdown(Shutdown::Both);
+        if let Some(route) = self.route.take() {
+            route.close();
+        }
         self.writer.close();
         if let Some(reader_thread) = self.reader_thread.take() {
             let _ = reader_thread.join();
@@ -750,6 +754,7 @@ pub(crate) fn spawn_tcp_reader_thread(
 ) -> std::io::Result<JoinHandle<()>> {
     nyaterm_core::runtime::worker::spawn(format!("transport-reader-{session_id}"), move || {
         let mut buffer = [0_u8; 8192];
+        let mut decoder = TelnetCommandDecoder::default();
         while !lifecycle.is_stopped() {
             match reader.read(&mut buffer) {
                 Ok(0) => {
@@ -770,7 +775,7 @@ pub(crate) fn spawn_tcp_reader_thread(
                     let visible = if config.raw_tcp {
                         unescape_iac_iac(&buffer[..read])
                     } else {
-                        strip_telnet_commands(&buffer[..read], &mut |command, option| {
+                        decoder.decode(&buffer[..read], &mut |command, option| {
                             let response = negotiate_response(
                                 command,
                                 option,

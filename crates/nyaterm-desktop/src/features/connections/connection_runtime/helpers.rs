@@ -858,7 +858,10 @@ pub(super) fn build_saved_connection_from_editor(
     };
 
     let network = match editor.kind {
-        ConnectionKindTab::Ssh | ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => {
+        ConnectionKindTab::Ssh
+        | ConnectionKindTab::Telnet
+        | ConnectionKindTab::Rdp
+        | ConnectionKindTab::Vnc => {
             let proxy_id = editor
                 .proxy_id
                 .clone()

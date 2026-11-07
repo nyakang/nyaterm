@@ -124,13 +124,15 @@ pub enum TelnetEnterMode {
     Lf,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct TelnetSessionConfig {
     pub name: String,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub password: Option<SecretString>,
+    pub proxy: Option<SshProxyConfig>,
+    pub proxy_jump: Option<Box<SshSessionConfig>>,
     pub backspace_mode: String,
     pub raw_tcp: bool,
     pub enter_mode: TelnetEnterMode,
@@ -156,6 +158,8 @@ impl std::fmt::Debug for TelnetSessionConfig {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("proxy", &self.proxy.is_some())
+            .field("proxy_jump", &self.proxy_jump.is_some())
             .field("backspace_mode", &self.backspace_mode)
             .field("raw_tcp", &self.raw_tcp)
             .field("enter_mode", &self.enter_mode)
@@ -442,7 +446,7 @@ impl std::fmt::Debug for SshProxyConfig {
             .field("protocol", &self.protocol)
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("command", &self.command)
+            .field("command", &self.command.as_ref().map(|_| "<redacted>"))
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
@@ -792,6 +796,8 @@ impl Default for TelnetSessionConfig {
             port: 23,
             username: String::new(),
             password: None,
+            proxy: None,
+            proxy_jump: None,
             backspace_mode: "del".to_string(),
             raw_tcp: false,
             enter_mode: TelnetEnterMode::Cr,

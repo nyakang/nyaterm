@@ -410,6 +410,36 @@ fn tauri_telnet_username_auth_and_encoding_fields_round_trip() {
 }
 
 #[test]
+fn telnet_network_fields_round_trip_and_legacy_connections_remain_direct() {
+    let legacy: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"legacy-telnet", "name":"Legacy", "type":"telnet", "host":"device.internal"
+    }))
+    .unwrap();
+    assert!(legacy.network.is_none());
+    for raw_tcp_cli in [false, true] {
+        let mut connection = legacy.clone();
+        if let ConnectionType::Telnet {
+            raw_tcp_cli: raw, ..
+        } = &mut connection.config
+        {
+            *raw = raw_tcp_cli;
+        }
+        connection.network = Some(crate::models::network::ConnectionNetwork {
+            proxy_id: Some("proxy".into()),
+            proxy_jump_id: Some("jump".into()),
+            host_key_alias: Some("existing-alias".into()),
+        });
+        let json = serde_json::to_value(&connection).unwrap();
+        assert_eq!(json["network"]["proxy_id"], "proxy");
+        assert_eq!(json["network"]["proxy_jump_id"], "jump");
+        assert_eq!(
+            serde_json::from_value::<SavedConnection>(json).unwrap(),
+            connection
+        );
+    }
+}
+
+#[test]
 fn validates_sftp_shell_detection_timeout_range() {
     for value in [
         MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,

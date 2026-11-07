@@ -44,15 +44,15 @@ pub(in crate::features) struct SessionStartSuccess {
     pub(in crate::features) session_info: SessionInfo,
     pub(in crate::features) multiplex_handle: Option<SshConnectionLease>,
     pub(in crate::features) launch_config: Option<SessionLaunchConfig>,
-    pub(in crate::features) cleanup: Option<PendingSshSession>,
+    pub(in crate::features) cleanup: Option<PendingSession>,
 }
 
 /// The worker's session is not owned by a window until its result is accepted.
 /// Dropping a cancelled or undeliverable result closes only that channel.
-pub(in crate::features) struct PendingSshSession {
+pub(in crate::features) struct PendingSession {
     manager: Arc<SessionManager>,
     session_id: Option<String>,
-    connection: SshConnectionLease,
+    connection: Option<SshConnectionLease>,
 }
 
 impl SessionStartSuccess {
@@ -62,15 +62,33 @@ impl SessionStartSuccess {
         connection: SshConnectionLease,
         launch_config: Option<SessionLaunchConfig>,
     ) -> Self {
-        let cleanup = PendingSshSession {
+        let cleanup = PendingSession {
             manager,
             session_id: Some(session_info.id.clone()),
-            connection: connection.clone(),
+            connection: Some(connection.clone()),
         };
         Self {
             session_info,
             multiplex_handle: Some(connection),
             launch_config,
+            cleanup: Some(cleanup),
+        }
+    }
+
+    pub(in crate::features) fn telnet(
+        manager: Arc<SessionManager>,
+        session_info: SessionInfo,
+        launch_config: Option<SessionLaunchConfig>,
+    ) -> Self {
+        let cleanup = PendingSession {
+            manager,
+            session_id: Some(session_info.id.clone()),
+            connection: None,
+        };
+        Self {
+            session_info,
+            launch_config,
+            multiplex_handle: None,
             cleanup: Some(cleanup),
         }
     }
@@ -82,15 +100,24 @@ impl SessionStartSuccess {
     }
 }
 
-impl Drop for PendingSshSession {
+impl Drop for PendingSession {
     fn drop(&mut self) {
         if let Some(session_id) = self.session_id.take() {
             let manager = Arc::clone(&self.manager);
-            let connection = self.connection.clone();
-            self.connection.enqueue_cleanup(move || {
-                let _ = manager.close(&session_id);
-                drop(connection);
-            });
+            if let Some(connection) = self.connection.as_ref() {
+                let retained_connection = connection.clone();
+                connection.enqueue_cleanup(move || {
+                    let _ = manager.close(&session_id);
+                    drop(retained_connection);
+                });
+            } else if manager.close_detached(&session_id).is_err() {
+                // Saturating the bounded reaper must not orphan a result that
+                // never reached the window. Keep fallback joins off GPUI too.
+                let _ =
+                    nyaterm_core::runtime::worker::spawn("pending-tcp-cleanup".into(), move || {
+                        let _ = manager.close(&session_id);
+                    });
+            }
         }
     }
 }
@@ -377,6 +404,68 @@ mod session_start_tests {
                 ..LocalSessionConfig::default()
             })
             .expect("create channel for cleanup test")
+    }
+
+    #[test]
+    fn discarded_and_undeliverable_telnet_starts_release_their_tcp_sessions() {
+        use nyaterm_transport::TelnetSessionConfig;
+        use std::io::Read as _;
+        use std::net::TcpListener;
+        use std::time::Duration;
+        for undeliverable in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let manager = Arc::new(SessionManager::new());
+            let info = manager
+                .create_telnet_session(TelnetSessionConfig {
+                    host: "127.0.0.1".into(),
+                    port: listener.local_addr().unwrap().port(),
+                    raw_tcp: true,
+                    ..Default::default()
+                })
+                .unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let success = SessionStartSuccess::telnet(manager.clone(), info, None);
+            if undeliverable {
+                let (sender, receiver) = unbounded();
+                drop(receiver);
+                let now = Instant::now();
+                let _ = sender.unbounded_send(SessionStartResult {
+                    request_id: "tcp".into(),
+                    connection_name: "TCP".into(),
+                    kind: SessionKind::RawTcp,
+                    worker_started_at: now,
+                    worker_finished_at: now,
+                    result: Ok(success),
+                });
+            } else {
+                drop(success);
+            }
+            assert!(manager.list_sessions().unwrap().is_empty());
+            assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn accepted_telnet_start_keeps_its_session_alive() {
+        use nyaterm_transport::TelnetSessionConfig;
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let manager = Arc::new(SessionManager::new());
+        let info = manager
+            .create_telnet_session(TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                raw_tcp: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let mut success = SessionStartSuccess::telnet(manager.clone(), info.clone(), None);
+        success.accept();
+        drop(success);
+        assert_eq!(manager.list_sessions().unwrap()[0].id, info.id);
+        manager.close(&info.id).unwrap();
     }
 
     #[test]

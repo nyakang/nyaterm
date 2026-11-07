@@ -81,6 +81,7 @@ impl ConnectionEditorSection {
             ],
             ConnectionKindTab::Telnet => &[
                 Self::Basic,
+                Self::Network,
                 Self::AutoLogin,
                 Self::Terminal,
                 Self::Compatibility,

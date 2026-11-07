@@ -69,6 +69,22 @@ impl SshSessionConfigBuildContext {
     ) -> Result<SshSessionConfig, String> {
         build_ssh_session_config_with_context(connection, &mut Vec::new(), self)
     }
+
+    pub(in crate::features) fn prepare_telnet_network(
+        &self,
+        connection: &SavedConnection,
+        config: &mut TelnetSessionConfig,
+    ) -> Result<(), String> {
+        self.attempt.check()?;
+        config.proxy_jump = load_proxy_jump_config_with_context(self, connection, &mut Vec::new())?;
+        // Match RDP/VNC: only the jump's own proxy participates when a jump is selected.
+        config.proxy = if config.proxy_jump.is_none() {
+            load_proxy_config_with_context(self, connection)?
+        } else {
+            None
+        };
+        self.attempt.check()
+    }
 }
 
 /// Loads stored SSH keys only when the transport broker needs identities.
@@ -591,6 +607,8 @@ impl NyaTermApp {
                     port,
                     username,
                     password,
+                    proxy: None,
+                    proxy_jump: None,
                     backspace_mode,
                     raw_tcp: raw_tcp_cli,
                     enter_mode: parse_telnet_enter_mode(&enter_mode),
@@ -605,10 +623,9 @@ impl NyaTermApp {
                     cols: 80,
                     rows: 24,
                 };
-                self.begin_background_session_start(
-                    connection.name,
-                    SessionLaunchConfig::Telnet(config),
-                    Some(connection.id),
+                self.begin_background_saved_telnet_start(
+                    connection,
+                    config,
                     ai_execution_profile,
                     options,
                     cx,
@@ -1678,6 +1695,90 @@ mod tests {
             agent_prompts: Arc::new(AgentPromptBroker::default()),
             otp_provider: Arc::new(NativeOtpProvider::new(store)),
         }
+    }
+
+    #[test]
+    fn telnet_network_preparation_loads_shared_routes_and_reports_invalid_references() {
+        use nyaterm_transport::TelnetSessionConfig;
+        let dir = unique_temp_dir("telnet-route-preparation");
+        let context = test_ssh_build_context(dir.path());
+        context
+            .store
+            .request_fn(StoreDomain::Tunnels, |store| {
+                store.replace_proxies(&[nyaterm_core::ProxyConfig {
+                    id: "proxy".into(),
+                    name: "Proxy".into(),
+                    host: "127.0.0.1".into(),
+                    port: 1080,
+                    ..Default::default()
+                }])
+            })
+            .unwrap();
+        for json in [
+            serde_json::json!({"id":"jump", "name":"Jump", "type":"ssh", "host":"jump.internal", "username":"user", "auth":{"mode":"none"}, "network":{"proxy_id":"proxy", "host_key_alias":"jump-alias"}}),
+            serde_json::json!({"id":"not-ssh", "name":"Telnet", "type":"telnet", "host":"device.internal"}),
+            serde_json::json!({"id":"cycle-a", "name":"A", "type":"ssh", "host":"a.internal", "username":"user", "auth":{"mode":"none"}, "network":{"proxy_jump_id":"cycle-b"}}),
+            serde_json::json!({"id":"cycle-b", "name":"B", "type":"ssh", "host":"b.internal", "username":"user", "auth":{"mode":"none"}, "network":{"proxy_jump_id":"cycle-a"}}),
+        ] {
+            let connection: SavedConnection = serde_json::from_value(json).unwrap();
+            context
+                .store
+                .request_fn(StoreDomain::Connections, move |store| {
+                    store.save_connection(&connection)
+                })
+                .unwrap();
+        }
+        for (network, error) in [
+            (
+                serde_json::json!({"proxy_id":"missing"}),
+                Some("was not found"),
+            ),
+            (
+                serde_json::json!({"proxy_jump_id":"missing"}),
+                Some("was not found"),
+            ),
+            (
+                serde_json::json!({"proxy_jump_id":"not-ssh"}),
+                Some("Only SSH"),
+            ),
+            (
+                serde_json::json!({"proxy_jump_id":"cycle-a"}),
+                Some("cycle"),
+            ),
+            (serde_json::json!({"proxy_id":"proxy"}), None),
+            (
+                serde_json::json!({"proxy_id":"missing", "proxy_jump_id":"jump"}),
+                None,
+            ),
+        ] {
+            let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id":"telnet", "name":"Telnet", "type":"telnet", "host":"device.internal", "network":network
+            })).unwrap();
+            let mut config = TelnetSessionConfig::default();
+            let result = context.prepare_telnet_network(&connection, &mut config);
+            if let Some(error) = error {
+                assert!(result.unwrap_err().contains(error));
+            } else {
+                result.unwrap();
+                if let Some(jump) = config.proxy_jump {
+                    assert!(config.proxy.is_none());
+                    assert_eq!(jump.host_key_alias.as_deref(), Some("jump-alias"));
+                    assert!(jump.proxy.is_some());
+                    assert!(jump.host_key_verifier.is_some());
+                    assert!(jump.credential_provider.is_some());
+                } else {
+                    assert!(config.proxy.is_some());
+                }
+            }
+        }
+        context.attempt.cancel();
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({"id":"cancelled", "name":"Cancelled", "type":"telnet", "host":"device.internal"})).unwrap();
+        assert!(
+            context
+                .prepare_telnet_network(&connection, &mut TelnetSessionConfig::default())
+                .unwrap_err()
+                .contains("cancelled")
+        );
     }
 
     #[test]

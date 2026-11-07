@@ -270,8 +270,14 @@ impl NyaTermApp {
         // Backend may already be gone (race with Exited); still mark disconnected.
         if self.remote_desktop.is_session(&session_id) {
             let _ = self.close_remote_desktop_runtime(&session_id);
-        } else {
-            let _ = self.session.manager().close(&session_id);
+        } else if let Err(error) = self.session.manager().close_detached(&session_id) {
+            self.session.finish_busy_action(&session_id);
+            self.shell.set_status(format!(
+                "could not disconnect {}: {error}",
+                short_id(&session_id)
+            ));
+            cx.notify();
+            return;
         }
         self.disconnect_recording_for_session(&session_id);
         self.mark_session_disconnected(&session_id, cx);

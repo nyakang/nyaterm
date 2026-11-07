@@ -969,6 +969,8 @@
     "telnetLocalEchoDesc": "當裝置端不回顯輸入時，在本機顯示使用者輸入。",
     "telnetLocalLineEdit": "本機行編輯 / 按行傳送",
     "telnetLocalLineEditDesc": "輸入先在本機編輯，按 Enter 後傳送完整命令，適用於不支援遠端 Backspace 的除錯口。",
+    "telnetNetworkRouteDescription": "選擇跳板機時優先使用跳板，本頁代理不參與連線。存取跳板所需的代理請在該 SSH 連線上設定。",
+    "telnetNetworkPlaintextDescription": "SSH 加密用戶端到跳板機的連線；跳板機到 Telnet 或 Raw TCP 裝置的鏈路仍為明文。",
     "telnetRawTcpCli": "相容嵌入式除錯口 / Raw TCP CLI",
     "telnetRawTcpCliDesc": "關閉 Telnet 協商並直接傳送輸入，適用於嵌入式除錯埠等非標準服務。",
     "telnetRawTcpCliLongDesc": "關閉 Telnet 協商並直接透傳輸入，適用於 TV、路由器、交換機、嵌入式除錯埠等非標準 Telnet 服務。",

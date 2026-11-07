@@ -24,6 +24,43 @@ fn edited(connection: SavedConnection) -> SavedConnection {
 }
 
 #[test]
+fn telnet_network_settings_survive_edit_save_reload_and_raw_tcp_changes() {
+    let root = TestTempDir::new("nyaterm-telnet-network");
+    let store = ConnectionStore::open(&root).unwrap();
+    let original: SavedConnection = serde_json::from_value(json!({
+        "id":"telnet", "name":"Telnet", "type":"telnet", "host":"device.internal",
+        "network":{"proxy_id":"proxy", "proxy_jump_id":"jump", "host_key_alias":"retained-alias"}
+    }))
+    .unwrap();
+    store.save_connection(&original).unwrap();
+    for raw in [false, true, false] {
+        let stored = store.get_connection("telnet").unwrap().unwrap();
+        let mut editor = connection_editor_from_saved(stored, false);
+        editor.raw_tcp_cli = raw;
+        editor.description = "Edited".into();
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        assert_eq!(built.network, original.network);
+        save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep)).unwrap();
+        let reloaded = store.get_connection("telnet").unwrap().unwrap();
+        assert_eq!(reloaded.network, original.network);
+        assert!(
+            matches!(reloaded.config, nyaterm_core::ConnectionType::Telnet { raw_tcp_cli, .. } if raw_tcp_cli == raw)
+        );
+    }
+    let mut editor =
+        connection_editor_from_saved(store.get_connection("telnet").unwrap().unwrap(), false);
+    editor.proxy_id = None;
+    editor.proxy_jump_id = None;
+    editor.host_key_alias = None;
+    assert!(
+        build_saved_connection_from_editor(&editor)
+            .unwrap()
+            .network
+            .is_none()
+    );
+}
+
+#[test]
 fn saving_mstsc_preserves_stored_authentication_and_unused_options() {
     let root = TestTempDir::new("nyaterm-mstsc-preserve");
     let store = ConnectionStore::open(&root).unwrap();

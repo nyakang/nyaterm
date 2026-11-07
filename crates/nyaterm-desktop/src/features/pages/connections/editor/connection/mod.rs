@@ -3104,6 +3104,40 @@ mod tests {
     }
 
     #[gpui::test]
+    fn telnet_network_page_and_select_focus_work_in_raw_tcp_mode(cx: &mut TestAppContext) {
+        use crate::models::ConnectionEditorSection;
+        let test_dir = TestConfigDir::new("nyaterm-telnet-network-editor");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 900., 12.);
+        for raw in [false, true] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    let mut draft = editor(None, None);
+                    draft.kind = ConnectionKindTab::Telnet;
+                    draft.raw_tcp_cli = raw;
+                    draft.proxy_id = Some("retained-proxy".into());
+                    draft.proxy_jump_id = Some("retained-jump".into());
+                    app.connection_state.begin_editor(draft);
+                    app.connection_state.build_editor_fields(cx);
+                    app.set_connection_editor_section(ConnectionEditorSection::Network, cx);
+                });
+            });
+            draw_editor(&app, vcx);
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let draft = app.connection_state.active_editor_draft().unwrap();
+                    assert_eq!(draft.section, ConnectionEditorSection::Network);
+                    assert_eq!(draft.proxy_id.as_deref(), Some("retained-proxy"));
+                    assert_eq!(draft.proxy_jump_id.as_deref(), Some("retained-jump"));
+                    for select in ["connection-editor-proxy", "connection-editor-proxy-jump"] {
+                        assert!(app.focus_select(select, window, cx));
+                        assert!(app.connection_editor_select_is_focused(window, cx));
+                    }
+                });
+            });
+        }
+    }
+
+    #[gpui::test]
     fn mstsc_editor_hides_unused_controls_and_restores_them_when_switching_back(
         cx: &mut TestAppContext,
     ) {

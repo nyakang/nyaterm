@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 use gpui::Context;
-use nyaterm_core::{AiExecutionProfile, uuid};
+use nyaterm_core::{AiExecutionProfile, SavedConnection, uuid};
 use nyaterm_transport::{
     LocalSessionConfig, SerialSessionConfig, SessionInfo, SessionKind, SessionManager,
     SshSessionConfig, TelnetSessionConfig, open_ssh_multiplex_handle,
@@ -15,6 +15,7 @@ use super::super::state::{
     PendingReconnectCompletion, failed_session_start_display_name,
     pending_session_start_display_name,
 };
+use super::start::SshSessionConfigBuildContext;
 use super::{MultiplexSshStartRequest, PendingSessionStartRegistration};
 use crate::features::formatting::{session_kind_label, short_id};
 use crate::features::{
@@ -23,6 +24,14 @@ use crate::features::{
     session::SavedConnectionStartOptions, session::SessionStartEventRequest,
 };
 use crate::models::{NavItem, SessionLaunchConfig, SessionRuntimeMetadata};
+
+struct BackgroundSessionStartRequest {
+    connection_name: String,
+    launch_config: SessionLaunchConfig,
+    source_connection_id: Option<String>,
+    ai_execution_profile: AiExecutionProfile,
+    options: SavedConnectionStartOptions,
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn prepare_session_start_options(
@@ -232,12 +241,60 @@ impl NyaTermApp {
     pub(in crate::features) fn begin_background_session_start(
         &mut self,
         connection_name: String,
-        mut launch_config: SessionLaunchConfig,
+        launch_config: SessionLaunchConfig,
         source_connection_id: Option<String>,
         ai_execution_profile: AiExecutionProfile,
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        self.begin_background_session_start_inner(
+            BackgroundSessionStartRequest {
+                connection_name,
+                launch_config,
+                source_connection_id,
+                ai_execution_profile,
+                options,
+            },
+            None,
+            cx,
+        );
+    }
+
+    pub(in crate::features) fn begin_background_saved_telnet_start(
+        &mut self,
+        connection: SavedConnection,
+        config: TelnetSessionConfig,
+        ai_execution_profile: AiExecutionProfile,
+        options: SavedConnectionStartOptions,
+        cx: &mut Context<Self>,
+    ) {
+        let context = self.ssh_session_config_build_context();
+        self.begin_background_session_start_inner(
+            BackgroundSessionStartRequest {
+                connection_name: connection.name.clone(),
+                launch_config: SessionLaunchConfig::Telnet(config),
+                source_connection_id: Some(connection.id.clone()),
+                ai_execution_profile,
+                options,
+            },
+            Some((connection, context)),
+            cx,
+        );
+    }
+
+    fn begin_background_session_start_inner(
+        &mut self,
+        request: BackgroundSessionStartRequest,
+        preparation: Option<(SavedConnection, SshSessionConfigBuildContext)>,
+        cx: &mut Context<Self>,
+    ) {
+        let BackgroundSessionStartRequest {
+            connection_name,
+            mut launch_config,
+            source_connection_id,
+            ai_execution_profile,
+            options,
+        } = request;
         if !matches!(launch_config, SessionLaunchConfig::Local(_))
             && self.remote_start_blocked_by_configuration_replacement(cx)
         {
@@ -319,14 +376,23 @@ impl NyaTermApp {
             session_start_tx,
             move || {
                 attempt.check()?;
-                let result = if let SessionLaunchConfig::Telnet(config) = &launch_config {
+                let result = if let SessionLaunchConfig::Telnet(config) = &mut launch_config {
+                    if let Some((connection, mut context)) = preparation {
+                        context.attempt = attempt.clone();
+                        context.host_key_prompts =
+                            Arc::new(context.host_key_prompts.for_attempt(attempt.clone()));
+                        context.credential_prompts =
+                            Arc::new(context.credential_prompts.for_attempt(attempt.clone()));
+                        context.prepare_telnet_network(&connection, config)?;
+                    }
                     session_manager
                         .create_telnet_session_with_attempt(config.clone(), attempt.clone())
-                        .map(|session_info| SessionStartSuccess {
-                            session_info,
-                            multiplex_handle: None,
-                            cleanup: None,
-                            launch_config: None,
+                        .map(|session_info| {
+                            SessionStartSuccess::telnet(
+                                Arc::clone(&session_manager),
+                                session_info,
+                                None,
+                            )
                         })
                         .map_err(|error| error.to_string())
                 } else {
@@ -686,7 +752,7 @@ impl NyaTermApp {
                 SessionStartEventRequest::Cancelled => {
                     if let Ok(success) = event.result {
                         let session_id = success.session_info.id;
-                        if let Err(error) = self.session.manager().close(&session_id) {
+                        if let Err(error) = self.session.manager().close_detached(&session_id) {
                             tracing::warn!(
                                 request_id = %request_id,
                                 session_id = %session_id,
@@ -732,7 +798,7 @@ impl NyaTermApp {
                     .as_deref()
                     .is_some_and(|stale_id| !self.session.has_session(stale_id))
                 {
-                    if let Err(error) = self.session.manager().close(&session_id) {
+                    if let Err(error) = self.session.manager().close_detached(&session_id) {
                         tracing::warn!(
                             request_id = %request_id,
                             session_id = %session_id,
@@ -1137,11 +1203,8 @@ fn create_session_from_launch_config(
         }
         SessionLaunchConfig::Telnet(config) => session_manager
             .create_telnet_session(config)
-            .map(|session_info| SessionStartSuccess {
-                session_info,
-                multiplex_handle: None,
-                cleanup: None,
-                launch_config: None,
+            .map(|session_info| {
+                SessionStartSuccess::telnet(Arc::clone(session_manager), session_info, None)
             })
             .map_err(|error| error.to_string()),
         SessionLaunchConfig::Serial(config) => session_manager
@@ -1180,6 +1243,8 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
                 port: 23,
                 username: String::new(),
                 password: None,
+                proxy: None,
+                proxy_jump: None,
                 backspace_mode: "del".to_string(),
                 raw_tcp: info.kind == SessionKind::RawTcp,
                 enter_mode: nyaterm_transport::TelnetEnterMode::default(),

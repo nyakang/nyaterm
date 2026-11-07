@@ -462,10 +462,30 @@ impl SessionManager {
             stream.set_nonblocking(false)?;
             Ok(stream)
         };
-        let stream = connect().map_err(|source| SessionError::ConnectTcp {
-            addr: addr.clone(),
-            source,
-        })?;
+        let (stream, route) = if config.proxy.is_some() || config.proxy_jump.is_some() {
+            let (stream, route) = crate::network_route::NetworkRoute::connect_with_attempt(
+                crate::network_route::NetworkRouteConfig {
+                    host: config.host.clone(),
+                    port: config.port,
+                    proxy: config.proxy.clone(),
+                    jump: config.proxy_jump.as_deref().cloned(),
+                },
+                attempt.clone(),
+            )
+            .map_err(|source| SessionError::ConnectRoute {
+                addr: addr.clone(),
+                source,
+            })?;
+            (stream, Some(route))
+        } else {
+            (
+                connect().map_err(|source| SessionError::ConnectTcp {
+                    addr: addr.clone(),
+                    source,
+                })?,
+                None,
+            )
+        };
         stream.set_nodelay(true).ok();
         stream
             .set_read_timeout(Some(Duration::from_millis(250)))
@@ -549,6 +569,7 @@ impl SessionManager {
         })?;
 
         let session = TelnetTransport {
+            route,
             info: info.clone(),
             writer,
             reader_stream: stream,
