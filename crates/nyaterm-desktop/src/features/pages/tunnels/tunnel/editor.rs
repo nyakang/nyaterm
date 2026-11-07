@@ -377,15 +377,11 @@ fn ssh_connection_select_options(
                 .and_then(|id| connection_group_path_label(groups, id))
                 .unwrap_or_default();
             let host_port = format!("{host}:{port}");
-            let subtitle = [
-                group_path.as_str(),
-                host_port.as_str(),
-                username.as_str(),
-            ]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ");
+            let subtitle = [group_path.as_str(), host_port.as_str(), username.as_str()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
             let search_text = [
                 connection.name.as_str(),
                 host.as_str(),
@@ -515,6 +511,40 @@ mod tests {
 
     use super::ssh_connection_select_options;
 
+    fn connection(id: &str, name: &str) -> SavedConnection {
+        SavedConnection {
+            id: id.into(),
+            name: name.into(),
+            config: ConnectionType::LocalTerminal {
+                shell_path: String::new(),
+                shell_args: String::new(),
+                working_dir: None,
+                ai_execution_profile: Default::default(),
+                encoding: String::new(),
+                dynamic_tab_title: false,
+            },
+            group_id: None,
+            description: None,
+            tags: Vec::new(),
+            sort_order: 0,
+            icon: None,
+            icon_auto_detect: None,
+            auth: None,
+            network: None,
+            post_login: None,
+            recording: None,
+            ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
+            sftp: Default::default(),
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+            extensions: Default::default(),
+        }
+    }
+
     #[test]
     fn ssh_connection_options_index_name_host_user_and_group_path() {
         let groups = vec![
@@ -523,12 +553,16 @@ mod tests {
                 name: "Branch A".to_string(),
                 parent_id: None,
                 sort_order: 0,
+                created_at_ms: None,
+                updated_at_ms: None,
             },
             Group {
                 id: "child".to_string(),
                 name: "Prod".to_string(),
                 parent_id: Some("parent".to_string()),
                 sort_order: 1,
+                created_at_ms: None,
+                updated_at_ms: None,
             },
         ];
         let connections = vec![
@@ -549,19 +583,9 @@ mod tests {
                     encoding: String::new(),
                     dynamic_tab_title: false,
                 },
-                ..SavedConnection::default()
+                ..connection("ssh-1", "Jump Gateway")
             },
-            SavedConnection {
-                id: "local-1".to_string(),
-                name: "Local Shell".to_string(),
-                config: ConnectionType::Local {
-                    shell: None,
-                    backspace_mode: String::new(),
-                    encoding: String::new(),
-                    dynamic_tab_title: false,
-                },
-                ..SavedConnection::default()
-            },
+            connection("local-1", "Local Shell"),
         ];
 
         assert_eq!(

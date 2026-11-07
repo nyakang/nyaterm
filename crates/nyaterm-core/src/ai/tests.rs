@@ -201,7 +201,7 @@ fn prompt_builder_uses_locale_and_context() {
     assert!(prompt.contains("任务："));
     assert!(prompt.contains("db-01"));
     assert!(prompt.contains("最多命令数: 5"));
-    assert!(agent_prompt.contains("每轮调用且只调用一个工具"));
+    assert!(agent_prompt.contains("有依赖的操作必须等待前序结果"));
     assert!(agent_system_prompt("en-US").contains("terminal automation agent"));
 }
 

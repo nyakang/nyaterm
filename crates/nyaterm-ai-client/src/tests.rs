@@ -376,16 +376,23 @@ fn continuation(
     completion: nyaterm_core::ai::AiChatCompletion,
 ) -> nyaterm_core::ai::AiChatRequest {
     use nyaterm_core::ai::harness::{AgentRequestContext, AgentToolRegistry, AgentToolResult};
-    let mut call = AgentToolRegistry::parse(&completion.tool_calls, &completion.text).unwrap();
-    call.assistant_turn = Some(completion.metadata.assistant_turn);
-    let result = AgentToolResult {
-        call_id: call.id.clone(),
-        value: json!({"denied":true}),
-        is_error: true,
+    let nyaterm_core::ai::harness::AgentDecision::Tools(batch) =
+        AgentToolRegistry::decision(&completion).unwrap()
+    else {
+        panic!("expected tools");
     };
+    let results = batch
+        .calls
+        .iter()
+        .map(|entry| AgentToolResult {
+            call_id: entry.source.id.clone().unwrap(),
+            value: json!({"denied":true}),
+            is_error: true,
+        })
+        .collect();
     req.options.agent_context = Some(AgentRequestContext {
         run_id: "run".into(),
-        calls: vec![(call, result)],
+        turns: vec![nyaterm_core::ai::harness::AgentTurnRecord { batch, results }],
         remaining_steps: 4,
     });
     req
@@ -743,6 +750,62 @@ async fn ollama_compatibility_backend_preserves_literal_model_and_options() {
 }
 
 #[tokio::test]
+async fn ollama_compatibility_classifies_completed_replies_in_both_modes() {
+    use nyaterm_core::ai::harness::{AgentDecision, AgentResponseError, AgentToolRegistry};
+
+    for streaming in [false, true] {
+        for (message, expected) in [
+            (json!({"content":""}), Some(AgentResponseError::Empty)),
+            (
+                json!({"content":"","thinking":"private-reasoning"}),
+                Some(AgentResponseError::ReasoningOnly),
+            ),
+            (
+                json!({"tool_calls":[{"id":"bad-args","function":{"name":"final_answer","arguments":[]}}]}),
+                None,
+            ),
+        ] {
+            let raw =
+                json!({"model":"org::model","message":message,"done":true,"done_reason":"stop"});
+            let (base, server) = mock_server(
+                format!("{raw}\n"),
+                if streaming {
+                    "application/x-ndjson"
+                } else {
+                    "application/json"
+                },
+            );
+            let mut config = settings(base, AiProviderApiProtocol::Ollama);
+            config.models[0].name = "org::model".into();
+            let mut req = request();
+            req.mode = AiMode::Agent;
+            let completion = if streaming {
+                streamed(config, req).await.0.unwrap()
+            } else {
+                let session = AiProviderSession::new(config, &req).unwrap();
+                complete_chat(&session, &req, &[], &CancellationToken::new())
+                    .await
+                    .unwrap()
+            };
+            server.join().unwrap();
+            let decision = AgentToolRegistry::decision(&completion);
+            if let Some(expected) = expected {
+                assert_eq!(decision.unwrap_err(), expected);
+            } else {
+                let AgentDecision::Tools(batch) = decision.unwrap() else {
+                    panic!("invalid arguments must reach the Agent tool feedback path");
+                };
+                assert_eq!(batch.calls[0].source.id.as_deref(), Some("bad-args"));
+                assert_eq!(
+                    batch.calls[0].action,
+                    Err(AgentResponseError::InvalidArguments)
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn connectivity_tests_keep_64_token_limit() {
     let (base, server) = mock_server(
         json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}).to_string(),
@@ -791,6 +854,200 @@ fn http_json(value: Value) -> String {
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+#[tokio::test]
+async fn multiple_tools_continue_as_one_assistant_turn_on_all_five_protocols() {
+    use nyaterm_core::ai::harness::{AgentDecision, AgentRequestContext, AgentToolRegistry};
+    for (protocol, responses) in [
+        (AiProviderApiProtocol::OpenaiCompatible, false),
+        (AiProviderApiProtocol::OpenaiCompatible, true),
+        (AiProviderApiProtocol::Anthropic, false),
+        (AiProviderApiProtocol::Gemini, false),
+        (AiProviderApiProtocol::Ollama, false),
+    ] {
+        let (first, second) = if responses {
+            (
+                json!({"id":"resp-a","object":"response","model":"gpt-test","status":"completed","output":[
+                    {"type":"reasoning","id":"reason-a","summary":[],"encrypted_content":"opaque"},
+                    {"type":"function_call","id":"item-a","call_id":"a","name":"session_get","arguments":"{\"sessionId\":\"s\"}"},
+                    {"type":"function_call","id":"item-b","call_id":"b","name":"session_get","arguments":"{\"sessionId\":\"s\"}"}
+                ]}),
+                json!({"id":"resp-b","object":"response","model":"gpt-test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}),
+            )
+        } else {
+            match protocol {
+                AiProviderApiProtocol::OpenaiCompatible => (
+                    json!({"choices":[{"message":{"role":"assistant","content":"Inspecting","tool_calls":[
+                    {"id":"a","type":"function","function":{"name":"session_get","arguments":"{\"sessionId\":\"s\"}"}},
+                    {"id":"b","type":"function","function":{"name":"session_get","arguments":"{\"sessionId\":\"s\"}"}}
+                ]},"finish_reason":"tool_calls"}]}),
+                    json!({"choices":[{"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}),
+                ),
+                AiProviderApiProtocol::Anthropic => (
+                    json!({"id":"msg-a","type":"message","role":"assistant","content":[
+                    {"type":"thinking","thinking":"Inspecting","signature":"signed"},
+                    {"type":"tool_use","id":"a","name":"session_get","input":{"sessionId":"s"}},
+                    {"type":"tool_use","id":"b","name":"session_get","input":{"sessionId":"s"}}
+                ],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}),
+                    json!({"id":"msg-b","type":"message","role":"assistant","content":[{"type":"text","text":"Done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}),
+                ),
+                AiProviderApiProtocol::Gemini => (
+                    json!({"candidates":[{"content":{"role":"model","parts":[
+                    {"text":"Inspecting","thought":true,"thoughtSignature":"signed"},
+                    {"functionCall":{"id":"a","name":"session_get","args":{"sessionId":"s"}},"thoughtSignature":"tool-a"},
+                    {"functionCall":{"id":"b","name":"session_get","args":{"sessionId":"s"}},"thoughtSignature":"tool-b"}
+                ]},"finishReason":"STOP"}]}),
+                    json!({"candidates":[{"content":{"role":"model","parts":[{"text":"Done"}]},"finishReason":"STOP"}]}),
+                ),
+                AiProviderApiProtocol::Ollama => (
+                    json!({"message":{"role":"assistant","content":"Inspecting","tool_calls":[
+                    {"function":{"name":"session_get","arguments":{"sessionId":"s"}}},
+                    {"function":{"name":"session_get","arguments":{"sessionId":"s"}}}
+                ]},"done":true,"done_reason":"stop"}),
+                    json!({"message":{"role":"assistant","content":"Done"},"done":true,"done_reason":"stop"}),
+                ),
+            }
+        };
+        let (base, server) = mock_sequence(vec![http_json(first.clone()), http_json(second)]);
+        let config = if responses {
+            responses_settings(base)
+        } else {
+            settings(base, protocol)
+        };
+        let mut req = request();
+        req.mode = AiMode::Agent;
+        req.options.agent_context = Some(AgentRequestContext {
+            run_id: "run".into(),
+            turns: vec![],
+            remaining_steps: 4,
+        });
+        let session = AiProviderSession::new(config, &req).unwrap();
+        let completion = complete_chat(&session, &req, &[], &CancellationToken::new())
+            .await
+            .unwrap_or_else(|error| panic!("{protocol:?} responses={responses}: {error:?}"));
+        assert_eq!(
+            completion.tool_calls.len(),
+            2,
+            "{protocol:?} responses={responses}"
+        );
+        let req = continuation(req, completion);
+        let completion = complete_chat(&session, &req, &[], &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            AgentToolRegistry::decision(&completion).unwrap(),
+            AgentDecision::FinalText("Done".into())
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        let payload = body(&requests[1]);
+        if responses {
+            let input = payload["input"].as_array().unwrap();
+            assert_eq!(
+                input
+                    .iter()
+                    .filter(|item| item["type"] == "reasoning")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                input
+                    .iter()
+                    .filter(|item| item["type"] == "function_call")
+                    .count(),
+                2
+            );
+            assert_eq!(
+                input
+                    .iter()
+                    .filter(|item| item["type"] == "function_call_output")
+                    .count(),
+                2
+            );
+            assert_eq!(payload["tools"][0]["strict"], false);
+        } else if protocol == AiProviderApiProtocol::Gemini {
+            let contents = payload["contents"].as_array().unwrap();
+            assert_eq!(
+                contents[contents.len() - 2]["parts"],
+                first["candidates"][0]["content"]["parts"]
+            );
+            assert_eq!(
+                contents.last().unwrap()["parts"][0]["functionResponse"]["id"],
+                "a"
+            );
+            assert_eq!(
+                contents.last().unwrap()["parts"][1]["functionResponse"]["id"],
+                "b"
+            );
+        } else {
+            let messages = payload["messages"].as_array().unwrap();
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["role"] == "assistant")
+                    .count(),
+                1
+            );
+            if protocol == AiProviderApiProtocol::Anthropic {
+                assert_eq!(messages[messages.len() - 2]["content"], first["content"]);
+                assert_eq!(
+                    messages.last().unwrap()["content"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    2
+                );
+            } else {
+                let assistant = messages
+                    .iter()
+                    .find(|message| message["role"] == "assistant")
+                    .unwrap();
+                assert_eq!(assistant["tool_calls"].as_array().unwrap().len(), 2);
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|message| message["role"] == "tool")
+                        .count(),
+                    2
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_diagnostics_allow_only_known_codes_parameters_and_safe_request_ids() {
+    use nyaterm_core::ai::completion::{AiProviderDiagnosticCode, AiProviderParameter};
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-request-id", "req_fixture_123".parse().unwrap());
+    let error = super::error::status_error(
+        400,
+        &headers,
+        Some(
+            &json!({"error":{"code":"unsupported_parameter","param":"reasoning_effort","message":"private-user-data"}}),
+        ),
+    );
+    assert_eq!(
+        error.diagnostic_code,
+        Some(AiProviderDiagnosticCode::UnsupportedParameter)
+    );
+    assert_eq!(error.parameter, Some(AiProviderParameter::Reasoning));
+    assert_eq!(error.request_id.as_deref(), Some("req_fixture_123"));
+    assert!(!error.tool_protocol_unsupported);
+    assert!(!format!("{error:?} {error}").contains("private"));
+    headers.insert("x-request-id", "private-user-data".parse().unwrap());
+    let error = super::error::status_error(
+        400,
+        &headers,
+        Some(
+            &json!({"error":{"code":"private-code","param":"private-param","message":"private-message"}}),
+        ),
+    );
+    assert!(
+        error.diagnostic_code.is_none() && error.parameter.is_none() && error.request_id.is_none()
+    );
+    assert!(!format!("{error:?} {error}").contains("private"));
 }
 
 #[tokio::test]
@@ -955,10 +1212,10 @@ fn explicit_anthropic_budget_requires_output_room_and_auto_tool_choice() {
 #[test]
 fn anthropic_default_thinking_families_keep_compatible_tool_choice() {
     for (model, auto) in [
-        ("claude-sonnet-4-6", false),
+        ("claude-sonnet-4-6", true),
         ("claude-opus-5", true),
         ("claude-haiku-6", true),
-        ("claude-opus-50", false),
+        ("claude-opus-50", true),
     ] {
         let mut config = settings(
             "http://127.0.0.1:1/v1".into(),

@@ -26,7 +26,7 @@ fn request() -> AiChatRequest {
     .unwrap();
     request.options.agent_context = Some(AgentRequestContext {
         run_id: "run".into(),
-        calls: Vec::new(),
+        turns: Vec::new(),
         remaining_steps: 4,
     });
     request
@@ -43,7 +43,7 @@ async fn fallback_and_protocol_repair_preserve_the_original_task_language() {
                 r#"{"error":{"code":"unsupported_tools"}}"#,
             )
         } else {
-            stream("not JSON", vec![])
+            stream("{not JSON", vec![])
         };
         let (base, server) = mock_provider(vec![
             initial,
@@ -228,7 +228,7 @@ async fn run(
 #[tokio::test]
 async fn invalid_text_is_corrected_once_with_the_original_tool_transcript() {
     let (base, server) = mock_provider(vec![
-        stream("private-rejected-response", vec![]),
+        stream("{private-rejected-response", vec![]),
         valid_response(),
     ]);
     let mut request = request();
@@ -247,8 +247,8 @@ async fn invalid_text_is_corrected_once_with_the_original_tool_transcript() {
         .agent_context
         .as_mut()
         .unwrap()
-        .calls
-        .push((call, result));
+        .turns
+        .push((call, result).into());
     let original_context = request.options.agent_context.clone();
     let original_input = request.user_input.clone();
     let session = AiProviderSession::new(settings(base), &request).unwrap();
@@ -261,7 +261,7 @@ async fn invalid_text_is_corrected_once_with_the_original_tool_transcript() {
         .iter()
         .position(|event| matches!(event, NativeJobEvent::ProtocolRepair))
         .unwrap();
-    assert!(events[..repair].iter().any(|event| matches!(event, NativeJobEvent::Delta(delta) if delta.text_delta == "private-rejected-response")));
+    assert!(events[..repair].iter().any(|event| matches!(event, NativeJobEvent::Delta(delta) if delta.text_delta == "{private-rejected-response")));
     assert!(events[repair + 1..].iter().all(|event| !matches!(event, NativeJobEvent::Delta(delta) if !delta.text_delta.is_empty() || delta.reasoning_delta.is_some())));
     let requests = server.join().unwrap();
     assert_eq!(requests.len(), 2);
@@ -275,27 +275,27 @@ async fn invalid_text_is_corrected_once_with_the_original_tool_transcript() {
     assert!(
         !requests[1]
             .to_string()
-            .contains("private-rejected-response")
+            .contains("{private-rejected-response")
     );
     assert!(!requests[1].to_string().contains("private-reasoning"));
     assert_eq!(
         requests[0]["messages"].as_array().unwrap()[1..],
         requests[1]["messages"].as_array().unwrap()[1..]
     );
-    assert_eq!(requests[1]["parallel_tool_calls"], false);
+    assert!(requests[1].get("parallel_tool_calls").is_none());
 }
 
 #[tokio::test]
 async fn repeated_invalid_responses_stop_after_two_posts() {
     let (base, server) = mock_provider(vec![
-        stream("private-rejected-response", vec![]),
-        stream("private-second-response", vec![]),
+        stream("{private-rejected-response", vec![]),
+        stream("{private-second-response", vec![]),
     ]);
     let mut request = request();
     let session = AiProviderSession::new(settings(base), &request).unwrap();
     let (result, events) = run(&session, &mut request, &CancellationToken::new()).await;
     let error = result.unwrap_err();
-    assert!(error.contains("no tool calls"));
+    assert!(error.contains("malformed JSON action"));
     assert!(!error.contains("private-"));
     assert_eq!(
         events
@@ -314,11 +314,11 @@ async fn unsupported_tools_fallback_consumes_the_same_extra_request_budget() {
         "application/json",
         r#"{"error":{"code":"unsupported_tools"}}"#,
     );
-    let (base, server) = mock_provider(vec![unsupported, stream("not JSON", vec![])]);
+    let (base, server) = mock_provider(vec![unsupported, stream("{not JSON", vec![])]);
     let mut request = request();
     let session = AiProviderSession::new(settings(base), &request).unwrap();
     let (result, events) = run(&session, &mut request, &CancellationToken::new()).await;
-    assert!(result.unwrap_err().contains("no tool calls"));
+    assert!(result.unwrap_err().contains("malformed JSON action"));
     assert!(request.options.agent_json_protocol);
     assert!(!request.options.agent_protocol_repair);
     assert_eq!(
@@ -341,7 +341,7 @@ async fn unsupported_tools_fallback_consumes_the_same_extra_request_budget() {
 #[tokio::test]
 async fn json_protocol_correction_keeps_json_protocol() {
     let (base, server) = mock_provider(vec![
-        stream("not JSON", vec![]),
+        stream("{not JSON", vec![]),
         stream(r#"{"action":"get_environment","arguments":{}}"#, vec![]),
     ]);
     let mut request = request();
@@ -364,23 +364,16 @@ async fn json_protocol_correction_keeps_json_protocol() {
 #[tokio::test]
 async fn other_protocol_and_provider_failures_do_not_retry() {
     let cases = vec![
-        stream(
-            "",
-            vec![
-                tool(0, "get_environment", json!({})),
-                tool(1, "get_environment", json!({})),
-            ],
+        stream("", vec![]),
+        stream("partial answer", vec![]).replace("\"stop\"", "\"length\""),
+        http(
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":{"code":"unsupported_parameter","param":"reasoning_effort","message":"private-body"}}"#,
         ),
-        stream(
-            "",
-            vec![tool(
-                0,
-                "session_get",
-                json!({"unexpected":"private-argument"}),
-            )],
-        ),
-        stream(r#"{"action":"unknown"}"#, vec![]),
         http("401 Unauthorized", "application/json", "{}"),
+        http("403 Forbidden", "application/json", "{}"),
+        http("429 Too Many Requests", "application/json", "{}"),
         http("500 Internal Server Error", "application/json", "{}"),
         // A partial SSE stream is a transport failure, not a completed bad action.
         http(
@@ -404,8 +397,82 @@ async fn other_protocol_and_provider_failures_do_not_retry() {
 }
 
 #[tokio::test]
+async fn completed_text_and_tool_batches_dispatch_without_protocol_retries() {
+    for calls in [
+        vec![],
+        vec![
+            tool(0, "get_environment", json!({})),
+            tool(1, "session_get", json!({"sessionId":"s"})),
+        ],
+        vec![
+            tool(0, "terminal_execute", json!({"command":42,"sessionId":"s"})),
+            tool(1, "get_environment", json!({})),
+        ],
+    ] {
+        let (base, server) = mock_provider(vec![stream("Explanation", calls.clone())]);
+        let mut request = request();
+        let session = AiProviderSession::new(settings(base), &request).unwrap();
+        let (result, events) = run(&session, &mut request, &CancellationToken::new()).await;
+        let decision = AgentToolRegistry::decision(&result.unwrap()).unwrap();
+        match decision {
+            nyaterm_core::ai::harness::AgentDecision::FinalText(text) => {
+                assert!(calls.is_empty());
+                assert_eq!(text, "Explanation");
+            }
+            nyaterm_core::ai::harness::AgentDecision::Tools(batch) => {
+                assert_eq!(batch.calls.len(), 2);
+                assert_eq!(
+                    batch.calls[0].action.is_err(),
+                    calls[0]["function"]["name"] == "terminal_execute"
+                );
+            }
+        }
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            NativeJobEvent::ProtocolRepair | NativeJobEvent::ProtocolFallback
+        )));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn unsupported_tools_after_a_completed_turn_cannot_change_protocol_or_replay_tools() {
+    let (base, server) = mock_provider(vec![http(
+        "400 Bad Request",
+        "application/json",
+        r#"{"error":{"code":"unsupported_tools"}}"#,
+    )]);
+    let mut request = request();
+    let call =
+        AgentToolRegistry::parse(&[], r#"{"action":"get_environment","arguments":{}}"#).unwrap();
+    let result = AgentToolResult {
+        call_id: call.id.clone(),
+        value: json!({"alreadyExecuted":true}),
+        is_error: false,
+    };
+    request
+        .options
+        .agent_context
+        .as_mut()
+        .unwrap()
+        .turns
+        .push((call, result).into());
+    let original = request.options.agent_context.clone();
+    let session = AiProviderSession::new(settings(base), &request).unwrap();
+    let (result, events) = run(&session, &mut request, &CancellationToken::new()).await;
+    assert!(result.is_err());
+    assert_eq!(request.options.agent_context, original);
+    assert!(!request.options.agent_json_protocol);
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        NativeJobEvent::ProtocolRepair | NativeJobEvent::ProtocolFallback
+    )));
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn cancellation_while_queued_at_the_retry_boundary_prevents_another_post() {
-    let (base, server) = mock_provider(vec![stream("private-response", vec![])]);
+    let (base, server) = mock_provider(vec![stream("{private-response", vec![])]);
     let mut request = request();
     let session = AiProviderSession::new(settings(base), &request).unwrap();
     // Text, reasoning and terminal metadata fill this queue. Cancel at the
@@ -431,7 +498,8 @@ struct DiagnosticCapture(Arc<Mutex<Vec<u8>>>);
 
 #[test]
 fn protocol_failure_diagnostics_omit_model_content_and_tool_arguments() {
-    use nyaterm_core::ai::{AiModelError, AiToolCall};
+    use nyaterm_core::ai::AiToolCall;
+    use nyaterm_core::ai::harness::AgentResponseError;
 
     let capture = DiagnosticCapture::default();
     let subscriber = tracing_subscriber::fmt()
@@ -442,32 +510,24 @@ fn protocol_failure_diagnostics_omit_model_content_and_tool_arguments() {
         .finish();
     tracing::subscriber::with_default(subscriber, || {
         let mut completion = AiChatCompletion {
-            text: "private-response".into(),
+            text: "{private-response".into(),
             reasoning_content: Some("private-reasoning".into()),
             tool_calls: Vec::new(),
             metadata: Default::default(),
         };
-        warn_agent_protocol_failure(&completion, 1, &AiModelError::InvalidAgentJsonFallback);
-        warn_agent_protocol_failure(&completion, 2, &AiModelError::InvalidAgentJsonFallback);
+        warn_agent_protocol_failure(&completion, 1, &AgentResponseError::InvalidJsonAction);
+        warn_agent_protocol_failure(&completion, 2, &AgentResponseError::InvalidJsonAction);
         completion.tool_calls.push(AiToolCall {
             name: "private-tool-name".into(),
             id: Some("private-id".into()),
             thought_signature: Some("private-signature".into()),
             arguments: json!({"command":"private-command","password":"private-password"}),
         });
-        warn_agent_protocol_failure(
-            &completion,
-            1,
-            &AiModelError::InvalidChatJson("private-error".into()),
-        );
+        warn_agent_protocol_failure(&completion, 1, &AgentResponseError::InvalidArguments);
     });
     let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
-    assert_eq!(
-        logs.matches("missing_tool_call_invalid_json").count(),
-        2,
-        "{logs}"
-    );
-    assert!(logs.contains("invalid_agent_tool_call"));
+    assert_eq!(logs.matches("malformed_json_action").count(), 2, "{logs}");
+    assert!(logs.contains("invalid_tool_arguments"));
     assert!(logs.contains("attempt=1"));
     assert!(logs.contains("attempt=2"));
     assert!(logs.contains("tool_count=0"));
@@ -483,7 +543,7 @@ async fn correction_prepares_and_persists_the_user_message_only_once() {
     let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-agent-protocol-repair");
     let store = crate::test_support::blocking_test_store(root.path());
     let jobs = BlockingJobScheduler::with_limits(1, 8).unwrap();
-    let (base, server) = mock_provider(vec![stream("invalid-response", vec![]), valid_response()]);
+    let (base, server) = mock_provider(vec![stream("{invalid-response", vec![]), valid_response()]);
     let request = request();
     let mut config = settings(base);
     config.record_history = true;
@@ -519,7 +579,11 @@ async fn correction_prepares_and_persists_the_user_message_only_once() {
         panic!("finished event must be last")
     };
     assert_eq!(
-        result.unwrap().native_call.unwrap().tool.name(),
+        match result.unwrap().native_decision.unwrap() {
+            nyaterm_core::ai::harness::AgentDecision::Tools(batch) =>
+                batch.calls[0].action.as_ref().unwrap().tool.name(),
+            _ => panic!("expected tools"),
+        },
         "get_environment"
     );
     assert_eq!(

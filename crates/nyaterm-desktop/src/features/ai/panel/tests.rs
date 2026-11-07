@@ -1,5 +1,6 @@
 mod approvals;
 mod history_and_streaming;
+mod native_decisions;
 mod pickers;
 mod text_selection;
 use std::path::Path;
@@ -280,7 +281,7 @@ fn ai_header_running_transition_notifies_root() {
                 launch.session_id,
                 Ok(AiChatJobOutput {
                     metadata: None,
-                    native_call: None,
+                    native_decision: None,
                     mode: AiMode::Ask,
                     text: "done".to_string(),
                     reasoning: None,
@@ -1439,7 +1440,7 @@ fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_scri
                     launch.session_id,
                     Ok(AiChatJobOutput {
                         metadata: None,
-                        native_call: None,
+                        native_decision: None,
                         mode: AiMode::Agent,
                         text: "Inspect resources".into(),
                         reasoning: None,

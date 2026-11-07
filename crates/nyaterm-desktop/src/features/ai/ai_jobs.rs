@@ -200,7 +200,7 @@ pub(in crate::features) fn run_ai_ask_job(
         );
         let output = AiChatJobOutput {
             metadata: None,
-            native_call: None,
+            native_decision: None,
             mode: AiMode::Agent,
             text: completion.text,
             reasoning: completion.reasoning,
@@ -352,7 +352,7 @@ pub(in crate::features) fn run_ai_ask_job(
         );
         let output = AiChatJobOutput {
             metadata: None,
-            native_call: None,
+            native_decision: None,
             mode: AiMode::Agent,
             text: completion.text,
             reasoning: None,
@@ -448,24 +448,33 @@ pub(super) fn finish_native_job(
     completion: AiChatCompletion,
 ) -> Result<AiChatJobOutput, String> {
     let metadata = completion.metadata.clone();
-    let mut output = if request.mode == AiMode::Agent {
-        let mut output = ai_agent_job_output(
+    let mut output = if request.mode == AiMode::Agent && request.options.agent_context.is_some() {
+        let decision = nyaterm_core::ai::harness::AgentToolRegistry::decision(&completion)
+            .map_err(|error| error.to_string())?;
+        AiChatJobOutput {
+            metadata: None,
+            native_decision: Some(decision),
+            mode: AiMode::Agent,
+            text: completion.text,
+            reasoning: completion.reasoning_content,
+            command_cards: Vec::new(),
+            auto_execute_first: false,
+            approval_note: None,
+        }
+    } else if request.mode == AiMode::Agent {
+        ai_agent_job_output(
             settings,
             request,
             completion.text,
             completion.reasoning_content,
             completion.tool_calls,
-        )?;
-        if let Some(call) = &mut output.native_call {
-            call.assistant_turn = Some(completion.metadata.assistant_turn);
-        }
-        output
+        )?
     } else {
         let (text, reasoning, command_cards) =
             parse_model_output(&completion.text, completion.reasoning_content);
         AiChatJobOutput {
             metadata: None,
-            native_call: None,
+            native_decision: None,
             mode: request.mode.clone(),
             text,
             reasoning,
@@ -555,20 +564,6 @@ fn ai_agent_job_output(
     reasoning: Option<String>,
     tool_calls: Vec<nyaterm_core::AiToolCall>,
 ) -> Result<AiChatJobOutput, String> {
-    if request.options.agent_context.is_some() {
-        let call = nyaterm_core::ai::harness::AgentToolRegistry::parse(&tool_calls, &text)
-            .map_err(|error| error.to_string())?;
-        return Ok(AiChatJobOutput {
-            metadata: None,
-            text: call.thought.clone(),
-            reasoning,
-            native_call: Some(call),
-            mode: AiMode::Agent,
-            command_cards: Vec::new(),
-            auto_execute_first: false,
-            approval_note: None,
-        });
-    }
     let parsed = if tool_calls.is_empty() {
         parse_agent_model_output(&text).map_err(|error| error.to_string())?
     } else {
@@ -587,7 +582,7 @@ fn ai_agent_job_output(
             .to_string();
         return Ok(AiChatJobOutput {
             metadata: None,
-            native_call: None,
+            native_decision: None,
             mode: AiMode::Agent,
             text: answer,
             reasoning: Some(parsed.thought).or(reasoning),
@@ -637,7 +632,7 @@ fn ai_agent_job_output(
 
     Ok(AiChatJobOutput {
         metadata: None,
-        native_call: None,
+        native_decision: None,
         mode: AiMode::Agent,
         text,
         reasoning: Some(parsed.thought).or(reasoning),

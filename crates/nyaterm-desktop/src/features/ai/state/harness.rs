@@ -117,7 +117,7 @@ impl AiFeatureState {
     pub(in crate::features) fn native_run_view(&self) -> Option<NativeRunView> {
         self.agent.native.as_ref().map(|native| NativeRunView {
             run_id: native.run.id.clone(),
-            call_id: native.run.pending_call.as_ref().map(|call| call.id.clone()),
+            call_id: native.run.pending_call().map(|call| call.id.clone()),
             status: native.run.status,
             plan: native.run.plan.clone(),
             questions: native.run.questions.clone(),
@@ -166,12 +166,67 @@ impl AiFeatureState {
             .map(|native| format!("native:{}", native.run.id))
     }
 
+    pub(in crate::features) fn native_run_scopes_for_session(
+        &self,
+        session_id: &str,
+    ) -> Vec<String> {
+        let owner_scope = format!("terminal:{session_id}");
+        std::iter::once((self.active_scope_key.as_str(), &self.agent))
+            .chain(self.inactive_scopes.iter().map(|(scope, state)| (scope.as_str(), &state.agent)))
+            .filter_map(|(scope, agent)| {
+                let native = agent.native.as_ref()?;
+                let targets_session = matches!(&native.run.scope,
+                    CapabilityScope::Explicit { session_ids, .. } if session_ids.contains(session_id));
+                (!native.run.status.is_terminal() && (scope == owner_scope || targets_session))
+                    .then(|| scope.to_string())
+            })
+            .collect()
+    }
+
     pub(in crate::features) fn ended_native_owner(&self) -> Option<String> {
         self.agent
             .native
             .as_ref()
             .filter(|native| native.run.status.is_terminal())
             .map(|native| format!("native:{}", native.run.id))
+    }
+
+    pub(in crate::features) fn queue_native_batch(
+        &mut self,
+        batch: nyaterm_core::ai::harness::AgentToolBatch,
+    ) -> Result<(), String> {
+        let native = self.agent.native.as_mut().ok_or("no native run")?;
+        if native.cancellation.is_cancelled() {
+            return Err("Agent run cancelled".into());
+        }
+        native.run.queue_batch(batch)
+    }
+
+    pub(in crate::features) fn next_native_call(&mut self) -> Option<AgentToolCall> {
+        let native = self.agent.native.as_mut()?;
+        if native.cancellation.is_cancelled() {
+            return None;
+        }
+        native.run.next_call()
+    }
+
+    pub(in crate::features) fn finish_native_text(&mut self, answer: String) -> Result<(), String> {
+        let native = self.agent.native.as_mut().ok_or("no native run")?;
+        native.run.finish_text()?;
+        native.cancellation.cancel();
+        self.agent.step_index = native.run.used_steps;
+        self.agent.task_prompt = None;
+        self.agent.loop_state = None;
+        self.upsert_agent_step(
+            self.agent.step_index,
+            crate::features::runtime_jobs::AiAgentStepStatus::Completed,
+            crate::features::ai::presentation::AiAgentStepKind::FinalAnswer,
+            "Final Answer",
+            answer.clone(),
+        );
+        self.link_native_step();
+        self.set_native_message(answer);
+        Ok(())
     }
 
     pub(in crate::features) fn begin_native_call(
@@ -207,8 +262,7 @@ impl AiFeatureState {
                 && native.run.status == AgentRunStatus::WaitingForUser
                 && native
                     .run
-                    .pending_call
-                    .as_ref()
+                    .pending_call()
                     .is_some_and(|call| call.id == call_id)
         })
     }
@@ -225,7 +279,7 @@ impl AiFeatureState {
         self.agent
             .native
             .as_ref()
-            .and_then(|native| native.run.pending_call.clone())
+            .and_then(|native| native.run.pending_call().cloned())
     }
 
     pub(in crate::features) fn set_native_run_status(
@@ -303,8 +357,7 @@ impl AiFeatureState {
                 && native.run.status == AgentRunStatus::WaitingForUser
                 && native
                     .run
-                    .pending_call
-                    .as_ref()
+                    .pending_call()
                     .is_some_and(|call| call.id == call_id)
         }) else {
             return false;
@@ -327,8 +380,7 @@ impl AiFeatureState {
                 && native.run.status == AgentRunStatus::WaitingForUser
                 && native
                     .run
-                    .pending_call
-                    .as_ref()
+                    .pending_call()
                     .is_some_and(|call| call.id == call_id)
         })?;
         if native.run.questions.iter().any(|question| {
@@ -374,7 +426,11 @@ impl AiFeatureState {
         &mut self,
     ) -> Option<(AiChatLaunch, AiChatRequest)> {
         let native = self.agent.native.as_ref()?;
-        if native.run.status != AgentRunStatus::Planning || self.chat.pending {
+        if native.run.status != AgentRunStatus::Planning
+            || native.cancellation.is_cancelled()
+            || native.run.has_queued_call()
+            || self.chat.pending
+        {
             return None;
         }
         let mut request = native.request.clone();

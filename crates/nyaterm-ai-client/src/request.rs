@@ -3,8 +3,7 @@ use genai::chat::{
     ToolCall, ToolChoice, ToolResponse,
 };
 use nyaterm_core::ai::{
-    AiChatRequest, AiMessage, AiMessageRole, AiMode, AiProviderApiProtocol as Protocol,
-    AiReasoningEffort,
+    AiChatRequest, AiMessage, AiMessageRole, AiProviderApiProtocol as Protocol, AiReasoningEffort,
     completion::{AiContentPart, AiProviderError, AiProviderErrorKind as Kind, request_messages},
     harness::AgentToolRegistry,
 };
@@ -144,165 +143,127 @@ pub(super) fn convert(
             &session.model.model_name
         ));
     }
-    if request.mode == AiMode::Agent
-        && !request.options.agent_json_protocol
-        && !request.options.connectivity_test
-    {
+    let policy = AgentToolRegistry::request_policy(request, session.protocol);
+    if let Some(tools) = policy.tools {
         chat.tools = Some(
-            AgentToolRegistry::TOOLS
+            tools
                 .iter()
                 .map(|tool| {
-                    let mut schema = AgentToolRegistry::schema(*tool);
-                    let strict = session.protocol == Protocol::OpenaiCompatible;
-                    if strict {
-                        nyaterm_core::ai::harness::transcript::strict_schema(&mut schema);
-                    }
+                    let schema = AgentToolRegistry::schema(*tool);
                     let mut tool = Tool::new(tool.name())
                         .with_description(AgentToolRegistry::description(*tool))
                         .with_schema(schema);
-                    if strict {
-                        tool.strict = Some(true);
-                    }
+                    tool.strict = policy.strict;
                     tool
                 })
                 .collect(),
         );
-        options.tool_choice = Some(
-            if session.protocol == Protocol::Anthropic
-                && (thinking
-                    || (matches!(effort, AiReasoningEffort::Auto)
-                        && anthropic_default_thinking(&session.model.model_name)))
-            {
-                ToolChoice::Auto
-            } else if request
-                .options
-                .agent_context
-                .as_ref()
-                .is_some_and(|context| context.remaining_steps == 0)
-            {
-                ToolChoice::Tool {
-                    name: "final_answer".into(),
-                }
-            } else {
-                ToolChoice::Required
-            },
-        );
-        if session.protocol == Protocol::OpenaiCompatible {
-            extra["parallel_tool_calls"] = json!(false);
-        }
-        if session.protocol == Protocol::Anthropic {
-            extra["tool_choice"] = match options.tool_choice.as_ref() {
-                Some(ToolChoice::Auto) => json!({"type":"auto","disable_parallel_tool_use":true}),
-                Some(ToolChoice::Tool { name }) => {
-                    json!({"type":"tool","name":name,"disable_parallel_tool_use":true})
-                }
-                _ => json!({"type":"any","disable_parallel_tool_use":true}),
-            };
-        }
+        options.tool_choice = Some(ToolChoice::Auto);
     }
     if let Some(context) = &request.options.agent_context {
-        for (call, result) in &context.calls {
-            if call.id != result.call_id {
+        for turn in &context.turns {
+            if turn.results.len() != turn.batch.calls.len()
+                || turn
+                    .batch
+                    .calls
+                    .iter()
+                    .zip(&turn.results)
+                    .any(|(entry, result)| {
+                        entry.source.id.as_deref() != Some(result.call_id.as_str())
+                    })
+            {
                 return Err(AiProviderError::new(Kind::InvalidRequest));
             }
             if request.options.agent_json_protocol {
-                chat.messages.push(ChatMessage::assistant(json!({"action":call.tool.name(),"arguments":call.arguments,"thought":call.thought}).to_string()));
-                chat.messages.push(ChatMessage::user(
-                    nyaterm_core::ai::build_agent_tool_result_message(
-                        &call.id,
-                        &result.value,
-                        &request.options.language,
-                    ),
-                ));
+                for (entry, result) in turn.batch.calls.iter().zip(&turn.results) {
+                    chat.messages.push(ChatMessage::assistant(
+                        json!({"action":entry.source.name,"arguments":entry.source.arguments})
+                            .to_string(),
+                    ));
+                    chat.messages.push(ChatMessage::user(
+                        nyaterm_core::ai::build_agent_tool_result_message(
+                            &result.call_id,
+                            &result.value,
+                            &request.options.language,
+                        ),
+                    ));
+                }
                 continue;
             }
-            let content = if let Some(turn) = &call.assistant_turn {
-                if turn.protocol != Some(session.protocol) || turn.responses != session.responses {
-                    return Err(AiProviderError::new(Kind::InvalidRequest));
-                }
-                if session.protocol == Protocol::Anthropic && !turn.provider_items.is_empty() {
+            let original = &turn.batch.assistant_turn;
+            if original.protocol.is_some()
+                && (original.protocol != Some(session.protocol)
+                    || original.responses != session.responses)
+            {
+                return Err(AiProviderError::new(Kind::InvalidRequest));
+            }
+            let content =
+                if session.protocol == Protocol::Anthropic && !original.provider_items.is_empty() {
                     MessageContent::from_parts(
-                        turn.provider_items
+                        original
+                            .provider_items
                             .iter()
                             .cloned()
                             .map(|part| ContentPart::from_custom(part, None))
                             .collect::<Vec<_>>(),
                     )
-                } else {
+                } else if !original.parts.is_empty() {
                     MessageContent::from_parts(
-                        turn.parts
+                        original
+                            .parts
                             .iter()
                             .map(to_sdk_part)
                             .collect::<Result<Vec<_>, _>>()?,
                     )
-                }
-            } else {
-                MessageContent::from_tool_calls(vec![ToolCall {
-                    call_id: call.id.clone(),
-                    fn_name: call.tool.name().into(),
-                    fn_arguments: call.provider_arguments.clone(),
-                    thought_signatures: call
-                        .thought_signature
-                        .clone()
-                        .map(|signature| vec![signature]),
-                }])
-            };
-            chat.messages.push(ChatMessage::assistant(content));
-            let response = if session.protocol == Protocol::Anthropic {
-                ChatMessage::user(MessageContent::from_parts(vec![ContentPart::from_custom(
-                    json!({"type":"tool_result","tool_use_id":call.id,"content":result.value.to_string(),"is_error":result.is_error}),
-                    None,
-                )]))
-            } else {
-                let value = if session.protocol == Protocol::Gemini {
-                    json!({"result":result.value,"isError":result.is_error})
                 } else {
-                    result.value.clone()
+                    MessageContent::from_tool_calls(
+                        turn.batch
+                            .calls
+                            .iter()
+                            .map(|entry| ToolCall {
+                                call_id: entry.source.id.clone().expect("validated id"),
+                                fn_name: entry.source.name.clone(),
+                                fn_arguments: entry.source.arguments.clone(),
+                                thought_signatures: entry
+                                    .source
+                                    .thought_signature
+                                    .clone()
+                                    .map(|signature| vec![signature]),
+                            })
+                            .collect(),
+                    )
                 };
-                ChatMessage::from(
-                    ToolResponse::new(&call.id, value.to_string()).with_fn_name(call.tool.name()),
-                )
-            };
-            chat.messages.push(response);
+            chat.messages.push(ChatMessage::assistant(content));
+            if session.protocol == Protocol::Anthropic {
+                chat.messages.push(ChatMessage::user(MessageContent::from_parts(turn.results.iter().map(|result|
+                    ContentPart::from_custom(json!({"type":"tool_result","tool_use_id":result.call_id,"content":result.value.to_string(),"is_error":result.is_error}), None)
+                ).collect::<Vec<_>>())));
+            } else {
+                for (entry, result) in turn.batch.calls.iter().zip(&turn.results) {
+                    let value = if session.protocol == Protocol::Gemini {
+                        json!({"result":result.value,"isError":result.is_error})
+                    } else {
+                        result.value.clone()
+                    };
+                    chat.messages.push(ChatMessage::from(
+                        ToolResponse::new(&result.call_id, value.to_string())
+                            .with_fn_name(&entry.source.name),
+                    ));
+                }
+            }
         }
-        // Responses output items and Gemini parts carry opaque continuation
-        // fields the uniform SDK message type cannot always echo faithfully.
-        if !request.options.agent_json_protocol
-            && context.calls.iter().any(|(call, _)| {
-                call.assistant_turn
-                    .as_ref()
-                    .is_some_and(|turn| !turn.provider_items.is_empty())
-            })
-        {
+        // Echo opaque provider continuation once per original assistant turn.
+        if !request.options.agent_json_protocol && !context.turns.is_empty() {
             if session.responses {
                 let mut input: Vec<Value> = messages
                     .iter()
                     .map(|(role, text)| json!({"role":role_name(role),"content":text}))
                     .collect();
-                for (call, result) in &context.calls {
-                    if let Some(turn) = &call.assistant_turn {
-                        input.extend(turn.provider_items.iter().cloned());
-                    } else {
-                        input.push(json!({"type":"function_call","call_id":call.id,"name":call.tool.name(),"arguments":call.provider_arguments.to_string()}));
-                    }
-                    input.push(json!({"type":"function_call_output","call_id":call.id,"output":result.value.to_string()}));
-                }
+                nyaterm_core::ai::harness::transcript::append_responses(&mut input, context);
                 extra["input"] = json!(input);
             } else if session.protocol == Protocol::Gemini {
                 let mut contents: Vec<Value> = messages.iter().filter(|(role, _)| *role != AiMessageRole::System).map(|(role, text)| json!({"role":if *role == AiMessageRole::Assistant { "model" } else { "user" },"parts":[{"text":text}]})).collect();
-                for (call, result) in &context.calls {
-                    let parts = call.assistant_turn.as_ref().map(|turn| turn.provider_items.clone()).filter(|parts| !parts.is_empty()).unwrap_or_else(|| vec![json!({"functionCall":{"name":call.tool.name(),"args":call.provider_arguments}})]);
-                    let provider_id = parts
-                        .iter()
-                        .find_map(|part| part.pointer("/functionCall/id"))
-                        .cloned();
-                    contents.push(json!({"role":"model","parts":parts}));
-                    let mut response = json!({"name":call.tool.name(),"response":{"result":result.value,"isError":result.is_error}});
-                    if let Some(id) = provider_id {
-                        response["id"] = id;
-                    }
-                    contents.push(json!({"role":"user","parts":[{"functionResponse":response}]}));
-                }
+                nyaterm_core::ai::harness::transcript::append_gemini(&mut contents, context, false);
                 extra["contents"] = json!(contents);
             }
         }
@@ -349,22 +310,4 @@ pub(super) fn to_sdk_part(part: &AiContentPart) -> Result<ContentPart, AiProvide
                 .map_err(|_| AiProviderError::new(Kind::Protocol))?,
         ),
     })
-}
-
-// Mirrors the default-on families in genai 0.7.3's Anthropic capabilities.
-// Other models retain required tool selection when no thinking was requested.
-fn anthropic_default_thinking(model: &str) -> bool {
-    let model = model.rsplit("::").next().unwrap_or(model);
-    let mut segments = model.split('-');
-    if segments.next() == Some("claude") {
-        let family = segments.next();
-        let major = segments.next().and_then(|value| value.parse::<u32>().ok());
-        match family {
-            Some("opus" | "sonnet") => return major == Some(5),
-            Some("haiku") => return major.is_some_and(|major| major >= 5),
-            Some("fable" | "mythos") => return false,
-            _ => {}
-        }
-    }
-    model.contains("claude-sonnet-5") || model.contains("claude-opus-5")
 }

@@ -118,33 +118,21 @@ pub(super) async fn complete(
             None,
         ));
     }
-    if tx.is_none() {
-        let raw: Value = response.json().await.map_err(http_error)?;
-        let mut result = nyaterm_core::ai::ollama::parse_response(&raw.to_string())
-            .map_err(|_| AiProviderError::new(Kind::Protocol))?;
-        if raw["done"] != true {
-            return Err(AiProviderError::new(Kind::Protocol));
-        }
-        for call in &mut result.tool_calls {
-            if !call.arguments.is_object() || call.name.is_empty() {
-                return Err(AiProviderError::new(Kind::Protocol));
-            }
-            if call.id.is_none() {
-                call.id = Some(format!("call-{}", uuid::Uuid::new_v4()));
-            }
-        }
-        fill_metadata(&mut result, raw);
-        return Ok(result);
-    }
-    let tx = tx.expect("stream sender");
-    let mut bytes = response.bytes_stream();
-    let mut pending = Vec::new();
     let mut completion = AiChatCompletion {
         text: String::new(),
         reasoning_content: None,
         tool_calls: Vec::new(),
         metadata: Default::default(),
     };
+    if tx.is_none() {
+        let raw: Value = response.json().await.map_err(http_error)?;
+        if !process_line(&mut completion, raw, None).await? {
+            return Err(AiProviderError::new(Kind::Protocol));
+        }
+        return Ok(completion);
+    }
+    let mut bytes = response.bytes_stream();
+    let mut pending = Vec::new();
     while let Some(chunk) = bytes.next().await {
         pending.extend_from_slice(&chunk.map_err(http_error)?);
         if pending.len() > 4 * 1024 * 1024 {
@@ -175,9 +163,9 @@ pub(super) async fn complete(
 async fn process_line(
     result: &mut AiChatCompletion,
     value: Value,
-    tx: &Sender<AiChatStreamDelta>,
+    tx: Option<&Sender<AiChatStreamDelta>>,
 ) -> Result<bool, AiProviderError> {
-    if value.get("error").is_some() {
+    if value.get("error").is_some() || !value.is_object() {
         return Err(AiProviderError::new(Kind::Protocol));
     }
     let text = value
@@ -211,10 +199,10 @@ async fn process_line(
             let name = call
                 .pointer("/function/name")
                 .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
                 .ok_or_else(|| AiProviderError::new(Kind::Protocol))?;
             let arguments = call
                 .pointer("/function/arguments")
-                .filter(|value| value.is_object())
                 .ok_or_else(|| AiProviderError::new(Kind::Protocol))?
                 .clone();
             let id = call["id"]
@@ -246,18 +234,22 @@ async fn process_line(
         }
     }
     let done = value["done"] == true;
-    send_delta(tx, delta).await?;
+    if let Some(tx) = tx {
+        send_delta(tx, delta).await?;
+    }
     if done {
         fill_metadata(result, value);
-        send_delta(
-            tx,
-            AiChatStreamDelta {
-                done: true,
-                metadata: Some(result.metadata.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
+        if let Some(tx) = tx {
+            send_delta(
+                tx,
+                AiChatStreamDelta {
+                    done: true,
+                    metadata: Some(result.metadata.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
     }
     Ok(done)
 }

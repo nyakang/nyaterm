@@ -62,6 +62,7 @@ impl NyaTermApp {
                 message: "The authorization target was closed.".into(),
             }));
         }
+        self.cancel_native_runs_for_disconnected_session(session_id, cx);
         self.defer_ai_panel_snapshot_flush(cx);
         let scope = format!("terminal:{session_id}");
         if !self.ai.chat_or_agent_is_running_in_scope(&scope)
@@ -72,6 +73,22 @@ impl NyaTermApp {
         let visible = self.ai.active_scope_key().to_string();
         self.ai.switch_scope(&scope);
         self.cancel_ai_chat(cx);
+        self.ai.switch_scope(&visible);
+    }
+
+    pub(in crate::features) fn cancel_native_runs_for_disconnected_session(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        // A target can belong to a background conversation on another terminal.
+        // Revoke its run before any queued model/tool completion is dispatched.
+        let scopes = self.ai.native_run_scopes_for_session(session_id);
+        let visible = self.ai.active_scope_key().to_string();
+        for scope in scopes {
+            self.ai.switch_scope(&scope);
+            self.cancel_ai_chat(cx);
+        }
         self.ai.switch_scope(&visible);
     }
 
@@ -107,6 +124,39 @@ impl NyaTermApp {
         .detach();
     }
 
+    pub(in crate::features) fn dispatch_native_agent_decision(
+        &mut self,
+        decision: nyaterm_core::ai::harness::AgentDecision,
+        cx: &mut Context<Self>,
+    ) {
+        match decision {
+            nyaterm_core::ai::harness::AgentDecision::Tools(batch) => {
+                if let Err(error) = self.ai.queue_native_batch(batch) {
+                    let owner = self.ai.native_owner();
+                    self.ai.cancel_chat_and_agent();
+                    self.ai.set_native_message(error);
+                    if let Some(owner) = owner {
+                        self.clear_capability_owner(&owner, cx);
+                    }
+                } else {
+                    self.start_native_agent_continuation(cx);
+                }
+            }
+            nyaterm_core::ai::harness::AgentDecision::FinalText(answer) => {
+                let answer = format!("{answer}\n\n[{}]", t!("ai.harness.unverified"));
+                match self.ai.finish_native_text(answer) {
+                    Ok(()) => self.record_native_control_audit("text_answer", true, cx),
+                    Err(error) => self.ai.set_native_message(error),
+                }
+                if let Some(owner) = self.ai.ended_native_owner() {
+                    self.clear_capability_owner(&owner, cx);
+                }
+                self.persist_native_chat_projection(cx);
+            }
+        }
+        self.defer_ai_panel_snapshot_flush(cx);
+    }
+
     pub(in crate::features) fn dispatch_native_agent_call(
         &mut self,
         call: AgentToolCall,
@@ -119,9 +169,10 @@ impl NyaTermApp {
                     self.start_native_agent_continuation(cx);
                     return;
                 }
+                let owner = self.ai.native_owner();
                 self.ai.cancel_chat_and_agent();
                 self.ai.set_native_message(error);
-                if let Some(owner) = self.ai.native_owner() {
+                if let Some(owner) = owner {
                     self.clear_capability_owner(&owner, cx);
                 }
                 return;
@@ -248,9 +299,10 @@ impl NyaTermApp {
                             && (value["exitCode"].is_null()
                                 || value["timedOut"] == true
                                 || value["sourceTruncated"] == true);
-                        let stop_execution = tool_kind == AgentTool::TerminalExecute
-                            && (value["timedOut"] == true || value["sourceTruncated"] == true
-                                || matches!(value["code"].as_str(), Some("execution_incomplete" | "target_disconnected" | "cancelled")));
+                        let stop_run = matches!(
+                            value["code"].as_str(),
+                            Some("target_disconnected" | "cancelled")
+                        );
                         if this.ai.complete_native_call(
                             &callback_run,
                             AgentToolResult {
@@ -275,9 +327,8 @@ impl NyaTermApp {
                                 nyaterm_core::truncate_preview(&value.to_string(), 500),
                             );
                             this.ai.record_native_tool_output(&value);
-                            if stop_execution {
-                                this.ai.set_native_run_status(&callback_run, nyaterm_core::ai::harness::AgentRunStatus::Blocked);
-                                this.ai.set_native_message("Terminal execution is incomplete; review the terminal before starting another command.".into());
+                            if stop_run {
+                                this.ai.cancel_chat_and_agent();
                                 this.clear_capability_owner(&format!("native:{callback_run}"), cx);
                             } else {
                                 this.start_native_agent_continuation(cx);
@@ -359,6 +410,10 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn start_native_agent_continuation(&mut self, cx: &mut Context<Self>) {
+        if let Some(call) = self.ai.next_native_call() {
+            self.dispatch_native_agent_call(call, cx);
+            return;
+        }
         let Some((launch, request)) = self.ai.begin_native_continuation() else {
             return;
         };

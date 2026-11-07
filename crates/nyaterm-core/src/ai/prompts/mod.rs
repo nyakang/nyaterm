@@ -272,7 +272,7 @@ pub(super) fn user_prompt(request: &AiChatRequest, settings: &AiSettings, agent:
                     .replace("{count}", &context.remaining_steps.to_string()),
                 l.tools
             ));
-            for tool in super::harness::AgentToolRegistry::TOOLS {
+            for tool in super::harness::AgentToolRegistry::available_tools(request) {
                 text.push_str(&format!(
                     "{}: {}\n{}\n",
                     tool.name(),
@@ -314,10 +314,7 @@ pub(super) fn observation(obs: &CommandObservation, command: &str, language: &st
         .replace("{status}", &status)
         .replace("{duration}", &obs.duration_ms.to_string())
         .replace("{command}", command);
-    format!(
-        "{header}\n\n{}:\n{output}\n\n{}\n{}",
-        c.labels.output, c.next, c.single
-    )
+    format!("{header}\n\n{}:\n{output}\n\n{}", c.labels.output, c.next)
 }
 
 pub(super) fn rejected(command: &str, language: &str) -> String {

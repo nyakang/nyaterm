@@ -32,27 +32,26 @@ struct FinalAnswerToolArgs {
     answer: String,
 }
 
-pub(super) fn agent_openai_tools() -> serde_json::Value {
-    use super::harness::{AgentToolRegistry, transcript::strict_schema};
+pub(super) fn agent_openai_tools(tools: &[super::harness::AgentTool]) -> serde_json::Value {
+    use super::harness::AgentToolRegistry;
     serde_json::Value::Array(
-        AgentToolRegistry::TOOLS
+        tools
             .iter()
             .map(|tool| {
-                let mut schema = AgentToolRegistry::schema(*tool);
-                strict_schema(&mut schema);
+                let schema = AgentToolRegistry::schema(*tool);
                 serde_json::json!({"type":"function","function":{
                     "name":tool.name(),"description":AgentToolRegistry::description(*tool),
-                    "strict":true,"parameters":schema
+                    "strict":false,"parameters":schema
                 }})
             })
             .collect(),
     )
 }
 
-pub(super) fn agent_anthropic_tools() -> serde_json::Value {
+pub(super) fn agent_anthropic_tools(tools: &[super::harness::AgentTool]) -> serde_json::Value {
     use super::harness::AgentToolRegistry;
     serde_json::Value::Array(
-        AgentToolRegistry::TOOLS
+        tools
             .iter()
             .map(|tool| {
                 serde_json::json!({
@@ -64,9 +63,9 @@ pub(super) fn agent_anthropic_tools() -> serde_json::Value {
     )
 }
 
-pub(super) fn agent_gemini_tools() -> serde_json::Value {
+pub(super) fn agent_gemini_tools(tools: &[super::harness::AgentTool]) -> serde_json::Value {
     use super::harness::AgentToolRegistry;
-    serde_json::json!([{"functionDeclarations":AgentToolRegistry::TOOLS.iter().map(|tool| {
+    serde_json::json!([{"functionDeclarations":tools.iter().map(|tool| {
         let mut schema = AgentToolRegistry::schema(*tool);
         if let Some(object) = schema.as_object_mut() { object.remove("$schema"); }
         serde_json::json!({"name":tool.name(),"description":AgentToolRegistry::description(*tool),"parameters":schema})
@@ -374,16 +373,16 @@ mod tests {
             messages[1]["content"]
                 .as_str()
                 .expect("user prompt")
-                .contains("Call exactly one tool per turn")
+                .contains("Wait for results before requesting dependent actions")
         );
     }
 
     #[test]
     fn native_execute_command_tools_expose_and_parse_target_session_id() {
         for tools in [
-            agent_openai_tools(),
-            agent_anthropic_tools(),
-            agent_gemini_tools(),
+            agent_openai_tools(crate::ai::harness::AgentToolRegistry::TOOLS),
+            agent_anthropic_tools(crate::ai::harness::AgentToolRegistry::TOOLS),
+            agent_gemini_tools(crate::ai::harness::AgentToolRegistry::TOOLS),
         ] {
             assert!(tools.to_string().contains("sessionId"));
         }

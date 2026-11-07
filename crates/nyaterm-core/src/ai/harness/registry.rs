@@ -2,7 +2,9 @@ use nyaterm_mcp_protocol::{definition_for_tool, tool_input_schema, validate_tool
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::ai::{AiModelError, AiToolCall, RiskLevel};
+use crate::ai::{
+    AiChatRequest, AiMode, AiModelError, AiProviderApiProtocol, AiToolCall, RiskLevel,
+};
 
 use super::run::{AgentPlan, AgentQuestion, AgentVerification};
 
@@ -69,7 +71,40 @@ impl std::fmt::Debug for AgentToolCall {
 
 pub struct AgentToolRegistry;
 
+/// Runtime request capabilities, shared by SDK and native wire builders.
+/// Tool choice is always automatic; execution is serialized by AgentRun.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentRequestPolicy {
+    pub tools: Option<&'static [AgentTool]>,
+    pub strict: Option<bool>,
+}
+
 impl AgentToolRegistry {
+    pub fn request_policy(
+        request: &AiChatRequest,
+        protocol: AiProviderApiProtocol,
+    ) -> AgentRequestPolicy {
+        AgentRequestPolicy {
+            tools: (request.mode == AiMode::Agent
+                && !request.options.agent_json_protocol
+                && !request.options.connectivity_test)
+                .then(|| Self::available_tools(request)),
+            strict: (protocol == AiProviderApiProtocol::OpenaiCompatible).then_some(false),
+        }
+    }
+
+    pub fn available_tools(request: &crate::ai::AiChatRequest) -> &'static [AgentTool] {
+        if request
+            .options
+            .agent_context
+            .as_ref()
+            .is_some_and(|context| context.remaining_steps == 0)
+        {
+            &[AgentTool::FinalAnswer]
+        } else {
+            Self::TOOLS
+        }
+    }
     pub const TOOLS: &'static [AgentTool] = &[
         AgentTool::GetEnvironment,
         AgentTool::SessionGet,

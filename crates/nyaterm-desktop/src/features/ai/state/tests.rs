@@ -54,6 +54,107 @@ fn native_continuations_keep_task_language_until_a_new_user_task() {
 }
 
 #[test]
+fn native_batch_waits_for_each_result_and_preserves_scope_and_cancellation_guards() {
+    use nyaterm_core::ai::harness::{AgentDecision, AgentToolRegistry, AgentToolResult};
+    use nyaterm_core::ai::{AiChatCompletion, AiToolCall};
+    use serde_json::json;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.begin_native_run(
+        serde_json::from_value(
+            json!({"mode":"agent","action":"generate_command","userInput":"inspect"}),
+        )
+        .unwrap(),
+    );
+    let completion = AiChatCompletion {
+        metadata: Default::default(),
+        text: "Inspecting sessions".into(),
+        reasoning_content: None,
+        tool_calls: ["a", "b", "c"]
+            .into_iter()
+            .map(|id| AiToolCall {
+                id: Some(id.into()),
+                name: "get_environment".into(),
+                arguments: json!({}),
+                thought_signature: None,
+            })
+            .collect(),
+    };
+    let AgentDecision::Tools(batch) = AgentToolRegistry::decision(&completion).unwrap() else {
+        panic!("expected tools");
+    };
+    state.queue_native_batch(batch).unwrap();
+    assert!(state.begin_native_continuation().is_none());
+    let first = state.next_native_call().unwrap();
+    let (run_id, _, _) = state.begin_native_call(first).unwrap();
+    assert!(state.next_native_call().is_none());
+    let scope = state.active_scope_key().to_string();
+    state.switch_scope("terminal:other");
+    assert!(state.next_native_call().is_none());
+    assert!(!state.complete_native_call(
+        &run_id,
+        AgentToolResult {
+            call_id: "a".into(),
+            value: json!({}),
+            is_error: false
+        }
+    ));
+    state.switch_scope(&scope);
+    assert!(state.complete_native_call(
+        &run_id,
+        AgentToolResult {
+            call_id: "a".into(),
+            value: json!({}),
+            is_error: false
+        }
+    ));
+    assert!(state.begin_native_continuation().is_none());
+    let second = state.next_native_call().unwrap();
+    assert_eq!(second.id, "b");
+    state.begin_native_call(second).unwrap();
+    assert!(state.complete_native_call(
+        &run_id,
+        AgentToolResult {
+            call_id: "b".into(),
+            value: json!({"code":"denied"}),
+            is_error: true
+        }
+    ));
+    assert!(state.next_native_call().is_none());
+    let context = state.native_request_context().unwrap();
+    assert_eq!(context.turns.len(), 1);
+    assert_eq!(context.turns[0].results[2].value["code"], "not_executed");
+    state.cancel_chat_and_agent();
+    assert!(state.next_native_call().is_none());
+    assert!(state.begin_native_continuation().is_none());
+}
+
+#[test]
+fn native_text_answer_finishes_unverified_without_creating_a_tool_call() {
+    use nyaterm_core::ai::harness::AgentRunStatus;
+    use serde_json::json;
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.begin_native_run(
+        serde_json::from_value(
+            json!({"mode":"agent","action":"generate_command","userInput":"explain"}),
+        )
+        .unwrap(),
+    );
+    state.finish_native_text("Explanation".into()).unwrap();
+    assert_eq!(
+        state.native_run_view().unwrap().status,
+        AgentRunStatus::Unverified
+    );
+    assert!(state.native_pending_call().is_none());
+    assert!(state.native_request_context().unwrap().turns.is_empty());
+    assert!(state.begin_native_continuation().is_none());
+}
+
+#[test]
 fn legacy_observation_and_rejection_continuations_keep_task_language() {
     use nyaterm_core::ai::{build_agent_rejection_message, build_observation_message};
 
@@ -232,7 +333,7 @@ fn native_questions_keep_the_owner_run_across_scope_switches_and_reject_stale_an
     assert!(state.complete_native_call(&run_id, result.clone()));
     assert!(!state.complete_native_call(&run_id, result));
     assert!(!state.native_question_matches(&run_id, &call_id));
-    assert_eq!(state.native_request_context().unwrap().calls.len(), 1);
+    assert_eq!(state.native_request_context().unwrap().turns.len(), 1);
     let read = AgentToolRegistry::parse(
         &[],
         r#"{"action":"session_get","arguments":{"sessionId":"a"}}"#,
@@ -338,7 +439,7 @@ fn protocol_repair_clears_only_the_active_response_and_keeps_completed_steps() {
             is_error: false
         }
     ));
-    let records = state.agent.native.as_ref().unwrap().run.records.clone();
+    let records = state.agent.native.as_ref().unwrap().run.turns.clone();
     let (launch, _) = state.begin_native_continuation().unwrap();
     state.apply_chat_delta(launch.job_id, "rejected text", Some("rejected reasoning"));
     let messages = state.chat.messages.clone();
@@ -358,7 +459,7 @@ fn protocol_repair_clears_only_the_active_response_and_keeps_completed_steps() {
     assert!(state.chat.response_preview.is_empty());
     assert!(state.chat.pending);
     assert_eq!(state.agent.json_protocol, json_protocol);
-    assert_eq!(state.agent.native.as_ref().unwrap().run.records, records);
+    assert_eq!(state.agent.native.as_ref().unwrap().run.turns, records);
     assert_eq!(state.agent_steps()[0].status, AiAgentStepStatus::Completed);
     assert!(state.panel.status.contains("retry 1/1"));
     state.cancel_chat_and_agent();
@@ -1074,7 +1175,7 @@ fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
             launch.session_id,
             Ok(AiChatJobOutput {
                 metadata: None,
-                native_call: None,
+                native_decision: None,
                 mode: AiMode::Agent,
                 text: "done".to_string(),
                 reasoning: Some("final reason".to_string()),
@@ -1169,7 +1270,7 @@ fn awaiting_agent_approval_remains_an_active_cancellable_run() {
                 launch.session_id.clone(),
                 Ok(AiChatJobOutput {
                     metadata: None,
-                    native_call: None,
+                    native_decision: None,
                     mode: AiMode::Agent,
                     text: "Run pwd".to_string(),
                     reasoning: None,
@@ -1250,7 +1351,7 @@ fn parallel_terminal_chats_isolate_cancel_and_late_results() {
                 second.session_id,
                 Ok(AiChatJobOutput {
                     metadata: None,
-                    native_call: None,
+                    native_decision: None,
                     mode: AiMode::Ask,
                     text: "finished B".to_string(),
                     reasoning: None,
@@ -1327,7 +1428,7 @@ fn new_chat_preserves_idle_agent_steps_for_history_reload() {
             session_id.clone(),
             Ok(AiChatJobOutput {
                 metadata: None,
-                native_call: None,
+                native_decision: None,
                 mode: AiMode::Agent,
                 text: "done".to_string(),
                 reasoning: None,
@@ -1824,7 +1925,7 @@ fn agent_proposals_link_the_exact_message_and_card_before_execution() {
                 launch.session_id,
                 Ok(AiChatJobOutput {
                     metadata: None,
-                    native_call: None,
+                    native_decision: None,
                     mode: AiMode::Agent,
                     text: String::new(),
                     reasoning: Some("Read only".into()),
@@ -1874,7 +1975,7 @@ fn final_answers_are_not_classified_as_thoughts_commands_or_output() {
             launch.session_id,
             Ok(AiChatJobOutput {
                 metadata: None,
-                native_call: None,
+                native_decision: None,
                 mode: AiMode::Agent,
                 text: "## Result\nAll good".into(),
                 reasoning: None,
@@ -1910,7 +2011,7 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                     launch.session_id.clone(),
                     Ok(AiChatJobOutput {
                         metadata: None,
-                        native_call: None,
+                        native_decision: None,
                         mode: AiMode::Agent,
                         text: String::new(),
                         reasoning: Some("Inspect safely".into()),
@@ -1967,7 +2068,7 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                 launch.session_id,
                 Ok(AiChatJobOutput {
                     metadata: None,
-                    native_call: None,
+                    native_decision: None,
                     mode: AiMode::Agent,
                     text: answer.clone(),
                     reasoning: None,
@@ -2130,7 +2231,7 @@ fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
             launch.session_id,
             Ok(AiChatJobOutput {
                 metadata: None,
-                native_call: None,
+                native_decision: None,
                 mode: AiMode::Agent,
                 text: String::new(),
                 reasoning: None,

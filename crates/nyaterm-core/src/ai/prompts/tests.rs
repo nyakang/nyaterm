@@ -121,14 +121,17 @@ fn native_fallback_and_repair_use_the_task_language_on_every_provider() {
         request.options.agent_context = Some(AgentRequestContext {
             run_id: "fixture-run".into(),
             remaining_steps: 0,
-            calls: vec![(
-                call,
-                AgentToolResult {
-                    call_id: "fixture-call".into(),
-                    value: json!({"literal":"{command}"}),
-                    is_error: false,
-                },
-            )],
+            turns: vec![
+                (
+                    call,
+                    AgentToolResult {
+                        call_id: "fixture-call".into(),
+                        value: json!({"literal":"{command}"}),
+                        is_error: false,
+                    },
+                )
+                    .into(),
+            ],
         });
         for fallback in [false, true] {
             request.options.agent_json_protocol = fallback;

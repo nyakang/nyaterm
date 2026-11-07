@@ -1,7 +1,10 @@
 use std::error::Error as _;
 use std::time::{Duration, SystemTime};
 
-use nyaterm_core::ai::completion::{AiProviderError, AiProviderErrorKind as Kind};
+use nyaterm_core::ai::completion::{
+    AiProviderDiagnosticCode as Code, AiProviderError, AiProviderErrorKind as Kind,
+    AiProviderParameter as Parameter,
+};
 
 pub(super) fn http_error(error: reqwest::Error) -> AiProviderError {
     if error.is_timeout() {
@@ -44,6 +47,46 @@ pub(super) fn status_error(
     };
     let mut error = AiProviderError::new(kind);
     error.status = Some(status);
+    error.diagnostic_code = match code {
+        Some("invalid_request_error" | "invalid_request") => Some(Code::InvalidRequest),
+        Some("unsupported_parameter" | "unsupported_value") => Some(Code::UnsupportedParameter),
+        Some("unsupported_tools" | "tool_use_not_supported" | "unsupported_tool_choice") => {
+            Some(Code::UnsupportedTools)
+        }
+        Some("context_length_exceeded" | "request_too_large") => Some(Code::ContextLength),
+        Some("invalid_thinking_signature" | "invalid_signature") => Some(Code::InvalidSignature),
+        Some("invalid_tool_results" | "tool_call_mismatch") => Some(Code::InvalidToolResults),
+        _ => None,
+    };
+    error.parameter = match body
+        .and_then(|body| body.pointer("/error/param"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("tools" | "strict") => Some(Parameter::Tools),
+        Some("tool_choice") => Some(Parameter::ToolChoice),
+        Some("parallel_tool_calls") => Some(Parameter::ParallelToolCalls),
+        Some("reasoning" | "reasoning_effort" | "thinking") => Some(Parameter::Reasoning),
+        Some("temperature") => Some(Parameter::Temperature),
+        Some("max_tokens" | "max_completion_tokens" | "max_output_tokens") => {
+            Some(Parameter::MaxTokens)
+        }
+        Some("messages") => Some(Parameter::Messages),
+        Some("input") => Some(Parameter::Input),
+        _ => None,
+    };
+    error.request_id = ["x-request-id", "request-id"].iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .filter(|id| {
+                id.len() <= 128
+                    && (id.starts_with("req_") || uuid::Uuid::parse_str(id).is_ok())
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            })
+            .map(str::to_string)
+    });
     error.retry_after = headers
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
