@@ -131,14 +131,19 @@ PowerShell commands, release gates and distribution recovery.
 
 `Release` accepts `verify_release` (default `false`) in both dispatch and reusable
 workflow calls. Set it to `true` with `upload_release=false` to build all targets,
-verify package provenance, sign updater payloads, and generate/verify the
-manifests without publishing. The `release-candidate` Actions artifact retains
+verify all six native targets and the glibc 2.31 tar.gz/deb variant, sign updater
+payloads, and generate/verify the manifests without publishing. The `release-candidate` Actions artifact retains
 packages, manifests, hashes, release notes and per-target source records for 30
 days. This is distinct from OS code signing/notarization.
 
 `source_ref` is resolved once to a full SHA. Reusing `source_run_id` requires a
-successful run from this repository's Release workflow, matching source/version
-records and package hashes. Runs without provenance must be rebuilt. Reuse is
+verified signed candidate from a completed run of this repository's Release workflow, complete v2
+source/version/target/variant/compiler/lockfile/build-configuration records and
+package hashes. The existing signed candidate is verified and reused byte for
+byte, without resigning or regenerating manifests. Incomplete historical runs
+must rebuild all packages, including glibc 2.31. Supported v1 records remain
+readable with `release_provenance.py verify --legacy`, but cannot authorize a
+new publication. Reuse is
 allowed for signed rehearsals as well as publication; build-only mode does not
 accept it. Keep the dispatch ref and source checkout at the same reviewed
 candidate when recording evidence.
@@ -176,3 +181,94 @@ reported `portable-backup` directory for recovery; it must not be automatically
 cleaned or followed by an automatic application restart. Include
 [the prepared upgrade notice](notes/portable-update-recovery.md) in the next
 version's release notes.
+
+## CI and publication topology
+
+Rust and Docs select jobs for PRs, branch pushes and Merge Queue revisions.
+Manual runs and the Sunday 03:00 Asia/Shanghai schedule (`0 19 * * 6` UTC) run
+full regular CI. `Rust gate` and `Docs gate` always report. Rust changes retain
+Linux x64, macOS arm64 and Windows x64 tests. Rust 1.99.1 is pinned in the root
+`rust-toolchain.toml`; frozen diagnostic builds keep their requested compiler.
+
+`python scripts/ci/test_scripts.py` discovers script tests. Real Cargo/WiX
+integration classes are excluded from this common suite and run explicitly on
+Windows using `--suite windows-resources`, `--suite windows-msi` and
+`--suite diagnostic`. Selected native suites fail on missing tools, and every
+suite records its run/skip/failure counts in Job Summary.
+
+Release and Main Snapshot call the same native packaging workflow. Release also
+calls Linux glibc 2.31, whose ABI audit, helper lifecycle and CPU fallback smoke
+must pass. All compatibility packages and their sidecars enter `SHA256SUMS` and
+versioned GitHub/R2 assets. Existing `latest.json` and `downloads.json` platform
+keys are unchanged; compatibility users continue to upgrade manually.
+
+Publication first validates the candidate, stages matching GitHub assets and
+conditionally creates immutable R2 version assets. Existing bytes must match;
+changed bytes require a new version. Stable and preview promotion jobs have
+separate non-cancelling locks. Within the lock, both old manifests (including
+recorded absence) are backed up before any writes. SemVer downgrades and
+same-version/different-byte changes are refused. Origin and public manifests
+are verified before making the GitHub release public. GitHub and R2 do not
+provide a shared atomic transaction; the journal records completed stages.
+GitHub concurrency does not guarantee FIFO and can replace a pending job; rerun
+an affected candidate explicitly. The version guard still prevents regression.
+
+A successful run uploads `published-release/release-receipt.json` with schema,
+tag, frozen source SHA, channel, run ID and `SHA256SUMS` digest. Homebrew, AUR and
+Gitee use the shared resolver and verify the actual published release. During
+migration the resolver also accepts the old `published-release-tag` artifact.
+Signing rehearsals and build-only runs have no publication receipt and cannot
+start distribution. Homebrew/AUR accept stable versions; Gitee also accepts
+previews. Each channel retains its manual retry input; no package rebuild is
+needed when just one distributor fails. Gitee's `upload_small_assets=false`
+remains false on manual runs.
+
+## Channel interruption and recovery
+
+Prefer **Re-run failed jobs** on the original Release run. A partial channel
+write can resume with the same verified candidate; a published GitHub release
+can finish a failed receipt upload without changing its bytes. For a new
+publication run, use `source_run_id` from a complete signed rehearsal or an
+interrupted publication with a saved verified candidate, and the same frozen
+`source_ref`. The source run must have completed; it need not have succeeded if
+publication failed after candidate verification. Keep repository build variables unchanged;
+build configuration identity is checked during reuse.
+
+The `channel-preimage-<attempt>` artifact is saved before writes, and
+`channel-recovery-<attempt>` records progress even on failure (90-day retention).
+To restore a failed channel, first stop competing publishing runs. Download the
+chosen artifact into a fresh recovery directory, configure the same existing
+R2 credentials used by CI, and run from the matching source checkout:
+
+```sh
+python scripts/release/release_channel.py restore --version 2.0.2 --recovery /path/to/channel-recovery
+```
+
+Restore checks every backup before writing, preserves original absence, refuses
+to overwrite a newer channel, and verifies both origin bytes and public
+responses. It does not delete immutable versioned packages or change installed
+applications. GitHub Latest/publication state and downstream package-manager
+metadata must be recovered separately following the existing cutover runbook.
+
+## Fixed Snapshot recovery
+
+Main Snapshot remains manual, globally serialized and not automatically
+cancelled. Before overwriting any fixed-name asset, the workflow saves the old
+release metadata, tag object and all assets in `snapshot-preimage-<attempt>`.
+It uploads and reads back every new asset before changing the tag/notes, then
+removes obsolete assets. Fixed attachment replacement is not atomic; partial
+uploads retain the old tag and can be restored. A first-ever snapshot is created
+as a draft until uploads pass. Recovery artifacts are retained for seven days.
+
+After stopping competing Snapshot runs, download the matching preimage or
+recovery artifact into a fresh directory and use an existing repository token
+with the same release permissions as the workflow:
+
+```sh
+python scripts/release/snapshot_release.py restore --recovery /path/to/snapshot-recovery
+```
+
+Restore verifies backup hashes and refuses a tag moved by a later snapshot. It
+restores old attachments, metadata and the exact previous tag object, or removes
+only the initial snapshot created by the interrupted first run. The progress
+journal is retained as `snapshot-recovery-<attempt>` even when publication fails.

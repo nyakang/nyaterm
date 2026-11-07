@@ -22,7 +22,7 @@ spec.loader.exec_module(focal)
 
 
 class FocalAbiTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb required")
+    @unittest.skipUnless(os.name == "posix" and shutil.which("dpkg-deb"), "dpkg-deb required")
     def test_compat_deb_uses_private_launcher_and_complete_readable_icons(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -71,7 +71,7 @@ class FocalAbiTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 focal.deb_dependencies(binaries)
 
-    @unittest.skipUnless(shutil.which("g++") and shutil.which("dpkg-shlibdeps"), "Debian ELF tools required")
+    @unittest.skipUnless(os.name == "posix" and shutil.which("g++") and shutil.which("dpkg-shlibdeps"), "Debian ELF tools required")
     def test_real_deb_dependency_scan_captures_helper_only_cpp_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -83,7 +83,7 @@ class FocalAbiTests(unittest.TestCase):
             self.assertIn("libstdc++6", depends)
             self.assertIn("libc6", depends)
 
-    @unittest.skipUnless(shutil.which("cc"), "C compiler required")
+    @unittest.skipUnless(os.name == "posix" and shutil.which("cc"), "C compiler required")
     def test_egl_adapter_changes_only_desktop_only_config_filter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -160,7 +160,7 @@ print(count.value)
             with self.assertRaisesRegex(ValueError, "ELF64 x86-64"):
                 focal.audit(binary)
 
-    @unittest.skipUnless(shutil.which("cc") and shutil.which("readelf"), "native ELF tools required")
+    @unittest.skipUnless(os.name == "posix" and shutil.which("cc") and shutil.which("readelf"), "native ELF tools required")
     def test_real_compiler_output_cannot_hide_new_glibc_requirement(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "hello.c"
@@ -174,6 +174,7 @@ print(count.value)
             else:
                 self.assertIn("libc.so.6", focal.audit(binary)["needed"])
 
+    @unittest.skipUnless(os.name == "posix", "POSIX package permissions required")
     def test_archive_contains_all_helpers_diagnostics_and_integrity_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -209,7 +210,7 @@ print(count.value)
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
 
     def test_packaging_refuses_validation_on_newer_host(self):
-        with mock.patch.object(focal.os, "confstr", return_value="glibc 2.41"):
+        with mock.patch.object(focal.os, "confstr", return_value="glibc 2.41", create=True):
             with self.assertRaisesRegex(ValueError, "glibc 2.31"):
                 focal.create_package(Path("missing"), Path("dist"), "2.0.0", Path("missing"))
 

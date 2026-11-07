@@ -2,6 +2,8 @@ name: Rust
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 19 * * 6'
   merge_group:
     types: [checks_requested]
   push:
@@ -19,8 +21,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -75,14 +77,14 @@ jobs:
           components: rustfmt, clippy
           cache-key: lint
 
-      - name: Install Linux system dependencies
-        uses: ./.github/actions/install-linux-deps
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Check architecture boundaries
         run: python scripts/ci/check_architecture.py
+
+      - name: Install Linux system dependencies
+        uses: ./.github/actions/install-linux-deps
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -153,7 +155,7 @@ jobs:
 
       - name: Test Windows executable resources
         if: runner.os == 'Windows'
-        run: python -m unittest scripts.tests.test_windows_resources -v
+        run: python scripts/ci/test_scripts.py --suite windows-resources
 
   tmux-compatibility:
     name: tmux (${{ matrix.tmux }}, ${{ matrix.os }})
@@ -254,6 +256,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # Auto-discovery includes compatibility fixtures read from historical tags.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Python
@@ -261,20 +265,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Deliberately its own job: these need no Rust toolchain and no native
-      # libraries, so they should not queue behind a workspace build.
+      - name: Install script test tools
+        run: sudo apt-get update && sudo apt-get install -y minisign dpkg-dev g++ binutils
       - name: Test packaging helpers
-        run: >-
-          python -m unittest
-          scripts.tests.test_check_release_assets
-          scripts.tests.test_package_native
-          scripts.tests.test_windows_msi
-          scripts.tests.test_verify_native_package
-          scripts.tests.test_generate_release_metadata
-          scripts.tests.test_bump_version
-          scripts.tests.test_release_provenance
-          scripts.tests.test_release_workflow
-          scripts.tests.test_check_architecture
+        run: python scripts/ci/test_scripts.py
 
   workflows:
     name: Workflow syntax
@@ -304,6 +298,14 @@ jobs:
     if: always()
     timeout-minutes: 5
     steps:
+      - name: Summarize dependency results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          {
+            printf '| Job | Result |\n| --- | --- |\n'
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<< "$NEEDS_JSON"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Check dependency results
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1

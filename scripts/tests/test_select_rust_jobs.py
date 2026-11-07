@@ -29,10 +29,10 @@ def workflow_jobs(filename: str) -> dict[str, str]:
 class PathSelectionTests(unittest.TestCase):
     def test_paths_enable_only_their_required_jobs(self):
         cases = (
-            ("docs-site/docs/guide/tmux.md", set()),
-            ("docs-site/i18n/en/code.json", set()),
-            ("README.zh-CN.md", set()),
-            ("AGENTS.md", set()),
+            ("docs-site/docs/guide/tmux.md", {"run_docs"}),
+            ("docs-site/i18n/en/code.json", {"run_docs"}),
+            ("README.zh-CN.md", {"run_docs"}),
+            ("AGENTS.md", {"run_docs"}),
             ("LICENSE", set()),
             (".github/ISSUE_TEMPLATE/bug_report.yml", set()),
             ("crates/nyaterm-desktop/locales/ja.json", {"run_rust"}),
@@ -61,7 +61,7 @@ class PathSelectionTests(unittest.TestCase):
             ("examples/plugins/guests/text-tools/src/lib.rs", {"run_plugin_sdk"}),
             ("examples/plugins/templates/templates/inspect.txt", {"run_plugin_sdk"}),
             (".github/workflows/release.yml", {"run_python", "run_workflows"}),
-            (".github/workflows/docs.yml", {"run_python", "run_workflows"}),
+            (".github/workflows/docs.yml", {"run_python", "run_workflows", "run_docs"}),
             (".github/actionlint.yaml", {"run_workflows"}),
         )
         for path, expected in cases:
@@ -75,6 +75,7 @@ class PathSelectionTests(unittest.TestCase):
             "examples/plugins/guests/.cargo/config.toml", "rust-toolchain",
             "rust-toolchain.toml", "rustfmt.toml", ".rustfmt.toml",
             "clippy.toml", ".clippy.toml", ".github/workflows/rust.yml",
+            ".github/workflows/native-package.yml",
             ".github/actions/setup-rust/action.yml", "scripts/ci/select_rust_jobs.py",
             "scripts/ci/install-linux-deps.sh", "scripts/ci/architecture_allowlist.json",
         )
@@ -101,7 +102,7 @@ class PathSelectionTests(unittest.TestCase):
         self.assertIn("No changed paths", selection.summary())
 
     def test_output_values_are_literal_lowercase_boolean_strings(self):
-        self.assertEqual(selector.select_paths(["README.md"]).outputs(), dict.fromkeys(selector.OUTPUTS, "false"))
+        self.assertEqual(selector.select_paths(["README.md"]).outputs(), {name: str(name == "run_docs").lower() for name in selector.OUTPUTS})
         self.assertEqual(selector.full_selection("test").outputs(), dict.fromkeys(selector.OUTPUTS, "true"))
 
     def test_untrusted_filenames_cannot_inject_summary_markup_or_commands(self):
@@ -179,7 +180,7 @@ class GitSelectionTests(unittest.TestCase):
         base = self.commit({})
         head = self.commit(dict.fromkeys(paths, b"documentation"), base)
         self.assertCountEqual(selector.changed_paths(self.root, base, head), paths)
-        self.assertEqual(selector.select_event("pull_request", self.event(base), head, self.root).enabled, set())
+        self.assertEqual(selector.select_event("pull_request", self.event(base), head, self.root).enabled, {"run_docs"})
 
     def test_empty_git_diff_skips_optional_jobs(self):
         base = self.commit({"README.md": b"unchanged"})
@@ -234,9 +235,20 @@ class GitSelectionTests(unittest.TestCase):
         )
 
     def test_non_pr_events_run_full_suite_without_a_diff(self):
-        for name in ("push", "workflow_dispatch", "merge_group"):
+        for name in ("workflow_dispatch", "schedule"):
             with self.subTest(name=name), patch.object(selector, "changed_paths", side_effect=AssertionError("unexpected diff")):
                 self.assertEqual(selector.select_event(name, {}, "tested", self.root).enabled, ALL)
+
+    def test_push_and_merge_queue_compare_actual_tested_revisions(self):
+        base = self.commit({"README.md": b"base"})
+        head = self.commit({"README.md": b"base", "crates/nyaterm-ai-client/src/lib.rs": b"change"}, base)
+        for name, event in (("push", {"before": base, "after": head}),
+                            ("merge_group", {"merge_group": {"base_sha": base, "head_sha": head}})):
+            with self.subTest(event=name):
+                self.assertEqual(selector.select_event(name, event, head, self.root).enabled, {"run_rust"})
+                self.assertEqual(selector.select_event(name, event, base, self.root).enabled, ALL)
+                self.assertEqual(selector.select_event(name, {}, head, self.root).enabled, ALL)
+        self.assertEqual(selector.select_event("push", {"before": "0" * 40, "after": head}, head, self.root).enabled, ALL)
 
     def test_main_writes_outputs_and_explains_selection(self):
         base = self.commit({})
@@ -252,7 +264,7 @@ class GitSelectionTests(unittest.TestCase):
         self.assertEqual(selector.main(environment, self.root), 0)
         self.assertEqual(dict(line.split("=") for line in output.read_text(encoding="utf-8").splitlines()), {
             "run_rust": "false", "run_tmux": "true", "run_plugin_sdk": "false",
-            "run_python": "false", "run_workflows": "false",
+            "run_python": "false", "run_workflows": "false", "run_docs": "true",
         })
         self.assertIn("run-tmux", summary.read_text(encoding="utf-8"))
         self.assertIn("README.md", summary.read_text(encoding="utf-8"))
@@ -369,7 +381,7 @@ class WorkflowWiringTests(unittest.TestCase):
                 self.assertIn("    needs: [orchestrate]", jobs[job])
                 for enabled in ("true", "false", ""):
                     self.assertEqual(gate(jobs[job], {f"needs.orchestrate.outputs.{output}": enabled}), enabled == "true")
-        for output in selector.OUTPUTS:
+        for output in set(selector.OUTPUTS) - {"run_docs"}:
             self.assertIn(f"      {output}: ${{{{ steps.select.outputs.{output} }}}}", jobs["orchestrate"])
 
     def test_orchestrator_always_tests_rules_before_selection_with_full_history(self):
@@ -388,6 +400,8 @@ class WorkflowWiringTests(unittest.TestCase):
             job = jobs["gate"]
             self.assertIn(f"    name: {name}", job)
             self.assertIn("    if: always()", job)
+            self.assertIn("name: Summarize dependency results", job)
+            self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
             dependencies = re.search(r"^    needs: \[(.+)\]$", job, flags=re.M).group(1).split(", ")
             self.assertCountEqual(dependencies, set(jobs) - {"gate"})
             step = job.split("      - name: Check dependency results\n", 1)[1].replace("        if:", "    if:")

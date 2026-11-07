@@ -35,52 +35,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Resolve stable release tag
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve published release receipt
         id: release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          set -euo pipefail
-          publish='true'
-          dry_run="${INPUT_DRY_RUN:-false}"
-          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
-            version="${INPUT_VERSION#v}"
-          else
-            r2_success="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")] | length')"
-            if [[ "${r2_success}" == '1' ]]; then
-              receipt_dir="$(mktemp -d)"
-              trap 'rm -rf "${receipt_dir}"' EXIT
-              gh run download "${RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
-                --name published-release-tag --dir "${receipt_dir}"
-              tag="$(cat "${receipt_dir}/published-release-tag.txt")"
-              version="${tag#v}"
-            else
-              version=''
-            fi
-          fi
-          if [[ -z "${version}" || "${version}" == *-* || ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            publish='false'
-          fi
-          if [[ "${publish}" == 'true' ]]; then
-            release_state="$(gh release view "v${version}" --repo "${GITHUB_REPOSITORY}" \
-              --json isDraft,isPrerelease,tagName --jq '[.isDraft,.isPrerelease,.tagName] | @tsv')"
-            expected="$(printf 'false\tfalse\tv%s' "${version}")"
-            [[ "${release_state}" == "${expected}" ]] || {
-              echo "Release v${version} is not a published stable release" >&2
-              exit 1
-            }
-          fi
-          {
-            echo "publish=${publish}"
-            echo "version=${version}"
-            echo "tag=v${version}"
-            echo "dry_run=${dry_run}"
-          } >> "${GITHUB_OUTPUT}"
+        run: python scripts/release/release_receipt.py resolve --channel aur
 
       - name: Skip non-stable release
         if: steps.release.outputs.publish != 'true'
@@ -124,6 +93,17 @@ jobs:
           curl -fL --retry 5 "https://raw.githubusercontent.com/${UPSTREAM_REPO}/${TAG}/LICENSE" -o packages/LICENSE
           curl -fL --retry 5 "${base}/NyaTerm_${VERSION}_linux_x64.deb" -o packages/x64.deb
           curl -fL --retry 5 "${base}/NyaTerm_${VERSION}_linux_arm64.deb" -o packages/arm64.deb
+          curl -fL --retry 5 "${base}/SHA256SUMS" -o packages/SHA256SUMS
+          VERSION="$VERSION" python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          checksums = dict(line.split('  ', 1)[::-1] for line in Path('packages/SHA256SUMS').read_text().splitlines())
+          for arch in ('x64', 'arm64'):
+              name = f"NyaTerm_{os.environ['VERSION']}_linux_{arch}.deb"
+              actual = hashlib.sha256(Path(f'packages/{arch}.deb').read_bytes()).hexdigest()
+              if checksums.get(name) != actual:
+                  raise SystemExit(f'AUR package checksum mismatch: {arch}')
+          PY
           test "$(dpkg-deb -f packages/x64.deb Package)" = nyaterm
           test "$(dpkg-deb -f packages/arm64.deb Package)" = nyaterm
           for package in packages/*.deb; do

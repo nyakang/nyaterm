@@ -50,13 +50,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
+  NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
   DOWNLOAD_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
 
 jobs:
@@ -158,14 +155,15 @@ jobs:
           source_workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" --jq '.workflow_id')"
           current_workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml" --jq '.id')"
           source_status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" --jq '.status')"
-          source_conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" --jq '.conclusion')"
 
           [[ "${source_workflow_id}" == "${current_workflow_id}" ]] || {
             echo "run ${SOURCE_RUN_ID} was not produced by release.yml" >&2
             exit 1
           }
-          [[ "${source_status}" == 'completed' && "${source_conclusion}" == 'success' ]] || {
-            echo "run ${SOURCE_RUN_ID} has not completed successfully" >&2
+          # A failed publication may still contain a fully verified signed candidate.
+          # Its complete provenance, inventory and signatures are checked before reuse.
+          [[ "${source_status}" == 'completed' ]] || {
+            echo "run ${SOURCE_RUN_ID} has not completed" >&2
             exit 1
           }
           [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || {
@@ -181,6 +179,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
         run: |
           set -euo pipefail
           expected="$(printf 'true\t%s\ttrue' "${PRERELEASE}")"
@@ -188,13 +187,20 @@ jobs:
             actual="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
               --json isDraft,isPrerelease,body \
               --jq '[.isDraft,.isPrerelease,(.body | length > 0)] | @tsv' 2>/dev/null || true)"
-            if [[ "${actual}" == "${expected}" ]]; then
+            published="$(printf 'false\t%s\ttrue' "${PRERELEASE}")"
+            if [[ "${actual}" == "${expected}" || ( -n "${SOURCE_RUN_ID}" && "${actual}" == "${published}" ) ]]; then
               exit 0
             fi
             sleep 5
           done
           echo "Missing populated matching draft release for ${TAG}" >&2
           exit 1
+      - name: Bind formal tag to frozen source
+        if: steps.release.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: test "$(git rev-parse "${TAG}^{commit}")" = "$SOURCE_SHA"
       - name: Verify build configuration
         if: inputs.source_run_id == ''
         shell: bash
@@ -220,16 +226,7 @@ jobs:
         run: cargo test --workspace --locked --no-fail-fast
       - name: Test packaging and release helpers
         if: inputs.source_run_id == ''
-        run: >-
-          python -m unittest
-          scripts.tests.test_check_release_assets
-          scripts.tests.test_prepare_conpty
-          scripts.tests.test_package_native
-          scripts.tests.test_verify_native_package
-          scripts.tests.test_generate_release_metadata
-          scripts.tests.test_bump_version
-          scripts.tests.test_release_provenance
-          scripts.tests.test_release_workflow
+        run: python scripts/ci/test_scripts.py
       - name: Check workflow syntax
         shell: bash
         run: |
@@ -240,158 +237,33 @@ jobs:
           docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 
   package:
-    name: Package ${{ matrix.label }}
     needs: preflight
     if: inputs.source_run_id == ''
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { label: macos-arm64, os: macos-15, target: aarch64-apple-darwin }
-          - { label: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
-          # Keep the x64 glibc floor at 2.35 while ubuntu-22.04 is supported.
-          - { label: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { label: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
-          - { label: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
-          - { label: windows-arm64, os: windows-2025, target: aarch64-pc-windows-msvc }
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.preflight.outputs.source_sha }}
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-        with:
-          targets: ${{ matrix.target }}
-          cache-key: release-${{ matrix.target }}
-          cache-on-failure: 'true'
-          save-cache: always
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/install-linux-deps
-        with:
-          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm
-      - name: Install AppImage tooling
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
-      - name: Install NSIS
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/ci/install-nsis.ps1
-      - name: Install .NET for WiX
-        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-      - name: Install WiX
-        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
-        shell: pwsh
-        run: ./scripts/ci/install-wix.ps1
-      - name: Test MSI packaging contracts
-        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
-        run: python -m unittest scripts.tests.test_windows_msi -v
-      - name: Prepare bundled ConPTY
-        if: runner.os == 'Windows'
-        run: python scripts/release/prepare_conpty.py
-      - name: Package native application
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
-          NYATERM_ARTIFACT_VERSION: ${{ needs.preflight.outputs.version }}
-          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
-          NYATERM_VERSION: ${{ needs.preflight.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: python scripts/release/package_native.py "${TARGET}"
-      - name: Package native application (Windows MSVC)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          NYATERM_ARTIFACT_VERSION: ${{ needs.preflight.outputs.version }}
-          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
-          NYATERM_VERSION: ${{ needs.preflight.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          # Git Bash prepends Git's /usr/bin/link.exe, shadowing MSVC's linker.
-          # Preserve the PATH configured by ilammy/msvc-dev-cmd for Rust builds.
-          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-          if ($linker -notmatch '\\VC\\Tools\\MSVC\\[^\\]+\\bin\\HostX64\\(x64|arm64)\\link\.exe$') {
-            throw "Expected Visual Studio MSVC linker, got: $linker"
-          }
-          Write-Host "Using MSVC linker: $linker"
-          python scripts/release/package_native.py "$env:TARGET"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify native package
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: >-
-          python scripts/release/verify_native_package.py
-          --target "${TARGET}" --version "${VERSION}"
-          --artifact-version "${VERSION}" --dist dist
-      # Run host tests even when the package contains ARM64 executables.
-      - name: Configure MSVC for host tests
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
-      - name: Test portable updater against packaged ZIP
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          $arch = if ($env:TARGET -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
-          $env:NYATERM_TEST_PORTABLE_ARCH = if ($arch -eq 'arm64') { 'aarch64' } else { 'x86_64' }
-          $env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path "dist/NyaTerm_$($env:VERSION)_windows_${arch}_portable.zip").Path
-          cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
-      - name: Record package provenance
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: >-
-          python scripts/release/release_provenance.py record
-          --dist dist --records provenance --source-sha "${SOURCE_SHA}"
-          --version "${VERSION}" --run-id "${GITHUB_RUN_ID}" --target "${TARGET}"
-      - name: Upload package provenance
-        uses: actions/upload-artifact@v4
-        with:
-          name: provenance-${{ matrix.label }}
-          path: provenance/*.json
-          if-no-files-found: error
-          retention-days: 30
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NyaTerm-${{ matrix.label }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 30
+    uses: ./.github/workflows/native-package.yml
+    with:
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+      version: ${{ needs.preflight.outputs.version }}
+      artifact_version: ${{ needs.preflight.outputs.version }}
+      release_type: release
+      artifact_prefix: NyaTerm
+
+  focal:
+    needs: preflight
+    if: inputs.source_run_id == ''
+    uses: ./.github/workflows/linux-focal.yml
+    with:
+      source_ref: ${{ needs.preflight.outputs.source_sha }}
 
   prepare_release:
     name: Sign and verify release candidate
-    needs: [preflight, package]
+    needs: [preflight, package, focal]
     if: >-
       always() &&
       needs.preflight.result == 'success' &&
       (needs.preflight.outputs.publish == 'true' || inputs.verify_release == true) &&
-      (needs.package.result == 'success' ||
+      ((needs.package.result == 'success' && needs.focal.result == 'success') ||
       (inputs.source_run_id != '' &&
-      needs.package.result == 'skipped'))
+      needs.package.result == 'skipped' && needs.focal.result == 'skipped'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -425,15 +297,6 @@ jobs:
           pattern: NyaTerm-*
           path: dist-release
           merge-multiple: true
-      - name: Download reused package artifacts
-        if: inputs.source_run_id != ''
-        uses: actions/download-artifact@v4
-        with:
-          pattern: NyaTerm-*
-          path: dist-release
-          merge-multiple: true
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run_id }}
       - name: Download package provenance
         if: inputs.source_run_id == ''
         uses: actions/download-artifact@v4
@@ -441,15 +304,22 @@ jobs:
           pattern: provenance-*
           path: provenance
           merge-multiple: true
-      - name: Download reused package provenance
+      - name: Download reused signed candidate
         if: inputs.source_run_id != ''
         uses: actions/download-artifact@v4
         with:
-          pattern: provenance-*
-          path: provenance
-          merge-multiple: true
+          name: release-candidate
           github-token: ${{ github.token }}
           run-id: ${{ inputs.source_run_id }}
+      - name: Verify reused signed candidate
+        if: inputs.source_run_id != ''
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: >-
+          python scripts/release/verify_candidate.py --version "$VERSION"
+          --source-sha "$SOURCE_SHA" --run-id "$SOURCE_RUN_ID"
       - name: Verify package provenance
         shell: bash
         env:
@@ -459,14 +329,16 @@ jobs:
         run: >-
           python scripts/release/release_provenance.py verify
           --dist dist-release --records provenance --source-sha "${SOURCE_SHA}"
-          --version "${VERSION}" --run-id "${SOURCE_RUN_ID}"
+          --version "${VERSION}" --run-id "${SOURCE_RUN_ID}" --include-focal
       - name: Validate release assets
+        if: inputs.source_run_id == ''
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: >-
           python3 scripts/ci/check_release_assets.py --dist dist-release
-          --version "${VERSION}" --artifact-version "${VERSION}"
+          --version "${VERSION}" --artifact-version "${VERSION}" --include-focal
       - name: Prepare release notes
+        if: inputs.source_run_id == ''
         id: metadata
         shell: bash
         env:
@@ -492,13 +364,13 @@ jobs:
           fi
           echo "published_at=$(git show -s --format=%cI HEAD)" >> "${GITHUB_OUTPUT}"
       - name: Sign and verify legacy updater artifacts
+        if: inputs.source_run_id == ''
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VERSION: ${{ needs.preflight.outputs.version }}
           PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
-          TAURI_UPDATER_PUBLIC_KEY_B64: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyQUYxQTA2NTYyQTNEOTkKUldTWlBTcFdCaHF2Z29pS0pEdE13U3ZUMVZVTlpGVmQ0YlU2cWlORkdNWU1BY005MU01YjFiU2IK
         run: |
           set -euo pipefail
           if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_B64:-}" || -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
@@ -508,7 +380,7 @@ jobs:
           # Keep the decoded key inside this shell; GITHUB_ENV is printed in later steps.
           TAURI_SIGNING_PRIVATE_KEY="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_B64}" | base64 --decode)"
           export TAURI_SIGNING_PRIVATE_KEY
-          printf '%s' "${TAURI_UPDATER_PUBLIC_KEY_B64}" | base64 --decode > "${RUNNER_TEMP}/nyaterm-updater.pub"
+          cp scripts/release/updater-public-key.txt "${RUNNER_TEMP}/nyaterm-updater.pub"
           files=(
             "dist-release/NyaTerm_${VERSION}_macos_arm64.app.tar.gz"
             "dist-release/NyaTerm_${VERSION}_macos_x64.app.tar.gz"
@@ -535,6 +407,7 @@ jobs:
       - name: Test signature rejection
         run: python3 -m unittest scripts.tests.test_verify_updater_signatures -v
       - name: Generate checksums and manifests
+        if: inputs.source_run_id == ''
         shell: bash
         env:
           BASE_URL: ${{ env.DOWNLOAD_BASE_URL }}
@@ -546,7 +419,7 @@ jobs:
           [[ -n "${BASE_URL:-}" ]] || { echo 'R2_PUBLIC_BASE_URL repository variable is required' >&2; exit 1; }
           python3 scripts/release/generate_release_metadata.py \
             --dist dist-release --version "${VERSION}" --tag "${TAG}" \
-            --base-url "${BASE_URL}" --notes-file release-notes.md --pub-date "${PUB_DATE}"
+            --base-url "${BASE_URL}" --notes-file release-notes.md --pub-date "${PUB_DATE}" --include-focal
           python3 scripts/release/verify_release_metadata.py \
             --directory dist-release --version "${VERSION}" --tag "${TAG}" \
             --base-url "${BASE_URL}"
@@ -555,6 +428,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-candidate
+          overwrite: true
           path: |
             dist-release/*
             provenance/*.json
@@ -566,275 +440,132 @@ jobs:
     name: Upload assets to GitHub draft
     needs: [preflight, prepare_release]
     if: >-
-      always() &&
-      needs.preflight.result == 'success' &&
-      needs.prepare_release.result == 'success' &&
-      needs.preflight.outputs.publish == 'true'
+      always() && needs.preflight.result == 'success' &&
+      needs.prepare_release.result == 'success' && needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
-    outputs:
-      version: ${{ needs.preflight.outputs.version }}
-      tag: ${{ needs.preflight.outputs.tag }}
-      prerelease: ${{ needs.preflight.outputs.prerelease }}
     steps:
-      - name: Download verified release candidate
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.source_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
         with:
           name: release-candidate
-      - name: Verify draft and upload assets without publishing
-        shell: bash
+      - name: Stage verified GitHub assets without publishing
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-        run: |
-          set -euo pipefail
-          status="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease,body \
-            --jq '[.isDraft,.isPrerelease,(.body | length > 0)] | @tsv')"
-          expected="$(printf 'true\t%s\ttrue' "${PRERELEASE}")"
-          [[ "${status}" == "${expected}" ]] || {
-            echo 'Expected a populated draft release with matching prerelease status' >&2
-            exit 1
-          }
-          gh release upload "${TAG}" dist-release/* \
-            --repo "${GITHUB_REPOSITORY}" --clobber
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: python scripts/release/release_channel.py stage-github --version "$VERSION"
 
   r2:
-    name: Publish Cloudflare R2 mirror
+    name: Stage Cloudflare R2 version assets
     needs: [preflight, release]
     if: >-
-      always() &&
-      needs.preflight.result == 'success' &&
-      needs.release.result == 'success' &&
-      needs.preflight.outputs.publish == 'true'
+      always() && needs.preflight.result == 'success' &&
+      needs.release.result == 'success' && needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      contents: write
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: us-east-1
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-      BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
       R2_BUCKET: nyaterm
       R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-      TAG: ${{ needs.release.outputs.tag }}
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ needs.preflight.outputs.source_sha }}
-      - name: Validate R2 configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY BASE_URL R2_ENDPOINT; do
-            if [[ -z "${!name:-}" || "${!name}" == 'https://.r2.cloudflarestorage.com' ]]; then
-              echo "${name} is required for R2 publishing" >&2
-              exit 1
-            fi
-          done
-          aws --version
-          [[ "${BASE_URL}" == 'https://downloads.nyaterm.app' ]] || {
-            echo 'R2_PUBLIC_BASE_URL must be https://downloads.nyaterm.app' >&2
-            exit 1
-          }
-      - name: Download GitHub release assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir release-assets
-          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir release-assets --clobber
-          (cd release-assets && sha256sum --check SHA256SUMS)
-      - name: Upload immutable release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          for path in release-assets/*; do
-            file="$(basename "${path}")"
-            content_type='application/octet-stream'
-            case "${file}" in
-              *.json) content_type='application/json; charset=utf-8' ;;
-              SHA256SUMS) content_type='text/plain; charset=utf-8' ;;
-              *.dmg) content_type='application/x-apple-diskimage' ;;
-              *.exe) content_type='application/vnd.microsoft.portable-executable' ;;
-              *.msi) content_type='application/x-msi' ;;
-              *.deb) content_type='application/vnd.debian.binary-package' ;;
-              *.rpm) content_type='application/x-rpm' ;;
-              *.tar.gz) content_type='application/gzip' ;;
-              *.zip) content_type='application/zip' ;;
-            esac
-            aws s3 cp "${path}" "s3://${R2_BUCKET}/releases/${TAG}/${file}" \
-              --endpoint-url "${R2_ENDPOINT}" --content-type "${content_type}" \
-              --cache-control 'public, max-age=31536000, immutable' --no-progress
-          done
-      - name: Verify versioned release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          verified="${RUNNER_TEMP}/verified-release-assets"
-          mkdir "${verified}"
-          aws s3 sync "s3://${R2_BUCKET}/releases/${TAG}/" "${verified}/" \
-            --endpoint-url "${R2_ENDPOINT}" --no-progress
-          diff --recursive --brief release-assets "${verified}"
-          (cd "${verified}" && sha256sum --check SHA256SUMS)
-          for manifest in latest.json downloads.json; do
-            python3 - "${verified}/${manifest}" "${VERSION}" <<'PY'
-          import json
-          import sys
-          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-          if manifest.get("version") != sys.argv[2] or not manifest.get("platforms"):
-              raise SystemExit(f"invalid release manifest: {sys.argv[1]}")
-          PY
-          done
-          python3 scripts/release/verify_release_metadata.py \
-            --directory "${verified}" --version "${VERSION}" --tag "${TAG}" \
-            --base-url "${BASE_URL}" --check-assets
-      - name: Update stable channel manifests
-        if: needs.release.outputs.prerelease == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for manifest in latest.json downloads.json; do
-            aws s3 cp "release-assets/${manifest}" "s3://${R2_BUCKET}/${manifest}" \
-              --endpoint-url "${R2_ENDPOINT}" --content-type 'application/json; charset=utf-8' \
-              --cache-control 'public, max-age=60, must-revalidate' --no-progress
-          done
-      - name: Update preview channel manifests
-        if: needs.release.outputs.prerelease == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for manifest in latest.json downloads.json; do
-            aws s3 cp "release-assets/${manifest}" "s3://${R2_BUCKET}/channels/preview/${manifest}" \
-              --endpoint-url "${R2_ENDPOINT}" --content-type 'application/json; charset=utf-8' \
-              --cache-control 'public, max-age=60, must-revalidate' --no-progress
-          done
-      - name: Verify public stable manifests
-        if: needs.release.outputs.prerelease == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for manifest in latest.json downloads.json; do
-            verified='false'
-            for attempt in {1..12}; do
-              if curl --fail --location --silent --show-error \
-                --header 'Cache-Control: no-cache' \
-                "${BASE_URL%/}/${manifest}?release=${VERSION}&attempt=${attempt}" \
-                -o "${RUNNER_TEMP}/public-${manifest}" && \
-                python3 - "${RUNNER_TEMP}/public-${manifest}" "${VERSION}" <<'PY'
-          import json
-          import sys
-          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-          if manifest.get("version") != sys.argv[2] or not manifest.get("platforms"):
-              raise SystemExit(f"stale or invalid stable manifest: {sys.argv[1]}")
-          PY
-              then
-                verified='true'
-                break
-              fi
-              sleep 5
-            done
-            [[ "${verified}" == 'true' ]] || {
-              echo "public stable manifest did not update: ${manifest}" >&2
-              exit 1
-            }
-          done
-          public_dir="${RUNNER_TEMP}/public-stable"
-          mkdir "${public_dir}"
-          cp "${RUNNER_TEMP}/public-latest.json" "${public_dir}/latest.json"
-          cp "${RUNNER_TEMP}/public-downloads.json" "${public_dir}/downloads.json"
-          python3 scripts/release/verify_release_metadata.py \
-            --directory "${public_dir}" --version "${VERSION}" --tag "${TAG}" \
-            --base-url "${BASE_URL}" --check-assets
-      - name: Verify public preview manifests
-        if: needs.release.outputs.prerelease == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for manifest in latest.json downloads.json; do
-            verified='false'
-            for attempt in {1..12}; do
-              if curl --fail --location --silent --show-error \
-                --header 'Cache-Control: no-cache' \
-                "${BASE_URL%/}/channels/preview/${manifest}?release=${VERSION}&attempt=${attempt}" \
-                -o "${RUNNER_TEMP}/public-preview-${manifest}" && \
-                python3 - "${RUNNER_TEMP}/public-preview-${manifest}" "${VERSION}" <<'PY'
-          import json
-          import sys
-          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-          if manifest.get("version") != sys.argv[2] or not manifest.get("platforms"):
-              raise SystemExit(f"stale or invalid preview manifest: {sys.argv[1]}")
-          PY
-              then
-                verified='true'
-                break
-              fi
-              sleep 5
-            done
-            [[ "${verified}" == 'true' ]] || {
-              echo "public preview manifest did not update: ${manifest}" >&2
-              exit 1
-            }
-          done
-          public_dir="${RUNNER_TEMP}/public-preview"
-          mkdir "${public_dir}"
-          cp "${RUNNER_TEMP}/public-preview-latest.json" "${public_dir}/latest.json"
-          cp "${RUNNER_TEMP}/public-preview-downloads.json" "${public_dir}/downloads.json"
-          python3 scripts/release/verify_release_metadata.py \
-            --directory "${public_dir}" --version "${VERSION}" --tag "${TAG}" \
-            --base-url "${BASE_URL}" --check-assets
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+      - name: Create or verify immutable version assets
+        run: python scripts/release/release_channel.py stage --version "$VERSION"
 
   publish:
-    name: Publish verified GitHub release
+    name: Commit verified release channel
     needs: [preflight, release, r2]
     if: >-
-      always() &&
-      needs.preflight.result == 'success' &&
-      needs.release.result == 'success' &&
-      needs.r2.result == 'success' &&
+      always() && needs.preflight.result == 'success' &&
+      needs.release.result == 'success' && needs.r2.result == 'success' &&
       needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
+    concurrency:
+      group: release-channel-${{ needs.preflight.outputs.prerelease == 'true' && 'preview' || 'stable' }}
+      cancel-in-progress: false
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      R2_BUCKET: nyaterm
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
     steps:
-      - name: Verify draft assets and prepare downstream version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          status="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease,body,assets \
-            --jq '[.isDraft,.isPrerelease,(.body | length > 0),([.assets[] | select(.name == "latest.json")] | length == 1),([.assets[] | select(.name == "downloads.json")] | length == 1),([.assets[] | select(.name == "SHA256SUMS")] | length == 1)] | @tsv')"
-          expected="$(printf 'true\t%s\ttrue\ttrue\ttrue\ttrue' "${PRERELEASE}")"
-          [[ "${status}" == "${expected}" ]] || {
-            echo 'Draft release is incomplete or not in the expected state' >&2
-            exit 1
-          }
-          printf '%s\n' "${TAG}" > published-release-tag.txt
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.source_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+      - name: Save channel preimage and validate version progression
+        run: python scripts/release/release_channel.py backup --version "$VERSION"
+      - name: Retain preimage before the first channel write
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-preimage-${{ github.run_attempt }}
+          path: channel-recovery/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Commit channel and publish verified draft
+        run: python scripts/release/release_channel.py commit --version "$VERSION"
+      - name: Create published release receipt
+        run: >-
+          python scripts/release/release_receipt.py create --version "$VERSION"
+          --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
+      - name: Save downstream publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-release
+          path: release-receipt.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
       - name: Save downstream release tag
         uses: actions/upload-artifact@v4
         with:
           name: published-release-tag
           path: published-release-tag.txt
           if-no-files-found: error
+          overwrite: true
           retention-days: 90
-      - name: Publish verified draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease="${PRERELEASE}"
+      - name: Retain publication progress and recovery journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-recovery-${{ github.run_attempt }}
+          path: channel-recovery/
+          if-no-files-found: warn
+          retention-days: 90

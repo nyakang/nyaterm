@@ -2,23 +2,22 @@ name: Linux glibc 2.31
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - crates/**
-      - scripts/compat/linux-focal/**
-      - scripts/tests/test_linux_focal.py
-      - scripts/tests/test_linux_focal_launcher.py
-      - scripts/release/linux_icons.py
-      - .github/workflows/linux-focal.yml
+    inputs:
+      source_ref:
+        description: Source ref to resolve and build
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: linux-focal-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
 
 jobs:
   build:
@@ -28,34 +27,72 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ inputs.source_ref || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve frozen build identity
+        id: identity
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import os, tomllib
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('rust=' + tomllib.load(open('rust-toolchain.toml', 'rb'))['toolchain']['channel'] + '\n')
+              output.write('version=' + tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version'] + '\n')
+          PY
       - name: Test ABI gate and renderer selection
         run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher
       - name: Build focal toolchain image
+        env:
+          RUST_VERSION: ${{ steps.identity.outputs.rust }}
         run: >-
           docker build --build-arg BUILDER_UID="$(id -u)" --build-arg BUILDER_GID="$(id -g)"
+          --build-arg RUST_VERSION="$RUST_VERSION"
           -t nyaterm-focal scripts/compat/linux-focal
       - name: Build, audit and test all runtime executables
         env:
           NYATERM_FOCAL_DEB: '1'
+          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
         run: >-
           docker run --rm --user "$(id -u):$(id -g)"
           -e NYATERM_FOCAL_DEB
+          -e NYATERM_GITHUB_GIST_CLIENT_ID
           -v "$PWD:/src" -w /src nyaterm-focal
-      - name: Upload offline package
-        uses: actions/upload-artifact@v4
-        with:
-          name: nyaterm-linux-x64-glibc231
-          path: |
-            dist/*_glibc231.tar.gz
-            dist/*_glibc231.tar.gz.sha256
-            dist/*_glibc231.deb
-            dist/*_glibc231.deb.sha256
-          if-no-files-found: error
       - name: Verify CPU fallback without Vulkan or NVIDIA
         run: >-
           docker run --rm --user "$(id -u):$(id -g)"
           -v "$PWD:/src" -w /src nyaterm-focal
           bash scripts/compat/linux-focal/smoke.sh
+      - name: Record compatibility package provenance
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.sha }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: >-
+          python scripts/release/release_provenance.py record
+          --dist dist --records provenance --source-sha "$SOURCE_SHA"
+          --version "$VERSION" --run-id "$GITHUB_RUN_ID"
+          --target x86_64-unknown-linux-gnu --variant glibc231
+          --compiler-file target/linux-focal/compiler.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: provenance-linux-x64-glibc231
+          path: provenance/*.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload offline package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NyaTerm-linux-x64-glibc231
+          path: |
+            dist/*_glibc231.tar.gz
+            dist/*_glibc231.tar.gz.sha256
+            dist/*_glibc231.deb
+            dist/*_glibc231.deb.sha256
+          overwrite: true
+          if-no-files-found: error
       - name: Upload smoke evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -7,16 +7,17 @@ symbol versions or replacing the destination's patched system libc.
 
 ## Build on a connected Linux machine
 
-From the checkout root, using Docker with BuildKit:
+From the checkout root, using Docker with BuildKit and host Python 3.11+:
 
 ```sh
 docker build --build-arg BUILDER_UID="$(id -u)" --build-arg BUILDER_GID="$(id -g)" \
+  --build-arg RUST_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')" \
   -t nyaterm-focal scripts/compat/linux-focal
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD:/src" -w /src nyaterm-focal
 ```
 
-The image pins Ubuntu 20.04 and Rust 1.99.1. Cargo uses the unchanged lockfile.
+The image pins Ubuntu 20.04 and reads Rust 1.99.1 from the root toolchain contract through the required build argument. Cargo uses the unchanged lockfile.
 The baseline is x86-64, without `target-cpu=native`. Outputs and Cargo downloads
 are isolated under `target/linux-focal/`; the host's newer sysroot, compiler
 flags and target cache are not used. Four build jobs are the default; set
@@ -200,9 +201,15 @@ explicit renderer selection using a recording executable.
 Evidence is retained in `target/linux-focal/smoke/`. See
 [validation evidence](VALIDATION.md).
 
-The dedicated `Linux glibc 2.31` Actions workflow builds, audits, tests, exercises
-the CPU fallback without Vulkan/NVIDIA, and uploads the archive. It does not publish a
-release or change the updater channel.
+The dedicated `Linux glibc 2.31` Actions workflow is callable by Release and
+manually through `workflow_dispatch` (Actions → Linux glibc 2.31 → Run workflow).
+It does not run automatically for PRs or main pushes. Every stable/preview Release
+and full signing rehearsal requires this variant. It builds,
+audits, tests, exercises the CPU fallback without Vulkan/NVIDIA, and uploads the
+archive and deb with checksums and v2 source records after all gates pass. The
+standalone workflow does not publish a release or change the updater channel;
+Release includes its outputs in the versioned GitHub/R2 assets and global
+`SHA256SUMS`. The existing update/download manifest platform keys stay unchanged.
 
 ### Target desktop acceptance (pending)
 

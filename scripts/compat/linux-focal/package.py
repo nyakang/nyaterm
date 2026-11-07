@@ -230,11 +230,15 @@ def create_package(binary_dir, output, version, opengl, deb=False):
                        Path(__file__).with_name("start-nyaterm.sh"),
                        Path(__file__).with_name("OFFLINE-README.zh-CN.md")):
             shutil.copy2(source, stage / source.name)
+            # NTFS/DrvFS checkouts can report every source file as executable.
+            # Only the two launch scripts below are executable package inputs.
+            (stage / source.name).chmod(0o644)
         (stage / "diagnose.sh").chmod(0o755)
         (stage / "start-nyaterm.sh").chmod(0o755)
         shutil.copytree(opengl, stage / "opengl", symlinks=True)
         for name in ("opengl-lock.txt", "egl_desktop.c"):
             shutil.copy2(Path(__file__).with_name(name), stage / "opengl" / name)
+            (stage / "opengl" / name).chmod(0o644)
         (stage / "abi-report.json").write_text(json.dumps(
             {"baseline": "Ubuntu 20.04 x86_64 / glibc 2.31", "version": version,
              "binaries": reports, "opengl_libraries": graphics}, indent=2) + "\n", encoding="utf-8")

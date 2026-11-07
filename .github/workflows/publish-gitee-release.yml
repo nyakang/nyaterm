@@ -38,55 +38,20 @@ jobs:
     runs-on: [self-hosted, linux, x64, gitee-release]
     timeout-minutes: 60
     steps:
-      - name: Resolve release tag
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve published release receipt
         id: release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
-            tag="${INPUT_TAG}"
-            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
-              echo "invalid release tag: ${tag}" >&2
-              exit 1
-            }
-            publish='true'
-          else
-            r2_success="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")] | length')"
-            if [[ "${r2_success}" == '1' ]]; then
-              receipt_dir="$(mktemp -d)"
-              trap 'rm -rf "${receipt_dir}"' EXIT
-              gh run download "${RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
-                --name published-release-tag --dir "${receipt_dir}"
-              tag="$(cat "${receipt_dir}/published-release-tag.txt")"
-              publish='true'
-              [[ -n "${tag}" ]] || publish='false'
-            else
-              tag=''
-              publish='false'
-            fi
-          fi
-          if [[ "${publish}" == 'true' ]]; then
-            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
-              echo "invalid published release tag: ${tag}" >&2
-              exit 1
-            }
-            release_state="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" \
-              --json isDraft,tagName --jq '[.isDraft,.tagName] | @tsv')"
-            expected="$(printf 'false\t%s' "${tag}")"
-            [[ "${release_state}" == "${expected}" ]] || {
-              echo "Release ${tag} is not published" >&2
-              exit 1
-            }
-          fi
-          {
-            echo "publish=${publish}"
-            echo "tag=${tag}"
-          } >> "${GITHUB_OUTPUT}"
+        run: python scripts/release/release_receipt.py resolve --channel gitee
 
       - name: Skip run without a release tag
         if: steps.release.outputs.publish != 'true'
@@ -154,7 +119,7 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG: ${{ steps.release.outputs.tag }}
-          UPLOAD_SMALL_ASSETS: ${{ inputs.upload_small_assets || 'true' }}
+          UPLOAD_SMALL_ASSETS: ${{ github.event_name != 'workflow_dispatch' || inputs.upload_small_assets }}
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/gitee-release-venv/bin/python" <<'PY'

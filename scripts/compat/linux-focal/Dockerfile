@@ -2,7 +2,7 @@
 FROM ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG RUST_VERSION=1.99.1
+ARG RUST_VERSION
 # Optional combined CA bundle for builds behind a TLS-inspecting proxy.
 RUN --mount=type=secret,id=proxy_ca,mode=0444 \
     if [ -f /run/secrets/proxy_ca ]; then \
@@ -35,6 +35,7 @@ RUN --mount=type=secret,id=proxy_ca,mode=0444 \
       cp /etc/ssl/certs/ca-certificates.crt /tmp/base-ca.crt && \
       cat /run/secrets/proxy_ca > /etc/ssl/certs/ca-certificates.crt || exit 1; \
     fi; \
+    test -n "$RUST_VERSION" && \
     curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh && \
     sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" && \
     rm /tmp/rustup.sh && chmod -R a+rX /opt/cargo /opt/rustup && \

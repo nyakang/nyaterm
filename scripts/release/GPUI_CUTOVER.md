@@ -66,21 +66,26 @@ gh workflow run release.yml --repo nyakang/nyaterm --ref cutover/gpui -f version
 `verify_release=false` remains the default build-only behavior. Verification
 uses the existing updater signing secret and public key, but no GitHub release,
 tag, R2 object or downstream package is written. The existing downstream
-workflows only publish after `Publish Cloudflare R2 mirror` succeeds; that job
-must be skipped in a rehearsal. Before cutover the old main workflows listen to
+workflows only publish after a successful Release run with a validated public
+publication receipt; the channel commit and receipt jobs must be skipped in a
+rehearsal. Before cutover the old main workflows listen to
 `Build and Release`, not this `Release` workflow.
 
 `release-candidate` retains `dist-release/`, `provenance/`, and
-`release-notes.md` for 30 days. The six per-target provenance records bind actual
-checkout SHA, Cargo version, producing run ID and package SHA-256 values. The
-candidate contains 14 package files plus checksums and manifests. Signing is
+`release-notes.md` for 30 days. Seven v2 target/variant provenance records bind
+actual checkout SHA, Cargo version, producing run ID, compiler, lockfile, build
+configuration and package SHA-256 values. A stable candidate contains 20 package
+files (including focal sidecars); a prerelease contains 18. Both include global
+checksums and manifests. Signing is
 verified with minisign before `.sig` sidecars are removed; signatures remain in
 `latest.json`. Keep the full artifact and its run link in the PR evidence.
 
-An optional `source_run_id` must identify a successful completed run of this
-repository's Release workflow. It is accepted only for verification or
-publication. Source SHA and version must match the requested checkout, all six
-records must exist, and every package hash must match. The run's `head_sha` is
+An optional `source_run_id` must identify a completed run of this repository's
+Release workflow with a saved verified signed candidate. A publication failure
+after candidate verification does not invalidate that candidate. Reuse is
+accepted only for verification or publication. Source SHA and version must match
+the requested checkout, all seven v2 records must exist, and every package hash
+and manifest signature must match. The run's `head_sha` is
 not used as a substitute for the actual checkout SHA. Old runs without these
 records must be rebuilt. A later merge commit has a different SHA: build and
 validate that final source again rather than reusing C's packages under it.
@@ -101,7 +106,7 @@ cargo check --workspace --locked
 cargo test --workspace --locked --no-fail-fast
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-python -m unittest scripts.tests.test_check_release_assets scripts.tests.test_prepare_conpty scripts.tests.test_package_native scripts.tests.test_verify_native_package scripts.tests.test_generate_release_metadata scripts.tests.test_bump_version scripts.tests.test_release_provenance scripts.tests.test_release_workflow scripts.tests.test_verify_updater_signatures
+python scripts/ci/test_scripts.py
 python scripts/ci/check_docs_translations.py
 pnpm --dir docs-site install --frozen-lockfile
 pnpm --dir docs-site build
@@ -159,6 +164,12 @@ not blockers to creating the draft cutover PR.
    during preparation. Keep archive and migration branches through stabilization.
 
 ## Stop distribution and recover
+
+The current CI/publication topology, v2 provenance requirements, immutable
+artifact checks and channel/Snapshot journal recovery commands are documented in
+[Release tooling](README.md#channel-interruption-and-recovery). Preserve these
+records alongside the operator backups described below.
+
 
 Stop/cancel the affected Release and downstream publishing runs first so that
 they cannot reapply the faulty channel. Preserve the failed run and evidence.
