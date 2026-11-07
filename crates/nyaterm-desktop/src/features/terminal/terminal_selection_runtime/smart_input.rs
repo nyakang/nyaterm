@@ -5,6 +5,7 @@ use nyaterm_core::terminal::editing::{EditIntent, EditPhase, EditPlan, plan_edit
 use nyaterm_core::terminal::input_tracker::InputSelectionRange;
 use nyaterm_terminal::editing::resolve_input;
 use nyaterm_terminal::navigation::{NavigationKey, navigation_key_bytes};
+use nyaterm_terminal::selection::TerminalSelectionMode;
 use nyaterm_terminal_gpui::{
     TerminalKeyMode, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
 };
@@ -207,7 +208,9 @@ impl NyaTermApp {
         if !self.can_use_smart_cursor_selection() {
             return;
         }
-        if let Some(selection) = self.terminal.selection.selection {
+        if let Some(selection) = self.terminal.selection.selection
+            && selection.mode == TerminalSelectionMode::Linear
+        {
             let state = self.terminal.editing.state_mut();
             if state.model.phase == EditPhase::Ready
                 && state.selection_origin_version == Some(state.model.version)
@@ -227,6 +230,9 @@ impl NyaTermApp {
             return None;
         }
         let selection = self.terminal.selection.selection.as_ref()?;
+        if selection.mode == TerminalSelectionMode::Block {
+            return None;
+        }
         if selection.is_empty() || selection.all_buffer {
             return None;
         }

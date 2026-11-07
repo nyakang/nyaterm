@@ -105,6 +105,10 @@ pub(super) struct TerminalSelectionState {
     pub(super) source_history: Option<nyaterm_terminal::TerminalHistoryState>,
     pub(super) selected_occurrence: TerminalSelectedOccurrenceState,
     pub(super) dragging: bool,
+    pub(super) block_gesture: Option<TerminalBlockSelectionGesture>,
+    /// Survives MouseUp: GPUI can dispatch on_click before or after the root
+    /// release handler. Only the next press resets this gesture's decision.
+    pub(super) suppress_action_link_click: bool,
     pub(super) drag_pointer_position: Option<gpui::Point<gpui::Pixels>>,
     pub(super) autoscroll: Option<TerminalSelectionAutoscroll>,
     pub(super) autoscroll_generation: u64,
@@ -115,7 +119,23 @@ pub(super) struct TerminalSelectionState {
     pub(super) mouse_report_position: Option<(u16, u16)>,
 }
 
+pub(super) struct TerminalBlockSelectionGesture {
+    pub(super) origin: gpui::Point<gpui::Pixels>,
+    pub(super) confirmed: bool,
+}
+
 impl TerminalSelectionState {
+    pub(super) fn confirm_block_drag(&mut self, position: gpui::Point<gpui::Pixels>) -> bool {
+        let Some(gesture) = self.block_gesture.as_mut() else {
+            return true;
+        };
+        let dx = f32::from(position.x - gesture.origin.x);
+        let dy = f32::from(position.y - gesture.origin.y);
+        gesture.confirmed |= dx * dx + dy * dy > 4.0;
+        self.suppress_action_link_click |= gesture.confirmed;
+        gesture.confirmed
+    }
+
     /// Coordinate-only moves keep cached text and outstanding copy generations.
     pub(super) fn advance_history(
         &mut self,
@@ -136,6 +156,7 @@ impl TerminalSelectionState {
             self.click_anchor = None;
             self.source_history = None;
             self.dragging = false;
+            self.block_gesture = None;
             self.drag_pointer_position = None;
             self.autoscroll = None;
             self.text.invalidate();
@@ -156,6 +177,7 @@ impl TerminalSelectionState {
             self.text.invalidate_preserving_copy();
             if self.selection.is_none() {
                 self.dragging = false;
+                self.block_gesture = None;
                 self.drag_pointer_position = None;
                 self.autoscroll = None;
                 self.text.pending_copy = None;
@@ -402,6 +424,8 @@ impl TerminalFeatureState {
                     generation: 0,
                 },
                 dragging: false,
+                block_gesture: None,
+                suppress_action_link_click: false,
                 drag_pointer_position: None,
                 autoscroll: None,
                 autoscroll_generation: 0,
@@ -547,6 +571,7 @@ impl TerminalFeatureState {
         self.selection.text.invalidate();
         self.selection.source_history = None;
         self.selection.dragging = false;
+        self.selection.block_gesture = None;
         self.selection.drag_pointer_position = None;
         self.selection.autoscroll = None;
         self.selection.scroll_rehit_armed = false;
@@ -563,6 +588,7 @@ impl TerminalFeatureState {
             return LostTerminalSelectionRecovery::None;
         }
         self.selection.dragging = false;
+        self.selection.block_gesture = None;
         self.selection.drag_pointer_position = None;
         self.selection.autoscroll = None;
         self.selection.scroll_rehit_armed = false;
@@ -839,6 +865,7 @@ mod tests {
             ),
             head: TerminalBufferCellPos::new(4, 3).into(),
             all_buffer: false,
+            mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
         });
         assert_eq!(
             state.recover_lost_selection_mouse_up(),

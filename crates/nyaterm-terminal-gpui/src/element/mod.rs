@@ -13,7 +13,7 @@ use gpui::{
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::selection::{
     TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
-    expand_selection_range,
+    TerminalSelectionMode, expand_selection_range,
 };
 use nyaterm_terminal::{
     TerminalLineId, TerminalSnapshot, terminal_cell_count, terminal_char_cell_width,
@@ -83,6 +83,7 @@ pub struct TerminalGridSelection {
     pub anchor_side: TerminalCellSide,
     pub head_side: TerminalCellSide,
     pub all_buffer: bool,
+    pub mode: TerminalSelectionMode,
 }
 
 impl TerminalGridSelection {
@@ -114,6 +115,7 @@ impl TerminalGridSelection {
             anchor_side: selection.anchor.side,
             head_side: selection.head.side,
             all_buffer: selection.all_buffer,
+            mode: selection.mode,
         }
     }
 
@@ -128,6 +130,7 @@ impl TerminalGridSelection {
                 self.head_side,
             ),
             all_buffer: self.all_buffer,
+            mode: self.mode,
         }
         .cols_for_absolute_line(line)
     }
@@ -1484,7 +1487,8 @@ fn terminal_selection_cols_for_snapshot_row(
         start.min(snapshot.cols),
         end.min(snapshot.cols),
     )?;
-    if (!selection.all_buffer && selection.anchor_line == selection.head_line)
+    if selection.mode == TerminalSelectionMode::Block
+        || (!selection.all_buffer && selection.anchor_line == selection.head_line)
         || snapshot_row.wraps_to_next
     {
         return Some((start, expanded_end));

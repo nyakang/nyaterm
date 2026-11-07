@@ -41,6 +41,44 @@ fn seed_cross_screen_selection(app: &mut NyaTermApp) {
 }
 
 #[test]
+fn block_copy_reads_the_full_rectangle_on_the_worker_and_preserves_spaces() {
+    let dir = TestConfigDir::new("nyaterm-block-worker-copy");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    cx.update_entity(&app, |app, cx| {
+        seed_cross_screen_selection(app);
+        let selection = app.terminal.selection.selection.as_mut().unwrap();
+        selection.mode = nyaterm_terminal::selection::TerminalSelectionMode::Block;
+        selection.head = TerminalBufferCellPos::new(499, 11).into();
+        cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+        app.copy_terminal_selection(cx);
+        assert!(matches!(
+            app.terminal.selection.text.status,
+            TerminalSelectionTextStatus::Pending
+        ));
+        app.terminal.view.frame_pipeline.flush_for_test();
+    });
+    cx.run_until_parked();
+    cx.update_entity(&app, |app, cx| {
+        let expected = (0..500)
+            .map(|i| format!("line {i:04}  "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            app.selected_terminal_text().as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(expected.as_str())
+        );
+    });
+}
+
+#[test]
 fn pending_menu_keeps_copy_enabled_and_copies_the_complete_selection_once() {
     let dir = TestConfigDir::new("nyaterm-cross-screen-copy");
     let mut cx = TestAppContext::single();
