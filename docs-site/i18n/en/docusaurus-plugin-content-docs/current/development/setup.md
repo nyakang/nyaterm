@@ -172,7 +172,7 @@ The variable only applies to packages built from source. AUR and the Homebrew
 cask repack the published `.deb` / `.dmg` artifacts, so the application still
 owns their updates and they must not set it.
 
-After validation, a version tag publishes GitHub Release and versioned R2 assets, then triggers Gitee, AUR, and Homebrew. The website reads `downloads.json`; signed `latest.json` exists only to migrate installed Tauri releases to GPUI. Only stable releases replace the root R2 manifests, while prereleases retain versioned manifests. A manual `Main Snapshot` run overwrites the `main-snapshot` prerelease without publishing to downstream channels.
+After validation, a version tag publishes GitHub Release and versioned R2 assets, then triggers Gitee, AUR, and Homebrew. The website reads `downloads.json`; signed `latest.json` exists only to migrate installed Tauri releases to GPUI. Stable releases update the root R2 manifests; prereleases update `channels/preview/`. Every Release and full signing rehearsal also builds and verifies glibc 2.31 compatibility packages, uploaded as separate GitHub and R2 assets and upgraded manually. A manual `Main Snapshot` run overwrites the `main-snapshot` prerelease without publishing to downstream channels.
 
 The Release workflow requires `NYATERM_GITHUB_GIST_CLIENT_ID`, the Gitee/R2 repository variables, and the updater, R2, Gitee, AUR, and Homebrew secrets named in the workflows. Missing configuration fails the relevant release step instead of producing an incomplete official release.
 
@@ -184,15 +184,21 @@ Automated verification checks the artifact set, archive paths, application and h
 
 ## Selective CI jobs
 
-The Rust workflow starts with a lightweight `orchestrate` job that tests the selection rules and compares the PR event's base SHA with the merge commit being tested. It selects the union of jobs required by all changed paths and explains its choices in the Actions Job Summary. Ordinary Rust changes still run the existing lint and Linux, macOS, and Windows workspace tests; application translation JSON keeps those checks too.
+The Rust and Docs workflows start with a lightweight `orchestrate` job that tests the selection rules. PRs compare the base SHA with the tested merge commit; pushes compare before/after; Merge Queue compares base_sha/head_sha. It selects the union of jobs required by all changed paths and explains its choices in the Actions Job Summary. Ordinary Rust changes still run the existing lint and Linux, macOS, and Windows workspace tests; application translation JSON keeps those checks too.
 
-The four tmux compatibility jobs run when transport, terminal, core, the plugin API, the MCP protocol, or shared build/CI configuration changes. The Plugin SDK job follows plugin examples, scripts, and related crates; Python and workflow checks have their own path rules. Documentation-site or root Markdown changes skip heavy Rust jobs, while the `Docs` workflow continues to build every locale.
+The four tmux compatibility jobs run when transport, terminal, core, the plugin API, the MCP protocol, or shared build/CI configuration changes. The Plugin SDK job follows plugin examples, scripts, and related crates; Python and workflow checks have their own path rules. Documentation-site or root Markdown changes select documentation validation; pure Rust changes skip the documentation build. Shared build configuration and unclassified paths enable the full suite.
 
-Add the `run-tmux` label to a PR to force the full tmux matrix; later commits continue to run it while the label remains. Label events also rerun the other checks selected for that PR's paths, rather than reporting only tmux results. Pushes to `main` or `migration/gpui`, Merge Queue events, and manual runs of the `Rust` workflow execute the full job set.
+Add the `run-tmux` label to a PR to force the full tmux matrix; later commits continue to run it while the label remains. Label events also rerun the other checks selected for that PR's paths, rather than reporting only tmux results. Pushes to `main` or `migration/gpui` and Merge Queue also select jobs by changes; manual runs execute the full suite. Full regular CI runs on main every Sunday at 03:00 Asia/Shanghai (UTC cron `0 19 * * 6`). The focal Docker build runs only through Release or manual dispatch.
 
 Unclassified paths, new crates, Cargo manifests/lockfiles, and shared build configuration enable all jobs. Missing comparison revisions or a failed Git diff also fall back to the full suite. A selection-script exception or failing regression test fails `Rust gate`. When adding a workspace crate or changing a related crate's dependencies, update the registration and dependency sets in `scripts/ci/select_rust_jobs.py`; manifest checks guard against missing coverage.
 
 `Rust gate` and `Docs gate` remain the unified Required Checks and support Merge Queue. Gates always aggregate dependency results: success and conditional skips pass, while failure or cancellation fails.
+
+Regular CI and packaging share Rust 1.99.1 pinned in the root `rust-toolchain.toml`. `python scripts/ci/test_scripts.py` discovers script regressions automatically. Windows resource, WiX and diagnostic native tests use `--suite windows-resources`, `--suite windows-msi` and `--suite diagnostic`; a selected suite fails if required tools are missing. Job Summary records skipped test counts.
+
+Release and Snapshot share six-platform packaging. Provenance binds actual source, target/variant, compiler, lockfile, build configuration and package hashes. `release_provenance.py verify --legacy` supports old records; new publication requires complete v2 provenance and compatibility packages, otherwise all packages must be rebuilt. Gitee, AUR and Homebrew share structured publication receipts and support independent retries. See the [Release tooling runbook](https://github.com/nyakang/nyaterm/blob/main/scripts/release/README.md) for recovery.
+
+Stable releases, prereleases and signed rehearsals with `verify_release=true` all include glibc 2.31; ordinary Linux packages retain a glibc 2.35 baseline. Download `_linux_x64_glibc231.tar.gz` or `.deb` from the corresponding GitHub Release assets or the R2 `releases/v<version>/` directory and verify `SHA256SUMS`. Compatibility packages continue to require manual upgrades and leave existing updater channels intact. Snapshot builds only the six native platforms by default and retains fixed `main-snapshot` download links. Stable releases generate Windows MSI packages; prereleases and Snapshots do not.
 
 ## Documentation development
 

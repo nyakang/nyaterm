@@ -2,6 +2,8 @@ name: Docs
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 19 * * 6'
   merge_group:
     types: [checks_requested]
   push:
@@ -16,11 +18,38 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
+  orchestrate:
+    name: Select CI jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      run_docs: ${{ steps.select.outputs.run_docs }}
+    steps:
+      - name: Checkout tested revision and comparison history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test selection rules and workflow gates
+        run: python -m unittest scripts.tests.test_select_rust_jobs -v
+
+      - name: Select jobs for this event
+        id: select
+        run: python scripts/ci/select_rust_jobs.py
+
   docs:
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_docs == 'true'
     # This job name is quoted in docs-site/docs/development/setup.md and its English
     # mirror. Keep the two in step if it ever changes.
     name: Documentation site
@@ -64,10 +93,18 @@ jobs:
   gate:
     name: Docs gate
     runs-on: ubuntu-24.04
-    needs: [docs]
+    needs: [orchestrate, docs]
     if: always()
     timeout-minutes: 5
     steps:
+      - name: Summarize dependency results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          {
+            printf '| Job | Result |\n| --- | --- |\n'
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<< "$NEEDS_JSON"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Check dependency results
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1

@@ -40,7 +40,7 @@ jobs:
           DIAGNOSTIC_TOOLCHAIN: ${{ inputs.toolchain }}
         run: rustup toolchain install $env:DIAGNOSTIC_TOOLCHAIN --profile minimal --component rustfmt
       - name: Test diagnostic instrumentation
-        run: python -m unittest scripts.tests.test_package_diagnostic -v
+        run: python scripts/ci/test_scripts.py --suite diagnostic
       - name: Build and verify relocated diagnostic package
         shell: pwsh
         env:

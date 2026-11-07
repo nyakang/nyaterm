@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import package_native
+import artifact_catalog
 
 
 DOWNLOAD_ARTIFACTS = {
@@ -64,11 +65,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def expected_artifacts(version: str) -> set[str]:
-    names: set[str] = set()
-    for target in package_native.TARGETS:
-        names.update(package_native.artifact_names(target, version))
-    return names
+def expected_artifacts(version: str, *, include_focal: bool = False) -> set[str]:
+    return artifact_catalog.expected(version, include_focal=include_focal)
 
 
 def canonical_base_url(base_url: str) -> str:
@@ -143,13 +141,14 @@ def generate(
     base_url: str,
     notes: str,
     pub_date: str,
+    include_focal: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     version = package_native.validate_version(version)
     base_url = canonical_base_url(base_url)
     if tag != f"v{version}":
         raise ValueError(f"release tag {tag} does not match version {version}")
 
-    expected = expected_artifacts(version)
+    expected = expected_artifacts(version, include_focal=include_focal)
     missing = sorted(name for name in expected if not (directory / name).is_file())
     if missing:
         raise RuntimeError(f"missing release artifacts: {', '.join(missing)}")
@@ -216,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--notes-file", type=Path, required=True)
     parser.add_argument("--pub-date", required=True)
+    parser.add_argument("--include-focal", action="store_true")
     args = parser.parse_args(argv)
 
     directory = args.dist.resolve()
@@ -229,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         notes=args.notes_file.read_text(encoding="utf-8"),
         pub_date=args.pub_date,
+        include_focal=args.include_focal,
     )
     print(f"Generated SHA256SUMS, downloads.json and latest.json in {directory}")
     return 0

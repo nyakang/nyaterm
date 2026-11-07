@@ -12,10 +12,11 @@ from typing import Iterable, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflows")
+OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflows", "run_docs")
 
 # Explicit registration makes a new crate fail closed until its CI impact is reviewed.
 KNOWN_CRATES = frozenset({
+    "nyaterm-ai-client", "nyaterm-cloud-storage",
     "nyaterm-app", "nyaterm-core", "nyaterm-desktop", "nyaterm-mcp",
     "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
     "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
@@ -76,10 +77,12 @@ def select_paths(paths: Iterable[str]) -> Selection:
         if (
             name in GLOBAL_CONFIG_NAMES
             or "/.cargo/" in f"/{path}"
-            or path == ".github/workflows/rust.yml"
+            or path in {".github/workflows/rust.yml", ".github/workflows/native-package.yml"}
             or path.startswith((".github/actions/", "scripts/ci/"))
         ):
             selection.enable(OUTPUTS, f"Shared build/CI configuration: {description}")
+        elif path == ".github/workflows/docs.yml":
+            selection.enable({"run_docs", "run_python", "run_workflows"}, f"Documentation workflow: {description}")
         elif len(parts) >= 3 and parts[0] == "crates" and parts[1] in KNOWN_CRATES:
             jobs = {"run_rust"}
             if parts[1] in TMUX_CRATES:
@@ -95,17 +98,16 @@ def select_paths(paths: Iterable[str]) -> Selection:
             jobs = {"run_python"}
             if path.startswith("scripts/plugins/"):
                 jobs.add("run_plugin_sdk")
-            if path == "scripts/tests/test_windows_resources.py":
+            if path in {"scripts/tests/test_windows_resources.py", "scripts/tests/test_windows_msi.py", "scripts/tests/test_package_diagnostic.py"}:
                 jobs.add("run_rust")
             selection.enable(jobs, f"Script or script test: {description}")
         elif path.startswith(".github/workflows/"):
             selection.enable({"run_python", "run_workflows"}, f"Workflow: {description}")
         elif path in {".github/actionlint.yaml", ".github/actionlint.yml"}:
             selection.enable({"run_workflows"}, f"Actionlint configuration: {description}")
-        elif (
-            path.startswith(("docs-site/", ".github/ISSUE_TEMPLATE/"))
-            or (len(parts) == 1 and (name.lower().endswith(".md") or name == "LICENSE"))
-        ):
+        elif path.startswith("docs-site/") or (len(parts) == 1 and name.lower().endswith(".md")):
+            selection.enable({"run_docs"}, f"Documentation: {description}")
+        elif path.startswith(".github/ISSUE_TEMPLATE/") or path == "LICENSE":
             selection.reasons.append(f"Documentation or repository text: {description}")
         else:
             selection.enable(OUTPUTS, f"Unclassified path; run all jobs: {description}")
@@ -133,11 +135,21 @@ def changed_paths(root: Path, base_sha: str, tested_sha: str) -> list[str]:
 
 
 def select_event(event_name: str, event: dict, tested_sha: str, root: Path = ROOT) -> Selection:
-    if event_name != "pull_request":
+    if event_name not in {"pull_request", "push", "merge_group"}:
         return full_selection(f"Full suite for event: {json.dumps(event_name)}")
-    pull_request = event["pull_request"]
+    pull_request = event.get("pull_request", {})
+    if event_name == "pull_request":
+        base, head = pull_request.get("base", {}).get("sha", ""), tested_sha
+    elif event_name == "push":
+        base, head = event.get("before", ""), event.get("after", "")
+    else:
+        group = event.get("merge_group", {})
+        base, head = group.get("base_sha", ""), group.get("head_sha", "")
+    # A selector must describe the exact checkout tested by subsequent jobs.
+    if head != tested_sha:
+        return full_selection("Event revision does not match tested checkout")
     try:
-        paths = changed_paths(root, pull_request.get("base", {}).get("sha", ""), tested_sha)
+        paths = changed_paths(root, base, head)
     except ComparisonUnavailable as error:
         selection = full_selection(str(error))
     else:

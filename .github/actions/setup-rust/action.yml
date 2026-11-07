@@ -38,9 +38,17 @@ runs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: ${{ contains(inputs.targets, 'aarch64') && 'amd64_arm64' || 'amd64' }}
+    - name: Read pinned Rust toolchain
+      id: toolchain
+      shell: bash
+      run: |
+        version=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' rust-toolchain.toml)
+        test -n "$version"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@master
       with:
+        toolchain: ${{ steps.toolchain.outputs.version }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
 
@@ -49,7 +57,7 @@ runs:
     - name: Restore Cargo cache
       uses: Swatinem/rust-cache@v2
       with:
-        key: ${{ inputs.cache-key }}
+        key: ${{ steps.toolchain.outputs.version }}-${{ inputs.targets }}-${{ inputs.cache-key }}
         cache-on-failure: ${{ inputs.cache-on-failure }}
         save-if: >-
           ${{ inputs.save-cache == 'always'

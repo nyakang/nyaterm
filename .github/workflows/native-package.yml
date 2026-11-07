@@ -1,0 +1,199 @@
+name: Native packages
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      artifact_version:
+        required: true
+        type: string
+      release_type:
+        required: true
+        type: string
+      artifact_prefix:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+
+jobs:
+  package:
+    name: Package ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: macos-arm64, os: macos-15, target: aarch64-apple-darwin }
+          - { label: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
+          # Keep the x64 glibc floor at 2.35 while ubuntu-22.04 is supported.
+          - { label: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { label: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { label: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
+          - { label: windows-arm64, os: windows-2025, target: aarch64-pc-windows-msvc }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate frozen package request
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, tomllib
+          sha = os.environ['SOURCE_SHA']
+          if not re.fullmatch('[0-9a-f]{40}', sha) or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != sha:
+              raise SystemExit('package source must be the frozen checkout SHA')
+          version = tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version']
+          kind = os.environ['RELEASE_TYPE']
+          if kind not in ('release', 'snapshot') or version != os.environ['VERSION']:
+              raise SystemExit('invalid package version or release type')
+          label, prefix = ('main-snapshot', 'main-snapshot') if kind == 'snapshot' else (version, 'NyaTerm')
+          if os.environ['ARTIFACT_VERSION'] != label or os.environ['ARTIFACT_PREFIX'] != prefix:
+              raise SystemExit('package filename contract mismatch')
+          PY
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          cache-key: package-${{ inputs.release_type }}-${{ matrix.target }}
+          cache-on-failure: 'true'
+          save-cache: always
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-deps
+        with:
+          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm
+      - name: Install AppImage tooling
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/install-nsis.ps1
+      - name: Install .NET for WiX
+        if: runner.os == 'Windows' && inputs.release_type == 'release' && !contains(inputs.version, '-')
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install WiX
+        if: runner.os == 'Windows' && inputs.release_type == 'release' && !contains(inputs.version, '-')
+        shell: pwsh
+        run: ./scripts/ci/install-wix.ps1
+      - name: Test MSI packaging contracts
+        if: runner.os == 'Windows' && inputs.release_type == 'release' && !contains(inputs.version, '-')
+        run: python scripts/ci/test_scripts.py --suite windows-msi
+      - name: Prepare bundled ConPTY
+        if: runner.os == 'Windows'
+        run: python scripts/release/prepare_conpty.py
+      - name: Package native application
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
+          NYATERM_ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+          NYATERM_VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: python scripts/release/package_native.py "${TARGET}"
+      - name: Package native application (Windows MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NYATERM_ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+          NYATERM_VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          # Git Bash prepends Git's /usr/bin/link.exe, shadowing MSVC's linker.
+          # Preserve the PATH configured by ilammy/msvc-dev-cmd for Rust builds.
+          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          if ($linker -notmatch '\\VC\\Tools\\MSVC\\[^\\]+\\bin\\HostX64\\(x64|arm64)\\link\.exe$') {
+            throw "Expected Visual Studio MSVC linker, got: $linker"
+          }
+          Write-Host "Using MSVC linker: $linker"
+          python scripts/release/package_native.py "$env:TARGET"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify native package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+        run: >-
+          python scripts/release/verify_native_package.py
+          --target "${TARGET}" --version "${VERSION}"
+          --artifact-version "${ARTIFACT_VERSION}" --dist dist
+      # Run host tests even when the package contains ARM64 executables.
+      - name: Configure MSVC for host tests
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Test portable updater against packaged ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+        run: |
+          $arch = if ($env:TARGET -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          $env:NYATERM_TEST_PORTABLE_ARCH = if ($arch -eq 'arm64') { 'aarch64' } else { 'x86_64' }
+          $env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path "dist/NyaTerm_$($env:ARTIFACT_VERSION)_windows_${arch}_portable.zip").Path
+          cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
+      - name: Record package provenance
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          TARGET: ${{ matrix.target }}
+        run: >-
+          python scripts/release/release_provenance.py record
+          --dist dist --records provenance --source-sha "${SOURCE_SHA}"
+          --version "${VERSION}" --artifact-version "${ARTIFACT_VERSION}"
+          --run-id "${GITHUB_RUN_ID}" --target "${TARGET}"
+      - name: Upload package provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-${{ matrix.label }}
+          path: provenance/*.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: ${{ inputs.release_type == 'snapshot' && 7 || 30 }}
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-${{ matrix.label }}
+          path: dist/*
+          overwrite: true
+          if-no-files-found: error
+          retention-days: ${{ inputs.release_type == 'snapshot' && 7 || 30 }}
+

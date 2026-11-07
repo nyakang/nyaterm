@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import os
 import io
 import shutil
 import subprocess
@@ -236,7 +237,8 @@ class PackageNativeTests(unittest.TestCase):
                     for size in package_native.linux_icons.ICON_SIZES:
                         icon = payload / "usr/share/icons/hicolor" / size / "apps" / f"{identity.desktop_id}.png"
                         self.assertTrue(icon.is_file())
-                        self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
+                        if os.name == "posix":
+                            self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
                     app_root = payload / "usr" / "bin" if payload.name == "NyaTerm.AppDir" else payload / "opt" / identity.desktop_id
                     for name in ("nyaterm", *package_native.helper_bins("x86_64-unknown-linux-gnu")):
                         self.assertTrue((app_root / name).is_file())

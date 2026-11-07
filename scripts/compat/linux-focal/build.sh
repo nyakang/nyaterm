@@ -20,6 +20,7 @@ export NYATERM_LINUX_COMPAT=glibc231
 # Default members include the MCP bridge; the Windows-only RDP integration is
 # not shipped in the focal package.
 cargo build --release --locked --target x86_64-unknown-linux-gnu
+rustc -Vv > "$CARGO_TARGET_DIR/compiler.txt"
 binary_dir="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release"
 bash scripts/compat/linux-focal/prepare-opengl.sh
 package_options=()

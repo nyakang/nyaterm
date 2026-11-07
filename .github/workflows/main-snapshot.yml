@@ -8,11 +8,12 @@ permissions:
 
 concurrency:
   group: main-snapshot
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
+  NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
   SNAPSHOT_TAG: main-snapshot
 
 jobs:
@@ -37,6 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.metadata.outputs.main_sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Python
@@ -70,14 +72,7 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
       - name: Test packaging and release helpers
-        run: >-
-          python -m unittest
-          scripts.tests.test_check_release_assets
-          scripts.tests.test_prepare_conpty
-          scripts.tests.test_package_native
-          scripts.tests.test_verify_native_package
-          scripts.tests.test_generate_release_metadata
-          scripts.tests.test_bump_version
+        run: python scripts/ci/test_scripts.py
       - name: Check workflow syntax
         run: >-
           docker run --rm
@@ -86,115 +81,14 @@ jobs:
           rhysd/actionlint:1.7.7
 
   package:
-    name: Package ${{ matrix.label }}
     needs: prepare
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { label: macos-arm64, os: macos-15, target: aarch64-apple-darwin }
-          - { label: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
-          - { label: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { label: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
-          - { label: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
-          - { label: windows-arm64, os: windows-2025, target: aarch64-pc-windows-msvc }
-    steps:
-      - name: Checkout main commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.main_sha }}
-          persist-credentials: false
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-        with:
-          targets: ${{ matrix.target }}
-          cache-key: main-snapshot-${{ matrix.target }}
-          cache-on-failure: 'true'
-          save-cache: always
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/install-linux-deps
-        with:
-          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm
-      - name: Install AppImage tooling
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
-      - name: Install NSIS
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/ci/install-nsis.ps1
-      - name: Prepare bundled ConPTY
-        if: runner.os == 'Windows'
-        run: python scripts/release/prepare_conpty.py
-      - name: Package native application
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
-          NYATERM_ARTIFACT_VERSION: main-snapshot
-          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
-          NYATERM_VERSION: ${{ needs.prepare.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: python scripts/release/package_native.py "${TARGET}"
-      - name: Package native application (Windows MSVC)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          NYATERM_ARTIFACT_VERSION: main-snapshot
-          NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
-          NYATERM_VERSION: ${{ needs.prepare.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          # Git Bash prepends Git's /usr/bin/link.exe, shadowing MSVC's linker.
-          # Preserve the PATH configured by ilammy/msvc-dev-cmd for Rust builds.
-          $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-          if ($linker -notmatch '\\VC\\Tools\\MSVC\\[^\\]+\\bin\\HostX64\\(x64|arm64)\\link\.exe$') {
-            throw "Expected Visual Studio MSVC linker, got: $linker"
-          }
-          Write-Host "Using MSVC linker: $linker"
-          python scripts/release/package_native.py "$env:TARGET"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify native package
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: >-
-          python scripts/release/verify_native_package.py
-          --target "${TARGET}" --version "${VERSION}"
-          --artifact-version main-snapshot --dist dist
-      # Run host tests even when the package contains ARM64 executables.
-      - name: Configure MSVC for host tests
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
-      - name: Test portable updater against packaged ZIP
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          $arch = if ($env:TARGET -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
-          $env:NYATERM_TEST_PORTABLE_ARCH = if ($arch -eq 'arm64') { 'aarch64' } else { 'x86_64' }
-          $env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path "dist/NyaTerm_main-snapshot_windows_${arch}_portable.zip").Path
-          cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-snapshot-${{ matrix.label }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 7
+    uses: ./.github/workflows/native-package.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.main_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      artifact_version: main-snapshot
+      release_type: snapshot
+      artifact_prefix: main-snapshot
 
   publish:
     name: Publish main snapshot
@@ -225,38 +119,41 @@ jobs:
         run: >-
           python3 scripts/ci/check_release_assets.py --dist release-assets
           --version "${VERSION}" --artifact-version main-snapshot
-      - name: Move snapshot tag
-        shell: bash
+      - name: Download package provenance
+        uses: actions/download-artifact@v4
+        with:
+          pattern: provenance-*
+          path: provenance
+          merge-multiple: true
+      - name: Verify snapshot provenance
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.main_sha }}
+        run: >-
+          python scripts/release/release_provenance.py verify
+          --dist release-assets --records provenance --version "$VERSION"
+          --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" --artifact-version main-snapshot
+      - name: Back up current snapshot
         env:
           GH_TOKEN: ${{ github.token }}
-          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
-        run: |
-          set -euo pipefail
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${SNAPSHOT_TAG}" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${SNAPSHOT_TAG}" -f sha="${MAIN_SHA}" -F force=true >/dev/null
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${SNAPSHOT_TAG}" -f sha="${MAIN_SHA}" >/dev/null
-          fi
-      - name: Create or update snapshot release
-        shell: bash
+          SOURCE_SHA: ${{ needs.prepare.outputs.main_sha }}
+        run: python scripts/release/snapshot_release.py backup --source-sha "$SOURCE_SHA"
+      - name: Retain snapshot preimage before replacing assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-preimage-${{ github.run_attempt }}
+          path: snapshot-recovery/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish verified snapshot
         env:
           GH_TOKEN: ${{ github.token }}
-          MAIN_SHA: ${{ needs.prepare.outputs.main_sha }}
-        run: |
-          set -euo pipefail
-          cat > release-notes.md <<EOF
-          Manually triggered snapshot of the main branch.
-
-          Source commit: ${MAIN_SHA}
-
-          This prerelease is overwritten after every successful snapshot build and is intended for testing only.
-          EOF
-          if gh release view "${SNAPSHOT_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${SNAPSHOT_TAG}" --repo "${GITHUB_REPOSITORY}" --title 'NyaTerm Main Snapshot' --notes-file release-notes.md --prerelease
-            while IFS= read -r asset; do
-              [[ -z "${asset}" ]] || gh release delete-asset "${SNAPSHOT_TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}" --yes
-            done < <(gh release view "${SNAPSHOT_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
-          else
-            gh release create "${SNAPSHOT_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${MAIN_SHA}" --title 'NyaTerm Main Snapshot' --notes-file release-notes.md --prerelease
-          fi
-          gh release upload "${SNAPSHOT_TAG}" release-assets/* --repo "${GITHUB_REPOSITORY}" --clobber
+        run: python scripts/release/snapshot_release.py publish
+      - name: Retain snapshot recovery journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-recovery-${{ github.run_attempt }}
+          path: snapshot-recovery/
+          if-no-files-found: warn
+          retention-days: 7
