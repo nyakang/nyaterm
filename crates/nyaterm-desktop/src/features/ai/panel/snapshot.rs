@@ -81,6 +81,10 @@ impl NyaTermApp {
         };
         AiHeaderPresentation {
             running: self.ai.chat_or_agent_is_running(),
+            conversation_title: self
+                .ai
+                .conversation_title()
+                .unwrap_or_else(|| t!("ai.newChat").to_string()),
             mode_label,
             selected_model_id,
             model_label,
@@ -462,6 +466,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn sync_ai_active_scope(&mut self, cx: &mut Context<Self>) {
+        let before = self.ai_header_presentation();
         let scope = self
             .session
             .active_id()
@@ -470,6 +475,7 @@ impl NyaTermApp {
         if self.ai.switch_visible_scope(&scope) {
             let draft = self.ai.chat_prompt_draft().to_string();
             self.reset_text_input("ai.chat.prompt", &draft, cx);
+            self.notify_root_if_ai_header_changed(before, cx);
         }
     }
 }

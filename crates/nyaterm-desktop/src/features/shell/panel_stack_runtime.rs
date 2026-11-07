@@ -13,7 +13,10 @@ use gpui::{
 };
 use nyaterm_core::truncate_preview;
 
-use crate::features::{NyaTermApp, view_widgets::panel_header_with_actions};
+use crate::features::NyaTermApp;
+use crate::features::view_widgets::{
+    conversation_panel_header_with_actions, panel_header_with_actions,
+};
 use crate::models::{
     ActivityBarZone, NavItem, NetworkTab, PanelOpenMode, PanelSide, RightFocus, SecurityAuthTab,
     SettingsTab,
@@ -904,13 +907,7 @@ impl NyaTermApp {
                         .flex_col()
                         .overflow_hidden()
                         .child(measurement)
-                        .child(panel_header_with_actions(
-                            title,
-                            meta,
-                            palette,
-                            self.shell_transparent_color(palette.section_header),
-                            actions,
-                        ))
+                        .child(self.side_panel_header(panel, title, meta, palette, actions))
                         .child(div().flex_1().min_h_0().overflow_hidden().child(body)),
                 );
                 if index + 1 < count {
@@ -965,14 +962,30 @@ impl NyaTermApp {
             .size_full()
             .flex()
             .flex_col()
-            .child(panel_header_with_actions(
-                title,
-                meta,
-                palette,
-                self.shell_transparent_color(palette.section_header),
-                actions,
-            ))
+            .child(self.side_panel_header(panel, title, meta, palette, actions))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
+    }
+
+    fn side_panel_header(
+        &self,
+        panel: NavItem,
+        title: impl Into<SharedString>,
+        meta: SharedString,
+        palette: ThemePalette,
+        actions: Option<AnyElement>,
+    ) -> AnyElement {
+        let background = self.shell_transparent_color(palette.section_header);
+        if panel == NavItem::AiAssistant {
+            conversation_panel_header_with_actions(
+                self.ai_header_presentation().conversation_title,
+                palette,
+                background,
+                actions,
+            )
+            .into_any_element()
+        } else {
+            panel_header_with_actions(title, meta, palette, background, actions).into_any_element()
+        }
     }
 
     fn side_panel_content(
@@ -1010,7 +1023,7 @@ impl NyaTermApp {
     fn side_panel_meta(&self, _side: PanelSide, panel: NavItem) -> SharedString {
         match panel {
             NavItem::Connections => SharedString::from(""),
-            NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().mode_label),
+            NavItem::AiAssistant => SharedString::from(""),
             NavItem::ActiveSessions => SharedString::from(""),
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
@@ -1525,7 +1538,7 @@ mod tests {
 
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
-    use crate::models::{NavItem, PanelOpenMode, PanelSide};
+    use crate::models::{NavItem, PanelOpenMode, PanelSide, SettingsTab};
     use crate::test_support::{TestAppCleanup, TestConfigDir};
 
     use super::{SidePanelStackRenderMode, side_panel_stack_render_mode};
@@ -1556,6 +1569,116 @@ mod tests {
         app: Entity<NyaTermApp>,
         side: PanelSide,
         height: f32,
+    }
+
+    struct AiPanelHeaderFixture {
+        app: Entity<NyaTermApp>,
+        side: PanelSide,
+        width: f32,
+    }
+
+    impl Render for AiPanelHeaderFixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let panel = self.app.update(cx, |app, cx| {
+                app.single_side_panel(self.side, NavItem::AiAssistant, None, window, cx)
+            });
+            div().size_full().child(
+                div()
+                    .debug_selector(|| "ai-panel-header-fixture".into())
+                    .w(px(self.width))
+                    .h_full()
+                    .child(panel),
+            )
+        }
+    }
+
+    #[test]
+    fn ai_panel_titles_reserve_space_for_clickable_actions_at_narrow_widths() {
+        let test_dir = TestConfigDir::new("nyaterm-ai-panel-header");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "header-test");
+        app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+        let (fixture, cx) = cx.add_window_view(|_, cx| {
+            cx.observe(&app, |_, _, cx| cx.notify()).detach();
+            AiPanelHeaderFixture {
+                app: app.clone(),
+                side: PanelSide::Right,
+                width: 320.,
+            }
+        });
+
+        for side in [PanelSide::Left, PanelSide::Right] {
+            for width in [160., 200., 320., 600.] {
+                cx.update(|_, cx| {
+                    app.update(cx, |app, cx| {
+                        app.sync_ai_active_scope(cx);
+                        app.ai.start_new_chat();
+                        app.ai.begin_chat_request(
+                            "MixedCase 中文 👩🏽‍💻 long conversation title ".repeat(40),
+                            nyaterm_core::AiMode::Ask,
+                            None,
+                        );
+                        app.ai.cancel_chat_and_agent();
+                    });
+                    fixture.update(cx, |fixture, cx| {
+                        fixture.width = width;
+                        fixture.side = side;
+                        cx.notify();
+                    });
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| _ = window.draw(cx));
+
+                let panel = cx.debug_bounds("ai-panel-header-fixture").unwrap();
+                let title = cx.debug_bounds("ai-conversation-title").unwrap();
+                assert!(title.left() >= panel.left());
+                let mut previous_right = title.right();
+                for id in [
+                    "ai-header-history-toggle",
+                    "ai-header-open-settings",
+                    "ai-header-new-chat",
+                ] {
+                    let action = cx.debug_bounds(id).unwrap();
+                    assert!(
+                        previous_right <= action.left(),
+                        "title and actions must not overlap"
+                    );
+                    assert!(action.right() <= panel.right());
+                    previous_right = action.right();
+                }
+
+                let history = cx.debug_bounds("ai-header-history-toggle").unwrap();
+                cx.simulate_click(history.center(), Modifiers::default());
+                cx.update(|_, cx| assert!(app.read(cx).ai.history_is_open()));
+                cx.run_until_parked();
+                cx.update(|window, cx| _ = window.draw(cx));
+                cx.simulate_click(history.center(), Modifiers::default());
+                cx.update(|_, cx| assert!(!app.read(cx).ai.history_is_open()));
+                cx.run_until_parked();
+                cx.update(|window, cx| _ = window.draw(cx));
+
+                let settings = cx.debug_bounds("ai-header-open-settings").unwrap();
+                cx.simulate_click(settings.center(), Modifiers::default());
+                cx.update(|_, cx| {
+                    assert_eq!(
+                        app.read(cx).shell.navigation.settings.active_tab,
+                        SettingsTab::AiGeneral
+                    );
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| _ = window.draw(cx));
+
+                let new_chat = cx.debug_bounds("ai-header-new-chat").unwrap();
+                cx.simulate_click(new_chat.center(), Modifiers::default());
+                cx.update(|_, cx| {
+                    assert_eq!(
+                        app.read(cx).ai_header_presentation().conversation_title,
+                        rust_i18n::t!("ai.newChat")
+                    );
+                });
+            }
+        }
     }
 
     impl Render for PanelStackFixture {
@@ -1690,6 +1813,13 @@ mod tests {
         app.update(&mut cx, |app, cx| {
             app.sync_component_theme(cx);
             app.set_panel_open_mode(PanelOpenMode::Floating, cx);
+            app.sync_ai_active_scope(cx);
+            app.ai.begin_chat_request(
+                "MixedCase 中文 👩🏽‍💻 long conversation title ".repeat(40),
+                nyaterm_core::AiMode::Ask,
+                None,
+            );
+            app.ai.cancel_chat_and_agent();
         });
         let (fixture, cx) = cx.add_window_view(|_, _| FloatingPanelFixture {
             app: app.clone(),
@@ -1701,7 +1831,7 @@ mod tests {
             (PanelSide::Left, "floating-left-panel-close"),
             (PanelSide::Right, "floating-right-panel-close"),
         ] {
-            for width in [160., 200., 320.] {
+            for width in [160., 200., 320., 600.] {
                 cx.update(|_, cx| {
                     app.update(cx, |app, cx| {
                         app.toggle_floating_panel(NavItem::AiAssistant, side, cx);
@@ -1719,6 +1849,8 @@ mod tests {
 
                 let panel = cx.debug_bounds("floating-panel-fixture").unwrap();
                 let close = cx.debug_bounds(close_id).unwrap();
+                let title = cx.debug_bounds("ai-conversation-title").unwrap();
+                assert!(title.left() >= panel.left() && title.right() <= close.left());
                 assert!(close.left() >= panel.left() && close.right() <= panel.right());
                 assert!(
                     cx.debug_bounds("ai-header-execution-mode-toggle").is_none(),
@@ -1734,6 +1866,7 @@ mod tests {
                         action.left() >= panel.left() && action.right() <= panel.right(),
                         "{id} must stay inside a {width}px panel"
                     );
+                    assert!(title.right() <= action.left(), "title must not cover {id}");
                     assert!(
                         action.right() <= close.left()
                             || close.right() <= action.left()

@@ -486,6 +486,113 @@ fn state(cx: &TestAppContext) -> AiFeatureState {
 }
 
 #[test]
+fn conversation_title_uses_the_first_nonempty_user_message_without_cutting_unicode() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.set_chat_prompt_draft("unsent draft".into());
+    assert_eq!(state.conversation_title(), None);
+
+    let question = format!(
+        "  > 引用\n\n **MixedCase**\t中文 👩🏽‍💻 e\u{301} {}  ",
+        "长问题".repeat(100)
+    );
+    let expected = format!(
+        "> 引用 **MixedCase** 中文 👩🏽‍💻 e\u{301} {}",
+        "长问题".repeat(100)
+    );
+    for (index, (role, content)) in [
+        (AiMessageRole::System, "system context".into()),
+        (AiMessageRole::Assistant, "assistant content".into()),
+        (AiMessageRole::User, " \n\t ".into()),
+        (AiMessageRole::User, question),
+        (AiMessageRole::User, "later question".into()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        state.chat.messages.push(Arc::new(AiMessage {
+            id: format!("message-{index}"),
+            session_id: state.chat_session_id().into(),
+            role,
+            content,
+            created_at: "2026-11-07T00:00:00Z".into(),
+            reasoning_content: None,
+            command_cards: Vec::new(),
+        }));
+    }
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
+fn conversation_title_follows_history_and_terminal_scopes_and_resets_for_new_chats() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.switch_visible_scope("terminal:a");
+    state.begin_chat_request("First question A".into(), AiMode::Ask, None);
+    state.cancel_chat_and_agent();
+    let saved_id = state.chat_session_id().to_string();
+    let saved_messages = state
+        .chat_messages()
+        .iter()
+        .map(|message| (**message).clone())
+        .collect();
+    state.begin_chat_request("Follow-up A".into(), AiMode::Ask, None);
+    state.cancel_chat_and_agent();
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some("First question A")
+    );
+
+    state.switch_visible_scope("terminal:b");
+    assert_eq!(state.conversation_title(), None);
+    state.begin_chat_request("First question B".into(), AiMode::Agent, None);
+    state.cancel_chat_and_agent();
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some("First question B")
+    );
+    state.switch_visible_scope("terminal:a");
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some("First question A")
+    );
+    state.start_new_chat();
+    assert_eq!(state.conversation_title(), None);
+
+    let source_id = state.chat_session_id().to_string();
+    let job_id = state.begin_history_operation("load").unwrap();
+    assert!(state.finish_history_message_load(
+        job_id,
+        &source_id,
+        saved_id.clone(),
+        Ok(saved_messages),
+        "loaded".into(),
+    ));
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some("First question A")
+    );
+    state.toggle_history();
+    state.close_history();
+    assert_eq!(
+        state.conversation_title().as_deref(),
+        Some("First question A")
+    );
+
+    let job_id = state.begin_history_operation("delete").unwrap();
+    assert_eq!(
+        state.finish_history_session_delete(job_id, &saved_id, Ok(())),
+        Some(true)
+    );
+    assert_eq!(state.conversation_title(), None);
+}
+
+#[test]
 fn settings_draft_restore_and_replacement_keep_related_values_together() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

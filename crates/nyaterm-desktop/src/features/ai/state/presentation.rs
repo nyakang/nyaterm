@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use nyaterm_core::AiMessageRole;
 use nyaterm_core::ai::CommandObservation;
 
 use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
@@ -8,6 +9,22 @@ use crate::features::formatting::markdown::think_content_presence;
 use crate::features::runtime_jobs::{AiAgentStepStatus, AiAgentStepView};
 
 impl AiFeatureState {
+    pub(in crate::features) fn conversation_title(&self) -> Option<String> {
+        self.chat
+            .messages
+            .iter()
+            .find(|message| {
+                message.role == AiMessageRole::User && !message.content.trim().is_empty()
+            })
+            .map(|message| {
+                message
+                    .content
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+    }
+
     pub(in crate::features) fn associate_agent_command(&mut self, step_index: u16, card_id: &str) {
         let source = self
             .chat

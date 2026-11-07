@@ -64,6 +64,7 @@ fn opening_the_current_history_entry_keeps_live_message_ids_and_draft() {
         app.ai.cancel_chat_and_agent();
         app.ai.set_chat_prompt_draft("unsent".into());
         app.ai.toggle_history();
+        let title = app.ai_header_presentation().conversation_title;
         let id = app.ai.chat_session_id().to_string();
         let messages = app.ai.chat_messages().to_vec();
         app.load_ai_session_messages(id.clone(), cx);
@@ -72,6 +73,7 @@ fn opening_the_current_history_entry_keeps_live_message_ids_and_draft() {
         assert_eq!(app.ai.chat_prompt_draft(), "unsent");
         assert!(!app.ai.history_is_open());
         assert!(!app.ai.history_is_pending());
+        assert_eq!(app.ai_header_presentation().conversation_title, title);
     });
 }
 

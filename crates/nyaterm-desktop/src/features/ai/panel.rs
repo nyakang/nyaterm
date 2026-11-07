@@ -152,7 +152,8 @@ pub(in crate::features) struct AiPanelSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::features) struct AiHeaderPresentation {
     pub running: bool,
-    /// Work mode and agent runtime, shown beside the panel title.
+    pub conversation_title: String,
+    /// Work mode and agent runtime, retained in the header change projection.
     pub mode_label: String,
     pub selected_model_id: Option<String>,
     pub model_label: String,

@@ -78,10 +78,12 @@ impl NyaTermApp {
         if self.ai.chat_or_agent_is_running() {
             return;
         }
+        let before = self.ai_header_presentation();
         self.ai.start_new_chat();
         // The composer keeps its own buffer, so clearing the draft is not enough.
         self.reset_text_input("ai.chat.prompt", "", cx);
         self.defer_ai_panel_snapshot_flush(cx);
+        self.notify_root_if_ai_header_changed(before, cx);
     }
 
     pub(in crate::features) fn load_ai_session_messages(
@@ -187,6 +189,7 @@ impl NyaTermApp {
                     this.ai.release_ai_session(&session_id);
                 }
                 let target_session_id = session_id.clone();
+                let before = this.ai_header_presentation();
                 if this.ai.finish_history_message_load(
                     job_id,
                     &source_session_id,
@@ -212,6 +215,7 @@ impl NyaTermApp {
                         this.reset_text_input("ai.chat.prompt", &draft, cx);
                     }
                     this.defer_ai_panel_snapshot_flush(cx);
+                    this.notify_root_if_ai_header_changed(before, cx);
                 }
             });
         })
@@ -245,6 +249,7 @@ impl NyaTermApp {
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
+                let before = this.ai_header_presentation();
                 if let Some(succeeded) =
                     this.ai
                         .finish_history_session_delete(job_id, &session_id, result)
@@ -253,6 +258,7 @@ impl NyaTermApp {
                         this.refresh_ai_usage_counts(cx);
                     }
                     this.defer_ai_panel_snapshot_flush(cx);
+                    this.notify_root_if_ai_header_changed(before, cx);
                 }
             });
         })
@@ -281,6 +287,7 @@ impl NyaTermApp {
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
+                let before = this.ai_header_presentation();
                 if let Some(succeeded) =
                     this.ai
                         .finish_history_clear(job_id, &source_session_id, result)
@@ -289,6 +296,7 @@ impl NyaTermApp {
                         this.refresh_ai_usage_counts(cx);
                     }
                     this.defer_ai_panel_snapshot_flush(cx);
+                    this.notify_root_if_ai_header_changed(before, cx);
                 }
             });
         })
