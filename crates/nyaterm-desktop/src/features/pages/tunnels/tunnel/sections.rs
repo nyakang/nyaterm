@@ -3,15 +3,17 @@ use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 
 use gpui::prelude::*;
-use gpui::{Context, FontWeight, IntoElement, SharedString, div, px, rgb, rgba, svg};
+use gpui::{Context, FontWeight, IntoElement, MouseButton, SharedString, div, px, rgb, rgba, svg};
 
 use super::super::common::{NetworkItemMenuConfig, network_item_overflow_menu};
 use super::row::{TunnelNetworkRow, tunnel_network_row};
+use crate::features::tunnels::{TunnelBatchAction, TunnelBatchProgress};
 use crate::features::{NyaTermApp, formatting::tunnel_name};
 use crate::models::NetworkTab;
 use crate::widgets::{small_button, status_pill};
 use nyaterm_core::{TunnelConfig, TunnelGroup, truncate_preview};
 use nyaterm_transport::SshTunnelInfo;
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
 #[derive(Debug, Clone)]
 pub(in crate::features::pages::tunnels) struct TunnelSection {
@@ -229,6 +231,7 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                 .child(
                     div()
                         .min_w_0()
+                        .flex_1()
                         .flex()
                         .items_center()
                         .gap_2()
@@ -260,6 +263,17 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                                 .child(item_count.to_string()),
                         ),
                 )
+                .when_some(section.group.clone(), |this, group| {
+                    if item_count == 0 {
+                        return this;
+                    }
+                    this.child(tunnel_group_batch_actions(
+                        palette,
+                        group.id.clone(),
+                        app.tunnel_state.batch_progress(&group.id),
+                        cx,
+                    ))
+                })
                 .when_some(section.group.clone(), |this, group| {
                     let rename_id = group.id.clone();
                     let delete_id = group.id.clone();
@@ -297,6 +311,70 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                 }),
         )
         .when(!collapsed, |this| this.child(rows))
+}
+
+/// Group-wide start/stop controls in a tunnel group header.
+///
+/// The header toggles collapse on click, so the strip swallows mouse-down
+/// before the header sees it. A running batch shows its progress; the
+/// opposite action stays available and supersedes it.
+fn tunnel_group_batch_actions(
+    palette: crate::theme::ThemePalette,
+    group_id: String,
+    progress: Option<TunnelBatchProgress>,
+    cx: &mut Context<NyaTermApp>,
+) -> impl IntoElement {
+    let running = progress.map(|progress| progress.action);
+    let start_group_id = group_id.clone();
+    let stop_group_id = group_id.clone();
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .when_some(progress, |this, progress| {
+            this.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!(
+                        "network.batchProgress",
+                        done = progress.done,
+                        total = progress.total
+                    )),
+            )
+        })
+        .child(
+            NyaButton::new(
+                format!("tunnel-group-start-all-{group_id}"),
+                t!("network.startAll"),
+            )
+            .variant(NyaButtonVariant::Ghost)
+            .icon("icons/transfer/play.svg")
+            .small()
+            .compact()
+            .loading(running == Some(TunnelBatchAction::Start))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.start_tunnel_group(start_group_id.clone(), cx);
+            })),
+        )
+        .child(
+            NyaButton::new(
+                format!("tunnel-group-stop-all-{group_id}"),
+                t!("network.stopAll"),
+            )
+            .variant(NyaButtonVariant::Ghost)
+            .icon("icons/transfer/stop.svg")
+            .small()
+            .compact()
+            .loading(running == Some(TunnelBatchAction::Stop))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.stop_tunnel_group(stop_group_id.clone(), cx);
+            })),
+        )
 }
 
 fn tunnel_move_picker(

@@ -22,8 +22,45 @@ pub fn request_body(
     );
     let mut body =
         json!({"model": model.model_name, "messages": openai["messages"], "stream": stream});
+    let mut names = std::collections::HashMap::new();
+    for message in body["messages"].as_array_mut().expect("messages") {
+        if let Some(calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) {
+            for call in calls {
+                if let (Some(id), Some(name)) =
+                    (call["id"].as_str(), call["function"]["name"].as_str())
+                {
+                    names.insert(id.to_string(), name.to_string());
+                }
+                if let Some(arguments) = call["function"]["arguments"].as_str() {
+                    // The shared transcript encoded a Value as JSON text.
+                    call["function"]["arguments"] =
+                        serde_json::from_str(arguments).expect("encoded arguments");
+                }
+            }
+        }
+        if message["role"] == "tool"
+            && let Some(name) = message["tool_call_id"]
+                .as_str()
+                .and_then(|id| names.get(id))
+        {
+            message["tool_name"] = json!(name);
+        }
+        if let Some(reasoning) = message
+            .as_object_mut()
+            .expect("message")
+            .remove("reasoning_content")
+        {
+            message["thinking"] = reasoning;
+        }
+    }
     if let Some(tools) = openai.get("tools") {
         body["tools"] = tools.clone();
+        for tool in body["tools"].as_array_mut().expect("tools") {
+            tool["function"]
+                .as_object_mut()
+                .expect("function")
+                .remove("strict");
+        }
     }
     if request.options.connectivity_test {
         body["options"] = json!({"num_predict": 64});

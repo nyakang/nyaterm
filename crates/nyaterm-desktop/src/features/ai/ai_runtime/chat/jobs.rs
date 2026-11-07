@@ -861,18 +861,18 @@ impl NyaTermApp {
                 dirty = self.ai.apply_agent_protocol_repair(job_id);
             }
             AiChatWorkerEvent::Finished(event) => {
-                let native_call = event
+                let native_decision = event
                     .result
                     .as_ref()
                     .ok()
-                    .and_then(|output| output.native_call.clone());
+                    .and_then(|output| output.native_decision.clone());
                 if let Some(effect) =
                     self.ai
                         .finish_chat_job(event.job_id, event.session_id, event.result)
                 {
                     dirty = true;
-                    if let Some(call) = native_call {
-                        self.dispatch_native_agent_call(call, cx);
+                    if let Some(call) = native_decision {
+                        self.dispatch_native_agent_decision(call, cx);
                     } else if let Some(owner) = self.ai.ended_native_owner() {
                         self.clear_capability_owner(&owner, cx);
                     }

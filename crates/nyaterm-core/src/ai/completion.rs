@@ -108,6 +108,29 @@ pub enum AiProviderErrorKind {
     UnsupportedCapability,
 }
 
+/// Allowlisted classifications; provider prose and arbitrary codes never cross the boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProviderDiagnosticCode {
+    InvalidRequest,
+    UnsupportedParameter,
+    UnsupportedTools,
+    ContextLength,
+    InvalidSignature,
+    InvalidToolResults,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProviderParameter {
+    Tools,
+    ToolChoice,
+    ParallelToolCalls,
+    Reasoning,
+    Temperature,
+    MaxTokens,
+    Messages,
+    Input,
+}
+
 /// Only machine classifications and safe context cross the HTTP boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderError {
@@ -118,6 +141,9 @@ pub struct AiProviderError {
     pub protocol: Option<AiProviderApiProtocol>,
     pub generated_content: bool,
     pub tool_protocol_unsupported: bool,
+    pub diagnostic_code: Option<AiProviderDiagnosticCode>,
+    pub parameter: Option<AiProviderParameter>,
+    pub request_id: Option<String>,
 }
 
 impl AiProviderError {
@@ -136,6 +162,9 @@ impl AiProviderError {
             protocol: None,
             generated_content: false,
             tool_protocol_unsupported: false,
+            diagnostic_code: None,
+            parameter: None,
+            request_id: None,
         }
     }
 }
@@ -162,6 +191,15 @@ impl fmt::Display for AiProviderError {
         f.write_str(message)?;
         if let Some(status) = self.status {
             write!(f, " (HTTP {status})")?;
+        }
+        if let Some(code) = self.diagnostic_code {
+            write!(f, " [{code:?}]")?;
+        }
+        if let Some(parameter) = self.parameter {
+            write!(f, " ({parameter:?})")?;
+        }
+        if let Some(id) = &self.request_id {
+            write!(f, " [request: {id}]")?;
         }
         Ok(())
     }

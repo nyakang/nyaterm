@@ -40,7 +40,6 @@ pub(super) fn completion(
                 if call.call_id.is_empty()
                     || call.fn_name.is_empty()
                     || !ids.insert(call.call_id.clone())
-                    || !call.fn_arguments.is_object()
                 {
                     return Err(AiProviderError::new(AiProviderErrorKind::Protocol));
                 }
@@ -80,7 +79,13 @@ pub(super) fn completion(
     {
         parts.insert(0, AiContentPart::Reasoning(value.clone()));
     }
-    if text.is_empty() && reasoning.is_none() && tool_calls.is_empty() && parts.is_empty() {
+    if text.is_empty()
+        && reasoning.is_none()
+        && tool_calls.is_empty()
+        && parts.is_empty()
+        && stop.is_none()
+        && provider_data.is_null()
+    {
         return Err(AiProviderError::new(AiProviderErrorKind::Protocol));
     }
     let metadata = AiResponseMetadata {

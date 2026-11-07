@@ -3,9 +3,7 @@ use std::sync::Arc;
 use gpui::Context;
 use nyaterm_core::ai::completion::AiProviderErrorKind;
 use nyaterm_core::ai::harness::AgentToolRegistry;
-use nyaterm_core::ai::{
-    AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiMode, AiModelError,
-};
+use nyaterm_core::ai::{AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiMode};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -220,7 +218,7 @@ async fn completion_with_repair(
                         .options
                         .agent_context
                         .as_ref()
-                        .is_none_or(|context| context.calls.is_empty()) =>
+                        .is_none_or(|context| context.turns.is_empty()) =>
             {
                 request.options.agent_json_protocol = true;
                 send_event(tx, NativeJobEvent::ProtocolFallback, cancel).await?;
@@ -233,10 +231,12 @@ async fn completion_with_repair(
         }
         if request.mode == AiMode::Agent
             && request.options.agent_context.is_some()
-            && let Err(error) = AgentToolRegistry::parse(&completion.tool_calls, &completion.text)
+            && let Err(error) = AgentToolRegistry::decision(&completion)
         {
             warn_agent_protocol_failure(&completion, attempt, &error);
-            if attempt == 1 && error == AiModelError::InvalidAgentJsonFallback {
+            if attempt == 1
+                && error == nyaterm_core::ai::harness::AgentResponseError::InvalidJsonAction
+            {
                 request.options.agent_protocol_repair = true;
                 send_event(tx, NativeJobEvent::ProtocolRepair, cancel).await?;
                 continue;
@@ -251,11 +251,16 @@ async fn completion_with_repair(
 fn warn_agent_protocol_failure(
     completion: &AiChatCompletion,
     attempt: usize,
-    error: &AiModelError,
+    error: &nyaterm_core::ai::harness::AgentResponseError,
 ) {
     let classification = match error {
-        AiModelError::InvalidAgentJsonFallback => "missing_tool_call_invalid_json",
-        _ => "invalid_agent_tool_call",
+        nyaterm_core::ai::harness::AgentResponseError::InvalidJsonAction => "malformed_json_action",
+        nyaterm_core::ai::harness::AgentResponseError::InvalidStructure => "invalid_call_structure",
+        nyaterm_core::ai::harness::AgentResponseError::InvalidArguments => "invalid_tool_arguments",
+        nyaterm_core::ai::harness::AgentResponseError::Empty => "empty_answer",
+        nyaterm_core::ai::harness::AgentResponseError::ReasoningOnly => "reasoning_only",
+        nyaterm_core::ai::harness::AgentResponseError::Refused => "refused",
+        nyaterm_core::ai::harness::AgentResponseError::Truncated => "truncated",
     };
     tracing::warn!(
         classification,
@@ -263,6 +268,7 @@ fn warn_agent_protocol_failure(
         protocol = ?completion.metadata.assistant_turn.protocol,
         responses = completion.metadata.assistant_turn.responses,
         tool_count = completion.tool_calls.len(),
+        finish_reason = completion.metadata.finish_reason.as_deref().filter(|value| matches!(*value, "stop" | "end_turn" | "tool_calls" | "tool_use" | "length" | "max_tokens" | "refusal")).unwrap_or("other"),
         text_empty = completion.text.is_empty(),
         text_chars = completion.text.chars().count(),
         "AI Agent response failed protocol validation"

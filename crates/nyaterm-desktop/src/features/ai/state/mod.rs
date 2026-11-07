@@ -1195,7 +1195,7 @@ impl AiFeatureState {
                         .unwrap_or_else(|| job_id.to_string());
                     self.chat.response_metadata.insert(id, metadata.clone());
                 }
-                let has_native_call = output.native_call.is_some();
+                let has_native_call = output.native_decision.is_some();
                 if output.mode == AiMode::Agent && !has_native_call {
                     self.agent.conversation.push(AiMessage {
                         id: format!("agent-assistant-{}", uuid()),

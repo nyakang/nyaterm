@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::capabilities::CapabilityScope;
 
 use super::registry::{AgentTool, AgentToolCall, AgentToolRegistry};
+use super::{AgentToolBatch, AgentTurnRecord};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -160,7 +161,7 @@ impl std::fmt::Debug for AgentToolResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRequestContext {
     pub run_id: String,
-    pub calls: Vec<(AgentToolCall, AgentToolResult)>,
+    pub turns: Vec<AgentTurnRecord>,
     pub remaining_steps: u16,
 }
 
@@ -173,9 +174,9 @@ pub struct AgentRun {
     pub final_verification: Option<AgentVerification>,
     pub max_steps: u16,
     pub used_steps: u16,
-    pub pending_call: Option<AgentToolCall>,
+    pending_active: bool,
     pub questions: Vec<AgentQuestion>,
-    pub records: Vec<(AgentToolCall, AgentToolResult)>,
+    pub turns: Vec<AgentTurnRecord>,
     seen_calls: HashSet<String>,
 }
 
@@ -190,68 +191,188 @@ impl AgentRun {
             final_verification: None,
             max_steps,
             used_steps: 0,
-            pending_call: None,
+            pending_active: false,
             questions: Vec::new(),
-            records: Vec::new(),
+            turns: Vec::new(),
             seen_calls: HashSet::new(),
         }
     }
 
-    pub fn begin_call(&mut self, call: AgentToolCall) -> Result<(), String> {
-        if self.status.is_terminal() || self.pending_call.is_some() {
-            return Err("run is not ready for a tool call".into());
+    pub fn queue_batch(&mut self, batch: AgentToolBatch) -> Result<(), String> {
+        if self.status != AgentRunStatus::Planning
+            || self.pending_active
+            || self.has_queued_call()
+            || batch.calls.is_empty()
+            || batch.calls.len() > 128
+        {
+            return Err("run is not ready for a model turn".into());
         }
-        if self.seen_calls.contains(&call.id) {
-            return Err("duplicate agent call".into());
+        let mut ids = HashSet::new();
+        for entry in &batch.calls {
+            let id = entry.source.id.as_deref().ok_or("missing agent call id")?;
+            if id.is_empty() || self.seen_calls.contains(id) || !ids.insert(id.to_owned()) {
+                return Err("duplicate or missing agent call id".into());
+            }
+        }
+        self.seen_calls.extend(ids);
+        self.turns.push(AgentTurnRecord {
+            batch,
+            results: Vec::new(),
+        });
+        Ok(())
+    }
+
+    pub fn has_queued_call(&self) -> bool {
+        self.turns
+            .last()
+            .is_some_and(|turn| turn.results.len() < turn.batch.calls.len())
+    }
+
+    pub fn pending_call(&self) -> Option<&AgentToolCall> {
+        if !self.pending_active {
+            return None;
+        }
+        let turn = self.turns.last()?;
+        turn.batch
+            .calls
+            .get(turn.results.len())?
+            .action
+            .as_ref()
+            .ok()
+    }
+
+    /// Resolve invalid/over-quota decisions without dispatching an operation.
+    pub fn next_call(&mut self) -> Option<AgentToolCall> {
+        if self.status != AgentRunStatus::Planning || self.pending_active {
+            return None;
+        }
+        let turn = self.turns.last_mut()?;
+        let entry = turn.batch.calls.get(turn.results.len())?;
+        let error = match &entry.action {
+            Err(_) => Some("invalid_argument"),
+            Ok(call)
+                if call.tool != AgentTool::FinalAnswer && self.used_steps >= self.max_steps =>
+            {
+                Some("step_limit")
+            }
+            _ => None,
+        };
+        if let Some(code) = error {
+            self.used_steps = self.used_steps.saturating_add(1).min(self.max_steps);
+            turn.results.push(AgentToolResult {
+                call_id: entry.source.id.clone().expect("validated call id"),
+                value: serde_json::json!({"code":code,"message":"Call was not executed. Correct the decision using the available results and remaining steps."}),
+                is_error: true,
+            });
+            self.skip_remaining();
+            return None;
+        }
+        entry.action.as_ref().ok().cloned()
+    }
+
+    pub fn begin_call(&mut self, mut call: AgentToolCall) -> Result<(), String> {
+        if self.status != AgentRunStatus::Planning || self.pending_active {
+            return Err("run is not ready for a tool call".into());
         }
         AgentToolRegistry::validate(&call)?;
         if call.tool != AgentTool::FinalAnswer && self.used_steps >= self.max_steps {
             return Err("Agent reached its step limit; provide a final summary".into());
         }
+        if !self.has_queued_call() {
+            self.queue_batch(call.clone().into())?;
+        }
+        let turn = self.turns.last().expect("queued turn");
+        let expected = turn.batch.calls[turn.results.len()]
+            .action
+            .as_ref()
+            .map_err(|_| "invalid agent call")?;
+        // Provider continuation belongs to the turn, never to each executable call.
+        call.assistant_turn = None;
+        if expected.id != call.id
+            || expected.tool != call.tool
+            || expected.arguments != call.arguments
+        {
+            return Err("call does not match the queued decision".into());
+        }
         if call.tool != AgentTool::FinalAnswer {
             self.used_steps = self.used_steps.saturating_add(1);
         }
-        self.seen_calls.insert(call.id.clone());
-        self.pending_call = Some(call);
+        self.pending_active = true;
         self.status = AgentRunStatus::Running;
         Ok(())
     }
 
     pub fn complete_call(&mut self, result: AgentToolResult) -> bool {
-        if self.status.is_terminal()
-            || self
-                .pending_call
-                .as_ref()
-                .is_none_or(|call| call.id != result.call_id)
-        {
+        let Some(call) = self.pending_call() else {
+            return false;
+        };
+        if self.status.is_terminal() || call.id != result.call_id {
             return false;
         }
-        let call = self.pending_call.take().expect("matching pending call");
-        self.records.push((call, result));
+        let stop_batch = result.is_error
+            || call.tool == AgentTool::RequestUserInput
+            || (call.tool == AgentTool::TerminalExecute
+                && (result.value["exitCode"].is_null()
+                    || result.value["exitCode"]
+                        .as_i64()
+                        .is_some_and(|code| code != 0)
+                    || result.value["timedOut"] == true
+                    || result.value["sourceTruncated"] == true));
+        self.turns
+            .last_mut()
+            .expect("pending turn")
+            .results
+            .push(result);
+        self.pending_active = false;
         self.questions.clear();
         self.status = AgentRunStatus::Planning;
+        if stop_batch {
+            self.skip_remaining();
+        }
         true
     }
 
-    /// Return an over-quota decision to the model without enabling another operation.
+    fn skip_remaining(&mut self) {
+        if let Some(turn) = self.turns.last_mut() {
+            for entry in &turn.batch.calls[turn.results.len()..] {
+                turn.results.push(AgentToolResult {
+                    call_id: entry.source.id.clone().expect("validated call id"),
+                    value: serde_json::json!({"code":"not_executed","message":"Batch stopped. Reconsider this operation using the preceding results."}),
+                    is_error: true,
+                });
+            }
+        }
+    }
+
+    /// Compatibility entry point for the old single-call coordinator.
     pub fn reject_over_limit(&mut self, call: AgentToolCall) -> bool {
-        if self.status.is_terminal()
-            || self.pending_call.is_some()
+        if self.status != AgentRunStatus::Planning
+            || self.pending_active
+            || self.has_queued_call()
             || self.used_steps < self.max_steps
             || call.tool == AgentTool::FinalAnswer
-            || self.seen_calls.contains(&call.id)
             || AgentToolRegistry::validate(&call).is_err()
         {
             return false;
         }
-        self.seen_calls.insert(call.id.clone());
-        self.records.push((call.clone(), AgentToolResult {
-            call_id: call.id,
-            value: serde_json::json!({"code":"step_limit","message":"No operations remain; use final_answer with the remaining work and verification limitations."}),
-            is_error: true,
-        }));
-        self.status = AgentRunStatus::Planning;
+        if self.queue_batch(call.into()).is_err() {
+            return false;
+        }
+        self.next_call();
         true
+    }
+
+    pub fn finish_text(&mut self) -> Result<(), String> {
+        if self.status != AgentRunStatus::Planning || self.pending_active || self.has_queued_call()
+        {
+            return Err("run is not ready for a final answer".into());
+        }
+        self.final_verification = Some(AgentVerification {
+            status: AgentVerificationStatus::Unverified,
+            summary: "No explicit verification was supplied.".into(),
+        });
+        self.status = AgentRunStatus::Unverified;
+        Ok(())
     }
 
     pub fn update_plan(&mut self, plan: AgentPlan) -> Result<(), String> {
@@ -272,8 +393,7 @@ impl AgentRun {
     pub fn wait_for_user(&mut self, questions: Vec<AgentQuestion>) -> Result<(), String> {
         AgentQuestion::validate_all(&questions)?;
         if self
-            .pending_call
-            .as_ref()
+            .pending_call()
             .is_none_or(|call| call.tool != AgentTool::RequestUserInput)
         {
             return Err("no pending question call".into());
@@ -285,8 +405,7 @@ impl AgentRun {
 
     pub fn finish(&mut self, verification: AgentVerification) -> Result<(), String> {
         if self
-            .pending_call
-            .as_ref()
+            .pending_call()
             .is_none_or(|call| call.tool != AgentTool::FinalAnswer)
         {
             return Err("no pending final answer".into());
@@ -294,12 +413,7 @@ impl AgentRun {
         if verification.status == AgentVerificationStatus::Verified && !self.plan.is_complete() {
             return Err("unfinished plan cannot be marked verified".into());
         }
-        let call_id = self
-            .pending_call
-            .as_ref()
-            .expect("pending final")
-            .id
-            .clone();
+        let call_id = self.pending_call().expect("pending final").id.clone();
         self.complete_call(AgentToolResult {
             call_id,
             value: serde_json::json!({"finished":true}),
@@ -315,14 +429,32 @@ impl AgentRun {
     }
 
     pub fn cancel(&mut self) {
+        if let Some(call) = self.pending_call() {
+            let result = AgentToolResult {
+                call_id: call.id.clone(),
+                value: serde_json::json!({"code":"cancelled","message":"Execution was cancelled; its final effect may be unknown."}),
+                is_error: true,
+            };
+            self.turns
+                .last_mut()
+                .expect("pending turn")
+                .results
+                .push(result);
+        }
         self.status = AgentRunStatus::Cancelled;
-        self.pending_call = None;
+        self.pending_active = false;
+        self.skip_remaining();
         self.questions.clear();
     }
     pub fn request_context(&self) -> AgentRequestContext {
         AgentRequestContext {
             run_id: self.id.clone(),
-            calls: self.records.clone(),
+            turns: self
+                .turns
+                .iter()
+                .filter(|turn| turn.results.len() == turn.batch.calls.len())
+                .cloned()
+                .collect(),
             remaining_steps: self.max_steps.saturating_sub(self.used_steps),
         }
     }
@@ -375,7 +507,7 @@ mod tests {
         assert!(run.complete_call(answer.clone()));
         assert!(!run.complete_call(answer));
         assert_eq!(run.used_steps, 1);
-        assert_eq!(run.request_context().calls.len(), 1);
+        assert_eq!(run.request_context().turns.len(), 1);
         assert!(run.begin_call(question).is_err());
     }
 
@@ -542,7 +674,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(run.id, id);
-        assert_eq!(run.records.len(), 8);
+        assert_eq!(run.turns.len(), 8);
         assert_eq!(run.used_steps, 7);
         assert_eq!(run.status, AgentRunStatus::Completed);
     }

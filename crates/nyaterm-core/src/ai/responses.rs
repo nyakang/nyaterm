@@ -6,9 +6,9 @@
 
 use super::agent::agent_openai_tools;
 use super::{
-    AiApiFormat, AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiMode,
-    AiModelError, AiProviderKind, AiReasoningEffort, AiSettings, AiToolCall, AiToolCallDelta,
-    ResolvedAiModel, build_openai_compatible_chat_request_body_with_stream, trim_string_to_option,
+    AiApiFormat, AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiModelError,
+    AiProviderKind, AiReasoningEffort, AiSettings, AiToolCall, AiToolCallDelta, ResolvedAiModel,
+    build_openai_compatible_chat_request_body_with_stream, trim_string_to_option,
 };
 
 const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -58,9 +58,13 @@ pub fn build_openai_responses_request_body(
     // Reuse the canonical prompt/history builder, then translate only the
     // provider envelope. This keeps Chat Completions and Responses context
     // selection byte-for-byte aligned.
+    let mut base_request = request.clone();
+    if let Some(context) = &mut base_request.options.agent_context {
+        context.turns.clear();
+    }
     let chat = build_openai_compatible_chat_request_body_with_stream(
         resolved_model,
-        request,
+        &base_request,
         settings,
         history,
         stream,
@@ -71,22 +75,33 @@ pub fn build_openai_responses_request_body(
         "stream": stream,
         "store": false,
     });
+    if let Some(context) = &request.options.agent_context {
+        let input = body["input"].as_array_mut().expect("responses input");
+        if request.options.agent_json_protocol {
+            let mut messages = Vec::new();
+            super::harness::transcript::append_openai_with_language(
+                &mut messages,
+                context,
+                true,
+                &request.options.language,
+            );
+            input.extend(super::harness::transcript::responses_input(&messages));
+        } else {
+            super::harness::transcript::append_responses(input, context);
+        }
+    }
     if let Some(effort) = responses_reasoning_effort(&settings.default_reasoning_effort) {
         body["reasoning"] = serde_json::json!({ "effort": effort });
     }
-    if request.mode == AiMode::Agent && !request.options.agent_json_protocol {
-        body["tools"] = responses_tools();
-        body["parallel_tool_calls"] = serde_json::json!(false);
-        body["tool_choice"] = if request
-            .options
-            .agent_context
-            .as_ref()
-            .is_some_and(|context| context.remaining_steps == 0)
-        {
-            serde_json::json!({"type":"function","name":"final_answer"})
-        } else {
-            serde_json::json!("required")
-        };
+    if super::harness::AgentToolRegistry::request_policy(
+        request,
+        super::AiProviderApiProtocol::OpenaiCompatible,
+    )
+    .tools
+    .is_some()
+    {
+        body["tools"] = responses_tools(request);
+        body["tool_choice"] = serde_json::json!("auto");
     }
     if request.options.connectivity_test {
         body["max_output_tokens"] = serde_json::json!(64);
@@ -224,8 +239,8 @@ pub fn responses_reasoning_effort(value: &AiReasoningEffort) -> Option<&'static 
     }
 }
 
-fn responses_tools() -> serde_json::Value {
-    let tools = agent_openai_tools();
+fn responses_tools(request: &AiChatRequest) -> serde_json::Value {
+    let tools = agent_openai_tools(super::harness::AgentToolRegistry::available_tools(request));
     serde_json::Value::Array(
         tools
             .as_array()
@@ -238,7 +253,7 @@ fn responses_tools() -> serde_json::Value {
                     "name": function.get("name").cloned().unwrap_or_default(),
                     "description": function.get("description").cloned().unwrap_or_default(),
                     "parameters": function.get("parameters").cloned().unwrap_or_else(|| serde_json::json!({})),
-                    "strict": true,
+                    "strict": false,
                 })
             })
             .collect(),
@@ -396,11 +411,11 @@ fn completed_tool_calls(response: &serde_json::Value) -> Result<Vec<AiToolCall>,
 #[cfg(test)]
 mod tests {
     use super::{
-        AiApiFormat, AiMode, AiModelError, AiProviderKind, AiReasoningEffort, AiSettings,
-        ResolvedAiModel, build_openai_responses_request_body, openai_responses_url,
-        parse_openai_responses_response, parse_openai_responses_stream_chunk,
+        AiApiFormat, AiModelError, AiProviderKind, AiReasoningEffort, AiSettings, ResolvedAiModel,
+        build_openai_responses_request_body, openai_responses_url, parse_openai_responses_response,
+        parse_openai_responses_stream_chunk,
     };
-    use crate::ai::{AiBackendKind, AiProviderCredential};
+    use crate::ai::{AiBackendKind, AiMode, AiProviderCredential};
 
     fn resolved_model(base_url: Option<&str>) -> ResolvedAiModel {
         ResolvedAiModel {
