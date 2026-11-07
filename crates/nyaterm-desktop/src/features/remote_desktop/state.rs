@@ -504,10 +504,13 @@ mod tests {
     #[test]
     fn native_surface_is_only_displayable_while_the_session_can_paint() {
         use super::native_rdp_state_is_displayable;
-        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Disconnecting, Failed};
+        use RemoteDesktopViewState::{
+            Connected, Connecting, Disconnected, Disconnecting, Failed, Reconnecting,
+        };
 
         assert!(native_rdp_state_is_displayable(Connecting));
         assert!(native_rdp_state_is_displayable(Connected));
+        assert!(native_rdp_state_is_displayable(Reconnecting));
         assert!(!native_rdp_state_is_displayable(Disconnecting));
         assert!(!native_rdp_state_is_displayable(Disconnected));
         assert!(!native_rdp_state_is_displayable(Failed));
@@ -516,7 +519,9 @@ mod tests {
     #[test]
     fn native_surface_scope_ends_with_its_last_visible_session() {
         use super::native_surface_needed;
-        use RemoteDesktopViewState::{Connected, Connecting, Disconnected, Failed};
+        use RemoteDesktopViewState::{
+            Connected, Connecting, Disconnected, Disconnecting, Failed, Reconnecting,
+        };
 
         // Nothing native left: the owned input popup and mouse hook must go,
         // otherwise they cover later modal child windows.
@@ -529,6 +534,8 @@ mod tests {
         assert!(native_surface_needed(true, false, Failed));
         assert!(native_surface_needed(false, true, Connecting));
         assert!(native_surface_needed(false, true, Connected));
+        assert!(native_surface_needed(false, true, Reconnecting));
+        assert!(!native_surface_needed(false, true, Disconnecting));
     }
 
     /// A floating panel joins the native overlay exactly while a native session
@@ -566,17 +573,66 @@ mod tests {
             clipboard: RdpClipboardConfig::default(),
             reconnect: RdpReconnectConfig::default(),
         });
+        let config = session.native_rdp_config.as_ref().unwrap().clone();
+        assert!(state.native_presentation_needed(), "pending native config");
+        let session = state.sessions.get_mut("native").unwrap();
+        session.native_rdp_config = None;
+        // Creating the staged controller performs no COM work; only running an
+        // operation would instantiate ActiveX. This needs no reachable server.
+        session.native_rdp = Some(
+            nyaterm_windows_rdp::NativeRdpControl::create(
+                1,
+                nyaterm_remote_desktop::activex::NativeRdpRect {
+                    x: 0,
+                    y: 0,
+                    width: 800,
+                    height: 600,
+                    scale_percent: 100,
+                },
+                &config,
+            )
+            .unwrap(),
+        );
+        for view_state in [
+            RemoteDesktopViewState::Connecting,
+            RemoteDesktopViewState::Connected,
+            RemoteDesktopViewState::Reconnecting,
+        ] {
+            state.sessions.get_mut("native").unwrap().state = view_state;
+            assert!(state.native_presentation_needed());
+        }
+        for view_state in [
+            RemoteDesktopViewState::Disconnecting,
+            RemoteDesktopViewState::Disconnected,
+            RemoteDesktopViewState::Failed,
+        ] {
+            state.sessions.get_mut("native").unwrap().state = view_state;
+            assert!(!state.native_presentation_needed());
+        }
+        state.insert_disconnected("second".into());
+        state.sessions.get_mut("second").unwrap().native_rdp_config = Some(config);
         assert!(
             state.native_presentation_needed(),
-            "a pending native config still needs the overlay for the floating panel"
+            "another pending session retains the scope"
         );
-
-        // Closing the session drops the config and the retained control; the
-        // panel must return to the owner scene instead of staying in an overlay
-        // popup that outlives the ActiveX surface.
-        let session = state.sessions.get_mut("native").expect("native session");
-        session.native_rdp_config = None;
-        session.state = RemoteDesktopViewState::Disconnected;
-        assert!(!state.native_presentation_needed());
+        state.sessions.remove("second");
+        assert!(
+            !state.native_presentation_needed(),
+            "no displayable native sessions remain"
+        );
+        state.sessions.get_mut("native").unwrap().state = RemoteDesktopViewState::Connected;
+        assert!(state.native_presentation_needed());
+        let hosts = state.take_native_hosts_for_shutdown();
+        assert!(
+            !state.native_presentation_needed(),
+            "shutdown suppresses native presentation"
+        );
+        assert!(
+            state
+                .sessions
+                .values()
+                .all(|session| session.native_rdp.is_none() && session.native_rdp_config.is_none())
+        );
+        drop(hosts);
     }
 }

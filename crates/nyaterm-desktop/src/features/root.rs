@@ -360,13 +360,7 @@ impl NyaTermApp {
             // Observe presses before child controls dismiss popups or toggle
             // panels. Popup dismissal and panel dismissal are separate clicks.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                this.shell.panels.clear_floating_outside_press();
-                this.shell.panels.clear_native_floating_outside_press();
-                if event.button == MouseButton::Left
-                    && !this.floating_panel_dismissal_is_blocked(window, cx)
-                {
-                    this.note_floating_panel_outside_press(event.position);
-                }
+                this.capture_floating_panel_press(event, window, cx);
             }))
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
                 if event.button == MouseButton::Left {
@@ -383,29 +377,7 @@ impl NyaTermApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    let transfer_rename_dismissed = this.dismiss_transfer_rename_if_open(cx);
-                    let remote_menus_open = this.remote_ops.docker_menus_open();
-                    let ai_menus_open = this.ai.transient_menus_are_open();
-                    let changed =
-                        this.shell.close_root_menus() || remote_menus_open || ai_menus_open;
-                    if transfer_rename_dismissed {
-                        // 传输面板独立维护快照；根层点击关闭行内重命名后也要同步它。
-                        this.defer_transfer_panel_snapshot_flush(cx);
-                    }
-                    if changed {
-                        this.remote_ops.close_docker_menus();
-                        if remote_menus_open {
-                            this.defer_remote_panel_snapshot_flush(cx);
-                        }
-                        if ai_menus_open {
-                            if this.ai.history_is_open() {
-                                this.close_ai_history(window, cx);
-                            }
-                            this.ai.close_transient_menus();
-                            this.defer_ai_panel_snapshot_flush(cx);
-                        }
-                        cx.notify();
-                    }
+                    this.dismiss_workspace_menus_on_left_press(window, cx);
                 }),
             )
             .on_mouse_down(
@@ -865,6 +837,63 @@ impl NyaTermApp {
         }
     }
 
+    fn dismiss_workspace_menus_on_left_press(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let transfer_rename_dismissed = self.dismiss_transfer_rename_if_open(cx);
+        let remote_menus_open = self.remote_ops.docker_menus_open();
+        let ai_menus_open = self.ai.transient_menus_are_open();
+        let changed = self.shell.close_root_menus() || remote_menus_open || ai_menus_open;
+        if transfer_rename_dismissed {
+            // 传输面板独立维护快照；根层点击关闭行内重命名后也要同步它。
+            self.defer_transfer_panel_snapshot_flush(cx);
+        }
+        if changed {
+            if remote_menus_open {
+                self.remote_ops.close_docker_menus();
+                self.defer_remote_panel_snapshot_flush(cx);
+            }
+            if ai_menus_open {
+                if self.ai.history_is_open() {
+                    self.close_ai_history(window, cx);
+                }
+                self.ai.close_transient_menus();
+                self.defer_ai_panel_snapshot_flush(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Observe the original press without consuming or replaying native input.
+    pub(in crate::features) fn handle_native_overlay_outside_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button == MouseButton::Left {
+            // Snapshot eligibility before closing menus. The same observation
+            // can be followed by owner capture, which must preserve this result.
+            self.defer_native_floating_panel_outside_press(event.position, window, cx);
+            self.dismiss_workspace_menus_on_left_press(window, cx);
+        } else {
+            self.shell.panels.clear_floating_outside_press();
+        }
+        // Keep the existing native outside-menu behavior for auxiliary buttons.
+        self.shell.close_root_menus();
+        self.session.dialog_close_tab_actions();
+        self.close_tab_color_picker(cx);
+        self.close_action_link_menu(cx);
+        self.close_activity_bar_context_menu(cx);
+        self.close_transfer_job_menu(cx);
+        self.close_transfer_browser_favorites_menu(cx);
+        self.close_transfer_browser_path_menu(cx);
+        self.close_transfer_browser_upload_menu(cx);
+        cx.notify();
+    }
+
     fn overlay_host(
         &mut self,
         content: Stateful<Div>,
@@ -873,33 +902,8 @@ impl NyaTermApp {
     ) -> Stateful<Div> {
         let app = cx.weak_entity();
         window.on_native_overlay_outside_mouse_down(move |event, window, cx| {
-            let position = event.position;
             let _ = app.update(cx, |this, cx| {
-                // Native child surfaces report the press but never the release,
-                // so the owner scene's capture handlers never see it. Arm the
-                // shared outside-press record here, before this callback closes
-                // menus, so an open menu keeps the first dismissal click. A real
-                // press clears the mark in `capture_any_mouse_down`, leaving the
-                // release path in charge.
-                if !this.floating_panel_dismissal_is_blocked(window, cx) {
-                    this.note_native_floating_panel_outside_press(position);
-                    let app = cx.entity().downgrade();
-                    window.defer(cx, move |_, cx| {
-                        let _ = app.update(cx, |this, cx| {
-                            this.finish_native_floating_panel_outside_press(position, cx);
-                        });
-                    });
-                }
-                this.shell.close_root_menus();
-                this.session.dialog_close_tab_actions();
-                this.close_tab_color_picker(cx);
-                this.close_action_link_menu(cx);
-                this.close_activity_bar_context_menu(cx);
-                this.close_transfer_job_menu(cx);
-                this.close_transfer_browser_favorites_menu(cx);
-                this.close_transfer_browser_path_menu(cx);
-                this.close_transfer_browser_upload_menu(cx);
-                cx.notify();
+                this.handle_native_overlay_outside_mouse_down(event, window, cx);
             });
         });
         let overlay = self.root_overlay_visibility(cx);

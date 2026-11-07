@@ -21,7 +21,7 @@ use crate::models::{
 use crate::theme::ThemePalette;
 use nyaterm_ui::{NyaDialogWindowExt as _, NyaTooltip, nya_popup_is_active};
 
-use super::state::PANEL_STACK_MIN_HEIGHT;
+use super::state::{FloatingPressSource, PANEL_STACK_MIN_HEIGHT};
 
 type PanelStackMeasurements = Rc<RefCell<Vec<(String, f32)>>>;
 
@@ -270,49 +270,76 @@ impl NyaTermApp {
             || self.shell.new_session_menu_is_open()
             || self.shell.header_status_menu_is_open()
             || self.shell.activity_bar_context_menu().is_some()
+            || self.session.dialog_tab_actions_target().is_some()
+            || self.session.dialog_color_picker_is_open()
+            || self.terminal.overlay_visibility().action_link_menu
+            || self.transfer.transfer_job_menu().is_some()
             || self.transfer.browser_view().favorites_menu.is_some()
             || self.transfer.browser_view().path_menu.is_some()
             || self.transfer.browser_view().upload_menu.is_some()
     }
 
-    pub(in crate::features) fn note_floating_panel_outside_press(
+    pub(in crate::features) fn capture_floating_panel_press(
         &mut self,
-        position: Point<Pixels>,
-    ) {
-        self.shell.panels.clear_floating_outside_press();
-        if !self.shell.panel_is_floating() || self.position_inside_floating_panel(position) {
-            return;
-        }
-        if [PanelSide::Left, PanelSide::Right]
-            .into_iter()
-            .any(|side| self.floating_panel_window_bounds(side).is_some())
-        {
-            self.shell.panels.set_floating_outside_press(position);
-        }
-    }
-
-    /// Arms the shared outside-press record from the native child surface,
-    /// which reports a press without a matching release.
-    pub(in crate::features) fn note_native_floating_panel_outside_press(
-        &mut self,
-        position: Point<Pixels>,
-    ) {
-        self.note_floating_panel_outside_press(position);
-        self.shell.panels.mark_native_floating_outside_press();
-    }
-
-    /// Runs after the current dispatch. A real press clears both records in the
-    /// owner scene's capture handler, so a surviving marker is the native-child
-    /// case; the shared click validation then performs the one dismissal.
-    pub(in crate::features) fn finish_native_floating_panel_outside_press(
-        &mut self,
-        position: Point<Pixels>,
+        event: &MouseDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.panels.take_native_floating_outside_press() {
+        if event.button != MouseButton::Left {
+            self.shell.panels.clear_floating_outside_press();
             return;
         }
-        self.finish_floating_panel_outside_click(position, cx);
+        // Native observation precedes capture even for ordinary GPUI targets.
+        // Reuse its decision made before menus were dismissed.
+        if !self.shell.panels.handoff_native_floating_press() {
+            self.begin_floating_panel_press(event.position, FloatingPressSource::Gpui, window, cx);
+        }
+    }
+
+    fn begin_floating_panel_press(
+        &mut self,
+        position: Point<Pixels>,
+        source: FloatingPressSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        let eligible = !self.floating_panel_dismissal_is_blocked(window, cx)
+            && self.shell.panel_is_floating()
+            && !self.position_inside_floating_panel(position)
+            && [PanelSide::Left, PanelSide::Right]
+                .into_iter()
+                .any(|side| self.floating_panel_window_bounds(side).is_some());
+        self.shell
+            .panels
+            .begin_floating_press(position, eligible, source)
+    }
+
+    /// A native child sends no release. If GPUI capture takes over this press,
+    /// only its release may complete the gesture instead.
+    pub(in crate::features) fn defer_native_floating_panel_outside_press(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = self.begin_floating_panel_press(
+            position,
+            FloatingPressSource::NativePending,
+            window,
+            cx,
+        );
+        let app = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let _ = app.update(cx, |this, cx| {
+                this.finish_floating_panel_outside_click(
+                    id,
+                    FloatingPressSource::NativePending,
+                    position,
+                    window,
+                    cx,
+                );
+            });
+        });
     }
 
     /// Terminal pointer handlers can stop bubbling before the root's menu
@@ -349,27 +376,36 @@ impl NyaTermApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(id) = self.shell.panels.floating_press_id() else {
+            return;
+        };
         let app = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             let _ = app.update(cx, |this, cx| {
-                if this.floating_panel_dismissal_is_blocked(window, cx) {
-                    this.shell.panels.clear_floating_outside_press();
-                } else {
-                    this.finish_floating_panel_outside_click(position, cx);
-                }
+                this.finish_floating_panel_outside_click(
+                    id,
+                    FloatingPressSource::Gpui,
+                    position,
+                    window,
+                    cx,
+                );
             });
         });
     }
 
     fn finish_floating_panel_outside_click(
         &mut self,
+        id: u64,
+        source: FloatingPressSource,
         position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(press) = self.shell.panels.take_floating_outside_press() else {
+        let Some(press) = self.shell.panels.take_floating_outside_press(id, source) else {
             return;
         };
-        if !self.shell.panel_is_floating()
+        if self.floating_panel_dismissal_is_blocked(window, cx)
+            || !self.shell.panel_is_floating()
             || press.panels
                 != [
                     self.shell.panels.floating_left,

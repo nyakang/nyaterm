@@ -4,14 +4,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use gpui::{
-    Entity, Modifiers, MouseButton, Pixels, Point, PointerCancelEvent, PointerCancelReason,
-    TestAppContext, VisualTestContext, point, px, size,
+    Entity, Modifiers, MouseButton, MouseDownEvent, NavigationDirection, Pixels, PlatformInput,
+    Point, PointerCancelEvent, PointerCancelReason, TestAppContext, VisualTestContext, point, px,
+    size,
 };
 use nyaterm_core::{AiModelConfigItem, AiModelSource, AiProviderKind};
 use nyaterm_transport::TelnetSessionConfig;
 use nyaterm_ui::{NyaDialogWindowExt as _, nya_popup_is_active};
 
 use crate::features::NyaTermApp;
+use crate::features::shell::state::NewSessionMenuAnchor;
 use crate::features::test_support::app_with_visible_local_session;
 use crate::models::{NavItem, PanelOpenMode, PanelSide, SessionLaunchConfig};
 use crate::test_support::{TestAppCleanup, TestConfigDir};
@@ -462,64 +464,224 @@ fn resized_panels_use_the_rendered_bounds_and_releasing_inside_either_does_not_c
     }
 }
 
+// Exercise the exact method installed in Window's native outside callback.
+// GPUI's test platform has no native child-window implementation, so model the
+// two dispatch orders here; HWND hit testing remains a Windows manual check.
+fn native_press(
+    app: &Entity<NyaTermApp>,
+    cx: &mut VisualTestContext,
+    position: Point<Pixels>,
+    button: MouseButton,
+    owner_receives_press: bool,
+) {
+    let event = MouseDownEvent {
+        position,
+        button,
+        ..Default::default()
+    };
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_native_overlay_outside_mouse_down(&event, window, cx);
+        });
+        if owner_receives_press {
+            window.dispatch_event(PlatformInput::MouseDown(event), cx);
+        }
+    });
+}
+
 #[test]
-fn native_outside_press_dismisses_floating_panels() {
-    let root = TestConfigDir::new("nyaterm-floating-native-outside");
+fn native_outside_press_only_dismisses_on_the_left_button_and_needs_no_release() {
+    let root = TestConfigDir::new("nyaterm-floating-native-buttons");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app(&mut cx, root.path());
     let cx = window(&mut cx, &app);
     open_both(&app, cx);
     let position = outside(cx);
-    cx.update(|_, cx| {
-        app.update(cx, |app, cx| {
-            app.note_native_floating_panel_outside_press(position);
-            app.finish_native_floating_panel_outside_press(position, cx);
-        });
-    });
+    for button in [
+        MouseButton::Right,
+        MouseButton::Middle,
+        MouseButton::Navigate(NavigationDirection::Back),
+        MouseButton::Navigate(NavigationDirection::Forward),
+    ] {
+        native_press(&app, cx, position, button, false);
+        draw(&app, cx);
+        assert_eq!(
+            panels(&app, cx),
+            [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+        );
+    }
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+    open_both(&app, cx);
+    let position = outside(cx);
+    cx.simulate_click(position, Modifiers::none());
     draw(&app, cx);
     assert_eq!(panels(&app, cx), [None, None]);
 }
 
 #[test]
-fn native_inside_press_keeps_floating_panels() {
+fn native_inside_press_keeps_either_floating_panel() {
     let root = TestConfigDir::new("nyaterm-floating-native-inside");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app(&mut cx, root.path());
     let cx = window(&mut cx, &app);
     open_both(&app, cx);
-    let bounds = cx.debug_bounds("floating-left-panel").unwrap();
-    let position = point(bounds.left() + px(12.), bounds.center().y);
-    cx.update(|_, cx| {
-        app.update(cx, |app, cx| {
-            app.note_native_floating_panel_outside_press(position);
-            app.finish_native_floating_panel_outside_press(position, cx);
-        });
-    });
-    draw(&app, cx);
-    assert_eq!(
-        panels(&app, cx),
-        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
-    );
+    for selector in ["floating-left-panel", "floating-right-panel"] {
+        let position = cx.debug_bounds(selector).unwrap().center();
+        native_press(&app, cx, position, MouseButton::Left, false);
+        draw(&app, cx);
+        assert_eq!(
+            panels(&app, cx),
+            [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+        );
+    }
 }
 
 #[test]
-fn real_press_clears_the_native_arm_and_leaves_the_release_path_in_charge() {
-    let root = TestConfigDir::new("nyaterm-floating-native-real-press");
+fn owner_capture_takes_over_native_observation_and_waits_for_release() {
+    let root = TestConfigDir::new("nyaterm-floating-native-owner");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app(&mut cx, root.path());
     let cx = window(&mut cx, &app);
     open_both(&app, cx);
     let position = outside(cx);
+    native_press(&app, cx, position, MouseButton::Left, true);
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_menu_dismissal_stays_blocked_when_owner_capture_follows() {
+    let root = TestConfigDir::new("nyaterm-floating-native-menu-order");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    for owner_receives_press in [false, true] {
+        open_both(&app, cx);
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.shell
+                    .open_new_session_menu(NewSessionMenuAnchor::MainTabStrip);
+                cx.notify();
+            })
+        });
+        draw(&app, cx);
+        let position = outside(cx);
+        native_press(&app, cx, position, MouseButton::Left, owner_receives_press);
+        if owner_receives_press {
+            cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+        }
+        draw(&app, cx);
+        cx.read(|cx| assert!(!app.read(cx).shell.new_session_menu_is_open()));
+        assert_eq!(
+            panels(&app, cx),
+            [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+        );
+        native_press(&app, cx, position, MouseButton::Left, false);
+        draw(&app, cx);
+        assert_eq!(panels(&app, cx), [None, None]);
+    }
+}
+
+#[test]
+fn native_outside_press_closes_docker_and_ai_menus_before_the_panels() {
+    let root = TestConfigDir::new("nyaterm-floating-native-feature-menus");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.note_native_floating_panel_outside_press(position);
-            // What the owner scene's `capture_any_mouse_down` does for a real press.
-            app.shell.panels.clear_floating_outside_press();
-            app.shell.panels.clear_native_floating_outside_press();
-            app.finish_native_floating_panel_outside_press(position, cx);
+            app.remote_ops.toggle_docker_header_menu();
+            app.flush_remote_panel_snapshots(cx);
+        })
+    });
+    let position = outside(cx);
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    cx.read(|cx| assert!(!app.read(cx).remote_ops.docker_menus_open()));
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    click_icon(&app, cx, "ai-model-control");
+    assert!(cx.debug_bounds("ai-model-menu").is_some());
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    cx.read(|cx| assert!(!app.read(cx).ai.transient_menus_are_open()));
+    assert!(cx.debug_bounds("ai-model-menu").is_none());
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_observation_preserves_component_popup_dismissal_priority() {
+    let root = TestConfigDir::new("nyaterm-floating-native-component-popup");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let bounds = cx.debug_bounds("connections-list-scroll").unwrap();
+    let position = point(bounds.right() - px(5.), bounds.top() + px(30.));
+    cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::none());
+    draw(&app, cx);
+    cx.update(|window, cx| assert!(nya_popup_is_active(window, cx)));
+    let position = outside(cx);
+    native_press(&app, cx, position, MouseButton::Left, true);
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    cx.update(|window, cx| assert!(!nya_popup_is_active(window, cx)));
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn a_dialog_opened_before_native_defer_prevents_panel_dismissal() {
+    let root = TestConfigDir::new("nyaterm-floating-native-deferred-dialog");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let position = outside(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_native_overlay_outside_mouse_down(
+                &MouseDownEvent {
+                    position,
+                    button: MouseButton::Left,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        });
+        window.open_nya_dialog(cx, |dialog, _, _| {
+            dialog.title("Fixture").content("Content")
         });
     });
     draw(&app, cx);
@@ -527,7 +689,138 @@ fn real_press_clears_the_native_arm_and_leaves_the_release_path_in_charge() {
         panels(&app, cx),
         [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
     );
-    cx.simulate_click(position, Modifiers::none());
+    cx.update(|window, cx| window.close_all_nya_dialogs(cx));
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_observation_does_not_close_an_activity_bar_selection() {
+    let root = TestConfigDir::new("nyaterm-floating-native-activity");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let position = cx.debug_bounds("activity-network").unwrap().center();
+    native_press(&app, cx, position, MouseButton::Left, true);
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Tunnels), Some(NavItem::AiAssistant)]
+    );
+}
+
+#[test]
+fn native_observation_survives_owner_drag_and_cancellation_without_stale_dismissals() {
+    let root = TestConfigDir::new("nyaterm-floating-native-cancel");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let position = outside(cx);
+    native_press(&app, cx, position, MouseButton::Left, true);
+    cx.simulate_mouse_move(
+        position + point(px(20.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_native_overlay_outside_mouse_down(
+                &MouseDownEvent {
+                    position,
+                    button: MouseButton::Left,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            app.cancel_pointer_interactions(window, cx);
+        })
+    });
+    draw(&app, cx);
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    native_press(&app, cx, position, MouseButton::Left, false);
+    draw(&app, cx);
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn an_old_native_defer_cannot_finish_a_new_press_at_the_same_position() {
+    let root = TestConfigDir::new("nyaterm-floating-native-stale");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let event = MouseDownEvent {
+        position: outside(cx),
+        button: MouseButton::Left,
+        ..Default::default()
+    };
+    let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_native_overlay_outside_mouse_down(&event, window, cx)
+        });
+        let app_for_check = app.clone();
+        let observed = observed.clone();
+        window.defer(cx, move |_, cx| {
+            let app = app_for_check.read(cx);
+            assert_eq!(
+                app.shell.floating_panel(PanelSide::Left),
+                Some(NavItem::Connections)
+            );
+            observed.set(true);
+        });
+        app.update(cx, |app, cx| {
+            app.handle_native_overlay_outside_mouse_down(&event, window, cx)
+        });
+    });
+    draw(&app, cx);
+    assert!(observed.get());
+    assert_eq!(panels(&app, cx), [None, None]);
+}
+
+#[test]
+fn native_tab_actions_take_the_first_outside_click() {
+    let root = TestConfigDir::new("nyaterm-floating-native-tab-menu");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let session_id = app.session.active_id().unwrap().to_owned();
+            app.open_tab_actions_at(session_id, Some((100., 100.)), window, cx);
+            assert!(app.session.dialog_tab_actions_target().is_some());
+        })
+    });
+    draw(&app, cx);
+    let position = outside(cx);
+    native_press(&app, cx, position, MouseButton::Left, true);
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    cx.read(|cx| assert!(app.read(cx).session.dialog_tab_actions_target().is_none()));
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+    native_press(&app, cx, position, MouseButton::Left, false);
     draw(&app, cx);
     assert_eq!(panels(&app, cx), [None, None]);
 }
@@ -539,13 +832,13 @@ fn native_press_without_open_panels_is_a_noop() {
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app(&mut cx, root.path());
     let cx = window(&mut cx, &app);
-    let position = point(px(600.), px(400.));
-    cx.update(|_, cx| {
-        app.update(cx, |app, cx| {
-            app.note_native_floating_panel_outside_press(position);
-            app.finish_native_floating_panel_outside_press(position, cx);
-        });
-    });
+    native_press(
+        &app,
+        cx,
+        point(px(600.), px(400.)),
+        MouseButton::Left,
+        false,
+    );
     draw(&app, cx);
     assert_eq!(panels(&app, cx), [None, None]);
 }

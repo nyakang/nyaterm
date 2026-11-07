@@ -162,6 +162,20 @@ impl FloatingOutsidePress {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FloatingPressSource {
+    NativePending,
+    Gpui,
+}
+
+struct FloatingPanelPress {
+    id: u64,
+    source: FloatingPressSource,
+    // None still records an observed press: closing its popup must not let
+    // the subsequent GPUI capture arm a dismissal for the same gesture.
+    candidate: Option<FloatingOutsidePress>,
+}
+
 /// Side-panel selection, stack layout and resize interaction state.
 pub(in crate::features) struct ShellPanelState {
     pub(in crate::features) active_left: Option<NavItem>,
@@ -176,14 +190,11 @@ pub(in crate::features) struct ShellPanelState {
     pub(super) floating_left: Option<NavItem>,
     pub(super) floating_right: Option<NavItem>,
     pub(super) last_floating_side: Option<PanelSide>,
-    /// Pending primary-button press outside the floating overlay, consumed by
-    /// the deferred mouse-up handler. Never persisted.
-    floating_outside_press: Option<FloatingOutsidePress>,
-    /// Set by the native overlay outside-press callback and cleared by the
-    /// owner scene's capture handler. A surviving flag at the deferred finish
-    /// means the press came from the native child surface, which never sends a
-    /// release, so the release-based dismissal cannot run.
-    native_floating_outside_press: bool,
+    /// One authoritative gesture record, handed from native observation to
+    /// GPUI capture when the owner also receives the press. Never persisted.
+    floating_press: Option<FloatingPanelPress>,
+    /// Deferred work must not consume a newer gesture, even at the same point.
+    floating_press_serial: u64,
     pub(super) right_focus: RightFocus,
     pub(in crate::features) left_collapsed: bool,
     pub(in crate::features) right_collapsed: bool,
@@ -315,8 +326,8 @@ impl ShellFeatureState {
                 floating_left: None,
                 floating_right: None,
                 last_floating_side: None,
-                floating_outside_press: None,
-                native_floating_outside_press: false,
+                floating_press: None,
+                floating_press_serial: 0,
                 right_focus: RightFocus::Default,
                 left_collapsed: init.left_sidebar_collapsed,
                 right_collapsed: init.right_inspector_collapsed,
@@ -1076,8 +1087,7 @@ impl ShellPanelState {
     ) {
         // Any state change invalidates a press from the gesture that caused it,
         // so an opening/toggling click cannot dismiss what it just opened.
-        self.floating_outside_press = None;
-        self.native_floating_outside_press = false;
+        self.clear_floating_outside_press();
         match side {
             PanelSide::Left => self.floating_left = panel,
             PanelSide::Right => self.floating_right = panel,
@@ -1097,40 +1107,61 @@ impl ShellPanelState {
         self.floating_left = None;
         self.floating_right = None;
         self.last_floating_side = None;
-        self.floating_outside_press = None;
-        self.native_floating_outside_press = false;
+        self.clear_floating_outside_press();
     }
 
-    pub(super) fn set_floating_outside_press(&mut self, position: Point<Pixels>) {
-        self.floating_outside_press = Some(FloatingOutsidePress {
-            panels: [self.floating_left, self.floating_right],
-            position,
+    pub(super) fn begin_floating_press(
+        &mut self,
+        position: Point<Pixels>,
+        eligible: bool,
+        source: FloatingPressSource,
+    ) -> u64 {
+        self.floating_press_serial = self.floating_press_serial.wrapping_add(1);
+        let id = self.floating_press_serial;
+        self.floating_press = Some(FloatingPanelPress {
+            id,
+            source,
+            candidate: eligible.then_some(FloatingOutsidePress {
+                panels: [self.floating_left, self.floating_right],
+                position,
+            }),
         });
+        id
     }
 
-    pub(super) fn take_floating_outside_press(&mut self) -> Option<FloatingOutsidePress> {
-        self.floating_outside_press.take()
+    pub(super) fn handoff_native_floating_press(&mut self) -> bool {
+        if let Some(press) = self.floating_press.as_mut()
+            && press.source == FloatingPressSource::NativePending
+        {
+            press.source = FloatingPressSource::Gpui;
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn floating_press_id(&self) -> Option<u64> {
+        self.floating_press.as_ref().map(|press| press.id)
+    }
+
+    pub(super) fn take_floating_outside_press(
+        &mut self,
+        id: u64,
+        source: FloatingPressSource,
+    ) -> Option<FloatingOutsidePress> {
+        self.floating_press
+            .take_if(|press| press.id == id && press.source == source)
+            .and_then(|press| press.candidate)
     }
 
     pub(in crate::features) fn clear_floating_outside_press(&mut self) {
-        self.floating_outside_press = None;
-    }
-
-    pub(super) fn mark_native_floating_outside_press(&mut self) {
-        self.native_floating_outside_press = true;
-    }
-
-    pub(super) fn take_native_floating_outside_press(&mut self) -> bool {
-        std::mem::take(&mut self.native_floating_outside_press)
-    }
-
-    pub(in crate::features) fn clear_native_floating_outside_press(&mut self) {
-        self.native_floating_outside_press = false;
+        self.floating_press = None;
     }
 
     pub(in crate::features) fn cancel_floating_outside_drag(&mut self, position: Point<Pixels>) {
         if self
-            .floating_outside_press
+            .floating_press
+            .as_ref()
+            .and_then(|press| press.candidate)
             .is_some_and(|press| !press.is_click_at(position))
         {
             self.clear_floating_outside_press();
@@ -1481,14 +1512,21 @@ mod tests {
         shell
             .panels
             .set_floating_panel(PanelSide::Left, Some(NavItem::Connections));
-        shell
-            .panels
-            .set_floating_outside_press(gpui::point(px(500.), px(200.)));
+        let id = shell.panels.begin_floating_press(
+            gpui::point(px(500.), px(200.)),
+            true,
+            super::FloatingPressSource::Gpui,
+        );
         shell.panels.set_floating_panel(PanelSide::Left, None);
         shell
             .panels
             .set_floating_panel(PanelSide::Left, Some(NavItem::Connections));
-        assert!(shell.panels.take_floating_outside_press().is_none());
+        assert!(
+            shell
+                .panels
+                .take_floating_outside_press(id, super::FloatingPressSource::Gpui,)
+                .is_none()
+        );
     }
 
     #[test]

@@ -1184,6 +1184,61 @@ mod tests {
         });
     }
 
+    #[test]
+    fn native_outside_press_refreshes_the_closed_docker_menu_snapshot() {
+        let test_dir = TestConfigDir::new("nyaterm-remote-native-menu-snapshot");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        activate_ssh_session(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.remote_ops.toggle_docker_tab_menu();
+            app.flush_remote_panel_snapshots(cx);
+            let snapshot = app
+                .remote_panels
+                .entity(RemoteMonitorKind::Docker)
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .unwrap();
+            let RemoteMonitorData::Docker(docker) = &snapshot.data else {
+                panic!("Docker snapshot")
+            };
+            assert!(docker.state.tab_menu_open);
+        });
+        let app_for_view = app.clone();
+        let (_, vcx) =
+            cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(app_for_view, window, cx));
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.handle_native_overlay_outside_mouse_down(
+                    &gpui::MouseDownEvent {
+                        button: gpui::MouseButton::Left,
+                        position: gpui::point(gpui::px(600.), gpui::px(400.)),
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
+            })
+        });
+        vcx.run_until_parked();
+        vcx.read(|cx| {
+            let app = app.read(cx);
+            assert!(!app.remote_ops.docker_menus_open());
+            let panel = app.remote_panels.entity(RemoteMonitorKind::Docker).read(cx);
+            assert_eq!(
+                panel.snapshot_key(),
+                Some(app.remote_monitor_key(RemoteMonitorKind::Docker))
+            );
+            let RemoteMonitorData::Docker(docker) = &panel.snapshot.as_ref().unwrap().data else {
+                panic!("Docker snapshot")
+            };
+            assert!(!docker.state.tab_menu_open);
+        });
+    }
+
     fn polling(app: &Entity<NyaTermApp>, cx: &mut TestAppContext) -> Vec<RemoteMonitorKind> {
         cx.update_entity(app, |app, cx| {
             RemoteMonitorKind::ALL
