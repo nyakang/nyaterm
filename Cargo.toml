@@ -30,6 +30,7 @@ members = [
     "crates/nyaterm-files",
     "crates/nyaterm-transport",
     "crates/nyaterm-ui",
+    "crates/nyaterm-updater",
     "crates/nyaterm-vnc-helper",
 ]
 resolver = "3"
@@ -116,6 +117,7 @@ nyaterm-remote-ops = { path = "crates/nyaterm-remote-ops" }
 nyaterm-files = { path = "crates/nyaterm-files" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }
 nyaterm-ui = { path = "crates/nyaterm-ui" }
+nyaterm-updater = { path = "crates/nyaterm-updater" }
 percent-encoding = "=2.3.2"
 portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "1ececcf9a10437f2fe04d0756735cd0847219a26" }
 quick-xml = "0.40"

@@ -30,7 +30,10 @@ pub(crate) use layout_state::*;
 pub(crate) use navigation::*;
 pub(crate) use network::*;
 pub(crate) use prompts::*;
-pub(crate) use recording::*;
+pub(crate) use recording::{
+    RecordingEventReceiver, RecordingHistorySearchEvent, RecordingHistorySearchKey,
+    RecordingWriteEvent, RecordingWriteHandle, RecordingWritePipeline,
+};
 pub(crate) use remote::*;
 pub(crate) use security::*;
 pub(crate) use session::*;

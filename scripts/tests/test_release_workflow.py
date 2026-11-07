@@ -30,6 +30,20 @@ def gate(job: str, values: dict[str, object]) -> bool:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_packaged_portable_zip_runs_the_updater_round_trip_test(self) -> None:
+        package = WORKFLOW.with_name("native-package.yml").read_text(encoding="utf-8")
+        validation = re.search(
+            r"      - name: Test portable updater against packaged ZIP\n(.*?)(?=      - name:)",
+            package, re.S,
+        ).group(1)
+        self.assertIn("if: runner.os == 'Windows'", validation)
+        self.assertIn("NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path", validation)
+        self.assertIn("NYATERM_TEST_PORTABLE_ARCH =", validation)
+        self.assertIn(
+            "cargo test -p nyaterm-updater --lib --locked portable_release_archive_round_trip -- --ignored",
+            validation,
+        )
+
     def test_windows_packaging_preserves_msvc_path_in_release_and_snapshot(self) -> None:
         for workflow in (WORKFLOW.with_name("native-package.yml"),):
             with self.subTest(workflow=workflow.name):

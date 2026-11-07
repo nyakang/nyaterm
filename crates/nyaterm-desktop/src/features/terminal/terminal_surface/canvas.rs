@@ -853,12 +853,18 @@ impl NyaTermApp {
                                             this.activate_workspace_pane(session_id.clone(), cx);
                                             window.focus(&this.terminal.input.focus, cx);
                                             this.close_action_link_menu(cx);
+                                            this.terminal.selection.block_gesture = None;
+                                            this.terminal.selection.suppress_action_link_click = false;
                                             let mods = event.modifiers;
+                                            let block_candidate = mods.alt
+                                                && this.settings.summary().terminal_wrap_mode
+                                                    != nyaterm_core::models::settings::TerminalWrapMode::None;
                                             let skip_selection = this
                                                 .settings
                                                 .summary()
                                                 .terminal_action_links_enabled
-                                                && (mods.alt || mods.control || mods.platform);
+                                                && (mods.alt || mods.control || mods.platform)
+                                                && !block_candidate;
                                             if !skip_selection {
                                                 this.start_terminal_selection_for_session(
                                                     Some(session_id.as_str()),
@@ -962,6 +968,16 @@ impl NyaTermApp {
                                         }
                                         window.focus(&this.terminal.input.focus, cx);
                                         let modifiers = event.modifiers();
+                                        if let ClickEvent::Mouse(mouse) = event
+                                            && !this.terminal.selection.confirm_block_drag(mouse.up.position)
+                                        {
+                                            this.clear_terminal_selection(cx);
+                                        }
+                                        if this.terminal.selection.suppress_action_link_click {
+                                            // The root MouseUp handler must still finish the
+                                            // selection or release the remote mouse capture.
+                                            return;
+                                        }
                                         if this.settings.summary().terminal_action_links_enabled {
                                             if modifiers.alt {
                                                 if this

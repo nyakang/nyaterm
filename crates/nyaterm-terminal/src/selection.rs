@@ -65,10 +65,17 @@ impl From<TerminalBufferCellPos> for TerminalSelectionEndpoint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerminalSelectionMode {
+    Linear,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalSelection {
     pub anchor: TerminalSelectionEndpoint,
     pub head: TerminalSelectionEndpoint,
     pub all_buffer: bool,
+    pub mode: TerminalSelectionMode,
 }
 
 impl TerminalSelection {
@@ -76,6 +83,22 @@ impl TerminalSelection {
     pub fn after_eviction(self, evicted: usize) -> Option<Self> {
         if self.all_buffer || evicted == 0 {
             return Some(self);
+        }
+        if self.mode == TerminalSelectionMode::Block {
+            if self.anchor.position.line.max(self.head.position.line) < evicted {
+                return None;
+            }
+            let clip = |mut endpoint: TerminalSelectionEndpoint| {
+                endpoint.position.line = endpoint.position.line.saturating_sub(evicted);
+                endpoint
+            };
+            // A zero-width block may still be a live drag candidate. Keep its
+            // anchor while that row survives, so output cannot cancel the drag.
+            return Some(Self {
+                anchor: clip(self.anchor),
+                head: clip(self.head),
+                ..self
+            });
         }
         let first = TerminalSelectionEndpoint::new(
             TerminalBufferCellPos::new(0, 0),
@@ -85,6 +108,7 @@ impl TerminalSelection {
             anchor: self.anchor.after_eviction(evicted).unwrap_or(first),
             head: self.head.after_eviction(evicted).unwrap_or(first),
             all_buffer: false,
+            mode: self.mode,
         };
         (!selection.is_empty()).then_some(selection)
     }
@@ -98,11 +122,19 @@ impl TerminalSelection {
     }
 
     pub fn with_anchor(anchor: impl Into<TerminalSelectionEndpoint>) -> Self {
+        Self::with_anchor_and_mode(anchor, TerminalSelectionMode::Linear)
+    }
+
+    pub fn with_anchor_and_mode(
+        anchor: impl Into<TerminalSelectionEndpoint>,
+        mode: TerminalSelectionMode,
+    ) -> Self {
         let anchor = anchor.into();
         Self {
             anchor,
             head: anchor,
             all_buffer: false,
+            mode,
         }
     }
 
@@ -127,6 +159,7 @@ impl TerminalSelection {
                 },
             ),
             all_buffer: false,
+            mode: TerminalSelectionMode::Linear,
         }
     }
 
@@ -155,7 +188,11 @@ impl TerminalSelection {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.all_buffer && self.anchor.boundary() == self.head.boundary()
+        !self.all_buffer
+            && match self.mode {
+                TerminalSelectionMode::Linear => self.anchor.boundary() == self.head.boundary(),
+                TerminalSelectionMode::Block => self.anchor.boundary().1 == self.head.boundary().1,
+            }
     }
 
     /// Half-open columns. The unbounded end is clipped by the consuming row.
@@ -172,6 +209,9 @@ impl TerminalSelection {
         if line < start_line || line > end_line {
             return None;
         }
+        if self.mode == TerminalSelectionMode::Block {
+            return Some((start_col.min(end_col), start_col.max(end_col)));
+        }
         let left = if line == start_line { start_col } else { 0 };
         let right = if line == end_line {
             end_col
@@ -182,6 +222,7 @@ impl TerminalSelection {
     }
 
     /// Inclusive selected cells for adapters which still require cell endpoints.
+    /// A block returns bounding corners, not a continuous text interval.
     pub fn cell_range(self, cols: usize) -> Option<(TerminalBufferCellPos, TerminalBufferCellPos)> {
         if self.all_buffer || self.is_empty() || cols == 0 {
             return None;
@@ -189,6 +230,14 @@ impl TerminalSelection {
         let (start, end) = self.ordered_endpoints();
         let (mut start_line, mut start_col) = start.boundary();
         let (mut end_line, end_col) = end.boundary();
+        if self.mode == TerminalSelectionMode::Block {
+            let left = start_col.min(end_col);
+            let right = start_col.max(end_col).min(cols);
+            return (left < right).then_some((
+                TerminalBufferCellPos::new(start_line, left),
+                TerminalBufferCellPos::new(end_line, right.saturating_sub(1)),
+            ));
+        }
         if start_col >= cols {
             start_line = start_line.checked_add(1)?;
             start_col = 0;
@@ -207,6 +256,7 @@ impl TerminalSelection {
 
     /// Resolve wide-glyph bounds without changing the mouse's original anchors.
     /// Returns None when this snapshot does not cover the selected cells.
+    /// Blocks retain their raw bounds; consumers expand each row independently.
     pub fn expanded_for_snapshot(self, snapshot: &TerminalSnapshot) -> Option<Self> {
         if self.all_buffer {
             return Some(self);
@@ -216,6 +266,11 @@ impl TerminalSelection {
         let absolute_start = absolute_end.saturating_sub(snapshot.row_count());
         if start.line < absolute_start || end.line >= absolute_end {
             return None;
+        }
+        // A block's wide edges expand independently on each row. They cannot
+        // be represented by widening its two original anchors globally.
+        if self.mode == TerminalSelectionMode::Block {
+            return Some(self);
         }
         let start_row = snapshot.row(start.line - absolute_start)?;
         let end_row = snapshot.row(end.line - absolute_start)?;
@@ -227,6 +282,32 @@ impl TerminalSelection {
             TerminalBufferCellPos::new(start.line, start_col),
             TerminalBufferCellPos::new(end.line, end_col - 1),
         ))
+    }
+
+    /// Shared copy policy for live grids and retained snapshots.
+    pub fn append_row_text(
+        self,
+        text: &mut String,
+        cells: &[RenderCell],
+        line: usize,
+        wrapped: bool,
+        wraps_to_next: bool,
+    ) -> Option<()> {
+        let (start, end) = self.cell_range(cells.len())?;
+        let (left, right) = self.cols_for_absolute_line(line)?;
+        let slice = selected_row_text(cells, left, right);
+        let block = self.mode == TerminalSelectionMode::Block;
+        let slice = if block || (wraps_to_next && right >= cells.len()) {
+            slice.as_str()
+        } else {
+            slice.trim_end()
+        };
+        let empty_endpoint = line == end.line && end.col == 0 && slice.is_empty();
+        if line > start.line && (block || (!wrapped && !empty_endpoint)) {
+            text.push('\n');
+        }
+        text.push_str(slice);
+        Some(())
     }
 }
 
@@ -274,8 +355,84 @@ mod tests {
     use crate::TerminalScreen;
     use crate::selection::{
         TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
-        expand_selection_range, selected_row_text,
+        TerminalSelectionMode, expand_selection_range, selected_row_text,
     };
+
+    #[test]
+    fn blocks_use_independent_half_open_columns_in_all_four_directions() {
+        for (top, bottom) in [(2, 5), (5, 2)] {
+            for (left, right) in [(3, 7), (7, 3)] {
+                let mut selection = TerminalSelection::with_anchor_and_mode(
+                    TerminalBufferCellPos::new(top, left),
+                    TerminalSelectionMode::Block,
+                );
+                selection.head = TerminalSelectionEndpoint::new(
+                    TerminalBufferCellPos::new(bottom, right),
+                    TerminalCellSide::Right,
+                );
+                let expected = (left.min(right + 1), left.max(right + 1));
+                for row in 2..=5 {
+                    assert_eq!(selection.cols_for_absolute_line(row), Some(expected));
+                }
+                assert_eq!(selection.cols_for_absolute_line(1), None);
+                assert_eq!(selection.cols_for_absolute_line(6), None);
+                assert_eq!(
+                    selection.cell_range(12),
+                    Some((
+                        TerminalBufferCellPos::new(2, expected.0),
+                        TerminalBufferCellPos::new(5, expected.1 - 1),
+                    ))
+                );
+                selection.head = TerminalBufferCellPos::new(bottom, left).into();
+                assert!(selection.is_empty());
+                assert_eq!(selection.cell_range(12), None);
+            }
+        }
+    }
+
+    #[test]
+    fn block_eviction_clips_rows_without_changing_columns_or_sides() {
+        let mut selection = TerminalSelection::with_anchor_and_mode(
+            TerminalBufferCellPos::new(1, 6),
+            TerminalSelectionMode::Block,
+        );
+        selection.head = TerminalSelectionEndpoint::new(
+            TerminalBufferCellPos::new(5, 2),
+            TerminalCellSide::Right,
+        );
+        for selection in [
+            selection,
+            TerminalSelection {
+                anchor: selection.head,
+                head: selection.anchor,
+                ..selection
+            },
+        ] {
+            let clipped = selection.after_eviction(3).unwrap();
+            assert_eq!(clipped.mode, TerminalSelectionMode::Block);
+            assert_eq!(clipped.anchor.side, selection.anchor.side);
+            assert_eq!(clipped.head.side, selection.head.side);
+            assert_eq!(clipped.anchor.position.col, selection.anchor.position.col);
+            assert_eq!(clipped.head.position.col, selection.head.position.col);
+            for row in 0..=2 {
+                assert_eq!(clipped.cols_for_absolute_line(row), Some((3, 6)));
+            }
+            assert_eq!(selection.after_eviction(6), None);
+        }
+    }
+
+    #[test]
+    fn block_pending_anchor_survives_eviction_of_earlier_history_rows() {
+        let candidate = TerminalSelection::with_anchor_and_mode(
+            TerminalBufferCellPos::new(5, 3),
+            TerminalSelectionMode::Block,
+        );
+        let rebased = candidate.after_eviction(2).unwrap();
+        assert!(rebased.is_empty());
+        assert_eq!(rebased.anchor.position, TerminalBufferCellPos::new(3, 3));
+        assert_eq!(rebased.head, rebased.anchor);
+        assert_eq!(candidate.after_eviction(6), None);
+    }
 
     #[test]
     fn eviction_preserves_selected_wide_glyphs_and_soft_wrapped_text() {
@@ -327,6 +484,7 @@ mod tests {
             anchor: TerminalSelectionEndpoint::from(TerminalBufferCellPos::new(1, 0)),
             head: TerminalSelectionEndpoint::from(TerminalBufferCellPos::new(3, 0)),
             all_buffer: false,
+            mode: crate::selection::TerminalSelectionMode::Linear,
         };
         assert!(boundary.after_eviction(3).is_none());
         let all = TerminalSelection::all_buffer(16);
@@ -367,6 +525,7 @@ mod tests {
                     anchor,
                     head,
                     all_buffer: false,
+                    mode: crate::selection::TerminalSelectionMode::Linear,
                 };
                 assert_eq!(selection.cols_for_absolute_line(0), expected);
                 assert_eq!(selection.is_empty(), expected.is_none());
@@ -380,6 +539,7 @@ mod tests {
             anchor: TerminalBufferCellPos::new(0, 0).into(),
             head: TerminalBufferCellPos::new(1, 0).into(),
             all_buffer: false,
+            mode: crate::selection::TerminalSelectionMode::Linear,
         };
         assert_eq!(selection.cols_for_absolute_line(0), Some((0, usize::MAX)));
         assert_eq!(selection.cols_for_absolute_line(1), None);
@@ -452,6 +612,7 @@ mod tests {
             anchor: TerminalBufferCellPos::new(0, 2).into(),
             head: TerminalBufferCellPos::new(0, 4).into(),
             all_buffer: false,
+            mode: crate::selection::TerminalSelectionMode::Linear,
         };
         let expanded = selection.expanded_for_snapshot(&snapshot).unwrap();
         assert_eq!(expanded.cols_for_absolute_line(0), Some((1, 5)));

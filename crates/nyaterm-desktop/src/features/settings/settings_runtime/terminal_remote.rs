@@ -98,6 +98,9 @@ impl NyaTermApp {
         mode: nyaterm_core::models::settings::TerminalWrapMode,
         cx: &mut Context<Self>,
     ) {
+        if mode == nyaterm_core::models::settings::TerminalWrapMode::None {
+            self.clear_terminal_block_selection(cx);
+        }
         self.settings.set_terminal_wrap_mode(mode);
         self.save_terminal_settings(cx);
         let session_ids = self

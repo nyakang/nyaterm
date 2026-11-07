@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use gpui::{Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
-use nyaterm_terminal::selection::{TerminalSelectionEndpoint, selected_row_text};
+use nyaterm_terminal::selection::{TerminalSelectionEndpoint, TerminalSelectionMode};
 use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::LostTerminalSelectionRecovery;
-use crate::features::terminal::state::{TerminalSelectionAutoscroll, TerminalSelectionTextStatus};
+use crate::features::terminal::state::{
+    TerminalBlockSelectionGesture, TerminalSelectionAutoscroll, TerminalSelectionTextStatus,
+};
 use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_surface::{
     terminal_absolute_line_for_snapshot_row, terminal_snapshot_absolute_range,
@@ -22,6 +24,9 @@ use super::metrics::{
     terminal_snapshot_row_for_visual_geometry,
 };
 
+#[cfg(test)]
+mod block_tests;
+
 const TERMINAL_SELECTION_DRAG_NOTIFY_DELAY: Duration = Duration::from_millis(8);
 const TERMINAL_SELECTION_AUTOSCROLL_DELAY: Duration = Duration::from_millis(24);
 const TERMINAL_SELECTED_OCCURRENCE_DEBOUNCE: Duration = Duration::from_millis(100);
@@ -30,6 +35,18 @@ const TERMINAL_SELECTED_OCCURRENCE_MAX_CHARS: usize = 256;
 const TERMINAL_SELECTION_IMMEDIATE_CELL_LIMIT: usize = 4096;
 
 impl NyaTermApp {
+    pub(in crate::features) fn clear_terminal_block_selection(&mut self, cx: &mut Context<Self>) {
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|selection| selection.mode == TerminalSelectionMode::Block)
+            || self.terminal.selection.block_gesture.is_some()
+        {
+            self.clear_terminal_selection(cx);
+        }
+    }
+
     pub(in crate::features) fn clear_terminal_selection_state_for_session(
         &mut self,
         session_id: &str,
@@ -52,6 +69,7 @@ impl NyaTermApp {
         self.terminal.selection.text.invalidate();
         self.terminal.selection.source_history = None;
         self.terminal.selection.dragging = false;
+        self.terminal.selection.block_gesture = None;
         self.terminal.selection.drag_pointer_position = None;
         self.terminal.selection.scroll_rehit_armed = false;
         self.stop_terminal_selection_autoscroll();
@@ -88,6 +106,7 @@ impl NyaTermApp {
             self.terminal.selection.text.invalidate();
             self.terminal.selection.source_history = None;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.terminal.selection.drag_pointer_position = None;
             self.terminal.selection.scroll_rehit_armed = false;
             self.stop_terminal_selection_autoscroll();
@@ -110,6 +129,7 @@ impl NyaTermApp {
         }
         self.terminal.selection.source_history = None;
         self.terminal.selection.dragging = false;
+        self.terminal.selection.block_gesture = None;
         self.terminal.selection.drag_pointer_position = None;
         self.terminal.selection.scroll_rehit_armed = false;
         self.stop_terminal_selection_autoscroll();
@@ -191,6 +211,8 @@ impl NyaTermApp {
         if event.button != MouseButton::Left {
             return;
         }
+        self.terminal.selection.block_gesture = None;
+        self.terminal.selection.suppress_action_link_click = false;
         let selection_session_id = session_id
             .filter(|session_id| !session_id.is_empty())
             .map(str::to_string)
@@ -225,6 +247,7 @@ impl NyaTermApp {
             self.terminal.selection.click_anchor = None;
             self.terminal.selection.session_id = None;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             if let Some(previous_selection_session_id) =
                 previous_selection_session_id.filter(|session_id| !session_id.is_empty())
             {
@@ -261,6 +284,7 @@ impl NyaTermApp {
             )
         {
             self.clear_terminal_selection(cx);
+            self.terminal.selection.suppress_action_link_click = true;
             return;
         }
         if !event.modifiers.modified()
@@ -281,7 +305,10 @@ impl NyaTermApp {
         }
         let cols = geometry.cols;
         self.terminal.selection.text.invalidate_preserving_copy();
-        if !event.modifiers.shift || self.terminal.selection.source_history.is_none() {
+        let block = event.modifiers.alt
+            && self.settings.summary().terminal_wrap_mode
+                != nyaterm_core::models::settings::TerminalWrapMode::None;
+        if block || !event.modifiers.shift || self.terminal.selection.source_history.is_none() {
             self.terminal.selection.source_history = Some(
                 selection_session_id
                     .as_deref()
@@ -292,6 +319,21 @@ impl NyaTermApp {
         }
         self.begin_smart_input_selection();
         let click_anchor = self.terminal.selection.click_anchor.take();
+        if block {
+            self.terminal.selection.selection = Some(TerminalSelection::with_anchor_and_mode(
+                endpoint,
+                TerminalSelectionMode::Block,
+            ));
+            self.terminal.selection.session_id = selection_session_id;
+            self.terminal.selection.dragging = true;
+            self.terminal.selection.block_gesture = Some(TerminalBlockSelectionGesture {
+                origin: event.position,
+                confirmed: false,
+            });
+            self.terminal.selection.drag_pointer_position = Some(event.position);
+            self.notify_terminal_selection_owner_surface(cx);
+            return;
+        }
         if event.modifiers.shift
             && event.click_count <= 1
             && self.terminal.selection.selection.is_none()
@@ -339,6 +381,7 @@ impl NyaTermApp {
             });
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.shell
                 .set_status(format!("selected line {}", cell.row + 1));
             self.notify_terminal_selection_owner_surface(cx);
@@ -360,6 +403,7 @@ impl NyaTermApp {
                 });
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.notify_terminal_selection_owner_surface(cx);
             cx.notify();
             return;
@@ -375,6 +419,7 @@ impl NyaTermApp {
             ));
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.shell.set_status("selected word".to_string());
             self.notify_terminal_selection_owner_surface(cx);
             cx.notify();
@@ -478,6 +523,9 @@ impl NyaTermApp {
             self.stop_terminal_selection_autoscroll();
             return;
         }
+        if !self.terminal.selection.confirm_block_drag(event.position) {
+            return;
+        }
         self.terminal.selection.drag_pointer_position = Some(event.position);
         let selection_session_id = self
             .terminal
@@ -545,6 +593,11 @@ impl NyaTermApp {
         if event.button != MouseButton::Left {
             return;
         }
+        if !self.terminal.selection.confirm_block_drag(event.position) {
+            self.clear_terminal_selection(cx);
+            return;
+        }
+        self.terminal.selection.block_gesture = None;
         self.stop_terminal_selection_autoscroll();
         self.terminal.selection.scroll_rehit_armed = false;
         if let Some(id) = self.session.active_id_owned() {
@@ -611,6 +664,7 @@ impl NyaTermApp {
             }
         }
         self.terminal.selection.dragging = false;
+        self.terminal.selection.block_gesture = None;
         self.terminal.selection.drag_pointer_position = None;
         self.commit_smart_input_selection();
         if self
@@ -620,16 +674,24 @@ impl NyaTermApp {
             .as_ref()
             .is_some_and(|selection| selection.is_empty())
         {
+            let block = self
+                .terminal
+                .selection
+                .selection
+                .is_some_and(|selection| selection.mode == TerminalSelectionMode::Block);
             let click_anchor = self
                 .terminal
                 .selection
                 .selection
                 .take()
+                .filter(|_| !block)
                 .map(|selection| selection.anchor);
             let session_id = self.terminal.selection.session_id.clone();
             self.clear_terminal_selected_occurrence(cx);
             // Empty selection after click: try smart input cursor move.
-            self.handle_smart_input_click(event, cx);
+            if !block {
+                self.handle_smart_input_click(event, cx);
+            }
             // Smart cursor movement may clear selection state. Restore only the
             // click anchor afterwards so Shift+click can extend without exposing
             // an empty selection to editing, context-menu or copy operations.
@@ -692,6 +754,15 @@ impl NyaTermApp {
     }
 
     pub(super) fn schedule_terminal_selected_occurrence_search(&mut self, cx: &mut Context<Self>) {
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|selection| selection.mode == TerminalSelectionMode::Block)
+        {
+            self.clear_terminal_selected_occurrence(cx);
+            return;
+        }
         let session_id = self
             .terminal
             .selection
@@ -794,6 +865,12 @@ impl NyaTermApp {
         session_id: &str,
     ) -> bool {
         self.terminal.selection.dragging
+            && self
+                .terminal
+                .selection
+                .block_gesture
+                .as_ref()
+                .is_none_or(|gesture| gesture.confirmed)
             && self.terminal.selection.session_id.as_deref() == Some(session_id)
     }
 
@@ -1180,23 +1257,15 @@ fn terminal_selected_text_for_view(
             return None;
         }
         let mut text = String::new();
-        let mut first_line = true;
         for line in start.line..=end.line {
             let row = snapshot.row(line - absolute_start)?;
-            let (left, right) = selection.cols_for_absolute_line(line)?;
-            let slice = selected_row_text(&row.cells, left, right);
-            let slice = if row.wraps_to_next && right >= row.cells.len() {
-                slice.as_str()
-            } else {
-                slice.trim_end()
-            };
-            // Preserve the existing empty-row endpoint copy policy.
-            let empty_endpoint_at_row_start = line == end.line && end.col == 0 && slice.is_empty();
-            if !first_line && !row.wrapped && !empty_endpoint_at_row_start {
-                text.push('\n');
-            }
-            first_line = false;
-            text.push_str(slice);
+            selection.append_row_text(
+                &mut text,
+                &row.cells,
+                line,
+                row.wrapped,
+                row.wraps_to_next,
+            )?;
         }
         return (!text.is_empty()).then_some(text);
     }
@@ -1477,7 +1546,7 @@ mod tests {
         );
     }
 
-    fn click_terminal_cell(
+    pub(super) fn click_terminal_cell(
         app: &mut NyaTermApp,
         session_id: &str,
         row: usize,
@@ -1536,7 +1605,7 @@ mod tests {
         );
     }
 
-    fn seed_click_selection_fixture(app: &mut NyaTermApp) {
+    pub(super) fn seed_click_selection_fixture(app: &mut NyaTermApp) {
         app.terminal.layout.surface_bounds = Some(Bounds {
             origin: Point::default(),
             size: Size {
@@ -1686,6 +1755,7 @@ mod tests {
             anchor: TerminalBufferCellPos::new(0, 0).into(),
             head: TerminalBufferCellPos::new(1, 0).into(),
             all_buffer: false,
+            mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
         };
         assert_eq!(
             terminal_selected_text_for_view(&view, selection).as_deref(),
@@ -1730,6 +1800,7 @@ mod tests {
                         TerminalCellSide::Right
                     ),
                     all_buffer: false,
+                    mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
                 }),
             );
             assert_eq!(app.selected_terminal_text().as_deref(), Some("cond\nthi"));
@@ -1747,6 +1818,7 @@ mod tests {
                         TerminalCellSide::Right
                     ),
                     all_buffer: false,
+                    mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
                 }),
             );
             assert_eq!(app.selected_terminal_text().as_deref(), Some("irst\nse"));
@@ -1859,6 +1931,7 @@ mod tests {
                 anchor,
                 head,
                 all_buffer: false,
+                mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
             });
             app.terminal.selection.session_id = Some("s1".into());
             app.terminal.selection.dragging = true;
@@ -1905,6 +1978,7 @@ mod tests {
                     TerminalCellSide::Right,
                 ),
                 all_buffer: false,
+                mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
             };
             app.terminal.selection.selection = Some(selection);
             app.terminal.selection.session_id = Some("s1".into());

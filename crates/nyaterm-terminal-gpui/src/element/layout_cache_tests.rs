@@ -2014,6 +2014,39 @@ fn grid_selection_handles_empty_and_all_buffer_ranges() {
 }
 
 #[test]
+fn block_highlights_blank_tails_and_expands_wide_glyphs_per_row() {
+    let mut screen = TerminalScreen::new(8, 4);
+    screen.advance("a界z\r\nabc\r\n\r\na😀z".as_bytes());
+    let snapshot = screen.snapshot();
+    let mut selection = TerminalSelection::with_anchor_and_mode(
+        TerminalBufferCellPos::new(0, 2),
+        nyaterm_terminal::selection::TerminalSelectionMode::Block,
+    );
+    selection.head = TerminalBufferCellPos::new(3, 4).into();
+    for selection in [
+        selection,
+        TerminalSelection {
+            anchor: selection.head,
+            head: selection.anchor,
+            ..selection
+        },
+    ] {
+        let grid = TerminalGridSelection::from_selection(selection);
+        assert_eq!(grid.mode, selection.mode);
+        for (row, expected) in [(0, (1, 4)), (1, (2, 4)), (2, (2, 4)), (3, (1, 4))] {
+            assert_eq!(
+                terminal_selection_cols_for_snapshot_row(&snapshot, row, Some(grid)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            screen.text_for_selection(selection).unwrap().as_deref(),
+            Some("界z\nc \n  \n😀z")
+        );
+    }
+}
+
+#[test]
 fn multiline_selection_trims_hard_line_tails_without_changing_copy() {
     for (source, start_col, expected, copied) in [
         ("  a b   \r\nend", 0, Some((0, 5)), "  a b\nen"),
@@ -2337,6 +2370,7 @@ fn half_cell_grid_selection_paints_the_same_cells_that_are_copied() {
                 anchor,
                 head,
                 all_buffer: false,
+                mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
             };
             let grid = TerminalGridSelection::from_selection(selection);
             assert_eq!(

@@ -141,6 +141,7 @@ impl NyaTermApp {
         // Only drop an in-progress drag so a stuck drag cannot block further input.
         if self.terminal.selection.dragging {
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.terminal.selection.drag_pointer_position = None;
             self.terminal.selection.scroll_rehit_armed = false;
             self.stop_terminal_selection_autoscroll();
@@ -272,6 +273,7 @@ impl NyaTermApp {
         // the active session's wire bytes.
         if self.terminal.selection.dragging {
             self.terminal.selection.dragging = false;
+            self.terminal.selection.block_gesture = None;
             self.terminal.selection.drag_pointer_position = None;
             self.terminal.selection.scroll_rehit_armed = false;
             self.stop_terminal_selection_autoscroll();
@@ -675,7 +677,8 @@ impl NyaTermApp {
         event: &gpui::MouseMoveEvent,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.terminal.selection.mouse_report_button.is_some() {
+        if self.terminal.selection.mouse_report_button.is_some() || self.terminal.selection.dragging
+        {
             return false;
         }
         let Some(session_id) = self.terminal_session_at_point(event.position) else {

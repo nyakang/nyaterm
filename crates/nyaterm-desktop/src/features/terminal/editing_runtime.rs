@@ -413,6 +413,7 @@ mod tests {
                         end_side,
                     ),
                     all_buffer: false,
+                    mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
                 });
                 app.begin_smart_input_selection();
                 app.commit_smart_input_selection();
@@ -552,6 +553,7 @@ mod tests {
                 anchor: TerminalBufferCellPos::new(0, 3).into(),
                 head: TerminalBufferCellPos::new(0, 6).into(),
                 all_buffer: false,
+                mode: nyaterm_terminal::selection::TerminalSelectionMode::Linear,
             });
             app.begin_smart_input_selection();
             app.commit_smart_input_selection();

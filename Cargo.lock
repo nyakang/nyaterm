@@ -6879,7 +6879,6 @@ dependencies = [
  "bytemuck",
  "dirs",
  "encoding_rs",
- "flate2",
  "futures",
  "gpui",
  "gpui_platform",
@@ -6889,7 +6888,6 @@ dependencies = [
  "image",
  "keyring",
  "md5",
- "minisign-verify",
  "nyaterm-ai-client",
  "nyaterm-cloud-storage",
  "nyaterm-core",
@@ -6906,6 +6904,7 @@ dependencies = [
  "nyaterm-terminal-gpui",
  "nyaterm-transport",
  "nyaterm-ui",
+ "nyaterm-updater",
  "nyaterm-windows-rdp",
  "rand 0.10.3",
  "raw-window-handle",
@@ -6916,7 +6915,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tar",
  "tempfile",
  "time",
  "tokio",
@@ -7041,6 +7039,7 @@ dependencies = [
 name = "nyaterm-recording"
 version = "2.0.2"
 dependencies = [
+ "futures",
  "nyaterm-core",
  "nyaterm-terminal",
  "regex",
@@ -7049,6 +7048,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -7196,6 +7196,20 @@ dependencies = [
  "ropey",
  "rust-i18n",
  "url",
+]
+
+[[package]]
+name = "nyaterm-updater"
+version = "2.0.2"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "minisign-verify",
+ "nyaterm-core",
+ "tar",
+ "windows-sys 0.61.2",
+ "zed-reqwest",
+ "zip",
 ]
 
 [[package]]

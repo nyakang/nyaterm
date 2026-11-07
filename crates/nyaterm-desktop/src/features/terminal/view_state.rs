@@ -105,6 +105,7 @@ impl TerminalFeatureState {
                     self.selection.session_id = None;
                     self.selection.click_anchor = None;
                     self.selection.dragging = false;
+                    self.selection.block_gesture = None;
                     self.selection.drag_pointer_position = None;
                     self.selection.autoscroll = None;
                     self.selection.scroll_rehit_armed = false;
