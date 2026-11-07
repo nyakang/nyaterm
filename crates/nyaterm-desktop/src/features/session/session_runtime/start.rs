@@ -174,7 +174,7 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features::session) fn focus_user_started_session_surface(
+    pub(in crate::features) fn focus_user_started_session_surface(
         &self,
         target: SessionStartFocusTarget,
         window: &mut Window,
