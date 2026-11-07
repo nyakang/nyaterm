@@ -40,6 +40,7 @@ class PathSelectionTests(unittest.TestCase):
             ("crates/nyaterm-desktop/src/features/tmux.rs", {"run_rust"}),
             ("crates/nyaterm-files/src/sftp/mod.rs", {"run_rust"}),
             ("crates/nyaterm-recording/src/recording.rs", {"run_rust"}),
+            ("crates/nyaterm-updater/src/download.rs", {"run_rust"}),
             ("crates/nyaterm-remote-ops/src/docker.rs", {"run_rust"}),
             ("crates/nyaterm-transport/src/tmux/control.rs", {"run_rust", "run_tmux"}),
             ("crates/nyaterm-transport/src/ssh/worker.rs", {"run_rust", "run_tmux"}),

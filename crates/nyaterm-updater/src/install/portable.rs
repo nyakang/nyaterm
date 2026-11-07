@@ -321,7 +321,7 @@ mod tests {
     use super::{
         commit_portable_files_with, extract_windows_portable, extract_with_limits, recovery_pending,
     };
-    use crate::features::update::install::cleanup_update_work_dir;
+    use crate::install::cleanup_update_work_dir;
 
     const ARCHITECTURES: [UpdateArchitecture; 2] =
         [UpdateArchitecture::X86_64, UpdateArchitecture::Aarch64];

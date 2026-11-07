@@ -369,6 +369,52 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_download_ignores_late_progress_and_completion() {
+        use super::DownloadState;
+        use crate::features::update::install::PreparedUpdate;
+        use std::path::PathBuf;
+
+        let mut state = UpdateStore::new();
+        let (_, generation) = state.begin_check(UpdateCheckKind::Manual).unwrap();
+        state.apply_event(check_event(
+            generation,
+            UpdateCheckKind::Manual,
+            Ok(update_info(true)),
+        ));
+        let cancel = nyaterm_transport::connection_attempt::ConnectionAttempt::default();
+        let (_, generation, _) = state.begin_download(cancel.clone()).unwrap();
+        state.cancel_download();
+        assert!(cancel.is_cancelled());
+
+        #[cfg(windows)]
+        let prepared = PreparedUpdate::WindowsInstalled {
+            helper: PathBuf::from("unused-helper.exe"),
+            installer: PathBuf::from("unused-installer.exe"),
+            target: PathBuf::from("NyaTerm.exe"),
+            work_dir: PathBuf::from("unused-work"),
+        };
+        #[cfg(not(windows))]
+        let prepared = PreparedUpdate::Installed {
+            artifact: PathBuf::from("unused-installer"),
+            target: PathBuf::from("nyaterm"),
+        };
+        for download in [
+            DownloadState::Downloading {
+                received: 1,
+                total: Some(4),
+            },
+            DownloadState::Ready(prepared),
+        ] {
+            assert!(!state.apply_event(UpdateEvent::Download {
+                generation,
+                state: download,
+            }));
+            assert!(matches!(state.phase(), UpdatePhase::Available));
+            assert!(matches!(state.download, DownloadState::Idle));
+        }
+    }
+
+    #[test]
     fn silent_failures_do_not_enter_the_user_visible_failed_state() {
         let mut state = UpdateStore::new();
         let (_, generation) = state.begin_check(UpdateCheckKind::Silent).unwrap();

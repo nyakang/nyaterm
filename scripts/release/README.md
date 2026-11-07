@@ -171,7 +171,7 @@ To repeat this check locally in PowerShell:
 ```powershell
 $env:NYATERM_TEST_PORTABLE_ARCHIVE = (Resolve-Path 'dist/NyaTerm_2.0.1_windows_x64_portable.zip').Path
 $env:NYATERM_TEST_PORTABLE_ARCH = 'x86_64' # 'aarch64' for the ARM64 ZIP
-cargo test -p nyaterm-desktop --lib --locked portable_release_archive_round_trip -- --ignored
+cargo test -p nyaterm-updater --lib --locked portable_release_archive_round_trip -- --ignored
 ```
 
 The test operates on isolated temporary directories and does not run the ZIP's
