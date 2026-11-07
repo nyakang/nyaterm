@@ -1581,6 +1581,20 @@ pub fn load_sync_pointer_from_remote(
     local_store.decode_sync_pointer(bytes.as_slice()).map(Some)
 }
 
+/// Verify that the configured root exposes the sync metadata the engine reads.
+///
+/// The connection test uses this instead of reading the shared compatibility
+/// pointer directly, so a pointer that was truncated by an interrupted upload
+/// does not mask working credentials once device heads are present.
+pub fn probe_remote_sync(
+    local_store: &dyn CloudLocalStore,
+    remote: &dyn CloudSyncRemote,
+    remote_root: &str,
+) -> Result<(), CloudSyncError> {
+    heads::read(local_store, remote, remote_root)?;
+    Ok(())
+}
+
 fn ensure_enabled(options: &LocalCloudSyncOptions) -> Result<(), CloudSyncError> {
     if options.enabled {
         Ok(())
@@ -1620,9 +1634,14 @@ fn write_sync_pointer(
         if capacity_limited || attempt == 0 {
             remote.write(&path, &bytes)?;
         }
-        if load_sync_pointer_from_remote(local_store, remote, remote_root)?.as_ref()
-            == Some(pointer)
-        {
+        let verified = match load_sync_pointer_from_remote(local_store, remote, remote_root) {
+            Ok(readback) => readback.as_ref() == Some(pointer),
+            // A corrupt readback is an unverified read, not a terminal error:
+            // re-read on the next attempt instead of aborting the retry budget.
+            Err(CloudSyncError::PortableSnapshot(_) | CloudSyncError::Json(_)) => false,
+            Err(error) => return Err(error),
+        };
+        if verified {
             return Ok(());
         }
         if attempt + 1 < attempts && !capacity_limited {

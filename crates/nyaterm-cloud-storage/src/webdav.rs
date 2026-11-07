@@ -83,25 +83,35 @@ impl NativeWebdavRemote {
         body: Option<Vec<u8>>,
         headers: &[(&str, &str)],
     ) -> Result<zed_reqwest::blocking::Response, CloudSyncError> {
+        let origin = url::Url::parse(url)
+            .map_err(|_| CloudSyncError::Remote("invalid WebDAV request URL".into()))?;
         let mut current = url.to_string();
         let mut redirects = 0;
         let mut challenge: Option<String> = None;
         let cnonce = webdav_cnonce();
         let mut nonce_count = 0;
         loop {
+            // A cross-origin read redirect may be followed, but the configured
+            // credentials stay with the origin they were entered for.
+            let credentialed = url::Url::parse(&current)
+                .is_ok_and(|current| redirect_keeps_credentials(&origin, &current));
             // Digest signs the actual path and query, including redirects after
             // authentication. Never replay a signature for an earlier URI.
-            let authorization = if let Some(challenge) = &challenge {
-                nonce_count += 1;
-                Some(build_digest_authorization(
-                    challenge,
-                    &self.username,
-                    self.password.as_deref().unwrap_or_default(),
-                    method.as_str(),
-                    path_and_query(&current),
-                    &cnonce,
-                    &format!("{nonce_count:08x}"),
-                )?)
+            let authorization = if credentialed {
+                if let Some(challenge) = &challenge {
+                    nonce_count += 1;
+                    Some(build_digest_authorization(
+                        challenge,
+                        &self.username,
+                        self.password.as_deref().unwrap_or_default(),
+                        method.as_str(),
+                        path_and_query(&current),
+                        &cnonce,
+                        &format!("{nonce_count:08x}"),
+                    )?)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -110,11 +120,13 @@ impl NativeWebdavRemote {
                 &current,
                 body.clone(),
                 authorization,
+                credentialed,
                 headers,
             )?;
             // Allow one Digest challenge per logical request. Authentication
             // retries do not consume or reset the redirect budget.
-            if response.status() == StatusCode::UNAUTHORIZED
+            if credentialed
+                && response.status() == StatusCode::UNAUTHORIZED
                 && challenge.is_none()
                 && !self.username.is_empty()
                 && !self.password.as_deref().unwrap_or_default().is_empty()
@@ -154,12 +166,13 @@ impl NativeWebdavRemote {
         url: &str,
         body: Option<Vec<u8>>,
         authorization: Option<String>,
+        credentialed: bool,
         headers: &[(&str, &str)],
     ) -> Result<zed_reqwest::blocking::Response, CloudSyncError> {
         let mut request = self.client.request(method, url);
         if let Some(authorization) = authorization {
             request = request.header(AUTHORIZATION, authorization);
-        } else if !self.username.is_empty() {
+        } else if credentialed && !self.username.is_empty() {
             request = request.basic_auth(&self.username, self.password.as_deref());
         }
         if let Some(body) = body {
@@ -337,11 +350,30 @@ pub(super) fn parse_webdav_file_names(body: &str) -> Result<Vec<String>, CloudSy
     parse_webdav_names(body, false)
 }
 
+/// Whether credentials may follow a redirect between two URLs.
+///
+/// Credentials stay within one origin, except for a same-host upgrade from
+/// HTTP's default port to HTTPS's default port where the host is unchanged and
+/// TLS protects the request.
+pub(super) fn redirect_keeps_credentials(base: &url::Url, next: &url::Url) -> bool {
+    base.origin() == next.origin()
+        || (base.scheme() == "http"
+            && next.scheme() == "https"
+            && base.host_str() == next.host_str()
+            && base.port_or_known_default() == Some(80)
+            && next.port_or_known_default() == Some(443))
+}
+
 /// Whether a redirect target may receive this request.
 ///
 /// Credentials and bodies stay within one origin, except for a same-host
 /// upgrade from HTTP's default port to HTTPS's default port. A 303 describes
 /// an indirect response, so it must never replay a WebDAV mutation there.
+///
+/// `GET` and `HEAD` may additionally leave the origin because providers
+/// commonly answer a download with a signed URL on another host. The send loop
+/// drops credentials whenever `redirect_keeps_credentials` is false, so a
+/// cross-origin read never carries an `Authorization` header or a body.
 pub(super) fn redirect_target(
     status: StatusCode,
     location: Option<&str>,
@@ -363,13 +395,9 @@ pub(super) fn redirect_target(
     };
     let base = url::Url::parse(current).map_err(|_| invalid())?;
     let next = base.join(location).map_err(|_| invalid())?;
-    let same_origin = base.origin() == next.origin();
-    let default_port_upgrade = base.scheme() == "http"
-        && next.scheme() == "https"
-        && base.port_or_known_default() == Some(80)
-        && next.port_or_known_default() == Some(443);
-    if next.host_str() != base.host_str()
-        || !(same_origin || default_port_upgrade)
+    let read_only = method == Method::GET || method == Method::HEAD;
+    let allowed = read_only || redirect_keeps_credentials(&base, &next);
+    if !allowed
         || !next.username().is_empty()
         || next.password().is_some()
         || next.fragment().is_some()

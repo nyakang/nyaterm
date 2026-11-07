@@ -241,7 +241,7 @@ pub(in crate::features) fn test_provider_connection(
         remote,
         caches,
         {
-            cloud_sync::load_sync_pointer_from_remote(
+            cloud_sync::probe_remote_sync(
                 &control.local_store(local_store),
                 &control.remote(&remote),
                 &settings.remote_root,

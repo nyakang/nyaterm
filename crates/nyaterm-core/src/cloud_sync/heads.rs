@@ -202,8 +202,19 @@ pub(super) fn read(
     remote: &dyn CloudSyncRemote,
     root: &str,
 ) -> Result<RemoteHeads, CloudSyncError> {
-    let compatibility = load_sync_pointer_from_remote(local_store, remote, root)?;
     let mut heads = read_device_heads(remote, root)?;
+    // The shared pointer is a compatibility cache, while device heads are
+    // authoritative. An interrupted or truncated `latest.redb` upload must not
+    // block every later sync, so a decode failure is treated as a missing
+    // pointer once another head identifies the remote revision. Without any
+    // device head there is no safe baseline, so the corruption stays fatal.
+    let compatibility = match load_sync_pointer_from_remote(local_store, remote, root) {
+        Ok(pointer) => pointer,
+        Err(CloudSyncError::PortableSnapshot(_) | CloudSyncError::Json(_)) if !heads.is_empty() => {
+            None
+        }
+        Err(error) => return Err(error),
+    };
     if let Some(latest) = &compatibility {
         heads.push(latest.clone());
     }
