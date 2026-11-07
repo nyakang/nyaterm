@@ -7,7 +7,7 @@ use super::state::{SavedConnectionStartOptions, SessionStartTabPlacement};
 use crate::models::{SessionLaunchConfig, StartupCommandRequest, WorkspaceSplitDirection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SessionStartFocusTarget {
+pub(in crate::features) enum SessionStartFocusTarget {
     Terminal,
     RemoteDesktop,
 }

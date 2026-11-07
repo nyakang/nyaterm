@@ -13,7 +13,7 @@ use nyaterm_transport::LocalSessionConfig;
 use nyaterm_ui::NyaDialogWindowExt as _;
 
 use super::NyaTermApp;
-use super::session::SavedConnectionStartOptions;
+use super::session::{SavedConnectionStartOptions, SessionStartFocusTarget};
 use crate::models::SessionLaunchConfig;
 use crate::temporary_ssh_link::{TemporarySshLinkConfig, TemporaryTelnetLinkConfig};
 
@@ -109,9 +109,14 @@ impl NyaTermApp {
                             .to_string(),
                             rust_i18n::t!("common.confirm").to_string(),
                             true,
-                            move |app, _, cx| {
+                            move |app, window, cx| {
                                 app.activation.dialog = None;
-                                app.start_external_saved(connection.as_ref().clone(), mode, cx);
+                                app.start_external_saved(
+                                    connection.as_ref().clone(),
+                                    mode,
+                                    window,
+                                    cx,
+                                );
                                 true
                             },
                             |app, _| {
@@ -140,8 +145,8 @@ impl NyaTermApp {
             _ => None,
         };
         match matches.as_slice() {
-            [connection] => self.prepare_external_saved(connection.clone(), mode, cx),
-            [] => self.start_external_temporary(request, cx),
+            [connection] => self.prepare_external_saved(connection.clone(), mode, window, cx),
+            [] => self.start_external_temporary(request, window, cx),
             _ => {
                 self.activation.dialog = Some(ExternalDialog::Choose {
                     request,
@@ -156,6 +161,7 @@ impl NyaTermApp {
         &mut self,
         connection: SavedConnection,
         mode: Option<SshRuntimeMode>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if mode != Some(SshRuntimeMode::Sftp)
@@ -169,7 +175,7 @@ impl NyaTermApp {
                 mode,
             });
         } else {
-            self.start_external_saved(connection, mode, cx);
+            self.start_external_saved(connection, mode, window, cx);
         }
     }
 
@@ -177,15 +183,19 @@ impl NyaTermApp {
         &mut self,
         connection: SavedConnection,
         mode: Option<SshRuntimeMode>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.activation.waiting_for_start = true;
-        self.continue_saved_connection_start(
+        // Same boundary a click takes: the newly started surface must own the
+        // keyboard, or a cold-launched window shows a terminal that ignores input.
+        self.start_saved_connection_with_options(
             connection,
             SavedConnectionStartOptions {
                 ssh_runtime_mode: mode,
                 ..Default::default()
             },
+            window,
             cx,
         );
     }
@@ -193,6 +203,7 @@ impl NyaTermApp {
     fn start_external_temporary(
         &mut self,
         request: ExternalConnectionRequest,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.activation.waiting_for_start = true;
@@ -240,6 +251,11 @@ impl NyaTermApp {
                 },
                 cx,
             ),
+        }
+        // Temporary external starts are all terminal surfaces. Steal focus only
+        // when a start actually registered, so a blocked launch keeps it.
+        if self.session.start_has_active_pending() {
+            self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
         }
     }
 
