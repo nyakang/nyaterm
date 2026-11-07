@@ -14,7 +14,7 @@ use crate::helpers::{
     build_digest_authorization, digest_challenge_headers, path_and_query, retry_after_seconds,
     webdav_cnonce,
 };
-use crate::webdav::redirect_target;
+use crate::webdav::{redirect_keeps_credentials, redirect_target};
 
 #[derive(Clone)]
 pub(super) struct Transport {
@@ -143,13 +143,24 @@ impl HttpTransport for Transport {
         let (parts, body) = request.into_parts();
         let method = parts.method;
         let mut current = parts.uri.to_string();
+        let origin = url::Url::parse(&current).ok();
         let mut challenge: Option<String> = None;
         let mut redirects = 0;
         let mut nonce_count = 0;
         let cnonce = webdav_cnonce();
         let body = body.to_bytes();
         loop {
+            // A cross-origin read redirect may be followed, but WebDAV
+            // credentials stay with the origin they were configured for.
+            let credentialed = self.webdav.is_some()
+                && origin.as_ref().is_some_and(|origin| {
+                    url::Url::parse(&current)
+                        .is_ok_and(|current| redirect_keeps_credentials(origin, &current))
+                });
             let mut headers = parts.headers.clone();
+            if self.webdav.is_some() && !credentialed {
+                headers.remove(AUTHORIZATION);
+            }
             if self.webdav.is_some() && method.as_str() == "MOVE" {
                 // Replace rather than append: duplicate Overwrite headers can
                 // cause a server to select the original OpenDAL value (T).
@@ -160,7 +171,7 @@ impl HttpTransport for Transport {
                 .request(method.clone(), &current)
                 .headers(headers)
                 .body(body.clone());
-            if let Some((username, password)) = &self.webdav {
+            if credentialed && let Some((username, password)) = &self.webdav {
                 if let Some(challenge) = &challenge {
                     nonce_count += 1;
                     let authorization = build_digest_authorization(
@@ -188,7 +199,8 @@ impl HttpTransport for Transport {
             let status = response.status();
             let headers = response.headers().clone();
             let retry_after = retry_after_seconds(&headers);
-            let next_challenge = if status == StatusCode::UNAUTHORIZED
+            let next_challenge = if credentialed
+                && status == StatusCode::UNAUTHORIZED
                 && challenge.is_none()
                 && self.webdav.as_ref().is_some_and(|(user, password)| {
                     !user.is_empty() && !password.as_deref().unwrap_or_default().is_empty()

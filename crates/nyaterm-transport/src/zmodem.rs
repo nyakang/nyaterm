@@ -300,6 +300,7 @@ fn detect_zmodem_start(data: &[u8]) -> Option<(ZmodemDirection, usize)> {
 
 fn retained_prefix_start(data: &[u8], data_starts_at_line_start: bool) -> usize {
     let max_suffix = data.len().min(ZMODEM_HEADER_LEN + 1);
+    let mut keep_from = data.len();
     for len in (1..=max_suffix).rev() {
         let start = data.len() - len;
         let suffix = &data[start..];
@@ -310,10 +311,45 @@ fn retained_prefix_start(data: &[u8], data_starts_at_line_start: bool) -> usize 
             || is_line_start(data, start, data_starts_at_line_start)
             || has_rz_receive_prompt_before(data, start)
         {
-            return start;
+            keep_from = start;
+            break;
         }
     }
-    data.len()
+    // lrzsz writes its receive banner between the "rz" echo and the ZRINIT
+    // header. Withholding the banner (and its split prefixes) keeps its leading
+    // CAN byte and half-rendered text out of the terminal: detection drops it,
+    // and `flush_pending_if_idle` releases it when no header follows.
+    if let Some(banner_start) =
+        rz_receive_banner_prefix_start(data, keep_from, data_starts_at_line_start)
+    {
+        keep_from = keep_from.min(banner_start);
+    }
+    keep_from
+}
+
+/// Byte offset of a trailing (possibly partial) lrzsz "waiting to receive"
+/// banner that ends exactly at `end`. A banner is only recognized at a line
+/// start, which is where the shell echo leaves the cursor before `rz` writes it.
+fn rz_receive_banner_prefix_start(
+    data: &[u8],
+    end: usize,
+    data_starts_at_line_start: bool,
+) -> Option<usize> {
+    const ZDLE_BANNER: &[u8] = b"\x18z waiting to receive.";
+    const BANNER: &[u8] = b"z waiting to receive.";
+    let prefix = data.get(..end)?;
+    for banner in [ZDLE_BANNER, BANNER] {
+        for len in (1..=prefix.len().min(banner.len())).rev() {
+            let start = prefix.len() - len;
+            if prefix[start..] != banner[..len] {
+                continue;
+            }
+            if is_line_start(data, start, data_starts_at_line_start) {
+                return Some(start);
+            }
+        }
+    }
+    None
 }
 
 fn is_line_start(data: &[u8], start: usize, data_starts_at_line_start: bool) -> bool {
@@ -338,13 +374,14 @@ fn has_rz_receive_prompt_before(data: &[u8], start: usize) -> bool {
         .any(|window| window == RZ_RECEIVE_PROMPT)
 }
 
-/// Strip the "rz" shell echo from the end of the passthrough data
-/// so that the user doesn't see the upload command in the terminal.
-/// Handles common echo variants: "rz\r\n", "rz\r", "rz".
+/// Strip the lrzsz startup noise from the end of the passthrough data: its
+/// "z waiting to receive." banner and the "rz" shell echo that precede an
+/// upload ZRINIT header. Neither the banner's CAN byte nor the echo should
+/// reach the terminal.
 fn strip_rz_echo(data: &mut Vec<u8>) {
-    // Try to strip from the end: \r\n, \r, or just the command text.
-    // The command is always at the end of the passthrough because the
-    // ZMODEM header follows immediately.
+    strip_rz_receive_banner(data);
+    // After the banner is gone, the command echo is the trailing text.
+    // Handles common echo variants: "rz\r\n", "rz\r", "rz".
     let patterns: &[&[u8]] = &[
         b"rz -e -y\r\n",
         b"rz -e -y\r",
@@ -360,6 +397,32 @@ fn strip_rz_echo(data: &mut Vec<u8>) {
         if data.ends_with(pat) {
             data.truncate(data.len() - pat.len());
             return;
+        }
+    }
+}
+
+/// Strip a trailing lrzsz receive banner, tolerating a trailing line ending.
+fn strip_rz_receive_banner(data: &mut Vec<u8>) {
+    for banner in [
+        b"\x18z waiting to receive.".as_slice(),
+        b"z waiting to receive.".as_slice(),
+    ] {
+        for tail in [
+            b"\r\n".as_slice(),
+            b"\n".as_slice(),
+            b"\r".as_slice(),
+            b"".as_slice(),
+        ] {
+            let total = banner.len() + tail.len();
+            if data.len() < total {
+                continue;
+            }
+            let banner_start = data.len() - total;
+            let tail_start = data.len() - tail.len();
+            if &data[banner_start..tail_start] == banner && &data[tail_start..] == tail {
+                data.truncate(banner_start);
+                return;
+            }
         }
     }
 }
@@ -1204,13 +1267,18 @@ impl ZmodemTransfer {
             .unwrap_or("file")
             .to_string();
         let file = std::fs::File::open(path).map_err(|e| format!("Failed to open upload: {e}"))?;
-        let size = file
+        let metadata = file
             .metadata()
-            .map_err(|e| format!("Failed to read upload metadata: {e}"))?
-            .len();
+            .map_err(|e| format!("Failed to read upload metadata: {e}"))?;
+        let size = metadata.len();
         let size_u32 = validate_file_size(size).map_err(|e| e.to_string())?;
-        let info = zmodem2::FileInfo::new(name.as_bytes(), Some(zmodem2::Position::new(size_u32)))
-            .with_mode(0o100644);
+        let modified = upload_modification_time(&metadata);
+        let mut info =
+            zmodem2::FileInfo::new(name.as_bytes(), Some(zmodem2::Position::new(size_u32)))
+                .with_mode(0o100644);
+        if let Some(modified) = modified {
+            info = info.with_modified(modified);
+        }
         sender
             .start_file(info)
             .map_err(|e| format!("start_file error: {e}"))?;
@@ -1353,12 +1421,24 @@ fn cancel_sequence() -> Vec<u8> {
     seq
 }
 
+/// Modification time for a ZFILE header, in whole seconds since the Unix
+/// epoch. zmodem2 writes `0` when a mode is set but the time is missing, which
+/// `rz` then applies as 1970-01-01, so every upload reports a real timestamp
+/// when the filesystem provides one.
+fn upload_modification_time(metadata: &std::fs::Metadata) -> Option<u32> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_secs().min(u64::from(u32::MAX)) as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ProgressThrottle, ZMODEM_PROGRESS_BYTES, ZMODEM_PROGRESS_INTERVAL, ZmodemAction,
         ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
-        cancel_sequence,
+        cancel_sequence, upload_modification_time,
     };
     use std::time::{Duration, Instant};
 
@@ -1440,7 +1520,10 @@ mod tests {
                 initial_bytes,
             } => {
                 assert_eq!(direction, ZmodemDirection::Upload);
-                assert_eq!(passthrough, b"\x18z waiting to receive.");
+                assert!(
+                    passthrough.is_empty(),
+                    "the lrzsz receive banner must not reach the terminal"
+                );
                 assert_eq!(initial_bytes, b"**\x18B01");
             }
             ZmodemDetectResult::NoMatch { .. } => panic!("expected ZMODEM detection"),
@@ -1451,9 +1534,10 @@ mod tests {
     fn detects_rz_zhex_upload_header_split_after_prompt_text() {
         let mut detector = ZmodemDetector::new();
         match detector.feed(b"\x18z waiting to receive.**") {
-            ZmodemDetectResult::NoMatch { passthrough } => {
-                assert_eq!(passthrough, b"\x18z waiting to receive.")
-            }
+            ZmodemDetectResult::NoMatch { passthrough } => assert!(
+                passthrough.is_empty(),
+                "the lrzsz receive banner must be withheld until the header arrives"
+            ),
             ZmodemDetectResult::Detected { .. } => panic!("unexpected early detection"),
         }
 
@@ -1461,6 +1545,40 @@ mod tests {
             detected_direction(detector.feed(b"\x18B01")),
             ZmodemDirection::Upload
         );
+    }
+
+    #[test]
+    fn strips_rz_command_echo_and_banner_before_upload_header() {
+        let mut detector = ZmodemDetector::new();
+        match detector.feed(b"[root@k3s ~]# rz -e\r\n\x18z waiting to receive.**\x18B01") {
+            ZmodemDetectResult::Detected {
+                direction,
+                passthrough,
+                initial_bytes,
+            } => {
+                assert_eq!(direction, ZmodemDirection::Upload);
+                assert_eq!(passthrough, b"[root@k3s ~]# ");
+                assert_eq!(initial_bytes, b"**\x18B01");
+            }
+            ZmodemDetectResult::NoMatch { .. } => panic!("expected ZMODEM detection"),
+        }
+    }
+
+    #[test]
+    fn withheld_rz_banner_is_released_when_no_header_follows() {
+        let mut detector = ZmodemDetector::new();
+        let now = Instant::now();
+        match detector.feed_at(b"\x18z waiting to receive.", now) {
+            ZmodemDetectResult::NoMatch { passthrough } => {
+                assert!(passthrough.is_empty(), "banner should be withheld")
+            }
+            ZmodemDetectResult::Detected { .. } => panic!("unexpected detection"),
+        }
+        assert_eq!(
+            detector.flush_pending_if_idle(now + Duration::from_secs(2)),
+            b"\x18z waiting to receive."
+        );
+        assert!(detector.is_idle());
     }
 
     #[test]
@@ -1718,8 +1836,19 @@ mod tests {
         // Larger than one subpacket and not a multiple of it, so the transfer has
         // to span frames and end on a partial one.
         let payload: Vec<u8> = (0..40_003u32).map(|i| (i % 251) as u8).collect();
+        let modified_secs = 1_700_000_000u64;
         let src_file = src_dir.join("payload.bin");
         std::fs::write(&src_file, &payload).expect("write source file");
+        let stamp = std::fs::File::options()
+            .write(true)
+            .open(&src_file)
+            .expect("open source file");
+        stamp
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified_secs),
+            )
+            .expect("set source modification time");
+        drop(stamp);
 
         let mut upload = ZmodemTransfer::new(ZmodemDirection::Upload, &[]);
         let mut download = ZmodemTransfer::new(ZmodemDirection::Download, &[]);
@@ -1728,6 +1857,7 @@ mod tests {
         // `rz` would.
         let mut to_upload = collect_wire(download.accept_download(dst_dir.clone()));
         let mut to_download = collect_wire(upload.accept_upload(vec![src_file]));
+        let mut sender_wire = to_download.clone();
 
         let mut upload_complete = None;
         let mut download_complete = None;
@@ -1743,7 +1873,10 @@ mod tests {
 
             for action in upload.feed_incoming(&inbound_upload) {
                 match action {
-                    ZmodemAction::SendToRemote(bytes) => to_download.extend_from_slice(&bytes),
+                    ZmodemAction::SendToRemote(bytes) => {
+                        sender_wire.extend_from_slice(&bytes);
+                        to_download.extend_from_slice(&bytes);
+                    }
                     ZmodemAction::EmitEvent(ZmodemEvent::Complete { file_count, .. }) => {
                         upload_complete = Some(file_count);
                     }
@@ -1787,6 +1920,35 @@ mod tests {
         let received = std::fs::read(dst_dir.join("payload.bin")).expect("read received file");
         assert_eq!(received.len(), payload.len());
         assert_eq!(received, payload);
+
+        let sender_text = String::from_utf8_lossy(&sender_wire);
+        assert!(
+            sender_text.contains(&format!(" {modified_secs:o} 100644")),
+            "ZFILE header did not carry the modification time: {sender_text}"
+        );
+    }
+
+    #[test]
+    fn upload_modification_time_reflects_file_mtime() {
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-zmodem-mtime");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let path = root.join("stamp.bin");
+        std::fs::write(&path, b"data").expect("write file");
+        let modified_secs = 1_700_000_000u64;
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open file");
+        file.set_modified(
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified_secs),
+        )
+        .expect("set modification time");
+
+        let metadata = file.metadata().expect("read metadata");
+        assert_eq!(
+            upload_modification_time(&metadata),
+            Some(modified_secs as u32)
+        );
     }
 
     fn collect_wire(actions: Vec<ZmodemAction>) -> Vec<u8> {

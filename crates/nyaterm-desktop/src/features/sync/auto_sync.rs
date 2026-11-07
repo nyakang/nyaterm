@@ -115,7 +115,8 @@ fn run_auto_sync_inner(
     if let Some(skipped) = auto_sync_skip(&settings, trigger, change_elapsed) {
         return Ok(skipped);
     }
-    if !matches!(settings.protocol_version, 3 | 4) {
+    let protocol_version = super::effective_protocol_version(&settings);
+    if !matches!(protocol_version, 3 | 4) {
         return Err(CloudSyncError::Remote(
             "Unsupported cloud sync protocol".into(),
         ));
@@ -132,7 +133,7 @@ fn run_auto_sync_inner(
         master_password: password,
         enabled: true,
     };
-    if settings.protocol_version == 4 {
+    if protocol_version == 4 {
         let preview = if trigger == AutoSyncTrigger::Change {
             let Some(preview) = super::cloud_sync_v4::preview_on_change(
                 store,
@@ -535,5 +536,70 @@ mod tests {
             auto_sync_skip(&settings, AutoSyncTrigger::Focus, Duration::ZERO),
             Some(AutoSyncResult::Disabled)
         ));
+    }
+
+    #[test]
+    fn a_stored_v4_preference_does_not_block_a_legacy_gist_auto_sync() {
+        use crate::features::sync::io_runtime::IoScope;
+        use crate::features::sync::operation::AutoSyncOperationControls;
+        use crate::test_support::{TestConfigDir, blocking_test_store};
+        use nyaterm_core::{AppRuntime, CloudSyncError, RuntimeMode};
+        use nyaterm_store::StoreDomain;
+        let dir = TestConfigDir::new("nyaterm-cloud-sync-gist-v4-fallback");
+        let store = blocking_test_store(dir.path());
+        store
+            .request_fn(StoreDomain::CloudSync, |s| {
+                s.save_master_password(Some("fixture-password"))?;
+                s.save_cloud_sync_settings(CloudSyncSettings {
+                    enabled: true,
+                    provider: "github_gist".into(),
+                    protocol_version: 4,
+                    ..CloudSyncSettings::default()
+                })?;
+                Ok(())
+            })
+            .unwrap();
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            dir.path().into(),
+            dir.join("config"),
+            dir.join("logs"),
+            dir.join("cache"),
+            None,
+        );
+        let scope = IoScope::new("fixture");
+        let mut result = Ok(AutoSyncResult::Busy);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
+            result = super::run_auto_sync(
+                &store,
+                &runtime,
+                super::AutoSyncRequest {
+                    trigger: AutoSyncTrigger::Settings,
+                    change_elapsed: Duration::ZERO,
+                    pull_safe: false,
+                    remote_available: false,
+                },
+                &|| Ok(()),
+                &AutoSyncOperationControls::default(),
+            );
+            if !matches!(result, Ok(AutoSyncResult::Busy)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let error = match result {
+            Err(error) => error,
+            _ => panic!("the gist access token is missing"),
+        };
+        let message = match error {
+            CloudSyncError::Remote(message) => message,
+            other => panic!("unexpected cloud sync error: {other:?}"),
+        };
+        assert_eq!(
+            message, "GitHub Gist access token is required",
+            "auto sync must take the legacy gist path instead of failing V4 validation"
+        );
+        assert_eq!(scope.stats.lock().unwrap().requests, 0);
     }
 }

@@ -221,17 +221,85 @@ fn a_collection_redirect_is_retried_with_the_original_method_and_body() {
 }
 
 #[test]
-fn a_redirect_to_another_host_is_not_followed_with_credentials() {
-    let (remote, server) = scripted_server(vec![(
-        "GET /dav/apps/nyaterm/sync/latest.redb HTTP/1.1",
-        redirect("http://other.example/dav/apps/nyaterm/sync/latest.redb"),
-    )]);
-    let result = remote.read_if_exists("sync/latest.redb");
-    server.join().unwrap();
-    assert!(matches!(
-        result,
-        Err(CloudSyncError::Http { status: 301, .. })
-    ));
+fn cross_origin_read_redirects_never_forward_basic_or_digest_credentials() {
+    for digest in [false, true] {
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let body = "remote-object";
+        let location = format!("http://{}/download", target.local_addr().unwrap());
+        let target_handle = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match target.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "missing redirected download");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("redirect target accept failed: {error}"),
+                }
+            };
+            Reply {
+                status: 200,
+                headers: Vec::new(),
+                body,
+            }
+            .answer(&mut stream)
+        });
+        let mut script = Vec::new();
+        if digest {
+            script.push((
+                "GET /dav/apps/nyaterm/sync/latest.redb HTTP/1.1",
+                unauthorized(),
+            ));
+        }
+        script.push((
+            "GET /dav/apps/nyaterm/sync/latest.redb HTTP/1.1",
+            redirect(&location),
+        ));
+        let (remote, server) = scripted_server(script);
+        let remote = with_credentials(remote);
+        let bytes = remote.read_if_exists("sync/latest.redb").unwrap();
+        server.join().unwrap();
+        let request = target_handle.join().unwrap();
+        assert_eq!(request.header("authorization"), None);
+        assert_eq!(bytes.as_deref(), Some(body.as_bytes()));
+    }
+}
+
+#[test]
+fn read_redirects_may_cross_origins_but_never_downgrade_or_carry_userinfo() {
+    for (current, location, allowed) in [
+        (
+            "https://dav.example/sync",
+            "https://other.example/other",
+            true,
+        ),
+        (
+            "http://dav.example/sync",
+            "http://other.example/other",
+            true,
+        ),
+        (
+            "https://dav.example/sync",
+            "http://other.example/other",
+            false,
+        ),
+        (
+            "https://dav.example/sync",
+            "https://user@other.example/other",
+            false,
+        ),
+        (
+            "https://dav.example/sync",
+            "https://other.example/other#fragment",
+            false,
+        ),
+    ] {
+        let target =
+            redirect_target(StatusCode::FOUND, Some(location), current, &Method::GET).unwrap();
+        assert_eq!(target.is_some(), allowed, "{current} -> {location}");
+    }
 }
 
 #[test]

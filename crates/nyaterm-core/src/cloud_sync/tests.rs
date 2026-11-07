@@ -2586,6 +2586,94 @@ fn a_remote_that_does_not_keep_the_uploaded_bytes_reports_a_divergent_write() {
 }
 
 #[test]
+fn a_truncated_compatibility_pointer_does_not_block_push_when_a_device_head_exists() {
+    let source_dir = unique_temp_dir("cloud-truncated-pointer-source");
+    let unused_remote = unique_temp_dir("cloud-truncated-pointer-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Truncated Pointer", "bash")],
+        })
+        .expect("seed source");
+    let remote = MemoryRemote::default();
+    push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), true)
+        .expect("first push");
+    let latest_path = remote_path(&source_options.remote_root, super::SYNC_LATEST_FILE);
+    remote
+        .files
+        .lock()
+        .expect("files lock")
+        .get_mut(&latest_path)
+        .expect("pointer")
+        .truncate(64);
+
+    let store = OptionsTestLocalStore(&source_options);
+    assert!(
+        super::load_sync_pointer_from_remote(&store, &remote, &source_options.remote_root).is_err(),
+        "the truncated pointer stays visibly corrupt"
+    );
+    super::probe_remote_sync(&store, &remote, &source_options.remote_root)
+        .expect("a device head makes the shared pointer advisory");
+    let pushed =
+        push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), true)
+            .expect("a truncated pointer must not block a push");
+    assert_eq!(
+        super::load_sync_pointer_from_remote(&store, &remote, &source_options.remote_root)
+            .expect("repair read"),
+        pushed.pointer
+    );
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
+}
+
+#[test]
+fn a_truncated_compatibility_pointer_remains_fatal_without_device_heads() {
+    let source_dir = unique_temp_dir("cloud-truncated-legacy-source");
+    let unused_remote = unique_temp_dir("cloud-truncated-legacy-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Truncated Legacy", "bash")],
+        })
+        .expect("seed source");
+    let remote = MemoryRemote::default();
+    push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), true)
+        .expect("first push");
+    let heads_prefix = remote_path(&source_options.remote_root, super::heads::HEADS_DIR);
+    remote
+        .files
+        .lock()
+        .expect("files lock")
+        .retain(|path, _| !path.starts_with(&heads_prefix));
+    let latest_path = remote_path(&source_options.remote_root, super::SYNC_LATEST_FILE);
+    remote
+        .files
+        .lock()
+        .expect("files lock")
+        .get_mut(&latest_path)
+        .expect("pointer")
+        .truncate(64);
+
+    let store = OptionsTestLocalStore(&source_options);
+    let error = super::probe_remote_sync(&store, &remote, &source_options.remote_root)
+        .expect_err("without a device head the corrupt pointer has no safe replacement");
+    assert!(matches!(
+        error,
+        CloudSyncError::PortableSnapshot(_) | CloudSyncError::Json(_)
+    ));
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
+}
+
+#[test]
 fn masked_cloud_sync_merge_preserves_provider_secrets() {
     let mut current = CloudSyncSettings::default();
     current.webdav.password = Some("webdav-password".to_string().into());

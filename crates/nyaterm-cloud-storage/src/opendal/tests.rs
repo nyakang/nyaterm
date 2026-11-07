@@ -303,6 +303,24 @@ fn cross_origin_redirect_and_303_mutation_never_replay_credentials_or_bodies() {
 }
 
 #[test]
+fn webdav_cross_origin_download_redirect_is_followed_without_credentials() {
+    let downloader = Server::new(|_| Reply::new(200, "remote-object"));
+    let location = format!("{}/download", downloader.endpoint);
+    let source = Server::new(move |_| Reply::new(302, "").header("Location", &location));
+    let remote = OpenDalRemote::webdav(&source.webdav(), Default::default()).unwrap();
+    assert_eq!(
+        remote
+            .read_if_exists("sync/latest.redb")
+            .unwrap()
+            .as_deref(),
+        Some(b"remote-object".as_slice())
+    );
+    let received = downloader.requests.lock().unwrap();
+    assert_eq!(received.len(), 1);
+    assert!(!received[0].headers.contains_key("authorization"));
+}
+
+#[test]
 fn errors_keep_status_retry_after_and_redact_server_data_without_replaying_mutations() {
     use nyaterm_core::CloudSyncError;
     for status in [401, 403, 409, 429, 503] {

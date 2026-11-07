@@ -16,5 +16,17 @@ pub(in crate::features) use cloud_sync_provider::{
 };
 pub(in crate::features) use state::{CloudSyncFeatureState, CloudSyncLiveState, SyncHistoryFilter};
 
+/// The sync protocol that can actually run for the configured provider.
+///
+/// Providers that have not passed V4 capability validation (GitHub Gist,
+/// Gitee snippets) keep working through the legacy path even when a V4
+/// preference was persisted before the provider changed.
+pub(crate) fn effective_protocol_version(settings: &nyaterm_core::CloudSyncSettings) -> u32 {
+    nyaterm_sync::protocol::ProviderCapabilities::effective_protocol_version(
+        &settings.provider,
+        settings.protocol_version,
+    )
+}
+
 #[cfg(test)]
 mod legacy_compat_tests;

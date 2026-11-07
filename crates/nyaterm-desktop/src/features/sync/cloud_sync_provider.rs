@@ -139,7 +139,10 @@ pub(super) fn with_remote<T>(
         &super::io_runtime::IoCaches,
     ) -> Result<T, CloudSyncError>,
 ) -> Result<T, CloudSyncError> {
-    if settings.protocol_version != 3 && !label.starts_with("v4_") && label != "connection_test" {
+    if super::effective_protocol_version(settings) != 3
+        && !label.starts_with("v4_")
+        && label != "connection_test"
+    {
         return Err(CloudSyncError::Remote(
             "Legacy sync writing is disabled for this protocol".into(),
         ));
@@ -241,7 +244,7 @@ pub(in crate::features) fn test_provider_connection(
         remote,
         caches,
         {
-            cloud_sync::load_sync_pointer_from_remote(
+            cloud_sync::probe_remote_sync(
                 &control.local_store(local_store),
                 &control.remote(&remote),
                 &settings.remote_root,
