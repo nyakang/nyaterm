@@ -56,7 +56,7 @@ pub(super) fn rotate_with_options(
     next_password: SecretString,
     control: &CloudSyncOperationControl,
 ) -> Result<CloudSyncSettings, CloudSyncError> {
-    if settings.protocol_version != 4 {
+    if crate::features::sync::effective_protocol_version(settings) != 4 {
         return Err(invalid());
     }
     let source = destination(settings, options);

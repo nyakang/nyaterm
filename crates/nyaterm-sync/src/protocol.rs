@@ -30,6 +30,21 @@ impl ProviderCapabilities {
             && self.max_files.is_none()
             && self.max_object_bytes >= MAX_PUBLICATION_BYTES
     }
+
+    /// The protocol that can actually run for `provider`.
+    ///
+    /// A stored V4 preference only applies to providers that passed capability
+    /// validation. Switching to a legacy provider must keep synchronizing
+    /// instead of failing every attempt against an unsupported protocol.
+    pub fn effective_protocol_version(provider: &str, configured: u32) -> u32 {
+        if configured == 4
+            && !Self::for_provider(provider).is_some_and(|capabilities| capabilities.supports_v4())
+        {
+            3
+        } else {
+            configured
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -103,5 +118,47 @@ impl PendingPublication {
             bytes,
             document_hash,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderCapabilities;
+
+    #[test]
+    fn a_stored_v4_preference_falls_back_to_the_legacy_protocol_for_snippet_providers() {
+        for provider in ["github_gist", "gitee_snippet", "unknown_provider"] {
+            assert_eq!(
+                ProviderCapabilities::effective_protocol_version(provider, 4),
+                3,
+                "{provider} has not passed V4 capability validation"
+            );
+        }
+        for provider in [
+            "local_directory",
+            "webdav",
+            "s3",
+            "google_drive",
+            "onedrive",
+            "aliyun_drive",
+        ] {
+            assert_eq!(
+                ProviderCapabilities::effective_protocol_version(provider, 4),
+                4,
+                "{provider} supports V4"
+            );
+        }
+    }
+
+    #[test]
+    fn a_configured_legacy_protocol_is_never_promoted() {
+        for provider in ["github_gist", "webdav"] {
+            for configured in [1, 2, 3, 5] {
+                assert_eq!(
+                    ProviderCapabilities::effective_protocol_version(provider, configured),
+                    configured
+                );
+            }
+        }
     }
 }

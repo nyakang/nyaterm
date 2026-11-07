@@ -139,7 +139,10 @@ pub(super) fn with_remote<T>(
         &super::io_runtime::IoCaches,
     ) -> Result<T, CloudSyncError>,
 ) -> Result<T, CloudSyncError> {
-    if settings.protocol_version != 3 && !label.starts_with("v4_") && label != "connection_test" {
+    if super::effective_protocol_version(settings) != 3
+        && !label.starts_with("v4_")
+        && label != "connection_test"
+    {
         return Err(CloudSyncError::Remote(
             "Legacy sync writing is disabled for this protocol".into(),
         ));

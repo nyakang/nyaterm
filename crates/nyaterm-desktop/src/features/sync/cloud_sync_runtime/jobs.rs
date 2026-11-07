@@ -118,7 +118,7 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.cloud_sync.settings().protocol_version == 4 {
+        if super::super::effective_protocol_version(self.cloud_sync.settings()) == 4 {
             self.run_cloud_sync_v3_preview(cx);
             return;
         }
@@ -272,7 +272,7 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.cloud_sync.settings().protocol_version == 4 {
+        if super::super::effective_protocol_version(self.cloud_sync.settings()) == 4 {
             self.run_cloud_sync_v3_preview(cx);
             return;
         }
@@ -445,7 +445,7 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.cloud_sync.settings().protocol_version == 4 {
+        if super::super::effective_protocol_version(self.cloud_sync.settings()) == 4 {
             self.run_cloud_sync_v3_preview(cx);
             return;
         }
@@ -602,7 +602,7 @@ impl NyaTermApp {
         force: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.cloud_sync.settings().protocol_version == 4 {
+        if super::super::effective_protocol_version(self.cloud_sync.settings()) == 4 {
             self.run_cloud_sync_v3_preview(cx);
             return;
         }

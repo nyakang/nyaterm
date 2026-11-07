@@ -332,16 +332,17 @@ impl NyaTermApp {
         } else {
             Some(Some(master_password.draft.to_string()))
         };
-        let password_rotation = (base.cloud_sync_settings.protocol_version == 4
-            && base.settings.has_master_password)
-            .then(|| {
-                master_password_update
-                    .as_ref()
-                    .and_then(|value| value.as_ref())
-                    .cloned()
-            })
-            .flatten()
-            .map(nyaterm_core::SecretString::from);
+        let password_rotation =
+            (crate::features::sync::effective_protocol_version(&base.cloud_sync_settings) == 4
+                && base.settings.has_master_password)
+                .then(|| {
+                    master_password_update
+                        .as_ref()
+                        .and_then(|value| value.as_ref())
+                        .cloned()
+                })
+                .flatten()
+                .map(nyaterm_core::SecretString::from);
         let sync_configuration_changed = cloud_changed || master_password_update.is_some();
         if password_rotation.is_some() && cloud_changed {
             let message = t!("settings.syncV3RotateSeparately").to_string();

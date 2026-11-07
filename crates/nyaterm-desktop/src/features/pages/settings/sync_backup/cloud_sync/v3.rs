@@ -15,7 +15,8 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.theme_palette();
-        let selected = self.cloud_sync.settings().protocol_version == 4;
+        let selected =
+            crate::features::sync::effective_protocol_version(self.cloud_sync.settings()) == 4;
         let capable = nyaterm_sync::protocol::ProviderCapabilities::for_provider(
             &self.cloud_sync.settings().provider,
         )
