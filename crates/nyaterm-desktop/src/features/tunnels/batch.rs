@@ -130,7 +130,8 @@ pub(in crate::features) struct TunnelBatchCoordinator {
 }
 
 impl TunnelBatchCoordinator {
-    pub(in crate::features) fn is_running(&self, group_id: &str) -> bool {
+    #[cfg(test)]
+    fn is_running(&self, group_id: &str) -> bool {
         self.batches.iter().any(|batch| batch.group_id == group_id)
     }
 

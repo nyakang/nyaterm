@@ -36,8 +36,10 @@ use tokio::sync::mpsc as tokio_mpsc;
 use uuid::Uuid;
 use x509_cert::der::Decode as _;
 
+mod client_name;
 mod clipboard;
 
+use client_name::resolve_client_name;
 use clipboard::ClipboardBridge;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -669,7 +671,7 @@ fn build_config(
         )
         .with_client_build(10_001)
         .with_client_dir("C:\\Windows\\System32\\mstscax.dll")
-        .with_client_name("NYATERM")
+        .with_client_name(resolve_client_name())
         .with_platform(platform)
         .with_desktop_width(u16::try_from(config.display.width).unwrap_or(1920))
         .with_desktop_height(u16::try_from(config.display.height).unwrap_or(1080))
@@ -1585,6 +1587,7 @@ mod tests {
         send_iron_input, send_reliable_iron_input, validate_active_session_id,
         validate_input_events,
     };
+    use crate::client_name::resolve_client_name;
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
     use ironrdp_pdu::geometry::InclusiveRectangle;
@@ -1633,6 +1636,19 @@ mod tests {
             clipboard: RdpClipboardConfig::default(),
             reconnect: RdpReconnectConfig::default(),
         }
+    }
+
+    #[test]
+    fn helper_reports_the_resolved_system_client_name() {
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let (config, _) = build_config(
+            "session",
+            &helper_config(),
+            output_tx,
+            Arc::new(CertificateGate::default()),
+        )
+        .unwrap();
+        assert!(config.connector().client_name == resolve_client_name());
     }
 
     #[test]
