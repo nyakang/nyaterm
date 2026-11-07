@@ -1,11 +1,13 @@
 use rust_i18n::t;
 
+use std::collections::HashSet;
+
 use gpui::prelude::*;
 use gpui::{App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, px, rgb};
 
 use crate::features::{NyaTermApp, selects::NO_SELECTION_VALUE, text_inputs::TextInputSetup};
 use crate::models::{NetworkTunnelEditorField, NetworkTunnelEditorState};
-use nyaterm_core::ConnectionType;
+use nyaterm_core::{ConnectionType, Group, SavedConnection};
 use nyaterm_ui::{NyaNumberInputOptions, NyaSelectOption};
 
 pub(in crate::features::pages::tunnels) fn network_tunnel_editor_content(
@@ -44,13 +46,10 @@ pub(in crate::features::pages::tunnels) fn network_tunnel_editor_content(
         NO_SELECTION_VALUE,
         t!("network.connectionPickerPlaceholder"),
     )];
-    connection_options.extend(
-        app.connection_state
-            .connections()
-            .iter()
-            .filter(|connection| matches!(&connection.config, ConnectionType::Ssh { .. }))
-            .map(|connection| NyaSelectOption::new(connection.id.clone(), connection.name.clone())),
-    );
+    connection_options.extend(ssh_connection_select_options(
+        app.connection_state.connections(),
+        app.connection_state.groups(),
+    ));
     let selected_connection = editor
         .connection_id
         .clone()
@@ -136,13 +135,14 @@ pub(in crate::features::pages::tunnels) fn network_tunnel_editor_content(
                     cx,
                 ))),
         )
-        .child(tunnel_editor_selector(
+        .child(tunnel_editor_searchable_selector(
             app,
             palette,
             "network-tunnel-editor-connection",
             t!("network.selectedConnection"),
             connection_options,
             selected_connection,
+            t!("network.searchConnections"),
             cx,
         ))
         .child(
@@ -291,6 +291,48 @@ pub(in crate::features::pages::tunnels) fn tunnel_editor_selector<I>(
 where
     I: Into<String>,
 {
+    tunnel_editor_selector_with_search(app, palette, id, label, options, selected_value, None, cx)
+}
+
+fn tunnel_editor_searchable_selector<I>(
+    app: &mut NyaTermApp,
+    palette: crate::theme::ThemePalette,
+    id: I,
+    label: impl Into<SharedString>,
+    options: Vec<NyaSelectOption>,
+    selected_value: String,
+    search_placeholder: impl Into<SharedString>,
+    cx: &mut Context<NyaTermApp>,
+) -> impl IntoElement
+where
+    I: Into<String>,
+{
+    tunnel_editor_selector_with_search(
+        app,
+        palette,
+        id,
+        label,
+        options,
+        selected_value,
+        Some(search_placeholder.into()),
+        cx,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tunnel_editor_selector_with_search<I>(
+    app: &mut NyaTermApp,
+    palette: crate::theme::ThemePalette,
+    id: I,
+    label: impl Into<SharedString>,
+    options: Vec<NyaSelectOption>,
+    selected_value: String,
+    search_placeholder: Option<SharedString>,
+    cx: &mut Context<NyaTermApp>,
+) -> impl IntoElement
+where
+    I: Into<String>,
+{
     let label: SharedString = label.into();
     div()
         .min_w_0()
@@ -303,7 +345,80 @@ where
                 .text_color(rgb(palette.text_muted))
                 .child(label),
         )
-        .child(app.form_select_control(id.into(), options, Some(selected_value), false, cx))
+        .child(app.form_select_control_with_search(
+            id.into(),
+            options,
+            Some(selected_value),
+            false,
+            search_placeholder,
+            cx,
+        ))
+}
+
+fn ssh_connection_select_options(
+    connections: &[SavedConnection],
+    groups: &[Group],
+) -> Vec<NyaSelectOption> {
+    connections
+        .iter()
+        .filter_map(|connection| {
+            let ConnectionType::Ssh {
+                host,
+                port,
+                username,
+                ..
+            } = &connection.config
+            else {
+                return None;
+            };
+            let group_path = connection
+                .group_id
+                .as_deref()
+                .and_then(|id| connection_group_path_label(groups, id))
+                .unwrap_or_default();
+            let host_port = format!("{host}:{port}");
+            let subtitle = [
+                group_path.as_str(),
+                host_port.as_str(),
+                username.as_str(),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+            let search_text = [
+                connection.name.as_str(),
+                host.as_str(),
+                username.as_str(),
+                group_path.as_str(),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+            Some(
+                NyaSelectOption::new(connection.id.clone(), connection.name.clone())
+                    .search_text(search_text)
+                    .subtitle(subtitle),
+            )
+        })
+        .collect()
+}
+
+fn connection_group_path_label(groups: &[Group], group_id: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut next = Some(group_id);
+    let mut seen = HashSet::new();
+    while let Some(id) = next {
+        if !seen.insert(id.to_string()) {
+            break;
+        }
+        let group = groups.iter().find(|group| group.id == id)?;
+        parts.push(group.name.clone());
+        next = group.parent_id.as_deref();
+    }
+    parts.reverse();
+    Some(parts.join(" / "))
 }
 
 pub(in crate::features::pages::tunnels) fn tunnel_editor_option(
@@ -390,5 +505,72 @@ pub(super) fn tunnel_editor_preview(editor: &NetworkTunnelEditorState) -> String
         format!("remote {bind_host}:{listen_port} -> {target_host}:{target_port}")
     } else {
         format!("local {bind_host}:{listen_port} -> {target_host}:{target_port}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_core::{ConnectionType, Group, SavedConnection};
+    use nyaterm_ui::NyaSelectOption;
+
+    use super::ssh_connection_select_options;
+
+    #[test]
+    fn ssh_connection_options_index_name_host_user_and_group_path() {
+        let groups = vec![
+            Group {
+                id: "parent".to_string(),
+                name: "Branch A".to_string(),
+                parent_id: None,
+                sort_order: 0,
+            },
+            Group {
+                id: "child".to_string(),
+                name: "Prod".to_string(),
+                parent_id: Some("parent".to_string()),
+                sort_order: 1,
+            },
+        ];
+        let connections = vec![
+            SavedConnection {
+                id: "ssh-1".to_string(),
+                name: "Jump Gateway".to_string(),
+                group_id: Some("child".to_string()),
+                config: ConnectionType::Ssh {
+                    host: "10.0.1.10".to_string(),
+                    port: 2222,
+                    username: "devops".to_string(),
+                    backspace_mode: String::new(),
+                    ai_execution_profile: Default::default(),
+                    x11_forwarding: false,
+                    auth_agent_endpoint: None,
+                    agent_forwarding_config: None,
+                    legacy_agent_forwarding: None,
+                    encoding: String::new(),
+                    dynamic_tab_title: false,
+                },
+                ..SavedConnection::default()
+            },
+            SavedConnection {
+                id: "local-1".to_string(),
+                name: "Local Shell".to_string(),
+                config: ConnectionType::Local {
+                    shell: None,
+                    backspace_mode: String::new(),
+                    encoding: String::new(),
+                    dynamic_tab_title: false,
+                },
+                ..SavedConnection::default()
+            },
+        ];
+
+        assert_eq!(
+            ssh_connection_select_options(&connections, &groups),
+            vec![
+                NyaSelectOption::new("ssh-1", "Jump Gateway")
+                    .search_text("Jump Gateway 10.0.1.10 devops Branch A / Prod")
+                    .subtitle("Branch A / Prod · 10.0.1.10:2222 · devops"),
+            ]
+        );
     }
 }

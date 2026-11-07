@@ -5,6 +5,11 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use nyaterm_core::{ProxyConfig, ProxyGroup, TunnelConfig, TunnelGroup, uuid};
 use nyaterm_transport::{SshTunnelInfo, SshTunnelManager};
 
+use super::batch::{
+    TunnelBatchAction, TunnelBatchBegin, TunnelBatchCoordinator, TunnelBatchDispatch,
+    TunnelBatchMember, TunnelBatchProgress, TunnelBatchReport, TunnelRuntimeState,
+};
+use crate::features::formatting::tunnel_name;
 use crate::features::runtime_jobs::TunnelJobResult;
 
 pub(in crate::features) struct TunnelFeatureState {
@@ -15,6 +20,7 @@ pub(in crate::features) struct TunnelFeatureState {
     /// delivery from then on. `None` afterwards, so a second start is a no-op.
     rx: Option<UnboundedReceiver<TunnelJobResult>>,
     pending: Vec<String>,
+    batches: TunnelBatchCoordinator,
 }
 
 pub(in crate::features) struct TunnelCatalogState {
@@ -81,6 +87,7 @@ impl TunnelFeatureState {
             tx,
             rx: Some(rx),
             pending: Vec::new(),
+            batches: TunnelBatchCoordinator::default(),
         }
     }
 
@@ -372,6 +379,107 @@ impl TunnelFeatureState {
     ) -> Option<UnboundedReceiver<TunnelJobResult>> {
         self.rx.take()
     }
+
+    pub(in crate::features) fn has_tunnel(&self, tunnel_id: &str) -> bool {
+        self.catalog
+            .tunnels
+            .iter()
+            .any(|tunnel| tunnel.id == tunnel_id)
+    }
+
+    pub(in crate::features) fn tunnel(&self, tunnel_id: &str) -> Option<&TunnelConfig> {
+        self.catalog
+            .tunnels
+            .iter()
+            .find(|tunnel| tunnel.id == tunnel_id)
+    }
+
+    fn runtime_state(
+        manager: &SshTunnelManager,
+        pending: &[String],
+        tunnel_id: &str,
+    ) -> TunnelRuntimeState {
+        if pending.iter().any(|id| id == tunnel_id) {
+            TunnelRuntimeState::Pending
+        } else if manager.is_open(tunnel_id).unwrap_or(false) {
+            TunnelRuntimeState::Open
+        } else {
+            TunnelRuntimeState::Closed
+        }
+    }
+
+    pub(in crate::features) fn batch_progress(
+        &self,
+        group_id: &str,
+    ) -> Option<TunnelBatchProgress> {
+        self.batches.progress(group_id)
+    }
+
+    /// Begin a batch over the tunnels whose `group_id` is exactly `group_id`.
+    /// Tunnels that merely share an SSH connection with the group are never
+    /// included.
+    pub(in crate::features) fn begin_group_batch(
+        &mut self,
+        group_id: &str,
+        action: TunnelBatchAction,
+    ) -> TunnelBatchBegin {
+        let members = self
+            .catalog
+            .tunnels
+            .iter()
+            .filter(|tunnel| tunnel.group_id.as_deref() == Some(group_id))
+            .map(|tunnel| TunnelBatchMember {
+                id: tunnel.id.clone(),
+                name: tunnel_name(tunnel),
+            })
+            .collect();
+        let Self {
+            batches,
+            manager,
+            pending,
+            ..
+        } = self;
+        batches.begin(group_id, action, members, |id| {
+            Self::runtime_state(manager, pending, id)
+        })
+    }
+
+    pub(in crate::features) fn cancel_group_batch(&mut self, group_id: &str) -> bool {
+        self.batches.cancel_group(group_id)
+    }
+
+    pub(in crate::features) fn next_batch_dispatches(&mut self) -> Vec<TunnelBatchDispatch> {
+        let Self {
+            batches,
+            manager,
+            pending,
+            ..
+        } = self;
+        batches.next_dispatches(|id| Self::runtime_state(manager, pending, id))
+    }
+
+    pub(in crate::features) fn record_batch_dispatch_rejected(
+        &mut self,
+        tunnel_id: &str,
+        error: String,
+    ) {
+        self.batches.record_dispatch_rejected(tunnel_id, error);
+    }
+
+    /// Feed a finished job to the batches. Call after `finish_job` so the
+    /// tunnel's post-job state is observed. Returns whether a batch owned it.
+    pub(in crate::features) fn record_batch_job_finished(
+        &mut self,
+        tunnel_id: &str,
+        outcome: Result<(), &str>,
+    ) -> bool {
+        let state_after = Self::runtime_state(&self.manager, &self.pending, tunnel_id);
+        self.batches.job_finished(tunnel_id, outcome, state_after)
+    }
+
+    pub(in crate::features) fn take_completed_batches(&mut self) -> Vec<TunnelBatchReport> {
+        self.batches.take_completed()
+    }
 }
 
 #[cfg(test)]
@@ -499,5 +607,59 @@ mod tests {
         assert_eq!(deleted_proxy_ids, ["proxy-1"]);
         assert!(tunnels.proxy_groups().is_empty());
         assert!(tunnels.proxies().is_empty());
+    }
+
+    #[test]
+    fn group_batch_matches_only_target_group_even_when_sharing_ssh_connection() {
+        use crate::features::tunnels::batch::{TunnelBatchAction, TunnelBatchBegin};
+
+        let mut tunnels = TunnelFeatureState::new(TunnelCatalogState::new(
+            vec![
+                TunnelConfig {
+                    id: "branch-a-db".to_string(),
+                    name: "MySQL".to_string(),
+                    group_id: Some("group-a".to_string()),
+                    connection_id: Some("shared-ssh".to_string()),
+                    ..TunnelConfig::default()
+                },
+                TunnelConfig {
+                    id: "branch-b-db".to_string(),
+                    name: "MySQL B".to_string(),
+                    group_id: Some("group-b".to_string()),
+                    connection_id: Some("shared-ssh".to_string()),
+                    ..TunnelConfig::default()
+                },
+                TunnelConfig {
+                    id: "ungrouped".to_string(),
+                    name: "Ungrouped".to_string(),
+                    group_id: None,
+                    connection_id: Some("shared-ssh".to_string()),
+                    ..TunnelConfig::default()
+                },
+            ],
+            vec![
+                TunnelGroup {
+                    id: "group-a".to_string(),
+                    name: "Branch A".to_string(),
+                    sort_order: 0,
+                },
+                TunnelGroup {
+                    id: "group-b".to_string(),
+                    name: "Branch B".to_string(),
+                    sort_order: 1,
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+        ));
+
+        assert_eq!(
+            tunnels.begin_group_batch("group-a", TunnelBatchAction::Start),
+            TunnelBatchBegin::Started
+        );
+        let dispatches = tunnels.next_batch_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].tunnel_id, "branch-a-db");
+        assert!(tunnels.batch_progress("group-b").is_none());
     }
 }

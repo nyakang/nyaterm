@@ -250,6 +250,7 @@ impl NyaTermApp {
         label: String,
         cx: &mut Context<Self>,
     ) {
+        self.tunnel_state.cancel_group_batch(&group_id);
         let removal = self.tunnel_state.without_tunnel_group(&group_id);
         let groups = removal.groups().to_vec();
         let tunnels = removal.tunnels().to_vec();
@@ -264,13 +265,34 @@ impl NyaTermApp {
                     Ok(()) => {
                         let deleted_tunnel_ids =
                             this.tunnel_state.commit_tunnel_group_removal(removal);
+                        this.tunnel_state.cancel_group_batch(&group_id);
+                        // Configuration is gone, so the forwards must go too.
+                        // Close in the background; a tunnel still opening is
+                        // closed by `apply_tunnel_event` once its open lands.
+                        let close_failures = deleted_tunnel_ids
+                            .iter()
+                            .filter(|id| {
+                                this.tunnel_state.is_open(id) && !this.tunnel_state.is_pending(id)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .filter_map(|id| this.submit_tunnel_close(id).err())
+                            .collect::<Vec<_>>();
                         this.connection_state.remove_network_group_references(
                             NetworkTab::Tunnels,
                             &group_id,
                             &deleted_tunnel_ids,
                         );
-                        this.shell
-                            .set_status(format!("tunnel group '{label}' deleted"));
+                        if close_failures.is_empty() {
+                            this.shell
+                                .set_status(format!("tunnel group '{label}' deleted"));
+                        } else {
+                            this.shell.set_status(format!(
+                                "tunnel group '{label}' deleted; failed to close tunnels: {}",
+                                close_failures.join("; ")
+                            ));
+                        }
                         this.settings
                             .update_store_status(this.shell.status().to_string(), true);
                     }

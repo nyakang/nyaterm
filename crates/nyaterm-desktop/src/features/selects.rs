@@ -190,8 +190,28 @@ impl NyaTermApp {
     where
         I: Into<SharedString>,
     {
+        self.form_select_control_with_search(id, options, selected_value, disabled, None, cx)
+    }
+
+    pub(in crate::features) fn form_select_control_with_search<I>(
+        &mut self,
+        id: I,
+        options: Vec<NyaSelectOption>,
+        selected_value: Option<String>,
+        disabled: bool,
+        search_placeholder: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<I>
+    where
+        I: Into<SharedString>,
+    {
         let id = id.into();
         let select = self.select_entity(id.clone(), options, selected_value, disabled, cx);
+        let searchable = search_placeholder.is_some();
+        select.update(cx, |select, cx| {
+            select.set_searchable(searchable, cx);
+            select.set_search_placeholder(search_placeholder, cx);
+        });
 
         div()
             .id(id)
