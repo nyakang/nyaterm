@@ -4,34 +4,87 @@ use std::sync::{Arc, Mutex};
 
 use genai::chat::{ChatFrameSink, FrameCtx, RawFrameRef};
 use nyaterm_core::ai::AiProviderApiProtocol;
+use nyaterm_core::ai::completion::{
+    AiStreamEventKind, AiStreamFrameFailure, AiStreamFrameFailureReason as FailureReason,
+};
 use serde_json::{Value, json};
 
 const MAX_CONTINUATION_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TOOL_CALLS: usize = 128;
 
 pub(super) struct FrameState {
+    pub frame_count: usize,
     pub terminal: bool,
     pub failed: bool,
+    pub failure: Option<AiStreamFrameFailure>,
     pub generated: bool,
     pub indexes: BTreeMap<String, usize>,
     pub items: BTreeMap<usize, Value>,
     pub data: Value,
     bytes: usize,
     arguments: BTreeMap<usize, String>,
+    current_event: AiStreamEventKind,
+    current_frame_bytes: usize,
 }
 
 impl Default for FrameState {
     fn default() -> Self {
         Self {
+            frame_count: 0,
             terminal: false,
             failed: false,
+            failure: None,
             generated: false,
             indexes: BTreeMap::new(),
             items: BTreeMap::new(),
             data: json!({}),
             bytes: 0,
             arguments: BTreeMap::new(),
+            current_event: AiStreamEventKind::Other,
+            current_frame_bytes: 0,
         }
+    }
+}
+
+impl FrameState {
+    fn fail(&mut self, reason: FailureReason) {
+        self.failed = true;
+        self.failure.get_or_insert(AiStreamFrameFailure {
+            reason,
+            frame: self.frame_count,
+            event: self.current_event,
+            data_bytes: self.current_frame_bytes,
+        });
+    }
+}
+
+fn event_kind(name: Option<&str>) -> AiStreamEventKind {
+    match name {
+        Some("response.created" | "response.in_progress" | "message_start" | "message_delta") => {
+            AiStreamEventKind::Lifecycle
+        }
+        Some("response.output_item.added" | "content_block_start") => {
+            AiStreamEventKind::OutputItemAdded
+        }
+        Some("response.output_item.done" | "content_block_stop") => {
+            AiStreamEventKind::OutputItemDone
+        }
+        Some(
+            "response.function_call_arguments.delta" | "response.function_call_arguments.done",
+        ) => AiStreamEventKind::FunctionArguments,
+        Some("response.output_text.delta" | "response.output_text.done") => AiStreamEventKind::Text,
+        Some(
+            "response.reasoning_text.delta"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_part.done",
+        ) => AiStreamEventKind::Reasoning,
+        Some("response.completed" | "message_stop") => AiStreamEventKind::Completed,
+        Some("response.incomplete") => AiStreamEventKind::Incomplete,
+        Some("response.failed") => AiStreamEventKind::Failed,
+        Some("error") => AiStreamEventKind::Error,
+        _ => AiStreamEventKind::Other,
     }
 }
 
@@ -56,7 +109,16 @@ impl ChatFrameSink for FrameObserver {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        state.frame_count = state.frame_count.saturating_add(1);
         if state.terminal || state.failed {
+            return;
+        }
+        state.current_event = event_kind(frame.event);
+        state.current_frame_bytes = frame.data.len();
+        // genai taps SSE blocks before discarding empty data (including comments
+        // and keep-alives). Mirror that transport rule without accepting an end.
+        // Ollama uses JSON lines, so its payloads still require valid JSON.
+        if frame.data.is_empty() && self.protocol != AiProviderApiProtocol::Ollama {
             return;
         }
         if frame.data.trim() == "[DONE]" {
@@ -65,25 +127,30 @@ impl ChatFrameSink for FrameObserver {
             return;
         }
         let Some(mut value) = frame.json() else {
-            state.failed = true;
+            state.fail(FailureReason::InvalidJson);
             return;
         };
         if !value.is_object() {
-            state.failed = true;
+            state.fail(FailureReason::InvalidEnvelope);
             return;
         }
-        if value.get("error").is_some()
+        if let Some(kind) = value.get("type").and_then(Value::as_str) {
+            state.current_event = event_kind(Some(kind));
+        }
+        // Some compatible gateways include a nullable error field on success.
+        // Explicit error events and non-null error payloads must still fail closed.
+        if value.get("error").is_some_and(|error| !error.is_null())
             || matches!(
                 value.get("type").and_then(Value::as_str),
                 Some("error" | "response.failed")
             )
         {
-            state.failed = true;
+            state.fail(FailureReason::ProviderError);
             return;
         }
         state.bytes = state.bytes.saturating_add(frame.data.len());
         if state.bytes > MAX_CONTINUATION_BYTES {
-            state.failed = true;
+            state.fail(FailureReason::ContinuationSizeLimit);
             return;
         }
         if self.responses {
@@ -93,7 +160,7 @@ impl ChatFrameSink for FrameObserver {
                 "response.completed" | "response.incomplete" => {
                     state.terminal = true;
                     if !value["response"].is_object() {
-                        state.failed = true;
+                        state.fail(FailureReason::MissingResponseObject);
                         return;
                     }
                     state.data = value["response"].take();
@@ -103,7 +170,7 @@ impl ChatFrameSink for FrameObserver {
                 }
                 "response.output_item.added" | "response.output_item.done" => {
                     if !value["item"].is_object() {
-                        state.failed = true;
+                        state.fail(FailureReason::MissingOutputItemObject);
                         return;
                     }
                     if let Some(index) = index(&value, "output_index") {
@@ -189,7 +256,7 @@ impl ChatFrameSink for FrameObserver {
                         .or_else(|| state.data.pointer("/candidates/0").cloned())
                         .unwrap_or_else(|| json!({}));
                     if !candidate.is_object() {
-                        state.failed = true;
+                        state.fail(FailureReason::InvalidContentBlock);
                         return;
                     }
                     candidate["content"] =
@@ -210,7 +277,7 @@ impl ChatFrameSink for FrameObserver {
                         matches!(kind.as_str(), "content_block_start" | "content_block_delta");
                     if kind == "message_start" {
                         if !value["message"].is_object() {
-                            state.failed = true;
+                            state.fail(FailureReason::InvalidContentBlock);
                             return;
                         }
                         state.data = value["message"].take();
@@ -234,12 +301,12 @@ impl ChatFrameSink for FrameObserver {
                         match kind.as_str() {
                             "content_block_start" => {
                                 if state.items.contains_key(&index) {
-                                    state.failed = true;
+                                    state.fail(FailureReason::DuplicateContentBlock);
                                     return;
                                 }
                                 let block = value["content_block"].clone();
                                 if !block.is_object() {
-                                    state.failed = true;
+                                    state.fail(FailureReason::InvalidContentBlock);
                                     return;
                                 }
                                 if let Some(id) = block["id"].as_str() {
@@ -266,7 +333,7 @@ impl ChatFrameSink for FrameObserver {
                                         }
                                     }
                                 } else {
-                                    state.failed = true;
+                                    state.fail(FailureReason::MissingContentBlock);
                                 }
                             }
                             "content_block_stop" => {
@@ -277,7 +344,7 @@ impl ChatFrameSink for FrameObserver {
                                                 block["input"] = input;
                                             }
                                         }
-                                        _ => state.failed = true,
+                                        _ => state.fail(FailureReason::InvalidToolArguments),
                                     }
                                 }
                             }
@@ -286,7 +353,7 @@ impl ChatFrameSink for FrameObserver {
                     }
                     if state.terminal {
                         if !state.arguments.is_empty() {
-                            state.failed = true;
+                            state.fail(FailureReason::UnclosedToolArguments);
                         }
                         state.data["content"] = json!(state.items.values().collect::<Vec<_>>());
                     }
@@ -301,7 +368,7 @@ impl ChatFrameSink for FrameObserver {
             }
         }
         if state.indexes.len() > MAX_TOOL_CALLS || state.items.len() > 4096 {
-            state.failed = true;
+            state.fail(FailureReason::StructureLimit);
         }
     }
 }
@@ -339,6 +406,7 @@ mod tests {
     use genai::chat::{ChatFrameSink, FrameCtx, RawFrameRef};
     use genai::{ModelIden, adapter::AdapterKind};
     use nyaterm_core::ai::AiProviderApiProtocol;
+    use nyaterm_core::ai::completion::{AiStreamEventKind, AiStreamFrameFailureReason};
     use serde_json::json;
 
     fn observe(observer: &FrameObserver, data: &str) {
@@ -388,6 +456,79 @@ mod tests {
         let observer = FrameObserver::new(AiProviderApiProtocol::Anthropic, false);
         observe(&observer, r#"{"type":"message_start","message":7}"#);
         assert!(observer.state.lock().unwrap().failed);
+    }
+
+    #[test]
+    fn responses_nullable_error_fields_do_not_reject_successful_events() {
+        let observer = FrameObserver::new(AiProviderApiProtocol::OpenaiCompatible, true);
+        for _ in 0..103 {
+            observe(
+                &observer,
+                r#"{"type":"response.reasoning_summary_text.delta","delta":"private-reasoning","error":null}"#,
+            );
+        }
+        observe(
+            &observer,
+            r#"{"type":"response.completed","response":{"output":[]},"error":null}"#,
+        );
+        let state = observer.state.lock().unwrap();
+        assert_eq!(state.frame_count, 104);
+        assert!(state.terminal && state.generated && !state.failed);
+        assert!(state.failure.is_none());
+    }
+
+    #[test]
+    fn first_frame_failure_retains_its_safe_cause_after_later_frames() {
+        use AiStreamFrameFailureReason as Reason;
+        for (data, reason, event) in [
+            (
+                "private-invalid-json",
+                Reason::InvalidJson,
+                AiStreamEventKind::Other,
+            ),
+            ("[]", Reason::InvalidEnvelope, AiStreamEventKind::Other),
+            (
+                r#"{"type":"response.output_item.done","item":null,"private-key":"private-content"}"#,
+                Reason::MissingOutputItemObject,
+                AiStreamEventKind::OutputItemDone,
+            ),
+            (
+                r#"{"type":"response.completed","response":null}"#,
+                Reason::MissingResponseObject,
+                AiStreamEventKind::Completed,
+            ),
+            (
+                r#"{"type":"response.failed","response":{"error":{"message":"private-content"}}}"#,
+                Reason::ProviderError,
+                AiStreamEventKind::Failed,
+            ),
+            (
+                r#"{"type":"private-event-name","error":{"message":"private-content"}}"#,
+                Reason::ProviderError,
+                AiStreamEventKind::Other,
+            ),
+            (
+                r#"{"type":"error","error":null}"#,
+                Reason::ProviderError,
+                AiStreamEventKind::Error,
+            ),
+        ] {
+            let observer = FrameObserver::new(AiProviderApiProtocol::OpenaiCompatible, true);
+            observe(&observer, r#"{"type":"response.created"}"#);
+            observe(&observer, data);
+            observe(
+                &observer,
+                r#"{"type":"response.completed","response":{"output":[]}}"#,
+            );
+            let state = observer.state.lock().unwrap();
+            let failure = state.failure.unwrap();
+            assert!(state.failed);
+            assert_eq!(failure.reason, reason);
+            assert_eq!(failure.event, event);
+            assert_eq!(failure.frame, 2);
+            assert_eq!(failure.data_bytes, data.len());
+            assert!(!format!("{failure:?}").contains("private"));
+        }
     }
     #[test]
     fn gemini_metadata_only_frames_preserve_raw_usage_without_synthetic_completion() {

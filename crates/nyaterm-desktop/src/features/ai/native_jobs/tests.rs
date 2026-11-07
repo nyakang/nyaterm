@@ -13,7 +13,10 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::{NativeJobEvent, completion_with_repair, run_native_job, warn_agent_protocol_failure};
+use super::{
+    NativeJobEvent, completion_with_repair, run_native_job, warn_agent_protocol_failure,
+    warn_native_request_failure,
+};
 use crate::blocking_jobs::BlockingJobScheduler;
 use crate::http::ai::AiProviderSession;
 use crate::thread_owner::spawn_joinable;
@@ -524,6 +527,22 @@ fn protocol_failure_diagnostics_omit_model_content_and_tool_arguments() {
             arguments: json!({"command":"private-command","password":"private-password"}),
         });
         warn_agent_protocol_failure(&completion, 1, &AgentResponseError::InvalidArguments);
+        let mut req = request();
+        req.user_input = "private-user-input".into();
+        req.model_name = Some("private-model".into());
+        let mut error = nyaterm_core::ai::completion::AiProviderError::new(
+            nyaterm_core::ai::completion::AiProviderErrorKind::Protocol,
+        );
+        error.failure_stage =
+            Some(nyaterm_core::ai::completion::AiProviderFailureStage::DecodeStream);
+        error.stream = Some(nyaterm_core::ai::completion::AiStreamDiagnostic {
+            frames: 3,
+            terminal: false,
+            failed: true,
+            tool_count: 1,
+            failure: None,
+        });
+        warn_native_request_failure(&error, &req, 1);
     });
     let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
     assert_eq!(logs.matches("malformed_json_action").count(), 2, "{logs}");
@@ -532,6 +551,8 @@ fn protocol_failure_diagnostics_omit_model_content_and_tool_arguments() {
     assert!(logs.contains("attempt=2"));
     assert!(logs.contains("tool_count=0"));
     assert!(logs.contains("tool_count=1"));
+    assert!(logs.contains("AI native request failed"));
+    assert!(logs.contains("DecodeStream"));
     assert!(!logs.contains("private-"));
 }
 

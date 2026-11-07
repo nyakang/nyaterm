@@ -6,13 +6,19 @@ use futures::StreamExt;
 use genai::chat::{ChatStreamEvent, ContentPart, MessageContent};
 use nyaterm_core::ai::{
     AiChatCompletion, AiChatRequest, AiChatStreamDelta, AiMessage, AiToolCallDelta,
-    completion::{AiProviderError, AiProviderErrorKind as Kind},
+    completion::{
+        AiProviderDiagnosticCode as Code, AiProviderError, AiProviderErrorKind as Kind,
+        AiProviderFailureStage as Stage, AiStreamDiagnostic,
+    },
 };
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    client::AiProviderSession, error::sdk_error, frames::FrameObserver, request, response,
+    client::AiProviderSession,
+    error::{at_stage, protocol_error, sdk_error},
+    frames::FrameObserver,
+    request, response,
 };
 
 pub async fn complete_chat(
@@ -25,14 +31,15 @@ pub async fn complete_chat(
         if session.ollama_compat {
             return super::ollama_compat::complete(session, request, history, None).await;
         }
-        let (chat, options) = request::convert(session, request, history)?;
+        let (chat, options) = request::convert(session, request, history)
+            .map_err(|error| at_stage(error, Stage::PrepareRequest))?;
         let response = session
             .client()
             .await?
             .sdk
             .exec_chat(session.target(false)?, chat, Some(&options))
             .await
-            .map_err(sdk_error)?;
+            .map_err(|error| at_stage(sdk_error(error), Stage::ReadResponse))?;
         let raw = response.captured_raw_body.unwrap_or_default();
         let mut content = response.content;
         normalize_synthetic_ids(&mut content, &mut ToolProgress::default());
@@ -45,6 +52,7 @@ pub async fn complete_chat(
             response.response_id,
             raw,
         )
+        .map_err(|error| at_stage(error, Stage::AssembleCompletion))
     })
     .await
 }
@@ -56,13 +64,14 @@ pub async fn stream_chat(
     tx: Sender<AiChatStreamDelta>,
     cancel: &CancellationToken,
 ) -> Result<AiChatCompletion, AiProviderError> {
+    let observer = FrameObserver::new(session.protocol, session.responses);
+    let frames = Arc::clone(&observer.state);
     guarded(session, cancel, async {
         if session.ollama_compat {
             return super::ollama_compat::complete(session, request, history, Some(&tx)).await;
         }
-        let (chat, mut options) = request::convert(session, request, history)?;
-        let observer = FrameObserver::new(session.protocol, session.responses);
-        let frames = Arc::clone(&observer.state);
+        let (chat, mut options) = request::convert(session, request, history)
+            .map_err(|error| at_stage(error, Stage::PrepareRequest))?;
         options = options.with_raw_frame_sink(observer);
         let mut stream = session
             .client()
@@ -70,7 +79,7 @@ pub async fn stream_chat(
             .sdk
             .exec_chat_stream(session.target(true)?, chat, Some(&options))
             .await
-            .map_err(sdk_error)?
+            .map_err(|error| at_stage(sdk_error(error), Stage::OpenStream))?
             .stream;
         let mut tools = ToolProgress::default();
         while let Some(event) = stream.next().await {
@@ -81,14 +90,17 @@ pub async fn stream_chat(
             let event = event.map_err(|error| {
                 let mut error = sdk_error(error);
                 error.generated_content = generated;
-                error
+                at_stage(error, Stage::DecodeStream)
             })?;
             if frames
                 .lock()
                 .map_err(|_| AiProviderError::new(Kind::Protocol))?
                 .failed
             {
-                return Err(AiProviderError::new(Kind::Protocol));
+                return Err(at_stage(
+                    protocol_error(Code::InvalidStreamFrame),
+                    Stage::DecodeStream,
+                ));
             }
             match event {
                 ChatStreamEvent::Chunk(chunk) => {
@@ -118,7 +130,9 @@ pub async fn stream_chat(
                         .indexes
                         .get(&chunk.tool_call.call_id)
                         .copied();
-                    let delta = tools.update(chunk.tool_call, index)?;
+                    let delta = tools
+                        .update(chunk.tool_call, index)
+                        .map_err(|error| at_stage(error, Stage::ValidateToolStream))?;
                     send_delta(
                         &tx,
                         AiChatStreamDelta {
@@ -134,7 +148,10 @@ pub async fn stream_chat(
                             .lock()
                             .map_err(|_| AiProviderError::new(Kind::Protocol))?;
                         if !frames.terminal {
-                            return Err(AiProviderError::new(Kind::StreamInterrupted));
+                            return Err(at_stage(
+                                AiProviderError::new(Kind::StreamInterrupted),
+                                Stage::DecodeStream,
+                            ));
                         }
                         frames.data.clone()
                     };
@@ -149,25 +166,30 @@ pub async fn stream_chat(
                             .map(|reason| reason.raw().to_string()),
                         end.captured_response_id,
                         raw,
-                    )?;
+                    )
+                    .map_err(|error| at_stage(error, Stage::AssembleCompletion))?;
                     // End may be the first event exposing a complete tool call.
                     // Check emitted fragments against it before exposing a result.
-                    tools.validate(&completion)?;
+                    tools
+                        .validate(&completion)
+                        .map_err(|error| at_stage(error, Stage::ValidateToolStream))?;
                     for call in &completion.tool_calls {
                         let id = call
                             .id
                             .as_deref()
                             .ok_or_else(|| AiProviderError::new(Kind::Protocol))?;
                         if !tools.calls.contains_key(id) {
-                            let delta = tools.update_normalized(
-                                genai::chat::ToolCall {
-                                    call_id: id.into(),
-                                    fn_name: call.name.clone(),
-                                    fn_arguments: call.arguments.clone(),
-                                    thought_signatures: None,
-                                },
-                                None,
-                            )?;
+                            let delta = tools
+                                .update_normalized(
+                                    genai::chat::ToolCall {
+                                        call_id: id.into(),
+                                        fn_name: call.name.clone(),
+                                        fn_arguments: call.arguments.clone(),
+                                        thought_signatures: None,
+                                    },
+                                    None,
+                                )
+                                .map_err(|error| at_stage(error, Stage::ValidateToolStream))?;
                             send_delta(
                                 &tx,
                                 AiChatStreamDelta {
@@ -194,9 +216,27 @@ pub async fn stream_chat(
                 | ChatStreamEvent::ThoughtSignatureChunk(_) => {}
             }
         }
-        Err(AiProviderError::new(Kind::StreamInterrupted))
+        Err(at_stage(
+            AiProviderError::new(Kind::StreamInterrupted),
+            Stage::DecodeStream,
+        ))
     })
     .await
+    .map_err(|mut error| {
+        if !session.ollama_compat
+            && let Ok(frames) = frames.lock()
+        {
+            error.generated_content |= frames.generated;
+            error.stream = Some(AiStreamDiagnostic {
+                frames: frames.frame_count,
+                terminal: frames.terminal,
+                failed: frames.failed,
+                tool_count: frames.indexes.len(),
+                failure: frames.failure,
+            });
+        }
+        error
+    })
 }
 
 async fn guarded<T>(
@@ -211,6 +251,7 @@ async fn guarded<T>(
     };
     result.map_err(|mut error| {
         error.protocol = Some(session.protocol);
+        error.responses = session.responses;
         error
     })
 }
@@ -328,7 +369,7 @@ impl ToolProgress {
     ) -> Result<AiToolCallDelta, AiProviderError> {
         let id = call.call_id;
         if !self.calls.contains_key(&id) && self.calls.len() >= 128 {
-            return Err(AiProviderError::new(Kind::Protocol));
+            return Err(protocol_error(Code::ToolCallLimit));
         }
         let next_index = wire_index.unwrap_or_else(|| {
             self.calls
@@ -343,7 +384,7 @@ impl ToolProgress {
                 (other != &id && *slot == index) || (other == &id && *slot != index)
             })
         {
-            return Err(AiProviderError::new(Kind::Protocol));
+            return Err(protocol_error(Code::ToolIndexConflict));
         }
         let existing = self
             .calls
@@ -356,12 +397,12 @@ impl ToolProgress {
         };
         let suffix = arguments
             .strip_prefix(&existing.2)
-            .ok_or_else(|| AiProviderError::new(Kind::Protocol))?
+            .ok_or_else(|| protocol_error(Code::ToolArgumentsChanged))?
             .to_string();
         let name = if existing.1.is_empty() {
             Some(call.fn_name.clone()).filter(|name| !name.is_empty())
         } else if !call.fn_name.is_empty() && call.fn_name != existing.1 {
-            return Err(AiProviderError::new(Kind::Protocol));
+            return Err(protocol_error(Code::ToolNameChanged));
         } else {
             None
         };
@@ -386,7 +427,7 @@ impl ToolProgress {
                 .tool_calls
                 .iter()
                 .find(|call| call.id.as_deref() == Some(id))
-                .ok_or_else(|| AiProviderError::new(Kind::Protocol))?;
+                .ok_or_else(|| protocol_error(Code::ToolResultMismatch))?;
             if (!name.is_empty() && name != &call.name)
                 || (!arguments.is_empty()
                     && serde_json::from_str::<serde_json::Value>(arguments)
@@ -394,7 +435,7 @@ impl ToolProgress {
                         .as_ref()
                         != Some(&call.arguments))
             {
-                return Err(AiProviderError::new(Kind::Protocol));
+                return Err(protocol_error(Code::ToolResultMismatch));
             }
         }
         Ok(())

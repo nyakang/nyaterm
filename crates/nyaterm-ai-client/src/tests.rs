@@ -281,6 +281,161 @@ async fn gemini_auto_preserves_literal_model_without_suffix_inference() {
 }
 
 #[tokio::test]
+async fn responses_stream_failures_report_safe_stage_and_frame_counts() {
+    use nyaterm_core::ai::completion::{
+        AiProviderDiagnosticCode as Code, AiProviderFailureStage as Stage,
+    };
+
+    let item = json!({"type":"function_call","id":"private-item","call_id":"private-call","name":"session_get","arguments":""});
+    let frames = [
+        json!({"type":"response.output_item.added","output_index":0,"item":item}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"private-item","delta":"{\"sessionId\":\"private-session\"}"}),
+        json!({"type":"error","code":"private-code","message":"private-provider-message"}),
+    ];
+    let (base, server) = mock_server(sse(&frames, false), "text/event-stream");
+    let (result, _) = streamed(responses_settings(base), request()).await;
+    server.join().unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(error.kind, AiProviderErrorKind::Protocol);
+    assert_eq!(error.failure_stage, Some(Stage::DecodeStream));
+    assert_eq!(error.diagnostic_code, Some(Code::ProviderStreamError));
+    assert!(error.responses);
+    let stream = error.stream.unwrap();
+    assert_eq!(stream.frames, 3);
+    assert!(!stream.terminal && stream.failed);
+    assert_eq!(stream.tool_count, 1);
+    let failure = stream.failure.unwrap();
+    assert_eq!(
+        failure.reason,
+        nyaterm_core::ai::completion::AiStreamFrameFailureReason::ProviderError
+    );
+    assert_eq!(failure.frame, 3);
+    assert!(!format!("{error:?} {error}").contains("private"));
+}
+
+#[tokio::test]
+async fn responses_empty_sse_blocks_between_content_frames_do_not_reject_completion() {
+    // Match the reported failure: three content frames, then an empty fourth
+    // frame. genai taps comment-only blocks before skipping their empty data.
+    for keepalive in [
+        ": keep-alive\n\n",
+        "event: ping\n\n",
+        "data:\n\n",
+        "data:   \n\n",
+        "id: fixture\nretry: 1000\n\n",
+    ] {
+        let mut frames = sse(
+            &[
+                json!({"type":"response.created"}),
+                json!({"type":"response.reasoning_summary_text.delta","delta":"Thinking"}),
+                json!({"type":"response.output_text.delta","delta":"Done"}),
+            ],
+            false,
+        );
+        frames.push_str(keepalive);
+        frames.push_str(&sse(&[json!({"type":"response.completed","response":{"id":"response-fixture","object":"response","model":"gpt-test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}})], false));
+        let (base, server) = mock_server(frames, "text/event-stream");
+        let (result, deltas) = streamed(responses_settings(base), request()).await;
+        server.join().unwrap();
+        let result = result.unwrap();
+        assert_eq!(result.text, "Done");
+        assert_eq!(result.reasoning_content.as_deref(), Some("Thinking"));
+        assert_eq!(deltas.iter().filter(|delta| delta.done).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn responses_empty_sse_blocks_do_not_hide_truncation_or_malformed_data() {
+    use nyaterm_core::ai::completion::AiStreamFrameFailureReason;
+
+    for malformed in [false, true] {
+        let mut frames = sse(
+            &[json!({"type":"response.output_text.delta","delta":"Done"})],
+            false,
+        );
+        frames.push_str(": keep-alive\n\ndata:\n\n");
+        if malformed {
+            frames.push_str("data: private-invalid-json\n\n");
+            frames.push_str(&sse(&[json!({"type":"response.completed","response":{"id":"response-fixture","object":"response","model":"gpt-test","status":"completed","output":[]}})], false));
+        }
+        let (base, server) = mock_server(frames, "text/event-stream");
+        let (result, deltas) = streamed(responses_settings(base), request()).await;
+        server.join().unwrap();
+        let error = result.unwrap_err();
+        let stream = error.stream.unwrap();
+        if malformed {
+            assert_eq!(error.kind, AiProviderErrorKind::Protocol);
+            let failure = stream.failure.unwrap();
+            assert_eq!(failure.reason, AiStreamFrameFailureReason::InvalidJson);
+            assert_eq!(failure.frame, 4);
+            assert_eq!(failure.data_bytes, "private-invalid-json".len());
+        } else {
+            assert_eq!(error.kind, AiProviderErrorKind::StreamInterrupted);
+            assert!(!stream.terminal && !stream.failed);
+            assert!(stream.failure.is_none());
+        }
+        assert!(!deltas.iter().any(|delta| delta.done));
+        assert!(!format!("{error:?} {error}").contains("private"));
+    }
+}
+
+#[tokio::test]
+async fn responses_nullable_error_metadata_can_finish_after_many_generated_frames() {
+    let mut frames = vec![
+        json!({"type":"response.reasoning_summary_text.delta","delta":"private-reasoning","error":null});
+        102
+    ];
+    frames.push(json!({"type":"response.output_text.delta","delta":"Done","error":null}));
+    frames.push(json!({"type":"response.completed","error":null,"response":{"id":"response-fixture","object":"response","model":"gpt-test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}}));
+    let (base, server) = mock_server(sse(&frames, false), "text/event-stream");
+    let (result, deltas) = streamed(responses_settings(base), request()).await;
+    server.join().unwrap();
+    assert_eq!(result.unwrap().text, "Done");
+    assert_eq!(deltas.iter().filter(|delta| delta.done).count(), 1);
+}
+
+#[tokio::test]
+async fn responses_rejected_item_reports_the_first_bad_frame_without_payloads() {
+    use nyaterm_core::ai::completion::{
+        AiProviderDiagnosticCode, AiStreamEventKind, AiStreamFrameFailureReason,
+    };
+    let frames = [
+        json!({"type":"response.output_text.delta","delta":"private-text"}),
+        json!({"type":"response.output_item.done","item":null,"private-field":"private-content"}),
+        json!({"type":"response.completed","response":{"id":"response-fixture","object":"response","model":"gpt-test","status":"completed","output":[]}}),
+    ];
+    let (base, server) = mock_server(sse(&frames, false), "text/event-stream");
+    let (result, _) = streamed(responses_settings(base), request()).await;
+    server.join().unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.diagnostic_code,
+        Some(AiProviderDiagnosticCode::InvalidStreamFrame)
+    );
+    let failure = error.stream.unwrap().failure.unwrap();
+    assert_eq!(failure.frame, 2);
+    assert_eq!(
+        failure.reason,
+        AiStreamFrameFailureReason::MissingOutputItemObject
+    );
+    assert_eq!(failure.event, AiStreamEventKind::OutputItemDone);
+    assert!(!format!("{error:?} {error}").contains("private"));
+}
+
+#[test]
+fn sdk_generation_errors_classify_without_exposing_cause_or_payloads() {
+    use nyaterm_core::ai::completion::AiProviderDiagnosticCode as Code;
+    let error = super::error::sdk_error(genai::Error::ChatResponseGeneration {
+        model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "private-model"),
+        request_payload: Box::new(json!({"password":"private-password"})),
+        response_body: Box::new(json!({"content":"private-body"})),
+        cause: "private-cause".into(),
+    });
+    assert_eq!(error.diagnostic_code, Some(Code::SdkResponseGeneration));
+    assert!(!format!("{error:?} {error}").contains("private"));
+}
+
+#[tokio::test]
 async fn malformed_arguments_and_unterminated_streams_fail_closed() {
     for (arguments, done, expected) in [
         ("{\"x\":", true, AiProviderErrorKind::Protocol),

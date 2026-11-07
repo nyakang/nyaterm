@@ -117,6 +117,80 @@ pub enum AiProviderDiagnosticCode {
     ContextLength,
     InvalidSignature,
     InvalidToolResults,
+    SdkStreamParse,
+    SdkResponseGeneration,
+    SdkResponseShape,
+    ProviderStreamError,
+    SdkOther,
+    InvalidStreamFrame,
+    ToolCallLimit,
+    ToolIndexConflict,
+    ToolArgumentsChanged,
+    ToolNameChanged,
+    ToolResultMismatch,
+    InvalidCompletion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProviderFailureStage {
+    PrepareRequest,
+    OpenStream,
+    ReadResponse,
+    DecodeStream,
+    AssembleCompletion,
+    ValidateToolStream,
+}
+
+/// Counts and flags only; never provider text, IDs, arguments, or signatures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiStreamDiagnostic {
+    pub frames: usize,
+    pub terminal: bool,
+    pub failed: bool,
+    pub tool_count: usize,
+    pub failure: Option<AiStreamFrameFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiStreamFrameFailureReason {
+    InvalidJson,
+    InvalidEnvelope,
+    ProviderError,
+    ContinuationSizeLimit,
+    MissingResponseObject,
+    MissingOutputItemObject,
+    InvalidContentBlock,
+    DuplicateContentBlock,
+    MissingContentBlock,
+    InvalidToolArguments,
+    UnclosedToolArguments,
+    StructureLimit,
+}
+
+/// Provider event names are mapped to these fixed categories before diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AiStreamEventKind {
+    Lifecycle,
+    OutputItemAdded,
+    OutputItemDone,
+    FunctionArguments,
+    Text,
+    Reasoning,
+    Completed,
+    Incomplete,
+    Failed,
+    Error,
+    #[default]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiStreamFrameFailure {
+    pub reason: AiStreamFrameFailureReason,
+    /// One-based received frame number, frozen at the first failure.
+    pub frame: usize,
+    pub event: AiStreamEventKind,
+    pub data_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,10 +214,13 @@ pub struct AiProviderError {
     pub retryable: bool,
     pub protocol: Option<AiProviderApiProtocol>,
     pub generated_content: bool,
+    pub responses: bool,
     pub tool_protocol_unsupported: bool,
     pub diagnostic_code: Option<AiProviderDiagnosticCode>,
     pub parameter: Option<AiProviderParameter>,
     pub request_id: Option<String>,
+    pub failure_stage: Option<AiProviderFailureStage>,
+    pub stream: Option<AiStreamDiagnostic>,
 }
 
 impl AiProviderError {
@@ -161,10 +238,13 @@ impl AiProviderError {
             ),
             protocol: None,
             generated_content: false,
+            responses: false,
             tool_protocol_unsupported: false,
             diagnostic_code: None,
             parameter: None,
             request_id: None,
+            failure_stage: None,
+            stream: None,
         }
     }
 }
@@ -194,6 +274,16 @@ impl fmt::Display for AiProviderError {
         }
         if let Some(code) = self.diagnostic_code {
             write!(f, " [{code:?}]")?;
+        }
+        if let Some(stage) = self.failure_stage {
+            write!(f, " [stage: {stage:?}]")?;
+        }
+        if let Some(failure) = self.stream.and_then(|stream| stream.failure) {
+            write!(
+                f,
+                " [frame {}: {:?}, {:?}]",
+                failure.frame, failure.reason, failure.event
+            )?;
         }
         if let Some(parameter) = self.parameter {
             write!(f, " ({parameter:?})")?;

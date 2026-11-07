@@ -157,6 +157,34 @@ pub(super) fn sdk_error(error: genai::Error) -> AiProviderError {
                 },
             }
         }
-        _ => AiProviderError::new(Kind::Protocol),
+        error => {
+            let mut result = AiProviderError::new(Kind::Protocol);
+            result.diagnostic_code = Some(match error {
+                genai::Error::StreamParse { .. } | genai::Error::SerdeJson(_) => {
+                    Code::SdkStreamParse
+                }
+                genai::Error::ChatResponseGeneration { .. } => Code::SdkResponseGeneration,
+                genai::Error::NoChatResponse { .. }
+                | genai::Error::InvalidJsonResponseElement { .. }
+                | genai::Error::JsonValueExt(_) => Code::SdkResponseShape,
+                genai::Error::ChatResponse { .. } => Code::ProviderStreamError,
+                _ => Code::SdkOther,
+            });
+            result
+        }
     }
+}
+
+pub(super) fn at_stage(
+    mut error: AiProviderError,
+    stage: nyaterm_core::ai::completion::AiProviderFailureStage,
+) -> AiProviderError {
+    error.failure_stage = Some(stage);
+    error
+}
+
+pub(super) fn protocol_error(code: Code) -> AiProviderError {
+    let mut error = AiProviderError::new(Kind::Protocol);
+    error.diagnostic_code = Some(code);
+    error
 }

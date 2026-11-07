@@ -206,7 +206,13 @@ async fn completion_with_repair(
     // Protocol fallback and response correction share one extra model POST.
     // Only model responses are retried; no tool has been dispatched here.
     for attempt in 1..=2 {
-        let completion = match stream_attempt(session, request, history, tx, cancel).await {
+        let result = stream_attempt(session, request, history, tx, cancel).await;
+        if let Err(error) = &result
+            && error.kind != AiProviderErrorKind::Cancelled
+        {
+            warn_native_request_failure(error, request, attempt);
+        }
+        let completion = match result {
             Err(error)
                 if attempt == 1
                     && error.kind == AiProviderErrorKind::UnsupportedCapability
@@ -246,6 +252,37 @@ async fn completion_with_repair(
         return Ok(completion);
     }
     unreachable!("the second attempt always returns a result")
+}
+
+fn warn_native_request_failure(
+    error: &nyaterm_core::ai::completion::AiProviderError,
+    request: &AiChatRequest,
+    attempt: usize,
+) {
+    // Deliberate allowlist: do not log the SDK error, request, model name,
+    // provider URL, raw frames, arguments, or any conversation content.
+    let turns = request
+        .options
+        .agent_context
+        .as_ref()
+        .map(|context| &context.turns);
+    tracing::warn!(
+        kind = ?error.kind,
+        classification = ?error.diagnostic_code,
+        stage = ?error.failure_stage,
+        protocol = ?error.protocol,
+        responses = error.responses,
+        status = ?error.status,
+        parameter = ?error.parameter,
+        request_id = error.request_id.as_deref(),
+        attempt,
+        json_protocol = request.options.agent_json_protocol,
+        completed_turns = turns.map_or(0, Vec::len),
+        completed_calls = turns.map_or(0, |turns| turns.iter().map(|turn| turn.results.len()).sum::<usize>()),
+        generated_content = error.generated_content,
+        stream = ?error.stream,
+        "AI native request failed"
+    );
 }
 
 fn warn_agent_protocol_failure(

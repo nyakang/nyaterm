@@ -2,13 +2,14 @@ use genai::chat::{ContentPart, MessageContent, Usage};
 use nyaterm_core::ai::{
     AiChatCompletion, AiToolCall,
     completion::{
-        AiAssistantTurn, AiContentPart, AiProviderError, AiProviderErrorKind, AiResponseMetadata,
-        AiUsage,
+        AiAssistantTurn, AiContentPart, AiProviderDiagnosticCode, AiProviderError,
+        AiResponseMetadata, AiUsage,
     },
 };
 use serde_json::Value;
 
 use super::client::AiProviderSession;
+use super::error::protocol_error;
 
 pub(super) fn completion(
     session: &AiProviderSession,
@@ -34,14 +35,14 @@ pub(super) fn completion(
             ContentPart::Custom(value) => AiContentPart::Custom(value.data),
             ContentPart::Binary(value) => AiContentPart::Binary(
                 serde_json::to_value(value)
-                    .map_err(|_| AiProviderError::new(AiProviderErrorKind::Protocol))?,
+                    .map_err(|_| protocol_error(AiProviderDiagnosticCode::InvalidCompletion))?,
             ),
             ContentPart::ToolCall(call) => {
                 if call.call_id.is_empty()
                     || call.fn_name.is_empty()
                     || !ids.insert(call.call_id.clone())
                 {
-                    return Err(AiProviderError::new(AiProviderErrorKind::Protocol));
+                    return Err(protocol_error(AiProviderDiagnosticCode::InvalidCompletion));
                 }
                 let signatures = call.thought_signatures.unwrap_or_default();
                 tool_calls.push(AiToolCall {
@@ -58,7 +59,7 @@ pub(super) fn completion(
                 }
             }
             ContentPart::ToolResponse(_) => {
-                return Err(AiProviderError::new(AiProviderErrorKind::Protocol));
+                return Err(protocol_error(AiProviderDiagnosticCode::InvalidCompletion));
             }
         });
     }
@@ -86,7 +87,7 @@ pub(super) fn completion(
         && stop.is_none()
         && provider_data.is_null()
     {
-        return Err(AiProviderError::new(AiProviderErrorKind::Protocol));
+        return Err(protocol_error(AiProviderDiagnosticCode::InvalidCompletion));
     }
     let metadata = AiResponseMetadata {
         usage: usage.as_ref().map(convert_usage).unwrap_or_default(),
