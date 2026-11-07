@@ -1604,6 +1604,9 @@ impl TerminalSurface {
             nyaterm_terminal::TerminalSnapshotMeta {
                 history: self.history,
                 shell_input_anchor: None,
+                command_navigation_target: None,
+                command_navigation_revision: 0,
+                shell_command_prompt: None,
                 cols,
                 viewport_rows,
                 cursor: hidden_terminal_cursor_snapshot(),
@@ -1646,6 +1649,9 @@ impl TerminalSurface {
             nyaterm_terminal::TerminalSnapshotMeta {
                 history: self.history,
                 shell_input_anchor: None,
+                command_navigation_target: None,
+                command_navigation_revision: 0,
+                shell_command_prompt: None,
                 cols,
                 viewport_rows,
                 cursor: hidden_terminal_cursor_snapshot(),
@@ -2442,6 +2448,17 @@ impl TerminalSurface {
             && self.can_handle_scroll_wheel_locally()
             && let Some(result) = self.apply_local_scroll_wheel_visual_state(raw_lines)
         {
+            // The gesture ends navigation even at a clamped edge. Defer the
+            // app adapter until this surface lease is released, rather than
+            // resetting from the later coalesced visual sync (which could
+            // otherwise cancel a newer navigation action).
+            let reset_app = app.clone();
+            let reset_session = session_id.clone();
+            cx.defer(move |cx| {
+                reset_app.update(cx, |app, _| {
+                    app.reset_terminal_command_navigation_for_session(&reset_session);
+                });
+            });
             if result.visual_changed {
                 let mut state = self.current_scroll_visual_state();
                 if !self.visual_scroll_active() {

@@ -883,18 +883,41 @@ impl NyaTermApp {
             TerminalFrameEvent::Snapshot(snapshot) => {
                 self.apply_terminal_snapshot_frame(snapshot, cx)
             }
-            TerminalFrameEvent::CommandNavigation { session_id, result } => {
-                if self.session.active_id() == Some(session_id.as_str()) {
-                    self.clear_terminal_selection(cx);
+            TerminalFrameEvent::CommandNavigation {
+                session_id,
+                result,
+                frame,
+            } => {
+                let stale = self
+                    .terminal
+                    .view
+                    .views
+                    .get(&session_id)
+                    .is_some_and(|view| {
+                        frame.revision < view.screen_revision
+                            && view.frame_snapshot.as_ref().is_some_and(|live| {
+                                live.command_navigation_revision
+                                    != frame.snapshot.command_navigation_revision
+                                    || live.command_navigation_target
+                                        != frame.snapshot.command_navigation_target
+                            })
+                    });
+                if !stale && self.session.active_id() == Some(session_id.as_str()) {
+                    if result.selection.is_some() {
+                        self.clear_terminal_selection(cx);
+                    }
                     self.clear_terminal_scroll_residual_for_session(Some(&session_id));
                     self.set_terminal_scroll_offset_for_session_state_only(
                         Some(&session_id),
-                        result.display_offset,
+                        self.terminal.view.views.get(&session_id).map_or(
+                            result.display_offset,
+                            |view| {
+                                view.history_state()
+                                    .reanchor_offset(frame.snapshot.history, result.display_offset)
+                            },
+                        ),
                     );
-                    self.request_terminal_frame_snapshot_for_user_scroll(
-                        &session_id,
-                        result.display_offset,
-                    );
+                    self.apply_terminal_snapshot_frame(frame, cx);
                     if let Some((start, end)) = result.selection {
                         self.terminal.selection.session_id = Some(session_id.clone());
                         self.terminal.selection.selection =
@@ -1317,6 +1340,14 @@ impl NyaTermApp {
         let Some(view) = self.terminal.view.views.get_mut(&frame.session_id) else {
             return TerminalFrameApplyResult::default();
         };
+        if frame.offset > 0
+            && frame.revision < view.screen_revision
+            && let Some(live) = view.frame_snapshot.as_ref()
+        {
+            let snapshot = std::sync::Arc::make_mut(&mut frame.snapshot);
+            snapshot.command_navigation_target = live.command_navigation_target;
+            snapshot.command_navigation_revision = live.command_navigation_revision;
+        }
         if frame.offset == 0 {
             // Live viewport recovery for sessions that had worker snapshot skipped.
             view.apply_terminal_live_snapshot_frame(
@@ -2146,6 +2177,138 @@ fn collect_workspace_pane_node_visible_session_ids<'a>(
 
 #[cfg(test)]
 mod frame_event_queue_tests {
+    #[test]
+    fn manual_wheel_at_live_bottom_and_input_end_same_screen_navigation() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::{AppContext as _, TestAppContext};
+        use nyaterm_terminal::command_navigation::CommandNavigationAction;
+        let dir = TestConfigDir::new("nyaterm-navigation-reset-input-wheel");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            let text =
+                "\x1b]133;A\x07$ \x1b]133;B\x07echo\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07"
+                    .repeat(5);
+            app.terminal
+                .seed_session_view("s1".into(), text.clone(), "UTF-8");
+            app.terminal
+                .ensure_frame_session("s1".into(), "UTF-8".into(), 10000);
+            app.terminal
+                .view
+                .frame_pipeline
+                .append_local_text("s1", text);
+            for wheel in [true, false] {
+                app.navigate_terminal_command(CommandNavigationAction::Previous, cx);
+                app.terminal.view.frame_pipeline.flush_for_test();
+                app.drain_terminal_frame_events(cx);
+                let view = app.terminal.view.views.get("s1").unwrap();
+                assert_eq!(view.scroll_offset, 0);
+                assert!(
+                    view.frame_snapshot
+                        .as_ref()
+                        .unwrap()
+                        .command_navigation_target
+                        .is_some()
+                );
+                if wheel {
+                    assert!(
+                        app.terminal_scroll_wheel_state_for_session(
+                            "s1",
+                            -20.0,
+                            gpui::Point::default(),
+                            gpui::Modifiers::default(),
+                            cx,
+                        )
+                        .handled
+                    );
+                } else {
+                    app.note_shell_editing_input(b"x", cx);
+                }
+                app.terminal.view.frame_pipeline.flush_for_test();
+                app.drain_terminal_frame_events(cx);
+                assert_eq!(
+                    app.terminal
+                        .view
+                        .views
+                        .get("s1")
+                        .unwrap()
+                        .frame_snapshot
+                        .as_ref()
+                        .unwrap()
+                        .command_navigation_target,
+                    None
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn late_navigation_reply_cannot_override_a_newer_manual_scroll_reset() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::models::{
+            TerminalFrameEvent, TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
+        };
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::{AppContext as _, TestAppContext};
+        use nyaterm_terminal::TerminalCore;
+        use nyaterm_terminal::command_navigation::CommandNavigationAction;
+        use std::sync::Arc;
+        use std::time::Duration;
+        let dir = TestConfigDir::new("nyaterm-late-navigation");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            let mut screen = TerminalCore::new(20, 3);
+            for _ in 0..5 {
+                screen.advance(
+                    b"\x1b]133;A\x07$ \x1b]133;B\x07echo\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07",
+                );
+            }
+            let result = screen
+                .navigate_command(CommandNavigationAction::Previous)
+                .unwrap();
+            let snapshot = Arc::new(screen.viewport_snapshot(result.display_offset));
+            screen.reset_command_navigation();
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.screen.resize(20, 3);
+            view.frame_snapshot = Some(Arc::new(screen.snapshot()));
+            view.screen_revision = 2;
+            view.scroll_offset = 4;
+            let frame = TerminalFrameSnapshotEvent {
+                session_id: "s1".into(),
+                offset: result.display_offset,
+                snapshot,
+                action_links: None,
+                revision: 1,
+                purpose: TerminalFrameSnapshotPurpose::Paint,
+                snapshot_duration: Duration::ZERO,
+                snapshot_stats: Default::default(),
+                action_link_stats: Default::default(),
+                process_duration: Duration::ZERO,
+            };
+            app.apply_terminal_frame_event(
+                TerminalFrameEvent::CommandNavigation {
+                    session_id: "s1".into(),
+                    result,
+                    frame,
+                },
+                cx,
+            );
+            let view = app.terminal.view.views.get("s1").unwrap();
+            assert_eq!(view.scroll_offset, 4);
+            assert_eq!(
+                view.frame_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .command_navigation_target,
+                None
+            );
+        });
+    }
+
     #[test]
     fn stale_revision_history_frame_reuses_surviving_rows_but_live_frame_is_rejected() {
         use crate::features::test_support::app_with_visible_local_session;

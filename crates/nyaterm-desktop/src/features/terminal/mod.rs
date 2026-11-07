@@ -10,6 +10,7 @@ mod editing_runtime;
 mod editing_state;
 mod ime_state;
 mod input_runtime;
+mod navigation_input;
 mod send_command_runtime;
 mod state;
 mod terminal_context_menu_runtime;

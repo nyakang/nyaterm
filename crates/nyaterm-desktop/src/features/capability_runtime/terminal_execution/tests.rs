@@ -1594,3 +1594,30 @@ fn inline_job_returns_before_completion_survives_request_cancellation_and_stops_
         assert_eq!(result["terminalState"], "disconnected");
     });
 }
+
+#[test]
+fn mcp_capture_blocks_navigation_fallback_even_with_a_visible_shell_prompt() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::TestAppContext;
+    let dir = TestConfigDir::new("nyaterm-navigation-mcp-capture");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    cx.update_entity(&app, |app, _| {
+        app.terminal
+            .seed_session_view("s1".into(), "$ echo visible".into(), "UTF-8");
+        assert!(app.prepare_command_navigation_input(b"\r").is_some());
+        let (request, _receiver) = execution_request("capture", "owner", "s1", false);
+        let mut capture = AgentOutputCaptureProcessor::new();
+        capture.register("capture".into());
+        assert!(
+            app.mcp
+                .capabilities
+                .terminal_executions
+                .insert(request, Some(capture))
+                .is_ok()
+        );
+        assert!(app.prepare_command_navigation_input(b"\r").is_none());
+    });
+}

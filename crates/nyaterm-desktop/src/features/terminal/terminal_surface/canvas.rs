@@ -1527,8 +1527,19 @@ mod tests {
         assert_terminal_shortcut_dispatch(&overrides, "ctrl-insert", TestShortcutEffect::InputCopy);
     }
 
+    #[test]
+    fn repeated_and_held_command_navigation_does_not_write_terminal_bytes_or_change_selection() {
+        let chord = if cfg!(target_os = "macos") {
+            "cmd-shift-left"
+        } else {
+            "ctrl-shift-left"
+        };
+        assert_terminal_shortcut_dispatch(&HashMap::new(), chord, TestShortcutEffect::Navigation);
+    }
+
     #[derive(Clone, Copy)]
     enum TestShortcutEffect {
+        Navigation,
         Copy,
         Paste,
         #[cfg(not(target_os = "macos"))]
@@ -1539,7 +1550,7 @@ mod tests {
 
     fn assert_terminal_shortcut_dispatch(
         overrides: &HashMap<String, String>,
-        chord: &str,
+        chord: &'static str,
         effect: TestShortcutEffect,
     ) {
         use std::io::Read;
@@ -1623,7 +1634,7 @@ mod tests {
             .unwrap();
         let (mut peer, _) = listener.accept().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        cx.update_entity(&app, |app, _| {
+        cx.update_entity(&app, |app, cx| {
             let metadata = app.session.metadata("s1").unwrap().clone();
             app.session.register_session_metadata(&info.id, metadata);
             app.session.select_active_session(&info.id);
@@ -1634,8 +1645,30 @@ mod tests {
                     height: px(600.0),
                 },
             });
+            let text = if matches!(effect, TestShortcutEffect::Navigation) {
+                "\x1b]133;A\x07$ \x1b]133;B\x07echo same\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07"
+                    .repeat(5)
+            } else {
+                "root@host:~# ls\n".into()
+            };
             app.terminal
-                .seed_session_view(info.id.clone(), "root@host:~# ls\n".into(), "UTF-8");
+                .seed_session_view(info.id.clone(), text.clone(), "UTF-8");
+            if matches!(effect, TestShortcutEffect::Navigation) {
+                app.terminal
+                    .ensure_frame_session(info.id.clone(), "UTF-8".into(), 10000);
+                app.terminal
+                    .view
+                    .frame_pipeline
+                    .append_local_text(info.id.clone(), text);
+                app.terminal.selection.session_id = Some(info.id.clone());
+                app.terminal.selection.selection =
+                    Some(crate::models::TerminalSelection::from_range(
+                        crate::models::TerminalBufferCellPos::new(0, 0),
+                        crate::models::TerminalBufferCellPos::new(0, 3),
+                    ));
+                app.terminal.view.frame_pipeline.flush_for_test();
+                app.drain_terminal_frame_events(cx);
+            }
         });
         cx.update(|cx| rebuild_keymap(overrides, cx));
         #[cfg(not(target_os = "macos"))]
@@ -1669,6 +1702,7 @@ mod tests {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste payload".into()));
         });
         vcx.run_until_parked();
+        let selection_before = vcx.update(|_, cx| app.read(cx).terminal.selection.selection);
         vcx.simulate_keystrokes(chord);
         vcx.run_until_parked();
 
@@ -1687,6 +1721,66 @@ mod tests {
 
         let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
         match effect {
+            TestShortcutEffect::Navigation => {
+                let target = |app: &mut NyaTermApp, cx: &mut gpui::Context<NyaTermApp>| {
+                    app.terminal.view.frame_pipeline.flush_for_test();
+                    app.drain_terminal_frame_events(cx);
+                    app.terminal
+                        .view
+                        .views
+                        .get(&info.id)
+                        .unwrap()
+                        .frame_snapshot
+                        .as_ref()
+                        .unwrap()
+                        .command_navigation_target
+                };
+                assert_eq!(
+                    vcx.update(|_, cx| app.read(cx).terminal.selection.selection),
+                    selection_before
+                );
+                let mut previous = vcx.update(|_, cx| app.update(cx, target)).unwrap();
+                for _ in 0..4 {
+                    vcx.update(|window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                                keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                                is_held: true,
+                                prefer_character_input: false,
+                            }),
+                            cx,
+                        );
+                    });
+                    let next = vcx.update(|_, cx| app.update(cx, target)).unwrap();
+                    assert!(next.logical_line < previous.logical_line);
+                    previous = next;
+                }
+                assert_eq!(
+                    vcx.update(|_, cx| app.read(cx).terminal.selection.selection),
+                    selection_before
+                );
+                let next = if cfg!(target_os = "macos") {
+                    "cmd-shift-right"
+                } else {
+                    "ctrl-shift-right"
+                };
+                for _ in 0..5 {
+                    vcx.simulate_keystrokes(next);
+                    vcx.update(|_, cx| app.update(cx, target));
+                }
+                assert!(vcx.update(|_, cx| app.update(cx, target)).is_none());
+                assert_eq!(
+                    vcx.update(|_, cx| app
+                        .read(cx)
+                        .terminal
+                        .view
+                        .views
+                        .get(&info.id)
+                        .unwrap()
+                        .scroll_offset),
+                    0
+                );
+            }
             TestShortcutEffect::Copy => assert!(
                 copied.unwrap_or_default().contains("root@host"),
                 "{chord} did not copy terminal text"

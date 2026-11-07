@@ -17,10 +17,21 @@ use super::editing_state::SnapshotEvidence;
 use crate::features::NyaTermApp;
 
 impl NyaTermApp {
-    /// This runs once after a successful logical write, regardless of suggestions.
+    /// Test adapter for callers that do not own a transport write.
+    #[cfg(test)]
     pub(in crate::features) fn note_shell_editing_input(
         &mut self,
         bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) {
+        let candidate = self.prepare_command_navigation_input(bytes);
+        self.note_shell_editing_input_with_navigation(bytes, candidate, cx);
+    }
+
+    pub(in crate::features) fn note_shell_editing_input_with_navigation(
+        &mut self,
+        bytes: &[u8],
+        candidate: Option<nyaterm_terminal::command_navigation::CommandSubmissionEvidence>,
         cx: &mut Context<Self>,
     ) {
         let Some(id) = self.session.active_id_owned() else {
@@ -28,6 +39,18 @@ impl NyaTermApp {
         };
         self.terminal.editing.activate(&id);
         self.terminal.editing.state_mut().suggestion_fill = None;
+        let fallback = candidate.as_ref().and_then(|evidence| {
+            self.terminal
+                .editing
+                .state_mut()
+                .command_navigation
+                .accept_submission(evidence)
+        });
+        self.terminal
+            .view
+            .frame_pipeline
+            .note_command_input(id.clone(), fallback);
+        self.terminal.view.frame_pipeline.arm_event_wakes();
         if self.active_terminal_uses_alternate_screen()
             || self.is_credential_prompt_input_mode()
             || self.terminal.assist.credential_suggestions.is_some()
@@ -45,29 +68,6 @@ impl NyaTermApp {
         }
         let submitted_for_navigation =
             get_tracked_submission_command(self.terminal.editing.predicted_input());
-        let interactive = self
-            .terminal
-            .editing
-            .state_mut()
-            .command_navigation_interactive;
-        let eligible = text == "\r"
-            && !submitted_for_navigation.is_empty()
-            && !interactive
-            && !self.mcp.capabilities.terminal_executions.capturing(&id)
-            && self
-                .session
-                .metadata(&id)
-                .is_some_and(|metadata| match &metadata.launch_config {
-                    crate::models::SessionLaunchConfig::Local(_) => true,
-                    crate::models::SessionLaunchConfig::Ssh(config) => {
-                        !config.effective_terminal_shell_integration()
-                    }
-                    _ => false,
-                });
-        self.terminal
-            .view
-            .frame_pipeline
-            .note_command_input(id.clone(), eligible);
         if text.contains(['\r', '\n']) {
             let state = self.terminal.editing.state_mut();
             state.launched_line_editor = command_starts_line_editor(&submitted_for_navigation);
@@ -75,25 +75,11 @@ impl NyaTermApp {
         } else if matches!(text, "\u{3}" | "\u{4}") {
             self.terminal.editing.state_mut().launched_line_editor = false;
         }
-        if text == "\u{4}"
-            || (text == "\r"
-                && matches!(
-                    submitted_for_navigation.trim(),
-                    "exit" | "quit" | "exit()" | "quit()" | ".exit" | ".quit" | "\\q"
-                ))
-        {
-            self.terminal
-                .editing
-                .state_mut()
-                .command_navigation_interactive = false;
-        } else if text == "\r"
-            && nyaterm_core::command_starts_interactive_input(&submitted_for_navigation)
-        {
-            self.terminal
-                .editing
-                .state_mut()
-                .command_navigation_interactive = true;
-        }
+        self.terminal
+            .editing
+            .state_mut()
+            .command_navigation
+            .note_input(text);
         let was_suppressed = self.terminal.assist.command_suggestions_suppressed;
         if text == "\u{3}" || (was_suppressed && text == "q") {
             self.terminal.assist.command_suggestions_suppressed = false;
@@ -179,6 +165,11 @@ impl NyaTermApp {
             return;
         }
         let snapshot = self.terminal_snapshot_for_session(Some(id), 0);
+        self.terminal
+            .editing
+            .state_mut()
+            .command_navigation
+            .observe(&snapshot);
         let Some(cursor_row) = snapshot.row(snapshot.cursor.row) else {
             return;
         };

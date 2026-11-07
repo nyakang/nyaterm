@@ -178,6 +178,7 @@ impl NyaTermApp {
         // pending Enter submission is applied to every successful peer.
         let mut ok_sessions = Vec::new();
         let write_started_at = Instant::now();
+        let navigation_candidate = self.prepare_command_navigation_input(&bytes);
         let result = if literal {
             self.write_session_literal_input_recorded(&session_id, &bytes)
         } else {
@@ -219,7 +220,7 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
-        self.note_shell_editing_input(&bytes, cx);
+        self.note_shell_editing_input_with_navigation(&bytes, navigation_candidate, cx);
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
@@ -325,6 +326,15 @@ impl NyaTermApp {
         let peers = self.sync_peer_session_ids(&session_id);
         let mut ok_sessions = Vec::new();
         let write_started_at = Instant::now();
+        // Kitty can encode Enter as CSI-u. Tracking/history still consume its
+        // logical submission, while each session keeps its own wire encoding.
+        let logical_bytes: &[u8] =
+            if event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() {
+                b"\r"
+            } else {
+                &primary_bytes
+            };
+        let navigation_candidate = self.prepare_command_navigation_input(logical_bytes);
         match self.write_session_input_recorded(&session_id, &primary_bytes) {
             Ok(()) => ok_sessions.push(session_id),
             Err(error) => {
@@ -382,15 +392,7 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
-        // Kitty can encode Enter as CSI-u. Tracking/history still consume its
-        // logical submission, while each session keeps its own wire encoding.
-        let logical_bytes: &[u8] =
-            if event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() {
-                b"\r"
-            } else {
-                &primary_bytes
-            };
-        self.note_shell_editing_input(logical_bytes, cx);
+        self.note_shell_editing_input_with_navigation(logical_bytes, navigation_candidate, cx);
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,

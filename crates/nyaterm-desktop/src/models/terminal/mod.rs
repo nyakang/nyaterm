@@ -1607,13 +1607,22 @@ impl TerminalFramePipeline {
         &self,
         session_id: String,
         action: nyaterm_terminal::command_navigation::CommandNavigationAction,
+        offset: usize,
+        source_history: nyaterm_terminal::TerminalHistoryState,
     ) {
-        let _ = self
-            .command_tx
-            .send(TerminalFrameCommand::NavigateCommand { session_id, action });
+        let _ = self.command_tx.send(TerminalFrameCommand::NavigateCommand {
+            session_id,
+            action,
+            offset,
+            source_history,
+        });
     }
 
-    pub(crate) fn note_command_input(&self, session_id: String, fallback: bool) {
+    pub(crate) fn note_command_input(
+        &self,
+        session_id: String,
+        fallback: Option<nyaterm_terminal::TerminalLineId>,
+    ) {
         let _ = self.command_tx.send(TerminalFrameCommand::CommandInput {
             session_id,
             fallback,
@@ -2067,10 +2076,12 @@ enum TerminalFrameCommand {
     NavigateCommand {
         session_id: String,
         action: nyaterm_terminal::command_navigation::CommandNavigationAction,
+        offset: usize,
+        source_history: nyaterm_terminal::TerminalHistoryState,
     },
     CommandInput {
         session_id: String,
-        fallback: bool,
+        fallback: Option<nyaterm_terminal::TerminalLineId>,
     },
     EnsureSession {
         session_id: String,
@@ -2181,6 +2192,7 @@ pub(crate) enum TerminalFrameEvent {
     CommandNavigation {
         session_id: String,
         result: nyaterm_terminal::command_navigation::CommandNavigationResult,
+        frame: TerminalFrameSnapshotEvent,
     },
     Output(TerminalFrameOutputEvent),
     Snapshot(TerminalFrameSnapshotEvent),
@@ -3640,7 +3652,12 @@ fn compact_stale_terminal_frame_commands(commands: &mut VecDeque<TerminalFrameCo
 }
 
 fn terminal_frame_command_is_fence(_command: &TerminalFrameCommand) -> bool {
-    if matches!(_command, TerminalFrameCommand::RekeySession { .. }) {
+    if matches!(
+        _command,
+        TerminalFrameCommand::RekeySession { .. }
+            | TerminalFrameCommand::NavigateCommand { .. }
+            | TerminalFrameCommand::CommandInput { .. }
+    ) {
         return true;
     }
     if matches!(_command, TerminalFrameCommand::Fence { .. }) {
@@ -3921,20 +3938,53 @@ fn run_terminal_frame_processor(
                 fallback,
             } => {
                 if let Some(session) = sessions.get_mut(&session_id) {
-                    session.screen.reset_command_navigation();
-                    if fallback {
-                        session.screen.record_fallback_command();
+                    let changed = session.screen.reset_command_navigation();
+                    if let Some(anchor) = fallback {
+                        session.screen.record_fallback_command_at(anchor);
+                    }
+                    if changed {
+                        session.revision = session.revision.saturating_add(1);
+                        let event = session.resized_live_snapshot_event(session_id, Instant::now());
+                        push_event(&event_queue, TerminalFrameEvent::Snapshot(event));
                     }
                 }
             }
-            TerminalFrameCommand::NavigateCommand { session_id, action } => {
-                if let Some(session) = sessions.get_mut(&session_id)
-                    && let Some(result) = session.screen.navigate_command(action)
-                {
-                    push_event(
-                        &event_queue,
-                        TerminalFrameEvent::CommandNavigation { session_id, result },
-                    );
+            TerminalFrameCommand::NavigateCommand {
+                session_id,
+                action,
+                offset,
+                source_history,
+            } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let offset = session
+                        .screen
+                        .history_state()
+                        .reanchor_offset(source_history, offset);
+                    if let Some(result) = session.screen.navigate_command_from_view(action, offset)
+                    {
+                        session.revision = session.revision.saturating_add(1);
+                        if result.display_offset > 0 {
+                            let live = session
+                                .resized_live_snapshot_event(session_id.clone(), Instant::now());
+                            push_event(&event_queue, TerminalFrameEvent::Snapshot(live));
+                        }
+                        let frame = session.snapshot_event(
+                            session_id.clone(),
+                            result.display_offset,
+                            false,
+                            ActionLinksMatcherSettings::default(),
+                            true,
+                            TerminalFrameSnapshotPurpose::Paint,
+                        );
+                        push_event(
+                            &event_queue,
+                            TerminalFrameEvent::CommandNavigation {
+                                session_id,
+                                result,
+                                frame,
+                            },
+                        );
+                    }
                 }
             }
             TerminalFrameCommand::ClearExceptInput { session_id } => {

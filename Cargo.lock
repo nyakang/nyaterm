@@ -181,7 +181,7 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/nyakang/alacritty?rev=6056cb4d0dc49a43a6542f3eb8a951c6d9220368#6056cb4d0dc49a43a6542f3eb8a951c6d9220368"
+source = "git+https://github.com/nyakang/alacritty?rev=eff8dffbd4c6063387c97c9c74a6428f329eee47#eff8dffbd4c6063387c97c9c74a6428f329eee47"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",
@@ -7143,6 +7143,7 @@ dependencies = [
  "regex",
  "unicode-segmentation",
  "unicode-width",
+ "zeroize",
 ]
 
 [[package]]

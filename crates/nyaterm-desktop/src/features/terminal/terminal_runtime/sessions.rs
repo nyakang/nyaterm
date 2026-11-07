@@ -501,10 +501,16 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(session_id) = self.session.active_id_owned() {
-            self.terminal
-                .view
-                .frame_pipeline
-                .navigate_command(session_id, action);
+            self.terminal.view.frame_pipeline.navigate_command(
+                session_id.clone(),
+                action,
+                self.terminal_display_offset_for_session(Some(&session_id)),
+                self.terminal
+                    .view
+                    .views
+                    .get(&session_id)
+                    .map_or_else(Default::default, |view| view.history_state()),
+            );
             self.terminal.view.frame_pipeline.arm_event_wakes();
         }
         cx.notify();

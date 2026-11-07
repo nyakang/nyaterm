@@ -1317,6 +1317,34 @@ fn push_terminal_background_ranges(
     }
 }
 
+fn push_command_navigation_highlight(
+    snapshot: &TerminalSnapshot,
+    row: usize,
+    target: Option<TerminalLineId>,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    if target.is_none()
+        || !snapshot
+            .row(row)
+            .is_some_and(|data| !data.cleared && data.line_id == target)
+    {
+        return;
+    }
+    out.push(fill(
+        Bounds::new(
+            point(
+                geometry.bounds.left(),
+                geometry.bounds.top()
+                    + px(geometry.visual_y_offset + row as f32 * geometry.cell_height),
+            ),
+            size(geometry.bounds.size.width, px(geometry.cell_height)),
+        ),
+        rgb(palette.terminal_line_highlight),
+    ));
+}
+
 fn push_terminal_zebra_stripes(
     snapshot: &TerminalSnapshot,
     visible_rows: std::ops::Range<usize>,
@@ -1733,6 +1761,39 @@ impl Element for NyaTerminalElement {
                         ..paint_geometry
                     },
                     &mut plan.zebra_stripes,
+                );
+            }
+        }
+        // Navigation feedback is independent of zebra stripes and glyph layout.
+        if let Some(layout) = self.unwrapped.as_ref() {
+            for display_row in 0..layout.viewport_rows {
+                let row = layout.first_source_row(display_row);
+                let target = layout.target_line_for_display_row(
+                    &self.snapshot,
+                    display_row,
+                    self.snapshot.command_navigation_target,
+                );
+                push_command_navigation_highlight(
+                    &self.snapshot,
+                    row,
+                    target,
+                    self.palette,
+                    TerminalPaintGeometry {
+                        visual_y_offset: (display_row as f32 - row as f32) * cell_h,
+                        ..paint_geometry
+                    },
+                    &mut plan.decoration_backgrounds,
+                );
+            }
+        } else {
+            for row in visible_rows.clone() {
+                push_command_navigation_highlight(
+                    &self.snapshot,
+                    row,
+                    self.snapshot.command_navigation_target,
+                    self.palette,
+                    paint_geometry,
+                    &mut plan.decoration_backgrounds,
                 );
             }
         }

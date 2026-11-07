@@ -15,6 +15,7 @@ memchr = "2"
 regex.workspace = true
 unicode-width = "0.2"
 unicode-segmentation.workspace = true
+zeroize.workspace = true
 
 [features]
 benchmark = []

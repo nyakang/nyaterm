@@ -321,6 +321,9 @@ pub struct TerminalSnapshotMeta {
     pub total_rows: usize,
     pub display_offset: usize,
     pub shell_input_anchor: Option<ShellInputAnchor>,
+    pub command_navigation_target: Option<TerminalLineId>,
+    pub command_navigation_revision: u64,
+    pub shell_command_prompt: Option<TerminalLineId>,
     pub images: Vec<GraphicsImageSnapshot>,
     /// Pinned numbering origin the row `display_line_number`s were computed
     /// against. Snapshots with different bases must never be stitched together.
@@ -358,6 +361,9 @@ pub struct TerminalSnapshot {
     /// Alacritty display offset represented by this snapshot.
     pub display_offset: usize,
     pub shell_input_anchor: Option<ShellInputAnchor>,
+    pub command_navigation_target: Option<TerminalLineId>,
+    pub command_navigation_revision: u64,
+    pub shell_command_prompt: Option<TerminalLineId>,
     /// Inline graphics placements visible in this viewport (Kitty / iTerm2 / Sixel).
     pub images: Vec<GraphicsImageSnapshot>,
     /// Pinned numbering origin behind every row's `display_line_number`.
@@ -444,6 +450,9 @@ impl TerminalSnapshot {
             total_rows: meta.total_rows,
             display_offset: meta.display_offset,
             shell_input_anchor: meta.shell_input_anchor,
+            command_navigation_target: meta.command_navigation_target,
+            command_navigation_revision: meta.command_navigation_revision,
+            shell_command_prompt: meta.shell_command_prompt,
             images: meta.images,
             line_number_base: meta.line_number_base,
         }
@@ -1066,8 +1075,20 @@ impl TerminalCore {
         // without advancing the scroll epoch, so logical identities must be
         // corrected below. Shrinking is already compensated by the epoch.
         let rows_added = next_rows.saturating_sub(old_rows);
-        let timestamps = (cols_changed && !self.alternate_screen())
-            .then(|| reflow_timestamps::capture(&self.term, self.active_line_state()));
+        let timestamps = cols_changed
+            .then(|| reflow_timestamps::capture(self.term.primary_grid(), &self.primary_lines));
+        let command_anchors = if cols_changed {
+            self.primary_lines
+                .metadata
+                .iter()
+                .filter_map(|(line, metadata)| metadata.command_anchor.then_some(*line))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let navigation =
+            cols_changed.then(|| std::mem::take(&mut self.primary_lines.command_navigation));
+        let pending_prompt = self.primary_lines.pending_command_prompt;
         // A width reflow rewrites grid coordinates arbitrarily and rebuilds the
         // numbering indices, so remember the cursor's pinned number to re-anchor
         // it afterwards. Row-only growth keeps logical identities instead (see
@@ -1171,12 +1192,35 @@ impl TerminalCore {
         }
         if let Some(timestamps) = timestamps {
             // Width reflow changes wrap positions throughout retained history.
-            self.initialize_line_numbers();
-            for (line, metadata) in reflow_timestamps::restore(&self.term, timestamps) {
-                let signature = line_signature(&self.term, line, self.cols);
+            if !self.alternate_screen() {
+                self.initialize_line_numbers();
+            }
+            let restored = reflow_timestamps::restore(self.term.primary_grid(), timestamps);
+            let remap = |line: i64| {
+                restored
+                    .points
+                    .get(&line)
+                    .map(|line| self.primary_lines.logical_line(*line))
+            };
+            let mapped_anchors = command_anchors
+                .into_iter()
+                .filter_map(&remap)
+                .collect::<Vec<_>>();
+            let navigation = navigation.unwrap_or_default();
+            let mapped_position = navigation.position.and_then(remap);
+            let mapped_selection = navigation
+                .selection
+                .and_then(|(start, end)| Some((remap(start)?, remap(end)?)));
+            let mapped_prompt = pending_prompt.and_then(remap);
+            self.primary_lines.command_navigation.revision = navigation.revision.wrapping_add(1);
+            self.primary_lines.command_navigation.position = mapped_position;
+            self.primary_lines.command_navigation.selection = mapped_selection;
+            self.primary_lines.pending_command_prompt = mapped_prompt;
+            for (line, metadata) in restored.rows {
+                let signature = grid_line_signature(self.term.primary_grid(), line, self.cols);
                 let revision = self.allocate_line_revision();
-                let logical_line = self.active_line_state().logical_line(line);
-                self.active_line_state_mut().metadata.insert(
+                let logical_line = self.primary_lines.logical_line(line);
+                self.primary_lines.metadata.insert(
                     logical_line,
                     LineMetadata {
                         timestamp_ms: metadata.timestamp_ms,
@@ -1188,13 +1232,20 @@ impl TerminalCore {
                 );
                 if let Some(number) = metadata.display_line_number {
                     let origin = logical_line.saturating_sub(number.saturating_sub(1) as i64);
-                    let state = self.active_line_state_mut();
+                    let state = &mut self.primary_lines;
                     state.clear_line_origin = Some(
                         state
                             .clear_line_origin
                             .map_or(origin, |old| old.min(origin)),
                     );
                 }
+            }
+            for line in mapped_anchors {
+                self.primary_lines
+                    .metadata
+                    .entry(line)
+                    .or_default()
+                    .command_anchor = true;
             }
         }
         self.stamp_changed_lines();
@@ -2562,6 +2613,12 @@ impl TerminalCore {
             }
             ShellBoundaryKind::Finished { exit_code } => {
                 metadata.command_mark = Some(ShellCommandMark::Finished { exit_code });
+                // Some integrations omit C. D still confirms that the pending
+                // prompt belonged to a completed command, rather than the next.
+                let state = self.active_line_state_mut();
+                if let Some(prompt) = state.pending_command_prompt.take() {
+                    state.metadata.entry(prompt).or_default().command_anchor = true;
+                }
                 if let Some(start) = self.active_line_state().active_input_start {
                     let end = logical_line.saturating_sub(1);
                     self.commit_shell_input_range(start, end);
@@ -2846,6 +2903,27 @@ fn snapshot_window_from_term(
                 .saturating_add(window.newer_rows),
             display_offset,
             shell_input_anchor: line_state.input_anchor,
+            command_navigation_revision: line_state.command_navigation.revision,
+            shell_command_prompt: line_state.pending_command_prompt.map(|logical_line| {
+                TerminalLineId {
+                    epoch: line_state.epoch,
+                    logical_line,
+                }
+            }),
+            command_navigation_target: line_state
+                .command_navigation
+                .position
+                .and_then(|line| {
+                    line_state
+                        .metadata
+                        .get(&line)
+                        .filter(|metadata| metadata.command_anchor)
+                        .map(|_| TerminalLineId {
+                            epoch: line_state.epoch,
+                            logical_line: line,
+                        })
+                })
+                .filter(|_| !content.mode.contains(TermMode::ALT_SCREEN)),
             images: Vec::new(),
             line_number_base: line_state.line_numbers.base(),
         },
@@ -2968,7 +3046,15 @@ fn snapshot_row_from_term(
 }
 
 fn line_signature(term: &Term<NyaTermEventProxy>, line: Line, cols: usize) -> u64 {
-    let row = &term.grid()[line];
+    grid_line_signature(term.grid(), line, cols)
+}
+
+fn grid_line_signature(
+    grid: &alacritty_terminal::grid::Grid<Cell>,
+    line: Line,
+    cols: usize,
+) -> u64 {
+    let row = &grid[line];
     let mut significant = cols;
     while significant > 0 {
         let cell = &row[Column(significant - 1)];

@@ -2749,3 +2749,59 @@ fn contrast_corrects_trailing_decorations_and_conceals_hidden_trailing_cells() {
             .any(|range| range.start == 3 && range.color == palette.terminal_selection)
     );
 }
+
+#[test]
+fn navigation_background_moves_without_selection_or_zebra_stripes() {
+    use crate::element::push_command_navigation_highlight;
+    use nyaterm_terminal::command_navigation::CommandNavigationAction;
+    let mut terminal = TerminalScreen::new(40, 10);
+    for _ in 0..3 {
+        terminal.advance(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07",
+        );
+    }
+    let geometry = TerminalPaintGeometry {
+        bounds: Bounds::new(point(px(10.0), px(20.0)), size(px(400.0), px(200.0))),
+        cell_width: 10.0,
+        cell_height: 20.0,
+        visual_y_offset: 0.0,
+    };
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut previous_top = None;
+    for _ in 0..3 {
+        terminal
+            .navigate_command(CommandNavigationAction::Previous)
+            .unwrap();
+        let snapshot = terminal.snapshot();
+        let mut quads = Vec::new();
+        for row in 0..snapshot.row_count() {
+            push_command_navigation_highlight(
+                &snapshot,
+                row,
+                snapshot.command_navigation_target,
+                palette,
+                geometry,
+                &mut quads,
+            );
+        }
+        assert_eq!(quads.len(), 1);
+        assert_ne!(previous_top, Some(quads[0].bounds.top()));
+        assert_eq!(quads[0].bounds.size.width, px(400.0));
+        assert!(snapshot.selection.is_none());
+        previous_top = Some(quads[0].bounds.top());
+    }
+    terminal.reset_command_navigation();
+    let snapshot = terminal.snapshot();
+    let mut quads = Vec::new();
+    for row in 0..snapshot.row_count() {
+        push_command_navigation_highlight(
+            &snapshot,
+            row,
+            snapshot.command_navigation_target,
+            palette,
+            geometry,
+            &mut quads,
+        );
+    }
+    assert!(quads.is_empty());
+}

@@ -2126,3 +2126,32 @@ fn option_arrows_follow_meta_setting_and_target_session_kitty_flags() {
         }
     });
 }
+
+#[test]
+fn cached_history_rows_use_the_latest_navigation_target_after_reset() {
+    use nyaterm_terminal::command_navigation::CommandNavigationAction;
+    let mut view = TerminalViewState::new();
+    view.screen.resize(20, 3);
+    for _ in 0..5 {
+        view.screen.advance(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07",
+        );
+    }
+    view.screen
+        .navigate_command(CommandNavigationAction::Previous)
+        .unwrap();
+    let result = view
+        .screen
+        .navigate_command(CommandNavigationAction::Previous)
+        .unwrap();
+    let old = Arc::new(view.screen.viewport_snapshot(result.display_offset));
+    view.scrollback_snapshots
+        .insert(result.display_offset, old.clone());
+    view.screen.reset_command_navigation();
+    view.frame_snapshot = Some(Arc::new(view.screen.snapshot()));
+    let painted =
+        terminal_paint_window_snapshot_for_view(Some(&view), result.display_offset, 3, None)
+            .unwrap();
+    assert_eq!(painted.command_navigation_target, None);
+    assert!(Arc::ptr_eq(&painted.row_data, &old.row_data));
+}

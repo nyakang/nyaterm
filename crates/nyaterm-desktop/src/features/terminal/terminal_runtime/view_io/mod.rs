@@ -126,6 +126,29 @@ fn terminal_paint_window_snapshot_for_view(
     viewport_rows: usize,
     retained_surface_snapshot: Option<std::sync::Arc<TerminalSnapshot>>,
 ) -> Option<std::sync::Arc<TerminalSnapshot>> {
+    let mut snapshot = terminal_paint_window_snapshot_for_view_inner(
+        view,
+        display_offset,
+        viewport_rows,
+        retained_surface_snapshot,
+    )?;
+    if let Some(live) = view.and_then(|view| view.frame_snapshot.as_ref())
+        && (snapshot.command_navigation_revision != live.command_navigation_revision
+            || snapshot.command_navigation_target != live.command_navigation_target)
+    {
+        let snapshot = std::sync::Arc::make_mut(&mut snapshot);
+        snapshot.command_navigation_target = live.command_navigation_target;
+        snapshot.command_navigation_revision = live.command_navigation_revision;
+    }
+    Some(snapshot)
+}
+
+fn terminal_paint_window_snapshot_for_view_inner(
+    view: Option<&TerminalViewState>,
+    display_offset: usize,
+    viewport_rows: usize,
+    retained_surface_snapshot: Option<std::sync::Arc<TerminalSnapshot>>,
+) -> Option<std::sync::Arc<TerminalSnapshot>> {
     if view.is_some_and(|view| view.grid_resize_pending) {
         return retained_surface_snapshot;
     }
@@ -248,6 +271,9 @@ fn terminal_snapshot_with_newer_edge_row(
         nyaterm_terminal::TerminalSnapshotMeta {
             history: base.history,
             shell_input_anchor: base.shell_input_anchor,
+            command_navigation_target: None,
+            command_navigation_revision: 0,
+            shell_command_prompt: None,
             cols: base.cols,
             viewport_rows: base.viewport_rows,
             cursor: base.cursor,
@@ -310,6 +336,9 @@ fn terminal_snapshot_with_retained_scroll_window(
         nyaterm_terminal::TerminalSnapshotMeta {
             history: base.history,
             shell_input_anchor: base.shell_input_anchor,
+            command_navigation_target: None,
+            command_navigation_revision: 0,
+            shell_command_prompt: None,
             cols: base.cols,
             viewport_rows: base.viewport_rows,
             cursor: base.cursor,

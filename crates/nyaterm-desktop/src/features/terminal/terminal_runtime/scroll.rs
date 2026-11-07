@@ -250,6 +250,17 @@ pub(in crate::features) struct TerminalScrollWheelStateResult {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn reset_terminal_command_navigation_for_session(
+        &self,
+        session_id: &str,
+    ) {
+        self.terminal
+            .view
+            .frame_pipeline
+            .note_command_input(session_id.to_owned(), None);
+        self.terminal.view.frame_pipeline.arm_event_wakes();
+    }
+
     pub(in crate::features) fn active_terminal_display_offset(&self) -> usize {
         self.terminal_display_offset_for_session(self.session.active_id())
     }
@@ -348,6 +359,7 @@ impl NyaTermApp {
         if delta == 0 {
             let residual = self.terminal_scroll_residual_for_session(Some(session_id));
             if local_scroll && (residual != 0.0 || residual != previous_residual) {
+                self.reset_terminal_command_navigation_for_session(session_id);
                 self.note_terminal_fractional_scroll_after_local_surface_update(session_id, cx);
                 self.queue_terminal_selection_scroll_rehit(session_id, cx);
                 return TerminalScrollWheelStateResult {
@@ -357,6 +369,7 @@ impl NyaTermApp {
                 };
             }
             if terminal_scroll_should_consume_raw_lines(raw_lines) {
+                self.reset_terminal_command_navigation_for_session(session_id);
                 return TerminalScrollWheelStateResult {
                     visual_state: None,
                     defer_repaint: false,
@@ -410,6 +423,9 @@ impl NyaTermApp {
             .terminal_scroll_visual_state_for_session(session_id)
             .map(|state| state.scroll_offset);
         let visual_state = self.scroll_terminal_by_for_session_state_only(Some(session_id), delta);
+        if visual_state.is_some() {
+            self.reset_terminal_command_navigation_for_session(session_id);
+        }
         if let (Some(previous_offset), Some(state)) = (previous_offset, visual_state.as_ref()) {
             self.reconcile_terminal_selection_after_scroll(
                 session_id,
@@ -817,6 +833,7 @@ impl NyaTermApp {
         let Some(session_id) = session_id else {
             return;
         };
+        self.reset_terminal_command_navigation_for_session(&session_id);
         let is_scrolled = self.terminal_visual_scroll_active_for_session(Some(&session_id));
         if is_scrolled {
             self.queue_terminal_scroll_position_notify(session_id.as_str(), cx);
@@ -1047,6 +1064,9 @@ impl NyaTermApp {
         finished: bool,
         command_running: bool,
     ) {
+        if finished && let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.command_navigation.command_finished();
+        }
         // Only affect the active session suggestion pipeline.
         if self.session.active_id() != Some(session_id) {
             return;
@@ -1243,7 +1263,8 @@ impl NyaTermApp {
         let offset = self.terminal_grid_offset_for_scrollbar(drag.session_id.as_deref(), offset);
         let repaint_session_id = self
             .set_terminal_scroll_offset_for_session_state_only(drag.session_id.as_deref(), offset);
-        if repaint_session_id.is_some() {
+        if let Some(id) = &repaint_session_id {
+            self.reset_terminal_command_navigation_for_session(id);
             self.queue_terminal_scrollbar_drag_visual_notify(repaint_session_id.as_deref(), cx);
         }
     }

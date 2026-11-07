@@ -98,6 +98,23 @@ fn strip_leading_env_prefixes(input: &str) -> String {
     }
 }
 
+/// The exact recognized prompt prefix; navigation may use it as position evidence.
+/// This does not grant permission to edit an unknown foreground program's input.
+pub fn known_terminal_prompt_prefix(input: &str) -> Option<&str> {
+    for matcher in [
+        bracket_prompt_prefix(),
+        posix_prompt_prefix(),
+        powershell_prompt_prefix(),
+        windows_prompt_prefix(),
+        simple_prompt_prefix(),
+    ] {
+        if let Some(found) = matcher.find(input) {
+            return Some(&input[..found.end()]);
+        }
+    }
+    None
+}
+
 fn strip_known_prompt_prefix(input: &str) -> String {
     for matcher in [
         bracket_prompt_prefix(),

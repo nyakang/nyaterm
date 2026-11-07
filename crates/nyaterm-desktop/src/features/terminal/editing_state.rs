@@ -20,7 +20,7 @@ pub(super) struct TerminalEditingState {
 
 #[derive(Default)]
 pub(super) struct SessionEditingState {
-    pub(super) command_navigation_interactive: bool,
+    pub(super) command_navigation: super::navigation_input::CommandNavigationInputState,
     pub(super) model: ShellEditState,
     pub(super) capability: EditCapability,
     pub(super) echo_line_editor: bool,
@@ -186,11 +186,15 @@ impl TerminalEditingState {
     }
 
     pub(super) fn clear_active(&mut self) {
+        // Losing editing authorization (alternate screen, credentials, locks)
+        // cannot prove that the foreground program returned to the shell.
+        let command_navigation = std::mem::take(&mut self.state_mut().command_navigation);
         let awaiting_snapshot = self.state_mut().awaiting_snapshot;
         let version = self.state_mut().model.version.wrapping_add(1);
         let mut model = ShellEditState::default();
         model.version = version;
         *self.state_mut() = SessionEditingState {
+            command_navigation,
             awaiting_snapshot,
             model,
             ..SessionEditingState::default()

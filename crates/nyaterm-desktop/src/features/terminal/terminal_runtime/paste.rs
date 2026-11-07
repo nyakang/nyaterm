@@ -212,6 +212,13 @@ impl NyaTermApp {
             }
         };
         let byte_count = primary_bytes.len();
+        // A newline inside bracketed paste edits the shell buffer; only a
+        // later Enter or OSC boundary can confirm an actual submission.
+        let navigation_candidate = if primary_bytes.starts_with(b"\x1b[200~") {
+            None
+        } else {
+            self.prepare_command_navigation_input(text.as_bytes())
+        };
         match self.write_session_wire_input_recorded_as(
             &session_id,
             &primary_bytes,
@@ -246,7 +253,7 @@ impl NyaTermApp {
             }
         }
 
-        self.note_shell_editing_input(text.as_bytes(), cx);
+        self.note_shell_editing_input_with_navigation(text.as_bytes(), navigation_candidate, cx);
         // History tracks the logical pasted text, not per-session framing bytes.
         let history_bytes = text.as_bytes();
         let session_refs: Vec<&str> = ok_sessions.iter().map(String::as_str).collect();
