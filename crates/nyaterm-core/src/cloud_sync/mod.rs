@@ -814,6 +814,7 @@ fn push_snapshot_prepared(
             remote: None,
         },
     };
+    local = crate::portable_snapshot::project_fixed_sync_snapshot(&local)?;
     local.recalculate_hash()?;
     let mut snapshot = local;
     let local_hash = snapshot.meta.payload_hash.clone();
@@ -1185,6 +1186,7 @@ fn pull_snapshot_prepared(
     before_apply()?;
     let mut snapshot = remote_snapshot;
     if requires_resolution {
+        snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(&snapshot)?;
         snapshot.meta.revision_id = uuid_v4();
         snapshot.meta.created_at_ms = current_time_ms();
         snapshot.meta.device_id = options.device_id.clone();

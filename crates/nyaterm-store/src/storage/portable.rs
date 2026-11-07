@@ -74,7 +74,7 @@ impl ConnectionStore {
             }
         })?;
 
-        self.apply_raw_portable_snapshot_with_password(snapshot, Some(snapshot_password))?;
+        self.apply_fixed_sync_snapshot(snapshot, snapshot_password)?;
         Ok(Some(safety_backup_path))
     }
 
@@ -574,6 +574,13 @@ impl ConnectionStore {
         snapshot_password: Option<&str>,
     ) -> Result<(), StorageError> {
         validate_raw_snapshot(snapshot)?;
+        if snapshot.meta.schema_version
+            == nyaterm_core::portable_snapshot::FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION
+        {
+            return Err(StorageError::InvalidData(
+                "Cloud sync snapshots require fixed-scope application".into(),
+            ));
+        }
         for (entity, raw) in &snapshot.entities {
             serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
                 StorageError::PortableSnapshotEntity {

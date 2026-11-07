@@ -1386,7 +1386,7 @@ fn legacy_tauri_snapshot_reencrypts_settings_and_rewraps_master_key() {
 }
 
 #[test]
-fn legacy_tauri_cloud_pull_rewraps_vault_key_and_preserves_local_master_password() {
+fn legacy_tauri_cloud_pull_excludes_vault_data_and_preserves_local_master_password() {
     let source_dir = unique_temp_dir("legacy-cloud-source");
     let target_dir = unique_temp_dir("legacy-cloud-target");
     let source = ConnectionStore::open(&source_dir).expect("source");
@@ -1415,11 +1415,12 @@ fn legacy_tauri_cloud_pull_rewraps_vault_key_and_preserves_local_master_password
     target
         .apply_cloud_sync_snapshot(&target_dir, &snapshot, "shared-cloud-password")
         .expect("apply legacy cloud snapshot");
-    let imported = target
-        .load_decrypted_password_by_id("legacy-secret")
-        .expect("decrypt imported password")
-        .expect("imported password");
-    assert_eq!(imported.password.as_deref(), Some("vault-value"));
+    assert!(
+        target
+            .load_decrypted_password_by_id("legacy-secret")
+            .unwrap()
+            .is_none()
+    );
     assert!(
         target
             .verify_master_password("different-local-password")
@@ -1428,7 +1429,7 @@ fn legacy_tauri_cloud_pull_rewraps_vault_key_and_preserves_local_master_password
 }
 
 #[test]
-fn current_gpui_cloud_pull_rewraps_vault_key_for_local_master_password() {
+fn current_gpui_cloud_pull_preserves_local_master_password_without_importing_vault_data() {
     let source_dir = unique_temp_dir("gpui-cloud-source");
     let target_dir = unique_temp_dir("gpui-cloud-target");
     let source = ConnectionStore::open(&source_dir).expect("source");
@@ -1457,14 +1458,11 @@ fn current_gpui_cloud_pull_rewraps_vault_key_for_local_master_password() {
     target
         .apply_cloud_sync_snapshot(&target_dir, &snapshot, "source-password")
         .expect("apply GPUI cloud snapshot");
-    assert_eq!(
+    assert!(
         target
             .load_decrypted_password_by_id("shared-account")
-            .expect("decrypt imported password")
-            .expect("imported password")
-            .password
-            .as_deref(),
-        Some("shared-value")
+            .unwrap()
+            .is_none()
     );
     assert!(
         target
@@ -1474,7 +1472,7 @@ fn current_gpui_cloud_pull_rewraps_vault_key_for_local_master_password() {
 }
 
 #[test]
-fn cloud_pull_reencrypts_device_secrets_across_restart_and_second_sync() {
+fn cloud_pull_preserves_device_secret_ciphertext_across_restart_and_second_sync() {
     use crate::runtime::{LoadBootstrap, StoreRequest};
 
     for version in ["2.0.0-preview.5", "1.2.10"] {
@@ -1555,20 +1553,26 @@ fn cloud_pull_reencrypts_device_secrets_across_restart_and_second_sync() {
                     local
                 );
                 let new_key = target.load_master_key_token().unwrap().unwrap();
-                let saved = target.load_settings_value().unwrap();
-                let new_ciphertext = saved["cloud_sync"]["webdav"]["password"].as_str().unwrap();
-                assert_ne!(old_key, new_key);
-                assert_ne!(old_ciphertext, new_ciphertext);
+                let saved = if legacy {
+                    target
+                        .load_settings_doc_value(SETTINGS_CLOUD_SYNC, serde_json::Value::Null)
+                        .unwrap()
+                } else {
+                    target.load_settings_value().unwrap()["cloud_sync"].clone()
+                };
+                let new_ciphertext = saved["webdav"]["password"].as_str().unwrap();
+                assert_eq!(old_key, new_key);
+                assert_eq!(old_ciphertext, new_ciphertext);
                 assert_ne!(new_ciphertext, "local-webdav");
                 assert!(
                     target
                         .credential_crypto()
                         .unwrap()
                         .decrypt_secret(&old_key, new_ciphertext)
-                        .is_err()
+                        .is_ok()
                 );
-                assert_eq!(saved["cloud_sync"]["future_policy"]["retain"], true);
-                assert_eq!(saved["cloud_sync"]["webdav"]["future_option"], 42);
+                assert_eq!(saved["future_policy"]["retain"], true);
+                assert_eq!(saved["webdav"]["future_option"], 42);
                 if legacy {
                     let stored: CloudSyncSettings = target
                         .read_json_table(SETTINGS_TABLE, SETTINGS_CLOUD_SYNC)
@@ -1594,14 +1598,11 @@ fn cloud_pull_reencrypts_device_secrets_across_restart_and_second_sync() {
                 target
                     .apply_cloud_sync_snapshot(&target_dir, &snapshot, "shared-password")
                     .unwrap();
-                assert_eq!(
+                assert!(
                     target
                         .load_decrypted_password_by_id("synced-account")
                         .unwrap()
-                        .unwrap()
-                        .password
-                        .as_deref(),
-                    Some("synced-value")
+                        .is_none()
                 );
                 assert!(target.verify_master_password(target_password).unwrap());
                 drop(target);
@@ -1763,7 +1764,7 @@ fn cloud_pull_store_worker_flushes_and_reopens_with_local_provider_secrets() {
 }
 
 #[test]
-fn cloud_pull_reencrypts_secrets_retained_from_partial_settings() {
+fn cloud_pull_preserves_secrets_retained_from_partial_settings() {
     use crate::runtime::{LoadBootstrap, StoreRequest};
 
     let source_dir = unique_temp_dir("partial-rekey-source");
@@ -1854,7 +1855,7 @@ fn cloud_pull_without_source_key_keeps_local_key_for_inline_passwords() {
             .unwrap()
             .password
             .as_deref(),
-        Some("imported-inline")
+        None
     );
 }
 
@@ -5735,10 +5736,10 @@ fn ai_headers_without_api_key_encrypt_roundtrip_and_reject_invalid_updates() {
     restore
         .save_master_password(Some("header-local-password"))
         .unwrap();
+    let wire =
+        crate::encode_encrypted_raw_portable_snapshot(&snapshot, "header-sync-password").unwrap();
     assert!(
-        restore
-            .apply_cloud_sync_snapshot(&restore_dir, &snapshot, "wrong-fixture-password")
-            .is_err()
+        crate::decode_encrypted_raw_portable_snapshot(&wire, "wrong-fixture-password").is_err()
     );
     restore
         .apply_cloud_sync_snapshot(&restore_dir, &snapshot, "header-sync-password")
@@ -8128,19 +8129,23 @@ fn tauri_ai_extensions_follow_account_and_model_ids_through_reorder_delete_and_b
     synced
         .save_master_password(Some("fixture-local-password"))
         .unwrap();
+    let wire =
+        crate::encode_encrypted_raw_portable_snapshot(&snapshot, "fixture-sync-password").unwrap();
     assert!(
-        synced
-            .apply_cloud_sync_snapshot(&sync_dir, &snapshot, "fixture-wrong-password")
-            .is_err()
+        crate::decode_encrypted_raw_portable_snapshot(&wire, "fixture-wrong-password").is_err()
     );
     synced
         .apply_cloud_sync_snapshot(&sync_dir, &snapshot, "fixture-sync-password")
         .unwrap();
-    assert_eq!(synced.load_ai_settings().unwrap(), saved);
-    assert_eq!(
-        synced.load_settings_value().unwrap()["ai"]["models"][1]["future_model"],
-        "first-extension"
+    assert!(
+        !synced
+            .load_ai_settings()
+            .unwrap()
+            .provider_credentials
+            .iter()
+            .any(|provider| provider.id == "first")
     );
+    assert!(synced.load_settings_value().unwrap()["ai"]["models"][1]["future_model"].is_null());
     drop(synced);
     std::fs::remove_dir_all(sync_dir).ok();
     store.save_master_password(None).unwrap();

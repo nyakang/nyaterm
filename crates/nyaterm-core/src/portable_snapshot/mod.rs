@@ -9,6 +9,7 @@ use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
 const PORTABLE_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
+pub const FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 const SNAPSHOT_ZIP_MANIFEST_NAME: &str = "manifest.json";
 const SNAPSHOT_ZIP_PAYLOAD_NAME: &str = "snapshot.redb";
 const MAX_COMPRESSED_SNAPSHOT_PAYLOAD_BYTES: u64 = 50 * 1024 * 1024;
@@ -17,6 +18,8 @@ mod encryption;
 pub use encryption::{decrypt_snapshot_bytes, encrypt_snapshot_bytes};
 mod sync_clock;
 pub use sync_clock::SnapshotSyncClock;
+mod fixed_sync;
+pub use fixed_sync::{project_fixed_sync_entities, project_fixed_sync_snapshot};
 
 mod v2;
 pub use v2::convert_v2_snapshot;
@@ -143,23 +146,36 @@ impl RawPortableSnapshot {
             .unwrap_or(&self.meta.payload_hash)
     }
 
-    /// Versioned change detection over every entity, including opaque entities
-    /// from newer clients. The historical payload hash remains a wire contract.
+    /// Sync change detection covers the fixed projection; full backups include
+    /// every entity. The historical payload hash remains a wire contract.
     pub fn sync_content_hash(&self) -> Result<String, PortableSnapshotError> {
+        if self.meta.snapshot_kind == PortableSnapshotKind::Sync {
+            let fixed = project_fixed_sync_snapshot(self)?;
+            return Ok(format!(
+                "entities-v1:{}",
+                calculate_entities_hash(&fixed.entities)?
+            ));
+        }
         Ok(format!(
             "entities-v1:{}",
             calculate_entities_hash(&self.entities)?
         ))
     }
 
-    /// Whether the snapshot holds anything user-made that a pull could
-    /// destroy: connections, credentials and similar data. `settings` is
-    /// deliberately absent — a fresh install serializes its defaults there,
-    /// and letting the remote settings win is what a sync should do anyway.
+    /// Whether the snapshot holds user content. Sync only counts the fixed
+    /// projection, including custom themes, without device preferences or vaults.
     /// A snapshot without user content belongs to a first-connect (or
     /// self-wiped) device, which should adopt the remote instead of being
     /// asked which side to keep.
     pub fn has_user_content(&self) -> bool {
+        if self.meta.snapshot_kind == PortableSnapshotKind::Sync {
+            return crate::sync_schema::project_entities(
+                &self.entities,
+                &crate::sync_schema::FIXED_CLOUD_SYNC_SCOPE,
+            )
+            .map(|projection| !projection.values.is_empty())
+            .unwrap_or(true);
+        }
         USER_CONTENT_ENTITIES.iter().any(|key| {
             self.entities
                 .get(*key)
@@ -339,7 +355,10 @@ pub fn decode_compressed_snapshot_payload(bytes: &[u8]) -> Result<Vec<u8>, Porta
 
 #[doc(hidden)]
 pub fn validate_raw_snapshot(snapshot: &RawPortableSnapshot) -> Result<(), PortableSnapshotError> {
-    if snapshot.meta.schema_version != PORTABLE_SNAPSHOT_SCHEMA_VERSION {
+    if snapshot.meta.schema_version != PORTABLE_SNAPSHOT_SCHEMA_VERSION
+        && !(snapshot.meta.snapshot_kind == PortableSnapshotKind::Sync
+            && snapshot.meta.schema_version == FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION)
+    {
         return Err(PortableSnapshotError::UnsupportedVersion(
             snapshot.meta.schema_version,
         ));

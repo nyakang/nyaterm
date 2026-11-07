@@ -552,7 +552,7 @@ impl CloudSyncRemote for EditingRemote<'_> {
 }
 
 #[test]
-fn vnc_and_unknown_entity_only_changes_are_uploaded_even_with_legacy_baselines() {
+fn vnc_and_unknown_entity_only_changes_do_not_dirty_fixed_sync_with_legacy_baselines() {
     for entity in ["vnc_known_hosts", "future_entity"] {
         let dir = unique_temp_dir("sync-complete-hash");
         let options = options(&dir, &dir.join("remote"), "device");
@@ -575,17 +575,17 @@ fn vnc_and_unknown_entity_only_changes_are_uploaded_even_with_legacy_baselines()
                 check_snapshot_with_remote_state(&store, &options, &remote, state, true)
                     .unwrap()
                     .decision,
-                CloudRemoteCheckDecision::LocalChanged
+                CloudRemoteCheckDecision::UpToDate
             );
         }
         let pushed =
             push_snapshot_with_remote(&store, &options, &remote, &old_state, false).unwrap();
-        assert_eq!(pushed.outcome, CloudSyncOutcome::Uploaded);
+        assert_eq!(pushed.outcome, CloudSyncOutcome::UpToDate);
         assert_eq!(
             first.state.last_synced_payload_hash,
             pushed.state.last_synced_payload_hash
         );
-        assert_ne!(
+        assert_eq!(
             first.state.last_synced_content_hash,
             pushed.state.last_synced_content_hash
         );

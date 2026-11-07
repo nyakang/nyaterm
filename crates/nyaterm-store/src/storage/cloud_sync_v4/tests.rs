@@ -144,6 +144,381 @@ fn prepared(store: &ConnectionStore) -> PreparedApply {
     prepared_scope(store, SyncScope::default())
 }
 
+#[test]
+fn fixed_snapshot_round_trip_preserves_local_vault_settings_and_unknown_fields() {
+    let source_dir = TestTempDir::new("nyaterm-fixed-snapshot-source");
+    let target_dir = TestTempDir::new("nyaterm-fixed-snapshot-target");
+    let source = ConnectionStore::open(source_dir.path()).unwrap();
+    let target = ConnectionStore::open(target_dir.path()).unwrap();
+    source
+        .save_master_password(Some("source-password"))
+        .unwrap();
+    target
+        .save_master_password(Some("target-password"))
+        .unwrap();
+    let mut remote = connection();
+    remote.name = "Remote name".into();
+    source.save_connection(&remote).unwrap();
+    source.save_password(serde_json::from_value(json!({"id":"remote-account","name":"Remote account","password":"fixture-remote-secret"})).unwrap()).unwrap();
+    let mut local = connection();
+    local.auth = Some(nyaterm_core::ConnectionAuth {
+        mode: "password".into(),
+        password: Some("fixture-local-inline-secret".into()),
+        ..Default::default()
+    });
+    target.save_connection(&local).unwrap();
+    let mut record = target
+        .list_raw_json_values_by_prefix(super::CONNECTIONS_TABLE, "connections/")
+        .unwrap()
+        .remove(0);
+    let txn = target.db.begin_write().unwrap();
+    record["future_local"] = json!({"opaque":"keep"});
+    super::write_json_in_txn(
+        &txn,
+        super::CONNECTIONS_TABLE,
+        "connections/server",
+        &record,
+    )
+    .unwrap();
+    txn.commit().unwrap();
+    let vault_before = target
+        .list_raw_json_values_by_prefix(super::CREDENTIALS_TABLE, "credentials/")
+        .unwrap();
+    let mut settings = target.load_settings_value().unwrap();
+    settings["appearance"]["theme"] = json!("github-dark");
+    settings["appearance"]["font_family"] = json!("Local Font");
+    settings["future_local_settings"] = json!({"opaque":"keep"});
+    settings["keybindings"] = json!({"copy":"ctrl-shift-c"});
+    target.save_settings_value(&settings).unwrap();
+    let before = target.load_settings_value().unwrap();
+    let mut custom = nyaterm_core::themes::builtins()[0].clone();
+    custom.id = "fixed-custom-theme".into();
+    let mut source_settings = source.load_settings_value().unwrap();
+    source_settings["appearance"]["custom_themes"] = json!([custom]);
+    source.save_settings_value(&source_settings).unwrap();
+    let fixed = source
+        .build_fixed_sync_snapshot("source", "version")
+        .unwrap();
+    assert_eq!(fixed.meta.schema_version, 4);
+    let encoded = crate::encode_encrypted_raw_portable_snapshot(&fixed, "shared-password").unwrap();
+    let decoded =
+        crate::decode_encrypted_raw_portable_snapshot(&encoded, "shared-password").unwrap();
+    assert!(target.apply_raw_portable_snapshot(&decoded).is_err());
+    target
+        .apply_fixed_sync_snapshot(&decoded, "shared-password")
+        .unwrap();
+    assert_eq!(
+        target
+            .list_raw_json_values_by_prefix(super::CREDENTIALS_TABLE, "credentials/")
+            .unwrap(),
+        vault_before
+    );
+    assert!(
+        target
+            .load_decrypted_password_by_id("remote-account")
+            .unwrap()
+            .is_none()
+    );
+    let saved = target.get_connection("server").unwrap().unwrap();
+    assert_eq!(saved.name, "Remote name");
+    let raw = target
+        .list_raw_json_values_by_prefix(super::CONNECTIONS_TABLE, "connections/")
+        .unwrap();
+    assert_eq!(raw[0]["future_local"], json!({"opaque":"keep"}));
+    let after = target.load_settings_value().unwrap();
+    for field in [
+        "security",
+        "keybindings",
+        "ai",
+        "cloud_sync",
+        "future_local_settings",
+    ] {
+        assert_eq!(after.get(field), before.get(field));
+    }
+    assert_eq!(after["appearance"]["theme"], before["appearance"]["theme"]);
+    assert_eq!(
+        after["appearance"]["font_family"],
+        before["appearance"]["font_family"]
+    );
+    assert_eq!(
+        after["appearance"]["custom_themes"][0]["id"],
+        "fixed-custom-theme"
+    );
+    assert!(!target.has_v4_replicas().unwrap());
+}
+
+#[test]
+fn both_sync_modes_round_trip_all_core_collections_edits_relationships_and_deletions() {
+    use nyaterm_core::portable_snapshot::{
+        project_fixed_sync_entities, project_fixed_sync_snapshot,
+    };
+    use nyaterm_core::sync_schema::{CORE_KINDS, FIXED_CLOUD_SYNC_SCOPE};
+    for field_mode in [false, true] {
+        let source_dir = TestTempDir::new("nyaterm-fixed-all-source");
+        let target_dir = TestTempDir::new("nyaterm-fixed-all-target");
+        let source = ConnectionStore::open(source_dir.path()).unwrap();
+        let target = ConnectionStore::open(target_dir.path()).unwrap();
+        enable(&source);
+        enable(&target);
+        for key in [super::SETTINGS_PROXY_GROUPS, super::SETTINGS_TUNNEL_GROUPS] {
+            target
+                .save_settings_doc_value(key, &json!({"groups":[], "future_local":{"keep":true}}))
+                .unwrap();
+        }
+        let mut fixture = nyaterm_core::RawPortableSnapshot::sync("source", "version");
+        fixture.entities.insert("sessions".into(), json!({
+            "connections":[{"id":"server","name":"Server","type":"ssh","host":"server.example","port":22,"username":"root","group_id":"cg","icon":"custom:ci","icon_auto_detect":false}],
+            "groups":[{"id":"cg","name":"Connections"}],
+            "custom_icons":[{"id":"ci","name":"Icon","data_url":"data:image/png;base64,AA=="}]
+        }).to_string());
+        fixture.entities.insert("proxies".into(), json!([{"id":"proxy","name":"Proxy","protocol":"socks5","host":"proxy.example","port":1080,"group_id":"pg"}]).to_string());
+        fixture.entities.insert(
+            "proxy_groups".into(),
+            json!([{"id":"pg","name":"Proxies"}]).to_string(),
+        );
+        fixture.entities.insert("tunnels".into(), json!([{"id":"tunnel","name":"Tunnel","connection_id":"server","listen_port":9000,"target_port":80,"group_id":"tg"}]).to_string());
+        fixture.entities.insert(
+            "tunnel_groups".into(),
+            json!([{"id":"tg","name":"Tunnels"}]).to_string(),
+        );
+        fixture.entities.insert("quick_commands".into(), json!({"commands":[{"id":"command","label":"Command","command":"pwd","category_id":"cc"}],"categories":[{"id":"cc","name":"Commands"}]}).to_string());
+        fixture.entities.insert("notes".into(), json!({"notes":[{"id":"note","title":"Note","markdown":"Text","parent_id":"nf","sort_order":0}],"folders":[{"id":"nf","name":"Notes","sort_order":0}]}).to_string());
+        let mut theme = nyaterm_core::themes::builtins()[0].clone();
+        theme.id = "theme".into();
+        fixture.entities.insert(
+            "settings".into(),
+            json!({"appearance":{"custom_themes":[theme]}}).to_string(),
+        );
+        let fixture = project_fixed_sync_snapshot(&fixture).unwrap();
+        source
+            .apply_fixed_sync_snapshot(&fixture, "password")
+            .unwrap();
+        let mut wire = SyncReplica::new(Uuid::new_v4());
+        let mut baseline = Default::default();
+        for phase in 0..3 {
+            if phase == 1 {
+                let mut edit = source
+                    .build_fixed_sync_snapshot("source", "version")
+                    .unwrap();
+                for raw in edit.entities.values_mut() {
+                    let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
+                    fn rename(value: &mut serde_json::Value) {
+                        match value {
+                            serde_json::Value::Array(items) => items.iter_mut().for_each(rename),
+                            serde_json::Value::Object(fields) => {
+                                if fields.contains_key("id") {
+                                    for key in ["name", "label", "title"] {
+                                        if let Some(value) = fields.get_mut(key) {
+                                            *value = json!("Edited");
+                                        }
+                                    }
+                                }
+                                fields.values_mut().for_each(rename);
+                            }
+                            _ => {}
+                        }
+                    }
+                    rename(&mut value);
+                    *raw = value.to_string();
+                }
+                edit.recalculate_hash().unwrap();
+                source.apply_fixed_sync_snapshot(&edit, "password").unwrap();
+            } else if phase == 2 {
+                let empty_dir = TestTempDir::new("nyaterm-fixed-all-empty");
+                let empty = ConnectionStore::open(empty_dir.path())
+                    .unwrap()
+                    .build_fixed_sync_snapshot("empty", "version")
+                    .unwrap();
+                source
+                    .apply_fixed_sync_snapshot(&empty, "password")
+                    .unwrap();
+            }
+            let snapshot = source
+                .build_fixed_sync_snapshot("source", "version")
+                .unwrap();
+            let projection = project_fixed_sync_entities(&snapshot).unwrap();
+            if field_mode {
+                wire.capture(&baseline, &projection, &FIXED_CLOUD_SYNC_SCOPE)
+                    .unwrap();
+                let remote = wire.fixed_snapshot().unwrap();
+                let mut proposal = prepared(&target);
+                proposal.plan = prepare(
+                    proposal.local.writer,
+                    proposal.local.replica.as_ref(),
+                    &proposal.local.effective,
+                    proposal.plan.expected_local.clone(),
+                    &[remote],
+                    FIXED_CLOUD_SYNC_SCOPE,
+                )
+                .unwrap();
+                target.apply_v4_plan(proposal, "password").unwrap();
+            } else {
+                target
+                    .apply_fixed_sync_snapshot(&snapshot, "password")
+                    .unwrap();
+            }
+            baseline = projection.values.clone();
+            for key in [super::SETTINGS_PROXY_GROUPS, super::SETTINGS_TUNNEL_GROUPS] {
+                assert_eq!(
+                    target.load_settings_doc_value(key, json!({})).unwrap()["future_local"],
+                    json!({"keep":true})
+                );
+            }
+            let actual = project_fixed_sync_entities(
+                &target
+                    .build_fixed_sync_snapshot("target", "version")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                actual.values, projection.values,
+                "mode={field_mode}, phase={phase}"
+            );
+            for kind in CORE_KINDS {
+                let present = actual
+                    .values
+                    .keys()
+                    .filter_map(|key| nyaterm_core::sync_schema::SyncFieldId::from_key(key))
+                    .any(|field| field.resource.kind == *kind && field.field == "$present");
+                assert_eq!(present, phase != 2, "kind={kind}");
+            }
+        }
+    }
+}
+
+#[test]
+fn incomplete_legacy_snapshot_preserves_local_notes_and_themes() {
+    let dir = TestTempDir::new("nyaterm-fixed-incomplete-snapshot");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store
+        .create_note(None, Some("Local note".into()), None)
+        .unwrap();
+    let before = store.load_notes_snapshot().unwrap();
+    let mut settings = store.load_settings_value().unwrap();
+    let mut theme = nyaterm_core::themes::builtins()[0].clone();
+    theme.id = "local-theme".into();
+    settings["appearance"]["custom_themes"] = json!([theme]);
+    store.save_settings_value(&settings).unwrap();
+    let mut incoming = nyaterm_core::RawPortableSnapshot::sync("source", "version");
+    incoming.entities.remove("notes");
+    incoming
+        .entities
+        .insert("settings".into(), json!({}).to_string());
+    incoming.recalculate_hash().unwrap();
+    let incoming = nyaterm_core::portable_snapshot::project_fixed_sync_snapshot(&incoming).unwrap();
+    store
+        .apply_fixed_sync_snapshot(&incoming, "password")
+        .unwrap();
+    assert_eq!(store.load_notes_snapshot().unwrap(), before);
+    assert_eq!(store.load_settings_value().unwrap(), settings);
+}
+
+#[test]
+fn old_scope_settings_round_trip_but_cannot_authorize_a_vault_apply() {
+    let dir = TestTempDir::new("nyaterm-fixed-old-scope");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    enable(&store);
+    let mut settings = store.load_cloud_sync_settings().unwrap();
+    settings.v4_scope = SyncScope {
+        secrets: true,
+        preferences: true,
+        ai: true,
+        keybindings: true,
+        trusted_hosts: true,
+    };
+    store.save_cloud_sync_settings(settings.clone()).unwrap();
+    assert_eq!(
+        store.load_cloud_sync_settings().unwrap().v4_scope,
+        settings.v4_scope
+    );
+    let prepared = prepared_scope(&store, settings.v4_scope);
+    assert!(store.apply_v4_plan(prepared, "password").is_err());
+    let fixed = store
+        .build_fixed_sync_snapshot("device", "version")
+        .unwrap();
+    let projection = nyaterm_core::portable_snapshot::project_fixed_sync_entities(&fixed).unwrap();
+    assert!(projection.values.keys().all(|key| {
+        nyaterm_core::sync_schema::SyncFieldId::from_key(key)
+            .is_some_and(|field| nyaterm_core::sync_schema::fixed_cloud_sync_field(&field))
+    }));
+}
+
+#[test]
+fn fixed_snapshot_keeps_proxy_ciphertext_and_defers_credential_redirection() {
+    let dir = TestTempDir::new("nyaterm-fixed-proxy-auth");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store.save_master_password(Some("password")).unwrap();
+    store
+        .replace_proxies(&[nyaterm_core::ProxyConfig {
+            id: "proxy".into(),
+            name: "Local".into(),
+            host: "proxy.example".into(),
+            password: Some("fixture-local-proxy-secret".into()),
+            ..Default::default()
+        }])
+        .unwrap();
+    let before = store
+        .list_raw_json_values_by_prefix(super::PROXIES_TABLE, super::PROXY_PREFIX)
+        .unwrap()[0]["password"]
+        .clone();
+    for redirect in [false, true] {
+        let mut snapshot = store
+            .build_fixed_sync_snapshot("source", "version")
+            .unwrap();
+        let mut proxies: serde_json::Value =
+            serde_json::from_str(&snapshot.entities["proxies"]).unwrap();
+        proxies[0]["name"] = json!("Remote rename");
+        if redirect {
+            proxies[0]["host"] = json!("other.example");
+        }
+        snapshot
+            .entities
+            .insert("proxies".into(), proxies.to_string());
+        snapshot.recalculate_hash().unwrap();
+        store
+            .apply_fixed_sync_snapshot(&snapshot, "password")
+            .unwrap();
+        let raw = store
+            .list_raw_json_values_by_prefix(super::PROXIES_TABLE, super::PROXY_PREFIX)
+            .unwrap()
+            .remove(0);
+        assert_eq!(raw["password"], before);
+        assert_eq!(raw["name"], "Remote rename");
+        assert_eq!(raw["host"], "proxy.example");
+    }
+}
+
+#[test]
+fn fixed_snapshot_defers_redirecting_a_connection_with_local_authentication() {
+    let dir = TestTempDir::new("nyaterm-fixed-snapshot-redirect");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store.save_master_password(Some("password")).unwrap();
+    let mut saved = connection();
+    saved.auth = Some(nyaterm_core::ConnectionAuth {
+        mode: "password".into(),
+        password: Some("fixture-local-secret".into()),
+        ..Default::default()
+    });
+    store.save_connection(&saved).unwrap();
+    let mut incoming = store
+        .build_fixed_sync_snapshot("source", "version")
+        .unwrap();
+    let mut sessions: serde_json::Value =
+        serde_json::from_str(&incoming.entities["sessions"]).unwrap();
+    sessions["connections"][0]["host"] = json!("other.example");
+    sessions["connections"][0]["name"] = json!("Renamed");
+    incoming
+        .entities
+        .insert("sessions".into(), sessions.to_string());
+    incoming.recalculate_hash().unwrap();
+    store
+        .apply_fixed_sync_snapshot(&incoming, "password")
+        .unwrap();
+    let actual = store.get_connection("server").unwrap().unwrap();
+    assert_eq!(actual.name, "Renamed");
+    assert_eq!(actual.config, saved.config);
+}
+
 fn prepared_scope(store: &ConnectionStore, scope: SyncScope) -> PreparedApply {
     let view = store
         .load_v4_view("destination", "password", &scope)
@@ -328,197 +703,6 @@ fn a_saved_edit_during_password_rotation_prevents_switching_and_keeps_the_old_sp
 }
 
 #[test]
-fn independent_secret_objects_reencrypt_vault_values_and_preserve_existing_ciphertext() {
-    let a = TestTempDir::new("nyaterm-v4-vault-a");
-    let b = TestTempDir::new("nyaterm-v4-vault-b");
-    let sa = ConnectionStore::open(a.path()).unwrap();
-    let sb = ConnectionStore::open(b.path()).unwrap();
-    let scope = SyncScope {
-        secrets: true,
-        ai: true,
-        ..Default::default()
-    };
-    for store in [&sa, &sb] {
-        enable(store);
-        let mut settings = store.load_cloud_sync_settings().unwrap();
-        settings.v4_scope = scope.clone();
-        store.save_cloud_sync_settings(settings).unwrap();
-    }
-    sa.save_master_password(Some("device-a-password")).unwrap();
-    sb.save_master_password(Some("device-b-password")).unwrap();
-    let mut server = connection();
-    server.auth = Some(
-        serde_json::from_value(json!({"mode":"password","password":"fixture-inline"})).unwrap(),
-    );
-    sa.save_connection(&server).unwrap();
-    sa.replace_proxies(&[serde_json::from_value(
-        json!({"id":"proxy","name":"Proxy","password":"fixture-proxy"}),
-    )
-    .unwrap()])
-        .unwrap();
-    let mut ai = sa.load_ai_settings().unwrap();
-    ai.provider_credentials = vec![serde_json::from_value(json!({"id":"provider","name":"Provider","provider_kind":"openai","base_url":"https://example.com/v1/","api_key":"fixture-ai-key","extra_headers":[{"id":"header","name":"X-Token","value":"fixture-header"}]})).unwrap()];
-    ai.models.clear();
-    ai.default_model_id = None;
-    sa.save_ai_settings(ai).unwrap();
-    let mut raw = sa.load_settings_value().unwrap();
-    raw["ai"]["models"] = json!([]);
-    raw["ai"]["provider_profiles"] = json!([]);
-    raw["ai"]["default_model_id"] = serde_json::Value::Null;
-    sa.save_settings_value(&raw).unwrap();
-    sa.save_password(serde_json::from_value(json!({"id":"account","name":"Account","username":"user","password":"fixture-password"})).unwrap()).unwrap();
-    sa.save_ssh_key(serde_json::from_value(json!({"id":"key","name":"Key","key":"fixture-key","cert":"fixture-cert","passphrase":"fixture-passphrase"})).unwrap()).unwrap();
-    sa.save_credential(serde_json::from_value(json!({"id":"credential","name":"Credential","username":"user","password":"fixture-credential"})).unwrap()).unwrap();
-    sa.save_otp_entry(
-        serde_json::from_value(
-            json!({"id":"otp","issuer":"Issuer","username":"user","secret":"JBSWY3DPEHPK3PXP"}),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let before = sa
-        .load_password_by_id("account")
-        .unwrap()
-        .unwrap()
-        .password
-        .unwrap();
-    let prepared_a = prepared_scope(&sa, scope.clone());
-    let replica_a = sa.apply_v4_plan(prepared_a, "password").unwrap();
-    assert_eq!(
-        sa.load_password_by_id("account")
-            .unwrap()
-            .unwrap()
-            .password
-            .unwrap(),
-        before
-    );
-    assert!(
-        !String::from_utf8_lossy(&replica_a.replica.as_ref().unwrap().document)
-            .contains("fixture-password")
-    );
-    let mut prepared_b = prepared_scope(&sb, scope.clone());
-    prepared_b.plan = prepare(
-        prepared_b.local.writer,
-        None,
-        &Default::default(),
-        prepared_b.plan.expected_local.clone(),
-        &[replica_a.replica.unwrap()],
-        scope.clone(),
-    )
-    .unwrap();
-    prepared_b
-        .local
-        .secret_objects
-        .extend(replica_a.secret_objects);
-    let inspection = sb
-        .inspect_v4_application_with_secrets(
-            &prepared_b.plan,
-            &prepared_b.local.secret_objects,
-            "password",
-            &Default::default(),
-        )
-        .unwrap();
-    assert!(
-        inspection.deferred.is_empty(),
-        "deferred fields: {:?}",
-        inspection.deferred
-    );
-    let applied = sb.apply_v4_plan(prepared_b, "password").unwrap();
-    assert!(applied.deferred.is_empty());
-    assert_eq!(
-        sb.load_decrypted_password_by_id("account")
-            .unwrap()
-            .unwrap()
-            .password
-            .unwrap()
-            .expose_secret(),
-        "fixture-password"
-    );
-    assert_eq!(
-        sb.load_decrypted_ssh_key_by_id("key")
-            .unwrap()
-            .unwrap()
-            .key_data
-            .unwrap()
-            .expose_secret(),
-        "fixture-key"
-    );
-    assert_eq!(
-        sb.load_decrypted_credential_by_id("credential")
-            .unwrap()
-            .unwrap()
-            .password
-            .unwrap()
-            .expose_secret(),
-        "fixture-credential"
-    );
-    assert_eq!(
-        sb.load_decrypted_otp_entry_by_id("otp")
-            .unwrap()
-            .unwrap()
-            .secret
-            .unwrap()
-            .expose_secret(),
-        "JBSWY3DPEHPK3PXP"
-    );
-    assert_eq!(
-        sb.get_connection("server")
-            .unwrap()
-            .unwrap()
-            .auth
-            .unwrap()
-            .password
-            .unwrap()
-            .expose_secret(),
-        "fixture-inline"
-    );
-    assert_eq!(
-        sb.list_proxies().unwrap()[0]
-            .password
-            .as_ref()
-            .unwrap()
-            .expose_secret(),
-        "fixture-proxy"
-    );
-    let ai = sb.load_ai_settings().unwrap();
-    assert_eq!(
-        ai.provider_credentials[0]
-            .api_key
-            .as_ref()
-            .unwrap()
-            .expose_secret(),
-        "fixture-ai-key"
-    );
-    assert_eq!(
-        ai.provider_credentials[0].extra_headers[0]
-            .value
-            .expose_secret(),
-        "fixture-header"
-    );
-    assert_ne!(
-        sb.load_password_by_id("account")
-            .unwrap()
-            .unwrap()
-            .password
-            .unwrap(),
-        before
-    );
-    let after = sb.load_v4_view("destination", "password", &scope).unwrap();
-    assert_eq!(after.projection.values, applied.effective);
-    assert!(after.projection.edited.is_empty());
-    let mut settings = sb.load_cloud_sync_settings().unwrap();
-    settings.v4_scope.secrets = false;
-    settings.v4_scope.ai = false;
-    sb.save_cloud_sync_settings(settings).unwrap();
-    sb.apply_v4_plan(prepared(&sb), "password").unwrap();
-    assert!(
-        sb.load_decrypted_password_by_id("account")
-            .unwrap()
-            .is_some()
-    );
-}
-
-#[test]
 fn excluded_inline_password_prevents_remote_parent_deletion_or_secret_redirection() {
     use nyaterm_core::sync_schema::{SyncFieldId, SyncResourceId, SyncValue};
     let dir = TestTempDir::new("nyaterm-v4-excluded-inline-parent");
@@ -632,194 +816,6 @@ fn legacy_secret_projection_is_read_only_and_replaces_master_key_material_with_v
             .decode()
             .unwrap()["api_key"],
         "legacy-plaintext-key"
-    );
-}
-
-#[test]
-fn remote_host_identity_requires_exact_local_confirmation_before_changing_trust() {
-    let a = TestTempDir::new("nyaterm-v4-trust-a");
-    let b = TestTempDir::new("nyaterm-v4-trust-b");
-    let sa = ConnectionStore::open(a.path()).unwrap();
-    let sb = ConnectionStore::open(b.path()).unwrap();
-    let scope = SyncScope {
-        trusted_hosts: true,
-        ..Default::default()
-    };
-    for store in [&sa, &sb] {
-        enable(store);
-        let mut settings = store.load_cloud_sync_settings().unwrap();
-        settings.v4_scope = scope.clone();
-        store.save_cloud_sync_settings(settings).unwrap();
-    }
-    let fingerprint = format!("SHA256:{}", "12".repeat(32));
-    sa.remember_vnc_known_host("example.com", 5900, &fingerprint, None)
-        .unwrap();
-    let line = "example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILM+rvN+ot98qgEN796jTiQfZfG1KaT0PtFDJ/XFSqti";
-    sa.upsert_known_host(line).unwrap();
-    let source = sa
-        .apply_v4_plan(prepared_scope(&sa, scope.clone()), "password")
-        .unwrap();
-    let mut proposal = prepared_scope(&sb, scope.clone());
-    proposal.plan = prepare(
-        proposal.local.writer,
-        None,
-        &Default::default(),
-        proposal.plan.expected_local.clone(),
-        &[source.replica.unwrap()],
-        scope.clone(),
-    )
-    .unwrap();
-    let reviews = nyaterm_sync::trust::reviews(
-        &proposal.plan.expected_local.values,
-        &proposal.plan.effective,
-    );
-    assert_eq!(reviews.len(), 2);
-    let deferred = sb.apply_v4_plan(proposal, "password").unwrap();
-    assert!(!deferred.deferred.is_empty());
-    assert!(
-        sb.load_vnc_known_host("example.com", 5900)
-            .unwrap()
-            .is_none()
-    );
-    assert!(sb.list_known_hosts().unwrap().is_empty());
-    let mut proposal = prepared_scope(&sb, scope.clone());
-    for review in nyaterm_sync::trust::reviews(
-        &proposal.plan.expected_local.values,
-        &proposal.plan.effective,
-    ) {
-        proposal.trust_approvals.insert(review.key, review.token);
-    }
-    let approved = sb.apply_v4_plan(proposal, "password").unwrap();
-    assert!(approved.deferred.is_empty());
-    assert_eq!(
-        sb.load_vnc_known_host("example.com", 5900)
-            .unwrap()
-            .unwrap()
-            .sha256_fingerprint,
-        fingerprint
-    );
-    assert_eq!(sb.list_known_hosts().unwrap().len(), 1);
-    let view = sb.load_v4_view("destination", "password", &scope).unwrap();
-    assert_eq!(view.record.effective, view.projection.values);
-    let mut proposal = prepared_scope(&sb, scope);
-    proposal.trust_approvals =
-        std::collections::BTreeMap::from([(reviews[0].key.clone(), reviews[0].token.clone())]);
-    sb.remember_vnc_known_host(
-        "example.com",
-        5900,
-        &format!("SHA256:{}", "34".repeat(32)),
-        Some(&fingerprint),
-    )
-    .unwrap();
-    assert!(matches!(
-        sb.apply_v4_plan(proposal, "password"),
-        Err(StorageError::CloudSyncLocalChanged)
-    ));
-}
-
-#[test]
-fn ai_configuration_merge_preserves_ciphertext_and_defers_secret_redirects_and_deletions() {
-    use nyaterm_core::sync_schema::{SyncFieldId, SyncResourceId, SyncValue};
-    let dir = TestTempDir::new("nyaterm-v4-ai-secret-isolation");
-    let store = ConnectionStore::open(dir.path()).unwrap();
-    enable(&store);
-    store.save_master_password(Some("local-password")).unwrap();
-    let mut ai = store.load_ai_settings().unwrap();
-    ai.provider_credentials = vec![serde_json::from_value(json!({"id":"p","name":"Provider","provider_kind":"openai","base_url":"https://original.example/v1/","api_key":"fixture-private-key","extra_headers":[{"id":"h","name":"X-Token","value":"fixture-private-header"}]})).unwrap()];
-    ai.models.clear();
-    ai.default_model_id = None;
-    store.save_ai_settings(ai).unwrap();
-    let mut settings = store.load_cloud_sync_settings().unwrap();
-    settings.v4_scope.ai = true;
-    store.save_cloud_sync_settings(settings.clone()).unwrap();
-    let scope = settings.v4_scope.clone();
-    let before = store.load_settings_value().unwrap()["ai"]["provider_credentials"][0].clone();
-    assert_ne!(before["api_key"], json!("fixture-private-key"));
-    let mut proposal = prepared_scope(&store, scope.clone());
-    let mut next = proposal.plan.expected_local.clone();
-    let provider = SyncResourceId::new("ai_provider", "p");
-    next.values.insert(
-        SyncFieldId::new(provider.clone(), "name").key(),
-        SyncValue::new(&json!("Renamed")),
-    );
-    let transport = SyncFieldId::new(provider.clone(), "transport");
-    let mut transport_value = next.values[&transport.key()].decode().unwrap();
-    transport_value["base_url"] = json!("https://other.example/v1/");
-    next.values
-        .insert(transport.key(), SyncValue::new(&transport_value));
-    replace_projection(&mut proposal, next);
-    let applied = store.apply_v4_plan(proposal, "password").unwrap();
-    assert_eq!(applied.deferred, vec![transport]);
-    let after = store.load_settings_value().unwrap()["ai"]["provider_credentials"][0].clone();
-    assert_eq!(after["name"], "Renamed");
-    assert_eq!(after["base_url"], before["base_url"]);
-    assert_eq!(after["api_key"], before["api_key"]);
-    assert_eq!(after["extra_headers"], before["extra_headers"]);
-    let mut deletion = prepared_scope(&store, scope.clone());
-    let mut next = deletion.plan.expected_local.clone();
-    next.values
-        .retain(|key, _| SyncFieldId::from_key(key).unwrap().resource != provider);
-    replace_projection(&mut deletion, next);
-    assert!(
-        !store
-            .apply_v4_plan(deletion, "password")
-            .unwrap()
-            .deferred
-            .is_empty()
-    );
-    assert_eq!(
-        store.load_settings_value().unwrap()["ai"]["provider_credentials"][0]["api_key"],
-        before["api_key"]
-    );
-    settings.v4_scope.ai = false;
-    store.save_cloud_sync_settings(settings).unwrap();
-    store.apply_v4_plan(prepared(&store), "password").unwrap();
-    assert_eq!(
-        store.load_settings_value().unwrap()["ai"]["provider_credentials"][0]["api_key"],
-        before["api_key"]
-    );
-}
-
-#[test]
-fn shortcut_scope_round_trip_and_reenable_keep_both_unconfirmed_values() {
-    let dir = TestTempDir::new("nyaterm-v4-shortcut-scope");
-    let store = ConnectionStore::open(dir.path()).unwrap();
-    enable(&store);
-    let mut settings = store.load_cloud_sync_settings().unwrap();
-    settings.v4_scope.keybindings = true;
-    store.save_cloud_sync_settings(settings.clone()).unwrap();
-    let scope = settings.v4_scope.clone();
-    store
-        .save_keybindings(&std::collections::HashMap::from([(
-            "terminal.copy".into(),
-            "ctrl+shift+c".into(),
-        )]))
-        .unwrap();
-    store
-        .apply_v4_plan(prepared_scope(&store, scope.clone()), "password")
-        .unwrap();
-    settings.v4_scope.keybindings = false;
-    store.save_cloud_sync_settings(settings.clone()).unwrap();
-    let disabled = store.apply_v4_plan(prepared(&store), "password").unwrap();
-    assert!(disabled.effective.is_empty());
-    assert_eq!(
-        store.load_app_settings_summary().unwrap().keybindings["terminal.copy"],
-        "ctrl+shift+c"
-    );
-    store
-        .save_keybindings(&std::collections::HashMap::from([(
-            "terminal.copy".into(),
-            "ctrl+c".into(),
-        )]))
-        .unwrap();
-    settings.v4_scope.keybindings = true;
-    store.save_cloud_sync_settings(settings).unwrap();
-    let reenabled = prepared_scope(&store, scope);
-    assert_eq!(reenabled.plan.conflicts.len(), 1);
-    store.apply_v4_plan(reenabled, "password").unwrap();
-    assert_eq!(
-        store.load_app_settings_summary().unwrap().keybindings["terminal.copy"],
-        "ctrl+c"
     );
 }
 
@@ -1550,61 +1546,4 @@ fn migration_safety_backup_is_read_only_and_restores_with_the_existing_nya_reade
         .unwrap();
     assert!(restored.record.replica.is_none());
     assert!(restored.record.pending.is_none());
-}
-
-#[test]
-fn appearance_apply_preserves_the_live_security_verifier_and_device_settings() {
-    let dir = TestTempDir::new("nyaterm-v4-settings-security");
-    let store = ConnectionStore::open(dir.path()).unwrap();
-    enable(&store);
-    store.save_master_password(Some("password")).unwrap();
-    let mut raw = store.load_settings_value().unwrap();
-    let verifier = raw["security"]["master_password"].clone();
-    raw["security"]["future_security"] = json!(42);
-    raw["appearance"] = json!({"theme":"github-dark","font_size":14,"window_material":"mica"});
-    store.save_settings_value(&raw).unwrap();
-    let mut settings = store.load_cloud_sync_settings().unwrap();
-    settings.v4_scope.preferences = true;
-    store.save_cloud_sync_settings(settings).unwrap();
-    let scope = SyncScope {
-        preferences: true,
-        ..Default::default()
-    };
-    let view = store.load_v4_view("settings", "password", &scope).unwrap();
-    let mut remote_projection = nyaterm_core::sync_schema::SyncProjection::default();
-    remote_projection.complete.insert("preference".into());
-    remote_projection
-        .record("preference", "appearance/font_size", &json!({"value":23}))
-        .unwrap();
-    let mut remote = SyncReplica::new(Uuid::new_v4());
-    remote
-        .capture(&Default::default(), &remote_projection, &scope)
-        .unwrap();
-    let plan = prepare(
-        view.record.writer,
-        None,
-        &Default::default(),
-        view.projection,
-        &[remote.snapshot()],
-        scope,
-    )
-    .unwrap();
-    store
-        .apply_v4_plan(
-            PreparedApply {
-                destination: "settings".into(),
-                expected_record: view.record_hash,
-                generation: view.generation,
-                local: view.record,
-                plan,
-                trust_approvals: Default::default(),
-            },
-            "password",
-        )
-        .unwrap();
-    let after = store.load_settings_value().unwrap();
-    assert_eq!(after["security"]["master_password"], verifier);
-    assert!(store.verify_master_password("password").unwrap());
-    assert_eq!(after["security"]["future_security"], 42);
-    assert_eq!(after["appearance"]["window_material"], "mica");
 }

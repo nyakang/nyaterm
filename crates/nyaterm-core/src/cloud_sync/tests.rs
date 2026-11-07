@@ -191,6 +191,10 @@ impl ConnectionStore {
                 .entities
                 .clone(),
         );
+        if snapshot.meta.snapshot_kind == PortableSnapshotKind::Sync {
+            snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(&snapshot)
+                .map_err(std::io::Error::other)?;
+        }
         Ok(snapshot)
     }
 
@@ -2919,7 +2923,10 @@ fn capacity_cleanup_protects_head_target_foreign_and_corrupted_snapshots() {
     };
     let mut snapshots = Vec::new();
     for (age, revision) in ["old", "head", "target", "recent"].into_iter().enumerate() {
-        let mut snapshot = store.build_sync_snapshot(&options).unwrap();
+        let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(
+            &store.build_sync_snapshot(&options).unwrap(),
+        )
+        .unwrap();
         snapshot.meta.revision_id = revision.into();
         snapshot.meta.created_at_ms = age as u64;
         snapshot.recalculate_hash().unwrap();
@@ -2992,7 +2999,10 @@ fn capacity_cleanup_rechecks_changed_or_unreadable_head_before_deleting() {
         };
         let mut snapshots = Vec::new();
         for (age, revision) in ["old", "expected", "spare"].into_iter().enumerate() {
-            let mut snapshot = store.build_sync_snapshot(&options).unwrap();
+            let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(
+                &store.build_sync_snapshot(&options).unwrap(),
+            )
+            .unwrap();
             snapshot.meta.revision_id = revision.into();
             snapshot.meta.created_at_ms = age as u64;
             snapshot.recalculate_hash().unwrap();
@@ -3056,7 +3066,10 @@ fn capacity_cleanup_stops_on_delete_failure_without_removing_other_files() {
         ..Default::default()
     };
     for revision in ["old-a", "old-b"] {
-        let mut snapshot = store.build_sync_snapshot(&options).unwrap();
+        let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(
+            &store.build_sync_snapshot(&options).unwrap(),
+        )
+        .unwrap();
         snapshot.meta.revision_id = revision.into();
         snapshot.recalculate_hash().unwrap();
         remote
@@ -3068,4 +3081,40 @@ fn capacity_cleanup_stops_on_delete_failure_without_removing_other_files() {
     }
     assert!(super::gc::reserve_snapshot_capacity(&store, &options, &remote, None, "new").is_err());
     assert_eq!(remote.files.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn cleanup_and_capacity_preserve_legacy_schema_three_snapshots() {
+    let dir = unique_temp_dir("retained-legacy-snapshots");
+    let options = options(&dir, &dir, "device");
+    let store = OptionsTestLocalStore(&options);
+    let remote = MemoryRemote {
+        capacity_limit: Some(8),
+        ..Default::default()
+    };
+    for index in 0..8 {
+        let mut snapshot = RawPortableSnapshot::sync("legacy-device", "supported-version");
+        assert_eq!(snapshot.meta.schema_version, 3);
+        snapshot.meta.revision_id = format!("legacy-{index}");
+        snapshot.meta.created_at_ms = index;
+        snapshot.recalculate_hash().unwrap();
+        remote
+            .write(
+                &remote_path(
+                    "nyaterm",
+                    &super::legacy_sync_snapshot_file(&snapshot.meta.revision_id),
+                ),
+                &store.encode_sync_snapshot(&snapshot, "secret").unwrap(),
+            )
+            .unwrap();
+    }
+    let original = remote.files.lock().unwrap().clone();
+    super::gc::cleanup_sync_snapshots_with_remote(&store, &options, &remote, None).unwrap();
+    assert_eq!(*remote.files.lock().unwrap(), original);
+    assert!(matches!(
+        super::gc::reserve_snapshot_capacity(&store, &options, &remote, None, "new"),
+        Err(CloudSyncError::GistCapacity)
+    ));
+    assert_eq!(*remote.files.lock().unwrap(), original);
+    std::fs::remove_dir_all(dir).ok();
 }

@@ -223,6 +223,284 @@ fn webdav_gist_webdav_round_trip_restores_manual_and_automatic_v4_without_old_v3
 }
 
 #[test]
+fn old_optional_switches_cannot_upload_or_apply_extra_data() {
+    let a = TestConfigDir::new("nyaterm-fixed-provider-a");
+    let b = TestConfigDir::new("nyaterm-fixed-provider-b");
+    let dir = TestConfigDir::new("nyaterm-fixed-provider-remote");
+    let (sa, mut settings, oa) = setup(&a, &dir);
+    let (sb, _, ob) = setup(&b, &dir);
+    settings.v4_scope = nyaterm_core::sync_schema::SyncScope {
+        secrets: true,
+        preferences: true,
+        ai: true,
+        keybindings: true,
+        trusted_hosts: true,
+    };
+    for store in [&sa, &sb] {
+        let saved = settings.clone();
+        store
+            .request_fn(StoreDomain::CloudSync, move |store| {
+                store.save_master_password(Some("password"))?;
+                store.save_cloud_sync_settings(saved)
+            })
+            .unwrap();
+    }
+    sa.request_fn(StoreDomain::CloudSync, |store| {
+        store.save_password(serde_json::from_value(json!({"id":"source-account","name":"Source account","password":"fixture-excluded-password"}))?)?;
+        let mut ai = store.load_ai_settings()?;
+        ai.provider_credentials.push(serde_json::from_value(json!({"id":"source-ai","name":"Source AI","provider_kind":"openai","base_url":"https://source.test/v1/","api_key":"fixture-excluded-ai-key"}))?);
+        store.save_ai_settings(ai)?;
+        store.remember_vnc_known_host("source.test", 5900, &format!("SHA256:{}", "ab".repeat(32)), None)?;
+        Ok(())
+    }).unwrap();
+    save(&sa, "server", "Portable connection");
+    let control = CloudSyncOperationControl::default();
+    let outgoing = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, outgoing, &control).unwrap();
+    let remote = LocalDirectoryRemote::new(dir.path());
+    let entries = remote
+        .list_sync_files("space/sync/v5/registry")
+        .unwrap()
+        .into_iter()
+        .flat_map(|registration| {
+            let writer = registration
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .strip_suffix(".bin")
+                .unwrap();
+            remote
+                .list_sync_files(&format!("space/sync/v5/writers/{writer}"))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(!entries.is_empty());
+    for entry in entries {
+        let relative = entry.strip_prefix("space/").unwrap();
+        let id = nyaterm_sync::protocol::PublicationId::parse(relative).unwrap();
+        let bytes = remote.read_if_exists(&entry).unwrap().unwrap();
+        let plaintext = nyaterm_core::sync_schema::encryption::open(
+            "password",
+            "publication",
+            &format!("{}/{}", id.writer, id.sequence),
+            &bytes,
+        )
+        .unwrap();
+        let publication: nyaterm_sync::protocol::PublishedReplica =
+            serde_json::from_slice(&plaintext).unwrap();
+        publication.validate_fixed().unwrap();
+        for marker in [
+            "fixture-excluded-password",
+            "fixture-excluded-ai-key",
+            "Source AI",
+        ] {
+            assert!(!String::from_utf8_lossy(&plaintext).contains(marker));
+            assert!(
+                publication.replica.values.values().all(|value| !value
+                    .decode()
+                    .unwrap()
+                    .to_string()
+                    .contains(marker))
+            );
+        }
+    }
+    let incoming = preview(&sb, &settings, &ob, &control).unwrap();
+    apply_and_publish(&sb, &settings, &ob, incoming, &control).unwrap();
+    sb.request_fn(StoreDomain::CloudSync, |store| {
+        assert_eq!(store.list_connections()?[0].name, "Portable connection");
+        assert!(
+            store
+                .load_decrypted_password_by_id("source-account")?
+                .is_none()
+        );
+        assert!(
+            !store
+                .load_ai_settings()?
+                .provider_credentials
+                .iter()
+                .any(|provider| provider.id == "source-ai")
+        );
+        assert!(store.load_vnc_known_host("source.test", 5900)?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn v4_history_migrates_core_conflicts_without_forwarding_extra_values_or_pending_bytes() {
+    use nyaterm_core::sync_schema::{SyncProjection, SyncScope, SyncValues};
+    use nyaterm_sync::engine::SyncReplica;
+    use nyaterm_sync::protocol::{PendingPublication, PublishedReplica};
+    let dir = TestConfigDir::new("nyaterm-fixed-legacy-local");
+    let remote_dir = TestConfigDir::new("nyaterm-fixed-legacy-remote");
+    let (store, settings, options) = setup(&dir, &remote_dir);
+    let scope = SyncScope {
+        secrets: true,
+        preferences: true,
+        ..Default::default()
+    };
+    let mut projection = SyncProjection::default();
+    projection
+        .complete
+        .extend(["connection".into(), "password".into(), "preference".into()]);
+    projection.record("connection", "server", &json!({"name":"Legacy connection","endpoint":{"type":"ssh","host":"server.test","port":22,"username":"user"}})).unwrap();
+    projection
+        .record(
+            "password",
+            "legacy-account",
+            &json!({"value":"fixture-legacy-password"}),
+        )
+        .unwrap();
+    projection
+        .record(
+            "preference",
+            "appearance/font_family",
+            &json!({"value":"fixture-legacy-font"}),
+        )
+        .unwrap();
+    let actor = Uuid::new_v4();
+    let mut legacy = SyncReplica::new(actor);
+    legacy
+        .capture(&SyncValues::new(), &projection, &scope)
+        .unwrap();
+    let snapshot = legacy.snapshot();
+    let publication = PublishedReplica {
+        schema: 4,
+        writer: actor,
+        sequence: 1,
+        replica: snapshot.clone(),
+        secret_objects: Default::default(),
+    };
+    let bytes = nyaterm_core::sync_schema::encryption::seal(
+        "password",
+        "publication",
+        &format!("{actor}/1"),
+        &serde_json::to_vec(&publication).unwrap(),
+    )
+    .unwrap();
+    let id = PendingPublication::new(
+        actor,
+        1,
+        bytes.clone(),
+        nyaterm_sync::engine::digest(&snapshot.document),
+    )
+    .unwrap()
+    .id;
+    let remote = LocalDirectoryRemote::new(remote_dir.path());
+    remote.create_dir("space/sync/v4/registry").unwrap();
+    remote
+        .create_dir(&format!("space/sync/v4/writers/{actor}"))
+        .unwrap();
+    let object = format!("space/sync/v4/writers/{actor}/1-{}.bin", id.hash);
+    remote.write_sync_file(&object, &bytes).unwrap();
+    remote
+        .write_sync_file(
+            &format!("space/sync/v4/registry/{actor}.bin"),
+            actor.as_bytes(),
+        )
+        .unwrap();
+    // A retained local baseline represents records that were actually applied
+    // on this device; an absent record would correctly create a local deletion.
+    store.request_fn(StoreDomain::CloudSync, |store| {
+        let connection: SavedConnection = serde_json::from_value(json!({
+            "id":"server", "name":"Legacy connection", "type":"ssh", "host":"server.test", "port":22, "username":"user"
+        }))?;
+        store.save_connection(&connection)
+    }).unwrap();
+    let archived_destination = super::legacy_destination(&settings, &options);
+    let archived = nyaterm_store::sync_v4::LocalReplica {
+        replica: Some(snapshot),
+        effective: projection.values,
+        scope,
+        pending: Some(
+            PendingPublication::new(
+                actor,
+                2,
+                b"retained-old-pending-bytes".to_vec(),
+                "retained-document".into(),
+            )
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    let old_destination = archived_destination.clone();
+    store
+        .request_fn(StoreDomain::CloudSync, move |store| {
+            store.persist_v4_record(&old_destination, "password", None, &archived)
+        })
+        .unwrap();
+    let control = CloudSyncOperationControl::default();
+    let prepared = preview_manual(&store, &settings, &options, &control).unwrap();
+    assert!(prepared.migration);
+    assert!(prepared.apply.local.pending.is_none());
+    apply_and_publish(&store, &settings, &options, prepared, &control).unwrap();
+    assert_eq!(remote.read_if_exists(&object).unwrap().unwrap(), bytes);
+    assert_eq!(
+        remote
+            .list_sync_files("space/sync/v5/registry")
+            .unwrap()
+            .len(),
+        1
+    );
+    for entry in remote.list_sync_files("space/sync/v5/registry").unwrap() {
+        let writer = entry
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .strip_suffix(".bin")
+            .unwrap();
+        for object in remote
+            .list_sync_files(&format!("space/sync/v5/writers/{writer}"))
+            .unwrap()
+        {
+            let id = nyaterm_sync::protocol::PublicationId::parse(
+                object.strip_prefix("space/").unwrap(),
+            )
+            .unwrap();
+            let bytes = remote.read_if_exists(&object).unwrap().unwrap();
+            let plaintext = nyaterm_core::sync_schema::encryption::open(
+                "password",
+                "publication",
+                &format!("{}/{}", id.writer, id.sequence),
+                &bytes,
+            )
+            .unwrap();
+            let publication: nyaterm_sync::protocol::PublishedReplica =
+                serde_json::from_slice(&plaintext).unwrap();
+            publication.validate_fixed().unwrap();
+            for marker in ["fixture-legacy-password", "fixture-legacy-font"] {
+                assert!(
+                    publication.replica.values.values().all(|value| !value
+                        .decode()
+                        .unwrap()
+                        .to_string()
+                        .contains(marker))
+                );
+            }
+        }
+    }
+    store
+        .request_fn(StoreDomain::CloudSync, move |store| {
+            let archived = store
+                .load_v4_replica(&archived_destination, "password")?
+                .unwrap()
+                .0;
+            assert_eq!(
+                archived.pending.unwrap().bytes,
+                b"retained-old-pending-bytes"
+            );
+            assert!(
+                store
+                    .load_decrypted_password_by_id("legacy-account")?
+                    .is_none()
+            );
+            assert_eq!(store.list_connections()?[0].name, "Legacy connection");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn opendal_services_migrate_native_v3_and_preserve_v4_multi_device_conflicts_and_cancellation() {
     use crate::http::cloud_sync::{
         CloudStorageFixture, NativeS3Remote, NativeWebdavRemote, OpenDalRemote,
@@ -335,13 +613,13 @@ fn opendal_services_migrate_native_v3_and_preserve_v4_multi_device_conflicts_and
         .unwrap();
         assert!(
             !native
-                .list_sync_files("space/sync/v4/registry")
+                .list_sync_files("space/sync/v5/registry")
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            native.list_sync_files("space/sync/v4/registry").unwrap(),
-            adapter.list_sync_files("space/sync/v4/registry").unwrap()
+            native.list_sync_files("space/sync/v5/registry").unwrap(),
+            adapter.list_sync_files("space/sync/v5/registry").unwrap()
         );
     }
 }
@@ -379,6 +657,7 @@ fn rotated_password_publishes_a_new_space_preserves_credentials_and_leaves_old_o
         .unwrap();
     let mut target_options = oa.clone();
     target_options.remote_root = "space/rotation-fixture".into();
+    target_options.master_password = "new-password".into();
     let mut target_settings = settings.clone();
     target_settings.remote_root = target_options.remote_root.clone();
     let target = destination(&target_settings, &target_options);
@@ -392,6 +671,26 @@ fn rotated_password_publishes_a_new_space_preserves_credentials_and_leaves_old_o
             )
         })
         .unwrap();
+    let plaintext = nyaterm_core::sync_schema::encryption::open(
+        "new-password",
+        "publication",
+        &format!(
+            "{}/{}",
+            staged.pending.id.writer, staged.pending.id.sequence
+        ),
+        &staged.pending.bytes,
+    )
+    .unwrap();
+    let publication: nyaterm_sync::protocol::PublishedReplica =
+        serde_json::from_slice(&plaintext).unwrap();
+    publication.validate_fixed().unwrap();
+    assert!(publication.replica.values.values().all(|value| {
+        !value
+            .decode()
+            .unwrap()
+            .to_string()
+            .contains("synthetic-rotation-secret")
+    }));
     let failing = LostResponse {
         remote: LocalDirectoryRemote::new(dir.path()),
         fail: Cell::new(true),
@@ -458,202 +757,10 @@ fn rotated_password_publishes_a_new_space_preserves_credentials_and_leaves_old_o
     );
     sb.request_fn(StoreDomain::CloudSync, |store| {
         assert_eq!(store.list_connections()?[0].name, "Saved server");
-        assert_eq!(
-            store
-                .load_decrypted_password_by_id("account")?
-                .unwrap()
-                .password
-                .unwrap()
-                .expose_secret(),
-            "synthetic-rotation-secret"
-        );
+        assert!(store.load_decrypted_password_by_id("account")?.is_none());
         Ok(())
     })
     .unwrap();
-}
-
-#[test]
-fn received_trust_waits_for_local_preview_confirmation_while_other_fields_apply() {
-    let a = TestConfigDir::new("nyaterm-v4-trust-provider-a");
-    let b = TestConfigDir::new("nyaterm-v4-trust-provider-b");
-    let dir = TestConfigDir::new("nyaterm-v4-trust-provider-remote");
-    let (sa, mut settings, oa) = setup(&a, &dir);
-    let (sb, _, ob) = setup(&b, &dir);
-    settings.v4_scope.trusted_hosts = true;
-    for store in [&sa, &sb] {
-        let saved = settings.clone();
-        store
-            .request_fn(StoreDomain::CloudSync, move |store| {
-                store.save_cloud_sync_settings(saved)
-            })
-            .unwrap();
-    }
-    sa.request_fn(StoreDomain::CloudSync, |store| {
-        store.remember_vnc_known_host(
-            "example.com",
-            5900,
-            &format!("SHA256:{}", "ab".repeat(32)),
-            None,
-        )
-    })
-    .unwrap();
-    save(&sa, "server", "Portable config");
-    let control = CloudSyncOperationControl::default();
-    let initial = preview(&sa, &settings, &oa, &control).unwrap();
-    apply_and_publish(&sa, &settings, &oa, initial, &control).unwrap();
-    let control = CloudSyncOperationControl::default();
-    let incoming = preview(&sb, &settings, &ob, &control).unwrap();
-    assert_eq!(incoming.summary().trust.len(), 1);
-    let applied = apply_and_publish(&sb, &settings, &ob, incoming, &control).unwrap();
-    assert!(applied.deferred > 0);
-    sb.request_fn(StoreDomain::CloudSync, |store| {
-        assert!(store.load_vnc_known_host("example.com", 5900)?.is_none());
-        assert_eq!(store.list_connections()?[0].name, "Portable config");
-        Ok(())
-    })
-    .unwrap();
-    let control = CloudSyncOperationControl::default();
-    let mut pending = preview(&sb, &settings, &ob, &control).unwrap();
-    let review = pending.summary().trust[0].clone();
-    pending
-        .confirm_trust(&sb, "password", &review.key, &review.token)
-        .unwrap();
-    assert!(pending.summary().trust.is_empty());
-    assert!(
-        apply_and_publish(&sb, &settings, &ob, pending, &control)
-            .unwrap()
-            .verified
-    );
-    assert!(
-        sb.request_fn(StoreDomain::CloudSync, |store| store
-            .load_vnc_known_host("example.com", 5900))
-            .unwrap()
-            .is_some()
-    );
-}
-
-#[test]
-fn local_provider_transfers_encrypted_secret_values_and_scope_off_preserves_the_vault() {
-    let a = TestConfigDir::new("nyaterm-v4-secret-provider-a");
-    let b = TestConfigDir::new("nyaterm-v4-secret-provider-b");
-    let remote = TestConfigDir::new("nyaterm-v4-secret-provider-remote");
-    let (sa, mut settings, oa) = setup(&a, &remote);
-    let (sb, _, ob) = setup(&b, &remote);
-    settings.v4_scope.secrets = true;
-    for store in [&sa, &sb] {
-        let settings = settings.clone();
-        store
-            .request_fn(StoreDomain::CloudSync, move |store| {
-                store.save_cloud_sync_settings(settings)
-            })
-            .unwrap();
-    }
-    sa.request_fn(StoreDomain::CloudSync, |store| {
-        store.save_master_password(Some("password"))?;
-        store.save_password(serde_json::from_value(json!({"id":"account","name":"Account","username":"user","password":"synthetic-provider-secret"})).unwrap())
-    }).unwrap();
-    sb.request_fn(StoreDomain::CloudSync, |store| {
-        store.save_master_password(Some("different-device-password"))
-    })
-    .unwrap();
-    let control = CloudSyncOperationControl::default();
-    let pa = preview(&sa, &settings, &oa, &control).unwrap();
-    assert!(
-        apply_and_publish(&sa, &settings, &oa, pa, &control)
-            .unwrap()
-            .verified
-    );
-    let control = CloudSyncOperationControl::default();
-    let pb = preview(&sb, &settings, &ob, &control).unwrap();
-    assert!(pb.summary().deferred.is_empty());
-    assert!(
-        apply_and_publish(&sb, &settings, &ob, pb, &control)
-            .unwrap()
-            .verified
-    );
-    sb.request_fn(StoreDomain::CloudSync, |store| {
-        assert_eq!(
-            store
-                .load_decrypted_password_by_id("account")?
-                .unwrap()
-                .password
-                .unwrap()
-                .expose_secret(),
-            "synthetic-provider-secret"
-        );
-        Ok(())
-    })
-    .unwrap();
-    settings.v4_scope.secrets = false;
-    let saved = settings.clone();
-    sb.request_fn(StoreDomain::CloudSync, move |store| {
-        store.save_cloud_sync_settings(saved)
-    })
-    .unwrap();
-    let control = CloudSyncOperationControl::default();
-    let pb = preview(&sb, &settings, &ob, &control).unwrap();
-    assert!(
-        apply_and_publish(&sb, &settings, &ob, pb, &control)
-            .unwrap()
-            .verified
-    );
-    sb.request_fn(StoreDomain::CloudSync, |store| {
-        assert!(store.load_decrypted_password_by_id("account")?.is_some());
-        Ok(())
-    })
-    .unwrap();
-}
-
-#[test]
-fn optional_ai_configuration_reaches_a_second_device_without_secrets_or_permissions() {
-    let a = TestConfigDir::new("nyaterm-v4-ai-a");
-    let b = TestConfigDir::new("nyaterm-v4-ai-b");
-    let remote = TestConfigDir::new("nyaterm-v4-ai-remote");
-    let (sa, mut settings, oa) = setup(&a, &remote);
-    let (sb, _, ob) = setup(&b, &remote);
-    settings.v4_scope.ai = true;
-    for store in [&sa, &sb] {
-        let settings = settings.clone();
-        store
-            .request_fn(StoreDomain::CloudSync, move |store| {
-                store.save_cloud_sync_settings(settings)
-            })
-            .unwrap();
-    }
-    sa.request_fn(StoreDomain::CloudSync, |store| {
-        let mut ai = store.load_ai_settings()?;
-        ai.provider_credentials.push(serde_json::from_value(json!({"id":"custom","name":"Custom","provider_kind":"openai","base_url":"https://example.com/v1/","api_key":"fixture-key"}))?);
-        ai.models.push(serde_json::from_value(json!({"id":"custom-model","name":"a-model","credential_id":"custom","source":"manual"}))?);
-        ai.default_model_id = Some("custom-model".into());
-        ai.agent_command_execution_mode = nyaterm_core::ai::AgentCommandExecutionMode::Auto;
-        store.save_ai_settings(ai)
-    }).unwrap();
-    let control = CloudSyncOperationControl::default();
-    let initial = preview(&sa, &settings, &oa, &control).unwrap();
-    apply_and_publish(&sa, &settings, &oa, initial, &control).unwrap();
-    let joined = preview(&sb, &settings, &ob, &control).unwrap();
-    assert!(joined.summary().deferred.is_empty());
-    assert!(joined.apply.plan.conflicts.is_empty());
-    let report = apply_and_publish(&sb, &settings, &ob, joined, &control).unwrap();
-    assert!(report.verified);
-    let ai = sb
-        .request_fn(StoreDomain::CloudSync, |store| store.load_ai_settings())
-        .unwrap();
-    let provider = ai
-        .provider_credentials
-        .iter()
-        .find(|provider| provider.id == "custom")
-        .unwrap();
-    assert!(provider.api_key.is_none());
-    assert_eq!(
-        provider.base_url.as_deref(),
-        Some("https://example.com/v1/")
-    );
-    assert_eq!(ai.default_model_id.as_deref(), Some("custom-model"));
-    assert_eq!(
-        ai.agent_command_execution_mode,
-        nyaterm_core::ai::AgentCommandExecutionMode::ConfirmEach
-    );
 }
 
 #[test]
@@ -683,7 +790,7 @@ fn persisted_local_provider_scale_and_unchanged_checks() {
         );
         let initial_ms = start.elapsed().as_millis();
         let publications = || -> usize {
-            std::fs::read_dir(remote.path().join("space/sync/v4/writers"))
+            std::fs::read_dir(remote.path().join("space/sync/v5/writers"))
                 .unwrap()
                 .map(|writer| std::fs::read_dir(writer.unwrap().path()).unwrap().count())
                 .sum()
@@ -952,12 +1059,29 @@ fn response_loss_retries_exact_bytes_and_verifies_before_registering_writer() {
         remote: LocalDirectoryRemote::new(dir.path()),
         fail: Cell::new(true),
     };
-    let pending =
-        PendingPublication::new(Uuid::new_v4(), 1, vec![1, 2, 3], "document".into()).unwrap();
+    let writer = Uuid::new_v4();
+    let mut replica = nyaterm_sync::engine::SyncReplica::new(writer);
+    let snapshot = replica.snapshot();
+    let publication =
+        nyaterm_sync::protocol::PublishedReplica::fixed(writer, 1, &snapshot).unwrap();
+    let bytes = nyaterm_core::sync_schema::encryption::seal(
+        "password",
+        "publication",
+        &format!("{writer}/1"),
+        &serde_json::to_vec(&publication).unwrap(),
+    )
+    .unwrap();
+    let pending = PendingPublication::new(
+        writer,
+        1,
+        bytes,
+        nyaterm_sync::engine::digest(&snapshot.document),
+    )
+    .unwrap();
     assert!(publish_bytes(&remote, &options, &pending).is_err());
     assert!(
         remote
-            .list_files("space/sync/v4/registry")
+            .list_files("space/sync/v5/registry")
             .unwrap()
             .is_empty()
     );
@@ -970,7 +1094,7 @@ fn response_loss_retries_exact_bytes_and_verifies_before_registering_writer() {
         pending.bytes
     );
     assert_eq!(
-        remote.list_files("space/sync/v4/registry").unwrap().len(),
+        remote.list_files("space/sync/v5/registry").unwrap().len(),
         1
     );
 }
@@ -1087,7 +1211,7 @@ fn a_late_publisher_cannot_acknowledge_or_replace_a_newer_applied_replica() {
     assert!(saved.record == latest);
     assert!(
         remote
-            .list_sync_files("space/sync/v4/registry")
+            .list_sync_files("space/sync/v5/registry")
             .unwrap()
             .is_empty()
     );
@@ -1410,7 +1534,7 @@ fn opendal_drives_import_native_v3_and_preserve_multi_device_conflicts_and_pendi
             );
             assert!(
                 !native
-                    .list_files("space/sync/v4/registry")
+                    .list_files("space/sync/v5/registry")
                     .unwrap()
                     .is_empty()
             );

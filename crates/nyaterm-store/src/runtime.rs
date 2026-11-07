@@ -635,11 +635,7 @@ impl nyaterm_core::CloudLocalStore for StoreBlockingClient {
         cloud_store_response(self.request(
             0,
             store_request(StoreDomain::CloudSync, move |store| {
-                store.build_raw_portable_snapshot(
-                    nyaterm_core::PortableSnapshotKind::Sync,
-                    device_id,
-                    app_version,
-                )
+                store.build_fixed_sync_snapshot(device_id, app_version)
             }),
         ))
     }
@@ -688,11 +684,8 @@ impl nyaterm_core::CloudLocalStore for StoreBlockingClient {
         cloud_store_response(self.request(
             0,
             store_mutation(StoreDomain::CloudSync, move |store| {
-                let current = store.build_raw_portable_snapshot(
-                    nyaterm_core::PortableSnapshotKind::Sync,
-                    &options.device_id,
-                    &options.app_version,
-                )?;
+                let current =
+                    store.build_fixed_sync_snapshot(&options.device_id, &options.app_version)?;
                 if current.sync_content_hash()? != expected_content_hash {
                     return Err(StorageError::CloudSyncLocalChanged);
                 }
@@ -701,11 +694,8 @@ impl nyaterm_core::CloudLocalStore for StoreBlockingClient {
                     &snapshot,
                     options.master_password.expose_secret(),
                 )?;
-                let mut applied = store.build_raw_portable_snapshot(
-                    nyaterm_core::PortableSnapshotKind::Sync,
-                    &options.device_id,
-                    &options.app_version,
-                )?;
+                let mut applied =
+                    store.build_fixed_sync_snapshot(&options.device_id, &options.app_version)?;
                 applied.recalculate_hash()?;
                 state.last_synced_content_hash = Some(applied.sync_content_hash()?);
                 state.last_synced_payload_hash = Some(applied.meta.payload_hash);
@@ -1098,9 +1088,7 @@ mod tests {
         let initial_hash = incoming.sync_content_hash().unwrap();
         client
             .request_mutation_fn(StoreDomain::Settings, |store| {
-                let mut settings = store.load_translation_settings()?;
-                settings.target_language = "en".into();
-                store.save_translation_settings(settings)
+                store.create_note(None, Some("Local edit".into()), Some("Text".into()))
             })
             .unwrap();
         let result = client.apply_sync_snapshot_checked(
@@ -1160,7 +1148,7 @@ mod tests {
                 store.save_translation_settings(settings)
             })
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             client
                 .build_sync_snapshot(&options)
                 .unwrap()

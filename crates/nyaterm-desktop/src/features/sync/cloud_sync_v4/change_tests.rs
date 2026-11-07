@@ -113,7 +113,7 @@ impl Fixture {
 
     fn needs_remote(&self) -> bool {
         let view = local::load(&self.store, &self.settings, &self.options).unwrap();
-        local::needs_remote(&view, &self.settings.v4_scope).unwrap()
+        local::needs_remote(&view, &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE).unwrap()
     }
 }
 
@@ -229,7 +229,7 @@ fn v4_change_preflight_preserves_edits_deletions_and_edits_reverted_to_the_basel
 }
 
 #[test]
-fn v4_preflight_detects_business_changes_and_every_enabled_optional_scope() {
+fn fixed_preflight_detects_core_changes_and_ignores_old_optional_switches() {
     type Update = fn(&ConnectionStore) -> Result<(), StorageError>;
     let cases: &[(SyncScope, Update)] = &[
         (SyncScope::default(), |store| {
@@ -332,6 +332,11 @@ fn v4_preflight_detects_business_changes_and_every_enabled_optional_scope() {
             .store
             .request_mutation_fn(StoreDomain::Settings, *update)
             .unwrap();
+        if *scope != SyncScope::default() {
+            assert!(!fixture.needs_remote());
+            fixture.assert_skipped();
+            continue;
+        }
         assert!(fixture.needs_remote());
         assert!(
             preview_on_change(
@@ -372,9 +377,14 @@ fn v4_change_preflight_keeps_initial_scope_publication_and_deferred_work() {
     for update in variants {
         let mut variant = local::load(&fixture.store, &fixture.settings, &fixture.options).unwrap();
         update(&mut variant);
-        assert!(local::needs_remote(&variant, &fixture.settings.v4_scope).unwrap());
+        assert!(
+            local::needs_remote(&variant, &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE)
+                .unwrap()
+        );
     }
-    assert!(!local::needs_remote(&view, &fixture.settings.v4_scope).unwrap());
+    assert!(
+        !local::needs_remote(&view, &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE).unwrap()
+    );
     assert!(
         preview_on_change(
             &fixture.store,

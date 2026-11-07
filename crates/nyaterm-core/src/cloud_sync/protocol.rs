@@ -63,6 +63,14 @@ pub(super) fn upload_sync_snapshot(
     snapshot: &RawPortableSnapshot,
     expected: Option<&RemoteSyncPointer>,
 ) -> Result<Vec<u8>, CloudSyncError> {
+    if snapshot.meta.schema_version != crate::portable_snapshot::FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION
+        || crate::portable_snapshot::project_fixed_sync_snapshot(snapshot)?.entities
+            != snapshot.entities
+    {
+        return Err(CloudSyncError::Remote(
+            "Only fixed-scope snapshots can be published".into(),
+        ));
+    }
     let bytes =
         local_store.encode_sync_snapshot(snapshot, options.master_password.expose_secret())?;
     upload_verified_snapshot(
@@ -330,7 +338,12 @@ pub(super) fn resolve_remote_snapshot(
         }
         Err(error) => return Err(error),
     };
-    if validate_snapshot_against_pointer(pointer, &current).is_ok() {
+    if validate_snapshot_against_pointer(pointer, &current).is_ok()
+        && current.meta.schema_version
+            == crate::portable_snapshot::FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION
+        && crate::portable_snapshot::project_fixed_sync_snapshot(&current)?.entities
+            == current.entities
+    {
         let current_bytes = remote
             .read_if_exists(&remote_path(&options.remote_root, SYNC_CURRENT_FILE))?
             .ok_or(CloudSyncError::SnapshotMissing {
@@ -393,7 +406,7 @@ pub(super) fn recover_current_remote_snapshot(
         });
     };
     let heads = super::heads::read(local_store, remote, &options.remote_root)?;
-    let mut snapshot = snapshot;
+    let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(&snapshot)?;
     snapshot.meta.revision_id = uuid::Uuid::new_v4().to_string();
     snapshot.meta.device_id = options.device_id.clone();
     snapshot.meta.created_at_ms = super::current_time_ms();

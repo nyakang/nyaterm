@@ -1,9 +1,11 @@
-use crate::engine::{ReplicaSnapshot, digest};
+use crate::engine::{ReplicaSnapshot, SyncError, SyncReplica, digest};
 use nyaterm_core::sync_schema::secrets::EncryptedSecretValue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const WRITERS_PREFIX: &str = "sync/v4/writers/";
+pub const WRITERS_PREFIX: &str = "sync/v5/writers/";
+pub const LEGACY_WRITERS_PREFIX: &str = "sync/v4/writers/";
+pub const PUBLICATION_SCHEMA_VERSION: u32 = 5;
 pub const MAX_PUBLICATION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,7 +64,13 @@ impl PublicationId {
         )
     }
     pub fn parse(path: &str) -> Option<Self> {
-        let tail = path.strip_prefix(WRITERS_PREFIX)?;
+        Self::parse_with_prefix(path, WRITERS_PREFIX)
+    }
+    pub fn parse_legacy(path: &str) -> Option<Self> {
+        Self::parse_with_prefix(path, LEGACY_WRITERS_PREFIX)
+    }
+    fn parse_with_prefix(path: &str, prefix: &str) -> Option<Self> {
+        let tail = path.strip_prefix(prefix)?;
         let (writer, file) = tail.split_once('/')?;
         let (sequence, hash) = file.strip_suffix(".bin")?.split_once('-')?;
         let id = Self {
@@ -77,7 +85,7 @@ impl PublicationId {
                 .hash
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            && id.path() == path)
+            && format!("{prefix}{}/{}-{}.bin", id.writer, id.sequence, id.hash) == path)
             .then_some(id)
     }
     pub fn verifies(&self, bytes: &[u8]) -> bool {
@@ -94,6 +102,37 @@ pub struct PublishedReplica {
     pub replica: ReplicaSnapshot,
     #[serde(default)]
     pub secret_objects: std::collections::BTreeMap<String, EncryptedSecretValue>,
+}
+
+impl PublishedReplica {
+    pub fn fixed(
+        writer: Uuid,
+        sequence: u64,
+        snapshot: &ReplicaSnapshot,
+    ) -> Result<Self, SyncError> {
+        let mut replica = SyncReplica::load(snapshot, writer)?;
+        Ok(Self {
+            schema: PUBLICATION_SCHEMA_VERSION,
+            writer,
+            sequence,
+            replica: replica.fixed_snapshot()?,
+            secret_objects: Default::default(),
+        })
+    }
+
+    pub fn validate_fixed(&self) -> Result<(), SyncError> {
+        if self.schema != PUBLICATION_SCHEMA_VERSION
+            || self.replica.schema != 5
+            || !self.secret_objects.is_empty()
+        {
+            return Err(SyncError::InvalidReplica);
+        }
+        let mut replica = SyncReplica::load(&self.replica, self.writer)?;
+        if replica.fixed_snapshot()?.values != self.replica.values {
+            return Err(SyncError::InvalidReplica);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

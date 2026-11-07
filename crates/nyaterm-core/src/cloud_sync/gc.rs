@@ -71,6 +71,8 @@ pub fn cleanup_sync_snapshots_with_remote_controlled(
                         revision_id,
                         created_at_ms: snapshot.meta.created_at_ms,
                         deletable: !snapshot.meta.payload_hash.is_empty()
+                            && snapshot.meta.schema_version
+                                == crate::portable_snapshot::FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION
                             && causally_collectable(&snapshot, &clocks),
                     },
                     _ => SnapshotGcEntry {
@@ -194,6 +196,8 @@ pub(super) fn reserve_snapshot_capacity(
             continue;
         };
         if snapshot.meta.revision_id == revision
+            && snapshot.meta.schema_version
+                == crate::portable_snapshot::FIXED_SYNC_SNAPSHOT_SCHEMA_VERSION
             && crate::portable_snapshot::validate_raw_snapshot(&snapshot).is_ok()
             && causally_collectable(&snapshot, &clocks)
         {

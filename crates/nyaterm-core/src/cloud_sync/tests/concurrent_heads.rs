@@ -296,7 +296,10 @@ fn cleanup_preserves_old_device_heads_and_staged_snapshots_under_capacity_pressu
         ..Default::default()
     };
     for index in 0..7 {
-        let mut snapshot = store.build_sync_snapshot(&options).unwrap();
+        let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(
+            &store.build_sync_snapshot(&options).unwrap(),
+        )
+        .unwrap();
         snapshot.meta.revision_id = format!("old-{index}");
         snapshot.meta.created_at_ms = index;
         snapshot.meta.device_id = "other-device".into();
@@ -380,7 +383,10 @@ fn cleanup_retains_concurrent_snapshots_when_device_listing_is_stale() {
         } else {
             "hidden-device"
         };
-        let mut snapshot = store.build_sync_snapshot(&options).unwrap();
+        let mut snapshot = crate::portable_snapshot::project_fixed_sync_snapshot(
+            &store.build_sync_snapshot(&options).unwrap(),
+        )
+        .unwrap();
         snapshot.meta.revision_id = format!("branch-{index}");
         snapshot.meta.device_id = device.into();
         snapshot.meta.created_at_ms = index;

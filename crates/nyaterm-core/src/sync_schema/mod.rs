@@ -116,6 +116,66 @@ pub struct SyncScope {
     pub trusted_hosts: bool,
 }
 
+/// The application sync policy is fixed. `SyncScope` remains a compatibility
+/// contract for reading older settings and encrypted replicas, not a preference.
+pub const FIXED_CLOUD_SYNC_SCOPE: SyncScope = SyncScope {
+    secrets: false,
+    preferences: false,
+    ai: false,
+    keybindings: false,
+    trusted_hosts: false,
+};
+
+pub fn fixed_cloud_sync_field(field: &SyncFieldId) -> bool {
+    CORE_KINDS.contains(&field.resource.kind.as_str())
+        && supports_field(&field.resource.kind, &field.field)
+}
+
+/// Legacy grouped registers may contain future properties. They must remain
+/// readable locally, but cannot expand the content of a fixed-scope publication.
+pub fn valid_fixed_cloud_sync_value(field: &SyncFieldId, value: &Value) -> bool {
+    if !fixed_cloud_sync_field(field) {
+        return false;
+    }
+    let kind = field.resource.kind.as_str();
+    let name = field.field.as_str();
+    if name == "$present" {
+        return value.is_boolean();
+    }
+    if kind == "connection" && !connection_fields(name).is_empty() {
+        return value
+            .as_object()
+            .is_some_and(|fields| fields.values().all(fixed_scalar_or_list))
+            && pick(value, connection_fields(name)) == *value;
+    }
+    if matches!(kind, "proxy" | "tunnel") && name == "endpoint" {
+        return value
+            .as_object()
+            .is_some_and(|fields| fields.values().all(fixed_scalar_or_list))
+            && pick(value, network_endpoint_fields(kind)) == *value;
+    }
+    if kind == "theme" && name == "colors" {
+        let Ok(mut colors) = serde_json::from_value::<crate::themes::ThemeColors>(value.clone())
+        else {
+            return false;
+        };
+        colors.extra.clear();
+        colors.terminal.extra.clear();
+        return serde_json::to_value(colors).is_ok_and(|clean| clean == *value);
+    }
+    fixed_scalar_or_list(value)
+}
+
+fn fixed_scalar_or_list(value: &Value) -> bool {
+    match value {
+        Value::Object(_) => false,
+        Value::Array(values) => values
+            .iter()
+            .all(|value| !value.is_object() && !value.is_array()),
+        _ => true,
+    }
+}
+
 pub const CORE_KINDS: &[&str] = &[
     "connection",
     "connection_group",

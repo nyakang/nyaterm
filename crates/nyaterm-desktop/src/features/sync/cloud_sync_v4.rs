@@ -1,11 +1,12 @@
 //! Blocking V4 orchestration. Prepare is read-only; the Store owns atomic Apply.
+mod legacy;
 mod local;
 mod rotation;
 pub(in crate::features) use rotation::rotate_master_password;
 use std::collections::{BTreeMap, BTreeSet};
 
 use nyaterm_core::cloud_sync::{CloudSyncRemote, control::CloudSyncOperationControl};
-use nyaterm_core::sync_schema::{encryption, project_entities};
+use nyaterm_core::sync_schema::{FIXED_CLOUD_SYNC_SCOPE, encryption};
 use nyaterm_core::{CloudSyncError, CloudSyncSettings, LocalCloudSyncOptions};
 use nyaterm_store::sync_v4::{LocalReplica, PreparedApply};
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
@@ -17,7 +18,7 @@ use nyaterm_sync::protocol::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const REGISTRY: &str = "sync/v4/registry";
+const REGISTRY: &str = "sync/v5/registry";
 const MAX_OBJECTS: usize = 20_000;
 
 pub(super) struct Preview {
@@ -34,14 +35,6 @@ pub(in crate::features) struct PreviewSummary {
     pub migration: bool,
     pub conflicts: Vec<ConflictSummary>,
     pub deferred: Vec<String>,
-    pub trust: Vec<TrustSummary>,
-}
-
-#[derive(Clone, PartialEq)]
-pub(in crate::features) struct TrustSummary {
-    pub key: String,
-    pub token: String,
-    pub description: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -62,28 +55,6 @@ impl Preview {
             resources: self.resource_count,
             migration: self.migration,
             deferred: self.presentation.deferred.clone(),
-            trust: nyaterm_sync::trust::reviews(
-                &self.apply.plan.expected_local.values,
-                &self.apply.plan.effective,
-            )
-            .into_iter()
-            .filter(|review| self.apply.trust_approvals.get(&review.key) != Some(&review.token))
-            .map(|review| TrustSummary {
-                description: format!(
-                    "{} → {}",
-                    nyaterm_core::sync_schema::trust::describe(
-                        &review.resource.kind,
-                        &review.previous
-                    ),
-                    nyaterm_core::sync_schema::trust::describe(
-                        &review.resource.kind,
-                        &review.proposed
-                    )
-                ),
-                key: review.key,
-                token: review.token,
-            })
-            .collect(),
             conflicts: self
                 .apply
                 .plan
@@ -201,27 +172,6 @@ impl Preview {
         self.presentation = self.compute_summary();
         Ok(())
     }
-
-    pub fn confirm_trust(
-        &mut self,
-        store: &StoreBlockingClient,
-        password: &str,
-        key: &str,
-        token: &str,
-    ) -> Result<(), CloudSyncError> {
-        let reviews = nyaterm_sync::trust::reviews(
-            &self.apply.plan.expected_local.values,
-            &self.apply.plan.effective,
-        );
-        if !reviews
-            .iter()
-            .any(|review| review.key == key && review.token == token)
-        {
-            return Err(CloudSyncError::LocalChangedDuringSync);
-        }
-        self.apply.trust_approvals.insert(key.into(), token.into());
-        self.refresh_summary(store, password)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +192,16 @@ fn store_error(_: impl std::fmt::Display) -> CloudSyncError {
 }
 
 fn destination(settings: &CloudSyncSettings, options: &LocalCloudSyncOptions) -> String {
+    digest(
+        format!(
+            "fixed-cloud-sync-v5:{}",
+            legacy_destination(settings, options)
+        )
+        .as_bytes(),
+    )
+}
+
+fn legacy_destination(settings: &CloudSyncSettings, options: &LocalCloudSyncOptions) -> String {
     // Passwords and rotating access tokens are not destination identities.
     if settings.provider == "s3" {
         return digest(
@@ -298,7 +258,7 @@ pub(super) fn preview_on_change(
         && !caches
             .pending_remote
             .load(std::sync::atomic::Ordering::Acquire)
-        && !local::needs_remote(&view, &settings.v4_scope)?
+        && !local::needs_remote(&view, &FIXED_CLOUD_SYNC_SCOPE)?
     {
         control.checkpoint()?;
         return Ok(None);
@@ -373,8 +333,16 @@ fn prepare_remote_with_view(
     let legacy = nyaterm_core::cloud_sync::read_legacy_sync_branches(store, remote, options)?;
     let mut fingerprints = legacy
         .iter()
-        .map(|snapshot| snapshot.sync_content_hash())
+        .map(|snapshot| {
+            Ok::<_, nyaterm_core::PortableSnapshotError>(snapshot.source_payload_hash().to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
+    let legacy_fields = legacy::read(remote, options)?;
+    fingerprints.extend(
+        legacy_fields
+            .iter()
+            .map(|(fingerprint, _)| fingerprint.clone()),
+    );
     fingerprints.sort();
     let fingerprint = digest(
         serde_json::to_string(&fingerprints)
@@ -392,33 +360,20 @@ fn prepare_remote_with_view(
     let mut snapshots = Vec::new();
     if migration {
         for snapshot in legacy {
-            let mut projection =
-                project_entities(&snapshot.entities, &settings.v4_scope).map_err(|_| invalid())?;
-            if settings.v4_scope.trusted_hosts {
-                let snapshot = snapshot.clone();
-                let trust = store
-                    .request_fn(StoreDomain::CloudSync, move |store| {
-                        store.project_v4_legacy_trust(&snapshot)
-                    })
-                    .map_err(store_error)?;
-                projection.values.extend(trust.values);
-            }
-            if settings.v4_scope.secrets {
-                let password = options.master_password.clone();
-                let (secrets, objects) = store
-                    .request_fn(StoreDomain::CloudSync, move |store| {
-                        store.project_v4_legacy_secrets(&snapshot, password.expose_secret())
-                    })
-                    .map_err(store_error)?;
-                projection.values.extend(secrets.values);
-                projection.complete.extend(secrets.complete);
-                local.secret_objects.extend(objects);
-            }
+            let projection =
+                nyaterm_core::portable_snapshot::project_fixed_sync_entities(&snapshot)?;
             let mut replica = SyncReplica::new(Uuid::new_v4());
             replica
-                .capture(&BTreeMap::new(), &projection, &settings.v4_scope)
+                .capture(&BTreeMap::new(), &projection, &FIXED_CLOUD_SYNC_SCOPE)
                 .map_err(|_| invalid())?;
             snapshots.push(replica.snapshot());
+        }
+    }
+    if migration {
+        for (_, snapshot) in legacy_fields {
+            let mut replica =
+                SyncReplica::load(&snapshot, Uuid::new_v4()).map_err(|_| invalid())?;
+            snapshots.push(replica.fixed_snapshot().map_err(|_| invalid())?);
         }
     }
     local.legacy_fingerprint = Some(fingerprint);
@@ -457,7 +412,7 @@ fn prepare_remote_with_view(
     }
     let mut objects = 0;
     for writer in writers {
-        let prefix = path(options, &format!("sync/v4/writers/{writer}"));
+        let prefix = path(options, &format!("sync/v5/writers/{writer}"));
         for entry in remote.list_sync_files(&prefix)? {
             objects += 1;
             if objects > MAX_OBJECTS {
@@ -505,19 +460,13 @@ fn prepare_remote_with_view(
             )?;
             let published: PublishedReplica =
                 serde_json::from_slice(&plaintext).map_err(|_| invalid())?;
-            if published.schema != 4
+            if published.schema != 5
                 || published.writer != id.writer
                 || published.sequence != id.sequence
             {
                 return Err(invalid());
             }
-            for (version, object) in published.secret_objects {
-                if version != object.reference.version {
-                    return Err(invalid());
-                }
-                local.secret_objects.entry(version).or_insert(object);
-            }
-            SyncReplica::load(&published.replica, Uuid::new_v4()).map_err(|_| invalid())?;
+            published.validate_fixed().map_err(|_| invalid())?;
             snapshots.push(published.replica);
             local.observed.insert(relative.into(), id);
         }
@@ -528,7 +477,7 @@ fn prepare_remote_with_view(
         &local.effective,
         view.projection,
         &snapshots,
-        settings.v4_scope.clone(),
+        FIXED_CLOUD_SYNC_SCOPE,
     )
     .map_err(|_| invalid())?;
     let resource_count = plan
@@ -719,17 +668,8 @@ fn publish(
     if record.published_document.as_ref() != Some(&document_hash) {
         let sequence = record.next_sequence;
         record.next_sequence = sequence.checked_add(1).ok_or_else(invalid)?;
-        let publication = PublishedReplica {
-            schema: 4,
-            writer: record.writer,
-            sequence,
-            replica,
-            secret_objects: if record.scope.secrets {
-                record.secret_objects.clone()
-            } else {
-                BTreeMap::new()
-            },
-        };
+        let publication =
+            PublishedReplica::fixed(record.writer, sequence, &replica).map_err(|_| invalid())?;
         let plaintext = Zeroizing::new(serde_json::to_vec(&publication).map_err(|_| invalid())?);
         if plaintext.len() > MAX_PUBLICATION_BYTES / 2 {
             return Err(invalid());
@@ -783,8 +723,20 @@ fn publish_bytes(
     if !pending.id.verifies(&pending.bytes) {
         return Err(invalid());
     }
-    let writer_dir = path(options, &format!("sync/v4/writers/{}", pending.id.writer));
-    for suffix in ["sync", "sync/v4", REGISTRY, "sync/v4/writers"] {
+    let plaintext = encryption::open(
+        options.master_password.expose_secret(),
+        "publication",
+        &format!("{}/{}", pending.id.writer, pending.id.sequence),
+        &pending.bytes,
+    )?;
+    let publication: PublishedReplica =
+        serde_json::from_slice(&plaintext).map_err(|_| invalid())?;
+    publication.validate_fixed().map_err(|_| invalid())?;
+    if publication.writer != pending.id.writer || publication.sequence != pending.id.sequence {
+        return Err(invalid());
+    }
+    let writer_dir = path(options, &format!("sync/v5/writers/{}", pending.id.writer));
+    for suffix in ["sync", "sync/v5", REGISTRY, "sync/v5/writers"] {
         remote.create_dir(&path(options, suffix))?;
     }
     remote.create_dir(&writer_dir)?;

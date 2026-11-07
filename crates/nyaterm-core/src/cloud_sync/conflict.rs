@@ -68,6 +68,12 @@ pub fn summarize(
     local: &RawPortableSnapshot,
     remote: &RawPortableSnapshot,
 ) -> Vec<CloudEntityDiff> {
+    let (Ok(local), Ok(remote)) = (
+        crate::portable_snapshot::project_fixed_sync_snapshot(local),
+        crate::portable_snapshot::project_fixed_sync_snapshot(remote),
+    ) else {
+        return Vec::new();
+    };
     let mut result = Vec::new();
     let keys: BTreeSet<_> = local
         .entities
@@ -76,6 +82,9 @@ pub fn summarize(
         .collect();
     let mut extension_changed = false;
     for key in keys {
+        if key == "fixed_sync_complete_kinds" {
+            continue;
+        }
         let (before, after) = (local.entities.get(key), remote.entities.get(key));
         if before == after {
             continue;
@@ -472,7 +481,7 @@ mod tests {
     use super::summarize;
     use crate::RawPortableSnapshot;
     #[test]
-    fn differences_count_record_ids_without_returning_any_values() {
+    fn differences_count_core_records_without_values_or_excluded_data() {
         let mut local = RawPortableSnapshot::sync("local", "test");
         let mut remote = local.clone();
         local.entities.insert("credentials".into(), r#"{"credentials":[{"id":"a","password":"PRIVATE-OLD"},{"id":"b","password":"PRIVATE-DELETE"}]}"#.into());
@@ -480,17 +489,15 @@ mod tests {
         remote
             .entities
             .insert("PRIVATE-EXTENSION".into(), "PRIVATE-CONTENT".into());
+        assert!(summarize(&local, &remote).is_empty());
+        local.entities.insert("notes".into(), r#"{"notes":[{"id":"a","title":"PRIVATE-OLD"},{"id":"b","title":"PRIVATE-DELETE"}],"folders":[]}"#.into());
+        remote.entities.insert("notes".into(), r#"{"notes":[{"id":"a","title":"PRIVATE-NEW"},{"id":"c","title":"PRIVATE-ADD"}],"folders":[]}"#.into());
         let differences = summarize(&local, &remote);
-        let credentials = differences
-            .iter()
-            .find(|d| d.entity == "credentials")
-            .unwrap();
-        assert_eq!(
-            (credentials.added, credentials.removed, credentials.modified),
-            (1, 1, 1)
-        );
+        let notes = differences.iter().find(|d| d.entity == "notes").unwrap();
+        assert_eq!((notes.added, notes.removed, notes.modified), (1, 1, 1));
         let json = serde_json::to_string(&differences).unwrap();
         assert!(!json.contains("PRIVATE"));
-        assert!(json.contains("extensions"));
+        assert!(!json.contains("extensions"));
+        assert!(!json.contains("credentials"));
     }
 }

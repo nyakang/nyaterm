@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use automerge::{ActorId, AutoCommit, ROOT, ReadDoc, ScalarValue, transaction::Transactable};
 use nyaterm_core::sync_schema::{
-    SyncFieldId, SyncProjection, SyncResourceId, SyncScope, SyncValue, SyncValues, supports_field,
+    SyncFieldId, SyncProjection, SyncResourceId, SyncScope, SyncValue, SyncValues,
+    fixed_cloud_sync_field, supports_field, valid_fixed_cloud_sync_value,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -55,6 +56,7 @@ pub struct SyncPlan {
 pub struct SyncReplica {
     document: AutoCommit,
     values: BTreeMap<String, SyncValue>,
+    fixed: bool,
 }
 
 type Registers = BTreeMap<SyncResourceId, BTreeMap<String, Vec<SyncCandidate>>>;
@@ -66,11 +68,12 @@ impl SyncReplica {
         Self {
             document,
             values: BTreeMap::new(),
+            fixed: false,
         }
     }
 
     pub fn load(snapshot: &ReplicaSnapshot, actor: Uuid) -> Result<Self, SyncError> {
-        if snapshot.schema != 4 {
+        if !matches!(snapshot.schema, 4 | 5) {
             return Err(SyncError::InvalidReplica);
         }
         let mut document =
@@ -79,6 +82,7 @@ impl SyncReplica {
         let replica = Self {
             document,
             values: snapshot.values.clone(),
+            fixed: snapshot.schema == 5,
         };
         replica.validate()?;
         Ok(replica)
@@ -86,10 +90,42 @@ impl SyncReplica {
 
     pub fn snapshot(&mut self) -> ReplicaSnapshot {
         ReplicaSnapshot {
-            schema: 4,
+            schema: if self.fixed { 5 } else { 4 },
             document: self.document.save(),
             values: self.values.clone(),
         }
+    }
+
+    /// Keep causal identities and tombstones, but only transmit current core
+    /// candidates (including conflicts). Unreferenced historical values and
+    /// excluded registers stay in the retained legacy input, never on the wire.
+    pub fn fixed_snapshot(&mut self) -> Result<ReplicaSnapshot, SyncError> {
+        let mut values = BTreeMap::new();
+        for field in self.fields()? {
+            if !fixed_cloud_sync_field(&field) {
+                continue;
+            }
+            for candidate in self.candidates(&field)? {
+                if candidate.value == "deleted" {
+                    continue;
+                }
+                let value = self.candidate_value(&candidate)?;
+                if !valid_fixed_cloud_sync_value(
+                    &field,
+                    &value.decode().map_err(|_| SyncError::InvalidReplica)?,
+                ) {
+                    return Err(SyncError::InvalidReplica);
+                }
+                values.insert(candidate.value, value.clone());
+            }
+        }
+        let snapshot = ReplicaSnapshot {
+            schema: 5,
+            document: self.document.save(),
+            values,
+        };
+        Self::load(&snapshot, Uuid::nil())?;
+        Ok(snapshot)
     }
 
     pub fn merge(&mut self, snapshot: &ReplicaSnapshot) -> Result<(), SyncError> {
@@ -104,6 +140,7 @@ impl SyncReplica {
             .merge(&mut remote.document)
             .map_err(|_| SyncError::InvalidReplica)?;
         self.values.extend(remote.values);
+        self.fixed |= remote.fixed;
         self.validate()
     }
 
@@ -154,7 +191,18 @@ impl SyncReplica {
                 let (digest, identity) =
                     reference.split_once('/').ok_or(SyncError::InvalidReplica)?;
                 Uuid::parse_str(identity).map_err(|_| SyncError::InvalidReplica)?;
-                if digest != "deleted" && !self.values.contains_key(digest) {
+                if digest != "deleted"
+                    && (digest.len() != 64
+                        || !digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+                {
+                    return Err(SyncError::InvalidReplica);
+                }
+                if digest != "deleted"
+                    && !self.values.contains_key(digest)
+                    && (!self.fixed || fixed_cloud_sync_field(field))
+                {
                     return Err(SyncError::InvalidReplica);
                 }
                 Ok(SyncCandidate {
@@ -198,7 +246,10 @@ impl SyncReplica {
                 return Err(SyncError::InvalidReplica);
             }
         }
-        for fields in self.registers()?.values() {
+        for (resource, fields) in self.registers()? {
+            if self.fixed && !fixed_cloud_sync_field(&SyncFieldId::presence(resource.clone())) {
+                continue;
+            }
             let candidates = fields.get("$present").ok_or(SyncError::InvalidReplica)?;
             if candidates.is_empty() {
                 return Err(SyncError::InvalidReplica);
@@ -224,9 +275,16 @@ impl SyncReplica {
     fn conflicts_from(&self, registers: &Registers) -> Result<Vec<SyncConflict>, SyncError> {
         let mut conflicts = Vec::new();
         for (resource, fields) in registers {
+            if self.fixed && !fixed_cloud_sync_field(&SyncFieldId::presence(resource.clone())) {
+                continue;
+            }
             let presence = fields.get("$present").ok_or(SyncError::InvalidReplica)?;
             let hidden = distinct(presence) > 1 || self.boolean(presence)? == Some(false);
             for (name, candidates) in fields {
+                if self.fixed && !fixed_cloud_sync_field(&SyncFieldId::new(resource.clone(), name))
+                {
+                    continue;
+                }
                 if name != "$present" && hidden {
                     continue;
                 }
@@ -276,6 +334,7 @@ impl SyncReplica {
             let field = SyncFieldId::from_key(key).ok_or(SyncError::InvalidReplica)?;
             if field.field != "$present"
                 || !scope.includes(&field.resource.kind)
+                || (self.fixed && !fixed_cloud_sync_field(&field))
                 || !current.complete.contains(&field.resource.kind)
             {
                 continue;
@@ -288,6 +347,7 @@ impl SyncReplica {
         for key in keys {
             let field = SyncFieldId::from_key(key).ok_or(SyncError::InvalidReplica)?;
             if !scope.includes(&field.resource.kind)
+                || (self.fixed && !fixed_cloud_sync_field(&field))
                 || !supports_field(&field.resource.kind, &field.field)
                 || (!current.complete.contains(&field.resource.kind)
                     && !current.values.contains_key(key))
@@ -338,7 +398,9 @@ impl SyncReplica {
             .collect::<BTreeSet<_>>();
         let mut deleted = BTreeSet::new();
         for (resource, fields) in resources {
-            if !scope.includes(&resource.kind) {
+            if !scope.includes(&resource.kind)
+                || (self.fixed && !fixed_cloud_sync_field(&SyncFieldId::presence(resource.clone())))
+            {
                 continue;
             }
             let presence_key = SyncFieldId::presence(resource.clone());
@@ -382,6 +444,7 @@ impl SyncReplica {
         scope: &SyncScope,
     ) -> Result<(), SyncError> {
         if !scope.includes(&conflict.field.resource.kind)
+            || (self.fixed && !fixed_cloud_sync_field(&conflict.field))
             || !supports_field(&conflict.field.resource.kind, &conflict.field.field)
         {
             return Err(SyncError::Excluded);

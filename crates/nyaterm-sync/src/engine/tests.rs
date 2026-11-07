@@ -20,6 +20,101 @@ fn projection(name: &str, description: &str) -> SyncProjection {
     projection
 }
 
+#[test]
+fn fixed_publication_keeps_core_conflicts_and_causality_without_excluded_history_values() {
+    use crate::protocol::PublishedReplica;
+    let (mut a, mut b, baseline) = seeded();
+    let mut old = baseline.clone();
+    old.complete.insert("password".into());
+    old.record(
+        "password",
+        "local-account",
+        &json!({"value":"fixture-old-password"}),
+    )
+    .unwrap();
+    let scope = SyncScope {
+        secrets: true,
+        ..Default::default()
+    };
+    a.capture(&baseline.values, &old, &scope).unwrap();
+    let mut updated = old.clone();
+    updated.insert(
+        &SyncResourceId::new("password", "local-account"),
+        "value",
+        &json!("fixture-new-password"),
+    );
+    a.capture(&old.values, &updated, &scope).unwrap();
+    a.capture(&updated.values, &projection("A", "description"), &scope)
+        .unwrap();
+    b.capture(&baseline.values, &projection("B", "description"), &scope)
+        .unwrap();
+    a.merge(&b.snapshot()).unwrap();
+    let legacy = a.snapshot();
+    let publication = PublishedReplica::fixed(Uuid::new_v4(), 1, &legacy).unwrap();
+    publication.validate_fixed().unwrap();
+    assert_eq!(publication.replica.document, legacy.document);
+    assert!(publication.secret_objects.is_empty());
+    for marker in ["fixture-old-password", "fixture-new-password"] {
+        assert!(
+            legacy.values.values().any(|value| value
+                .decode()
+                .unwrap()
+                .to_string()
+                .contains(marker))
+        );
+        assert!(
+            publication.replica.values.values().all(|value| !value
+                .decode()
+                .unwrap()
+                .to_string()
+                .contains(marker))
+        );
+    }
+    let mut received = SyncReplica::load(&publication.replica, Uuid::new_v4()).unwrap();
+    assert_eq!(received.conflicts().unwrap().len(), 1);
+    assert_eq!(received.conflicts().unwrap()[0].field, field("name"));
+    let conflict = received.conflicts().unwrap().remove(0);
+    received
+        .resolve(&conflict, &conflict.candidates[0], &SyncScope::default())
+        .unwrap();
+    let next = PublishedReplica::fixed(Uuid::new_v4(), 2, &received.snapshot()).unwrap();
+    next.validate_fixed().unwrap();
+    let mut joined = SyncReplica::load(&publication.replica, Uuid::new_v4()).unwrap();
+    joined.merge(&next.replica).unwrap();
+    assert!(joined.conflicts().unwrap().is_empty());
+}
+
+#[test]
+fn fixed_publication_rejects_missing_core_candidates_and_unreferenced_value_payloads() {
+    use crate::protocol::PublishedReplica;
+    let (mut a, _, _) = seeded();
+    let valid = PublishedReplica::fixed(Uuid::new_v4(), 1, &a.snapshot()).unwrap();
+    let mut missing = valid.clone();
+    let name = a.candidates(&field("name")).unwrap()[0].value.clone();
+    missing.replica.values.remove(&name);
+    assert!(missing.validate_fixed().is_err());
+    let mut extra = valid.clone();
+    let value = SyncValue::new(&json!("fixture-excluded-value"));
+    extra
+        .replica
+        .values
+        .insert(crate::engine::digest(value.bytes()), value);
+    assert!(extra.validate_fixed().is_err());
+}
+
+#[test]
+fn fixed_publication_rejects_unclassified_properties_inside_legacy_core_registers() {
+    use crate::protocol::PublishedReplica;
+    let mut source = SyncReplica::new(Uuid::new_v4());
+    let mut projection = SyncProjection::default();
+    projection.complete.insert("connection".into());
+    projection.record("connection", "server", &json!({"endpoint":{"type":"ssh","host":"example.test","password":"fixture-hidden-secret"}})).unwrap();
+    source
+        .capture(&SyncValues::new(), &projection, &SyncScope::default())
+        .unwrap();
+    assert!(PublishedReplica::fixed(Uuid::new_v4(), 1, &source.snapshot()).is_err());
+}
+
 fn field(name: &str) -> SyncFieldId {
     SyncFieldId::new(SyncResourceId::new("connection", "a"), name)
 }
@@ -333,7 +428,7 @@ fn partition_schedules_keep_all_candidates_and_resolutions_survive_old_replica_r
 fn corrupt_or_future_replica_is_rejected() {
     let (mut a, _, _) = seeded();
     let mut snapshot = a.snapshot();
-    snapshot.schema = 5;
+    snapshot.schema = 6;
     assert!(SyncReplica::load(&snapshot, Uuid::new_v4()).is_err());
     snapshot.schema = 4;
     snapshot.values.clear();

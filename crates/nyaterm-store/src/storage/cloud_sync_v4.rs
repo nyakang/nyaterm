@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use nyaterm_core::sync_schema::{
-    SyncFieldId, SyncProjection, SyncScope, SyncValues, apply_record, encryption, project_entities,
-    project_record,
+    FIXED_CLOUD_SYNC_SCOPE, SyncFieldId, SyncProjection, SyncScope, SyncValues, apply_record,
+    encryption, project_entities, project_record,
 };
 use nyaterm_core::{Group, NotesSnapshot, SessionsConfig};
 use nyaterm_sync::application::{SyncApplication, isolate_changes};
@@ -213,6 +213,59 @@ fn record_secret_edit(txn: &redb::WriteTransaction, key: &str) -> Result<(), Sto
 }
 
 impl ConnectionStore {
+    pub(crate) fn build_fixed_sync_snapshot(
+        &self,
+        device_id: impl Into<String>,
+        app_version: impl Into<String>,
+    ) -> Result<nyaterm_core::RawPortableSnapshot, StorageError> {
+        let mut source = nyaterm_core::RawPortableSnapshot::sync(device_id, app_version);
+        source.entities = self.v4_entities()?;
+        Ok(nyaterm_core::portable_snapshot::project_fixed_sync_snapshot(&source)?)
+    }
+
+    pub(crate) fn apply_fixed_sync_snapshot(
+        &self,
+        snapshot: &nyaterm_core::RawPortableSnapshot,
+        password: &str,
+    ) -> Result<(), StorageError> {
+        nyaterm_core::portable_snapshot::validate_raw_snapshot(snapshot)?;
+        // A transient view reuses the same transaction, classified overlay and
+        // credential-binding guards as field merge. It never creates a replica
+        // or restores vault/settings tables from a remote backup.
+        let destination = format!("snapshot-apply/{}", Uuid::new_v4());
+        let view = self.load_v4_view(&destination, password, &FIXED_CLOUD_SYNC_SCOPE)?;
+        let incoming = nyaterm_core::portable_snapshot::project_fixed_sync_entities(snapshot)?;
+        let mut desired = view.projection.clone();
+        desired.values.retain(|key, _| {
+            SyncFieldId::from_key(key)
+                .is_none_or(|field| !incoming.complete.contains(&field.resource.kind))
+        });
+        desired.values.extend(incoming.values);
+        desired.edited.clear();
+        let plan = nyaterm_sync::engine::prepare(
+            view.record.writer,
+            None,
+            &view.projection.values,
+            desired,
+            &[],
+            FIXED_CLOUD_SYNC_SCOPE,
+        )
+        .map_err(|_| invalid())?;
+        let prepared = PreparedApply {
+            destination,
+            expected_record: view.record_hash,
+            generation: view.generation,
+            local: view.record,
+            plan: nyaterm_sync::engine::SyncPlan {
+                expected_local: view.projection,
+                ..plan
+            },
+            trust_approvals: BTreeMap::new(),
+        };
+        self.apply_core_plan(prepared, password, true, |_| {})?;
+        Ok(())
+    }
+
     pub fn project_v4_legacy_trust(
         &self,
         snapshot: &nyaterm_core::RawPortableSnapshot,
@@ -297,10 +350,22 @@ impl ConnectionStore {
         // history, trust stores, cloud authentication and vault tables are not
         // read just to check whether a portable user field changed.
         let mut entities = BTreeMap::new();
-        entities.insert(
-            "settings".into(),
-            serde_json::to_string(&self.load_settings_value()?)?,
-        );
+        let mut settings = self.load_settings_value()?;
+        // The local settings reader knows an omitted catalog means the empty
+        // default. Legacy transport inputs cannot make that same assumption.
+        if settings.pointer("/appearance/custom_themes").is_none()
+            && settings.get("appearance").is_none_or(Value::is_object)
+        {
+            settings
+                .as_object_mut()
+                .ok_or_else(invalid)?
+                .entry("appearance")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(invalid)?
+                .insert("custom_themes".into(), json!([]));
+        }
+        entities.insert("settings".into(), serde_json::to_string(&settings)?);
         // load_sessions() performs legacy icon and credential migrations. A
         // preview must not invoke those writes or decrypt an excluded vault.
         // Raw records also retain properties unknown to the typed catalogs.
@@ -448,7 +513,11 @@ impl ConnectionStore {
         password: &str,
     ) -> Result<Option<(LocalReplica, String)>, StorageError> {
         let txn = self.db.begin_read()?;
-        let table = txn.open_table(REPLICAS)?;
+        let table = match txn.open_table(REPLICAS) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         let Some(bytes) = table.get(destination)? else {
             return Ok(None);
         };
@@ -489,13 +558,26 @@ impl ConnectionStore {
         prepared: PreparedApply,
         password: &str,
     ) -> Result<LocalReplica, StorageError> {
+        if prepared.plan.scope != FIXED_CLOUD_SYNC_SCOPE {
+            return Err(invalid());
+        }
         self.apply_v4_plan_observed(prepared, password, |_| {})
     }
 
     fn apply_v4_plan_observed(
         &self,
+        prepared: PreparedApply,
+        password: &str,
+        observe: impl FnMut(ApplyPoint),
+    ) -> Result<LocalReplica, StorageError> {
+        self.apply_core_plan(prepared, password, false, observe)
+    }
+
+    fn apply_core_plan(
+        &self,
         mut prepared: PreparedApply,
         password: &str,
+        snapshot_only: bool,
         mut observe: impl FnMut(ApplyPoint),
     ) -> Result<LocalReplica, StorageError> {
         let current = self.load_v4_view(&prepared.destination, password, &prepared.plan.scope)?;
@@ -506,7 +588,9 @@ impl ConnectionStore {
             return Err(StorageError::CloudSyncLocalChanged);
         }
         let live_settings = self.load_cloud_sync_settings()?;
-        if live_settings.v4_scope != prepared.plan.scope || live_settings.protocol_version != 4 {
+        if prepared.plan.scope != FIXED_CLOUD_SYNC_SCOPE
+            || (!snapshot_only && live_settings.protocol_version != 4)
+        {
             return Err(StorageError::CloudSyncLocalChanged);
         }
         let replica = SyncReplica::load(&prepared.plan.replica, prepared.local.writer)
@@ -622,8 +706,6 @@ impl ConnectionStore {
             if !next_connections.contains(original.id.as_str()) {
                 txn.open_table(CONNECTIONS_TABLE)?
                     .remove(entity_key(CONNECTION_PREFIX, &original.id).as_str())?;
-                txn.open_table(CREDENTIALS_TABLE)?
-                    .remove(entity_key(CONNECTION_PASSWORD_PREFIX, &original.id).as_str())?;
             }
         }
         for (next, connection) in sessions.connections.iter().zip(connections.iter()) {
@@ -665,7 +747,17 @@ impl ConnectionStore {
             let old: Value = serde_json::from_str(&snapshot[entity])?;
             if old != entities[entity] {
                 let next = if wrapped {
-                    json!({"groups":entities[entity]})
+                    // Collection wrappers may carry fields from newer versions.
+                    // Rebase on the locked document before replacing only groups.
+                    let mut document: Value = txn
+                        .open_table(SETTINGS_TABLE)?
+                        .get(key)?
+                        .map(|raw| serde_json::from_slice(raw.value()))
+                        .transpose()?
+                        .unwrap_or_else(|| json!({}));
+                    let fields = document.as_object_mut().ok_or_else(invalid)?;
+                    fields.insert("groups".into(), entities[entity].clone());
+                    document
                 } else {
                     entities[entity].clone()
                 };
@@ -728,10 +820,13 @@ impl ConnectionStore {
                 }));
         }
         prepared.local.applied_generation = generation(&txn)?;
-        let plaintext = Zeroizing::new(serde_json::to_vec(&prepared.local)?);
-        let bytes = encryption::seal(password, "local-replica", &prepared.destination, &plaintext)?;
-        txn.open_table(REPLICAS)?
-            .insert(prepared.destination.as_str(), bytes.as_slice())?;
+        if !snapshot_only {
+            let plaintext = Zeroizing::new(serde_json::to_vec(&prepared.local)?);
+            let bytes =
+                encryption::seal(password, "local-replica", &prepared.destination, &plaintext)?;
+            txn.open_table(REPLICAS)?
+                .insert(prepared.destination.as_str(), bytes.as_slice())?;
+        }
         observe(ApplyPoint::Replica);
         // Every mutation here belongs to this one Redb transaction. A process
         // death therefore exposes either the entire apply or none of it.
@@ -1098,12 +1193,18 @@ fn reconstruct(
         }
     }
     let settings = entities.get_mut("settings").ok_or_else(invalid)?;
-    if let Some(themes) = settings
-        .pointer("/appearance/custom_themes")
-        .filter(|value| value.is_array())
-        .cloned()
-    {
-        settings["appearance"]["custom_themes"] = merge_collection(&themes, effective, "theme")?;
+    let themes = settings.pointer("/appearance/custom_themes").cloned();
+    if themes.is_some() || !records(effective, "theme")?.is_empty() {
+        let merged = merge_collection(&themes.unwrap_or_else(|| json!([])), effective, "theme")?;
+        let appearance = settings
+            .as_object_mut()
+            .ok_or_else(invalid)?
+            .entry("appearance")
+            .or_insert_with(|| json!({}));
+        appearance
+            .as_object_mut()
+            .ok_or_else(invalid)?
+            .insert("custom_themes".into(), merged);
     }
     if scope.preferences {
         for (id, value) in records(effective, "preference")? {

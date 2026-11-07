@@ -18,6 +18,7 @@ use crate::storage::{
     SETTINGS_TABLE, StorageError, TEXT_DOCS_TABLE, set_nested_json_value, write_json_in_txn,
 };
 use crate::sync_v4::{LocalReplica, PasswordRotationPublication, PreparedApply};
+use nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE;
 
 const ROTATIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_v4_password_rotations");
 const STAGED: &str = "pending";
@@ -94,6 +95,13 @@ impl ConnectionStore {
         if stage.source != source
             || !matches(&txn, &stage)?
             || encryption::open(next_password, "rotation-proof", source, &stage.proof).is_err()
+            || !serde_json::from_slice::<PublishedReplica>(&encryption::open(
+                next_password,
+                "publication",
+                &format!("{}/{}", stage.pending.id.writer, stage.pending.id.sequence),
+                &stage.pending.bytes,
+            )?)
+            .is_ok_and(|publication| publication.validate_fixed().is_ok())
         {
             return Ok(None);
         }
@@ -118,6 +126,7 @@ impl ConnectionStore {
             || next_password == password.expose_secret()
             || target == source.destination
             || !source.local.migration_approved
+            || source.plan.scope != FIXED_CLOUD_SYNC_SCOPE
         {
             return Err(invalid());
         }
@@ -175,17 +184,8 @@ impl ConnectionStore {
         rewrap_record(&mut record)?;
         let replica = record.replica.clone().ok_or_else(invalid)?;
         let document_hash = digest(&replica.document);
-        let publication = PublishedReplica {
-            schema: 4,
-            writer: record.writer,
-            sequence: 1,
-            replica,
-            secret_objects: if record.scope.secrets {
-                record.secret_objects.clone()
-            } else {
-                BTreeMap::new()
-            },
-        };
+        let publication =
+            PublishedReplica::fixed(record.writer, 1, &replica).map_err(|_| invalid())?;
         let plaintext = Zeroizing::new(serde_json::to_vec(&publication)?);
         if plaintext.len() > MAX_PUBLICATION_BYTES / 2 {
             return Err(invalid());
@@ -264,6 +264,18 @@ impl ConnectionStore {
             STAGED,
             &plaintext,
         )?;
+        let old_stage = txn
+            .open_table(ROTATIONS)?
+            .get(STAGED)?
+            .map(|value| value.value().to_vec());
+        if let Some(old_stage) = old_stage {
+            // An old-version exact-byte ticket is retained, never retried by
+            // the fixed-scope publisher or overwritten without preservation.
+            txn.open_table(ROTATIONS)?.insert(
+                format!("retained/{}", digest(&old_stage)).as_str(),
+                old_stage.as_slice(),
+            )?;
+        }
         txn.open_table(ROTATIONS)?
             .insert(STAGED, bytes.as_slice())?;
         txn.commit()?;

@@ -373,26 +373,6 @@ impl CloudSyncFeatureState {
         self.settings.protocol_version = 4;
         self.v4_preview = None;
     }
-    pub(in crate::features) fn toggle_v4_preferences(&mut self) {
-        self.settings.v4_scope.preferences = !self.settings.v4_scope.preferences;
-        self.v4_preview = None;
-    }
-    pub(in crate::features) fn toggle_v4_keybindings(&mut self) {
-        self.settings.v4_scope.keybindings = !self.settings.v4_scope.keybindings;
-        self.v4_preview = None;
-    }
-    pub(in crate::features) fn toggle_v4_ai(&mut self) {
-        self.settings.v4_scope.ai = !self.settings.v4_scope.ai;
-        self.v4_preview = None;
-    }
-    pub(in crate::features) fn toggle_v4_secrets(&mut self) {
-        self.settings.v4_scope.secrets = !self.settings.v4_scope.secrets;
-        self.v4_preview = None;
-    }
-    pub(in crate::features) fn toggle_v4_trust(&mut self) {
-        self.settings.v4_scope.trusted_hosts = !self.settings.v4_scope.trusted_hosts;
-        self.v4_preview = None;
-    }
 
     pub(in crate::features) fn select_provider(&mut self, provider: &str) {
         if self.settings.provider != provider {
