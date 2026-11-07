@@ -25,6 +25,10 @@ const TRZSZ_MAX_TRIGGER_LEN: usize = 96;
 const TRZSZ_MAX_PROTOCOL_LINE_LEN: usize = 1024 * 1024;
 const TRZSZ_MAX_DECODED_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 const TRZSZ_UPLOAD_DATA_CHUNK_SIZE: usize = 256 * 1024;
+// Protocol 3 switched NAME and its SUCC reply to sourceFile/targetFile JSON.
+// The negotiated value comes from CFG; a server that omits `protocol` keeps
+// the legacy plain-text semantics, matching trzsz-go's default of 0.
+const TRZSZ_JSON_NAME_PROTOCOL: i64 = 3;
 const TRZSZ_STALE_TRIGGER_MARKERS: [&[u8]; 5] =
     [b"#CFG:", b"Saved", b"Cancelled", b"Stopped", b"Interrupted"];
 
@@ -631,6 +635,7 @@ pub struct TrzszDownloadEngine {
     phase: TrzszDownloadPhase,
     remote_is_windows: bool,
     directory_mode: bool,
+    protocol_version: i64,
 }
 
 enum TrzszDownloadPhase {
@@ -670,11 +675,16 @@ impl TrzszDownloadEngine {
             phase: TrzszDownloadPhase::AwaitNum,
             remote_is_windows,
             directory_mode: false,
+            protocol_version: 0,
         }
     }
 
     pub fn set_directory_mode(&mut self, directory_mode: bool) {
         self.directory_mode = directory_mode;
+    }
+
+    pub fn set_protocol_version(&mut self, protocol_version: i64) {
+        self.protocol_version = protocol_version;
     }
 
     pub fn observe_frame(
@@ -771,7 +781,7 @@ impl TrzszDownloadEngine {
         }
         let raw_name = string_payload(&frame)?;
         let mut events = Vec::new();
-        let (name, response_name, names) = if self.directory_mode {
+        let (name, response, names) = if self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
             let entry = parse_trzsz_source_file(&raw_name).ok_or_else(|| {
                 TrzszDownloadError::InvalidPayload {
                     frame_type: frame.frame_type.clone(),
@@ -780,14 +790,16 @@ impl TrzszDownloadEngine {
             let name = entry.file_name().to_string();
             let response_name = entry.top_level_name().to_string();
             let names = push_unique_name(names, response_name.clone());
+            // A fresh local download always reports size 0 so the sender skips
+            // the prefix-hash resume exchange this engine does not implement.
+            let target = build_trzsz_target_file(&response_name, 0);
+            let response = build_trzsz_string_frame("SUCC", target.as_bytes(), self.newline());
             if entry.is_dir {
                 events.push(TrzszDownloadEvent::Directory {
                     name: name.clone(),
                     path_id: entry.path_id,
                     components: entry.path_name.clone(),
                 });
-                let response =
-                    build_trzsz_string_frame("SUCC", response_name.as_bytes(), self.newline());
                 let remaining = remaining.saturating_sub(1);
                 if remaining <= 0 {
                     self.phase = TrzszDownloadPhase::Completed {
@@ -802,16 +814,18 @@ impl TrzszDownloadEngine {
                     responses: vec![response],
                 });
             }
-            events.push(TrzszDownloadEvent::FilePath {
-                name: name.clone(),
-                path_id: entry.path_id,
-                components: entry.path_name,
-            });
-            (name, response_name, names)
+            if self.directory_mode {
+                events.push(TrzszDownloadEvent::FilePath {
+                    name: name.clone(),
+                    path_id: entry.path_id,
+                    components: entry.path_name,
+                });
+            }
+            (name, response, names)
         } else {
-            (raw_name.clone(), raw_name, names)
+            let response = build_trzsz_string_frame("SUCC", raw_name.as_bytes(), self.newline());
+            (raw_name.clone(), response, names)
         };
-        let response = build_trzsz_string_frame("SUCC", response_name.as_bytes(), self.newline());
         events.push(TrzszDownloadEvent::FileName { name: name.clone() });
         self.phase = TrzszDownloadPhase::AwaitSize {
             remaining,
@@ -1094,6 +1108,7 @@ pub struct TrzszUploadEngine {
     phase: TrzszUploadPhase,
     remote_is_windows: bool,
     entries: Vec<TrzszUploadEntry>,
+    protocol_version: i64,
 }
 
 enum TrzszUploadPhase {
@@ -1138,7 +1153,12 @@ impl TrzszUploadEngine {
             phase: TrzszUploadPhase::Ready,
             remote_is_windows,
             entries,
+            protocol_version: 0,
         }
+    }
+
+    pub fn set_protocol_version(&mut self, protocol_version: i64) {
+        self.protocol_version = protocol_version;
     }
 
     pub fn begin(&mut self) -> Result<TrzszUploadStep, TrzszUploadError> {
@@ -1237,7 +1257,16 @@ impl TrzszUploadEngine {
             };
             return Err(unexpected_trzsz_upload_frame("SUCC", frame));
         }
-        let remote_name = upload_string_payload(&frame)?;
+        let remote_name = if self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
+            let target = upload_string_payload(&frame)?;
+            parse_trzsz_target_file_name(&target).ok_or_else(|| {
+                TrzszUploadError::InvalidPayload {
+                    frame_type: frame.frame_type.clone(),
+                }
+            })?
+        } else {
+            upload_string_payload(&frame)?
+        };
         if !remote_names.contains(&remote_name) {
             remote_names.push(remote_name.clone());
         }
@@ -1449,7 +1478,7 @@ impl TrzszUploadEngine {
         remote_names: Vec<String>,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
         let entry = self.entries.get(index).ok_or(TrzszUploadError::NoFiles)?;
-        let name = entry.protocol_name()?;
+        let name = entry.protocol_name(self.protocol_version)?;
         self.phase = TrzszUploadPhase::AwaitNameAck {
             index,
             remote_names,
@@ -1500,9 +1529,16 @@ impl TrzszUploadEntry {
         self.source.as_ref().is_some_and(|source| source.is_dir)
     }
 
-    fn protocol_name(&self) -> Result<String, TrzszUploadError> {
-        if let Some(source) = &self.source {
-            return serde_json::to_string(source).map_err(|_| TrzszUploadError::InvalidSource {
+    fn protocol_name(&self, protocol_version: i64) -> Result<String, TrzszUploadError> {
+        if protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
+            let source = self.source.clone().unwrap_or(TrzszUploadSource {
+                path_id: 0,
+                path_name: vec![self.name.clone()],
+                is_dir: false,
+                size: self.size.max(0),
+                perm: None,
+            });
+            return serde_json::to_string(&source).map_err(|_| TrzszUploadError::InvalidSource {
                 name: self.display_name().to_string(),
             });
         }
@@ -1567,6 +1603,25 @@ fn parse_trzsz_source_file(source: &str) -> Option<TrzszSourceFile> {
         && !source.top_level_name().is_empty()
         && !source.file_name().is_empty())
     .then_some(source)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrzszTargetFile {
+    name: String,
+    size: i64,
+}
+
+fn build_trzsz_target_file(name: &str, size: i64) -> String {
+    serde_json::to_string(&TrzszTargetFile {
+        name: name.to_string(),
+        size,
+    })
+    .expect("target file payload is always serializable")
+}
+
+fn parse_trzsz_target_file_name(target: &str) -> Option<String> {
+    let target: TrzszTargetFile = serde_json::from_str(target).ok()?;
+    (target.size >= 0 && !target.name.is_empty()).then_some(target.name)
 }
 
 fn push_unique_name(mut names: Vec<String>, name: String) -> Vec<String> {

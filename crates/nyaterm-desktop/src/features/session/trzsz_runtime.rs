@@ -1142,6 +1142,9 @@ impl NyaTermApp {
                     .trzsz_state_mut(session_id)
                     .and_then(|state| state.download.as_mut())
                 {
+                    download
+                        .engine
+                        .set_protocol_version(config.protocol.unwrap_or(0));
                     download.engine.set_directory_mode(config.directory);
                     if config.directory {
                         *status = Some("trzsz directory download accepted".to_string());
@@ -1152,6 +1155,15 @@ impl NyaTermApp {
                     .trzsz_state(session_id)
                     .is_some_and(|state| state.upload.is_some())
                 {
+                    if let Some(upload) = self
+                        .session
+                        .trzsz_state_mut(session_id)
+                        .and_then(|state| state.upload.as_mut())
+                    {
+                        upload
+                            .engine
+                            .set_protocol_version(config.protocol.unwrap_or(0));
+                    }
                     let expected_directory = self
                         .session
                         .trzsz_state(session_id)
@@ -1716,6 +1728,9 @@ fn process_trzsz_download_worker_frame(
 ) -> Option<TrzszDownloadWorkerEvent> {
     match transfer.observe_frame(frame.clone()) {
         TrzszTransferEvent::Config { config } => {
+            download
+                .engine
+                .set_protocol_version(config.protocol.unwrap_or(0));
             download.engine.set_directory_mode(config.directory);
             if config.directory {
                 event.status = Some("trzsz directory download accepted".to_string());

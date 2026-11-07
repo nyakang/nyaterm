@@ -904,6 +904,36 @@ fn download_engine_receives_binary_file_and_generates_acks() {
 }
 
 #[test]
+fn download_engine_requests_zero_size_for_modern_protocol() {
+    let mut engine = TrzszDownloadEngine::new(false);
+    engine.set_protocol_version(4);
+
+    engine
+        .observe_frame(parse_trzsz_protocol_frame(b"#NUM:1\n").unwrap())
+        .unwrap();
+    let name = build_trzsz_string_frame(
+        "NAME",
+        br#"{"path_id":0,"path_name":["anaconda-ks.cfg"],"is_dir":false,"archive":false,"size":1088,"perm":null}"#,
+        "\n",
+    );
+    let step = engine
+        .observe_frame(parse_trzsz_protocol_frame(&name).unwrap())
+        .unwrap();
+
+    assert_eq!(
+        step.events,
+        vec![TrzszDownloadEvent::FileName {
+            name: "anaconda-ks.cfg".to_string()
+        }]
+    );
+    let ack = parse_trzsz_protocol_frame(&step.responses[0]).unwrap();
+    assert_eq!(
+        bytes_payload(&ack).unwrap(),
+        br#"{"name":"anaconda-ks.cfg","size":0}"#.to_vec()
+    );
+}
+
+#[test]
 fn download_engine_accepts_empty_file_without_data_frame() {
     let mut engine = TrzszDownloadEngine::new(true);
     let digest = md5::compute(b"").0.to_vec();
@@ -937,6 +967,7 @@ fn download_engine_accepts_empty_file_without_data_frame() {
 fn download_engine_accepts_directory_entries_without_size() {
     let mut engine = TrzszDownloadEngine::new(false);
     engine.set_directory_mode(true);
+    engine.set_protocol_version(4);
 
     engine
         .observe_frame(parse_trzsz_protocol_frame(b"#NUM:1\n").unwrap())
@@ -964,7 +995,10 @@ fn download_engine_accepts_directory_entries_without_size() {
         ]
     );
     let ack = parse_trzsz_protocol_frame(&step.responses[0]).unwrap();
-    assert_eq!(bytes_payload(&ack).unwrap(), b"logs".to_vec());
+    assert_eq!(
+        bytes_payload(&ack).unwrap(),
+        br#"{"name":"logs","size":0}"#.to_vec()
+    );
     assert!(engine.is_completed());
 }
 
@@ -972,6 +1006,7 @@ fn download_engine_accepts_directory_entries_without_size() {
 fn download_engine_receives_directory_file_metadata() {
     let mut engine = TrzszDownloadEngine::new(false);
     engine.set_directory_mode(true);
+    engine.set_protocol_version(4);
     let digest = md5::compute(b"abc").0.to_vec();
 
     engine
@@ -1003,7 +1038,10 @@ fn download_engine_receives_directory_file_metadata() {
         ]
     );
     let ack = parse_trzsz_protocol_frame(&step.responses[0]).unwrap();
-    assert_eq!(bytes_payload(&ack).unwrap(), b"project".to_vec());
+    assert_eq!(
+        bytes_payload(&ack).unwrap(),
+        br#"{"name":"project","size":0}"#.to_vec()
+    );
 
     let step = engine
         .observe_frame(parse_trzsz_protocol_frame(b"#SIZE:3\n").unwrap())
@@ -1144,6 +1182,41 @@ fn upload_engine_sends_regular_file_after_acks() {
         ]
     );
     assert!(engine.is_completed());
+}
+
+#[test]
+fn upload_engine_sends_json_source_name_for_modern_protocol() {
+    let mut engine = TrzszUploadEngine::new(
+        false,
+        vec![TrzszUploadEntry::from_bytes("hello.txt", b"hello".to_vec())],
+    );
+    engine.set_protocol_version(4);
+
+    engine.begin().expect("begin");
+    let step = engine
+        .observe_frame(parse_trzsz_protocol_frame(b"#SUCC:1\n").unwrap())
+        .expect("num ack");
+    let name = parse_trzsz_protocol_frame(&step.responses[0]).unwrap();
+    assert_eq!(name.frame_type, "NAME");
+    let source: serde_json::Value =
+        serde_json::from_slice(&bytes_payload(&name).unwrap()).expect("source json");
+    assert_eq!(source["path_id"], 0);
+    assert_eq!(source["path_name"], serde_json::json!(["hello.txt"]));
+    assert_eq!(source["is_dir"], false);
+    assert_eq!(source["size"], 5);
+
+    let remote_name = build_trzsz_string_frame("SUCC", br#"{"name":"hello.txt","size":0}"#, "\n");
+    let step = engine
+        .observe_frame(parse_trzsz_protocol_frame(&remote_name).unwrap())
+        .expect("name ack");
+    assert_eq!(
+        step.events,
+        vec![TrzszUploadEvent::FileStarted {
+            name: "hello.txt".to_string(),
+            remote_name: "hello.txt".to_string(),
+            size: 5,
+        }]
+    );
 }
 
 #[test]
@@ -1301,6 +1374,7 @@ fn upload_engine_sends_directory_entries_without_size() {
             },
         ],
     );
+    engine.set_protocol_version(4);
 
     let step = engine.begin().expect("begin");
     assert_eq!(step.events, vec![TrzszUploadEvent::Started { count: 2 }]);
@@ -1321,7 +1395,7 @@ fn upload_engine_sends_directory_entries_without_size() {
     assert_eq!(source["path_name"][0], "folder");
     assert_eq!(source["is_dir"], true);
 
-    let remote_dir = build_trzsz_string_frame("SUCC", b"folder", "\n");
+    let remote_dir = build_trzsz_string_frame("SUCC", br#"{"name":"folder","size":0}"#, "\n");
     let step = engine
         .observe_frame(parse_trzsz_protocol_frame(&remote_dir).unwrap())
         .expect("dir ack");
@@ -1340,7 +1414,7 @@ fn upload_engine_sends_directory_entries_without_size() {
     assert_eq!(source["path_name"][1], "note.txt");
     assert_eq!(source["is_dir"], false);
 
-    let remote_file = build_trzsz_string_frame("SUCC", b"note.txt", "\n");
+    let remote_file = build_trzsz_string_frame("SUCC", br#"{"name":"note.txt","size":0}"#, "\n");
     let step = engine
         .observe_frame(parse_trzsz_protocol_frame(&remote_file).unwrap())
         .expect("file ack");
