@@ -28,7 +28,11 @@ must include explicit conversion logic and tests.
   adapters, OAuth device authorization, token-refresh sinks, and HTTP I/O counters.
   Sync orchestration, caches, and credential persistence remain in desktop/store.
   Its default-off `test-support` feature exposes local fixtures only for tests.
-  Both adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
+* `crates/nyaterm-updater`: UI-independent native update HTTP checks, signed
+  downloads, installation preparation, helper execution, and portable recovery.
+  Desktop owns update state, scheduling, close guards, and native progress UI;
+  cancellation and helper progress execution are injected through callbacks.
+  All three adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
   store, other business crates, or each other, including in development dependencies.
 * `crates/nyaterm-terminal`: terminal state machine, snapshots,
   control-sequence handling, encoding, and graphics protocols. It must remain
@@ -45,7 +49,10 @@ must include explicit conversion logic and tests.
   GPU/NPU operations over transport execution APIs. Docker state is shared by
   the desktop SSH connection lease, not owned by transport.
 * `crates/nyaterm-recording`: recording, transcripts, rotation, and terminal
-  history search over the core and terminal contracts.
+  history search over the core and terminal contracts. Its `pipeline` module
+  owns the recording writer, bounded queues, and coalesced events; desktop owns
+  lifecycle coordination. Its default-off `test-support` feature exposes only
+  cross-crate test helpers.
 * These four crates remain independent of GPUI and desktop presentation types;
   the three business crates must not depend on each other.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
@@ -314,6 +321,10 @@ Add tests beside the behavior being changed.
   the handshake, an ordinary disconnect, and crash/hang reaping; keep both in
   step when the IPC contract changes.
 * Storage changes require round-trip and supported-format compatibility tests.
+* Update HTTP, signature, package validation, replacement, and recovery tests
+  belong in `nyaterm-updater`. GPUI update state and native progress presentation
+  tests remain in desktop. Release jobs run `portable_release_archive_round_trip`
+  from the updater crate against the actual packaged ZIP.
 * Credential and encryption changes require success, invalid-password,
   corrupted-data, and compatibility-format tests.
 * GPUI state changes should test state transitions separately from visual

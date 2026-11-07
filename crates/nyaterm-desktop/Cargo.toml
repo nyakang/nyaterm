@@ -20,9 +20,6 @@ hex.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 keyring.workspace = true
 md5.workspace = true
-minisign-verify = "=0.2.5"
-flate2 = "1"
-tar = "0.4"
 nyaterm-ai-client.workspace = true
 nyaterm-cloud-storage.workspace = true
 nyaterm-core.workspace = true
@@ -39,6 +36,7 @@ nyaterm-recording.workspace = true
 nyaterm-remote-ops.workspace = true
 nyaterm-files.workspace = true
 nyaterm-ui.workspace = true
+nyaterm-updater.workspace = true
 regex.workspace = true
 rust-i18n.workspace = true
 rand.workspace = true
@@ -59,6 +57,7 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+nyaterm-recording = { workspace = true, features = ["test-support"] }
 nyaterm-cloud-storage = { workspace = true, features = ["test-support"] }
 tracing-subscriber.workspace = true
 gpui = { workspace = true, features = ["test-support", "profiler"] }

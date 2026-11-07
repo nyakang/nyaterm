@@ -13,6 +13,8 @@ nyaterm-app
             ├─ nyaterm-terminal-gpui     终端布局、输入和绘制
             ├─ nyaterm-terminal          终端状态机、解析和快照
             ├─ nyaterm-transport         PTY、SSH、SFTP 和其他协议
+            ├─ nyaterm-recording         录制、历史搜索和写入流水线
+            ├─ nyaterm-updater           更新检查、验签、安装与恢复
             ├─ nyaterm-remote-desktop    RDP/VNC 会话管理与 helper IPC 合约
             ├─ nyaterm-store             redb、事务和兼容性读取
             └─ nyaterm-core              纯模型、格式和策略
@@ -32,6 +34,8 @@ nyaterm-app
 | `nyaterm-terminal` | 与 UI 无关的终端状态机、控制序列、编码和图形协议 |
 | `nyaterm-terminal-gpui` | GPUI 终端输入、布局、选区、高亮、图片和绘制 |
 | `nyaterm-transport` | PTY、SSH、Telnet、串口、SFTP、隧道、远程操作和传输协议 |
+| `nyaterm-recording` | 与 UI 无关的录制、转录、轮转和历史搜索；`pipeline` 管理写入线程、有界队列及合并事件 |
+| `nyaterm-updater` | 与 UI 无关的更新 HTTP 检查、下载验签、安装准备、helper 执行和 portable 恢复 |
 | `nyaterm-store` | redb 数据库、事务、加密适配和兼容性读取 |
 | `nyaterm-core` | 领域模型、兼容格式、解析、策略及纯逻辑 |
 | `nyaterm-remote-desktop` | 与 UI 无关的 RDP/VNC 会话管理、framebuffer 与输入模型、证书策略、剪贴板状态和 helper IPC 合约 |
@@ -67,6 +71,10 @@ nyaterm-app
 文件系统、数据库、网络、SSH、SFTP、子进程和图片解码等阻塞工作不在 render 路径中执行。
 
 后台任务通过有类型的结果或事件返回 GPUI 状态层。例如会话运行时使用 `nyaterm_transport::SessionEvent` 传递输出、工作目录变化、命令确认、退出和错误；桌面层在窗口运行时 pump 中消费事件、更新 feature state 并通知 GPUI 重绘。
+
+`nyaterm-recording::pipeline` 拥有录制写入线程、队列限流和状态与搜索结果的合并。desktop 协调其生命周期，并在后台执行 `take_shutdown()` 返回的关闭任务。跨 crate 测试所需的同步辅助接口由默认关闭的 `test-support` feature 提供，desktop 仅在开发依赖中启用它。
+
+`nyaterm-updater` 执行更新检查、下载验签和安装恢复。desktop 保留更新状态、generation 校验、任务调度、退出检查和 Windows 原生进度窗口；取消检查、字节进度与 helper 进度执行通过回调注入。helper 参数、清理环境变量和安装包格式沿用现有合约。
 
 ## 终端数据流
 
@@ -110,6 +118,7 @@ RDP 和 VNC 的协议解码器解析的是**服务器控制的字节流**，因�
 ## 依赖规则
 
 - `nyaterm-core`、`nyaterm-terminal`、`nyaterm-transport` 和 `nyaterm-remote-desktop` 不依赖 GPUI。
+- `nyaterm-updater` 的项目内依赖仅允许 `nyaterm-core`，普通、开发、构建和平台依赖均不得引入 GPUI、desktop、store 或其他业务 crate。`nyaterm-recording` 同样独立于 GPUI、desktop、transport 和其他业务 crate。
 - 解析服务器控制字节的协议解码器只放在 helper crate 里，不放进应用链接的 crate。
 - 桌面功能通过 `nyaterm-ui` 使用普通输入、选择、菜单、开关和对话框。
 - 模块使用正常 Rust module tree 和显式 import。

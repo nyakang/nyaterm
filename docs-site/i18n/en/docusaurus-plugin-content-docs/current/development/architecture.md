@@ -13,6 +13,8 @@ nyaterm-app
             ├─ nyaterm-terminal-gpui     terminal layout, input, and painting
             ├─ nyaterm-terminal          terminal state machine and snapshots
             ├─ nyaterm-transport         PTY, SSH, SFTP, and other protocols
+            ├─ nyaterm-recording         recording, history search, and writer pipeline
+            ├─ nyaterm-updater           update checks, verification, installation, and recovery
             ├─ nyaterm-remote-desktop    RDP/VNC session management and helper IPC
             ├─ nyaterm-store             redb, transactions, compatibility readers
             └─ nyaterm-core              pure models, formats, and policies
@@ -32,6 +34,8 @@ The main responsibilities are:
 | `nyaterm-terminal` | UI-independent terminal state, control sequences, encodings, and graphics protocols |
 | `nyaterm-terminal-gpui` | GPUI terminal input, layout, selection, highlighting, images, and painting |
 | `nyaterm-transport` | PTY, SSH, Telnet, Serial, SFTP, tunnels, remote operations, and transfer protocols |
+| `nyaterm-recording` | UI-independent recording, transcripts, rotation, and history search; `pipeline` owns the writer thread, bounded queues, and coalesced events |
+| `nyaterm-updater` | UI-independent update HTTP checks, signed downloads, installation preparation, helper execution, and portable recovery |
 | `nyaterm-store` | redb persistence, transactions, encryption adapters, and compatibility readers |
 | `nyaterm-core` | Domain models, compatibility formats, parsing, policies, and pure logic |
 | `nyaterm-remote-desktop` | UI-independent RDP/VNC session management, framebuffer and input models, certificate policy, clipboard state, and the helper IPC contracts |
@@ -67,6 +71,10 @@ Views read authoritative state directly when building GPUI elements. Do not intr
 Filesystem, database, network, SSH, SFTP, subprocess, and image-decoding work does not run in render paths.
 
 Background jobs return typed results or events to GPUI state. For example, session runtimes use `nyaterm_transport::SessionEvent` for output, working-directory changes, accepted commands, exits, and errors. The desktop window-runtime pump consumes those events, updates feature state, and notifies GPUI when a repaint is needed.
+
+`nyaterm-recording::pipeline` owns the recording writer thread, queue limits, and coalescing of status and search results. Desktop coordinates its lifecycle and executes the shutdown task returned by `take_shutdown()` on a background worker. Synchronous helpers for cross-crate tests use the default-off `test-support` feature, which desktop enables only in development dependencies.
+
+`nyaterm-updater` executes update checks, signed downloads, installation, and recovery. Desktop retains update state, generation checks, scheduling, close guards, and the Windows native progress window; cancellation checks, byte progress, and helper progress execution are injected through callbacks. Helper arguments, the cleanup environment variable, and package formats retain their existing contracts.
 
 ## Terminal data flow
 
@@ -110,6 +118,7 @@ Both helper crates carry a `tests/lifecycle.rs` covering the handshake, an ordin
 ## Dependency rules
 
 - `nyaterm-core`, `nyaterm-terminal`, `nyaterm-transport`, and `nyaterm-remote-desktop` stay independent of GPUI.
+- `nyaterm-updater` may depend only on `nyaterm-core` within the project; ordinary, development, build, and platform dependencies must not introduce GPUI, desktop, store, or other business crates. `nyaterm-recording` also remains independent of GPUI, desktop, transport, and other business crates.
 - Protocol decoders that parse server-controlled bytes live only in the helper crates, never in a crate the application links.
 - Desktop features use `nyaterm-ui` for ordinary inputs, selects, menus, switches, and dialogs.
 - Modules use normal Rust module trees and explicit imports.

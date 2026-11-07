@@ -9,29 +9,20 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Stage {
-    Waiting,
-    BackingUp,
-    Installing,
-    Replacing,
-    Starting,
-}
+use nyaterm_updater::install::UpdateStage;
 
-impl Stage {
-    fn label(self) -> String {
-        match self {
-            Self::Waiting => t!("updater.waitingForExit").to_string(),
-            Self::BackingUp => t!("updater.backingUpInstall").to_string(),
-            Self::Installing => t!("updater.applyingInstall").to_string(),
-            Self::Replacing => t!("updater.replacingFiles").to_string(),
-            Self::Starting => t!("updater.startingUpdatedApp").to_string(),
-        }
+fn stage_label(stage: UpdateStage) -> String {
+    match stage {
+        UpdateStage::Waiting => t!("updater.waitingForExit").to_string(),
+        UpdateStage::BackingUp => t!("updater.backingUpInstall").to_string(),
+        UpdateStage::Installing => t!("updater.applyingInstall").to_string(),
+        UpdateStage::Replacing => t!("updater.replacingFiles").to_string(),
+        UpdateStage::Starting => t!("updater.startingUpdatedApp").to_string(),
     }
 }
 
 enum Event {
-    Stage(Stage),
+    Stage(UpdateStage),
     Finished(Result<(), String>),
 }
 
@@ -72,7 +63,9 @@ unsafe extern "system" fn dialog_callback(
         TDN_TIMER => {
             while let Ok(event) = state.rx.try_recv() {
                 match event {
-                    Event::Stage(stage) => unsafe { set_text(hwnd, TDE_CONTENT, &stage.label()) },
+                    Event::Stage(stage) => unsafe {
+                        set_text(hwnd, TDE_CONTENT, &stage_label(stage))
+                    },
                     Event::Finished(Ok(())) => {
                         state.finished = true;
                         unsafe { PostMessageW(hwnd, TDM_CLICK_BUTTON as u32, 8, 0) };
@@ -97,7 +90,7 @@ unsafe extern "system" fn dialog_callback(
 
 pub(super) fn run(
     language: &str,
-    operation: impl FnOnce(&mut dyn FnMut(Stage)) -> Result<(), String> + Send + 'static,
+    operation: impl FnOnce(&mut dyn FnMut(UpdateStage)) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
     let i18n_ready = crate::preload_i18n().is_ok();
     if i18n_ready {
@@ -119,7 +112,7 @@ pub(super) fn run(
     if i18n_ready {
         let title = wide("NyaTerm");
         let instruction = wide(&t!("updater.installing"));
-        let content = wide(&Stage::Waiting.label());
+        let content = wide(&stage_label(UpdateStage::Waiting));
         let mut state = DialogState {
             rx,
             finished: false,
