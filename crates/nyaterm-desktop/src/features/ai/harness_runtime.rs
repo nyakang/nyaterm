@@ -291,6 +291,8 @@ impl NyaTermApp {
                 .detach();
                 self.dispatch_capability_request(
                     CapabilityRequest {
+                        extended_results: true,
+                        resolved_session_id: None,
                         connection_id: format!("native:{run_id}"),
                         request_id: format!("native:{run_id}:{}", call.id),
                         generation: String::new(),

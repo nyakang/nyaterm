@@ -50,6 +50,10 @@ fn external_mcp_terminal_policy(
 }
 
 pub(in crate::features) struct TerminalExecutionRequest {
+    pub mcp_owned: bool,
+    pub async_job: bool,
+    pub return_job: bool,
+    pub operation_id: Option<String>,
     pub id: String,
     pub owner: String,
     pub source: String,
@@ -73,12 +77,23 @@ struct TerminalExecutionTask {
     worker_cancellation: CancellationToken,
 }
 
+struct TerminalExecutionWaiter {
+    cancellation: CancellationToken,
+    reply: oneshot::Sender<Result<Value, RpcError>>,
+}
 struct TerminalExecutionCompletion {
     event: Option<TerminalExecutionEvent>,
     reply: oneshot::Sender<Result<Value, RpcError>>,
     result: Result<Value, RpcError>,
     recording_tail: String,
     recording_boundary: bool,
+    operation_id: Option<String>,
+}
+
+struct TerminalRecoveryGuard {
+    marker_id: String,
+    owner: String,
+    mcp_owned: bool,
 }
 
 /// Owns every automatic terminal execution, independently of the visible AI scope.
@@ -90,12 +105,23 @@ pub(in crate::features) struct TerminalExecutionState {
     // Consume the prompt following an END marker, even after its reply was sent.
     draining: HashMap<String, (AgentOutputCaptureProcessor, Instant)>,
     retired: HashMap<String, Vec<RetiredCaptureFilter>>,
+    recovery: HashMap<String, TerminalRecoveryGuard>,
+    jobs: HashMap<String, jobs::TerminalJob>,
+    waiters: HashMap<String, Vec<TerminalExecutionWaiter>>,
     clock_armed: bool,
 }
 
 impl TerminalExecutionState {
     pub fn busy(&self, session_id: &str) -> bool {
-        self.tasks.contains_key(session_id)
+        self.tasks.contains_key(session_id) || self.recovery.contains_key(session_id)
+    }
+
+    pub fn recovery_required(&self, session_id: &str) -> bool {
+        self.recovery.contains_key(session_id)
+    }
+
+    pub fn confirm_recovered(&mut self, session_id: &str) -> bool {
+        self.recovery.remove(session_id).is_some()
     }
 
     pub fn capturing(&self, session_id: &str) -> bool {
@@ -135,15 +161,55 @@ impl TerminalExecutionState {
 
     pub fn process_output(&mut self, session_id: &str, text: &str) -> AgentCaptureProcessResult {
         let mut text = text.to_string();
+        let mut late_ends = Vec::new();
+        let mut late_output = Vec::new();
         if let Some(filters) = self.retired.get_mut(session_id) {
             filters.retain_mut(|filter| {
+                if !self
+                    .recovery
+                    .get(session_id)
+                    .is_some_and(|guard| guard.marker_id == filter.marker_id())
+                    || !self
+                        .jobs
+                        .get(filter.marker_id())
+                        .is_some_and(|job| !job.manual_takeover)
+                {
+                    filter.disable_observation();
+                }
                 let (visible, finished) = filter.process(&text);
                 text = visible;
+                let observed = filter.take_observed_output();
+                if self
+                    .recovery
+                    .get(session_id)
+                    .is_some_and(|guard| guard.marker_id == filter.marker_id())
+                    && self
+                        .jobs
+                        .get(filter.marker_id())
+                        .is_some_and(|job| !job.manual_takeover)
+                {
+                    late_output.push((filter.marker_id().to_owned(), observed));
+                }
+                if let Some((id, _)) = filter.completed_marker()
+                    && self
+                        .recovery
+                        .get(session_id)
+                        .is_some_and(|guard| guard.marker_id == id)
+                {
+                    self.recovery.remove(session_id);
+                    late_ends.push((id.to_string(), filter.completed_marker().unwrap().1));
+                }
                 !finished
             });
             if filters.is_empty() {
                 self.retired.remove(session_id);
             }
+        }
+        for (id, output) in late_output {
+            self.append_job_output(&id, &output);
+        }
+        for (id, code) in late_ends {
+            self.observe_late_job_end(&id, code);
         }
         if let Some(raw) = self
             .tasks
@@ -158,13 +224,27 @@ impl TerminalExecutionState {
                 completed: Vec::new(),
             };
         }
+        let capture_id = self
+            .tasks
+            .get(session_id)
+            .map(|task| task.capture_marker_id.clone());
         if let Some(capture) = self
             .tasks
             .get_mut(session_id)
             .filter(|task| task.capture_started)
             .and_then(|task| task.capture.as_mut())
         {
-            return capture.process(&text);
+            let result = capture.process(&text);
+            let started = capture.marker_started(capture_id.as_deref().unwrap());
+            let id = capture_id.unwrap();
+            if started && let Some(job) = self.jobs.get_mut(&id) {
+                job.process_state = nyaterm_mcp_protocol::TerminalProcessState::Active;
+                if job.stop_started.is_none() {
+                    job.status = nyaterm_mcp_protocol::TerminalJobStatus::Running;
+                }
+            }
+            self.append_job_output(&id, &result.recording_text);
+            return result;
         }
         if let Some((capture, _)) = self.draining.get_mut(session_id) {
             let result = capture.process(&text);
@@ -188,6 +268,10 @@ impl TerminalExecutionState {
         if self.busy(&request.session_id) {
             return Err(Box::new(request));
         }
+        self.jobs.insert(
+            request.id.clone(),
+            jobs::TerminalJob::from_request(&request),
+        );
         let step = self.next_steps.entry(request.owner.clone()).or_default();
         let step_index = *step;
         *step = step.saturating_add(1);
@@ -242,6 +326,10 @@ impl TerminalExecutionState {
             return None;
         }
         let mut task = self.tasks.remove(session_id).expect("matched task");
+        // Ending the waiter cannot erase exit evidence already received from the worker.
+        let confirmed_exit_code = (status == TerminalExecutionStatus::Completed)
+            .then(|| result.as_ref().ok().and_then(|result| result.exit_code))
+            .flatten();
         let recording_boundary = task.request.policy.background || task.capture.is_some();
         let mut recording_tail = String::new();
         let duration_ms = task
@@ -257,11 +345,31 @@ impl TerminalExecutionState {
             status = TerminalExecutionStatus::Cancelled;
             result = Err(rpc_failure(
                 "cancelled",
-                "Stopped waiting for the command; it may still be running.",
+                if confirmed_exit_code.is_some() {
+                    "The request was cancelled after the command's exit was confirmed."
+                } else {
+                    "Stopped waiting for the command; it may still be running."
+                },
             ));
         }
         if result.is_err() && status == TerminalExecutionStatus::Completed {
             status = TerminalExecutionStatus::Failed;
+        }
+        if !task.request.policy.background
+            && confirmed_exit_code.is_none()
+            && !matches!(
+                status,
+                TerminalExecutionStatus::Completed | TerminalExecutionStatus::Disconnected
+            )
+        {
+            self.recovery.insert(
+                session_id.into(),
+                TerminalRecoveryGuard {
+                    marker_id: task.capture_marker_id.clone(),
+                    owner: task.request.owner.clone(),
+                    mcp_owned: task.request.mcp_owned,
+                },
+            );
         }
         if task.capture.is_some() || task.raw_capture.is_some() {
             let mut partial_output = String::new();
@@ -290,10 +398,12 @@ impl TerminalExecutionState {
                     );
                 } else if status != TerminalExecutionStatus::Completed {
                     let filter = capture.retire(&task.capture_marker_id);
-                    self.retired
-                        .entry(session_id.into())
-                        .or_default()
-                        .push(filter);
+                    let filters = self.retired.entry(session_id.into()).or_default();
+                    // The newest observer always carries the current recovery guard.
+                    if filters.len() == 8 {
+                        filters.remove(0);
+                    }
+                    filters.push(filter);
                     if let Some(partial) = capture.cancel(&task.capture_marker_id) {
                         recording_tail = partial.recording_text;
                         partial_truncated = partial.source_truncated;
@@ -334,8 +444,8 @@ impl TerminalExecutionState {
                 event = Some(TerminalExecutionEvent::Finished {
                     id: id.into(),
                     session_id: session_id.into(),
-                    source: task.request.source,
-                    command: task.request.command,
+                    source: task.request.source.clone(),
+                    command: task.request.command.clone(),
                     step_index: task.step_index,
                     max_lines: task.request.policy.max_lines,
                     output,
@@ -346,9 +456,26 @@ impl TerminalExecutionState {
                 });
             }
         }
+        self.append_job_output(id, &recording_tail);
+        self.finish_job(id, status, result.as_ref().ok(), &task.request);
+        if status == TerminalExecutionStatus::Cancelled
+            && let Some(code) = confirmed_exit_code
+        {
+            self.observe_late_job_end(id, code);
+        }
+        if task.request.return_job
+            && let Ok(value) = &mut result
+        {
+            value.job_id = Some(id.into());
+        }
         // Stop queued background work without changing the caller's outcome.
         task.worker_cancellation.cancel();
         Some(TerminalExecutionCompletion {
+            operation_id: if task.request.async_job {
+                None
+            } else {
+                task.request.operation_id.clone()
+            },
             event,
             recording_tail,
             recording_boundary,
@@ -360,10 +487,27 @@ impl TerminalExecutionState {
         })
     }
 
+    fn complete_waiters(&mut self, operation: &str, result: &Result<Value, RpcError>) {
+        if let Some(waiters) = self.waiters.remove(operation) {
+            for waiter in waiters {
+                if !waiter.cancellation.is_cancelled() {
+                    let _ = waiter.reply.send(result.clone());
+                }
+            }
+        }
+    }
+    fn prune_waiters(&mut self) {
+        for waiters in self.waiters.values_mut() {
+            waiters.retain(|waiter| !waiter.cancellation.is_cancelled());
+        }
+    }
     pub fn forget_owner(&mut self, owner: &str) {
         self.next_steps.remove(owner);
         for task in self.tasks.values() {
-            if task.request.owner == owner {
+            if task.request.owner == owner
+                && task.request.operation_id.is_none()
+                && !task.request.async_job
+            {
                 task.request.cancellation.cancel();
             }
         }
@@ -386,14 +530,47 @@ impl TerminalExecutionState {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn process_terminal_execution_output(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> AgentCaptureProcessResult {
+        let previous_guard = self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .recovery
+            .get(session_id)
+            .map(|guard| (guard.marker_id.clone(), guard.mcp_owned));
+        let result = self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .process_output(session_id, text);
+        if let Some((marker_id, mcp_owned)) = previous_guard {
+            let still_guarded = self
+                .mcp
+                .capabilities
+                .terminal_executions
+                .recovery
+                .get(session_id)
+                .is_some_and(|guard| guard.marker_id == marker_id);
+            if !still_guarded && mcp_owned {
+                self.audit_terminal_job_lifecycle(session_id, "mcp.remote_exit_confirmed", cx);
+            }
+        }
+        result
+    }
+
     pub(in crate::features) fn dispatch_shared_terminal_execute(
         &mut self,
         request: CapabilityRequest,
         session_id: String,
         cx: &mut Context<Self>,
     ) {
-        let args: TerminalExecuteArgs =
-            serde_json::from_value(request.arguments).expect("validated terminal arguments");
+        let mut args: TerminalExecuteArgs = serde_json::from_value(request.arguments.clone())
+            .expect("validated terminal arguments");
         let policy = match &request.caller {
             CapabilityCaller::Native { .. } => {
                 self.ai
@@ -417,14 +594,72 @@ impl NyaTermApp {
         } else {
             30_000
         };
-        let source = match request.caller {
+        let source = match &request.caller {
             CapabilityCaller::Native { .. } => "NyaTerm Agent".into(),
-            CapabilityCaller::Mcp => request.client,
+            CapabilityCaller::Mcp => request.client.clone(),
         };
+        args.session_id = Some(session_id.clone());
+        args.timeout_ms = Some(args.timeout_ms.unwrap_or(default_timeout));
+        let canonical = serde_json::to_value(&args).expect("terminal arguments");
+        let operation_id = match self.mcp.capabilities.ledger.begin(
+            &request.connection_id,
+            &request.tool,
+            args.idempotency_key.as_deref(),
+            &canonical,
+        ) {
+            Ok(super::idempotency::Lookup::Complete(result)) => {
+                let _ = request.reply.send(result);
+                return;
+            }
+            Ok(super::idempotency::Lookup::Pending(id)) => {
+                if let Some(waiters) = self
+                    .mcp
+                    .capabilities
+                    .terminal_executions
+                    .waiters
+                    .get_mut(&id)
+                {
+                    waiters.push(TerminalExecutionWaiter {
+                        cancellation: request.cancellation,
+                        reply: request.reply,
+                    });
+                } else {
+                    let _ = request.reply.send(Err(rpc_failure(
+                        "operation_pending",
+                        "The original operation is still being observed.",
+                    )));
+                }
+                return;
+            }
+            Ok(super::idempotency::Lookup::New(id)) => id,
+            Err(error) => {
+                let _ = request.reply.send(Err(error));
+                return;
+            }
+        };
+        let native = matches!(request.caller, CapabilityCaller::Native { .. });
+        let (reply, cancellation) = if native {
+            (request.reply, request.cancellation)
+        } else {
+            self.mcp.capabilities.terminal_executions.waiters.insert(
+                operation_id.clone(),
+                vec![TerminalExecutionWaiter {
+                    cancellation: request.cancellation,
+                    reply: request.reply,
+                }],
+            );
+            let (reply, _) = oneshot::channel();
+            (reply, CancellationToken::new())
+        };
+        self.ensure_terminal_execution_clock(cx);
         self.start_terminal_execution(
             TerminalExecutionRequest {
+                mcp_owned: matches!(request.caller, CapabilityCaller::Mcp),
+                async_job: false,
+                return_job: args.return_job && request.extended_results,
+                operation_id: Some(operation_id),
                 id: request.request_id,
-                owner: if self.mcp.terminal_policy(&request.generation).is_some() {
+                owner: if native && self.mcp.terminal_policy(&request.generation).is_some() {
                     request.generation
                 } else {
                     request.connection_id
@@ -434,9 +669,9 @@ impl NyaTermApp {
                 session_id,
                 command: args.command,
                 timeout: Duration::from_millis(args.timeout_ms.unwrap_or(default_timeout)),
-                cancellation: request.cancellation,
+                cancellation,
                 policy,
-                reply: request.reply,
+                reply,
             },
             cx,
         );
@@ -447,15 +682,29 @@ impl NyaTermApp {
         request: TerminalExecutionRequest,
         cx: &mut Context<Self>,
     ) {
-        let reject = |request: TerminalExecutionRequest, code: &str, message: &str| {
-            let _ = request.reply.send(Err(rpc_failure(code, message)));
-        };
+        let reject =
+            |this: &mut Self, request: TerminalExecutionRequest, code: &str, message: &str| {
+                let result = Err(rpc_failure(code, message));
+                if let Some(id) = &request.operation_id {
+                    this.mcp.capabilities.ledger.finish(id, result.clone());
+                    this.mcp
+                        .capabilities
+                        .terminal_executions
+                        .complete_waiters(id, &result);
+                }
+                let _ = request.reply.send(result);
+            };
         if request.cancellation.is_cancelled() {
-            reject(request, "cancelled", "Terminal execution was cancelled.");
+            reject(
+                self,
+                request,
+                "cancelled",
+                "Terminal execution was cancelled.",
+            );
             return;
         }
         if self.security.screen_locked() {
-            reject(request, "permission_denied", "Screen is locked.");
+            reject(self, request, "permission_denied", "Screen is locked.");
             return;
         }
         if self
@@ -464,10 +713,24 @@ impl NyaTermApp {
             .terminal_executions
             .busy(&request.session_id)
         {
+            let recovering = self
+                .mcp
+                .capabilities
+                .terminal_executions
+                .recovery_required(&request.session_id);
             reject(
+                self,
                 request,
-                "target_busy",
-                "Another automatic command is using this terminal.",
+                if recovering {
+                    "target_recovery_required"
+                } else {
+                    "target_busy"
+                },
+                if recovering {
+                    "The previous command may still be running or waiting for input. Recover the shell and confirm it is ready in the terminal tab menu."
+                } else {
+                    "Another automatic command is using this terminal."
+                },
             );
             return;
         }
@@ -477,15 +740,31 @@ impl NyaTermApp {
             .filter(|_| !self.session.is_disconnected(&request.session_id))
         else {
             reject(
+                self,
                 request,
                 "invalid_argument",
                 "The target terminal session is unavailable.",
             );
             return;
         };
+        if !self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .can_register_job(&request.owner)
+        {
+            reject(
+                self,
+                request,
+                "resource_limit",
+                "Too many active or retained jobs.",
+            );
+            return;
+        }
         let profile = self.ai_execution_profile_for_session(&request.session_id);
         if profile == AiExecutionProfile::Disabled {
             reject(
+                self,
                 request,
                 "permission_denied",
                 "Terminal execution is disabled for this session.",
@@ -495,7 +774,7 @@ impl NyaTermApp {
         if request.policy.background
             && let Err(error) = self.validate_ai_background_execution(&request.session_id)
         {
-            reject(request, "permission_denied", &error);
+            reject(self, request, "permission_denied", &error);
             return;
         }
         let target = if request.policy.background {
@@ -518,8 +797,18 @@ impl NyaTermApp {
         } else {
             None
         };
+        if request.return_job && matches!(target, Some(BackgroundTerminalTarget::Local { .. })) {
+            reject(
+                self,
+                request,
+                "invalid_argument",
+                "Legacy local background execution cannot expose an SSH channel job. Use terminal_start with inline_pty.",
+            );
+            return;
+        }
         if request.policy.background && target.is_none() {
             reject(
+                self,
                 request,
                 "permission_denied",
                 "Background execution is supported only for SSH and local sessions.",
@@ -531,12 +820,20 @@ impl NyaTermApp {
         let wrapped = (!request.policy.background)
             .then(|| build_agent_capture_command(profile, &capture_marker_id, &request.command))
             .flatten();
+        let async_job = request.async_job;
         let capture = wrapped.as_ref().map(|_| {
             let mut capture = AgentOutputCaptureProcessor::new();
-            capture.register_with_end_newline(
-                capture_marker_id.clone(),
-                profile != AiExecutionProfile::Cmd,
-            );
+            if async_job {
+                capture.register_streaming(
+                    capture_marker_id.clone(),
+                    profile != AiExecutionProfile::Cmd,
+                );
+            } else {
+                capture.register_with_end_newline(
+                    capture_marker_id.clone(),
+                    profile != AiExecutionProfile::Cmd,
+                );
+            }
             capture
         });
         let raw_capture = (profile == AiExecutionProfile::SendOnly).then(|| {
@@ -567,7 +864,21 @@ impl NyaTermApp {
             .tasks
             .get_mut(&session_id)
             .expect("inserted task");
-        task.capture_marker_id = capture_marker_id;
+        task.capture_marker_id = capture_marker_id.clone();
+        if let Some(mut job) = self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .jobs
+            .remove(&audit_request_id)
+        {
+            job.window_label = self.mcp.owner_window_label.clone();
+            self.mcp
+                .capabilities
+                .terminal_executions
+                .jobs
+                .insert(capture_marker_id, job);
+        }
         task.raw_capture = raw_capture;
         let cancellation = self.mcp.capabilities.terminal_executions.tasks[&session_id]
             .worker_cancellation
@@ -616,6 +927,7 @@ impl NyaTermApp {
                         .is_some_and(|error| error.contains("timed out"));
                     let result = result
                         .map(|(output, exit_code)| TerminalExecuteResult {
+                            job_id: None,
                             output,
                             exit_code,
                             duration_ms: 0,
@@ -628,6 +940,7 @@ impl NyaTermApp {
                     let (result, status) = if timed_out {
                         (
                             Ok(TerminalExecuteResult {
+                                job_id: None,
                                 output: String::new(),
                                 exit_code: None,
                                 duration_ms: 0,
@@ -700,6 +1013,29 @@ impl NyaTermApp {
         else {
             return;
         };
+        if self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .jobs
+            .get(id)
+            .is_some_and(|job| {
+                job.process_state == nyaterm_mcp_protocol::TerminalProcessState::ExitConfirmed
+                    && job.mcp_owned
+            })
+        {
+            self.audit_terminal_job_lifecycle(session_id, "mcp.remote_exit_confirmed", cx);
+        }
+        if let Some(operation_id) = &completion.operation_id {
+            self.mcp
+                .capabilities
+                .ledger
+                .finish(operation_id, completion.result.clone());
+            self.mcp
+                .capabilities
+                .terminal_executions
+                .complete_waiters(operation_id, &completion.result);
+        }
         if let Some(output) = background_output {
             self.terminal
                 .submit_execution_recording(session_id, ExecutionRecordingEvent::Output(output));
@@ -749,8 +1085,17 @@ impl NyaTermApp {
             );
         }
         let state = &mut self.mcp.capabilities.terminal_executions;
+        for job in state
+            .jobs
+            .values_mut()
+            .filter(|job| job.session_id == session_id && job.finished.is_none())
+        {
+            job.receiver = None; // Receiver closure asks the auxiliary worker to close its own channel.
+            job.disconnect();
+        }
         state.draining.remove(session_id);
         state.retired.remove(session_id);
+        state.recovery.remove(session_id);
         self.sync_session_event_bridge_session_policy(session_id);
     }
 
@@ -773,6 +1118,7 @@ impl NyaTermApp {
             session_id,
             &id,
             Ok(TerminalExecuteResult {
+                job_id: None,
                 output: String::new(),
                 exit_code: None,
                 duration_ms: 0,
@@ -784,7 +1130,7 @@ impl NyaTermApp {
         );
     }
 
-    fn ensure_terminal_execution_clock(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ensure_terminal_execution_clock(&mut self, cx: &mut Context<Self>) {
         if self.mcp.capabilities.terminal_executions.clock_armed {
             return;
         }
@@ -798,7 +1144,11 @@ impl NyaTermApp {
                     this.poll_terminal_executions(cx);
                     let state = &mut this.mcp.capabilities.terminal_executions;
                     let running = !state.tasks.is_empty() || !state.draining.is_empty();
-                    state.clock_armed = running;
+                    let running = running
+                        || this.mcp.capabilities.session_opens.pending()
+                        || this.mcp.capabilities.ledger.requires_cleanup()
+                        || !this.mcp.capabilities.terminal_executions.jobs.is_empty();
+                    this.mcp.capabilities.terminal_executions.clock_armed = running;
                     running
                 }) else {
                     break;
@@ -812,6 +1162,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn poll_terminal_executions(&mut self, cx: &mut Context<Self>) {
+        self.mcp.capabilities.terminal_executions.prune_waiters();
+        self.poll_terminal_jobs(cx);
+        self.poll_mcp_session_opens(cx);
         let now = Instant::now();
         let raw_ended = self
             .mcp
@@ -837,6 +1190,7 @@ impl NyaTermApp {
             let (result, status) = if end == RawCliEnd::Prompt {
                 (
                     Ok(TerminalExecuteResult {
+                        job_id: None,
                         output: end.description().into(),
                         exit_code: None,
                         duration_ms: 0,
@@ -881,6 +1235,7 @@ impl NyaTermApp {
         for (session, id, status) in ended {
             let result = match status {
                 TerminalExecutionStatus::TimedOut => Ok(TerminalExecuteResult {
+                    job_id: None,
                     output: String::new(),
                     exit_code: None,
                     duration_ms: 0,
@@ -907,3 +1262,5 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests;
+
+mod jobs;

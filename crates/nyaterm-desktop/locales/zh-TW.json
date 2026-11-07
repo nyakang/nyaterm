@@ -1,4 +1,7 @@
 {
+  "mcp": {
+    "confirmShellReady": "已恢復 Shell，確認允許自動執行"
+  },
   "tray": {
     "show": "顯示主視窗",
     "newWindow": "新增視窗",

@@ -158,3 +158,25 @@ AI 助手不只能从面板手动输入，还可以从以下入口唤起：
 ### 错误自动检测
 
 当终端输出中检测到错误模式时，AI 助手会提示可以自动分析该错误。
+
+## MCP 命令与会话生命周期
+
+`session_open` 默认每次创建新会话。自动化客户端可使用 `mode: "reuse_or_create"`，在当前 scope 中优先复用同一保存连接来源、已连接且可以自动执行的终端；名称或地址相同的其他连接不会被视为同一来源。`idempotencyKey` 绑定客户端、工具和规范化参数：重复请求返回原操作，参数改变返回冲突，失败后请使用新键重试。显式 scope 不会因创建会话而扩大。
+
+`terminal_execute` 保留同步调用及原有超时范围。可传入 `idempotencyKey`；只有 `returnJob: true` 时结果附带 `jobId`。需要长时间执行时使用：
+
+集成客户端的旧本地后台执行模式继续保留，但该模式不支持 `returnJob: true`；需要可轮询的本地任务时使用 `terminal_start` 的 `inline_pty` 后端。
+
+```json
+{"sessionId":"SESSION_ID","command":"your command","backend":"inline_pty","timeoutMs":300000,"idempotencyKey":"operation-1"}
+```
+
+把上述参数交给 `terminal_start`，随后用 `terminal_poll({"jobId":"JOB_ID","offset":0,"maxBytes":16384})` 读取增量输出，下一次使用返回的 `nextOffset`。`baseOffset` 表示仍然保留的最早字节位置；`droppedBeforeOffset` 和 `sourceTruncated` 表示丢失，不等于分页尚未读完。游标必须位于 UTF-8 字符边界。`status` 是任务结果，`processState` 是远端退出证据，`terminalState` 是交互式终端的可用状态，三者独立。
+
+默认 `inline_pty` 在当前 Shell 中运行，保留目录、变量和 Shell 状态。同一 Shell 同时只允许一个自动执行任务。超时、取消等待、写入不确定或输出丢失后，终端会进入恢复保护；看到普通输出、等待一段时间或按一次 Ctrl+C 都不会自动解除保护。可以手动中断并检查 Shell，再从终端标签菜单选择“确认 Shell 已就绪”；匹配的迟到 END marker 也可确认恢复。不会自动重放命令。
+
+SSH 会话可显式使用 `backend: "ssh_exec"`。该任务使用独立 channel，不继承交互式 Shell 的工作目录或环境。`terminal_stop` 对安全匹配的 Inline Job 最多发送一次 Ctrl+C，对 SSH Exec 的 channel 最多请求一次 INT，不会升级为 KILL。停止回复区分已接受、已发送、确认结束、未确认、人工恢复和目标失效；SSH EOF 本身不代表进程退出。两秒没有退出证据时报告未确认，执行期限到达后仅关闭辅助 channel。
+
+长任务默认五分钟，范围为一秒至二十四小时。输出限制为每任务 4 MiB、每客户端 16 MiB、全局 64 MiB，旧输出滚动丢弃；活动任务限制为每客户端 8 个、全局 32 个。结束结果保留十分钟，过期的幂等键不会重新执行，记录容量耗尽时拒绝新增键。
+
+启动需按现有风险规则审批。每次查询、停止和结果恢复仍检查客户端所有权与 scope。sidecar 的恢复凭证只保存在内存，同一进程的 TCP 重连可继续查询，sidecar 重启后不能接管旧任务。请求断开后，已提交任务继续观察其生命周期；撤权不会自动杀进程或关闭用户 SSH 连接。旧 Host 不发布新的 Job 工具，旧 sidecar 接入新 Host 保留原有结果字段。

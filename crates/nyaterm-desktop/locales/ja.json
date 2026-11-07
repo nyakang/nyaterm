@@ -1,4 +1,7 @@
 {
+  "mcp": {
+    "confirmShellReady": "Shell の復旧を確認し、自動コマンドを許可する"
+  },
   "tray": {
     "show": "メインウィンドウを表示",
     "newWindow": "新しいウィンドウ",

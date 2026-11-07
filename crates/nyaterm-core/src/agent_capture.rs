@@ -22,8 +22,11 @@ pub fn build_agent_capture_command(
 }
 
 fn build_posix_capture_command(marker_id: &str, command: &str) -> String {
+    // The command's last line must remain a complete shell line: a heredoc
+    // delimiter, comment or compound statement cannot share our closing brace.
+    // The colon also makes empty/comment-only commands a valid command group.
     format!(
-        " printf '\\n{MARKER_PREFIX}''START_{marker_id}__\\n'; {{ {command}; }}; _dfec=$?; printf '\\n{MARKER_PREFIX}''END_{marker_id}_'\"$_dfec\"'__\\n'; unset _dfec\n",
+        " printf '\\n{MARKER_PREFIX}''START_{marker_id}__\\n'; {{\n:\n{command}\n}}; _dfec=$?; printf '\\n{MARKER_PREFIX}''END_{marker_id}_'\"$_dfec\"'__\\n'; unset _dfec\n",
     )
 }
 

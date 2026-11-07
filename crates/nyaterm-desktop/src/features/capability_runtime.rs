@@ -1,6 +1,8 @@
 //! Shared capability authorization, execution, bounded output and audit adapters.
 
 pub(in crate::features) mod approvals;
+mod idempotency;
+mod session_open;
 pub(in crate::features) mod terminal_execution;
 
 use super::NyaTermApp;
@@ -19,11 +21,10 @@ use nyaterm_files::sftp::SftpFileEntry as TransportFileEntry;
 use nyaterm_mcp_protocol::{
     ConnectionListResult, ConnectionSummary, EnvironmentResult, MAX_INLINE_OUTPUT_BYTES,
     MutationResult, OutputReadArgs, PathArgs, RpcError, SessionArgs, SessionGetResult,
-    SessionOpenArgs, SessionOpenResult, SessionSummary, SftpChmodArgs, SftpFileEntry,
-    SftpHomeResult, SftpMkdirArgs, SftpReadTextArgs, SftpReadTextResult, SftpRenameArgs,
-    SftpStatResult, SftpWriteTextArgs, SftpWriteTextResult, TerminalRecentOutputArgs,
-    TerminalRecentOutputResult, definition_for_tool, tool, validate_tool_arguments,
-    validate_tool_result,
+    SessionSummary, SftpChmodArgs, SftpFileEntry, SftpHomeResult, SftpMkdirArgs, SftpReadTextArgs,
+    SftpReadTextResult, SftpRenameArgs, SftpStatResult, SftpWriteTextArgs, SftpWriteTextResult,
+    TerminalRecentOutputArgs, TerminalRecentOutputResult, definition_for_tool, tool,
+    validate_tool_arguments, validate_tool_result,
 };
 use nyaterm_store::StoreDomain;
 use nyaterm_transport::SessionKind;
@@ -56,6 +57,8 @@ pub(in crate::features) enum CapabilityCaller {
 }
 
 pub(in crate::features) struct CapabilityRequest {
+    pub extended_results: bool,
+    pub resolved_session_id: Option<String>,
     pub connection_id: String,
     pub request_id: String,
     pub generation: String,
@@ -83,16 +86,6 @@ pub(in crate::features) struct CapabilityApprovalRequest {
     pub allow_session: bool,
 }
 
-pub(in crate::features) struct PendingCapabilitySessionOpen {
-    pub(in crate::features) host_request_id: String,
-    pub(in crate::features) client_connection_id: String,
-    pub(in crate::features) cancellation: tokio_util::sync::CancellationToken,
-    pub(in crate::features) reply: tokio::sync::oneshot::Sender<Result<Value, RpcError>>,
-    pub(in crate::features) connection_id: String,
-    pub(in crate::features) connection_name: String,
-    pub(in crate::features) connection_type: String,
-}
-
 pub(in crate::features) struct PendingCapabilityApproval {
     pub(in crate::features) request: CapabilityRequest,
     pub(in crate::features) approval: CapabilityApprovalRequest,
@@ -110,13 +103,17 @@ pub(in crate::features) struct CapabilityRuntimeState {
     pub(in crate::features) approval_order: VecDeque<String>,
     pub(in crate::features) session_grants: HashSet<(String, String, String)>,
     pub(in crate::features) terminal_executions: terminal_execution::TerminalExecutionState,
-    pending_session_opens: HashMap<String, PendingCapabilitySessionOpen>,
+    session_opens: session_open::SessionOpenState,
+    ledger: idempotency::IdempotencyLedger,
     pub(in crate::features) outputs: HashMap<String, nyaterm_core::OutputStore>,
     active_requests: HashMap<String, (String, tokio_util::sync::CancellationToken)>,
     owners: HashMap<String, (CapabilityCaller, String)>,
 }
 
 impl CapabilityRuntimeState {
+    pub(in crate::features) fn expire_mcp_owner(&mut self, owner: &str) {
+        self.ledger.forget_expired_owner(owner);
+    }
     fn read_output(&mut self, owner: &str, args: OutputReadArgs) -> Result<Value, RpcError> {
         self.outputs
             .get_mut(owner)
@@ -145,7 +142,7 @@ impl CapabilityRuntimeState {
     ) -> Result<Value, RpcError> {
         validate_tool_result(tool_name, &value)
             .map_err(|_| rpc_failure("internal_error", "Invalid capability result."))?;
-        if tool_name == tool::OUTPUT_READ {
+        if matches!(tool_name, tool::OUTPUT_READ | tool::TERMINAL_POLL) {
             return Ok(value);
         }
         let text = serde_json::to_string(&value)
@@ -184,8 +181,8 @@ impl CapabilityRuntimeState {
             .retain(|_, pending| !pending.request.cancellation.is_cancelled());
         self.approval_order
             .retain(|request_id| self.pending_approvals.contains_key(request_id));
-        self.pending_session_opens
-            .retain(|_, pending| !pending.cancellation.is_cancelled());
+        self.session_opens.prune_waiters();
+        self.ledger.cleanup();
     }
 
     #[cfg(test)]
@@ -270,21 +267,7 @@ impl CapabilityRuntimeState {
             pending.request.cancellation.cancel();
             cancelled.push(pending.request);
         }
-        let open_id = self
-            .pending_session_opens
-            .iter()
-            .find_map(|(connection_id, pending)| {
-                (pending.host_request_id == request_id).then(|| connection_id.clone())
-            });
-        if let Some(open_id) = open_id
-            && let Some(pending) = self.pending_session_opens.remove(&open_id)
-        {
-            pending.cancellation.cancel();
-            let _ = pending.reply.send(Err(rpc_failure(
-                "cancelled",
-                "The MCP request was cancelled.",
-            )));
-        }
+        self.session_opens.cancel_request(request_id);
         cancelled
     }
 
@@ -316,79 +299,10 @@ impl CapabilityRuntimeState {
                 disconnected.push(pending.request);
             }
         }
-        let open_ids = self
-            .pending_session_opens
-            .iter()
-            .filter(|(_, pending)| pending.client_connection_id == client_connection_id)
-            .map(|(connection_id, _)| connection_id.clone())
-            .collect::<Vec<_>>();
-        for open_id in open_ids {
-            if let Some(pending) = self.pending_session_opens.remove(&open_id) {
-                pending.cancellation.cancel();
-                let _ = pending.reply.send(Err(rpc_failure(
-                    "cancelled",
-                    "The MCP client disconnected.",
-                )));
-            }
-        }
+        self.session_opens.disconnect(client_connection_id);
         self.session_grants
             .retain(|(connection_id, _, _)| connection_id != client_connection_id);
         disconnected
-    }
-
-    pub(in crate::features) fn session_open_is_pending(&mut self, connection_id: &str) -> bool {
-        self.prune_cancelled();
-        self.pending_session_opens.contains_key(connection_id)
-    }
-
-    pub(in crate::features) fn register_session_open(
-        &mut self,
-        pending: PendingCapabilitySessionOpen,
-    ) {
-        debug_assert!(
-            !self
-                .pending_session_opens
-                .contains_key(&pending.connection_id)
-        );
-        self.pending_session_opens
-            .insert(pending.connection_id.clone(), pending);
-    }
-
-    pub(in crate::features) fn complete_session_open_success(
-        &mut self,
-        connection_id: &str,
-        session_id: String,
-    ) {
-        let Some(pending) = self.pending_session_opens.remove(connection_id) else {
-            return;
-        };
-        if pending.cancellation.is_cancelled() {
-            return;
-        }
-        let result = to_value(SessionOpenResult {
-            session_id,
-            connection_id: pending.connection_id,
-            name: pending.connection_name,
-            r#type: pending.connection_type,
-            connected: true,
-        });
-        let _ = pending.reply.send(result);
-    }
-
-    pub(in crate::features) fn complete_session_open_failure(
-        &mut self,
-        connection_id: &str,
-        error: &str,
-    ) {
-        let Some(pending) = self.pending_session_opens.remove(connection_id) else {
-            return;
-        };
-        if pending.cancellation.is_cancelled() {
-            return;
-        }
-        let _ = pending
-            .reply
-            .send(Err(rpc_failure("execution_failed", error)));
     }
 }
 
@@ -531,11 +445,13 @@ impl NyaTermApp {
                     .map_or("unknown", |definition| definition.tool)
                     .to_string(),
             ),
-            session_id: request
-                .arguments
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            session_id: request.resolved_session_id.clone().or_else(|| {
+                request
+                    .arguments
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
             permission_mode: Some(request.permission_mode.clone()),
             approval_decision: approval_decision.map(ToOwned::to_owned),
             success,
@@ -644,11 +560,13 @@ impl NyaTermApp {
                 }
             };
             request.arguments["sessionId"] = Value::String(session_id.clone());
-            if request.tool == tool::TERMINAL_EXECUTE
-                && self.session.metadata(&session_id).is_some_and(|metadata| {
-                    metadata.ai_execution_profile == AiExecutionProfile::Disabled
-                })
-            {
+            request.resolved_session_id = Some(session_id.clone());
+            if matches!(
+                request.tool.as_str(),
+                tool::TERMINAL_EXECUTE | tool::TERMINAL_START
+            ) && self.session.metadata(&session_id).is_some_and(|metadata| {
+                metadata.ai_execution_profile == AiExecutionProfile::Disabled
+            }) {
                 self.reject_capability(
                     request,
                     "permission_denied",
@@ -658,26 +576,68 @@ impl NyaTermApp {
                 return;
             }
         }
+        if matches!(
+            request.tool.as_str(),
+            tool::TERMINAL_POLL | tool::TERMINAL_STOP
+        ) {
+            let job_id = request
+                .arguments
+                .get("jobId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match self.authorize_terminal_job(&request.connection_id, &request.scope, job_id) {
+                Ok(id) => request.resolved_session_id = Some(id),
+                Err(error) => {
+                    self.reject_capability(request, &error.code, &error.message, cx);
+                    return;
+                }
+            }
+        }
         let mut assessment =
             nyaterm_core::capabilities::assess_tool_risk(&request.tool, &request.arguments);
-        let policy = match &request.caller {
-            CapabilityCaller::Mcp => decide_policy(
-                &request.permission_mode,
-                definition.access,
-                assessment.as_ref(),
-            ),
-            CapabilityCaller::Native { model_risk, .. } => {
-                if let (Some(risk), Some(model)) = (assessment.as_mut(), model_risk) {
-                    risk.level = risk.level.clone().max(model.clone());
-                }
-                let settings = self.ai.run_settings();
-                decide_native_policy(
-                    &settings.agent_command_execution_mode,
-                    &settings.agent_smart_auto_execute_max_risk,
+        let known_operation = request
+            .arguments
+            .get("idempotencyKey")
+            .and_then(Value::as_str)
+            .is_some_and(|key| {
+                self.mcp
+                    .capabilities
+                    .ledger
+                    .contains(&request.connection_id, &request.tool, key)
+            });
+        let policy = if request.tool == tool::TERMINAL_POLL || known_operation {
+            PolicyDecision::Allow
+        } else {
+            match &request.caller {
+                CapabilityCaller::Mcp => decide_policy(
+                    &request.permission_mode,
                     definition.access,
                     assessment.as_ref(),
-                )
+                ),
+                CapabilityCaller::Native { model_risk, .. } => {
+                    if let (Some(risk), Some(model)) = (assessment.as_mut(), model_risk) {
+                        risk.level = risk.level.clone().max(model.clone());
+                    }
+                    let settings = self.ai.run_settings();
+                    decide_native_policy(
+                        &settings.agent_command_execution_mode,
+                        &settings.agent_smart_auto_execute_max_risk,
+                        definition.access,
+                        assessment.as_ref(),
+                    )
+                }
             }
+        };
+        let repeated_stop = request.tool == tool::TERMINAL_STOP
+            && request
+                .arguments
+                .get("jobId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| self.mcp.capabilities.terminal_executions.stop_requested(id));
+        let policy = if repeated_stop && matches!(policy, PolicyDecision::RequireApproval) {
+            PolicyDecision::Allow
+        } else {
+            policy
         };
         let single_approval = requires_single_approval(definition.access, assessment.as_ref());
         let confirm_each = matches!(request.caller, CapabilityCaller::Native { .. })
@@ -880,7 +840,10 @@ impl NyaTermApp {
                 respond(request.reply, result);
             }
             tool::GET_ENVIRONMENT => {
-                respond(request.reply, self.mcp_environment(&scope));
+                respond(
+                    request.reply,
+                    self.mcp_environment(&scope, &request.connection_id, request.extended_results),
+                );
             }
             tool::CONNECTION_LIST => {
                 respond(request.reply, self.mcp_connection_list());
@@ -890,7 +853,12 @@ impl NyaTermApp {
                     .expect("sidecar validated session arguments");
                 respond(
                     request.reply,
-                    self.mcp_session_get(&scope, &args.session_id),
+                    self.mcp_session_get(
+                        &scope,
+                        &args.session_id,
+                        &request.connection_id,
+                        request.extended_results,
+                    ),
                 );
             }
             tool::TERMINAL_RECENT_OUTPUT => {
@@ -931,6 +899,9 @@ impl NyaTermApp {
                     self.dispatch_mcp_terminal_execute(request, &scope, cx);
                 }
             }
+            tool::TERMINAL_START => self.dispatch_terminal_start(request, cx),
+            tool::TERMINAL_POLL => self.dispatch_terminal_poll(request),
+            tool::TERMINAL_STOP => self.dispatch_terminal_stop(request, cx),
             tool::SESSION_OPEN => {
                 self.dispatch_mcp_session_open(request, cx);
             }
@@ -956,13 +927,42 @@ impl NyaTermApp {
             .collect()
     }
 
-    fn mcp_environment(&self, scope: &CapabilityScopeSnapshot) -> Result<Value, RpcError> {
+    fn mcp_environment(
+        &self,
+        scope: &CapabilityScopeSnapshot,
+        owner: &str,
+        extended: bool,
+    ) -> Result<Value, RpcError> {
         let mut sessions = self
             .session
             .ordered_sessions()
             .into_iter()
             .filter(|session| scope.session_ids.contains(&session.id))
             .map(|session| SessionSummary {
+                source_connection_id: extended
+                    .then(|| {
+                        self.session
+                            .metadata(&session.id)
+                            .and_then(|m| m.source_connection_id.clone())
+                    })
+                    .flatten(),
+                terminal_state: extended.then(|| {
+                    if self.session.is_disconnected(&session.id) {
+                        return nyaterm_mcp_protocol::TerminalAvailability::Disconnected;
+                    }
+                    self.mcp
+                        .capabilities
+                        .terminal_executions
+                        .availability(&session.id)
+                }),
+                terminal_job_id: extended
+                    .then(|| {
+                        self.mcp
+                            .capabilities
+                            .terminal_executions
+                            .owned_job_id(&session.id, owner)
+                    })
+                    .flatten(),
                 id: session.id.clone(),
                 name: self
                     .session
@@ -1018,6 +1018,8 @@ impl NyaTermApp {
         &self,
         scope: &CapabilityScopeSnapshot,
         session_id: &str,
+        owner: &str,
+        extended: bool,
     ) -> Result<Value, RpcError> {
         scope
             .require(session_id)
@@ -1029,6 +1031,26 @@ impl NyaTermApp {
             rpc_failure("invalid_argument", "The requested session is unavailable.")
         })?;
         to_value(SessionGetResult {
+            source_connection_id: extended
+                .then(|| metadata.source_connection_id.clone())
+                .flatten(),
+            terminal_state: extended.then(|| {
+                if self.session.is_disconnected(session_id) {
+                    return nyaterm_mcp_protocol::TerminalAvailability::Disconnected;
+                }
+                self.mcp
+                    .capabilities
+                    .terminal_executions
+                    .availability(session_id)
+            }),
+            terminal_job_id: extended
+                .then(|| {
+                    self.mcp
+                        .capabilities
+                        .terminal_executions
+                        .owned_job_id(session_id, owner)
+                })
+                .flatten(),
             id: session.id.clone(),
             name: self
                 .session
@@ -1186,52 +1208,6 @@ impl NyaTermApp {
         })
         .detach();
     }
-    fn dispatch_mcp_session_open(&mut self, request: CapabilityRequest, cx: &mut Context<Self>) {
-        let args = serde_json::from_value::<SessionOpenArgs>(request.arguments)
-            .expect("sidecar validated session open arguments");
-        let Some(connection) = self
-            .connection_state
-            .connection_by_id(&args.connection_id)
-            .cloned()
-        else {
-            let _ = request.reply.send(Err(rpc_failure(
-                "invalid_argument",
-                "The requested saved connection does not exist.",
-            )));
-            return;
-        };
-        let Some(connection_type) = connection_type_name(&connection.config) else {
-            let _ = request.reply.send(Err(rpc_failure(
-                "permission_denied",
-                "MCP cannot open graphical remote desktop connections.",
-            )));
-            return;
-        };
-        if self
-            .mcp
-            .capabilities
-            .session_open_is_pending(&connection.id)
-        {
-            let _ = request.reply.send(Err(rpc_failure(
-                "execution_failed",
-                "This saved connection is already being opened by MCP.",
-            )));
-            return;
-        }
-        self.mcp
-            .capabilities
-            .register_session_open(PendingCapabilitySessionOpen {
-                host_request_id: request.request_id,
-                client_connection_id: request.connection_id,
-                cancellation: request.cancellation,
-                reply: request.reply,
-                connection_id: connection.id.clone(),
-                connection_name: connection.name.clone(),
-                connection_type: connection_type.to_string(),
-            });
-        self.continue_saved_connection_start(connection, Default::default(), cx);
-    }
-
     fn dispatch_mcp_terminal_execute(
         &mut self,
         request: CapabilityRequest,
@@ -1592,10 +1568,15 @@ fn permissions(mode: Option<u32>) -> String {
 
 pub(in crate::features) fn mcp_request_target(request: &CapabilityRequest) -> Option<String> {
     request
-        .arguments
-        .get("sessionId")
-        .or_else(|| request.arguments.get("connectionId"))
-        .and_then(Value::as_str)
+        .resolved_session_id
+        .as_deref()
+        .or_else(|| {
+            request
+                .arguments
+                .get("sessionId")
+                .or_else(|| request.arguments.get("connectionId"))
+                .and_then(Value::as_str)
+        })
         .map(ToOwned::to_owned)
 }
 
@@ -1618,7 +1599,7 @@ pub(in crate::features) fn mcp_grant_key(
 
 fn mcp_parameter_summary(tool_name: &str, arguments: &Value) -> String {
     match tool_name {
-        tool::TERMINAL_EXECUTE => arguments
+        tool::TERMINAL_EXECUTE | tool::TERMINAL_START => arguments
             .get("command")
             .and_then(Value::as_str)
             .map(|command| truncate_summary(command, 240))
@@ -1682,6 +1663,8 @@ mod tests {
     fn request(owner: &str, caller: CapabilityCaller, command: &str) -> CapabilityRequest {
         let (reply, _) = tokio::sync::oneshot::channel();
         CapabilityRequest {
+            extended_results: true,
+            resolved_session_id: None,
             connection_id: owner.into(),
             request_id: format!("{owner}:call"),
             generation: "generation".into(),

@@ -626,6 +626,10 @@ impl SessionFeatureState {
             .reserve_saved_connection_start(connection_id, placement)
     }
 
+    pub(in crate::features) fn saved_connection_is_starting(&self, id: &str) -> bool {
+        self.start.source_connection_is_pending(id) || self.start.saved_connection_is_preparing(id)
+    }
+
     pub(in crate::features) fn start_release_saved_connection(&mut self, connection_id: &str) {
         self.start.release_saved_connection_start(connection_id);
         if self.start.visible_tab_reservation_count() == 0 {
@@ -3097,6 +3101,7 @@ impl SessionDialogState {
 }
 
 pub(in crate::features) struct PendingSessionStart {
+    pub(in crate::features) mcp_open_operation_id: Option<String>,
     /// Retains an external override before a saved connection's config is built.
     pub requested_ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
     pub attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
@@ -3134,6 +3139,7 @@ impl PendingSessionStart {
 }
 
 pub(in crate::features) struct PendingReconnectCompletion {
+    pub(in crate::features) mcp_open_operation_id: Option<String>,
     pub old_id: String,
     pub new_id: String,
     pub connection_name: String,
@@ -3202,6 +3208,7 @@ pub(in crate::features) enum SessionStartEventRequest {
 
 #[derive(Clone, Default)]
 pub(in crate::features) struct SavedConnectionStartOptions {
+    pub(in crate::features) mcp_open_operation_id: Option<String>,
     pub ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
     pub custom_name: Option<String>,
     pub tab_color: Option<u32>,

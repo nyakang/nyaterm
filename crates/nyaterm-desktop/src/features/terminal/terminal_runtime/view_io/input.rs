@@ -970,8 +970,15 @@ impl NyaTermApp {
             .capabilities
             .terminal_executions
             .capturing(session_id)
+            && bytes != b"\x03"
         {
             return Err("An automatic command is capturing this terminal".into());
+        }
+        if !bytes.is_empty() {
+            self.mcp
+                .capabilities
+                .terminal_executions
+                .note_manual_takeover(session_id);
         }
         self.write_terminal_input_recorded_impl(session_id, bytes, None)
     }
@@ -1114,8 +1121,15 @@ impl NyaTermApp {
             .capabilities
             .terminal_executions
             .capturing(session_id)
+            && bytes != b"\x03"
         {
             return Err("An automatic command is capturing this terminal".into());
+        }
+        if !bytes.is_empty() {
+            self.mcp
+                .capabilities
+                .terminal_executions
+                .note_manual_takeover(session_id);
         }
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
@@ -1158,8 +1172,15 @@ impl NyaTermApp {
             .capabilities
             .terminal_executions
             .capturing(session_id)
+            && bytes != b"\x03"
         {
             return Err("An automatic command is capturing this terminal".into());
+        }
+        if !bytes.is_empty() {
+            self.mcp
+                .capabilities
+                .terminal_executions
+                .note_manual_takeover(session_id);
         }
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
@@ -1238,6 +1259,18 @@ impl NyaTermApp {
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }
+        if self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .capturing(session_id)
+        {
+            return Err("An automatic command is capturing this terminal".into());
+        }
+        self.mcp
+            .capabilities
+            .terminal_executions
+            .note_manual_takeover(session_id);
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::FramedInput);
         debug_assert!(!disposition.encode_session_charset);
         if let Err(error) = self

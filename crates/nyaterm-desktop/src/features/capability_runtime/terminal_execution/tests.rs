@@ -66,6 +66,10 @@ fn execution_request(
     let (reply, receiver) = oneshot::channel();
     (
         TerminalExecutionRequest {
+            mcp_owned: false,
+            async_job: false,
+            return_job: false,
+            operation_id: None,
             id: id.into(),
             owner: owner.into(),
             source: owner.into(),
@@ -86,6 +90,7 @@ fn execution_request(
 
 fn result() -> TerminalExecuteResult {
     TerminalExecuteResult {
+        job_id: None,
         output: "first\nsecond\nthird".into(),
         exit_code: Some(0),
         duration_ms: 0,
@@ -264,7 +269,13 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
         let input = build_agent_capture_command(profile, &marker, "echo fixture")
             .unwrap_or_else(|| "echo fixture\r".into());
         // The fixture uses CR Enter mode, including for Raw TCP text writes.
-        let wire = format!("{}\r", input.trim_end_matches(['\r', '\n']));
+        let wire = format!(
+            "{}\r",
+            input
+                .trim_end_matches(['\r', '\n'])
+                .replace("\r\n", "\r")
+                .replace('\n', "\r")
+        );
         let mut sent = vec![0; wire.len()];
         stream.read_exact(&mut sent).unwrap();
         assert_eq!(sent, wire.as_bytes());
@@ -449,6 +460,7 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
             app.ai.replace_settings_config(settings, true);
             let (reply, receiver) = oneshot::channel();
             app.dispatch_shared_terminal_execute(CapabilityRequest {
+            extended_results: true, resolved_session_id: None,
                 connection_id: source.into(), request_id: source.into(), generation,
                 client: source.into(), permission_mode: AiPermissionMode::FullAccess,
                 scope: CapabilityScope::AllSessions,
@@ -926,7 +938,7 @@ fn completion_replies_once_keeps_full_output_and_ignores_late_results() {
 }
 
 #[test]
-fn every_terminal_outcome_releases_capture_and_background_never_draws_a_block() {
+fn uncertain_terminal_outcomes_protect_occupancy_and_background_never_draws_a_block() {
     for status in [
         TerminalExecutionStatus::Failed,
         TerminalExecutionStatus::TimedOut,
@@ -945,7 +957,15 @@ fn every_terminal_outcome_releases_capture_and_background_never_draws_a_block() 
         assert!(
             matches!(completed.event, Some(TerminalExecutionEvent::Finished { status: ended, .. }) if ended == status)
         );
-        assert!(!state.busy("a") && !state.capturing("a"));
+        assert!(!state.capturing("a"));
+        assert_eq!(
+            state.busy("a"),
+            status != TerminalExecutionStatus::Disconnected
+        );
+        if status != TerminalExecutionStatus::Disconnected {
+            assert!(state.confirm_recovered("a"));
+            assert!(!state.busy("a"));
+        }
         assert_eq!(
             state.process_output("a", "normal output").visible_text,
             "normal output"
@@ -1018,6 +1038,7 @@ fn raw_capture_respects_output_boundary_and_replies_with_unknown_exit_status() {
             "a",
             "raw",
             Ok(TerminalExecuteResult {
+                job_id: None,
                 output: RawCliEnd::Prompt.description().into(),
                 exit_code: None,
                 duration_ms: 0,
@@ -1055,6 +1076,7 @@ fn raw_capture_respects_output_boundary_and_replies_with_unknown_exit_status() {
             "a",
             "next",
             Ok(TerminalExecuteResult {
+                job_id: None,
                 exit_code: None,
                 ..result()
             }),
@@ -1070,7 +1092,7 @@ fn raw_capture_respects_output_boundary_and_replies_with_unknown_exit_status() {
 }
 
 #[test]
-fn raw_failures_keep_partial_output_and_release_occupancy() {
+fn raw_failures_keep_partial_output_and_require_recovery() {
     use nyaterm_core::raw_cli_capture::RawCliCapture;
     use std::time::Instant;
     for status in [
@@ -1101,7 +1123,15 @@ fn raw_failures_keep_partial_output_and_release_occupancy() {
         assert!(
             matches!(completion.event, Some(TerminalExecutionEvent::Finished { output, .. }) if output.contains("partial") && output.contains("More"))
         );
-        assert!(!state.busy("a") && !state.capturing("a"));
+        assert!(!state.capturing("a"));
+        assert_eq!(
+            state.busy("a"),
+            status != TerminalExecutionStatus::Disconnected
+        );
+        if status != TerminalExecutionStatus::Disconnected {
+            assert!(state.confirm_recovered("a"));
+            assert!(!state.busy("a"));
+        }
     }
 }
 
@@ -1271,8 +1301,296 @@ fn raw_output_loss_cancellation_and_disconnect_release_the_shared_task(
             } else {
                 assert!(result.is_err());
             }
+            if app
+                .mcp
+                .capabilities
+                .terminal_executions
+                .recovery_required("raw")
+            {
+                assert!(
+                    app.mcp
+                        .capabilities
+                        .terminal_executions
+                        .confirm_recovered("raw")
+                );
+            }
             assert!(!app.mcp.capabilities.terminal_executions.busy("raw"));
             assert!(!app.mcp.capabilities.terminal_executions.capturing("raw"));
         });
     }
+}
+
+#[test]
+fn cancellation_after_end_keeps_exit_evidence_and_does_not_require_shell_recovery() {
+    use nyaterm_mcp_protocol::{TerminalJobStatus, TerminalProcessState};
+    let mut state = TerminalExecutionState::default();
+    let (request, _) = execution_request("job", "owner", "a", false);
+    let cancellation = request.cancellation.clone();
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register("job".into());
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "job");
+    let captured = state
+        .process_output(
+            "a",
+            "__DF_CMD_START_job__\nprefix\n__DF_CMD_END_job_17__\nprompt>",
+        )
+        .completed
+        .remove(0);
+    cancellation.cancel();
+    let mut outcome = result();
+    outcome.exit_code = captured.exit_code;
+    outcome.output = captured.output;
+    let completion = state
+        .finish("a", "job", Ok(outcome), TerminalExecutionStatus::Completed)
+        .unwrap();
+    assert_eq!(completion.result.unwrap_err().code, "cancelled");
+    assert!(!state.busy("a"));
+    assert_eq!(state.jobs["job"].status, TerminalJobStatus::Cancelled);
+    assert_eq!(
+        state.jobs["job"].process_state,
+        TerminalProcessState::ExitConfirmed
+    );
+    assert_eq!(state.jobs["job"].exit_code, Some(17));
+}
+
+#[test]
+fn timeout_blocks_reexecution_until_matching_late_end_and_retains_job_outcome() {
+    use nyaterm_mcp_protocol::{TerminalJobStatus, TerminalProcessState};
+    let mut state = TerminalExecutionState::default();
+    let (request, _) = execution_request("job", "owner", "a", false);
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register_streaming("job".into(), true);
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "job");
+    state.process_output("a", "__DF_CMD_START_job__\nprefix\n");
+    state
+        .finish("a", "job", Ok(result()), TerminalExecutionStatus::TimedOut)
+        .unwrap();
+    assert!(state.recovery_required("a"));
+    let (request, _) = execution_request("other", "owner", "a", false);
+    assert!(state.insert(request, None).is_err());
+    state.process_output("a", "tail\n__DF_CMD_END_other_0__");
+    assert!(state.busy("a"));
+    state.process_output("a", "\n__DF_CMD_END_job_7__\nprompt>");
+    assert!(!state.busy("a"));
+    let job = &state.jobs["job"];
+    assert_eq!(job.status, TerminalJobStatus::TimedOut);
+    assert_eq!(job.process_state, TerminalProcessState::ExitConfirmed);
+    assert_eq!(job.exit_code, Some(7));
+    let output = job.output.read(0, 16384).unwrap().data;
+    assert!(output.contains("prefix") && output.contains("tail"));
+    assert!(!output.contains("prompt>"));
+}
+#[test]
+fn manual_takeover_and_result_expiry_do_not_release_recovery_guard() {
+    let mut state = TerminalExecutionState::default();
+    let (request, _) = execution_request("job", "owner", "a", false);
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register("job".into());
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "job");
+    state.process_output("a", "__DF_CMD_START_job__\nprefix");
+    state
+        .finish("a", "job", Ok(result()), TerminalExecutionStatus::TimedOut)
+        .unwrap();
+    state.note_manual_takeover("a");
+    state.process_output("a", "manual command output");
+    assert!(
+        !state.jobs["job"]
+            .output
+            .read(0, 16384)
+            .unwrap()
+            .data
+            .contains("manual command")
+    );
+    state.jobs.clear();
+    assert!(state.busy("a"));
+    assert!(state.confirm_recovered("a"));
+    assert!(!state.busy("a"));
+}
+#[test]
+fn cancelling_one_waiter_does_not_cancel_another_waiter_or_the_job() {
+    let mut state = TerminalExecutionState::default();
+    let cancelled = CancellationToken::new();
+    let live = CancellationToken::new();
+    let (a, mut ar) = oneshot::channel();
+    let (b, mut br) = oneshot::channel();
+    state.waiters.insert(
+        "operation".into(),
+        vec![
+            super::TerminalExecutionWaiter {
+                cancellation: cancelled.clone(),
+                reply: a,
+            },
+            super::TerminalExecutionWaiter {
+                cancellation: live.clone(),
+                reply: b,
+            },
+        ],
+    );
+    cancelled.cancel();
+    state.prune_waiters();
+    assert_eq!(state.waiters["operation"].len(), 1);
+    let result = Ok(serde_json::json!({"output":"once"}));
+    state.complete_waiters("operation", &result);
+    assert!(ar.try_recv().is_err());
+    assert_eq!(br.try_recv().unwrap().unwrap()["output"], "once");
+    assert!(!live.is_cancelled());
+}
+
+#[gpui::test]
+fn inline_job_returns_before_completion_survives_request_cancellation_and_stops_once(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::features::capability_runtime::{CapabilityCaller, CapabilityRequest};
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::{AiPermissionMode, CapabilityScope};
+    use nyaterm_mcp_protocol::tool;
+    use nyaterm_transport::{SessionEvent, TelnetSessionConfig};
+    use std::io::Read;
+    cx.executor().allow_parking();
+    let directory = TestConfigDir::new("nyaterm-inline-job-contract");
+    let app = app_with_visible_local_session(cx, directory.path(), "fixture");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = TelnetSessionConfig {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        raw_tcp: true,
+        ..Default::default()
+    };
+    let (manager, session) = cx.update_entity(&app, |app, _| {
+        let manager = app.session.manager_handle();
+        let info = manager.create_telnet_session(config.clone()).unwrap();
+        let mut metadata = app.session.metadata("fixture").unwrap().clone();
+        metadata.launch_config = SessionLaunchConfig::Telnet(config);
+        app.session.register_session_metadata(&info.id, metadata);
+        app.terminal
+            .seed_session_view(info.id.clone(), String::new(), "UTF-8");
+        (manager, info.id)
+    });
+    let (mut stream, _) = listener.accept().unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let request = |tool: &str, arguments: Value| {
+        let (reply, receiver) = oneshot::channel();
+        (
+            CapabilityRequest {
+                extended_results: true,
+                resolved_session_id: None,
+                connection_id: "owner".into(),
+                request_id: nyaterm_core::uuid(),
+                generation: "generation".into(),
+                client: "fixture".into(),
+                permission_mode: AiPermissionMode::FullAccess,
+                scope: CapabilityScope::AllSessions,
+                tool: tool.into(),
+                arguments,
+                cancellation: CancellationToken::new(),
+                approved: true,
+                approval_decision: None,
+                caller: CapabilityCaller::Mcp,
+                reply,
+            },
+            receiver,
+        )
+    };
+    let (start, mut receiver) = request(
+        tool::TERMINAL_START,
+        serde_json::json!({"sessionId":session,"command":"sleep 30","idempotencyKey":"once"}),
+    );
+    let cancellation = start.cancellation.clone();
+    let job = cx.update_entity(&app, |app, cx| {
+        app.dispatch_terminal_start(start, cx);
+        receiver.try_recv().unwrap().unwrap()["jobId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    let input = nyaterm_core::agent_capture::build_agent_capture_command(
+        nyaterm_core::AiExecutionProfile::Posix,
+        &job,
+        "sleep 30",
+    )
+    .unwrap();
+    let wire = input.replace('\n', "\r");
+    let mut bytes = vec![0; wire.len()];
+    stream.read_exact(&mut bytes).unwrap();
+    assert_eq!(bytes, wire.as_bytes());
+    cx.update_entity(&app, |app, cx| {
+        let (retry, mut receiver) = request(
+            tool::TERMINAL_START,
+            serde_json::json!({"sessionId":session,"command":"sleep 30","backend":"inline_pty","timeoutMs":300000,"idempotencyKey":"once"}),
+        );
+        app.dispatch_terminal_start(retry, cx);
+        assert_eq!(receiver.try_recv().unwrap().unwrap()["jobId"], job);
+        let (conflict, mut receiver) = request(
+            tool::TERMINAL_START,
+            serde_json::json!({"sessionId":session,"command":"sleep 30","timeoutMs":310000,"idempotencyKey":"once"}),
+        );
+        app.dispatch_terminal_start(conflict, cx);
+        assert_eq!(receiver.try_recv().unwrap().unwrap_err().code, "idempotency_conflict");
+    });
+    cancellation.cancel();
+    cx.update_entity(&app, |app, cx| {
+        app.poll_terminal_executions(cx);
+        assert!(app.mcp.capabilities.terminal_executions.busy(&session));
+        app.session.extend_pending_events([
+            SessionEvent::OutputBoundary {
+                session_id: session.clone(),
+                token: job.clone(),
+            },
+            SessionEvent::Output {
+                session_id: session.clone(),
+                data: format!("__DF_CMD_START_{job}__\nrunning\n").into_bytes(),
+            },
+        ]);
+        app.drain_session_events(cx);
+        let (stop, mut receiver) = request(tool::TERMINAL_STOP, serde_json::json!({"jobId":job}));
+        app.dispatch_terminal_stop(stop, cx);
+        assert_eq!(receiver.try_recv().unwrap().unwrap()["stopState"], "sent");
+    });
+    let mut interrupt = [0];
+    stream.read_exact(&mut interrupt).unwrap();
+    assert_eq!(interrupt, [3]);
+    cx.update_entity(&app, |app, cx| {
+        let (stop, mut receiver) = request(tool::TERMINAL_STOP, serde_json::json!({"jobId":job}));
+        app.dispatch_terminal_stop(stop, cx);
+        assert_eq!(receiver.try_recv().unwrap().unwrap()["stopState"], "sent");
+        app.session.extend_pending_events([SessionEvent::Output {
+            session_id: session.clone(),
+            data: format!("tail\n__DF_CMD_END_{job}_130__\nprompt>").into_bytes(),
+        }]);
+        app.drain_session_events(cx);
+        let (poll, mut receiver) = request(tool::TERMINAL_POLL, serde_json::json!({"jobId":job}));
+        app.dispatch_terminal_poll(poll);
+        let result = receiver.try_recv().unwrap().unwrap();
+        assert_eq!(result["status"], "cancelled");
+        assert_eq!(result["processState"], "exit_confirmed");
+        assert_eq!(result["terminalState"], "ready");
+        assert!(result["output"].as_str().unwrap().contains("running"));
+        assert!(result["output"].as_str().unwrap().contains("tail"));
+        assert!(!result["output"].as_str().unwrap().contains("prompt>"));
+        let (stop, mut receiver) = request(tool::TERMINAL_STOP, serde_json::json!({"jobId":job}));
+        app.dispatch_terminal_stop(stop, cx);
+        let result = receiver.try_recv().unwrap().unwrap();
+        assert_eq!(result["stopState"], "confirmed_ended");
+        assert_eq!(result["processState"], "exit_confirmed");
+    });
+    stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    assert!(stream.read(&mut interrupt).is_err());
+    manager.close(&session).unwrap();
+    cx.update_entity(&app, |app, cx| {
+        app.session.metadata_mut(&session).unwrap().disconnected = true;
+        let (stop, mut receiver) = request(tool::TERMINAL_STOP, serde_json::json!({"jobId":job}));
+        app.dispatch_terminal_stop(stop, cx);
+        let result = receiver.try_recv().unwrap().unwrap();
+        assert_eq!(result["stopState"], "target_invalid");
+        assert_eq!(result["terminalState"], "disconnected");
+    });
 }

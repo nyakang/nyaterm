@@ -153,6 +153,7 @@ fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_complete
 
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
+        mcp_open_operation_id: None,
         requested_ssh_runtime_mode: None,
         attempt: Default::default(),
         connection_name: name.to_string(),
@@ -2437,6 +2438,7 @@ fn reconnect_targets_are_owned_by_each_pending_request() {
 fn reconnect_stays_pending_until_frame_migration_finishes() {
     let mut starts = SessionStartFeatureState::new();
     starts.record_reconnect_completion(PendingReconnectCompletion {
+        mcp_open_operation_id: None,
         old_id: "old".to_string(),
         new_id: "new".to_string(),
         connection_name: "ssh".to_string(),

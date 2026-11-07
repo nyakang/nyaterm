@@ -198,6 +198,10 @@ impl NyaTermApp {
         }).detach();
         self.start_terminal_execution(
             TerminalExecutionRequest {
+                mcp_owned: false,
+                async_job: false,
+                return_job: false,
+                operation_id: None,
                 id: execution_id.clone(),
                 owner: format!("ai-session:{}", self.ai.chat_session_id()),
                 source: "NyaTerm Agent".into(),

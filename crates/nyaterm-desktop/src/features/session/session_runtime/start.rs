@@ -223,7 +223,7 @@ impl NyaTermApp {
             && self.remote_start_blocked_by_configuration_replacement(cx)
         {
             self.complete_mcp_session_open_failure(
-                &connection.id,
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 &t!("settings.configurationReplacementInProgress"),
             );
             return;
@@ -256,7 +256,10 @@ impl NyaTermApp {
             {
                 let message = error.to_string();
                 self.fail_retry_preparation(&options, message.clone(), cx);
-                self.complete_mcp_session_open_failure(&connection.id, &message);
+                self.complete_mcp_session_open_failure(
+                    options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                    &message,
+                );
                 self.shell.set_status(message.clone());
                 self.notify_operation(
                     "rdp-backend",
@@ -276,7 +279,7 @@ impl NyaTermApp {
         });
         let Some(placement) = placement else {
             self.complete_mcp_session_open_failure(
-                &connection.id,
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 "could not reserve a tab position",
             );
             self.shell.set_status(format!(
@@ -293,7 +296,7 @@ impl NyaTermApp {
                 .start_reserve_saved_connection(&connection.id, placement)
         {
             self.complete_mcp_session_open_failure(
-                &connection.id,
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 "connection is already starting",
             );
             self.shell
@@ -316,7 +319,10 @@ impl NyaTermApp {
             let message = account_auth_error_message(
                 nyaterm_core::models::credentials::AccountAuthError::MissingAccount,
             );
-            self.complete_mcp_session_open_failure(&connection.id, &message);
+            self.complete_mcp_session_open_failure(
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                &message,
+            );
             self.session.start_release_saved_connection(&connection.id);
             self.fail_retry_preparation(&options, message.clone(), cx);
             self.shell.set_status(message);
@@ -358,7 +364,7 @@ impl NyaTermApp {
                                     Err(error) => {
                                         let error = account_auth_error_message(error);
                                         this.fail_retry_preparation(&options, error.clone(), cx);
-                                        this.complete_mcp_session_open_failure(&connection_id, &error);
+                                        this.complete_mcp_session_open_failure(options.mcp_open_operation_id.as_deref().unwrap_or(""), &error);
                                         this.session.start_release_saved_connection(&connection_id);
                                         this.shell.set_status(
                                             t!(
@@ -378,7 +384,7 @@ impl NyaTermApp {
                         Ok(None) => {
                             this.fail_retry_preparation(&options, "saved password was not found".to_string(), cx);
                             this.complete_mcp_session_open_failure(
-                                &connection_id,
+                                options.mcp_open_operation_id.as_deref().unwrap_or(""),
                                 "saved password was not found",
                             );
                             this.session
@@ -392,7 +398,7 @@ impl NyaTermApp {
                         Err(error) => {
                             this.fail_retry_preparation(&options, format!("could not load saved password: {error}"), cx);
                             this.complete_mcp_session_open_failure(
-                                &connection_id,
+                                options.mcp_open_operation_id.as_deref().unwrap_or(""),
                                 &format!("could not load saved password: {error}"),
                             );
                             this.session
@@ -407,7 +413,7 @@ impl NyaTermApp {
                     let Some(password) = password else {
                         this.fail_retry_preparation(&options, "saved password is empty or locked".to_string(), cx);
                         this.complete_mcp_session_open_failure(
-                            &connection_id,
+                            options.mcp_open_operation_id.as_deref().unwrap_or(""),
                             "saved password is empty or locked",
                         );
                         this.session
@@ -519,6 +525,11 @@ impl NyaTermApp {
                             let message =
                                 rust_i18n::t!("dialog.shellArgsUnclosedQuote").to_string();
                             self.fail_retry_preparation(&options, message.clone(), cx);
+                            self.complete_mcp_session_open_failure(
+                                options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                                &message,
+                            );
+                            self.session.start_release_saved_connection(&connection.id);
                             self.shell.set_status(message.clone());
                             self.notify_operation(
                                 "shell-arguments",
@@ -652,7 +663,10 @@ impl NyaTermApp {
                     Ok(_) => unreachable!("RDP connection"),
                     Err(error) => {
                         self.fail_retry_preparation(&options, error.clone(), cx);
-                        self.complete_mcp_session_open_failure(&connection.id, &error);
+                        self.complete_mcp_session_open_failure(
+                            options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                            &error,
+                        );
                         self.session.start_release_saved_connection(&connection.id);
                         self.shell.set_status(error);
                         cx.notify();
@@ -935,10 +949,16 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.remote_start_blocked_by_configuration_replacement(cx) {
+            self.complete_mcp_session_open_failure(
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                "configuration replacement",
+            );
+            self.session.start_release_saved_connection(&connection.id);
             return;
         }
 
         let SavedConnectionStartOptions {
+            mcp_open_operation_id,
             ssh_runtime_mode,
             custom_name,
             tab_color,
@@ -963,6 +983,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                mcp_open_operation_id,
                 requested_ssh_runtime_mode: ssh_runtime_mode,
                 connection_name: connection_name.clone(),
                 launch_config: None,

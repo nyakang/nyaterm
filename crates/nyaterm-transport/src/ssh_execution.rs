@@ -1,4 +1,5 @@
 //! SSH command execution, cancellation, and runtime adapters.
+pub mod streaming;
 use crate::{
     SshClientHandler, SshMultiplexHandle, SshSessionConfig, open_authenticated_ssh_handle,
 };
@@ -263,6 +264,7 @@ async fn collect_exec_channel(
     let mut stdout = String::new();
     let mut stderr = String::new();
     let mut exit_status = None;
+    let mut eof_seen = false;
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Success) => attempt.record_shell_reply(true),
@@ -282,8 +284,13 @@ async fn collect_exec_channel(
             }) => {
                 exit_status = Some(status);
             }
-            Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+            Some(ChannelMsg::Eof) => eof_seen = true,
+            Some(ChannelMsg::Close) | None => break,
             Some(_) => {}
+        }
+        // EOF alone is not process-exit evidence; exit status can arrive later.
+        if eof_seen && exit_status.is_some() {
+            break;
         }
     }
 

@@ -717,11 +717,7 @@ impl NyaTermApp {
             drain_timings.decode += stage_duration;
             chunk_timings.decode += stage_duration;
             let stage_started_at = Instant::now();
-            let result = self
-                .mcp
-                .capabilities
-                .terminal_executions
-                .process_output(session_id, &text);
+            let result = self.process_terminal_execution_output(session_id, &text, cx);
             let stage_duration = stage_started_at.elapsed();
             drain_timings.ai_capture += stage_duration;
             chunk_timings.ai_capture += stage_duration;
@@ -753,6 +749,7 @@ impl NyaTermApp {
                     session_id,
                     &id,
                     Ok(nyaterm_mcp_protocol::TerminalExecuteResult {
+                        job_id: None,
                         output: nyaterm_terminal::recording_sanitizer::RecordingSanitizer::default(
                         )
                         .feed(&captured.output),

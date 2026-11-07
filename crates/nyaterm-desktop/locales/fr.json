@@ -1,4 +1,7 @@
 {
+  "mcp": {
+    "confirmShellReady": "Shell rétabli : autoriser les commandes automatiques"
+  },
   "tray": {
     "show": "Afficher la fenêtre principale",
     "newWindow": "Nouvelle fenêtre",

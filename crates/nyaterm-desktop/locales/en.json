@@ -1,4 +1,7 @@
 {
+  "mcp": {
+    "confirmShellReady": "I have recovered the shell; allow automatic commands"
+  },
   "tray": {
     "show": "Show Main Window",
     "newWindow": "New Window",

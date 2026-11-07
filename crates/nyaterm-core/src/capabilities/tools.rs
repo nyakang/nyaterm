@@ -13,6 +13,16 @@ pub fn assess_tool_risk(tool_name: &str, arguments: &Value) -> Option<RiskAssess
             reason: "opening a saved connection changes live session state".to_string(),
             auto_executable: true,
         }),
+        tool::TERMINAL_START => {
+            serde_json::from_value::<nyaterm_mcp_protocol::TerminalStartArgs>(arguments.clone())
+                .ok()
+                .map(|args| assess_command_risk(&args.command))
+        }
+        tool::TERMINAL_STOP => Some(RiskAssessment {
+            level: RiskLevel::Medium,
+            reason: "interrupting the owned terminal job".into(),
+            auto_executable: true,
+        }),
         tool::TERMINAL_EXECUTE => serde_json::from_value::<TerminalExecuteArgs>(arguments.clone())
             .ok()
             .map(|args| assess_command_risk(&args.command)),

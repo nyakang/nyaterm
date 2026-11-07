@@ -104,6 +104,8 @@ mod tests {
     ) -> PendingCapabilityApproval {
         let (reply, _) = tokio::sync::oneshot::channel();
         let request = CapabilityRequest {
+            extended_results: true,
+            resolved_session_id: None,
             request_id: id.into(),
             connection_id: match &caller {
                 CapabilityCaller::Mcp => "external".into(),

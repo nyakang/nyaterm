@@ -183,6 +183,7 @@ impl NyaTermApp {
             return;
         };
         let mut pending = PendingSessionStart {
+            mcp_open_operation_id: None,
             requested_ssh_runtime_mode: source.requested_ssh_runtime_mode,
             attempt: Default::default(),
             connection_name: source.connection_name.clone(),

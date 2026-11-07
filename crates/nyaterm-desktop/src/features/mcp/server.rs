@@ -22,6 +22,8 @@ use crate::thread_owner::spawn_joinable;
 
 use super::discovery::DiscoveryStore;
 
+mod client_owners;
+
 const REQUEST_REPLY_TIMEOUT: Duration = Duration::from_secs(305);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -173,7 +175,13 @@ async fn run_listener(
         }
     };
     let cancellations = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let owners = Arc::new(tokio::sync::Mutex::new(
+        client_owners::ClientOwners::default(),
+    ));
     while !shutdown.load(Ordering::Acquire) {
+        for connection_id in owners.lock().await.expired() {
+            let _ = requests.unbounded_send(McpHostEvent::Disconnected { connection_id });
+        }
         match tokio::time::timeout(ACCEPT_POLL_INTERVAL, listener.accept()).await {
             Ok(Ok((stream, address))) if address.ip().is_loopback() => {
                 tokio::spawn(handle_connection(
@@ -181,6 +189,7 @@ async fn run_listener(
                     credential.clone(),
                     requests.clone(),
                     cancellations.clone(),
+                    owners.clone(),
                 ));
             }
             Ok(Ok((_stream, _))) => {}
@@ -192,13 +201,15 @@ async fn run_listener(
     }
 }
 
-type CancellationMap = Arc<tokio::sync::Mutex<HashMap<(String, String), CancellationToken>>>;
+type CancellationMap =
+    Arc<tokio::sync::Mutex<HashMap<(String, String, String), CancellationToken>>>;
 
 async fn handle_connection(
     stream: TcpStream,
     credentials: Arc<Mutex<HostCredential>>,
     requests: UnboundedSender<McpHostEvent>,
     cancellations: CancellationMap,
+    owners: Arc<tokio::sync::Mutex<client_owners::ClientOwners>>,
 ) {
     let peer = stream.peer_addr().ok();
     if peer.is_none_or(|address| !address.ip().is_loopback()) {
@@ -242,7 +253,10 @@ async fn handle_connection(
     }
     if write_response(
         &mut writer,
-        rpc_ok(request.id, json!({ "authenticated": true })),
+        rpc_ok(
+            request.id,
+            json!({ "authenticated": true, "features": ["client_resume", "mcp_lifecycle"] }),
+        ),
     )
     .await
     .is_err()
@@ -251,7 +265,8 @@ async fn handle_connection(
     }
 
     let mut client = "external MCP client".to_string();
-    let connection_id = uuid::Uuid::new_v4().to_string();
+    let mut connection_id = uuid::Uuid::new_v4().to_string();
+    let mut resumable = false;
     loop {
         let line = match read_rpc_line(&mut reader).await {
             Ok(Some(line)) => line,
@@ -271,6 +286,40 @@ async fn handle_connection(
             break;
         }
         let response = match request.method.as_str() {
+            "client.attach" => {
+                let token = request.params.get("resumeToken").and_then(Value::as_str);
+                let valid = request.params.as_object().is_some_and(|params| {
+                    params.keys().all(|key| key == "resumeToken")
+                        && params
+                            .get("resumeToken")
+                            .is_none_or(|value| value.is_null() || value.is_string())
+                });
+                if !valid {
+                    rpc_error(
+                        request.id,
+                        "invalid_argument",
+                        "Invalid client attachment parameters.",
+                    )
+                } else if resumable {
+                    rpc_error(
+                        request.id,
+                        "invalid_argument",
+                        "This connection already has an owner.",
+                    )
+                } else {
+                    match owners.lock().await.attach(&auth.generation, token) {
+                        Ok((owner, token)) => {
+                            connection_id = owner.clone();
+                            resumable = true;
+                            rpc_ok(
+                                request.id,
+                                json!({ "ownerId": owner, "resumeToken": token }),
+                            )
+                        }
+                        Err(message) => rpc_error(request.id, "resume_failed", message),
+                    }
+                }
+            }
             "client.identify" => {
                 match serde_json::from_value::<ClientIdentifyParams>(request.params) {
                     Ok(identity)
@@ -298,6 +347,7 @@ async fn handle_connection(
                     request.id,
                     request.params,
                     &auth.generation,
+                    &connection_id,
                     &cancellations,
                     &requests,
                 )
@@ -313,6 +363,8 @@ async fn handle_connection(
                     &credentials,
                     &requests,
                     &cancellations,
+                    &mut reader,
+                    resumable,
                 )
                 .await
             }
@@ -322,13 +374,18 @@ async fn handle_connection(
             break;
         }
     }
-    let _ = requests.unbounded_send(McpHostEvent::Disconnected { connection_id });
+    if resumable {
+        owners.lock().await.detach(&connection_id);
+    } else {
+        let _ = requests.unbounded_send(McpHostEvent::Disconnected { connection_id });
+    }
 }
 
 async fn handle_cancel(
     id: u64,
     params: Value,
     generation: &str,
+    owner: &str,
     cancellations: &CancellationMap,
     requests: &UnboundedSender<McpHostEvent>,
 ) -> RpcResponse {
@@ -336,11 +393,15 @@ async fn handle_cancel(
         return rpc_error(id, "invalid_argument", "Invalid cancellation request.");
     };
     let request_id = params.request_id;
-    let key = (generation.to_string(), request_id.clone());
+    let key = (
+        generation.to_string(),
+        owner.to_string(),
+        request_id.clone(),
+    );
     let cancelled = if let Some(token) = cancellations.lock().await.get(&key) {
         token.cancel();
         let _ = requests.unbounded_send(McpHostEvent::Cancelled {
-            request_id: format!("mcp:{generation}:{request_id}"),
+            request_id: format!("mcp:{generation}:{owner}:{request_id}"),
         });
         true
     } else {
@@ -359,6 +420,8 @@ async fn handle_execute(
     credentials: &Arc<Mutex<HostCredential>>,
     requests: &UnboundedSender<McpHostEvent>,
     cancellations: &CancellationMap,
+    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    extended_results: bool,
 ) -> RpcResponse {
     let Ok(params) = serde_json::from_value::<CapabilityExecuteParams>(params) else {
         return rpc_error(id, "invalid_argument", "Invalid capability request.");
@@ -376,7 +439,11 @@ async fn handle_execute(
         .request_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let cancellation = CancellationToken::new();
-    let key = (credential.generation.clone(), request_id.clone());
+    let key = (
+        credential.generation.clone(),
+        connection_id.to_string(),
+        request_id.clone(),
+    );
     {
         let mut pending = cancellations.lock().await;
         if pending.contains_key(&key) {
@@ -386,8 +453,10 @@ async fn handle_execute(
     }
     let (reply, result) = oneshot::channel();
     let request = McpHostRequest {
+        extended_results,
+        resolved_session_id: None,
         connection_id: connection_id.to_string(),
-        request_id: format!("mcp:{}:{request_id}", credential.generation),
+        request_id: format!("mcp:{}:{connection_id}:{request_id}", credential.generation),
         generation: credential.generation,
         client: client.to_string(),
         permission_mode: credential.permission_mode,
@@ -408,6 +477,10 @@ async fn handle_execute(
         return rpc_error(id, "host_unavailable", "NyaTerm MCP Host is unavailable.");
     }
     let result = tokio::select! {
+        _ = reader.fill_buf() => {
+            cancellation.cancel();
+            Err(rpc_failure("bridge_disconnected", "The client disconnected or pipelined an unsupported request; the operation may already have started."))
+        },
         _ = cancellation.cancelled() => Err(rpc_failure("cancelled", "The MCP request was cancelled.")),
         result = tokio::time::timeout(REQUEST_REPLY_TIMEOUT, result) => match result {
             Ok(Ok(result)) => result,

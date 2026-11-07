@@ -707,6 +707,36 @@ impl NyaTermApp {
                                     }),
                                 ))
                             })
+                            .when(
+                                self.mcp
+                                    .capabilities
+                                    .terminal_executions
+                                    .recovery_required(&session_id),
+                                |menu| {
+                                    let recovery_id = session_id.clone();
+                                    menu.child(tab_menu_item(
+                                        palette,
+                                        "tab-actions-confirm-shell-ready",
+                                        t!("mcp.confirmShellReady"),
+                                        cx.listener(move |this, _, _window, cx| {
+                                            this.close_tab_actions(cx);
+                                            if !this.security.screen_locked()
+                                                && !this.session.is_disconnected(&recovery_id)
+                                            {
+                                                this.mcp
+                                                    .capabilities
+                                                    .terminal_executions
+                                                    .confirm_recovered(&recovery_id);
+                                                this.sync_session_event_bridge_session_policy(
+                                                    &recovery_id,
+                                                );
+                                                this.arm_terminal_input_wake(cx);
+                                                cx.notify();
+                                            }
+                                        }),
+                                    ))
+                                },
+                            )
                             .when(support.ai, |this| {
                                 this.child(tab_actions_submenu_host(
                                     "tab-actions-ai-submenu",

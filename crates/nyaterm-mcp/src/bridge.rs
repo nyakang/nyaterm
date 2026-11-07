@@ -1,5 +1,8 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use nyaterm_mcp_protocol::{
@@ -45,6 +48,8 @@ impl BridgeEndpoint {
 }
 
 struct Connection {
+    client_resume: bool,
+    lifecycle: bool,
     reader: BufReader<tokio::net::tcp::OwnedReadHalf>,
     writer: tokio::net::tcp::OwnedWriteHalf,
     next_id: u64,
@@ -56,6 +61,8 @@ pub struct BridgeClient {
     endpoint: BridgeEndpoint,
     connection: Arc<Mutex<Option<Connection>>>,
     identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
+    resume_token: Arc<Mutex<Option<nyaterm_core::SecretString>>>,
+    lifecycle: Arc<AtomicBool>,
 }
 
 impl BridgeClient {
@@ -64,7 +71,13 @@ impl BridgeClient {
             endpoint,
             connection: Arc::new(Mutex::new(None)),
             identity: Arc::new(Mutex::new(None)),
+            resume_token: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn supports_lifecycle(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire)
     }
 
     pub async fn identify(&self, name: String, version: Option<String>) {
@@ -80,6 +93,12 @@ impl BridgeClient {
         arguments: Value,
         cancellation: CancellationToken,
     ) -> Result<Value, RpcError> {
+        if cancellation.is_cancelled() {
+            return Err(bridge_error(
+                "cancelled",
+                "The tool call was cancelled before submission.",
+            ));
+        }
         let request_id = uuid::Uuid::new_v4().to_string();
         let params = serde_json::to_value(CapabilityExecuteParams {
             request_id: Some(request_id.clone()),
@@ -88,12 +107,19 @@ impl BridgeClient {
         })
         .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
         let mut guard = self.connection.lock().await;
+        if cancellation.is_cancelled() {
+            return Err(bridge_error(
+                "cancelled",
+                "The tool call was cancelled before submission.",
+            ));
+        }
         self.ensure_connection(&mut guard, true).await?;
         let connection = guard.as_mut().unwrap();
         let result = tokio::select! {
             _ = cancellation.cancelled() => {
                 let endpoint = self.endpoint.clone();
-                tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id).await; });
+                let resume = self.resume_token.lock().await.clone();
+                tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id, resume.as_ref()).await; });
                 *guard = None;
                 return Err(bridge_error("cancelled", "The MCP tool call was cancelled."));
             }
@@ -120,6 +146,14 @@ impl BridgeClient {
             return Ok(());
         }
         let mut connection = connect(&self.endpoint).await.map_err(io_error)?;
+        self.lifecycle
+            .store(connection.lifecycle, Ordering::Release);
+        if connection.client_resume {
+            let resume = self.resume_token.lock().await.clone();
+            let token = attach_owner(&mut connection, resume.as_ref()).await?;
+            *self.resume_token.lock().await = Some(token);
+        }
+
         if replay_identity && let Some(identity) = self.identity.lock().await.clone() {
             let params = serde_json::to_value(identity)
                 .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
@@ -211,6 +245,8 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
     let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port)).await?;
     let (read, write) = stream.into_split();
     let mut connection = Connection {
+        client_resume: false,
+        lifecycle: false,
         reader: BufReader::new(read),
         writer: write,
         next_id: 1,
@@ -221,18 +257,52 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
         generation: endpoint.generation.clone(),
     })
     .map_err(std::io::Error::other)?;
-    connection_rpc(&mut connection, "auth", params)
+    let authenticated = connection_rpc(&mut connection, "auth", params)
         .await
         .map_err(|error| match error {
             ConnectionRpcError::Remote(error) | ConnectionRpcError::Disconnected(error) => {
                 std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.message)
             }
         })?;
+    connection.client_resume = authenticated["features"]
+        .as_array()
+        .is_some_and(|f| f.iter().any(|v| v == "client_resume"));
+    connection.lifecycle = authenticated["features"]
+        .as_array()
+        .is_some_and(|f| f.iter().any(|v| v == "mcp_lifecycle"));
     Ok(connection)
 }
 
-async fn cancel_request(endpoint: &BridgeEndpoint, request_id: &str) -> std::io::Result<()> {
+async fn attach_owner(
+    connection: &mut Connection,
+    resume: Option<&nyaterm_core::SecretString>,
+) -> Result<nyaterm_core::SecretString, RpcError> {
+    let params = serde_json::json!({ "resumeToken": resume.map(|s| s.expose_secret()) });
+    let result = connection_rpc(connection, "client.attach", params)
+        .await
+        .map_err(|e| match e {
+            ConnectionRpcError::Remote(e) | ConnectionRpcError::Disconnected(e) => e,
+        })?;
+    let token = result["resumeToken"]
+        .as_str()
+        .filter(|token| token.len() == 64)
+        .ok_or_else(|| {
+            bridge_error("bridge_protocol_error", "Invalid client recovery response.")
+        })?;
+    Ok(nyaterm_core::SecretString::new(token.to_string()))
+}
+
+async fn cancel_request(
+    endpoint: &BridgeEndpoint,
+    request_id: &str,
+    resume: Option<&nyaterm_core::SecretString>,
+) -> std::io::Result<()> {
     let mut connection = connect(endpoint).await?;
+    if connection.client_resume {
+        attach_owner(&mut connection, resume)
+            .await
+            .map_err(|e| std::io::Error::other(e.code))?;
+    }
     let params = serde_json::to_value(RequestCancelParams {
         request_id: request_id.to_string(),
     })
@@ -625,6 +695,64 @@ mod tests {
         );
         server.await.unwrap();
         assert_eq!(auth_count.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test]
+    async fn lost_response_resumes_the_same_owner_without_automatic_side_effect_replay() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let token = "a".repeat(64);
+            for index in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = stream.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                let auth = request(&mut lines).await;
+                assert_eq!(auth.method, "auth");
+                respond(
+                    &mut writer,
+                    auth.id,
+                    json!({"authenticated":true,"features":["client_resume","mcp_lifecycle"]}),
+                )
+                .await;
+                let attach = request(&mut lines).await;
+                assert_eq!(attach.method, "client.attach");
+                if index == 0 {
+                    assert!(attach.params["resumeToken"].is_null());
+                } else {
+                    assert_eq!(attach.params["resumeToken"], token);
+                }
+                respond(
+                    &mut writer,
+                    attach.id,
+                    json!({"ownerId":"owner","resumeToken":token}),
+                )
+                .await;
+                let call = request(&mut lines).await;
+                assert_eq!(call.method, "capability.execute");
+                assert_eq!(call.params["arguments"]["idempotencyKey"], "key");
+                if index == 1 {
+                    respond(&mut writer, call.id, json!({"sessionId":"created-once"})).await;
+                }
+                // The first submitted operation survives a lost response at the Host.
+            }
+        });
+        let client = BridgeClient::new(BridgeEndpoint::for_test(port));
+        let args = json!({"connectionId":"saved","idempotencyKey":"key"});
+        assert!(
+            client
+                .call("session_open", args.clone(), CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert!(client.supports_lifecycle());
+        assert_eq!(
+            client
+                .call("session_open", args, CancellationToken::new())
+                .await
+                .unwrap()["sessionId"],
+            "created-once"
+        );
+        server.await.unwrap();
     }
 }
 

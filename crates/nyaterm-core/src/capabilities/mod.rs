@@ -4,6 +4,7 @@ mod output_store;
 mod policy;
 mod scope;
 mod sftp;
+pub mod stream_output;
 mod tools;
 
 pub use output_store::{

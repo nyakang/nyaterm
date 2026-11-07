@@ -8,25 +8,51 @@ const MARKER_PREFIX: &str = "__DF_CMD_";
 /// After observation stops, let ordinary output through while removing only this
 /// request's late markers. This never retains an unbounded server-controlled tail.
 pub struct RetiredCaptureFilter {
+    marker_id: String,
+    exit_code: Option<i32>,
     start: String,
     end: String,
     pending: String,
     control_filter: CaptureControlFilter,
     finished: bool,
+    observer: Option<AgentOutputCaptureProcessor>,
+    observed_output: String,
 }
 
 impl RetiredCaptureFilter {
     pub fn new(id: &str) -> Self {
         Self {
+            marker_id: id.into(),
+            exit_code: None,
             start: format!("{MARKER_PREFIX}START_{id}__"),
             end: format!("{MARKER_PREFIX}END_{id}_"),
             pending: String::new(),
             control_filter: CaptureControlFilter::default(),
             finished: false,
+            observer: None,
+            observed_output: String::new(),
         }
     }
 
+    pub fn disable_observation(&mut self) {
+        self.observer = None;
+        self.observed_output.clear();
+    }
+    pub fn marker_id(&self) -> &str {
+        &self.marker_id
+    }
+    pub fn take_observed_output(&mut self) -> String {
+        std::mem::take(&mut self.observed_output)
+    }
+    pub fn completed_marker(&self) -> Option<(&str, i32)> {
+        self.exit_code.map(|code| (self.marker_id.as_str(), code))
+    }
+
     pub fn process(&mut self, text: &str) -> (String, bool) {
+        if let Some(observer) = self.observer.as_mut() {
+            self.observed_output
+                .push_str(&observer.process(text).recording_text);
+        }
         let mut output = String::with_capacity(text.len());
         let filtered = self.control_filter.process(text);
         for ch in filtered.text.chars() {
@@ -40,10 +66,11 @@ impl RetiredCaptureFilter {
                     break;
                 }
                 if let Some(code) = self.pending.strip_prefix(&self.end) {
-                    if code
+                    if let Some(code) = code
                         .strip_suffix("__")
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
+                        .and_then(|code| code.parse::<i32>().ok())
                     {
+                        self.exit_code = Some(code);
                         self.pending.clear();
                         self.finished = true;
                         break;
@@ -101,6 +128,7 @@ enum CapturePhase {
 #[derive(Debug)]
 struct ActiveCapture {
     buffer: String,
+    retain_output: bool,
     phase: CapturePhase,
     start_time: Instant,
     source_truncated: bool,
@@ -111,7 +139,7 @@ struct ActiveCapture {
 
 /// Control strings are opaque to marker matching. CMD titles can contain copies
 /// of the wrapper's markers, including an END marker with a numeric exit status.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CaptureControlFilter {
     pending: String,
     // OSC accepts BEL as well as ST; the other control strings accept only ST.
@@ -228,6 +256,7 @@ impl AgentOutputCaptureProcessor {
             marker_id,
             ActiveCapture {
                 buffer: String::new(),
+                retain_output: true,
                 phase: CapturePhase::WaitingForStart,
                 start_time: Instant::now(),
                 source_truncated: false,
@@ -236,6 +265,20 @@ impl AgentOutputCaptureProcessor {
                 end_newline,
             },
         );
+    }
+
+    pub fn register_streaming(&mut self, id: String, end_newline: bool) {
+        self.register_with_end_newline(id.clone(), end_newline);
+        self.active
+            .get_mut(&id)
+            .expect("registered capture")
+            .retain_output = false;
+    }
+
+    pub fn marker_started(&self, id: &str) -> bool {
+        self.active
+            .get(id)
+            .is_some_and(|c| c.phase != CapturePhase::WaitingForStart)
     }
 
     pub fn has_active(&self) -> bool {
@@ -254,7 +297,28 @@ impl AgentOutputCaptureProcessor {
     /// Keep partial markers and control strings opaque after observation stops.
     pub fn retire(&mut self, marker_id: &str) -> RetiredCaptureFilter {
         let mut filter = RetiredCaptureFilter::new(marker_id);
+        if let Some(active) = self.active.get(marker_id) {
+            let mut observer = AgentOutputCaptureProcessor::new();
+            observer.active.insert(
+                marker_id.into(),
+                ActiveCapture {
+                    buffer: String::new(),
+                    retain_output: false,
+                    phase: active.phase,
+                    start_time: active.start_time,
+                    source_truncated: active.source_truncated,
+                    start_newline: active.start_newline,
+                    recording_tail: String::new(),
+                    end_newline: active.end_newline,
+                },
+            );
+            observer.pending_marker_tail = self.pending_marker_tail.clone();
+            observer.control_filter = self.control_filter.clone();
+            filter.observer = Some(observer);
+        }
+        let observer = filter.observer.take();
         filter.process(&std::mem::take(&mut self.pending_marker_tail));
+        filter.observer = observer;
         filter.control_filter = std::mem::take(&mut self.control_filter);
         filter
     }
@@ -509,6 +573,9 @@ fn append_capture_output(capture: &mut ActiveCapture, text: &str, recording_text
             0
         };
         capture.recording_tail = recording_text.split_off(recording_text.len() - tail_len);
+    }
+    if !capture.retain_output {
+        return;
     }
     let available = MAX_CAPTURE_BYTES.saturating_sub(capture.buffer.len());
     let mut end = available.min(text.len());

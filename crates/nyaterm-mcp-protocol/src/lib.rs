@@ -14,6 +14,9 @@ pub mod capability {
     pub const SESSION_OPEN: &str = "session.open";
     pub const SESSION_GET: &str = "session.get";
     pub const TERMINAL_EXECUTE: &str = "terminal.execute";
+    pub const TERMINAL_START: &str = "terminal.start";
+    pub const TERMINAL_POLL: &str = "terminal.poll";
+    pub const TERMINAL_STOP: &str = "terminal.stop";
     pub const TERMINAL_RECENT_OUTPUT: &str = "terminal.recent_output";
     pub const SFTP_HOME: &str = "sftp.home";
     pub const SFTP_LIST: &str = "sftp.list";
@@ -33,6 +36,9 @@ pub mod tool {
     pub const SESSION_OPEN: &str = "session_open";
     pub const SESSION_GET: &str = "session_get";
     pub const TERMINAL_EXECUTE: &str = "terminal_execute";
+    pub const TERMINAL_START: &str = "terminal_start";
+    pub const TERMINAL_POLL: &str = "terminal_poll";
+    pub const TERMINAL_STOP: &str = "terminal_stop";
     pub const TERMINAL_RECENT_OUTPUT: &str = "terminal_recent_output";
     pub const SFTP_HOME: &str = "sftp_home";
     pub const SFTP_LIST: &str = "sftp_list";
@@ -90,7 +96,7 @@ pub const MCP_TOOL_REGISTRY: &[McpToolDefinition] = &[
     McpToolDefinition {
         tool: tool::SESSION_OPEN,
         capability: capability::SESSION_OPEN,
-        description: "Open a new NyaTerm terminal session from a saved connection.",
+        description: "Open a saved terminal connection. Default mode=create opens a new session. Prefer mode=reuse_or_create to obtain a usable authorized shell; use an idempotencyKey for retries.",
         access: CapabilityAccess::Write,
         requires_session: false,
         read_only_hint: false,
@@ -113,6 +119,36 @@ pub const MCP_TOOL_REGISTRY: &[McpToolDefinition] = &[
         description: "Execute a command in an existing scoped NyaTerm terminal session.",
         access: CapabilityAccess::Write,
         requires_session: true,
+        read_only_hint: false,
+        destructive_hint: false,
+        open_world_hint: true,
+    },
+    McpToolDefinition {
+        tool: tool::TERMINAL_START,
+        capability: capability::TERMINAL_START,
+        description: "Start a noninteractive job. Defaults to the current inline PTY; ssh_exec is explicit and does not inherit its cwd or environment. Use an idempotencyKey for retries.",
+        access: CapabilityAccess::Write,
+        requires_session: true,
+        read_only_hint: false,
+        destructive_hint: false,
+        open_world_hint: true,
+    },
+    McpToolDefinition {
+        tool: tool::TERMINAL_POLL,
+        capability: capability::TERMINAL_POLL,
+        description: "Read incremental UTF-8 output and execution/terminal state of a job owned by this client. eof only means the current output tail, not process completion.",
+        access: CapabilityAccess::SensitiveRead,
+        requires_session: false,
+        read_only_hint: true,
+        destructive_hint: false,
+        open_world_hint: true,
+    },
+    McpToolDefinition {
+        tool: tool::TERMINAL_STOP,
+        capability: capability::TERMINAL_STOP,
+        description: "Request one interrupt of an owned job. Accepted or sent does not mean the remote command has exited; poll to confirm. An uncertain inline terminal needs manual recovery.",
+        access: CapabilityAccess::Write,
+        requires_session: false,
         read_only_hint: false,
         destructive_hint: false,
         open_world_hint: true,
@@ -324,6 +360,133 @@ pub struct SessionArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionOpenArgs {
     pub connection_id: String,
+    #[serde(default)]
+    pub mode: SessionOpenMode,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOpenMode {
+    #[default]
+    Create,
+    ReuseOrCreate,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalBackend {
+    #[default]
+    InlinePty,
+    SshExec,
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalStartArgs {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub backend: TerminalBackend,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalPollArgs {
+    pub job_id: String,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalStopArgs {
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalJobStatus {
+    Starting,
+    Running,
+    Cancelling,
+    Completed,
+    Failed,
+    TimedOut,
+    Cancelled,
+    Disconnected,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalProcessState {
+    NotStarted,
+    Active,
+    ExitConfirmed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalAvailability {
+    Ready,
+    Busy,
+    RecoveryRequired,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalStartResult {
+    pub job_id: String,
+    pub session_id: String,
+    pub backend: TerminalBackend,
+    pub status: TerminalJobStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalPollResult {
+    pub job_id: String,
+    pub session_id: String,
+    pub backend: TerminalBackend,
+    pub status: TerminalJobStatus,
+    pub process_state: TerminalProcessState,
+    pub terminal_state: TerminalAvailability,
+    pub session_exists: bool,
+    pub connected: bool,
+    pub exit_code: Option<i32>,
+    pub started_at_ms: u64,
+    pub ended_at_ms: Option<u64>,
+    pub output: String,
+    pub offset: usize,
+    pub next_offset: usize,
+    pub base_offset: usize,
+    pub total_bytes: usize,
+    pub eof: bool,
+    pub output_complete: bool,
+    pub source_truncated: bool,
+    pub dropped_before_offset: bool,
+    pub stop_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalStopResult {
+    pub job_id: String,
+    pub status: TerminalJobStatus,
+    pub stop_state: String,
+    pub process_state: TerminalProcessState,
+    pub terminal_state: TerminalAvailability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -336,6 +499,10 @@ pub struct PathArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalExecuteArgs {
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub return_job: bool,
     #[serde(default)]
     pub session_id: Option<String>,
     pub command: String,
@@ -427,6 +594,12 @@ impl std::error::Error for ToolContractError {}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_state: Option<TerminalAvailability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_job_id: Option<String>,
     pub id: String,
     pub name: String,
     pub r#type: String,
@@ -469,6 +642,12 @@ pub struct SessionOpenResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionGetResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_state: Option<TerminalAvailability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_job_id: Option<String>,
     pub id: String,
     pub name: String,
     pub r#type: String,
@@ -481,6 +660,8 @@ pub struct SessionGetResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalExecuteResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
     pub output: String,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
@@ -602,6 +783,7 @@ pub fn validate_tool_arguments(name: &str, value: &Value) -> Result<(), ToolCont
         tool::SESSION_OPEN => {
             let args = parse_contract::<SessionOpenArgs>(name, value)?;
             require_identifier(name, "connectionId", &args.connection_id)?;
+            validate_idempotency_key(name, args.idempotency_key.as_deref())?;
         }
         tool::SESSION_GET | tool::SFTP_HOME => {
             let args = parse_contract::<SessionArgs>(name, value)?;
@@ -609,6 +791,7 @@ pub fn validate_tool_arguments(name: &str, value: &Value) -> Result<(), ToolCont
         }
         tool::TERMINAL_EXECUTE => {
             let args = parse_contract::<TerminalExecuteArgs>(name, value)?;
+            validate_idempotency_key(name, args.idempotency_key.as_deref())?;
             if let Some(id) = args.session_id.as_deref() {
                 require_identifier(name, "sessionId", id)?;
             }
@@ -624,6 +807,42 @@ pub fn validate_tool_arguments(name: &str, value: &Value) -> Result<(), ToolCont
             {
                 return contract_error(name, "timeoutMs must be between 1000 and 300000");
             }
+        }
+        tool::TERMINAL_START => {
+            let args = parse_contract::<TerminalStartArgs>(name, value)?;
+            if let Some(id) = args.session_id.as_deref() {
+                require_identifier(name, "sessionId", id)?;
+            }
+            validate_idempotency_key(name, args.idempotency_key.as_deref())?;
+            if args.command.trim().is_empty()
+                || args.command.len() > MAX_TEXT_WRITE_BYTES
+                || args.command.contains('\0')
+            {
+                return contract_error(
+                    name,
+                    "command must be nonempty, NUL-free and at most 1 MiB",
+                );
+            }
+            if args
+                .timeout_ms
+                .is_some_and(|t| !(1_000..=86_400_000).contains(&t))
+            {
+                return contract_error(name, "timeoutMs must be between 1000 and 86400000");
+            }
+        }
+        tool::TERMINAL_POLL => {
+            let args = parse_contract::<TerminalPollArgs>(name, value)?;
+            require_identifier(name, "jobId", &args.job_id)?;
+            if args
+                .max_bytes
+                .is_some_and(|n| !(4..=MAX_INLINE_OUTPUT_BYTES).contains(&n))
+            {
+                return contract_error(name, "maxBytes must be between 4 and 65536");
+            }
+        }
+        tool::TERMINAL_STOP => {
+            let args = parse_contract::<TerminalStopArgs>(name, value)?;
+            require_identifier(name, "jobId", &args.job_id)?;
         }
         tool::TERMINAL_RECENT_OUTPUT => {
             let args = parse_contract::<TerminalRecentOutputArgs>(name, value)?;
@@ -693,16 +912,20 @@ pub fn validate_tool_arguments(name: &str, value: &Value) -> Result<(), ToolCont
     Ok(())
 }
 
+fn schema<T: JsonSchema>() -> Value {
+    serde_json::to_value(schemars::schema_for!(T)).expect("serializable tool schema")
+}
+
 /// Canonical schemas shared by the MCP sidecar and the native agent providers.
 pub fn tool_input_schema(name: &str) -> Result<Value, ToolContractError> {
-    fn schema<T: JsonSchema>() -> Value {
-        serde_json::to_value(schemars::schema_for!(T)).expect("serializable tool schema")
-    }
     Ok(match name {
         tool::GET_ENVIRONMENT | tool::CONNECTION_LIST => schema::<EmptyArgs>(),
         tool::SESSION_OPEN => schema::<SessionOpenArgs>(),
         tool::SESSION_GET | tool::SFTP_HOME => schema::<SessionArgs>(),
         tool::TERMINAL_EXECUTE => schema::<TerminalExecuteArgs>(),
+        tool::TERMINAL_START => schema::<TerminalStartArgs>(),
+        tool::TERMINAL_POLL => schema::<TerminalPollArgs>(),
+        tool::TERMINAL_STOP => schema::<TerminalStopArgs>(),
         tool::TERMINAL_RECENT_OUTPUT => schema::<TerminalRecentOutputArgs>(),
         tool::SFTP_LIST | tool::SFTP_STAT | tool::SFTP_DELETE => schema::<PathArgs>(),
         tool::SFTP_READ_TEXT => schema::<SftpReadTextArgs>(),
@@ -713,6 +936,16 @@ pub fn tool_input_schema(name: &str) -> Result<Value, ToolContractError> {
         tool::OUTPUT_READ => schema::<OutputReadArgs>(),
         _ => return contract_error(name, "unknown NyaTerm MCP tool"),
     })
+}
+
+/// Job results stay structured rather than using the legacy static-output envelope.
+pub fn terminal_job_result_schema(name: &str) -> Option<Value> {
+    match name {
+        tool::TERMINAL_START => Some(schema::<TerminalStartResult>()),
+        tool::TERMINAL_POLL => Some(schema::<TerminalPollResult>()),
+        tool::TERMINAL_STOP => Some(schema::<TerminalStopResult>()),
+        _ => None,
+    }
 }
 
 pub fn validate_tool_result(name: &str, value: &Value) -> Result<(), ToolContractError> {
@@ -728,6 +961,9 @@ pub fn validate_tool_result(name: &str, value: &Value) -> Result<(), ToolContrac
         tool::SESSION_OPEN => parse_contract::<SessionOpenResult>(name, value).map(drop),
         tool::SESSION_GET => parse_contract::<SessionGetResult>(name, value).map(drop),
         tool::TERMINAL_EXECUTE => parse_contract::<TerminalExecuteResult>(name, value).map(drop),
+        tool::TERMINAL_START => parse_contract::<TerminalStartResult>(name, value).map(drop),
+        tool::TERMINAL_POLL => parse_contract::<TerminalPollResult>(name, value).map(drop),
+        tool::TERMINAL_STOP => parse_contract::<TerminalStopResult>(name, value).map(drop),
         tool::TERMINAL_RECENT_OUTPUT => {
             parse_contract::<TerminalRecentOutputResult>(name, value).map(drop)
         }
@@ -929,8 +1165,8 @@ mod contract_tests {
     }
 
     #[test]
-    fn registry_contains_exactly_the_required_sixteen_tools_and_limits() {
-        assert_eq!(MCP_TOOL_REGISTRY.len(), 16);
+    fn registry_contains_legacy_tools_and_three_job_tools_with_limits() {
+        assert_eq!(MCP_TOOL_REGISTRY.len(), 19);
         assert_eq!(
             MCP_TOOL_REGISTRY.first().unwrap().tool,
             tool::GET_ENVIRONMENT
@@ -1033,5 +1269,90 @@ mod contract_tests {
             }),
         };
         assert!(both.validate_envelope().is_err());
+    }
+}
+
+fn validate_idempotency_key(name: &str, key: Option<&str>) -> Result<(), ToolContractError> {
+    if let Some(key) = key {
+        require_identifier(name, "idempotencyKey", key)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod lifecycle_contract_tests {
+    use super::{
+        SessionOpenArgs, SessionOpenMode, TerminalBackend, TerminalExecuteArgs,
+        TerminalExecuteResult, TerminalStartArgs, tool, validate_tool_arguments,
+    };
+    use serde_json::json;
+    #[test]
+    fn omitted_new_parameters_preserve_legacy_open_execute_and_result_shapes() {
+        let open: SessionOpenArgs =
+            serde_json::from_value(json!({"connectionId":"saved"})).unwrap();
+        assert_eq!(open.mode, SessionOpenMode::Create);
+        assert!(open.idempotency_key.is_none());
+        let execute: TerminalExecuteArgs =
+            serde_json::from_value(json!({"command":"pwd"})).unwrap();
+        assert!(!execute.return_job);
+        let result:TerminalExecuteResult=serde_json::from_value(json!({"output":"ok","exitCode":0,"durationMs":1,"timedOut":false,"sourceTruncated":false})).unwrap();
+        assert!(serde_json::to_value(result).unwrap().get("jobId").is_none());
+        let start: TerminalStartArgs = serde_json::from_value(json!({"command":"pwd"})).unwrap();
+        assert_eq!(start.backend, TerminalBackend::InlinePty);
+    }
+    #[test]
+    fn long_jobs_validate_timeouts_backends_keys_and_utf8_page_budgets() {
+        for timeout in [1000, 300000, 86400000] {
+            assert!(validate_tool_arguments(tool::TERMINAL_START,&json!({"command":"echo 中文","timeoutMs":timeout,"backend":"ssh_exec","idempotencyKey":"key"})).is_ok());
+        }
+        for timeout in [999, 86400001] {
+            assert!(
+                validate_tool_arguments(
+                    tool::TERMINAL_START,
+                    &json!({"command":"pwd","timeoutMs":timeout})
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_tool_arguments(
+                tool::TERMINAL_START,
+                &json!({"command":"pwd","backend":"other"})
+            )
+            .is_err()
+        );
+        assert!(
+            validate_tool_arguments(tool::TERMINAL_START, &json!({"command":"bad\0command"}))
+                .is_err()
+        );
+        assert!(
+            validate_tool_arguments(
+                tool::TERMINAL_START,
+                &json!({"command":"pwd","idempotencyKey":""})
+            )
+            .is_err()
+        );
+        for bytes in [4, 16384, 65536] {
+            assert!(
+                validate_tool_arguments(
+                    tool::TERMINAL_POLL,
+                    &json!({"jobId":"job","maxBytes":bytes})
+                )
+                .is_ok()
+            );
+        }
+        for bytes in [3, 65537] {
+            assert!(
+                validate_tool_arguments(
+                    tool::TERMINAL_POLL,
+                    &json!({"jobId":"job","maxBytes":bytes})
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_tool_arguments(tool::TERMINAL_STOP, &json!({"jobId":"job","force":true}))
+                .is_err()
+        );
     }
 }

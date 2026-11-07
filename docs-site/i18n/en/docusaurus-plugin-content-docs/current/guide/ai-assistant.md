@@ -158,3 +158,21 @@ For files in the SFTP file explorer, you can send file content to AI for analysi
 ### Error auto-detection
 
 When terminal output matches error patterns, AI Assistant can suggest analyzing the error automatically.
+
+## MCP execution lifecycle
+
+`session_open` creates a new session by default. Set `mode: "reuse_or_create"` to reuse a connected, executable terminal from the same saved connection within the current scope. Names and addresses do not identify a saved connection. An explicit scope is never widened automatically.
+
+Use `idempotencyKey` on session opens and terminal executions to recover the original operation after a lost response. Keys bind the client, tool and normalized parameters. Changed parameters conflict; confirmed failures require a new key. Expired keys cannot execute again, and a full ledger rejects new records.
+
+`terminal_execute` retains its synchronous timeout and result contract; `returnJob: true` adds `jobId`. For long work, call `terminal_start` with `sessionId`, `command`, optional `backend`, `timeoutMs` and `idempotencyKey`. Poll the returned `jobId` with `terminal_poll`, passing the previous `nextOffset`. Pages default to 16 KiB and use UTF-8 byte boundaries. `baseOffset`, `droppedBeforeOffset` and `sourceTruncated` describe lost output separately from pagination. Job status, remote exit evidence and terminal availability are separate fields.
+
+The integrated client's legacy local background mode remains available, but rejects `returnJob: true`. Use `terminal_start` with `inline_pty` for a pollable local job.
+
+The default `inline_pty` backend preserves the current shell directory and variables. Only one automatic command can occupy a shell. Timeout, uncertain writes, cancellation or output loss require recovery before further automatic execution. Manually interrupt and inspect the shell, then use **Confirm shell is ready** in the terminal tab menu. A matching late END marker also confirms recovery. Ordinary output, time passing and Ctrl+C alone do not prove recovery. Commands are never replayed automatically.
+
+SSH sessions may explicitly select `ssh_exec`, an auxiliary channel that does not inherit interactive shell state. `terminal_stop` sends at most one safe Ctrl+C or channel INT and never escalates to KILL. It distinguishes accepted, sent, confirmed, unconfirmed, manual recovery and invalid targets. EOF does not prove process exit. Stop remains unconfirmed after two seconds without exit evidence; reaching the execution deadline closes only the auxiliary channel.
+
+Long jobs default to five minutes and accept one second through twenty-four hours. Rolling output limits are 4 MiB per job, 16 MiB per client and 64 MiB globally. Active limits are eight jobs per client and thirty-two globally. Completed results remain for ten minutes. Every poll, stop and result recovery checks owner and current scope. Startup approval grants access to that job's output. Revoking access does not kill a process or close the user's SSH session.
+
+The Host issues an in-memory recovery credential for reconnecting the same sidecar process. A sidecar restart cannot inherit previous jobs. Submitted jobs continue after an RPC disconnect, and the bridge never replays a side-effect request. Old Hosts omit unsupported job tools and parameters; old sidecars retain the original result shape on new Hosts.

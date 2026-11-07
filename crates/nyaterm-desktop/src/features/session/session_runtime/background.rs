@@ -158,6 +158,7 @@ impl NyaTermApp {
             .map(str::to_string)
             .unwrap_or_else(uuid);
         let PendingSessionStartRegistration {
+            mcp_open_operation_id,
             requested_ssh_runtime_mode,
             connection_name,
             launch_config,
@@ -191,6 +192,7 @@ impl NyaTermApp {
         let reconnecting = self.session.start.register_pending(
             request_id.clone(),
             PendingSessionStart {
+                mcp_open_operation_id,
                 requested_ssh_runtime_mode,
                 attempt: Default::default(),
                 connection_name: connection_name.clone(),
@@ -257,6 +259,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            mcp_open_operation_id,
             ssh_runtime_mode: _,
             custom_name,
             tab_color,
@@ -275,6 +278,7 @@ impl NyaTermApp {
             .then(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(launch_config.clone()),
@@ -376,6 +380,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            mcp_open_operation_id,
             ssh_runtime_mode,
             custom_name,
             tab_color,
@@ -404,6 +409,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config.clone()))),
@@ -509,6 +515,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            mcp_open_operation_id,
             ssh_runtime_mode: _,
             custom_name,
             tab_color,
@@ -539,6 +546,7 @@ impl NyaTermApp {
             .unwrap_or_else(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
                 launch_config: Some(SessionLaunchConfig::Ssh(Box::new(config.clone()))),
@@ -809,6 +817,9 @@ impl NyaTermApp {
                     self.session
                         .start
                         .record_reconnect_completion(PendingReconnectCompletion {
+                            mcp_open_operation_id: pending
+                                .as_ref()
+                                .and_then(|p| p.mcp_open_operation_id.clone()),
                             old_id: old_id.to_string(),
                             new_id: session_id.clone(),
                             connection_name: connection_name.clone(),
@@ -882,7 +893,12 @@ impl NyaTermApp {
                     return;
                 }
                 if let Some(connection_id) = source_connection_id.as_deref() {
-                    self.complete_mcp_session_open_success(connection_id, session_id.clone());
+                    if let Some(id) = pending
+                        .as_ref()
+                        .and_then(|p| p.mcp_open_operation_id.as_deref())
+                    {
+                        self.complete_mcp_session_open_success(id, session_id.clone());
+                    }
                     if kind == nyaterm_transport::SessionKind::Ssh {
                         self.start_auto_tunnels_for_connection(connection_id, cx);
                     }
@@ -957,15 +973,15 @@ impl NyaTermApp {
                 }
             }
             Err(error) => {
-                let source_connection_id = pending
-                    .as_ref()
-                    .and_then(|pending| pending.source_connection_id.clone());
                 let reconnect_session_id = pending
                     .as_ref()
                     .and_then(|pending| pending.reconnect_session_id.clone());
                 let reconnect_session_exists = reconnect_session_id
                     .as_deref()
                     .is_some_and(|session_id| self.session.has_session(session_id));
+                let mcp_failure_id = pending
+                    .as_ref()
+                    .and_then(|p| p.mcp_open_operation_id.clone());
                 let reconnect_failure = self.session.start.record_failure(
                     request_id.clone(),
                     pending,
@@ -973,8 +989,8 @@ impl NyaTermApp {
                     was_active_pending,
                     reconnect_session_exists,
                 );
-                if let Some(connection_id) = source_connection_id.as_deref() {
-                    self.complete_mcp_session_open_failure(connection_id, &error);
+                if let Some(id) = mcp_failure_id.as_deref() {
+                    self.complete_mcp_session_open_failure(id, &error);
                 }
                 if !reconnect_failure {
                     self.shell
@@ -1028,8 +1044,8 @@ impl NyaTermApp {
                     .start
                     .set_reconnect_failure(old_id.to_string(), error.clone());
             }
-            if let Some(connection_id) = completion.source_connection_id.as_deref() {
-                self.complete_mcp_session_open_failure(connection_id, &error);
+            if let Some(id) = completion.mcp_open_operation_id.as_deref() {
+                self.complete_mcp_session_open_failure(id, &error);
             }
             self.shell.set_status(format!("reconnect failed: {error}"));
             cx.notify();
@@ -1041,7 +1057,9 @@ impl NyaTermApp {
         self.persist_workspace_pane_layout();
         self.persist_terminal_window_layout();
         if let Some(connection_id) = completion.source_connection_id.as_deref() {
-            self.complete_mcp_session_open_success(connection_id, new_id.to_string());
+            if let Some(id) = completion.mcp_open_operation_id.as_deref() {
+                self.complete_mcp_session_open_success(id, new_id.to_string());
+            }
             if completion.kind == SessionKind::Ssh {
                 self.start_auto_tunnels_for_connection(connection_id, cx);
             }
@@ -1239,6 +1257,7 @@ mod focus_tests {
                     );
                     let request_id = app.register_pending_session_start(
                         PendingSessionStartRegistration {
+                            mcp_open_operation_id: None,
                             requested_ssh_runtime_mode: None,
                             connection_name: "SSH".into(),
                             launch_config: Some(SessionLaunchConfig::Ssh(Box::default())),

@@ -52,6 +52,9 @@ pub(crate) struct AiTask {
     abort: AbortHandle,
 }
 impl AiTask {
+    pub(crate) fn is_finished(&self) -> bool {
+        self.abort.is_finished()
+    }
     pub(crate) fn cancel(&self) {
         self.cancel.cancel();
         self.abort.abort();
