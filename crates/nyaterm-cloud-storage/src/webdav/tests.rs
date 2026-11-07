@@ -303,6 +303,35 @@ fn read_redirects_may_cross_origins_but_never_downgrade_or_carry_userinfo() {
 }
 
 #[test]
+fn native_head_redirects_strip_authentication_and_writes_never_leave_origin() {
+    use crate::test_support::http::{Reply as HttpReply, Server};
+    for method in ["HEAD", "PUT", "DELETE", "MKCOL", "MOVE", "PROPFIND"] {
+        let target = Server::new(|_| HttpReply::new(200, ""));
+        let location = format!("{}/object", target.endpoint);
+        let source = Server::new(move |_| HttpReply::new(307, "").header("Location", &location));
+        let remote = NativeWebdavRemote::new(&source.webdav()).unwrap();
+        let response = remote
+            .send(
+                Method::from_bytes(method.as_bytes()).unwrap(),
+                &format!("{}/original", source.endpoint),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            if method == "HEAD" { 200 } else { 307 }
+        );
+        let requests = target.requests.lock().unwrap();
+        assert_eq!(requests.len(), usize::from(method == "HEAD"));
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.method == "HEAD" && !r.headers.contains_key("authorization"))
+        );
+    }
+}
+
+#[test]
 fn redirects_require_the_same_origin_or_a_default_port_tls_upgrade() {
     for (current, location, allowed) in [
         ("https://dav.example/sync", "/other", true),

@@ -486,6 +486,7 @@ impl NyaTermApp {
                     saved_keyword_highlights,
                     saved_translation_settings,
                     saved_cloud_sync_settings,
+                    store.load_cloud_sync_state()?,
                     saved_ai_settings,
                 ))
             }),
@@ -495,6 +496,7 @@ impl NyaTermApp {
                     saved_keyword_highlights,
                     saved_translation_settings,
                     saved_cloud_sync_settings,
+                    saved_cloud_sync_state,
                     saved_ai_settings,
                 )) => {
                     this.apply_gpui_settings(saved_settings.clone(), cx);
@@ -512,7 +514,7 @@ impl NyaTermApp {
                     this.settings.rebase_master_password();
                     this.ai.replace_settings_config(saved_ai_settings, true);
                     this.cloud_sync
-                        .replace_settings(saved_cloud_sync_settings, Default::default());
+                        .replace_loaded(saved_cloud_sync_settings, saved_cloud_sync_state);
                     this.translation.replace_settings(
                         saved_translation_settings,
                         TranslationSecretDraft::default(),
@@ -788,6 +790,82 @@ mod tests {
         });
         assert_eq!(saved.terminal_wrap_mode, TerminalWrapMode::None);
         assert!(saved.terminal_show_wrap_markers);
+    }
+
+    #[test]
+    fn provider_draft_cancel_preserves_receipt_and_save_refreshes_it_before_another_sync() {
+        use nyaterm_core::{CloudSyncSettings, CloudSyncState};
+        use nyaterm_store::StoreDomain;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            let (settings, state) = app
+                .store_blocking_client()
+                .request_fn(StoreDomain::CloudSync, |store| {
+                    let settings = store.save_cloud_sync_settings(CloudSyncSettings {
+                        provider: "webdav".into(),
+                        protocol_version: 4,
+                        ..Default::default()
+                    })?;
+                    let state = CloudSyncState {
+                        device_id: "stable".into(),
+                        last_synced_payload_hash: Some("previous-provider".into()),
+                        last_synced_content_hash: Some("previous-content".into()),
+                        ..Default::default()
+                    };
+                    store.save_cloud_sync_state(&state)?;
+                    Ok((settings, state))
+                })
+                .unwrap();
+            app.cloud_sync.replace_loaded(settings, state.clone());
+            app.begin_settings_draft(cx);
+            app.cloud_sync.select_provider("github_gist");
+            assert_eq!(app.cloud_sync.state(), &state);
+            app.cancel_settings(cx);
+            assert_eq!(app.cloud_sync.settings().provider, "webdav");
+            assert_eq!(app.cloud_sync.state(), &state);
+        });
+        for (provider, protocol) in [("github_gist", 3), ("webdav", 4)] {
+            app.update(&mut cx, |app, cx| {
+                app.begin_settings_draft(cx);
+                app.cloud_sync.select_provider(provider);
+                app.apply_settings_draft(false, cx);
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                cx.run_until_parked();
+                if app.read_with(&cx, |app, _| {
+                    app.cloud_sync.state().last_synced_payload_hash.is_none()
+                        && !app.settings_draft_dirty()
+                }) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "provider save did not finish"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            app.update(&mut cx, |app, _| {
+                assert_eq!(app.cloud_sync.settings().provider, provider);
+                assert_eq!(app.cloud_sync.settings().protocol_version, 4);
+                assert_eq!(
+                    crate::features::sync::effective_protocol_version(app.cloud_sync.settings()),
+                    protocol
+                );
+                assert_eq!(app.cloud_sync.state().device_id, "stable");
+                assert!(app.cloud_sync.state().last_synced_payload_hash.is_none());
+                assert!(app.cloud_sync.state().last_synced_content_hash.is_none());
+                let state = app
+                    .store_blocking_client()
+                    .request_fn(StoreDomain::CloudSync, |store| {
+                        store.load_cloud_sync_state()
+                    })
+                    .unwrap();
+                assert_eq!(&state, app.cloud_sync.state());
+            });
+        }
     }
 
     #[test]

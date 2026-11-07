@@ -282,6 +282,11 @@ impl CloudSyncFeatureState {
         settings: CloudSyncSettings,
         secret_draft: CloudSyncSecretDraft,
     ) {
+        if self.settings.provider != settings.provider {
+            self.v4_preview = None;
+            self.conflict = None;
+            self.pending_resolution = None;
+        }
         self.settings = settings;
         self.secret_draft = secret_draft;
     }
@@ -291,7 +296,7 @@ impl CloudSyncFeatureState {
         settings: CloudSyncSettings,
         state: CloudSyncState,
     ) {
-        self.settings = settings;
+        self.replace_settings(settings, CloudSyncSecretDraft::default());
         self.state = state;
         self.secret_draft = CloudSyncSecretDraft::default();
     }
@@ -390,6 +395,11 @@ impl CloudSyncFeatureState {
     }
 
     pub(in crate::features) fn select_provider(&mut self, provider: &str) {
+        if self.settings.provider != provider {
+            self.v4_preview = None;
+            self.conflict = None;
+            self.pending_resolution = None;
+        }
         self.settings.provider = provider.to_string();
         self.status = t!("settings.syncProviderSetTo", provider = provider).to_string();
     }

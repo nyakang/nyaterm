@@ -321,6 +321,135 @@ fn webdav_cross_origin_download_redirect_is_followed_without_credentials() {
 }
 
 #[test]
+fn both_webdav_adapters_isolate_cross_origin_challenges_and_restore_only_origin_credentials() {
+    for native in [false, true] {
+        for digest in [false, true] {
+            for challenge in [false, true] {
+                let origin = Arc::new(Mutex::new(String::new()));
+                let origin_url = origin.clone();
+                let third = Server::new(move |_| {
+                    Reply::new(307, "").header(
+                        "Location",
+                        &format!("{}/returned", origin_url.lock().unwrap()),
+                    )
+                });
+                let third_url = third.endpoint.clone();
+                let target = Server::new(move |_| {
+                    if challenge {
+                        Reply::new(401, "").header(
+                            "WWW-Authenticate",
+                            "Digest realm=\"foreign\", nonce=\"foreign\", qop=\"auth\"",
+                        )
+                    } else {
+                        Reply::new(302, "").header("Location", &format!("{third_url}/next"))
+                    }
+                });
+                let location = format!("{}/foreign", target.endpoint);
+                let source = Server::new(move |request| {
+                    if digest
+                        && !request
+                            .headers
+                            .get("authorization")
+                            .is_some_and(|value| value.starts_with("Digest "))
+                    {
+                        return Reply::new(401, "").header(
+                            "WWW-Authenticate",
+                            "Digest realm=\"origin\", nonce=\"origin\", qop=\"auth\"",
+                        );
+                    }
+                    if request.target == "/returned" {
+                        Reply::new(200, "object")
+                    } else {
+                        Reply::new(302, "").header("Location", &location)
+                    }
+                });
+                *origin.lock().unwrap() = source.endpoint.clone();
+                let remote: Box<dyn CloudSyncRemote> = if native {
+                    Box::new(NativeWebdavRemote::new(&source.webdav()).unwrap())
+                } else {
+                    Box::new(OpenDalRemote::webdav(&source.webdav(), Default::default()).unwrap())
+                };
+                let result = remote.read_if_exists("sync/latest.redb");
+                if challenge {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap().as_deref(), Some(b"object".as_slice()));
+                }
+                let foreign = target.requests.lock().unwrap();
+                assert_eq!(
+                    foreign.len(),
+                    1,
+                    "a foreign 401 must not trigger an authentication retry"
+                );
+                assert!(!foreign[0].headers.contains_key("authorization"));
+                assert!(foreign[0].body.is_empty());
+                let onward = third.requests.lock().unwrap();
+                assert_eq!(onward.len(), usize::from(!challenge));
+                assert!(
+                    onward
+                        .iter()
+                        .all(|r| !r.headers.contains_key("authorization"))
+                );
+                let origin = source.requests.lock().unwrap();
+                assert_eq!(
+                    origin.len(),
+                    1 + usize::from(digest) + usize::from(!challenge)
+                );
+                if !challenge {
+                    let auth = &origin.last().unwrap().headers["authorization"];
+                    assert!(auth.starts_with(if digest { "Digest " } else { "Basic " }));
+                    if digest {
+                        assert!(auth.contains("uri=\"/returned\""));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn webdav_head_redirects_strip_credentials_and_mutations_never_leave_the_origin() {
+    use opendal::{Buffer, HttpTransport};
+    for method in ["HEAD", "PUT", "DELETE", "MKCOL", "MOVE", "PROPFIND"] {
+        let target = Server::new(|_| Reply::new(200, ""));
+        let location = format!("{}/object", target.endpoint);
+        let source = Server::new(move |_| Reply::new(307, "").header("Location", &location));
+        let transport =
+            super::transport::Transport::new(Default::default(), Some(&source.webdav())).unwrap();
+        let url = format!("{}/original", source.endpoint);
+        super::worker::Worker::new()
+            .unwrap()
+            .run(async move {
+                let result = transport
+                    .fetch(
+                        http::Request::builder()
+                            .method(method)
+                            .uri(url)
+                            .body(Buffer::new())
+                            .unwrap(),
+                    )
+                    .await;
+                if method == "HEAD" {
+                    assert!(result.unwrap().status().is_success());
+                }
+                // Raw transport returns a controlled 307 error for unsupported replay.
+                else {
+                    assert!(result.is_err());
+                }
+                Ok(())
+            })
+            .unwrap();
+        let requests = target.requests.lock().unwrap();
+        assert_eq!(requests.len(), usize::from(method == "HEAD"));
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.method == "HEAD" && !r.headers.contains_key("authorization"))
+        );
+    }
+}
+
+#[test]
 fn errors_keep_status_retry_after_and_redact_server_data_without_replaying_mutations() {
     use nyaterm_core::CloudSyncError;
     for status in [401, 403, 409, 429, 503] {

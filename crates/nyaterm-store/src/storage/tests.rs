@@ -5248,6 +5248,107 @@ fn cloud_sync_state_round_trips_and_reads_legacy_doc() {
 }
 
 #[test]
+fn provider_round_trip_resets_only_the_legacy_receipt_and_preserves_extensions() {
+    for legacy in [false, true] {
+        let dir = TestTempDir::new("nyaterm-cloud-provider-receipt");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let mut settings = store.load_cloud_sync_settings().unwrap();
+        settings.provider = "webdav".into();
+        store.save_cloud_sync_settings(settings.clone()).unwrap();
+        let raw = serde_json::json!({
+            "device_id":"stable-device", "last_synced_payload_hash":"old-payload",
+            "last_synced_content_hash":"old-content", "last_synced_clock":{"counters":{"a":3}},
+            "last_applied_remote_revision":"old-revision", "last_checked_at_ms":10,
+            "last_synced_at_ms":20, "last_validated_remote_revision":"old-revision",
+            "last_full_validation_at_ms":30, "last_gc_attempt_at_ms":40,
+            "future_extension":{"keep":true}
+        });
+        if legacy {
+            let txn = store.db.begin_write().unwrap();
+            // Model a supported installation with only the legacy text state.
+            // The initial provider save above has created a canonical receipt.
+            txn.open_table(SETTINGS_TABLE)
+                .unwrap()
+                .remove(super::SETTINGS_CLOUD_SYNC_STATE)
+                .unwrap();
+            txn.open_table(TEXT_DOCS_TABLE)
+                .unwrap()
+                .insert(LEGACY_TEXT_CLOUD_SYNC_STATE, raw.to_string().as_str())
+                .unwrap();
+            txn.commit().unwrap();
+        } else {
+            store
+                .save_settings_doc_value(super::SETTINGS_CLOUD_SYNC_STATE, &raw)
+                .unwrap();
+        }
+        let baseline = store.load_cloud_sync_state().unwrap();
+        // Editing or discarding a draft does not touch persisted state.
+        let mut draft = settings.clone();
+        draft.provider = "github_gist".into();
+        assert_eq!(store.load_cloud_sync_state().unwrap(), baseline);
+        // Token/settings saves at the same destination retain the receipt.
+        settings.webdav.username = "rotated".into();
+        store.save_cloud_sync_settings(settings.clone()).unwrap();
+        assert_eq!(store.load_cloud_sync_state().unwrap(), baseline);
+        for provider in ["github_gist", "webdav"] {
+            settings.provider = provider.into();
+            store.save_cloud_sync_settings(settings.clone()).unwrap();
+            let reset = store.load_cloud_sync_state().unwrap();
+            assert_eq!(
+                reset,
+                CloudSyncState {
+                    device_id: "stable-device".into(),
+                    ..Default::default()
+                }
+            );
+            let raw = store
+                .load_settings_doc_value(super::SETTINGS_CLOUD_SYNC_STATE, serde_json::Value::Null)
+                .unwrap();
+            assert_eq!(raw["future_extension"]["keep"], true);
+            assert_eq!(
+                store.load_cloud_sync_settings().unwrap().protocol_version,
+                settings.protocol_version
+            );
+        }
+        drop(store);
+        let reopened = ConnectionStore::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.load_cloud_sync_state().unwrap().device_id,
+            "stable-device"
+        );
+        assert!(
+            reopened
+                .load_cloud_sync_state()
+                .unwrap()
+                .last_synced_content_hash
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn invalid_legacy_receipt_prevents_a_partial_provider_save() {
+    let dir = TestTempDir::new("nyaterm-cloud-provider-invalid-receipt");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    let before = store.load_cloud_sync_settings().unwrap();
+    store
+        .save_settings_doc_value(
+            super::SETTINGS_CLOUD_SYNC_STATE,
+            &serde_json::json!({"device_id":42}),
+        )
+        .unwrap();
+    let mut next = before.clone();
+    next.provider = if before.provider == "webdav" {
+        "github_gist"
+    } else {
+        "webdav"
+    }
+    .into();
+    assert!(store.save_cloud_sync_settings(next).is_err());
+    assert_eq!(store.load_cloud_sync_settings().unwrap(), before);
+}
+
+#[test]
 fn translation_settings_read_legacy_plaintext_and_encrypt_on_save() {
     let dir = unique_temp_dir("translation-settings");
     let store = ConnectionStore::open(&dir).expect("store");

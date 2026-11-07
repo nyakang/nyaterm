@@ -115,6 +115,31 @@ fn enable(store: &ConnectionStore) {
     store.save_cloud_sync_settings(settings).unwrap();
 }
 
+#[test]
+fn provider_switch_preserves_per_destination_v4_records() {
+    let dir = TestTempDir::new("nyaterm-provider-v4-records");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    enable(&store);
+    store.apply_v4_plan(prepared(&store), "password").unwrap();
+    let before = store
+        .load_v4_view("destination", "password", &SyncScope::default())
+        .unwrap();
+    for provider in ["webdav", "github_gist", "webdav"] {
+        let mut settings = store.load_cloud_sync_settings().unwrap();
+        settings.provider = provider.into();
+        store.save_cloud_sync_settings(settings).unwrap();
+        let after = store
+            .load_v4_view("destination", "password", &SyncScope::default())
+            .unwrap();
+        assert_eq!(after.record_hash, before.record_hash);
+        assert_eq!(after.record.writer, before.record.writer);
+        assert_eq!(
+            store.load_cloud_sync_settings().unwrap().protocol_version,
+            4
+        );
+    }
+}
+
 fn prepared(store: &ConnectionStore) -> PreparedApply {
     prepared_scope(store, SyncScope::default())
 }

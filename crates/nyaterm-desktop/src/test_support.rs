@@ -111,8 +111,7 @@ pub(crate) fn spawn_webdav_service_unavailable_server() -> (String, JoinHandle<(
     (endpoint, server)
 }
 
-/// A one-shot WebDAV server that answers any request as "no such resource", so a
-/// provider connection test reading `sync/latest.redb` succeeds (`None` pointer).
+/// Strictly exercises the metadata reads used by a connection probe.
 pub(crate) fn spawn_webdav_healthy_server() -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("mock WebDAV listener");
     let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
@@ -120,36 +119,68 @@ pub(crate) fn spawn_webdav_healthy_server() -> (String, JoinHandle<()>) {
         .set_nonblocking(true)
         .expect("nonblocking listener");
     let server = std::thread::spawn(move || {
-        // Sync jobs queue behind the process-wide lock during parallel test runs.
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let mut stream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "WebDAV request was not sent");
-                    std::thread::sleep(Duration::from_millis(5));
+        for method in ["PROPFIND", "GET"] {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "missing WebDAV {method}");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("mock accept failed: {error}"),
                 }
-                Err(error) => panic!("mock accept failed: {error}"),
+            };
+            stream.set_nonblocking(false).expect("blocking stream");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).expect("request headers");
+                request.push(byte[0]);
+                assert!(request.len() < 16 * 1024, "oversized mock headers");
             }
-        };
-        stream
-            .set_nonblocking(false)
-            .expect("blocking accepted stream");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("read timeout");
-        let mut request = Vec::new();
-        let mut buffer = [0; 1024];
-        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-            let count = stream.read(&mut buffer).expect("request headers");
-            assert!(count > 0, "incomplete request");
-            request.extend_from_slice(&buffer[..count]);
-            assert!(request.len() < 16 * 1024, "oversized mock request");
+            let head = String::from_utf8(request).expect("HTTP headers");
+            let mut line = head
+                .lines()
+                .next()
+                .expect("request line")
+                .split_whitespace();
+            assert_eq!(line.next(), Some(method));
+            let path = line.next().expect("request path");
+            let header = |name: &str| {
+                head.lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then(|| value.trim()))
+            };
+            let length: usize = header("Content-Length").unwrap_or("0").parse().unwrap();
+            assert!(length < 16 * 1024, "oversized mock body");
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).expect("request body");
+            if method == "PROPFIND" {
+                assert!(path.ends_with("/sync/heads/"), "unexpected listing path");
+                assert_eq!(header("Depth"), Some("1"));
+                assert!(body.windows(8).any(|part| part == b"propfind"));
+                let body = "<D:multistatus xmlns:D=\"DAV:\"/>";
+                write!(stream, "HTTP/1.1 207 Multi-Status\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            } else {
+                assert!(
+                    path.ends_with("/sync/latest.redb"),
+                    "unexpected pointer path"
+                );
+                assert!(body.is_empty());
+                stream
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
+            }
         }
-        assert!(request.starts_with(b"GET /"));
-        stream
-            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .expect("mock response");
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
     });
     (endpoint, server)
 }

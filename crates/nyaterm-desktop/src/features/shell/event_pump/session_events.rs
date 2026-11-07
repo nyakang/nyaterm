@@ -209,6 +209,12 @@ impl NyaTermApp {
 
         if !self.session.pending_events_are_empty() {
             while let Some(event) = self.session.pop_pending_event() {
+                if let SessionEvent::Output { session_id, .. } = &event
+                    && !self.trzsz_output_ready(session_id)
+                {
+                    self.session.defer_pending_event(event);
+                    break;
+                }
                 drained_events += 1;
                 match event {
                     SessionEvent::Output { session_id, data } => {

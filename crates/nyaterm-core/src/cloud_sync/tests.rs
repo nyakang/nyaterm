@@ -5,6 +5,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 mod cancellation;
 mod concurrent_heads;
+mod recovery;
 mod regressions;
 
 use super::{

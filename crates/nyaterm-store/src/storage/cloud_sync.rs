@@ -5,8 +5,9 @@
 
 use super::{
     ConnectionStore, LEGACY_TEXT_CLOUD_SYNC_STATE, SETTINGS_CLOUD_SYNC, SETTINGS_CLOUD_SYNC_STATE,
-    SETTINGS_TABLE, StorageError, TEXT_DOCS_TABLE, decrypt_optional_secret,
+    SETTINGS_DEFAULT, SETTINGS_TABLE, StorageError, TEXT_DOCS_TABLE, decrypt_optional_secret,
     encrypt_optional_secret, merge_unknown_json, optional_secret_present, set_nested_json_value,
+    write_json_in_txn,
 };
 use nyaterm_core::{
     AliyunDriveSyncSettings, CloudSyncSettings, CloudSyncState, CredentialCrypto,
@@ -71,7 +72,43 @@ impl ConnectionStore {
         }
         let mut value = self.load_settings_value()?;
         set_nested_json_value(&mut value, &["cloud_sync"], encrypted_value);
-        self.save_settings_value(&value)?;
+        // The legacy receipt belongs to the selected remote. Commit its
+        // invalidation together with the provider change, including on restart.
+        let state = if current.provider != merged.provider {
+            let previous = self.load_cloud_sync_state()?;
+            let reset = CloudSyncState {
+                device_id: previous.device_id,
+                ..Default::default()
+            };
+            let mut next = serde_json::to_value(reset)?;
+            let mut previous = if let Some(value) = self
+                .read_json_table::<serde_json::Value>(SETTINGS_TABLE, SETTINGS_CLOUD_SYNC_STATE)?
+            {
+                value
+            } else if let Some(raw) =
+                self.read_string_table(TEXT_DOCS_TABLE, LEGACY_TEXT_CLOUD_SYNC_STATE)?
+            {
+                serde_json::from_str::<serde_json::Value>(&raw)?
+            } else {
+                serde_json::Value::Null
+            };
+            // These known optional fields are omitted by serde when empty;
+            // they must not be mistaken for unknown extension fields.
+            if let Some(previous) = previous.as_object_mut() {
+                previous.remove("last_synced_content_hash");
+                previous.remove("last_synced_clock");
+            }
+            merge_unknown_json(&previous, &mut next);
+            Some(next)
+        } else {
+            None
+        };
+        let txn = self.db.begin_write()?;
+        write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_DEFAULT, &value)?;
+        if let Some(state) = state {
+            write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_CLOUD_SYNC_STATE, &state)?;
+        }
+        txn.commit()?;
         Ok(merged)
     }
     pub fn update_cloud_credentials(

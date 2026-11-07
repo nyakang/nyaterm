@@ -32,6 +32,7 @@ tokio-socks.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 zmodem2.workspace = true
+zstd = { version = "0.13", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -335,16 +335,18 @@ fn rz_receive_banner_prefix_start(
     end: usize,
     data_starts_at_line_start: bool,
 ) -> Option<usize> {
-    const ZDLE_BANNER: &[u8] = b"\x18z waiting to receive.";
-    const BANNER: &[u8] = b"z waiting to receive.";
     let prefix = data.get(..end)?;
-    for banner in [ZDLE_BANNER, BANNER] {
-        for len in (1..=prefix.len().min(banner.len())).rev() {
+    for candidate in [
+        b"\x18z waiting to receive.\r\n".as_slice(),
+        b"\x18z waiting to receive.\n",
+        b"z waiting to receive.\r\n",
+        b"z waiting to receive.\n",
+    ] {
+        for len in (1..=prefix.len().min(candidate.len())).rev() {
             let start = prefix.len() - len;
-            if prefix[start..] != banner[..len] {
-                continue;
-            }
-            if is_line_start(data, start, data_starts_at_line_start) {
+            if prefix[start..] == candidate[..len]
+                && is_line_start(data, start, data_starts_at_line_start)
+            {
                 return Some(start);
             }
         }
@@ -1426,8 +1428,11 @@ fn cancel_sequence() -> Vec<u8> {
 /// `rz` then applies as 1970-01-01, so every upload reports a real timestamp
 /// when the filesystem provides one.
 fn upload_modification_time(metadata: &std::fs::Metadata) -> Option<u32> {
-    metadata
-        .modified()
+    modification_time_seconds(metadata.modified())
+}
+
+fn modification_time_seconds(modified: std::io::Result<std::time::SystemTime>) -> Option<u32> {
+    modified
         .ok()
         .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|elapsed| elapsed.as_secs().min(u64::from(u32::MAX)) as u32)
@@ -1438,7 +1443,7 @@ mod tests {
     use super::{
         ProgressThrottle, ZMODEM_PROGRESS_BYTES, ZMODEM_PROGRESS_INTERVAL, ZmodemAction,
         ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
-        cancel_sequence, upload_modification_time,
+        cancel_sequence, modification_time_seconds, upload_modification_time,
     };
     use std::time::{Duration, Instant};
 
@@ -1579,6 +1584,80 @@ mod tests {
             b"\x18z waiting to receive."
         );
         assert!(detector.is_idle());
+    }
+
+    #[test]
+    fn receive_banner_and_header_tolerate_every_fragment_boundary() {
+        for banner in [
+            b"\x18z waiting to receive.".as_slice(),
+            b"z waiting to receive.",
+        ] {
+            for newline in [b"".as_slice(), b"\r", b"\n", b"\r\n"] {
+                let mut bytes = banner.to_vec();
+                bytes.extend(newline);
+                bytes.extend(b"**\x18B01");
+                for split in 1..bytes.len() {
+                    let mut detector = ZmodemDetector::new();
+                    let mut shown = Vec::new();
+                    let mut detected = false;
+                    for part in [&bytes[..split], &bytes[split..]] {
+                        match detector.feed(part) {
+                            ZmodemDetectResult::NoMatch { passthrough } => {
+                                shown.extend(passthrough)
+                            }
+                            ZmodemDetectResult::Detected {
+                                direction,
+                                passthrough,
+                                ..
+                            } => {
+                                assert_eq!(direction, ZmodemDirection::Upload);
+                                shown.extend(passthrough);
+                                detected = true;
+                            }
+                        }
+                    }
+                    assert!(detected, "split={split} input={bytes:?}");
+                    assert!(shown.is_empty(), "split={split} leaked={shown:?}");
+                }
+                let mut detector = ZmodemDetector::new();
+                let mut shown = Vec::new();
+                for byte in banner.iter().chain(newline) {
+                    let ZmodemDetectResult::NoMatch { passthrough } = detector.feed(&[*byte])
+                    else {
+                        panic!("unexpected header")
+                    };
+                    shown.extend(passthrough);
+                }
+                shown.extend(
+                    detector.flush_pending_if_idle(Instant::now() + Duration::from_secs(2)),
+                );
+                assert_eq!(
+                    shown,
+                    [banner, newline].concat(),
+                    "ordinary text must be released unchanged"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modification_time_handles_unavailable_before_epoch_and_overflow() {
+        use std::time::UNIX_EPOCH;
+        assert_eq!(
+            modification_time_seconds(Err(std::io::Error::other("unsupported"))),
+            None
+        );
+        assert_eq!(
+            modification_time_seconds(Ok(UNIX_EPOCH - Duration::from_secs(1))),
+            None
+        );
+        assert_eq!(modification_time_seconds(Ok(UNIX_EPOCH)), Some(0));
+        assert_eq!(
+            modification_time_seconds(
+                Ok(UNIX_EPOCH + Duration::from_secs(u64::from(u32::MAX) + 1))
+            ),
+            Some(u32::MAX)
+        );
     }
 
     #[test]

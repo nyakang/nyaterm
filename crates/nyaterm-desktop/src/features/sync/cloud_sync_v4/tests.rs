@@ -63,6 +63,166 @@ fn save(store: &StoreBlockingClient, id: &str, name: &str) {
 }
 
 #[test]
+fn provider_edits_and_loaded_changes_invalidate_old_v4_previews() {
+    use crate::features::sync::CloudSyncFeatureState;
+    let dir = TestConfigDir::new("nyaterm-provider-preview-state");
+    let remote = TestConfigDir::new("nyaterm-provider-preview-remote");
+    let (store, settings, options) = setup(&dir, &remote);
+    let mut state = CloudSyncFeatureState::new(settings.clone(), Default::default(), Vec::new());
+    for loaded in [false, true] {
+        state.replace_loaded(settings.clone(), Default::default());
+        state.set_v4_preview(preview(&store, &settings, &options, &Default::default()).unwrap());
+        assert!(state.v4_summary().is_some());
+        let conflict = serde_json::from_value(json!({
+            "detected_at_ms":1, "provider":"local_directory",
+            "local_payload_hash":"local", "remote_payload_hash":"remote",
+            "local_content_hash":"content", "remote_revision":"previous-provider",
+            "remote_created_at_ms":1, "remote_device_id":"other", "message":"conflict"
+        }))
+        .unwrap();
+        state.capture_conflict(
+            &CloudSyncError::Conflict(Box::new(conflict)),
+            settings.provider.clone(),
+            true,
+        );
+        assert!(state.prepare_resolution(false));
+        assert!(state.conflict().is_some());
+        if loaded {
+            let mut next = settings.clone();
+            next.provider = "github_gist".into();
+            state.replace_loaded(next, Default::default());
+        } else {
+            state.select_provider("github_gist");
+        }
+        assert!(state.v4_summary().is_none());
+        assert!(state.conflict().is_none());
+        assert!(state.take_resolution().is_none());
+        assert_eq!(state.settings().protocol_version, 4);
+    }
+}
+
+#[test]
+fn webdav_gist_webdav_round_trip_restores_manual_and_automatic_v4_without_old_v3_baselines() {
+    use crate::features::sync::operation::AutoSyncOperationControls;
+    use crate::features::sync::{AutoSyncRequest, AutoSyncResult, AutoSyncTrigger, run_auto_sync};
+    use nyaterm_core::{AppRuntime, CloudSyncState, RuntimeMode};
+    use std::time::{Duration, Instant};
+    let dir = TestConfigDir::new("nyaterm-provider-roundtrip");
+    let remote_dir = TestConfigDir::new("nyaterm-provider-roundtrip-unused");
+    let server = crate::http::cloud_sync::CloudStorageFixture::storage();
+    let (store, mut settings, mut options) = setup(&dir, &remote_dir);
+    settings.provider = "webdav".into();
+    settings.remote_root = options.remote_root.clone();
+    settings.webdav = server.webdav();
+    settings.auto_pull_remote_changes = true;
+    settings.auto_push_on_change = true;
+    let saved = settings.clone();
+    let device = store
+        .request_fn(StoreDomain::CloudSync, move |s| {
+            s.save_master_password(Some("password"))?;
+            s.save_cloud_sync_settings(saved)?;
+            Ok(s.load_cloud_sync_state()?.device_id)
+        })
+        .unwrap();
+    options.device_id = device.clone();
+    let control = CloudSyncOperationControl::default();
+    let initial = preview(&store, &settings, &options, &control).unwrap();
+    apply_and_publish(&store, &settings, &options, initial, &control).unwrap();
+    let destination = destination(&settings, &options);
+    let record_key = destination.clone();
+    let before = store
+        .request_fn(StoreDomain::CloudSync, move |s| {
+            Ok(
+                s.load_v4_view(&record_key, "password", &Default::default())?
+                    .record_hash,
+            )
+        })
+        .unwrap();
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        dir.path().into(),
+        dir.path().into(),
+        dir.join("logs"),
+        dir.join("cache"),
+        None,
+    );
+    let automatic = || {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let result = run_auto_sync(
+                &store,
+                &runtime,
+                AutoSyncRequest {
+                    trigger: AutoSyncTrigger::Settings,
+                    change_elapsed: Duration::from_secs(61),
+                    pull_safe: true,
+                    remote_available: false,
+                },
+                &|| Ok(()),
+                &AutoSyncOperationControls::default(),
+            );
+            if !matches!(result, Ok(AutoSyncResult::Busy)) {
+                break result;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    settings.provider = "github_gist".into();
+    let saved = settings.clone();
+    store
+        .request_fn(StoreDomain::CloudSync, move |s| {
+            s.save_cloud_sync_state(&CloudSyncState {
+                device_id: device,
+                last_synced_payload_hash: Some("previous".into()),
+                ..Default::default()
+            })?;
+            s.save_cloud_sync_settings(saved)?;
+            assert!(
+                s.load_cloud_sync_state()?
+                    .last_synced_payload_hash
+                    .is_none()
+            );
+            assert_eq!(s.load_cloud_sync_settings()?.protocol_version, 4);
+            Ok(())
+        })
+        .unwrap();
+    let manual = crate::features::sync::cloud_sync_provider::push_provider_snapshot(
+        &store,
+        &settings,
+        &options,
+        &Default::default(),
+        false,
+        &control,
+    );
+    for result in [manual.map(|_| ()), automatic().map(|_| ())] {
+        assert!(
+            matches!(result, Err(CloudSyncError::Remote(message)) if message == "GitHub Gist access token is required")
+        );
+    }
+    settings.provider = "webdav".into();
+    let saved = settings.clone();
+    let record_key = destination;
+    store
+        .request_fn(StoreDomain::CloudSync, move |s| {
+            s.save_cloud_sync_settings(saved)?;
+            assert_eq!(
+                s.load_v4_view(&record_key, "password", &Default::default())?
+                    .record_hash,
+                before
+            );
+            Ok(())
+        })
+        .unwrap();
+    let resumed = preview(&store, &settings, &options, &control).unwrap();
+    assert!(!resumed.migration);
+    apply_and_publish(&store, &settings, &options, resumed, &control).unwrap();
+    assert!(matches!(automatic().unwrap(), AutoSyncResult::Skipped));
+    save(&store, "post-switch", "changed after returning to WebDAV");
+    assert!(matches!(automatic().unwrap(), AutoSyncResult::V4(_)));
+}
+
+#[test]
 fn opendal_services_migrate_native_v3_and_preserve_v4_multi_device_conflicts_and_cancellation() {
     use crate::http::cloud_sync::{
         CloudStorageFixture, NativeS3Remote, NativeWebdavRemote, OpenDalRemote,

@@ -7,7 +7,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -15,6 +15,11 @@ use std::{
 use base64::Engine as _;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
+
+mod archive;
+mod codec;
+mod modern;
+mod resume;
 
 const TRZSZ_PREFIX: &[u8] = b"::TRZSZ:TRANSFER:";
 // Bare colons are common shell echoes. A recognizable marker gets more time
@@ -61,6 +66,8 @@ pub enum TrzszProtocolPayload {
     /// A syntactically valid trzsz protocol line whose payload cannot be
     /// classified without more transfer state.
     Raw(String),
+    /// A bounded portion of one modern wire DATA frame. ACK only at `end`.
+    DataChunk { bytes: Vec<u8>, end: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +137,8 @@ pub struct TrzszConfig {
     pub max_buf_size: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compress: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub escape_chars: Vec<[String; 2]>,
     #[serde(default, rename = "fork", skip_serializing_if = "is_false")]
     pub fork: bool,
 }
@@ -149,6 +158,7 @@ impl TrzszConfig {
                 .map(|protocol| protocol.min(4)),
             max_buf_size: Some(10 * 1024 * 1024),
             compress: None,
+            escape_chars: Vec::new(),
             fork: false,
         }
     }
@@ -499,6 +509,10 @@ pub struct TrzszProtocolStream {
     pending_line: Vec<u8>,
     binary_bytes_remaining: usize,
     binary_data: Vec<u8>,
+    binary_streaming: bool,
+    text_streaming: bool,
+    modern: bool,
+    binary: bool,
 }
 
 impl TrzszProtocolStream {
@@ -514,39 +528,115 @@ impl TrzszProtocolStream {
                 self.binary_bytes_remaining -= 1;
                 output.consumed_binary_bytes += 1;
                 self.binary_data.push(*byte);
-                if self.binary_bytes_remaining == 0 {
+                let end = self.binary_bytes_remaining == 0;
+                if end || (self.modern && self.binary_data.len() >= TRZSZ_UPLOAD_DATA_CHUNK_SIZE) {
+                    let bytes = std::mem::take(&mut self.binary_data);
+                    let payload = if self.binary_streaming || !end {
+                        TrzszProtocolPayload::DataChunk { bytes, end }
+                    } else {
+                        TrzszProtocolPayload::EncodedBytes(bytes)
+                    };
                     output.frames.push(TrzszProtocolFrame {
-                        frame_type: "DATA".to_string(),
-                        payload: TrzszProtocolPayload::EncodedBytes(std::mem::take(
-                            &mut self.binary_data,
-                        )),
+                        frame_type: "DATA".into(),
+                        payload,
                     });
+                    self.binary_streaming = !end;
                 }
                 continue;
             }
 
-            if self.pending_line.is_empty() && *byte != b'#' {
+            if self.pending_line.is_empty() && !self.text_streaming && *byte != b'#' {
                 output.passthrough.push(*byte);
                 continue;
             }
 
             self.pending_line.push(*byte);
-            if self.pending_line.len() > TRZSZ_MAX_PROTOCOL_LINE_LEN {
-                output.passthrough.append(&mut self.pending_line);
-                continue;
+            let text_data = self.modern
+                && !self.binary
+                && (self.text_streaming || self.pending_line.starts_with(b"#DATA:"));
+            if text_data
+                && *byte != b'\n'
+                && self.pending_line.len() >= TRZSZ_UPLOAD_DATA_CHUNK_SIZE + 8
+            {
+                let start = if self.text_streaming { 0 } else { 6 };
+                let keep = self.pending_line.split_off(self.pending_line.len() - 2);
+                let bytes = std::mem::replace(&mut self.pending_line, keep)[start..].to_vec();
+                output.frames.push(TrzszProtocolFrame {
+                    frame_type: "DATA".into(),
+                    payload: TrzszProtocolPayload::DataChunk { bytes, end: false },
+                });
+                self.text_streaming = true;
+            }
+            let limit = TRZSZ_MAX_PROTOCOL_LINE_LEN;
+            if self.pending_line.len() > limit {
+                self.pending_line.clear();
+                output.frames.push(TrzszProtocolFrame {
+                    frame_type: "fail".into(),
+                    payload: TrzszProtocolPayload::EncodedBytes(
+                        b"trzsz frame exceeds limit".to_vec(),
+                    ),
+                });
+                return output;
             }
             if *byte != b'\n' {
                 continue;
             }
 
             let line = std::mem::take(&mut self.pending_line);
-            if let Some(frame) = parse_trzsz_protocol_frame(&line) {
+            let frame = if self.text_streaming {
+                self.text_streaming = false;
+                Some(TrzszProtocolFrame {
+                    frame_type: "DATA".into(),
+                    payload: TrzszProtocolPayload::DataChunk {
+                        bytes: trim_trzsz_protocol_line_ending(&line).to_vec(),
+                        end: true,
+                    },
+                })
+            } else if self.modern && line.starts_with(b"#DATA:") {
+                let value = trim_trzsz_protocol_line_ending(&line)[6..].to_vec();
+                if self.binary && value.iter().all(u8::is_ascii_digit) && !value.is_empty() {
+                    std::str::from_utf8(&value)
+                        .ok()
+                        .and_then(|text| text.parse().ok())
+                        .map(|length| TrzszProtocolFrame {
+                            frame_type: "DATA".into(),
+                            payload: TrzszProtocolPayload::Integer(length),
+                        })
+                } else {
+                    Some(TrzszProtocolFrame {
+                        frame_type: "DATA".into(),
+                        payload: TrzszProtocolPayload::Raw(
+                            String::from_utf8_lossy(&value).into_owned(),
+                        ),
+                    })
+                }
+            } else {
+                parse_trzsz_protocol_frame(&line)
+            };
+            if let Some(frame) = frame {
+                if let Some(config) = parse_trzsz_config_frame(&frame) {
+                    self.modern = config.protocol.unwrap_or(0) >= 2;
+                    self.binary = config.binary;
+                }
                 if let TrzszProtocolPayload::Integer(length) = &frame.payload
                     && frame.frame_type.eq_ignore_ascii_case("DATA")
                     && *length > 0
                 {
-                    self.binary_bytes_remaining =
-                        usize::try_from(*length).unwrap_or(usize::MAX / 2);
+                    let limit = if self.modern {
+                        1024 * 1024 * 1024
+                    } else {
+                        64 * 1024 * 1024
+                    };
+                    if *length > limit {
+                        output.frames.push(TrzszProtocolFrame {
+                            frame_type: "fail".into(),
+                            payload: TrzszProtocolPayload::EncodedBytes(
+                                b"trzsz frame exceeds limit".to_vec(),
+                            ),
+                        });
+                        return output;
+                    }
+                    self.binary_bytes_remaining = *length as usize;
                 }
                 output.frames.push(frame);
             } else {
@@ -561,6 +651,10 @@ impl TrzszProtocolStream {
         self.pending_line.clear();
         self.binary_bytes_remaining = 0;
         self.binary_data.clear();
+        self.binary_streaming = false;
+        self.text_streaming = false;
+        self.modern = false;
+        self.binary = false;
     }
 }
 
@@ -609,6 +703,9 @@ pub struct TrzszDownloadStep {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrzszDownloadError {
+    DataDecode {
+        message: String,
+    },
     UnexpectedFrame {
         expected: &'static str,
         frame_type: String,
@@ -636,6 +733,11 @@ pub struct TrzszDownloadEngine {
     remote_is_windows: bool,
     directory_mode: bool,
     protocol_version: i64,
+    config: TrzszConfig,
+    decoder: Option<codec::Decoder>,
+    wire_received: usize,
+    archive: Option<archive::Receiver>,
+    awaiting_compression: bool,
 }
 
 enum TrzszDownloadPhase {
@@ -676,6 +778,11 @@ impl TrzszDownloadEngine {
             remote_is_windows,
             directory_mode: false,
             protocol_version: 0,
+            config: TrzszConfig::local_default(None, false),
+            decoder: None,
+            wire_received: 0,
+            archive: None,
+            awaiting_compression: false,
         }
     }
 
@@ -685,6 +792,15 @@ impl TrzszDownloadEngine {
 
     pub fn set_protocol_version(&mut self, protocol_version: i64) {
         self.protocol_version = protocol_version;
+        self.config.protocol = Some(protocol_version);
+    }
+
+    pub fn configure(&mut self, config: &TrzszConfig) -> Result<(), String> {
+        codec::validate(config)?;
+        self.config = config.clone();
+        self.protocol_version = config.protocol.unwrap_or(0);
+        self.directory_mode = config.directory;
+        Ok(())
     }
 
     pub fn observe_frame(
@@ -737,6 +853,51 @@ impl TrzszDownloadEngine {
         }
     }
 
+    /// Streams decoded bytes into the worker-owned sink before producing ACKs.
+    pub fn observe_frame_into(
+        &mut self,
+        frame: TrzszProtocolFrame,
+        mut sink: impl FnMut(TrzszDownloadEvent) -> Result<(), String>,
+    ) -> Result<TrzszDownloadStep, String> {
+        if self.protocol_version >= 2 && matches!(self.phase, TrzszDownloadPhase::AwaitData { .. })
+        {
+            let TrzszDownloadPhase::AwaitData {
+                remaining,
+                names,
+                name,
+                size,
+                received,
+                md5,
+                expected_binary_chunk,
+            } = std::mem::replace(&mut self.phase, TrzszDownloadPhase::AwaitNum)
+            else {
+                unreachable!()
+            };
+            return self
+                .observe_modern_data_into(
+                    frame,
+                    TrzszDownloadDataState {
+                        remaining,
+                        names,
+                        name,
+                        size,
+                        received,
+                        md5,
+                        expected_binary_chunk,
+                    },
+                    &mut sink,
+                )
+                .map_err(|error| format!("{error:?}"));
+        }
+        let mut step = self
+            .observe_frame(frame)
+            .map_err(|error| format!("{error:?}"))?;
+        for event in std::mem::take(&mut step.events) {
+            sink(event)?;
+        }
+        Ok(step)
+    }
+
     pub fn is_completed(&self) -> bool {
         matches!(self.phase, TrzszDownloadPhase::Completed { .. })
     }
@@ -751,6 +912,11 @@ impl TrzszDownloadEngine {
             return Err(unexpected_trzsz_frame("NUM", frame));
         }
         let count = integer_payload(frame)?;
+        if count < 0 {
+            return Err(TrzszDownloadError::InvalidPayload {
+                frame_type: "NUM".into(),
+            });
+        }
         let response = build_trzsz_integer_frame("SUCC", count, self.newline());
         let mut step = TrzszDownloadStep {
             events: vec![TrzszDownloadEvent::FileCount { count }],
@@ -781,7 +947,9 @@ impl TrzszDownloadEngine {
         }
         let raw_name = string_payload(&frame)?;
         let mut events = Vec::new();
-        let (name, response, names) = if self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
+        let (name, response, names) = if self.directory_mode
+            || self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL
+        {
             let entry = parse_trzsz_source_file(&raw_name).ok_or_else(|| {
                 TrzszDownloadError::InvalidPayload {
                     frame_type: frame.frame_type.clone(),
@@ -791,30 +959,45 @@ impl TrzszDownloadEngine {
             let response_name = entry.top_level_name().to_string();
             let names = push_unique_name(names, response_name.clone());
             // A fresh local download always reports size 0 so the sender skips
-            // the prefix-hash resume exchange this engine does not implement.
-            let target = build_trzsz_target_file(&response_name, 0);
+            // the prefix-hash exchange and preserves local collision renaming.
+            let target = if self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
+                build_trzsz_target_file(&response_name, 0)
+            } else {
+                response_name
+            };
             let response = build_trzsz_string_frame("SUCC", target.as_bytes(), self.newline());
+            let archived = entry.archive;
+            if archived {
+                if self.protocol_version < 4 || !entry.is_dir {
+                    return Err(TrzszDownloadError::InvalidPayload {
+                        frame_type: "NAME".into(),
+                    });
+                }
+                self.archive = Some(archive::Receiver::new(entry.clone()));
+            }
             if entry.is_dir {
                 events.push(TrzszDownloadEvent::Directory {
                     name: name.clone(),
                     path_id: entry.path_id,
                     components: entry.path_name.clone(),
                 });
-                let remaining = remaining.saturating_sub(1);
-                if remaining <= 0 {
-                    self.phase = TrzszDownloadPhase::Completed {
-                        names: names.clone(),
-                    };
-                    events.push(TrzszDownloadEvent::Completed { names });
-                } else {
-                    self.phase = TrzszDownloadPhase::AwaitName { remaining, names };
+                if !archived {
+                    let remaining = remaining.saturating_sub(1);
+                    if remaining <= 0 {
+                        self.phase = TrzszDownloadPhase::Completed {
+                            names: names.clone(),
+                        };
+                        events.push(TrzszDownloadEvent::Completed { names });
+                    } else {
+                        self.phase = TrzszDownloadPhase::AwaitName { remaining, names };
+                    }
+                    return Ok(TrzszDownloadStep {
+                        events,
+                        responses: vec![response],
+                    });
                 }
-                return Ok(TrzszDownloadStep {
-                    events,
-                    responses: vec![response],
-                });
             }
-            if self.directory_mode {
+            if self.directory_mode && !archived {
                 events.push(TrzszDownloadEvent::FilePath {
                     name: name.clone(),
                     path_id: entry.path_id,
@@ -854,8 +1037,23 @@ impl TrzszDownloadEngine {
             return Err(unexpected_trzsz_frame("SIZE", frame));
         }
         let size = integer_payload(frame)?;
+        if size < 0 {
+            return Err(TrzszDownloadError::InvalidPayload {
+                frame_type: "SIZE".into(),
+            });
+        }
         let response = build_trzsz_integer_frame("SUCC", size, self.newline());
-        self.phase = if size == 0 {
+        if self.protocol_version >= 2 {
+            let compression = codec::compression(&self.config, size);
+            self.awaiting_compression = compression.is_none();
+            self.decoder = compression
+                .map(|compress| codec::Decoder::new(&self.config, compress))
+                .transpose()
+                .map_err(|_| TrzszDownloadError::InvalidPayload {
+                    frame_type: "CFG".into(),
+                })?;
+        }
+        self.phase = if size == 0 && self.protocol_version < 2 {
             TrzszDownloadPhase::AwaitMd5 {
                 remaining,
                 names,
@@ -874,7 +1072,11 @@ impl TrzszDownloadEngine {
             }
         };
         Ok(TrzszDownloadStep {
-            events: vec![TrzszDownloadEvent::FileSize { name, size }],
+            events: if self.archive.is_some() {
+                Vec::new()
+            } else {
+                vec![TrzszDownloadEvent::FileSize { name, size }]
+            },
             responses: vec![response],
         })
     }
@@ -884,6 +1086,9 @@ impl TrzszDownloadEngine {
         frame: TrzszProtocolFrame,
         mut state: TrzszDownloadDataState,
     ) -> Result<TrzszDownloadStep, TrzszDownloadError> {
+        if self.protocol_version >= 2 {
+            return self.observe_modern_data(frame, state);
+        }
         if !frame.frame_type.eq_ignore_ascii_case("DATA") {
             self.phase = state.into_phase();
             return Err(unexpected_trzsz_frame("DATA", frame));
@@ -894,13 +1099,30 @@ impl TrzszDownloadEngine {
             return Ok(TrzszDownloadStep::default());
         }
 
-        let bytes = bytes_payload(&frame)?;
+        let mut bytes = bytes_payload(&frame)?;
         if let Some(expected) = state.expected_binary_chunk.take() {
             let actual = bytes.len() as i64;
             if expected != actual {
                 self.phase = state.into_phase();
                 return Err(TrzszDownloadError::DataLengthMismatch { expected, actual });
             }
+        }
+        if self.config.binary {
+            let mut decoder = codec::Decoder::new(&self.config, false).map_err(|_| {
+                TrzszDownloadError::InvalidPayload {
+                    frame_type: "CFG".into(),
+                }
+            })?;
+            let mut decoded = Vec::new();
+            decoder
+                .decode(&bytes, true, |data| {
+                    decoded.extend(data);
+                    Ok(())
+                })
+                .map_err(|_| TrzszDownloadError::InvalidPayload {
+                    frame_type: "DATA".into(),
+                })?;
+            bytes = decoded;
         }
         let chunk = bytes.len() as i64;
         if state.received.saturating_add(chunk) > state.size {
@@ -1033,6 +1255,7 @@ pub struct TrzszUploadEntry {
 pub enum TrzszUploadPayload {
     Memory(Vec<u8>),
     File(PathBuf),
+    Archive(Vec<TrzszUploadEntry>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1044,6 +1267,8 @@ pub struct TrzszUploadSource {
     pub size: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perm: Option<u32>,
+    #[serde(default)]
+    pub archive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1108,7 +1333,13 @@ pub struct TrzszUploadEngine {
     phase: TrzszUploadPhase,
     remote_is_windows: bool,
     entries: Vec<TrzszUploadEntry>,
+    synthetic_path_id_base: Option<i64>,
     protocol_version: i64,
+    config: TrzszConfig,
+    encoder: Option<codec::Encoder>,
+    wire_acks: std::collections::VecDeque<i64>,
+    offset: i64,
+    acknowledged: i64,
 }
 
 enum TrzszUploadPhase {
@@ -1132,6 +1363,17 @@ enum TrzszUploadPhase {
         md5: md5::Context,
         reader: TrzszUploadReader,
     },
+    AwaitPrefix {
+        index: usize,
+        remote_names: Vec<String>,
+        remote_name: String,
+        prefix: resume::PrefixSender,
+    },
+    AwaitFinalAck {
+        index: usize,
+        remote_names: Vec<String>,
+        digest: Vec<u8>,
+    },
     AwaitMd5Ack {
         index: usize,
         remote_names: Vec<String>,
@@ -1145,25 +1387,54 @@ enum TrzszUploadPhase {
 enum TrzszUploadReader {
     Memory,
     File(File),
+    Archive(archive::Reader),
 }
 
 impl TrzszUploadEngine {
     pub fn new(remote_is_windows: bool, entries: Vec<TrzszUploadEntry>) -> Self {
+        let synthetic_path_id_base = entries
+            .iter()
+            .filter_map(|entry| entry.source.as_ref().map(|source| source.path_id))
+            .max()
+            .unwrap_or(-1)
+            .checked_add(1);
         Self {
             phase: TrzszUploadPhase::Ready,
             remote_is_windows,
             entries,
+            synthetic_path_id_base,
             protocol_version: 0,
+            config: TrzszConfig::local_default(None, false),
+            encoder: None,
+            wire_acks: std::collections::VecDeque::new(),
+            offset: 0,
+            acknowledged: 0,
         }
     }
 
     pub fn set_protocol_version(&mut self, protocol_version: i64) {
         self.protocol_version = protocol_version;
+        self.config.protocol = Some(protocol_version);
+    }
+
+    pub fn configure(&mut self, config: &TrzszConfig) -> Result<(), String> {
+        codec::validate(config)?;
+        self.config = config.clone();
+        self.protocol_version = config.protocol.unwrap_or(0);
+        Ok(())
     }
 
     pub fn begin(&mut self) -> Result<TrzszUploadStep, TrzszUploadError> {
         if !matches!(self.phase, TrzszUploadPhase::Ready) {
             return Err(TrzszUploadError::AlreadyStarted);
+        }
+        if self.protocol_version >= 4 && self.config.directory && !self.config.overwrite {
+            self.entries = archive::pack(std::mem::take(&mut self.entries)).map_err(|message| {
+                TrzszUploadError::PayloadRead {
+                    name: "trzsz archive".into(),
+                    message,
+                }
+            })?;
         }
         if self.entries.is_empty() {
             return Err(TrzszUploadError::NoFiles);
@@ -1180,6 +1451,9 @@ impl TrzszUploadEngine {
         &mut self,
         frame: TrzszProtocolFrame,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
+        if frame.payload == TrzszProtocolPayload::Raw("=".into()) && self.protocol_version >= 3 {
+            return Ok(TrzszUploadStep::default());
+        }
         match std::mem::replace(&mut self.phase, TrzszUploadPhase::Ready) {
             TrzszUploadPhase::Ready => {
                 self.phase = TrzszUploadPhase::Ready;
@@ -1216,6 +1490,17 @@ impl TrzszUploadEngine {
                 md5,
                 reader,
             ),
+            TrzszUploadPhase::AwaitPrefix {
+                index,
+                remote_names,
+                remote_name,
+                prefix,
+            } => self.observe_prefix_ack(frame, index, remote_names, remote_name, prefix),
+            TrzszUploadPhase::AwaitFinalAck {
+                index,
+                remote_names,
+                digest,
+            } => self.observe_final_ack(frame, index, remote_names, digest),
             TrzszUploadPhase::AwaitMd5Ack {
                 index,
                 remote_names,
@@ -1257,13 +1542,20 @@ impl TrzszUploadEngine {
             };
             return Err(unexpected_trzsz_upload_frame("SUCC", frame));
         }
+        let mut target_size = 0;
         let remote_name = if self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
             let target = upload_string_payload(&frame)?;
-            parse_trzsz_target_file_name(&target).ok_or_else(|| {
-                TrzszUploadError::InvalidPayload {
-                    frame_type: frame.frame_type.clone(),
-                }
-            })?
+            let target: TrzszTargetFile =
+                serde_json::from_str(&target).map_err(|_| TrzszUploadError::InvalidPayload {
+                    frame_type: "SUCC".into(),
+                })?;
+            if target.size < 0 || target.name.is_empty() {
+                return Err(TrzszUploadError::InvalidPayload {
+                    frame_type: "SUCC".into(),
+                });
+            }
+            target_size = target.size;
+            target.name
         } else {
             upload_string_payload(&frame)?
         };
@@ -1271,7 +1563,7 @@ impl TrzszUploadEngine {
             remote_names.push(remote_name.clone());
         }
         let entry = &self.entries[index];
-        if entry.is_dir() {
+        if entry.is_dir() && !entry.source.as_ref().is_some_and(|source| source.archive) {
             let mut events = vec![TrzszUploadEvent::Directory {
                 name: entry.display_name().to_string(),
                 remote_name,
@@ -1295,6 +1587,72 @@ impl TrzszUploadEngine {
             return Ok(step);
         }
 
+        if target_size > 0 && entry.size == 0 {
+            let mut responses = Vec::new();
+            if self.protocol_version == 3 {
+                responses.push(build_trzsz_integer_frame("SIZE", 0, self.newline()));
+            }
+            let over = resume::PrefixHash {
+                step: 0,
+                hash: String::new(),
+                over: true,
+            };
+            responses.push(build_trzsz_string_frame(
+                "HASH",
+                &serde_json::to_vec(&over).expect("prefix"),
+                self.newline(),
+            ));
+            responses.push(build_trzsz_integer_frame("SIZE", 0, self.newline()));
+            let events = vec![TrzszUploadEvent::FileStarted {
+                name: entry.display_name().into(),
+                remote_name: remote_name.clone(),
+                size: entry.size,
+            }];
+            self.phase = TrzszUploadPhase::AwaitSizeAck {
+                index,
+                remote_names,
+                remote_name,
+            };
+            return Ok(TrzszUploadStep { events, responses });
+        }
+        if target_size > 0
+            && entry.size > 0
+            && !entry.source.as_ref().is_some_and(|source| source.archive)
+        {
+            let mut prefix = resume::PrefixSender {
+                limit: target_size.min(entry.size),
+                step: 0,
+                matched: 0,
+                reader: self.open_upload_reader(index)?,
+                digest: md5::Context::new(),
+            };
+            let hash = prefix.next(entry)?;
+            let mut responses = Vec::new();
+            if self.protocol_version == 3 {
+                responses.push(build_trzsz_integer_frame(
+                    "SIZE",
+                    entry.size,
+                    self.newline(),
+                ));
+            }
+            responses.push(build_trzsz_string_frame(
+                "HASH",
+                &serde_json::to_vec(&hash).expect("prefix"),
+                self.newline(),
+            ));
+            let events = vec![TrzszUploadEvent::FileStarted {
+                name: entry.display_name().into(),
+                remote_name: remote_name.clone(),
+                size: entry.size,
+            }];
+            self.phase = TrzszUploadPhase::AwaitPrefix {
+                index,
+                remote_names,
+                remote_name,
+                prefix,
+            };
+            return Ok(TrzszUploadStep { events, responses });
+        }
         let size = entry.size;
         self.phase = TrzszUploadPhase::AwaitSizeAck {
             index,
@@ -1319,11 +1677,11 @@ impl TrzszUploadEngine {
         remote_name: String,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
         let entry = &self.entries[index];
-        let size = entry.size;
+        let size = entry.size - self.offset;
         let expected = TrzszProtocolPayload::Integer(size);
         expect_upload_ack(&frame, &expected)?;
 
-        if size <= 0 {
+        if size <= 0 && self.protocol_version < 2 {
             let digest = md5::compute([]).0.to_vec();
             self.phase = TrzszUploadPhase::AwaitMd5Ack {
                 index,
@@ -1336,15 +1694,72 @@ impl TrzszUploadEngine {
             });
         }
 
-        let reader = self.open_upload_reader(index)?;
-        self.send_upload_data_chunk(
+        let mut reader = self.open_upload_reader(index)?;
+        if let TrzszUploadReader::File(file) = &mut reader {
+            file.seek(SeekFrom::Start(self.offset as u64))
+                .map_err(|error| TrzszUploadError::PayloadRead {
+                    name: entry.name.clone(),
+                    message: error.to_string(),
+                })?;
+        }
+        let mut step = TrzszUploadStep::default();
+        if self.protocol_version >= 2 {
+            let fixed = codec::compression(&self.config, size);
+            let compress = match fixed {
+                Some(compress) => compress,
+                None => {
+                    let result = match &mut reader {
+                        TrzszUploadReader::File(file) => codec::compression_profitable(file, size),
+                        TrzszUploadReader::Memory => {
+                            let TrzszUploadPayload::Memory(bytes) = &entry.payload else {
+                                unreachable!()
+                            };
+                            let mut sample = std::io::Cursor::new(bytes);
+                            sample.set_position(self.offset as u64);
+                            codec::compression_profitable(&mut sample, size)
+                        }
+                        TrzszUploadReader::Archive(_) => Ok(true),
+                    };
+                    result.map_err(|message| TrzszUploadError::PayloadRead {
+                        name: entry.name.clone(),
+                        message,
+                    })?
+                }
+            };
+            self.encoder = Some(codec::Encoder::new(&self.config, compress).map_err(|_| {
+                TrzszUploadError::InvalidPayload {
+                    frame_type: "CFG".into(),
+                }
+            })?);
+            if fixed.is_none() {
+                step.responses
+                    .push(format!("#COMP:{compress}{}", self.newline()).into_bytes());
+            }
+        }
+        if size == 0 {
+            step.responses.extend(self.encode_modern_data(&[], true)?);
+            self.phase = TrzszUploadPhase::AwaitDataAck {
+                index,
+                remote_names,
+                remote_name,
+                sent: 0,
+                chunk: 0,
+                md5: md5::Context::new(),
+                reader,
+            };
+            return Ok(step);
+        }
+        let data = self.send_upload_data_chunk(
             index,
             remote_names,
             remote_name,
             0,
             md5::Context::new(),
             reader,
-        )
+        )?;
+        step.events.extend(data.events);
+        step.responses.extend(data.responses);
+        Ok(step)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1359,6 +1774,18 @@ impl TrzszUploadEngine {
         md5: md5::Context,
         reader: TrzszUploadReader,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
+        if self.protocol_version >= 2 {
+            return self.observe_modern_ack(
+                frame,
+                index,
+                remote_names,
+                remote_name,
+                sent,
+                chunk,
+                md5,
+                reader,
+            );
+        }
         let expected = TrzszProtocolPayload::Integer(chunk);
         expect_upload_ack(&frame, &expected)?;
         if sent < self.entries[index].size {
@@ -1420,6 +1847,9 @@ impl TrzszUploadEngine {
         let entry = self.entries.get(index).ok_or(TrzszUploadError::NoFiles)?;
         match &entry.payload {
             TrzszUploadPayload::Memory(_) => Ok(TrzszUploadReader::Memory),
+            TrzszUploadPayload::Archive(entries) => Ok(TrzszUploadReader::Archive(
+                archive::Reader::new(entries.clone()),
+            )),
             TrzszUploadPayload::File(path) => File::open(path)
                 .map(TrzszUploadReader::File)
                 .map_err(|error| TrzszUploadError::PayloadRead {
@@ -1435,12 +1865,57 @@ impl TrzszUploadEngine {
         remote_names: Vec<String>,
         remote_name: String,
         sent: i64,
+        md5: md5::Context,
+        reader: TrzszUploadReader,
+    ) -> Result<TrzszUploadStep, TrzszUploadError> {
+        let mut step =
+            self.send_upload_data_chunk_once(index, remote_names, remote_name, sent, md5, reader)?;
+        // A small sliding window amortizes RTT while bounding encoded data and
+        // disk read-ahead independently of file size and peer buffer settings.
+        while self.protocol_version >= 2 && self.wire_acks.len() < 5 {
+            let phase = std::mem::replace(&mut self.phase, TrzszUploadPhase::Ready);
+            match phase {
+                TrzszUploadPhase::AwaitDataAck {
+                    index,
+                    remote_names,
+                    remote_name,
+                    sent,
+                    md5,
+                    reader,
+                    ..
+                } if sent < self.entries[index].size - self.offset => {
+                    let next = self.send_upload_data_chunk_once(
+                        index,
+                        remote_names,
+                        remote_name,
+                        sent,
+                        md5,
+                        reader,
+                    )?;
+                    step.events.extend(next.events);
+                    step.responses.extend(next.responses);
+                }
+                phase => {
+                    self.phase = phase;
+                    break;
+                }
+            }
+        }
+        Ok(step)
+    }
+
+    fn send_upload_data_chunk_once(
+        &mut self,
+        index: usize,
+        remote_names: Vec<String>,
+        remote_name: String,
+        sent: i64,
         mut md5: md5::Context,
         mut reader: TrzszUploadReader,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
         let entry = self.entries.get(index).ok_or(TrzszUploadError::NoFiles)?;
-        let size = entry.size;
-        let chunk = read_upload_chunk(entry, sent, &mut reader)?;
+        let size = entry.size - self.offset;
+        let chunk = read_upload_chunk(entry, sent + self.offset, &mut reader)?;
         let chunk_len = chunk.len() as i64;
         if chunk_len <= 0 || sent + chunk_len > size {
             return Err(TrzszUploadError::PayloadRead {
@@ -1453,6 +1928,26 @@ impl TrzszUploadEngine {
         md5.consume(&chunk);
         let sent = sent + chunk_len;
         let display_name = entry.display_name().to_string();
+        let responses = if self.protocol_version >= 2 {
+            self.encode_modern_data(&chunk, sent == size)?
+        } else if self.config.binary {
+            let mut encoder = codec::Encoder::new(&self.config, false).map_err(|_| {
+                TrzszUploadError::InvalidPayload {
+                    frame_type: "CFG".into(),
+                }
+            })?;
+            let encoded =
+                encoder
+                    .encode(&chunk, true)
+                    .map_err(|_| TrzszUploadError::InvalidPayload {
+                        frame_type: "DATA".into(),
+                    })?;
+            let mut frame = build_trzsz_integer_frame("DATA", encoded.len() as i64, self.newline());
+            frame.extend(encoded);
+            vec![frame]
+        } else {
+            vec![build_trzsz_string_frame("DATA", &chunk, self.newline())]
+        };
         self.phase = TrzszUploadPhase::AwaitDataAck {
             index,
             remote_names,
@@ -1463,12 +1958,16 @@ impl TrzszUploadEngine {
             reader,
         };
         Ok(TrzszUploadStep {
-            events: vec![TrzszUploadEvent::Data {
-                name: display_name,
-                sent,
-                size,
-            }],
-            responses: vec![build_trzsz_string_frame("DATA", &chunk, self.newline())],
+            events: if self.protocol_version >= 2 {
+                Vec::new()
+            } else {
+                vec![TrzszUploadEvent::Data {
+                    name: display_name,
+                    sent: sent + self.offset,
+                    size: size + self.offset,
+                }]
+            },
+            responses,
         })
     }
 
@@ -1478,7 +1977,20 @@ impl TrzszUploadEngine {
         remote_names: Vec<String>,
     ) -> Result<TrzszUploadStep, TrzszUploadError> {
         let entry = self.entries.get(index).ok_or(TrzszUploadError::NoFiles)?;
-        let name = entry.protocol_name(self.protocol_version)?;
+        let path_id = if entry.source.is_none() && self.protocol_version >= TRZSZ_JSON_NAME_PROTOCOL
+        {
+            self.synthetic_path_id_base
+                .and_then(|base| base.checked_add(index as i64))
+                .ok_or_else(|| TrzszUploadError::InvalidSource {
+                    name: entry.name.clone(),
+                })?
+        } else {
+            0
+        };
+        let name = entry.protocol_name(self.protocol_version, path_id)?;
+        self.offset = 0;
+        self.acknowledged = 0;
+        self.wire_acks.clear();
         self.phase = TrzszUploadPhase::AwaitNameAck {
             index,
             remote_names,
@@ -1518,25 +2030,28 @@ impl TrzszUploadEntry {
     }
 
     fn display_name(&self) -> &str {
-        self.source
-            .as_ref()
-            .and_then(|source| source.path_name.last())
-            .map(String::as_str)
-            .unwrap_or(&self.name)
+        // The local entry name is also the desktop progress key. Basenames
+        // collide across directories and cannot identify an upload job.
+        &self.name
     }
 
     fn is_dir(&self) -> bool {
         self.source.as_ref().is_some_and(|source| source.is_dir)
     }
 
-    fn protocol_name(&self, protocol_version: i64) -> Result<String, TrzszUploadError> {
-        if protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
+    fn protocol_name(
+        &self,
+        protocol_version: i64,
+        path_id: i64,
+    ) -> Result<String, TrzszUploadError> {
+        if self.source.is_some() || protocol_version >= TRZSZ_JSON_NAME_PROTOCOL {
             let source = self.source.clone().unwrap_or(TrzszUploadSource {
-                path_id: 0,
+                path_id,
                 path_name: vec![self.name.clone()],
                 is_dir: false,
                 size: self.size.max(0),
                 perm: None,
+                archive: false,
             });
             return serde_json::to_string(&source).map_err(|_| TrzszUploadError::InvalidSource {
                 name: self.display_name().to_string(),
@@ -1558,6 +2073,24 @@ fn read_upload_chunk(
             let start = sent.max(0) as usize;
             let end = start.saturating_add(chunk_size).min(data.len());
             Ok(data.get(start..end).unwrap_or_default().to_vec())
+        }
+        (TrzszUploadPayload::Archive(_), TrzszUploadReader::Archive(reader)) => {
+            let mut chunk = vec![0; chunk_size];
+            let mut read = 0;
+            while read < chunk.len() {
+                let count = reader.read(&mut chunk[read..]).map_err(|error| {
+                    TrzszUploadError::PayloadRead {
+                        name: entry.name.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                if count == 0 {
+                    break;
+                }
+                read += count;
+            }
+            chunk.truncate(read);
+            Ok(chunk)
         }
         (TrzszUploadPayload::File(_), TrzszUploadReader::File(file)) => {
             let mut chunk = vec![0; chunk_size];
@@ -1585,6 +2118,10 @@ struct TrzszSourceFile {
     path_name: Vec<String>,
     #[serde(default)]
     is_dir: bool,
+    #[serde(default)]
+    archive: bool,
+    #[serde(default)]
+    size: i64,
 }
 
 impl TrzszSourceFile {
@@ -1600,8 +2137,14 @@ impl TrzszSourceFile {
 fn parse_trzsz_source_file(source: &str) -> Option<TrzszSourceFile> {
     let source: TrzszSourceFile = serde_json::from_str(source).ok()?;
     (!source.path_name.is_empty()
-        && !source.top_level_name().is_empty()
-        && !source.file_name().is_empty())
+        && source.path_id >= 0
+        && source.size >= 0
+        && source.path_name.iter().all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && !part.contains(['/', '\\', '\0', ':'])
+        }))
     .then_some(source)
 }
 
@@ -1617,11 +2160,6 @@ fn build_trzsz_target_file(name: &str, size: i64) -> String {
         size,
     })
     .expect("target file payload is always serializable")
-}
-
-fn parse_trzsz_target_file_name(target: &str) -> Option<String> {
-    let target: TrzszTargetFile = serde_json::from_str(target).ok()?;
-    (target.size >= 0 && !target.name.is_empty()).then_some(target.name)
 }
 
 fn push_unique_name(mut names: Vec<String>, name: String) -> Vec<String> {
@@ -1927,6 +2465,9 @@ pub fn parse_trzsz_json_frame(frame: &TrzszProtocolFrame) -> Option<serde_json::
 }
 
 pub fn parse_trzsz_action_frame(frame: &TrzszProtocolFrame) -> Option<TrzszAction> {
+    if frame.frame_type != "ACT" {
+        return None;
+    }
     let TrzszProtocolPayload::EncodedBytes(bytes) = &frame.payload else {
         return None;
     };
@@ -1934,6 +2475,9 @@ pub fn parse_trzsz_action_frame(frame: &TrzszProtocolFrame) -> Option<TrzszActio
 }
 
 pub fn parse_trzsz_config_frame(frame: &TrzszProtocolFrame) -> Option<TrzszConfig> {
+    if frame.frame_type != "CFG" {
+        return None;
+    }
     let TrzszProtocolPayload::EncodedBytes(bytes) = &frame.payload else {
         return None;
     };
@@ -1993,6 +2537,7 @@ fn trzsz_payload_message(payload: &TrzszProtocolPayload) -> String {
         TrzszProtocolPayload::EncodedBytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
         TrzszProtocolPayload::Raw(text) => text.clone(),
         TrzszProtocolPayload::Integer(value) => value.to_string(),
+        TrzszProtocolPayload::DataChunk { bytes, .. } => format!("{} data bytes", bytes.len()),
     }
 }
 
@@ -2015,3 +2560,6 @@ fn retained_prefix_start(data: &[u8]) -> usize {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod interop_tests;

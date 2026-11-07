@@ -1096,6 +1096,10 @@ impl SessionFeatureState {
         self.events.pending.extend(events);
     }
 
+    pub(in crate::features) fn defer_pending_event(&mut self, event: SessionEvent) {
+        self.events.pending.push_front(event);
+    }
+
     pub(in crate::features) fn pop_pending_event(&mut self) -> Option<SessionEvent> {
         self.events.pending.pop_front()
     }

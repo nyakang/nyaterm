@@ -26,6 +26,194 @@ fn decode_trzsz_string(encoded: &[u8]) -> String {
 }
 
 #[test]
+fn modern_text_data_digits_are_not_a_binary_header_and_name_json_is_not_config() {
+    let mut config = TrzszConfig::local_default(None, false);
+    config.protocol = Some(4);
+    let mut stream = TrzszProtocolStream::new();
+    stream.filter_terminal_output(&build_trzsz_config_frame(&config, false));
+    let name = build_trzsz_string_frame(
+        "NAME",
+        br#"{"path_id":0,"path_name":["file"],"size":3}"#,
+        "\n",
+    );
+    let name = stream.filter_terminal_output(&name).frames.remove(0);
+    assert!(parse_trzsz_config_frame(&name).is_none());
+    let frame = stream
+        .filter_terminal_output(b"#DATA:1234\n")
+        .frames
+        .remove(0);
+    assert_eq!(frame.payload, TrzszProtocolPayload::Raw("1234".into()));
+}
+
+#[test]
+fn old_directory_name_json_is_parsed_with_a_plain_name_ack() {
+    for protocol in [0, 1, 2] {
+        let mut engine = TrzszDownloadEngine::new(false);
+        engine.set_directory_mode(true);
+        engine.set_protocol_version(protocol);
+        engine
+            .observe_frame(parse_trzsz_protocol_frame(b"#NUM:1\n").unwrap())
+            .unwrap();
+        let frame = build_trzsz_string_frame(
+            "NAME",
+            br#"{"path_id":7,"path_name":["folder"],"is_dir":true}"#,
+            "\n",
+        );
+        let step = engine
+            .observe_frame(parse_trzsz_protocol_frame(&frame).unwrap())
+            .unwrap();
+        assert!(matches!(
+            step.events[0],
+            TrzszDownloadEvent::Directory { path_id: 7, .. }
+        ));
+        assert_eq!(
+            bytes_payload(&parse_trzsz_protocol_frame(&step.responses[0]).unwrap()).unwrap(),
+            b"folder"
+        );
+    }
+}
+
+#[test]
+fn modern_independent_upload_roots_receive_distinct_path_ids() {
+    let mut engine = TrzszUploadEngine::new(
+        false,
+        vec![
+            TrzszUploadEntry::from_bytes("a", Vec::new()),
+            TrzszUploadEntry::from_bytes("b", Vec::new()),
+        ],
+    );
+    engine.set_protocol_version(3);
+    engine.begin().unwrap();
+    let first = engine
+        .observe_frame(parse_trzsz_protocol_frame(b"#SUCC:2\n").unwrap())
+        .unwrap();
+    let json =
+        parse_trzsz_json_frame(&parse_trzsz_protocol_frame(&first.responses[0]).unwrap()).unwrap();
+    assert_eq!(json["path_id"], 0);
+    // Inspect the second NAME through the same helper used by every file.
+    let second = engine.send_name(1, Vec::new()).unwrap();
+    let json =
+        parse_trzsz_json_frame(&parse_trzsz_protocol_frame(&second.responses[0]).unwrap()).unwrap();
+    assert_eq!(json["path_id"], 1);
+
+    let mut explicit = TrzszUploadEntry::from_bytes("explicit", Vec::new());
+    explicit.source = Some(TrzszUploadSource {
+        path_id: 0,
+        path_name: vec!["explicit".into()],
+        is_dir: false,
+        size: 0,
+        perm: None,
+        archive: false,
+    });
+    let mut engine = TrzszUploadEngine::new(
+        false,
+        vec![
+            TrzszUploadEntry::from_bytes("synthetic", Vec::new()),
+            explicit,
+        ],
+    );
+    engine.set_protocol_version(3);
+    let first = engine.send_name(0, Vec::new()).unwrap();
+    let json =
+        parse_trzsz_json_frame(&parse_trzsz_protocol_frame(&first.responses[0]).unwrap()).unwrap();
+    assert_eq!(json["path_id"], 1);
+    let second = engine.send_name(1, Vec::new()).unwrap();
+    let json =
+        parse_trzsz_json_frame(&parse_trzsz_protocol_frame(&second.responses[0]).unwrap()).unwrap();
+    assert_eq!(json["path_id"], 0);
+}
+
+#[test]
+fn large_modern_wire_frames_stream_with_bounded_buffers_and_ack_only_after_writes() {
+    for binary in [false, true] {
+        let mut config = TrzszConfig::local_default(None, false);
+        config.protocol = Some(4);
+        config.compress = Some(2);
+        config.binary = binary;
+        let data = vec![0xa7; 2 * 1024 * 1024 + 1];
+        let wire = if binary {
+            data.clone()
+        } else {
+            base64::engine::general_purpose::STANDARD
+                .encode(&data)
+                .into_bytes()
+        };
+        let mut engine = TrzszDownloadEngine::new(false);
+        engine.configure(&config).unwrap();
+        engine
+            .observe_frame(parse_trzsz_protocol_frame(b"#NUM:1\n").unwrap())
+            .unwrap();
+        let name = build_trzsz_string_frame(
+            "NAME",
+            format!(
+                r#"{{"path_id":0,"path_name":["large"],"size":{}}}"#,
+                data.len()
+            )
+            .as_bytes(),
+            "\n",
+        );
+        engine
+            .observe_frame(parse_trzsz_protocol_frame(&name).unwrap())
+            .unwrap();
+        engine
+            .observe_frame(TrzszProtocolFrame {
+                frame_type: "SIZE".into(),
+                payload: TrzszProtocolPayload::Integer(data.len() as i64),
+            })
+            .unwrap();
+        let mut stream = TrzszProtocolStream::new();
+        stream.filter_terminal_output(&build_trzsz_config_frame(&config, false));
+        let mut frame = if binary {
+            format!("#DATA:{}\n", wire.len()).into_bytes()
+        } else {
+            b"#DATA:".to_vec()
+        };
+        frame.extend(&wire);
+        if !binary {
+            frame.push(b'\n');
+        }
+        let mut written = 0;
+        let mut acks = Vec::new();
+        for chunk in frame.chunks(4093) {
+            for frame in stream.filter_terminal_output(chunk).frames {
+                let step = engine
+                    .observe_frame_into(frame, |event| {
+                        if let TrzszDownloadEvent::Data { bytes, .. } = event {
+                            assert!(bytes.len() <= 256 * 1024);
+                            written += bytes.len();
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                if !step.responses.is_empty() {
+                    assert_eq!(written, data.len());
+                }
+                acks.extend(step.responses);
+            }
+            assert!(stream.pending_line.len() <= TRZSZ_UPLOAD_DATA_CHUNK_SIZE + 8);
+            assert!(stream.binary_data.len() <= TRZSZ_UPLOAD_DATA_CHUNK_SIZE);
+        }
+        assert_eq!(
+            acks,
+            vec![format!("#SUCC:{}/{}\n", wire.len(), data.len()).into_bytes()]
+        );
+        let finish = if binary {
+            b"#DATA:0\n".as_slice()
+        } else {
+            b"#DATA:\n"
+        };
+        for frame in stream.filter_terminal_output(finish).frames {
+            engine.observe_frame(frame).unwrap();
+        }
+        let md5 = build_trzsz_string_frame("MD5", &md5::compute(&data).0, "\n");
+        engine
+            .observe_frame(parse_trzsz_protocol_frame(&md5).unwrap())
+            .unwrap();
+        assert!(engine.is_completed());
+    }
+}
+
+#[test]
 fn fast_scan_predicate_skips_ordinary_output() {
     assert!(!TrzszDetector::output_may_contain_trigger(
         b"Last login: Wed Jul 15\n$ "
@@ -1053,9 +1241,16 @@ fn download_engine_receives_directory_file_metadata() {
             size: 3,
         }]
     );
-    let data = build_trzsz_string_frame("DATA", b"abc", "\n");
+    let data = TrzszProtocolFrame {
+        frame_type: "DATA".into(),
+        payload: TrzszProtocolPayload::Raw("YWJj".into()),
+    };
+    engine.observe_frame(data).unwrap();
     engine
-        .observe_frame(parse_trzsz_protocol_frame(&data).unwrap())
+        .observe_frame(TrzszProtocolFrame {
+            frame_type: "DATA".into(),
+            payload: TrzszProtocolPayload::Raw(String::new()),
+        })
         .unwrap();
     let md5 = build_trzsz_string_frame("MD5", &digest, "\n");
     let step = engine
@@ -1354,6 +1549,7 @@ fn upload_engine_sends_directory_entries_without_size() {
                 size: 0,
                 payload: TrzszUploadPayload::Memory(Vec::new()),
                 source: Some(TrzszUploadSource {
+                    archive: false,
                     path_id: 0,
                     path_name: vec!["folder".to_string()],
                     is_dir: true,
@@ -1364,6 +1560,7 @@ fn upload_engine_sends_directory_entries_without_size() {
             {
                 let mut entry = TrzszUploadEntry::from_bytes("note.txt", b"note".to_vec());
                 entry.source = Some(TrzszUploadSource {
+                    archive: false,
                     path_id: 0,
                     path_name: vec!["folder".to_string(), "note.txt".to_string()],
                     is_dir: false,
