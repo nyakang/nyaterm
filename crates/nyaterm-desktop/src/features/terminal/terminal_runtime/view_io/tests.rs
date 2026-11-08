@@ -50,6 +50,12 @@ fn alt_mouse_gate_allows_captured_release_after_alt_is_released() {
 }
 
 #[test]
+fn middle_press_is_kept_from_mouse_applications_only_on_windows() {
+    assert!(!super::terminal_middle_press_is_reported(true));
+    assert!(super::terminal_middle_press_is_reported(false));
+}
+
+#[test]
 fn lost_mouse_report_capture_releases_the_button_that_is_no_longer_pressed() {
     for (captured, button) in [
         (0, MouseButton::Left),

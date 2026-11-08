@@ -17,6 +17,14 @@ enum MouseReportWriteResult {
     Failed,
 }
 
+/// Whether a middle press goes to a mouse-reporting application instead of pasting.
+///
+/// Windows has no primary selection, so its middle click always means "paste the clipboard".
+/// Vim with `mouse=a` would otherwise answer the report by pasting one of its own registers.
+pub(in crate::features) fn terminal_middle_press_is_reported(windows: bool) -> bool {
+    !windows
+}
+
 pub(super) fn terminal_mouse_report_button(button: u8) -> Option<MouseButton> {
     match button {
         0 => Some(MouseButton::Left),

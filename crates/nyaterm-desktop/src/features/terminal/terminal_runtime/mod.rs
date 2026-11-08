@@ -13,4 +13,6 @@ pub(in crate::features) use scroll::{
 };
 mod sessions;
 mod view_io;
-pub(in crate::features) use view_io::TerminalMouseReportRequest;
+pub(in crate::features) use view_io::{
+    TerminalMouseReportRequest, terminal_middle_press_is_reported,
+};

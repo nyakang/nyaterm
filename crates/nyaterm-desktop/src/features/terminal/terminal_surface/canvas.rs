@@ -15,7 +15,9 @@ use crate::features::formatting::{
     TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
     terminal_timestamp_format_width_chars,
 };
-use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
+use crate::features::terminal::terminal_runtime::{
+    TerminalMouseReportRequest, terminal_middle_press_is_reported,
+};
 use crate::features::terminal::terminal_selection_runtime::{
     terminal_bounds_tracker, terminal_gutter_metrics,
 };
@@ -935,7 +937,9 @@ impl NyaTermApp {
                                             this.activate_workspace_pane(session_id.clone(), cx);
                                             window.focus(&this.terminal.input.focus, cx);
                                             this.close_action_link_menu(cx);
-                                            if let Some(cell) = this
+                                            if terminal_middle_press_is_reported(cfg!(
+                                                target_os = "windows"
+                                            )) && let Some(cell) = this
                                                 .point_to_terminal_cell_for_session(
                                                     Some(session_id.as_str()),
                                                     event.position,

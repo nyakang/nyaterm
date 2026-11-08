@@ -27,7 +27,9 @@ use super::{
 
 mod input;
 
-pub(in crate::features) use input::TerminalMouseReportRequest;
+pub(in crate::features) use input::{
+    TerminalMouseReportRequest, terminal_middle_press_is_reported,
+};
 #[cfg(test)]
 use input::{
     lost_mouse_report_release_button, mouse_report_allowed_by_alt,
