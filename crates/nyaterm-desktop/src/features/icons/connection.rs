@@ -228,13 +228,15 @@ pub(in crate::features) fn resolve_connection_icon(icon_key: Option<&str>, kind:
 }
 
 /// Kind-specific default. The old app always fell back to the blue server glyph;
-/// giving Local/Telnet/Serial their own mark is an intentional improvement, and
-/// it is what drives the session tab icons.
+/// giving each non-SSH kind its own mark also distinguishes saved connections
+/// and session tabs when no custom icon is selected.
 pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconDef {
     match kind {
         "Local" => IconDef::mono("icons/conn/terminal.svg", 0x4ade80),
         "Telnet" => IconDef::mono("icons/conn/telnet.svg", 0xd29922),
         "Serial" => IconDef::mono("icons/conn/serial.svg", 0xbc8cff),
+        "RDP" => IconDef::mono("icons/conn/rdp.svg", 0x22d3ee),
+        "VNC" => IconDef::mono("icons/conn/vnc.svg", 0xfb7185),
         _ => IconDef::mono("icons/brand/server.svg", 0x60a5fa),
     }
 }
@@ -388,15 +390,23 @@ mod tests {
 
     #[test]
     fn unknown_and_empty_keys_fall_back_by_kind() {
-        let default = default_connection_icon_for_kind("SSH");
-        assert_eq!(resolve_connection_icon(None, "SSH"), default);
-        assert_eq!(resolve_connection_icon(Some(""), "SSH"), default);
-        assert_eq!(resolve_connection_icon(Some("   "), "SSH"), default);
-        assert_eq!(resolve_connection_icon(Some("nonsense"), "SSH"), default);
-        assert_eq!(
-            resolve_connection_icon(None, "Serial"),
-            default_connection_icon_for_kind("Serial"),
-        );
+        let mut paths = Vec::new();
+        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC"] {
+            let default = default_connection_icon_for_kind(kind);
+            for key in [None, Some(""), Some("   "), Some("nonsense")] {
+                assert_eq!(resolve_connection_icon(key, kind), default);
+            }
+            // Switching protocols must preserve an explicitly chosen icon.
+            assert_eq!(
+                resolve_connection_icon(Some("ubuntu"), kind),
+                resolve_connection_icon(Some("ubuntu"), "SSH"),
+            );
+            assert!(
+                !paths.contains(&default.path),
+                "{kind} shares its default glyph with another session kind"
+            );
+            paths.push(default.path);
+        }
     }
 
     #[test]
