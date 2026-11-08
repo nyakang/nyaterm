@@ -1518,6 +1518,23 @@ fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened(
         app.connection_state.hide_editor_secrets(cx);
         assert!(field.read(cx).is_masked());
         assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
+        for mode in ["key", "agent", "none", "password"] {
+            field.update(cx, |state, cx| state.set_masked(false, cx));
+            app.set_connection_editor_select_value(
+                ConnectionEditorSelect::Authentication,
+                Some(mode),
+                cx,
+            );
+            assert!(field.read(cx).is_masked());
+            assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
+            assert_eq!(
+                app.connection_state
+                    .active_editor_draft()
+                    .unwrap()
+                    .password_edit,
+                draft.password_edit
+            );
+        }
         field.update(cx, |state, cx| state.set_masked(false, cx));
         app.set_connection_editor_select_value(ConnectionEditorSelect::SshKey, None, cx);
         assert!(field.read(cx).is_masked());

@@ -1954,6 +1954,70 @@ mod tests {
     }
 
     #[test]
+    fn ssh_session_config_uses_only_selected_credentials_after_reload_and_for_jump_hosts() {
+        let dir = unique_temp_dir("ssh-inactive-credentials");
+        let context = test_ssh_build_context(dir.path());
+        context
+            .store
+            .request_fn(StoreDomain::Security, |store| {
+                store.save_ssh_key(
+                    serde_json::from_value(serde_json::json!({
+                        "id":"fixture-key", "name":"Fixture key", "key":"fixture-key-data"
+                    }))
+                    .unwrap(),
+                )
+            })
+            .unwrap();
+        for mode in ["password", "key", "agent", "none"] {
+            for locked in [false, true] {
+                if mode == "password" && locked {
+                    continue;
+                }
+                let saved: SavedConnection = serde_json::from_value(serde_json::json!({
+                    "id":"jump", "name":"Jump", "type":"ssh", "host":"jump.example.test", "username":"user",
+                    "auth":{"mode":mode, "password_source":"connection", "password":if locked { "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } else { "fixture-password" }, "has_password":locked, "key_id":"fixture-key"}
+                })).unwrap();
+                let to_save = saved.clone();
+                context
+                    .store
+                    .request_fn(StoreDomain::Connections, move |store| {
+                        store.save_connection(&to_save)
+                    })
+                    .unwrap();
+                // The builder must read the newly selected mode instead of stale reconnect state.
+                let mut stale = saved;
+                stale.auth.as_mut().unwrap().mode = "password".into();
+                let config =
+                    build_ssh_session_config_with_context(&stale, &mut Vec::new(), &context)
+                        .unwrap();
+                assert_eq!(
+                    config.password.as_deref(),
+                    (mode == "password").then_some("fixture-password")
+                );
+                assert_eq!(config.key_auth.is_some(), mode == "key");
+                assert_eq!(config.agent_auth, mode == "agent");
+                assert_eq!(config.allow_none_auth, mode == "none");
+
+                let parent: SavedConnection = serde_json::from_value(serde_json::json!({
+                    "id":"parent", "name":"Parent", "type":"ssh", "host":"parent.example.test", "username":"user",
+                    "auth":{"mode":"none"}, "network":{"proxy_jump_id":"jump"}
+                })).unwrap();
+                let parent =
+                    build_ssh_session_config_with_context(&parent, &mut Vec::new(), &context)
+                        .unwrap();
+                let jump = parent.proxy_jump.unwrap();
+                assert_eq!(
+                    jump.password.as_deref(),
+                    (mode == "password").then_some("fixture-password")
+                );
+                assert_eq!(jump.key_auth.is_some(), mode == "key");
+                assert_eq!(jump.agent_auth, mode == "agent");
+                assert_eq!(jump.allow_none_auth, mode == "none");
+            }
+        }
+    }
+
+    #[test]
     fn ssh_session_config_uses_context_keep_alive_interval() {
         let dir = unique_temp_dir("ssh-keepalive");
         let mut context = test_ssh_build_context(dir.path());

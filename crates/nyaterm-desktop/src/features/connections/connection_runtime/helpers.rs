@@ -189,7 +189,8 @@ pub(super) fn connection_editor_from_saved(
             auth.account_id.clone()
         },
         password_id: auth.password_id,
-        password: if auth.mode == "password"
+        password: if (auth.mode == "password"
+            || matches!(connection.config, ConnectionType::Ssh { .. }))
             && password_source == ConnectionEditorPasswordSource::Direct
             && !auth.has_password
         {
@@ -489,8 +490,9 @@ pub(super) fn build_saved_connection_from_editor(
                 .to_string(),
                 ai_execution_profile: AiExecutionProfile::Auto,
                 x11_forwarding: editor.x11_forwarding,
-                auth_agent_endpoint: (editor.auth_mode == "agent")
-                    .then(|| editor.agent_endpoint.clone()),
+                auth_agent_endpoint: (editor.auth_mode == "agent"
+                    || editor.agent_endpoint != nyaterm_core::SshAgentEndpoint::default())
+                .then(|| editor.agent_endpoint.clone()),
                 agent_forwarding_config: (editor.agent_forwarding_config
                     != nyaterm_core::SshAgentForwardingConfig::default())
                 .then(|| editor.agent_forwarding_config.clone()),
@@ -783,7 +785,9 @@ pub(super) fn build_saved_connection_from_editor(
                 }
                 _ => "none".to_string(),
             };
-            let (password, has_password) = if mode == "password"
+            // SSH authentication tabs choose what to use, not what to retain.
+            let retain_ssh_credentials = editor.kind == ConnectionKindTab::Ssh;
+            let (password, has_password) = if (mode == "password" || retain_ssh_credentials)
                 && editor.password_source == ConnectionEditorPasswordSource::Direct
             {
                 match editor.password_edit {
@@ -812,7 +816,7 @@ pub(super) fn build_saved_connection_from_editor(
                     ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
                 )
                 .then_some(
-                    if mode == "password"
+                    if (mode == "password" || retain_ssh_credentials)
                         && editor.password_source == ConnectionEditorPasswordSource::Saved
                     {
                         nyaterm_core::models::credentials::ConnectionPasswordSource::Account
@@ -820,7 +824,7 @@ pub(super) fn build_saved_connection_from_editor(
                         nyaterm_core::models::credentials::ConnectionPasswordSource::Connection
                     },
                 ),
-                password_id: (mode == "password")
+                password_id: (mode == "password" || retain_ssh_credentials)
                     .then(|| editor.password_id.clone())
                     .flatten(),
                 username_source: (matches!(
@@ -834,7 +838,7 @@ pub(super) fn build_saved_connection_from_editor(
                         == nyaterm_core::ConnectionUsernameSource::Connection)
                     .then_some(nyaterm_core::ConnectionUsernameSource::Connection),
                 password,
-                key_id: (mode == "key")
+                key_id: (mode == "key" || retain_ssh_credentials)
                     .then(|| {
                         editor
                             .key_id
@@ -1171,11 +1175,12 @@ mod tests {
     }
 
     #[test]
-    fn connection_editor_does_not_prefill_account_or_inactive_passwords() {
+    fn connection_editor_restores_inactive_direct_passwords_and_hides_account_or_locked_secrets() {
         for auth in [
             serde_json::json!({"mode": "password", "password_source": "account", "account_id": "account", "password": "fixture-secret"}),
             serde_json::json!({"mode": "key", "password": "fixture-secret"}),
             serde_json::json!({"mode": "none", "password": "fixture-secret"}),
+            serde_json::json!({"mode": "key", "password": "fixture-secret", "has_password": true}),
         ] {
             let connection: SavedConnection = serde_json::from_value(serde_json::json!({
                 "id": "password-prefill", "name": "Password prefill", "type": "ssh",
@@ -1183,7 +1188,13 @@ mod tests {
             }))
             .expect("connection");
             let editor = connection_editor_from_saved(connection, false);
-            assert!(editor.password.is_empty());
+            if editor.password_source == ConnectionEditorPasswordSource::Direct
+                && !editor.existing_password_locked
+            {
+                assert_eq!(editor.password.expose_secret(), "fixture-secret");
+            } else {
+                assert!(editor.password.is_empty());
+            }
         }
     }
 
@@ -2168,7 +2179,7 @@ mod account_edit_tests {
     }
 
     #[test]
-    fn saving_only_emits_the_active_authentication_and_explicit_password_edit() {
+    fn ssh_authentication_tabs_retain_credentials_and_honor_explicit_password_edits() {
         let connection: SavedConnection = serde_json::from_value(serde_json::json!({
             "id":"active-auth-test", "name":"Active auth", "type":"ssh", "host":"example.test", "username":"user",
             "auth":{"mode":"password", "password_source":"connection", "password":"existing"}
@@ -2176,13 +2187,40 @@ mod account_edit_tests {
         let mut editor = connection_editor_from_saved(connection, false);
         editor.key_id = Some("saved-key".into());
         editor.password = "new-draft".into();
-        for mode in ["none", "key", "agent"] {
+        editor.agent_endpoint = nyaterm_core::SshAgentEndpoint::Environment {
+            variable: "FIXTURE_SSH_AGENT".into(),
+        };
+        for mode in ["none", "key", "agent", "password"] {
             editor.auth_mode = mode.into();
             let saved = build_saved_connection_from_editor(&editor).unwrap();
+            assert!(
+                matches!(&saved.config, nyaterm_core::ConnectionType::Ssh { auth_agent_endpoint: Some(endpoint), .. } if endpoint == &editor.agent_endpoint)
+            );
             let auth = saved.auth.unwrap();
-            assert!(auth.password.is_none());
-            assert_eq!(auth.key_id.is_some(), mode == "key");
+            assert_eq!(auth.mode, mode);
+            assert_eq!(auth.password.as_deref(), Some("existing"));
+            assert_eq!(auth.key_id.as_deref(), Some("saved-key"));
             assert_eq!(editor.password.expose_secret(), "new-draft");
+            editor.password_edit = crate::models::ConnectionPasswordEdit::Replace;
+            assert_eq!(
+                build_saved_connection_from_editor(&editor)
+                    .unwrap()
+                    .auth
+                    .unwrap()
+                    .password
+                    .as_deref(),
+                Some("new-draft")
+            );
+            editor.password_edit = crate::models::ConnectionPasswordEdit::Remove;
+            assert!(
+                build_saved_connection_from_editor(&editor)
+                    .unwrap()
+                    .auth
+                    .unwrap()
+                    .password
+                    .is_none()
+            );
+            editor.password_edit = crate::models::ConnectionPasswordEdit::Keep;
         }
         editor.auth_mode = "password".into();
         editor.password_source = ConnectionEditorPasswordSource::Direct;

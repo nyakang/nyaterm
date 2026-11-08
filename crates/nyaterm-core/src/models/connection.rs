@@ -396,12 +396,9 @@ pub fn migrate_legacy_ssh_agent_settings(connection: &mut SavedConnection) -> bo
     if legacy_agent_forwarding.take().is_some() {
         changed = true;
     }
-    if auth_mode == Some("agent") {
-        if auth_agent_endpoint.is_none() {
-            auth_agent_endpoint.replace(SshAgentEndpoint::Auto);
-            changed = true;
-        }
-    } else if auth_agent_endpoint.take().is_some() {
+    // Authentication selection must not discard a saved endpoint for later reuse.
+    if auth_mode == Some("agent") && auth_agent_endpoint.is_none() {
+        auth_agent_endpoint.replace(SshAgentEndpoint::Auto);
         changed = true;
     }
     changed

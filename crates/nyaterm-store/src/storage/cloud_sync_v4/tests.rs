@@ -14,6 +14,82 @@ fn connection() -> SavedConnection {
 }
 
 #[test]
+fn ssh_password_and_key_coexist_encrypted_and_survive_backup_and_sync() {
+    let dir = TestTempDir::new("nyaterm-ssh-coexisting-credentials");
+    let mut store = ConnectionStore::open(dir.path()).unwrap();
+    enable(&store);
+    store
+        .save_ssh_key(
+            serde_json::from_value(json!({
+                "id":"fixture-key", "name":"Fixture key", "key":"fixture-key-data"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    for mode in ["key", "password", "agent", "none"] {
+        let mut saved = connection();
+        saved.auth = Some(serde_json::from_value(json!({
+            "mode":mode, "password_source":"connection", "password":" fixture-password ", "key_id":"fixture-key"
+        })).unwrap());
+        store.save_connection(&saved).unwrap();
+        let record = crate::storage::tests::connection_password_record(&store, &saved.id);
+        assert_ne!(record.password.expose_secret(), " fixture-password ");
+        let original_ciphertext = record.password;
+        drop(store);
+        store = ConnectionStore::open(dir.path()).unwrap();
+        let expected = store.get_connection(&saved.id).unwrap().unwrap();
+        assert_eq!(expected.auth, saved.auth);
+
+        let backup_dir = TestTempDir::new("nyaterm-ssh-coexisting-backup");
+        let backup = backup_dir.path().join("connections.nya");
+        store
+            .export_encrypted_portable_snapshot_from_open_store(
+                &backup, "source", "fixture", "password",
+            )
+            .unwrap();
+        let bytes = std::fs::read(&backup).unwrap();
+        assert!(crate::decode_encrypted_raw_portable_snapshot(&bytes, "wrong-password").is_err());
+        let restored = ConnectionStore::open(backup_dir.path().join("restored")).unwrap();
+        restored
+            .import_encrypted_portable_snapshot_into_open_store(&backup, "password")
+            .unwrap();
+        assert_eq!(
+            restored.get_connection(&saved.id).unwrap().unwrap().auth,
+            expected.auth
+        );
+        assert_eq!(
+            restored
+                .load_decrypted_ssh_key_by_id("fixture-key")
+                .unwrap()
+                .unwrap()
+                .key_data
+                .as_deref(),
+            Some("fixture-key-data")
+        );
+
+        store.apply_v4_plan(prepared(&store), "password").unwrap();
+        let view = store
+            .load_v4_view("destination", "password", &SyncScope::default())
+            .unwrap();
+        assert!(view.projection.edited.is_empty());
+        assert_eq!(view.record.effective, view.projection.values);
+        assert_eq!(
+            store.get_connection(&saved.id).unwrap().unwrap().auth,
+            expected.auth
+        );
+        assert_eq!(
+            crate::storage::tests::connection_password_record(&store, &saved.id).password,
+            original_ciphertext
+        );
+    }
+    store.delete_connection("server").unwrap();
+    let txn = store.db.begin_read().unwrap();
+    let table = txn.open_table(crate::storage::CREDENTIALS_TABLE).unwrap();
+    let key = crate::storage::entity_key(crate::storage::CONNECTION_PASSWORD_PREFIX, "server");
+    assert!(table.get(key.as_str()).unwrap().is_none());
+}
+
+#[test]
 fn rdp_backend_aliases_authentication_and_clipboard_survive_backup_and_sync() {
     for (backend, canonical) in [
         ("auto", "builtin"),

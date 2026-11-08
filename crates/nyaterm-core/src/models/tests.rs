@@ -689,6 +689,28 @@ fn ssh_agent_legacy_fields_migrate_to_canonical_without_secrets() {
 }
 
 #[test]
+fn legacy_agent_migration_keeps_inactive_endpoints_and_is_idempotent() {
+    for mode in ["password", "key", "none"] {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"inactive-agent", "name":"SSH", "type":"ssh", "host":"example.test",
+            "auth":{"mode":mode}, "agent_endpoint":{"type":"environment", "variable":"FIXTURE_SSH_AGENT"},
+            "agent_forwarding":true
+        })).unwrap();
+        assert!(migrate_legacy_ssh_agent_settings(&mut connection));
+        let expected_endpoint = SshAgentEndpoint::Environment {
+            variable: "FIXTURE_SSH_AGENT".into(),
+        };
+        assert!(
+            matches!(&connection.config, ConnectionType::Ssh { auth_agent_endpoint: Some(endpoint), .. } if endpoint == &expected_endpoint)
+        );
+        assert!(!migrate_legacy_ssh_agent_settings(&mut connection));
+        let reloaded: SavedConnection =
+            serde_json::from_value(serde_json::to_value(&connection).unwrap()).unwrap();
+        assert_eq!(reloaded, connection);
+    }
+}
+
+#[test]
 fn canonical_agent_forwarding_takes_precedence_over_legacy_boolean() {
     let json = r#"{
         "id":"agent-canonical","name":"Agent Canonical","type":"ssh",

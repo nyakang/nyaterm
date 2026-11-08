@@ -6,7 +6,7 @@ use super::save_editor_connection;
 use crate::features::connections::connection_runtime::helpers::{
     build_saved_connection_from_editor, connection_editor_from_saved,
 };
-use crate::models::ConnectionPasswordEdit;
+use crate::models::{ConnectionEditorPasswordSource, ConnectionPasswordEdit};
 
 fn connection(id: &str, group_id: Option<&str>, sort_order: i32) -> SavedConnection {
     // The older saved format omits timestamps and optional editor metadata.
@@ -373,6 +373,146 @@ fn keeping_unreadable_ciphertext_survives_saving_and_reopening() {
             auth.password.as_deref(),
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         );
+    }
+}
+
+#[test]
+fn ssh_authentication_tabs_preserve_password_sources_keys_and_agent_settings_after_restart() {
+    for auth in [
+        json!({"mode":"password", "password":" fixture password "}),
+        json!({"mode":"password", "password":"   ", "account_id":"account", "password_source":"connection", "username_source":"connection"}),
+        json!({"mode":"password", "account_id":"account", "password_source":"account"}),
+        json!({"mode":"password", "password_id":"account"}),
+    ] {
+        let root = TestTempDir::new("nyaterm-ssh-auth-retention");
+        let mut store = ConnectionStore::open(&root).unwrap();
+        store.save_password(serde_json::from_value(json!({
+            "id":"account", "name":"Fixture account", "username":"account-user", "password":"fixture-account-password"
+        })).unwrap()).unwrap();
+        let original: SavedConnection = serde_json::from_value(json!({
+            "id":"ssh", "name":"SSH", "type":"ssh", "host":"example.test", "username":"user", "auth":auth
+        })).unwrap();
+        store.save_connection(&original).unwrap();
+        let expected_password = original.auth.as_ref().unwrap().password.clone();
+        let mut editor =
+            connection_editor_from_saved(store.get_connection("ssh").unwrap().unwrap(), false);
+        let expected_source = editor.password_source;
+        let expected_account = editor.account_id.clone();
+        let expected_username_source = editor.username_source;
+        let endpoint = nyaterm_core::SshAgentEndpoint::Environment {
+            variable: "FIXTURE_SSH_AGENT".into(),
+        };
+        editor.key_id = Some("fixture-key".into());
+        editor.agent_endpoint = endpoint.clone();
+        for mode in ["key", "agent", "none", "password", "key", "password"] {
+            editor.auth_mode = mode.into();
+            let built = build_saved_connection_from_editor(&editor).unwrap();
+            let password_edit = (editor.password_source == ConnectionEditorPasswordSource::Direct)
+                .then_some(editor.password_edit);
+            save_editor_connection(&store, built, None, password_edit).unwrap();
+            drop(store);
+            store = ConnectionStore::open(&root).unwrap();
+            let saved = store.get_connection("ssh").unwrap().unwrap();
+            assert_eq!(saved.auth.as_ref().unwrap().mode, mode);
+            assert_eq!(saved.auth.as_ref().unwrap().password, expected_password);
+            editor = connection_editor_from_saved(saved, false);
+            assert_eq!(editor.password_source, expected_source);
+            assert_eq!(editor.account_id, expected_account);
+            assert_eq!(editor.username_source, expected_username_source);
+            assert_eq!(editor.key_id.as_deref(), Some("fixture-key"));
+            assert_eq!(editor.agent_endpoint, endpoint);
+            if expected_source == ConnectionEditorPasswordSource::Direct {
+                assert_eq!(Some(&editor.password), expected_password.as_ref());
+            }
+        }
+        editor.key_id = None;
+        let built = build_saved_connection_from_editor(&editor).unwrap();
+        save_editor_connection(
+            &store,
+            built,
+            None,
+            (expected_source == ConnectionEditorPasswordSource::Direct)
+                .then_some(ConnectionPasswordEdit::Keep),
+        )
+        .unwrap();
+        assert!(
+            store
+                .get_connection("ssh")
+                .unwrap()
+                .unwrap()
+                .auth
+                .unwrap()
+                .key_id
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn inactive_ssh_password_keeps_latest_or_unreadable_secret_and_honors_replace_and_remove() {
+    for mode in ["key", "agent", "none"] {
+        for unreadable in [false, true] {
+            let root = TestTempDir::new("nyaterm-inactive-ssh-password");
+            let mut store = ConnectionStore::open(&root).unwrap();
+            let mut original: SavedConnection = serde_json::from_value(json!({
+                "id":"ssh", "name":"SSH", "type":"ssh", "host":"example.test", "username":"user",
+                "auth":{"mode":"password", "password_source":"connection", "password":"fixture-old-password"}
+            })).unwrap();
+            store.save_connection(&original).unwrap();
+            let mut editor =
+                connection_editor_from_saved(store.get_connection("ssh").unwrap().unwrap(), false);
+            editor.auth_mode = mode.into();
+            editor.key_id = Some("fixture-key".into());
+            // Model locking after opening the editor and a newer database credential.
+            editor.password = Default::default();
+            editor.existing_password = None;
+            let latest = if unreadable {
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            } else {
+                " fixture-latest-password "
+            };
+            original.auth.as_mut().unwrap().password = Some(latest.into());
+            original.auth.as_mut().unwrap().has_password = unreadable;
+            store.save_connection(&original).unwrap();
+            let built = build_saved_connection_from_editor(&editor).unwrap();
+            save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep))
+                .unwrap();
+            drop(store);
+            store = ConnectionStore::open(&root).unwrap();
+            let saved = store.get_connection("ssh").unwrap().unwrap();
+            let auth = saved.auth.unwrap();
+            assert_eq!(auth.mode, mode);
+            assert_eq!(auth.password.as_deref(), Some(latest));
+            assert_eq!(auth.has_password, unreadable);
+
+            editor.password = " fixture-replacement ".into();
+            editor.password_edit = ConnectionPasswordEdit::Replace;
+            let built = build_saved_connection_from_editor(&editor).unwrap();
+            save_editor_connection(&store, built, None, Some(editor.password_edit)).unwrap();
+            assert_eq!(
+                store
+                    .get_connection("ssh")
+                    .unwrap()
+                    .unwrap()
+                    .auth
+                    .unwrap()
+                    .password
+                    .as_deref(),
+                Some(" fixture-replacement ")
+            );
+
+            editor.password = Default::default();
+            editor.password_edit = ConnectionPasswordEdit::Remove;
+            let built = build_saved_connection_from_editor(&editor).unwrap();
+            save_editor_connection(&store, built, None, Some(editor.password_edit)).unwrap();
+            drop(store);
+            store = ConnectionStore::open(&root).unwrap();
+            let auth = store.get_connection("ssh").unwrap().unwrap().auth.unwrap();
+            assert_eq!(auth.mode, mode);
+            assert!(auth.password.is_none());
+            assert!(!auth.has_password);
+            assert_eq!(auth.key_id.as_deref(), Some("fixture-key"));
+        }
     }
 }
 

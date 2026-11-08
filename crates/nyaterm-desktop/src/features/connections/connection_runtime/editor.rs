@@ -38,7 +38,8 @@ fn save_editor_connection(
     }
     if password_edit == Some(crate::models::ConnectionPasswordEdit::Keep)
         && let Some(auth) = persisted.auth.as_mut()
-        && auth.mode == "password"
+        && (auth.mode == "password"
+            || matches!(persisted.config, nyaterm_core::ConnectionType::Ssh { .. }))
     {
         // Locking discards plaintext in the UI. Keep the latest stored secret,
         // including its ciphertext marker, rather than serializing the empty input.
