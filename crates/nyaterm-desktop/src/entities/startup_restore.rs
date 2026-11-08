@@ -90,6 +90,13 @@ impl StartupRestoreStore {
         !pending_session_active && !self.queue.is_empty()
     }
 
+    pub fn can_finish_restore(&self, session_start_busy: bool) -> bool {
+        // The final asynchronous start settles after its tab has left the queue.
+        // Credential preparation must also settle before the caller rebuilds
+        // layouts; its completion flag prevents subsequent empty-queue passes.
+        self.open_tabs_restored && self.queue.is_empty() && !session_start_busy
+    }
+
     pub fn clear_pending_layouts(&mut self) {
         self.pending_pane_layouts.clear();
         self.pending_active_pane_indexes.clear();
