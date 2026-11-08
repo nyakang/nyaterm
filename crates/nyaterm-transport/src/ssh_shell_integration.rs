@@ -604,7 +604,13 @@ fn wrap_shell_integration_payload(
         ShellKind::Bash => {
             " if [[ -o history ]]; then NYATERM_INJ_HISTORY_WAS_ENABLED=1; NYATERM_PRUNE_HISTORY=1; else unset NYATERM_INJ_HISTORY_WAS_ENABLED NYATERM_PRUNE_HISTORY; fi; NYATERM_LAST_HISTCMD=\"${HISTCMD-}\"; export NYATERM_INJ=1; set +o history\n"
         }
-        ShellKind::Zsh => " fc -p /dev/null 2>/dev/null\n export NYATERM_INJ=1;\n",
+        // `/dev/null` cannot be locked when HISTSIZE/SAVEHIST are enabled: Zsh creates
+        // its history lock beside the file, so a non-root user gets `locking failed`
+        // on `fc -P`. A writable temp file keeps the throwaway history list private
+        // without depending on a root-owned path.
+        ShellKind::Zsh => {
+            " NYATERM_INJ_HIST=\"$(mktemp \"${TMPDIR:-/tmp}/nyaterm-hist.XXXXXX\" 2>/dev/null)\"; if [ -n \"${NYATERM_INJ_HIST:-}\" ]; then fc -p \"$NYATERM_INJ_HIST\" 2>/dev/null || true; fi\n export NYATERM_INJ=1;\n"
+        }
         ShellKind::Fish => " set -gx NYATERM_INJ 1\n",
         ShellKind::PosixSh | ShellKind::Unknown => return None,
     };
@@ -614,8 +620,11 @@ fn wrap_shell_integration_payload(
                 "\nif [ -n \"${{NYATERM_INJ_HISTORY_WAS_ENABLED:-}}\" ]; then set -o history; __nyaterm_prune_history; else unset NYATERM_PRUNE_HISTORY; fi; unset NYATERM_INJ_HISTORY_WAS_ENABLED; __nyaterm_install_prompt {install_arg} 2>/dev/null || true; printf '{ready}'\n"
             )
         }
+        // The ready marker must be emitted before `fc -P`: a failed pop aborts the
+        // remainder of its physical line, which previously swallowed the marker and
+        // stalled startup for the full integration timeout.
         ShellKind::Zsh => format!(
-            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true; fc -P 2>/dev/null; printf '{ready}'\n"
+            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true; printf '{ready}'; fc -P 2>/dev/null; if [ -n \"${{NYATERM_INJ_HIST:-}}\" ]; then rm -f \"$NYATERM_INJ_HIST\" \"$NYATERM_INJ_HIST.LOCK\" 2>/dev/null; unset NYATERM_INJ_HIST; fi\n"
         ),
         ShellKind::Fish => format!(
             "\n __nyaterm_install_prompt {install_arg} 2>/dev/null; or true\n printf '{ready}'\n"
@@ -1667,7 +1676,11 @@ mod tests {
                     assert!(uploaded.contains("set -o history; __nyaterm_prune_history"));
                 }
                 ShellKind::Zsh => {
-                    assert!(uploaded.starts_with(" fc -p /dev/null"));
+                    assert!(uploaded.starts_with(" NYATERM_INJ_HIST=\"$(mktemp "));
+                    assert!(uploaded.lines().next().is_some_and(|line| {
+                        !line.contains("fc -p /dev/null")
+                            && line.contains("fc -p \"$NYATERM_INJ_HIST\"")
+                    }));
                     assert!(uploaded.contains("fc -P 2>/dev/null"));
                 }
                 ShellKind::Fish => {
@@ -1710,10 +1723,51 @@ mod tests {
             assert!(script.contains("NyaTermReady:rc-history-guard"));
             match shell {
                 ShellKind::Bash => assert!(script.contains("if [[ -o history ]]")),
-                ShellKind::Zsh => assert!(script.starts_with(" fc -p /dev/null")),
+                ShellKind::Zsh => {
+                    assert!(script.starts_with(" NYATERM_INJ_HIST=\"$(mktemp "));
+                    assert!(script.lines().next().is_some_and(|line| {
+                        !line.contains("fc -p /dev/null")
+                            && line.contains("fc -p \"$NYATERM_INJ_HIST\"")
+                    }));
+                }
                 ShellKind::Fish => assert!(script.starts_with(" set -gx NYATERM_INJ 1")),
                 ShellKind::PosixSh | ShellKind::Unknown => unreachable!(),
             }
+        }
+    }
+
+    #[test]
+    fn zsh_history_guard_uses_writable_file_and_emits_ready_before_pop() {
+        let ready_marker = build_ssh_ready_marker("zsh-history-lock");
+        for mode in [ShellIntegrationMode::Full, ShellIntegrationMode::CwdOnly] {
+            let integration = super::prepare_shell_integration(ShellKind::Zsh, &ready_marker, mode)
+                .expect("prepared zsh shell integration");
+            let script = String::from_utf8(integration.inline_script()).expect("utf8 script");
+
+            // A root-owned `/dev/null` makes Zsh's history lock creation fail for
+            // non-root users, which aborts the rest of the line that pops the stack.
+            let guard_line = script.lines().next().expect("guard line");
+            assert!(
+                guard_line.contains("mktemp \"${TMPDIR:-/tmp}/nyaterm-hist.XXXXXX\""),
+                "guard must allocate a writable history file: {guard_line:?}"
+            );
+            assert!(
+                !guard_line.contains("fc -p /dev/null"),
+                "guard must not use an unlockable history file: {guard_line:?}"
+            );
+
+            // A failing `fc -P` aborts the remainder of its physical line, so the
+            // ready marker must be printed first.
+            let ready = script.find("NyaTermReady:zsh-history-lock").expect("ready");
+            let pop = script.find("fc -P 2>/dev/null").expect("pop");
+            assert!(
+                ready < pop,
+                "ready marker must precede the history pop for {mode:?}: {script:?}"
+            );
+            assert!(
+                script.contains("rm -f \"$NYATERM_INJ_HIST\" \"$NYATERM_INJ_HIST.LOCK\""),
+                "temporary history artifacts must be removed for {mode:?}"
+            );
         }
     }
 

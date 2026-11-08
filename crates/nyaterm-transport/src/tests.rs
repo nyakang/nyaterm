@@ -1448,6 +1448,9 @@ fn run_uploaded_shell_history_probe(
             command.env("HISTFILE", "/dev/null");
             command.env("PROMPT", "");
             command.env("RPROMPT", "");
+            // Keep the writable history file the integration allocates inside the
+            // probe directory so its cleanup can be asserted below.
+            command.env("TMPDIR", state_dir.to_string_lossy().to_string());
         }
         crate::ssh_shell_integration::ShellKind::Fish => {
             if matches!(initial_state, UploadedHistoryProbeState::FishPrivate) {
@@ -1586,6 +1589,18 @@ fn run_uploaded_shell_history_probe(
     let captured =
         String::from_utf8_lossy(&output.lock().expect("uploaded history probe output lock"))
             .into_owned();
+    if matches!(shell, crate::ssh_shell_integration::ShellKind::Zsh) {
+        let leftovers: Vec<String> = std::fs::read_dir(&state_dir)
+            .expect("read zsh history probe state directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("nyaterm-hist."))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "zsh history guard left temporary files behind: {leftovers:?}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&state_dir);
     Some((captured, remote_dir))
 }
