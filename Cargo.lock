@@ -6769,7 +6769,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-ai-client"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "futures",
  "genai",
@@ -6785,7 +6785,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-app"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -6812,7 +6812,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-cloud-storage"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "futures",
  "hex",
@@ -6837,7 +6837,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-core"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -6883,7 +6883,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-desktop"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6944,7 +6944,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-files"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6972,7 +6972,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "dirs",
  "nyaterm-core",
@@ -6989,7 +6989,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp-protocol"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -7009,7 +7009,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-plugin-host"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -7024,7 +7024,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-rdp-helper"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -7049,7 +7049,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-recording"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -7065,7 +7065,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-remote-desktop"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "nyaterm-core",
@@ -7079,7 +7079,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-remote-ops"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "nyaterm-core",
@@ -7094,7 +7094,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-store"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -7118,7 +7118,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-sync"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "automerge",
  "hex",
@@ -7134,7 +7134,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "alacritty_terminal",
  "encoding_rs",
@@ -7149,7 +7149,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal-gpui"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "aho-corasick",
  "futures",
@@ -7167,7 +7167,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-transport"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "async-http-proxy",
@@ -7203,7 +7203,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-ui"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -7216,7 +7216,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-updater"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -7230,7 +7230,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-vnc-helper"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "nyaterm-core",
  "nyaterm-remote-desktop",
@@ -7243,7 +7243,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-windows-rdp"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
  "cc",
