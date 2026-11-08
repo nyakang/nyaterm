@@ -1,12 +1,16 @@
-use super::{
-    CredentialPromptState, FailedSessionStart, HostKeyPromptRequest,
-    KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
-    PendingReconnectCompletion, PendingSessionStart, PromptResolution, RenameSessionSubmission,
-    SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
+use super::dialogs::RenameSessionSubmission;
+use super::prompts::{PromptResolution, SessionPromptState};
+use super::start::{
+    FailedSessionStart, PendingReconnectCompletion, PendingSessionStart, SessionStartEventRequest,
     SessionStartFeatureState,
 };
+use super::{SessionFeatureFocus, SessionFeatureState};
 use crate::app_shell::session_hub::ssh_connections::SshConnectionPool;
 use crate::features::runtime_jobs::SessionStartResult;
+use crate::features::session::auth_runtime::{
+    CredentialPromptState, HostKeyPromptRequest, KeyboardInteractivePromptState,
+    NativeOtpCodePreview, NativeOtpProvider,
+};
 use crate::features::session::{HostKeyPromptChoice, HostKeyPromptIssue};
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
 use crate::models::{

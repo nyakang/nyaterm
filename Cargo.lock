@@ -6887,18 +6887,14 @@ version = "2.0.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bytemuck",
  "dirs",
- "encoding_rs",
  "futures",
  "gpui",
  "gpui_platform",
  "gtk",
- "hayro",
  "hex",
  "image",
  "keyring",
- "md5",
  "nyaterm-ai-client",
  "nyaterm-cloud-storage",
  "nyaterm-core",
@@ -6906,6 +6902,7 @@ dependencies = [
  "nyaterm-mcp-protocol",
  "nyaterm-otp",
  "nyaterm-plugin-host",
+ "nyaterm-preview",
  "nyaterm-recording",
  "nyaterm-remote-desktop",
  "nyaterm-remote-ops",
@@ -6913,6 +6910,7 @@ dependencies = [
  "nyaterm-sync",
  "nyaterm-terminal",
  "nyaterm-terminal-gpui",
+ "nyaterm-translation-client",
  "nyaterm-transport",
  "nyaterm-ui",
  "nyaterm-updater",
@@ -6937,7 +6935,6 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "x11rb",
- "zed-reqwest",
  "zeroize",
  "zip",
 ]
@@ -7020,6 +7017,17 @@ dependencies = [
  "wasmtime",
  "wit-component",
  "zip",
+]
+
+[[package]]
+name = "nyaterm-preview"
+version = "2.0.3"
+dependencies = [
+ "bytemuck",
+ "hayro",
+ "image",
+ "nyaterm-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -7163,6 +7171,16 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tracing",
+]
+
+[[package]]
+name = "nyaterm-translation-client"
+version = "2.0.3"
+dependencies = [
+ "nyaterm-core",
+ "serde_json",
+ "url",
+ "zed-reqwest",
 ]
 
 [[package]]

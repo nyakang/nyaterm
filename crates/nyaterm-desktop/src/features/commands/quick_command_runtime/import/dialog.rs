@@ -8,8 +8,8 @@ use nyaterm_ui::NyaDialogWindowExt as _;
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
 use crate::models::{QuickCommandImportPathPromptKind, QuickCommandImportPathPromptResult};
 
-use super::merge::merge_import;
 use super::sources::parse_quick_commands_from_path;
+use nyaterm_core::quick_command_import::merge_import;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_quick_command_import_dialog(

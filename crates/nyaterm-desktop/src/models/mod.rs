@@ -21,9 +21,6 @@ mod transfers;
 mod workspace_pane;
 mod workspace_tabs;
 
-#[cfg(test)]
-mod tests_workspace;
-
 pub(crate) use chrome::*;
 pub(crate) use connections::*;
 pub(crate) use layout_state::*;

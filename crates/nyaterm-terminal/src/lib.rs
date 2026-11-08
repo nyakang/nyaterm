@@ -13,6 +13,7 @@ use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::{Color, Handler as _, NamedColor, NamedPrivateMode, Rgb};
 
+pub mod action_links;
 pub mod agent_capture;
 mod cell_string;
 mod cells;
@@ -24,12 +25,14 @@ mod kitty_payload;
 mod line_numbers;
 pub mod logical_lines;
 pub mod navigation;
+pub mod protocol;
 pub mod recording_sanitizer;
 mod reflow_timestamps;
 mod scroll_region;
 pub mod selection;
 mod signature;
 mod sixel;
+pub mod snapshot_window;
 pub use cell_string::CellText;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,

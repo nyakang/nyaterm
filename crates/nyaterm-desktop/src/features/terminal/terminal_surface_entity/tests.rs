@@ -1,3 +1,4 @@
+use nyaterm_terminal_gpui::geometry::terminal_visual_scroll_offset_px;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,7 +38,6 @@ use super::{
     terminal_snapshot_covers_display_offset, terminal_snapshot_row_estimated_bytes,
     terminal_surface_fractional_prefetch_offset, terminal_surface_synthesized_window_extra_rows,
     terminal_surface_text_first_repaint_ready, terminal_surface_visible_rows_for_viewport,
-    terminal_visual_scroll_offset_px,
 };
 
 struct TerminalSurfaceLayoutTestView {

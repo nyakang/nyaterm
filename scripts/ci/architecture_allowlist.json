@@ -10,13 +10,12 @@
     {"path": "crates/nyaterm-desktop/src/thread_owner.rs", "max_count": 1, "reason": "The central named-thread factory returns join handles to explicit lifecycle owners."},
     {"path": "crates/nyaterm-desktop/src/models/connections.rs", "max_count": 1, "reason": "CredentialAutofillMatchPipeline owns, stops, and joins its matcher worker."},
     {"path": "crates/nyaterm-desktop/src/models/session_event_bridge.rs", "max_count": 1, "reason": "SessionEventBridge owns, signals, and joins its bridge worker."},
-    {"path": "crates/nyaterm-desktop/src/models/terminal/mod.rs", "max_count": 1, "reason": "TerminalFramePipeline owns, closes, and joins its frame worker."},
+    {"path": "crates/nyaterm-desktop/src/models/terminal/frame_pipeline.rs", "max_count": 1, "reason": "TerminalFramePipeline owns, closes, and joins its frame worker."},
     {"path": "crates/nyaterm-desktop/src/features/remote_desktop/keyboard_capture.rs", "max_count": 1, "reason": "Windows keyboard capture owns the hook thread, posts WM_QUIT, unhooks, and joins it."},
     {"path": "crates/nyaterm-desktop/src/features/root.rs", "max_count": 1, "reason": "The ignored root-render benchmark joins its large-stack test thread."},
     {"path": "crates/nyaterm-desktop/src/features/pages/workspace/group_tests.rs", "max_count": 1, "reason": "The workspace stack-regression test uses a named one-MiB-stack thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/features/session/auth_runtime.rs", "max_count": 1, "reason": "The prompt broker test joins its named request thread."},
     {"path": "crates/nyaterm-desktop/src/app_shell/session_hub/ssh_connections.rs", "max_count": 1, "reason": "SshConnectionPool owns its process-wide disconnect worker and DisconnectWorker joins it during shutdown."},
-    {"path": "crates/nyaterm-desktop/src/features/session/trzsz_runtime.rs", "max_count": 3, "reason": "Per-session trzsz state owns, stops, and joins prepare, upload, and download workers."},
     {"path": "crates/nyaterm-desktop/src/features/session/xymodem_runtime.rs", "max_count": 1, "reason": "Per-session X/YMODEM state owns, stops, and joins its upload worker."}
   ],
   "raw_scroll_container": [
