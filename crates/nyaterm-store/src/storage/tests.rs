@@ -7188,7 +7188,7 @@ fn locked_connection_ciphertext_is_not_reencrypted_or_unlocked() {
     );
 
     store
-        .save_connection(&loaded)
+        .save_connections_atomic(&[loaded])
         .expect("resave locked connection");
     assert_eq!(
         connection_password_record(&store, "locked-inline-password")
@@ -8589,4 +8589,160 @@ fn line_role_settings_default_and_reopen_without_losing_unknown_fields() {
         store.load_settings_value().unwrap()["ui"]["highlight_line_roles"],
         false
     );
+}
+
+#[test]
+fn atomic_connection_batch_rolls_back_later_failure_with_secrets_indexes_and_sync() {
+    use nyaterm_core::{SecretString, SshAgentForwardingConfig, SshAgentForwardingPolicy};
+    let dir = unique_temp_dir("atomic-connection-batch");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut first = ssh_connection_for_asset("first");
+    first.auth = Some(ConnectionAuth {
+        password: Some(SecretString::new("original")),
+        ..Default::default()
+    });
+    let second = ssh_connection_for_asset("second");
+    store.save_connections_atomic(&[first, second]).unwrap();
+    let snapshot = || {
+        use super::{
+            IDX_CONNECTIONS_BY_GROUP_TABLE, IDX_CONNECTIONS_BY_LAST_USED_TABLE,
+            IDX_CONNECTIONS_BY_PROTOCOL_TABLE,
+        };
+        use redb::ReadableTable as _;
+        let txn = store.db.begin_read().unwrap();
+        let generation = txn
+            .open_table(META_TABLE)
+            .unwrap()
+            .get("sync_v4/generation")
+            .unwrap()
+            .unwrap()
+            .value()
+            .to_string();
+        let indexes = [
+            IDX_CONNECTIONS_BY_GROUP_TABLE,
+            IDX_CONNECTIONS_BY_LAST_USED_TABLE,
+            IDX_CONNECTIONS_BY_PROTOCOL_TABLE,
+        ]
+        .into_iter()
+        .map(|definition| {
+            txn.open_table(definition)
+                .unwrap()
+                .iter()
+                .unwrap()
+                .map(|entry| {
+                    let (key, value) = entry.unwrap();
+                    (key.value().to_string(), value.value().to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+        (generation, indexes)
+    };
+    let before = snapshot();
+    let original = store.get_connection("first").unwrap().unwrap();
+    let secret = connection_password_record(&store, "first");
+    let mut first = original.clone();
+    first.group_id = Some("new-group".into());
+    first.auth.as_mut().unwrap().password = Some(SecretString::new("replacement"));
+    first.auth.as_mut().unwrap().has_password = false;
+    let mut second = store.get_connection("second").unwrap().unwrap();
+    if let ConnectionType::Ssh {
+        agent_forwarding_config,
+        ..
+    } = &mut second.config
+    {
+        *agent_forwarding_config = Some(SshAgentForwardingConfig {
+            policy: SshAgentForwardingPolicy::Allowlist {
+                fingerprints: vec![String::new()],
+            },
+            ..Default::default()
+        });
+    }
+    assert!(
+        store
+            .save_connections_atomic(&[first.clone(), second])
+            .is_err()
+    );
+    assert_eq!(snapshot(), before);
+    assert_eq!(store.get_connection("first").unwrap().unwrap(), original);
+    assert_eq!(
+        connection_password_record(&store, "first").password,
+        secret.password
+    );
+    assert!(
+        store
+            .list_connections()
+            .unwrap()
+            .iter()
+            .all(|c| c.group_id.is_none())
+    );
+    let mut raw = serde_json::to_value(&first).unwrap();
+    raw["future-field"] = serde_json::json!({"version": 99});
+    first = serde_json::from_value(raw).unwrap();
+    store.save_connections_atomic(&[first]).unwrap();
+    let saved = store.get_connection("first").unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&saved).unwrap().get("future-field"),
+        Some(&serde_json::json!({"version": 99}))
+    );
+    assert_eq!(
+        saved.auth.unwrap().password.unwrap().expose_secret(),
+        "replacement"
+    );
+}
+#[test]
+fn atomic_connection_batch_rejects_missing_references_before_any_write() {
+    let dir = unique_temp_dir("atomic-missing-reference");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_connections_atomic(&[ssh_connection_for_asset("a"), ssh_connection_for_asset("b")])
+        .unwrap();
+    let mut first = store.get_connection("a").unwrap().unwrap();
+    let original = first.clone();
+    first.description = Some("changed".into());
+    let mut second = store.get_connection("b").unwrap().unwrap();
+    second.auth = Some(ConnectionAuth {
+        account_id: Some("deleted-account".into()),
+        ..Default::default()
+    });
+    assert!(store.save_connections_atomic(&[first, second]).is_err());
+    assert_eq!(store.get_connection("a").unwrap().unwrap(), original);
+}
+
+#[test]
+fn atomic_common_edits_preserve_untouched_unsupported_legacy_agent_values() {
+    use super::CONNECTION_PREFIX;
+    use nyaterm_core::{SshAgentForwardingConfig, SshAgentForwardingPolicy};
+    let dir = unique_temp_dir("atomic-legacy-agent");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut connection = ssh_connection_for_asset("legacy");
+    store.save_connection(&connection).unwrap();
+    if let ConnectionType::Ssh {
+        agent_forwarding_config,
+        ..
+    } = &mut connection.config
+    {
+        *agent_forwarding_config = Some(SshAgentForwardingConfig {
+            policy: SshAgentForwardingPolicy::Allowlist {
+                fingerprints: vec![String::new()],
+            },
+            ..Default::default()
+        });
+    }
+    let txn = store.db.begin_write().unwrap();
+    write_json_in_txn(
+        &txn,
+        CONNECTIONS_TABLE,
+        &entity_key(CONNECTION_PREFIX, &connection.id),
+        &connection,
+    )
+    .unwrap();
+    txn.commit().unwrap();
+    let original = store.get_connection(&connection.id).unwrap().unwrap();
+    let mut changed = original.clone();
+    changed.description = Some("common description".into());
+    store.save_connections_atomic(&[changed]).unwrap();
+    let saved = store.get_connection(&connection.id).unwrap().unwrap();
+    assert_eq!(saved.config, original.config);
+    assert_eq!(saved.description.as_deref(), Some("common description"));
 }

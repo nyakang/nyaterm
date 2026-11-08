@@ -2,11 +2,11 @@ use crate::SecretString;
 
 use super::{
     ConnectionAuth, ConnectionNetwork, ConnectionPasswordSource, ConnectionPostLogin,
-    ConnectionRecordingSettings, ConnectionType, RecordingMode, SavedConnection, SerialFlowControl,
-    SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
-    SshAgentForwardingPolicy, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
-    SshTerminalType, default_rdp_certificate_policy, default_ssh_port, default_ssh_user,
-    default_vnc_security_mode,
+    ConnectionRecordingSettings, ConnectionType, ConnectionUsernameSource, RecordingMode,
+    SavedConnection, SerialFlowControl, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
+    SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAlgorithmMode, SshAlgorithmPreferences,
+    SshProfile, SshTerminalType, default_rdp_certificate_policy, default_ssh_port,
+    default_ssh_user, default_vnc_security_mode,
 };
 
 /// One batch-editable field with an explicit three-way state.
@@ -36,12 +36,8 @@ impl<T> BatchField<T> {
     }
 }
 
-/// Protocol selected by a batch edit.
-///
-/// Switching protocols is lossy: protocol-specific configuration is rebuilt
-/// from the target's defaults, while the protocol-independent endpoint
-/// (host/port/username) is carried over where it is meaningful.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Original protocol used to classify batch editing scopes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConnectionBatchKind {
     Ssh,
     LocalTerminal,
@@ -81,7 +77,6 @@ impl ConnectionBatchKind {
 /// unknown (`extensions`/`extra`) data is never rewritten.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionBatchEdit {
-    pub kind: BatchField<ConnectionBatchKind>,
     pub group_id: BatchField<String>,
     pub description: BatchField<String>,
     pub icon: BatchField<String>,
@@ -197,8 +192,7 @@ pub struct ConnectionBatchEdit {
 impl ConnectionBatchEdit {
     /// Whether every field is still `Unchanged`.
     pub fn is_empty(&self) -> bool {
-        self.kind.is_unchanged()
-            && self.group_id.is_unchanged()
+        self.group_id.is_unchanged()
             && self.description.is_unchanged()
             && self.icon.is_unchanged()
             && self.icon_auto_detect.is_unchanged()
@@ -369,130 +363,6 @@ fn supports_backspace(config: &ConnectionType) -> bool {
     )
 }
 
-/// Returns `(host, port, username)` for protocols that own a network endpoint.
-fn network_endpoint(config: &ConnectionType) -> Option<(&str, u16, &str)> {
-    match config {
-        ConnectionType::Ssh {
-            host,
-            port,
-            username,
-            ..
-        }
-        | ConnectionType::Telnet {
-            host,
-            port,
-            username,
-            ..
-        }
-        | ConnectionType::Rdp {
-            host,
-            port,
-            username,
-            ..
-        } => Some((host, *port, username)),
-        ConnectionType::Vnc {
-            host,
-            port,
-            username,
-            ..
-        } => Some((host, *port, username)),
-        ConnectionType::LocalTerminal { .. } | ConnectionType::Serial { .. } => None,
-    }
-}
-
-/// Rebuilds `config` as `target` using the target protocol's defaults.
-///
-/// Host and username survive between network protocols. A port survives only
-/// when it was custom for the source protocol; a default source port would be
-/// meaningless on the target, so the target default replaces it.
-fn convert_config(config: &ConnectionType, target: ConnectionBatchKind) -> ConnectionType {
-    let endpoint = network_endpoint(config);
-    let host = endpoint
-        .map(|(host, _, _)| host.to_string())
-        .unwrap_or_default();
-    let username = endpoint
-        .map(|(_, _, username)| username.to_string())
-        .unwrap_or_default();
-    let port = match endpoint {
-        Some((_, port, _)) if port != endpoint_port_default(config) => port,
-        _ => target.default_port(),
-    };
-
-    match target {
-        ConnectionBatchKind::Ssh => ConnectionType::Ssh {
-            host,
-            port,
-            username,
-            backspace_mode: super::default_backspace_mode_ssh(),
-            ai_execution_profile: super::AiExecutionProfile::default(),
-            x11_forwarding: false,
-            auth_agent_endpoint: None,
-            agent_forwarding_config: None,
-            legacy_agent_forwarding: None,
-            encoding: String::new(),
-            dynamic_tab_title: false,
-        },
-        ConnectionBatchKind::LocalTerminal => ConnectionType::LocalTerminal {
-            shell_path: String::new(),
-            shell_args: String::new(),
-            working_dir: None,
-            ai_execution_profile: super::AiExecutionProfile::default(),
-            encoding: String::new(),
-            dynamic_tab_title: false,
-        },
-        ConnectionBatchKind::Telnet => ConnectionType::Telnet {
-            host,
-            port,
-            username,
-            ai_execution_profile: super::AiExecutionProfile::default(),
-            backspace_mode: super::default_backspace_mode_telnet(),
-            raw_tcp_cli: false,
-            enter_mode: super::default_telnet_enter_mode(),
-            local_echo: false,
-            local_line_edit: false,
-            force_character_at_a_time: false,
-            send_naws: true,
-            send_sga: true,
-            keep_alive_interval_secs: super::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS,
-            auto_login: super::TelnetAutoLoginConfig::default(),
-            encoding: String::new(),
-        },
-        ConnectionBatchKind::Serial => ConnectionType::Serial {
-            port_name: String::new(),
-            baud_rate: super::default_baud_rate(),
-            data_bits: super::default_data_bits(),
-            parity: super::default_parity(),
-            flow_control: super::SerialFlowControl::default(),
-            stop_bits: super::default_stop_bits(),
-            ai_execution_profile: super::AiExecutionProfile::default(),
-            backspace_mode: super::default_backspace_mode_serial(),
-            encoding: String::new(),
-        },
-        ConnectionBatchKind::Rdp => ConnectionType::Rdp {
-            host,
-            port,
-            username,
-            domain: String::new(),
-            backend: super::default_rdp_backend(),
-            security: super::RdpSecuritySettings::default(),
-            display: super::RdpDisplaySettings::default(),
-            clipboard: super::RdpClipboardSettings::default(),
-            reconnect: super::RdpReconnectSettings::default(),
-        },
-        ConnectionBatchKind::Vnc => ConnectionType::Vnc {
-            username,
-            host,
-            port,
-            security: super::VncSecuritySettings::default(),
-            display: super::VncDisplaySettings::default(),
-            clipboard: super::VncClipboardSettings::default(),
-            reconnect: super::VncReconnectSettings::default(),
-            shared: true,
-            view_only: false,
-        },
-    }
-}
-
 /// Applies `edit` to `connection`, writing only the fields explicitly selected.
 ///
 /// Fields that do not apply to the concrete connection type are skipped and
@@ -502,28 +372,6 @@ pub fn apply_connection_batch_edit(
     edit: &ConnectionBatchEdit,
 ) -> ConnectionBatchApplyReport {
     let mut report = ConnectionBatchApplyReport::default();
-
-    // Protocol switching runs first so the remaining field patches land on the
-    // target configuration. It is intentionally destructive for everything
-    // specific to the previous protocol: credential and proxy references are
-    // cleared rather than carried into a protocol whose semantics differ.
-    if let BatchField::Set(target) = edit.kind
-        && ConnectionBatchKind::from_config(&connection.config) != target
-    {
-        let extra = std::mem::take(&mut connection.sftp.extra);
-        connection.config = convert_config(&connection.config, target);
-        connection.auth = None;
-        connection.network = None;
-        connection.post_login = None;
-        connection.ssh_algorithms = None;
-        connection.ssh_profile = SshProfile::default();
-        connection.terminal_type = None;
-        connection.sftp = SftpSettings {
-            extra,
-            ..SftpSettings::default()
-        };
-        report.applied_fields += 1;
-    }
 
     let apply = |condition: bool, touched: bool, report: &mut ConnectionBatchApplyReport| {
         if !touched {
@@ -704,7 +552,7 @@ pub fn apply_connection_batch_edit(
     if !edit.dynamic_tab_title.is_unchanged() {
         apply(dynamic_title_ok, true, &mut report);
         if dynamic_title_ok {
-            let value = flag_value(&edit.dynamic_tab_title);
+            let value = flag_value(&edit.dynamic_tab_title, false);
             match &mut connection.config {
                 ConnectionType::Ssh {
                     dynamic_tab_title, ..
@@ -743,7 +591,7 @@ pub fn apply_connection_batch_edit(
     if !edit.x11_forwarding.is_unchanged() {
         apply(is_ssh, true, &mut report);
         if let ConnectionType::Ssh { x11_forwarding, .. } = &mut connection.config {
-            *x11_forwarding = flag_value(&edit.x11_forwarding);
+            *x11_forwarding = flag_value(&edit.x11_forwarding, false);
         }
     }
     if !edit.agent_forwarding_enabled.is_unchanged() {
@@ -753,7 +601,7 @@ pub fn apply_connection_batch_edit(
             ..
         } = &mut connection.config
         {
-            let enabled = flag_value(&edit.agent_forwarding_enabled);
+            let enabled = flag_value(&edit.agent_forwarding_enabled, false);
             match agent_forwarding_config {
                 Some(config) => config.enabled = enabled,
                 None if enabled => {
@@ -833,7 +681,8 @@ pub fn apply_connection_batch_edit(
                 };
             }
             if !edit.rdp_administrative_session.is_unchanged() {
-                security.administrative_session = flag_value(&edit.rdp_administrative_session);
+                security.administrative_session =
+                    flag_value(&edit.rdp_administrative_session, false);
             }
         }
     }
@@ -875,7 +724,10 @@ pub fn apply_connection_batch_edit(
             BatchField::Unchanged => unreachable!(),
         }
     }
-    let recording_blocked = matches!(edit.recording_use_global, BatchField::Set(true));
+    let recording_blocked = matches!(
+        edit.recording_use_global,
+        BatchField::Set(true) | BatchField::Clear
+    );
     for touched in recording_fields {
         apply(!recording_blocked, touched, &mut report);
     }
@@ -921,14 +773,26 @@ pub fn apply_connection_batch_edit(
                 BatchField::Set(value) => {
                     auth.account_id = Some(value.clone());
                     auth.password_id = None;
-                    if auth.mode == "password" {
-                        auth.password_source = Some(ConnectionPasswordSource::Account);
-                    }
+                    auth.username_source = Some(ConnectionUsernameSource::Account);
+                    auth.password_source = Some(ConnectionPasswordSource::Account);
                 }
-                BatchField::Clear => auth.account_id = None,
+                BatchField::Clear => {
+                    auth.account_id = None;
+                    auth.password_id = None;
+                    auth.username_source = Some(ConnectionUsernameSource::Connection);
+                    auth.password_source = Some(ConnectionPasswordSource::Connection);
+                }
                 BatchField::Unchanged => unreachable!(),
             }
         }
+    }
+    // An explicit username wins over the account's default source in the same patch.
+    if account_ok
+        && !edit.username.is_unchanged()
+        && let Some(auth) = connection.auth.as_mut()
+        && (auth.account_id.is_some() || auth.password_id.is_some())
+    {
+        auth.username_source = Some(ConnectionUsernameSource::Connection);
     }
     if !edit.password_id.is_unchanged() {
         apply(password_reference_ok, true, &mut report);
@@ -940,7 +804,11 @@ pub fn apply_connection_batch_edit(
                     auth.account_id = None;
                     auth.password_source = Some(ConnectionPasswordSource::Account);
                 }
-                BatchField::Clear => auth.password_id = None,
+                BatchField::Clear => {
+                    auth.password_id = None;
+                    auth.account_id = None;
+                    auth.password_source = Some(ConnectionPasswordSource::Connection);
+                }
                 BatchField::Unchanged => unreachable!(),
             }
         }
@@ -958,7 +826,7 @@ pub fn apply_connection_batch_edit(
                 BatchField::Clear => {
                     auth.password = None;
                     auth.has_password = false;
-                    auth.password_source = None;
+                    auth.password_source = Some(ConnectionPasswordSource::Connection);
                 }
                 BatchField::Unchanged => unreachable!(),
             }
@@ -971,7 +839,6 @@ pub fn apply_connection_batch_edit(
             match &edit.key_id {
                 BatchField::Set(value) => {
                     auth.key_id = Some(value.clone());
-                    auth.mode = "key".to_string();
                 }
                 BatchField::Clear => auth.key_id = None,
                 BatchField::Unchanged => unreachable!(),
@@ -993,7 +860,7 @@ pub fn apply_connection_batch_edit(
         apply(is_ssh, true, &mut report);
         if is_ssh {
             let auth = connection.auth.get_or_insert_with(ConnectionAuth::default);
-            auth.auto_fill_otp = flag_value(&edit.auto_fill_otp);
+            auth.auto_fill_otp = flag_value(&edit.auto_fill_otp, false);
         }
     }
     if !edit.auth_agent_endpoint.is_unchanged() {
@@ -1028,10 +895,10 @@ pub fn apply_connection_batch_edit(
             _ => unreachable!(),
         };
         if !edit.agent_forwarding_external.is_unchanged() {
-            agent.sources.external_agent = flag_value(&edit.agent_forwarding_external);
+            agent.sources.external_agent = flag_value(&edit.agent_forwarding_external, false);
         }
         if !edit.agent_forwarding_stored_keys.is_unchanged() {
-            agent.sources.stored_keys = flag_value(&edit.agent_forwarding_stored_keys);
+            agent.sources.stored_keys = flag_value(&edit.agent_forwarding_stored_keys, true);
         }
         if !edit.agent_forwarding_policy.is_unchanged() {
             let fingerprints = match &agent.policy {
@@ -1137,7 +1004,7 @@ pub fn apply_connection_batch_edit(
         } = &mut connection.config
     {
         if !edit.telnet_raw_tcp_cli.is_unchanged() {
-            *raw_tcp_cli = flag_value(&edit.telnet_raw_tcp_cli);
+            *raw_tcp_cli = flag_value(&edit.telnet_raw_tcp_cli, false);
         }
         if !edit.telnet_enter_mode.is_unchanged() {
             *enter_mode = match &edit.telnet_enter_mode {
@@ -1147,19 +1014,19 @@ pub fn apply_connection_batch_edit(
             };
         }
         if !edit.telnet_local_echo.is_unchanged() {
-            *local_echo = flag_value(&edit.telnet_local_echo);
+            *local_echo = flag_value(&edit.telnet_local_echo, false);
         }
         if !edit.telnet_local_line_edit.is_unchanged() {
-            *local_line_edit = flag_value(&edit.telnet_local_line_edit);
+            *local_line_edit = flag_value(&edit.telnet_local_line_edit, false);
         }
         if !edit.telnet_force_character_at_a_time.is_unchanged() {
-            *force_character_at_a_time = flag_value(&edit.telnet_force_character_at_a_time);
+            *force_character_at_a_time = flag_value(&edit.telnet_force_character_at_a_time, false);
         }
         if !edit.telnet_send_naws.is_unchanged() {
-            *send_naws = flag_value(&edit.telnet_send_naws);
+            *send_naws = flag_value(&edit.telnet_send_naws, true);
         }
         if !edit.telnet_send_sga.is_unchanged() {
-            *send_sga = flag_value(&edit.telnet_send_sga);
+            *send_sga = flag_value(&edit.telnet_send_sga, true);
         }
         if !edit.telnet_keep_alive_interval_secs.is_unchanged() {
             *keep_alive_interval_secs = match edit.telnet_keep_alive_interval_secs {
@@ -1169,10 +1036,10 @@ pub fn apply_connection_batch_edit(
             };
         }
         if !edit.telnet_auto_login_enabled.is_unchanged() {
-            auto_login.enabled = flag_value(&edit.telnet_auto_login_enabled);
+            auto_login.enabled = flag_value(&edit.telnet_auto_login_enabled, true);
         }
         if !edit.telnet_auto_login_send_wake_enter.is_unchanged() {
-            auto_login.send_wake_enter = flag_value(&edit.telnet_auto_login_send_wake_enter);
+            auto_login.send_wake_enter = flag_value(&edit.telnet_auto_login_send_wake_enter, true);
         }
         if !edit.telnet_auto_login_timeout_ms.is_unchanged() {
             auto_login.timeout_ms = match edit.telnet_auto_login_timeout_ms {
@@ -1351,31 +1218,31 @@ pub fn apply_connection_batch_edit(
         } = &mut connection.config
     {
         if !edit.rdp_display_wallpaper.is_unchanged() {
-            display.display_wallpaper = flag_value(&edit.rdp_display_wallpaper);
+            display.display_wallpaper = flag_value(&edit.rdp_display_wallpaper, true);
         }
         if !edit.rdp_display_themes.is_unchanged() {
-            display.display_themes = flag_value(&edit.rdp_display_themes);
+            display.display_themes = flag_value(&edit.rdp_display_themes, true);
         }
         if !edit.rdp_font_smoothing.is_unchanged() {
-            display.enable_font_smoothing = flag_value(&edit.rdp_font_smoothing);
+            display.enable_font_smoothing = flag_value(&edit.rdp_font_smoothing, true);
         }
         if !edit.rdp_desktop_composition.is_unchanged() {
-            display.enable_desktop_composition = flag_value(&edit.rdp_desktop_composition);
+            display.enable_desktop_composition = flag_value(&edit.rdp_desktop_composition, false);
         }
         if !edit.rdp_disable_full_window_drag.is_unchanged() {
-            display.disable_full_window_drag = flag_value(&edit.rdp_disable_full_window_drag);
+            display.disable_full_window_drag = flag_value(&edit.rdp_disable_full_window_drag, true);
         }
         if !edit.rdp_disable_menu_animations.is_unchanged() {
-            display.disable_menu_animations = flag_value(&edit.rdp_disable_menu_animations);
+            display.disable_menu_animations = flag_value(&edit.rdp_disable_menu_animations, true);
         }
         if !edit.rdp_disable_cursor_shadow.is_unchanged() {
-            display.disable_cursor_shadow = flag_value(&edit.rdp_disable_cursor_shadow);
+            display.disable_cursor_shadow = flag_value(&edit.rdp_disable_cursor_shadow, false);
         }
         if !edit.rdp_disable_cursor_blinking.is_unchanged() {
-            display.disable_cursor_blinking = flag_value(&edit.rdp_disable_cursor_blinking);
+            display.disable_cursor_blinking = flag_value(&edit.rdp_disable_cursor_blinking, false);
         }
         if !edit.rdp_auto_reconnect.is_unchanged() {
-            reconnect.enabled = flag_value(&edit.rdp_auto_reconnect);
+            reconnect.enabled = flag_value(&edit.rdp_auto_reconnect, true);
         }
         if !edit.rdp_reconnect_attempts.is_unchanged() {
             reconnect.max_attempts = match edit.rdp_reconnect_attempts {
@@ -1416,16 +1283,16 @@ pub fn apply_connection_batch_edit(
             };
         }
         if !edit.vnc_clipboard.is_unchanged() {
-            clipboard.enabled = flag_value(&edit.vnc_clipboard);
+            clipboard.enabled = flag_value(&edit.vnc_clipboard, true);
         }
         if !edit.vnc_shared.is_unchanged() {
-            *shared = flag_value(&edit.vnc_shared);
+            *shared = flag_value(&edit.vnc_shared, true);
         }
         if !edit.vnc_view_only.is_unchanged() {
-            *view_only = flag_value(&edit.vnc_view_only);
+            *view_only = flag_value(&edit.vnc_view_only, false);
         }
         if !edit.vnc_reconnect.is_unchanged() {
-            reconnect.enabled = flag_value(&edit.vnc_reconnect);
+            reconnect.enabled = flag_value(&edit.vnc_reconnect, true);
         }
         if !edit.vnc_reconnect_attempts.is_unchanged() {
             reconnect.max_attempts = match edit.vnc_reconnect_attempts {
@@ -1439,8 +1306,12 @@ pub fn apply_connection_batch_edit(
     report
 }
 
-fn flag_value(field: &BatchField<bool>) -> bool {
-    matches!(field, BatchField::Set(true))
+fn flag_value(field: &BatchField<bool>, default: bool) -> bool {
+    match field {
+        BatchField::Set(value) => *value,
+        BatchField::Clear => default,
+        BatchField::Unchanged => unreachable!("only touched fields are applied"),
+    }
 }
 
 fn plain_string_value(field: &BatchField<String>) -> String {
@@ -1519,7 +1390,7 @@ fn apply_post_login(post_login: &mut Option<ConnectionPostLogin>, edit: &Connect
 
     let object = post_login.get_or_insert_with(ConnectionPostLogin::default);
     if !edit.post_login_enabled.is_unchanged() {
-        object.enabled = flag_value(&edit.post_login_enabled);
+        object.enabled = flag_value(&edit.post_login_enabled, false);
     }
     if !edit.post_login_command.is_unchanged() {
         object.command = match &edit.post_login_command {
@@ -1584,6 +1455,68 @@ fn list_value(field: &BatchField<Vec<String>>) -> Vec<String> {
 pub fn validate_connection_batch_edit(edit: &ConnectionBatchEdit) -> Result<(), String> {
     if !edit.has_changes() {
         return Err("no fields selected".to_string());
+    }
+    for (label, field) in [
+        ("group_id", &edit.group_id),
+        ("description", &edit.description),
+        ("icon", &edit.icon),
+        ("username", &edit.username),
+        ("host_key_alias", &edit.host_key_alias),
+        ("encoding", &edit.encoding),
+        ("backspace_mode", &edit.backspace_mode),
+        ("sftp_filename_encoding", &edit.sftp_filename_encoding),
+        ("post_login_command", &edit.post_login_command),
+        ("rdp_certificate_policy", &edit.rdp_certificate_policy),
+        ("vnc_security_mode", &edit.vnc_security_mode),
+        ("auth_mode", &edit.auth_mode),
+        ("account_id", &edit.account_id),
+        ("password_id", &edit.password_id),
+        ("key_id", &edit.key_id),
+        ("otp_id", &edit.otp_id),
+        ("proxy_id", &edit.proxy_id),
+        ("proxy_jump_id", &edit.proxy_jump_id),
+        ("shell_path", &edit.shell_path),
+        ("shell_args", &edit.shell_args),
+        ("working_dir", &edit.working_dir),
+        ("telnet_enter_mode", &edit.telnet_enter_mode),
+        (
+            "telnet_auto_login_username_prompt",
+            &edit.telnet_auto_login_username_prompt,
+        ),
+        (
+            "telnet_auto_login_password_prompt",
+            &edit.telnet_auto_login_password_prompt,
+        ),
+        (
+            "telnet_auto_login_success_prompt",
+            &edit.telnet_auto_login_success_prompt,
+        ),
+        (
+            "telnet_auto_login_failure_prompt",
+            &edit.telnet_auto_login_failure_prompt,
+        ),
+        ("serial_port_name", &edit.serial_port_name),
+        ("serial_parity", &edit.serial_parity),
+        ("serial_stop_bits", &edit.serial_stop_bits),
+        ("rdp_domain", &edit.rdp_domain),
+        ("rdp_backend", &edit.rdp_backend),
+        ("rdp_display_mode", &edit.rdp_display_mode),
+        ("vnc_scale_mode", &edit.vnc_scale_mode),
+    ] {
+        if let BatchField::Set(value) = field
+            && value.trim().is_empty()
+        {
+            return Err(format!("{label} cannot be empty; use clear instead"));
+        }
+    }
+    if let BatchField::Set(value) = &edit.password
+        && value.is_empty()
+    {
+        return Err("password cannot be empty; use clear instead".to_string());
+    }
+    if let BatchField::Set(endpoint) = &edit.auth_agent_endpoint {
+        super::validate_ssh_agent_endpoint(endpoint)
+            .map_err(|_| "invalid SSH agent endpoint".to_string())?;
     }
     if let BatchField::Set(port) = edit.port
         && port == 0

@@ -1,9 +1,13 @@
-use super::*;
+use super::{
+    BatchField, ConnectionBatchEdit, apply_connection_batch_edit, validate_connection_batch_edit,
+};
 use crate::SecretString;
 use crate::models::{
     AiExecutionProfile, ConnectionAuth, ConnectionExtensions, ConnectionNetwork,
-    ConnectionPasswordSource, RecordingMode, SerialFlowControl, SftpSettings, SshAgentEndpoint,
-    SshAgentForwardingPolicy, SshProfile,
+    ConnectionPasswordSource, ConnectionPostLogin, ConnectionType, ConnectionUsernameSource,
+    RecordingMode, SavedConnection, SerialFlowControl, SftpCwdFollowMode, SftpSettings,
+    SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAlgorithmMode,
+    SshAlgorithmPreferences, SshProfile, SshTerminalType,
 };
 
 fn ssh_connection() -> SavedConnection {
@@ -390,234 +394,6 @@ fn unknown_top_level_fields_survive_apply_and_serialize() {
 }
 
 #[test]
-fn kind_is_part_of_emptiness() {
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Telnet),
-        ..Default::default()
-    };
-
-    assert!(!edit.is_empty());
-    assert!(edit.has_changes());
-    assert!(validate_connection_batch_edit(&edit).is_ok());
-}
-
-#[test]
-fn switching_ssh_to_telnet_carries_endpoint_and_clears_protocol_config() {
-    let mut connection = ssh_connection();
-    connection.network = Some(ConnectionNetwork {
-        proxy_id: Some("proxy-1".to_string()),
-        proxy_jump_id: Some("jump-1".to_string()),
-        host_key_alias: Some("alias".to_string()),
-    });
-    connection.auth = Some(ConnectionAuth {
-        mode: "password".to_string(),
-        account_id: Some("account-1".to_string()),
-        has_password: true,
-        ..ConnectionAuth::default()
-    });
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Telnet),
-        ..Default::default()
-    };
-
-    let report = apply_connection_batch_edit(&mut connection, &edit);
-
-    assert_eq!(report.applied_fields, 1);
-    match connection.config {
-        ConnectionType::Telnet {
-            host,
-            port,
-            username,
-            backspace_mode,
-            encoding,
-            ..
-        } => {
-            assert_eq!(host, "10.0.0.1");
-            assert_eq!(port, 23);
-            assert_eq!(username, "root");
-            assert_eq!(
-                backspace_mode,
-                crate::models::default_backspace_mode_telnet()
-            );
-            assert!(encoding.is_empty());
-        }
-        _ => panic!("expected telnet"),
-    }
-    assert!(connection.auth.is_none());
-    assert!(connection.network.is_none());
-    assert!(connection.post_login.is_none());
-    assert!(connection.ssh_algorithms.is_none());
-    assert_eq!(connection.ssh_profile, SshProfile::Standard);
-    assert!(connection.terminal_type.is_none());
-    assert!(!connection.sftp.compatibility_mode);
-    assert!(connection.sftp.filename_encoding.is_empty());
-    assert!(connection.sftp.enabled);
-    assert_eq!(connection.group_id.as_deref(), Some("group-a"));
-    assert_eq!(connection.tags, vec!["prod".to_string()]);
-}
-
-#[test]
-fn switching_custom_port_keeps_it_on_the_target_protocol() {
-    let mut connection = ssh_connection();
-    connection.config = match connection.config {
-        ConnectionType::Ssh {
-            host,
-            username,
-            backspace_mode,
-            ai_execution_profile,
-            x11_forwarding,
-            auth_agent_endpoint,
-            agent_forwarding_config,
-            legacy_agent_forwarding,
-            encoding,
-            dynamic_tab_title,
-            ..
-        } => ConnectionType::Ssh {
-            host,
-            port: 2222,
-            username,
-            backspace_mode,
-            ai_execution_profile,
-            x11_forwarding,
-            auth_agent_endpoint,
-            agent_forwarding_config,
-            legacy_agent_forwarding,
-            encoding,
-            dynamic_tab_title,
-        },
-        _ => unreachable!(),
-    };
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Rdp),
-        ..Default::default()
-    };
-
-    apply_connection_batch_edit(&mut connection, &edit);
-
-    match connection.config {
-        ConnectionType::Rdp {
-            host,
-            port,
-            username,
-            ..
-        } => {
-            assert_eq!(host, "10.0.0.1");
-            assert_eq!(port, 2222);
-            assert_eq!(username, "root");
-        }
-        _ => panic!("expected rdp"),
-    }
-}
-
-#[test]
-fn switching_from_telnet_to_ssh_uses_target_defaults_but_keeps_identity() {
-    let mut connection = SavedConnection {
-        config: ConnectionType::Telnet {
-            host: "telnet.example".to_string(),
-            port: 2323,
-            username: "operator".to_string(),
-            ai_execution_profile: AiExecutionProfile::default(),
-            backspace_mode: "del".to_string(),
-            raw_tcp_cli: false,
-            enter_mode: "cr".to_string(),
-            local_echo: false,
-            local_line_edit: false,
-            force_character_at_a_time: false,
-            send_naws: true,
-            send_sga: true,
-            keep_alive_interval_secs: 60,
-            auto_login: Default::default(),
-            encoding: "gbk".to_string(),
-        },
-        ..ssh_connection()
-    };
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Ssh),
-        ..Default::default()
-    };
-
-    apply_connection_batch_edit(&mut connection, &edit);
-
-    match connection.config {
-        ConnectionType::Ssh {
-            host,
-            port,
-            username,
-            backspace_mode,
-            encoding,
-            ..
-        } => {
-            assert_eq!(host, "telnet.example");
-            assert_eq!(port, 2323);
-            assert_eq!(username, "operator");
-            assert_eq!(backspace_mode, crate::models::default_backspace_mode_ssh());
-            assert!(encoding.is_empty());
-        }
-        _ => panic!("expected ssh"),
-    }
-}
-
-#[test]
-fn switching_from_local_uses_target_defaults_without_host() {
-    let mut connection = local_connection();
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Ssh),
-        ..Default::default()
-    };
-
-    apply_connection_batch_edit(&mut connection, &edit);
-
-    match connection.config {
-        ConnectionType::Ssh {
-            host,
-            port,
-            username,
-            ..
-        } => {
-            assert!(host.is_empty());
-            assert_eq!(port, crate::models::default_ssh_port());
-            assert!(username.is_empty());
-        }
-        _ => panic!("expected ssh"),
-    }
-}
-
-#[test]
-fn switching_to_the_same_kind_does_not_reset_config() {
-    let original = ssh_connection();
-    let mut connection = original.clone();
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Ssh),
-        ..Default::default()
-    };
-
-    let report = apply_connection_batch_edit(&mut connection, &edit);
-
-    assert_eq!(report.applied_fields, 0);
-    assert_eq!(connection, original);
-}
-
-#[test]
-fn switching_keeps_unknown_sftp_fields() {
-    let mut connection = ssh_connection();
-    connection.sftp.extra.insert(
-        "future_sftp_field".to_string(),
-        serde_json::Value::String("keep".to_string()),
-    );
-    let edit = ConnectionBatchEdit {
-        kind: BatchField::Set(ConnectionBatchKind::Vnc),
-        ..Default::default()
-    };
-
-    apply_connection_batch_edit(&mut connection, &edit);
-
-    assert_eq!(
-        connection.sftp.extra.get("future_sftp_field"),
-        Some(&serde_json::Value::String("keep".to_string()))
-    );
-}
-
-#[test]
 fn tags_and_recording_fields_apply() {
     let mut connection = ssh_connection();
     let edit = ConnectionBatchEdit {
@@ -681,7 +457,10 @@ fn password_fields_never_expose_plaintext() {
     let auth = connection.auth.as_ref().expect("auth");
     assert!(auth.password.is_none());
     assert!(!auth.has_password);
-    assert!(auth.password_source.is_none());
+    assert_eq!(
+        auth.password_source,
+        Some(ConnectionPasswordSource::Connection)
+    );
 }
 
 #[test]
@@ -703,7 +482,7 @@ fn auth_references_and_agent_endpoint_apply() {
     let auth = connection.auth.as_ref().expect("auth");
     assert_eq!(auth.account_id.as_deref(), Some("account-1"));
     assert_eq!(auth.key_id.as_deref(), Some("key-1"));
-    assert_eq!(auth.mode, "key");
+    assert_eq!(auth.mode, ConnectionAuth::default().mode);
     assert_eq!(auth.otp_id.as_deref(), Some("otp-1"));
     assert!(auth.auto_fill_otp);
     match &connection.config {
@@ -1050,4 +829,169 @@ fn validation_rejects_empty_edit_and_invalid_values() {
         ..Default::default()
     };
     assert!(validate_connection_batch_edit(&edit).is_err());
+}
+
+#[test]
+fn explicit_username_wins_over_account_and_clearing_account_removes_legacy_reference() {
+    let mut connection = ssh_connection();
+    connection.auth = Some(ConnectionAuth {
+        password_id: Some("legacy".into()),
+        password: Some(SecretString::new(" retained ")),
+        ..Default::default()
+    });
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            account_id: BatchField::Set("account".into()),
+            username: BatchField::Set("connection-user".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        connection.auth.as_ref().unwrap().username_source,
+        Some(ConnectionUsernameSource::Connection)
+    );
+    connection.auth.as_mut().unwrap().password_id = Some("legacy".into());
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            account_id: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    let auth = connection.auth.unwrap();
+    assert!(auth.account_id.is_none() && auth.password_id.is_none());
+    assert_eq!(
+        auth.password_source,
+        Some(ConnectionPasswordSource::Connection)
+    );
+    assert_eq!(auth.password.unwrap().expose_secret(), " retained ");
+}
+
+#[test]
+fn boolean_clear_restores_true_defaults_and_never_converts_protocol() {
+    let mut connection = vnc_connection();
+    let kind = super::ConnectionBatchKind::from_config(&connection.config);
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            vnc_shared: BatchField::Set(false),
+            vnc_clipboard: BatchField::Set(false),
+            vnc_reconnect: BatchField::Set(false),
+            ..Default::default()
+        },
+    );
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            vnc_shared: BatchField::Clear,
+            vnc_clipboard: BatchField::Clear,
+            vnc_reconnect: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        super::ConnectionBatchKind::from_config(&connection.config),
+        kind
+    );
+    match connection.config {
+        ConnectionType::Vnc {
+            shared,
+            clipboard,
+            reconnect,
+            ..
+        } => assert!(shared && clipboard.enabled && reconnect.enabled),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn clear_restores_telnet_and_rdp_true_defaults() {
+    let mut telnet = telnet_connection();
+    if let ConnectionType::Telnet {
+        send_naws,
+        send_sga,
+        auto_login,
+        ..
+    } = &mut telnet.config
+    {
+        *send_naws = false;
+        *send_sga = false;
+        auto_login.enabled = false;
+        auto_login.send_wake_enter = false;
+    }
+    apply_connection_batch_edit(
+        &mut telnet,
+        &ConnectionBatchEdit {
+            telnet_send_naws: BatchField::Clear,
+            telnet_send_sga: BatchField::Clear,
+            telnet_auto_login_enabled: BatchField::Clear,
+            telnet_auto_login_send_wake_enter: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    if let ConnectionType::Telnet {
+        send_naws,
+        send_sga,
+        auto_login,
+        ..
+    } = telnet.config
+    {
+        assert!(send_naws && send_sga && auto_login.enabled && auto_login.send_wake_enter);
+    }
+    let mut rdp = rdp_connection();
+    apply_connection_batch_edit(
+        &mut rdp,
+        &ConnectionBatchEdit {
+            rdp_display_wallpaper: BatchField::Clear,
+            rdp_display_themes: BatchField::Clear,
+            rdp_font_smoothing: BatchField::Clear,
+            rdp_disable_full_window_drag: BatchField::Clear,
+            rdp_disable_menu_animations: BatchField::Clear,
+            rdp_auto_reconnect: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    if let ConnectionType::Rdp {
+        display, reconnect, ..
+    } = rdp.config
+    {
+        assert!(
+            display.display_wallpaper
+                && display.display_themes
+                && display.enable_font_smoothing
+                && display.disable_full_window_drag
+                && display.disable_menu_animations
+                && reconnect.enabled
+        );
+    }
+}
+
+#[test]
+fn setting_account_defaults_to_account_username_without_overwriting_auth_mode() {
+    let mut connection = ssh_connection();
+    connection.auth = Some(ConnectionAuth {
+        mode: "agent".into(),
+        username_source: Some(ConnectionUsernameSource::Connection),
+        password_source: Some(ConnectionPasswordSource::Connection),
+        ..Default::default()
+    });
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            account_id: BatchField::Set("account".into()),
+            key_id: BatchField::Set("key".into()),
+            ..Default::default()
+        },
+    );
+    let auth = connection.auth.unwrap();
+    assert_eq!(
+        auth.username_source,
+        Some(ConnectionUsernameSource::Account)
+    );
+    assert_eq!(
+        auth.password_source,
+        Some(ConnectionPasswordSource::Account)
+    );
+    assert_eq!(auth.mode, "agent");
 }
