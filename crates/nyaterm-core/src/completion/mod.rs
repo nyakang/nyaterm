@@ -14,6 +14,7 @@ use crate::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionScope, ShellDialect,
 };
 use crate::terminal::editing::supports_scalar_editing;
+use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -187,7 +188,9 @@ impl CompletionEngine {
                     context_priority: item.priority,
                 };
                 candidate.fillable = candidate.target_line(input).is_some_and(|target| {
-                    target.starts_with(input) && supports_scalar_editing(&target)
+                    !target.is_empty()
+                        && target.len() <= MAX_TRACKED_INPUT_BYTES
+                        && supports_scalar_editing(&target)
                 });
                 candidate
             })
@@ -317,6 +320,25 @@ mod tests {
                 })
                 .is_empty()
         );
+    }
+    #[test]
+    fn fuzzy_tokens_are_fillable_text_for_a_confirmed_shell_replacement() {
+        let mut engine = CompletionEngine::embedded();
+        let candidates = engine.complete(TokenCompletionRequest {
+            input: "dkr",
+            cursor: 3,
+            dialect: ShellDialect::Bash,
+            scope: CompletionScope::legacy(),
+            history: &TokenHistoryIndex::default(),
+            quick: &TokenHistoryIndex::default(),
+            limit: 12,
+        });
+        let candidate = candidates
+            .iter()
+            .find(|c| c.insert_text == "docker")
+            .unwrap();
+        assert!(candidate.fillable);
+        assert_eq!(candidate.target_line("dkr").as_deref(), Some("docker"));
     }
     #[test]
     fn native_windows_names_keep_typed_case() {

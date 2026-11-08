@@ -7,7 +7,7 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
     TestAppContext, Window,
 };
-use nyaterm_core::terminal::editing::EditPhase;
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
 use nyaterm_transport::{SessionManager, TelnetSessionConfig};
 
 use super::fill::SuggestionSubmitResult;
@@ -97,6 +97,20 @@ impl Fixture {
         });
     }
 
+    fn suggest_in_shell(&mut self, current: &str, target: &str) {
+        self.suggest(current, target);
+        self.update(|app, cx, id| {
+            app.terminal.seed_session_view(
+                id.into(),
+                format!("$ \x1b]133;B\x07{current}"),
+                "UTF-8",
+            );
+            app.reconcile_shell_editing(id, cx);
+            assert!(app.terminal.editing.state().unwrap().allows_editing());
+            popup(app, id, target);
+        });
+    }
+
     fn receive(&mut self, expected: &[u8]) {
         self.peer
             .set_read_timeout(Some(Duration::from_secs(3)))
@@ -140,9 +154,18 @@ fn key(name: &str) -> KeyDownEvent {
 }
 
 fn echo(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>, id: &str, value: &str) {
-    // A network CLI prompt provides a unique input mapping, not Readline evidence.
-    app.terminal
-        .seed_session_view(id.into(), format!("<device>{value}"), "UTF-8");
+    // Keep a marked shell's input anchor stable across its fill acknowledgement.
+    // A network CLI prompt supplies a mapping without Readline evidence.
+    let output = if app
+        .terminal_snapshot_for_session(Some(id), 0)
+        .shell_input_anchor
+        .is_some()
+    {
+        format!("$ \x1b]133;B\x07{value}")
+    } else {
+        format!("<device>{value}")
+    };
+    app.terminal.seed_session_view(id.into(), output, "UTF-8");
     app.reconcile_shell_editing(id, cx);
 }
 
@@ -258,7 +281,7 @@ fn an_independent_manual_enter_uses_session_encoding_and_records_once() {
 }
 
 #[test]
-fn identical_input_writes_nothing_and_replacement_is_rejected() {
+fn identical_input_writes_nothing_and_a_network_prompt_cannot_authorize_replacement() {
     let mut f = Fixture::new();
     for execute in [false, true] {
         f.suggest("display version", "display version");
@@ -288,69 +311,263 @@ fn identical_input_writes_nothing_and_replacement_is_rejected() {
 }
 
 #[test]
-fn stale_versions_and_unsafe_terminal_states_consume_acceptance_without_writing() {
+fn fuzzy_history_and_quick_labels_replace_once_and_wait_for_echo_without_execution() {
+    for mode in [
+        nyaterm_core::completion::types::CompletionMode::History,
+        nyaterm_core::completion::types::CompletionMode::Token,
+    ] {
+        for (current, target) in [
+            ("systmi", "systemctl restart mihomo.service"),
+            ("重启代理", "systemctl restart example.service"),
+        ] {
+            let mut f = Fixture::new();
+            f.suggest_in_shell(current, target);
+            f.update(|app, cx, id| {
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_mut()
+                    .unwrap()
+                    .mode = mode;
+                let version = app.terminal.editing.state().unwrap().model.version;
+                assert_eq!(
+                    app.submit_selected_command_suggestion(true, cx),
+                    SuggestionSubmitResult::Submitted
+                );
+                let state = app.terminal.editing.state().unwrap();
+                assert_eq!(state.model.input.value, target);
+                assert_eq!(state.model.version, version + 1);
+                assert_eq!(state.model.phase, EditPhase::Pending);
+                assert_eq!(state.suggestion_fill.as_ref().unwrap().target, target);
+                assert!(state.mapping.is_none());
+                assert!(app.session.command_history_for(id).is_none());
+                echo(app, cx, id, target);
+                let state = app.terminal.editing.state().unwrap();
+                assert_eq!(state.model.phase, EditPhase::Ready);
+                assert!(state.suggestion_fill.is_none());
+                assert!(app.session.command_history_for(id).is_none());
+                assert!(app.terminal.assist.pending_command_history_entry.is_none());
+            });
+            let mut expected = vec![0x7f; current.chars().count()];
+            expected.extend_from_slice(target.as_bytes());
+            f.receive(&expected);
+            f.assert_quiet();
+            let expected_enter = f.update(|app, cx, id| {
+                let press = key("enter");
+                let wire = app
+                    .terminal_key_bytes_for_event_for_session(Some(id), &press)
+                    .unwrap();
+                assert!(app.send_terminal_key_event(&press, true, cx));
+                assert_eq!(app.session.command_history_for(id).unwrap(), [target]);
+                assert!(app.terminal.assist.pending_command_history_entry.is_none());
+                wire
+            });
+            f.receive(&expected_enter);
+            f.assert_quiet();
+        }
+    }
+}
+
+#[test]
+fn replacement_uses_native_keyboard_encoding_and_the_session_charset() {
     let mut f = Fixture::new();
-    for scenario in 0..11 {
-        f.suggest("display ver", "display version");
+    f.suggest_in_shell("代理", "重启服务");
+    f.update(|app, cx, id| {
+        app.terminal
+            .view
+            .views
+            .get_mut(id)
+            .unwrap()
+            .protocol_state
+            .kitty_keyboard_disambiguate = true;
+        app.terminal
+            .view
+            .views
+            .get_mut(id)
+            .unwrap()
+            .protocol_state
+            .kitty_keyboard_report_event_types = true;
+        app.terminal
+            .view
+            .views
+            .get_mut(id)
+            .unwrap()
+            .protocol_state
+            .kitty_keyboard_report_all_keys_as_esc = true;
+        let mut metadata = app.session.metadata(id).unwrap().clone();
+        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
+            config.encoding = "GBK".into();
+        }
+        app.session.register_session_metadata(id, metadata);
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "重启服务");
+    });
+    let mut expected = b"\x1b[127;1:1u\x1b[127;1:3u".repeat(2);
+    expected.extend_from_slice(&[0xd6, 0xd8, 0xc6, 0xf4, 0xb7, 0xfe, 0xce, 0xf1]);
+    f.receive(&expected);
+    f.assert_quiet();
+}
+
+#[test]
+fn replacement_write_failure_leaves_the_original_prediction_and_no_fill_request() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("systmi", "systemctl restart mihomo.service");
+    f.manager.close(&f.id).unwrap();
+    f.update(|app, cx, id| {
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::WriteFailed
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "systmi");
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert!(app.session.command_history_for(id).is_none());
+    });
+}
+
+#[test]
+fn replacement_encoding_failure_never_deletes_the_original_input() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("dkr", "echo 😀");
+    f.update(|app, cx, id| {
+        let mut metadata = app.session.metadata(id).unwrap().clone();
+        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
+            config.encoding = "GBK".into();
+        }
+        app.session.register_session_metadata(id, metadata);
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::WriteFailed
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "dkr");
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert!(app.session.command_history_for(id).is_none());
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn replacement_confirmation_expiry_and_input_changes_cancel_the_request() {
+    for change_input in [false, true] {
+        let mut f = Fixture::new();
+        f.suggest_in_shell("systmi", "systemctl restart mihomo.service");
         f.update(|app, cx, id| {
-            match scenario {
-                0 => app.terminal.editing.state_mut().model.version += 1,
-                1 => app.terminal.editing.state_mut().awaiting_snapshot = true,
-                2 => {
-                    app.sync_input.toggle_broadcast_to_all();
-                }
-                3 => {
-                    app.sync_input.toggle_broadcast_to_all();
-                    app.sync_input.toggle_broadcast_to_all();
-                }
-                4 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
-                5 => {
-                    app.terminal
-                        .view
-                        .views
-                        .get_mut(id)
-                        .unwrap()
-                        .protocol_state
-                        .mouse_reporting = true
-                }
-                6 => {
-                    app.terminal
-                        .view
-                        .views
-                        .get_mut(id)
-                        .unwrap()
-                        .protocol_state
-                        .alternate_screen = true
-                }
-                7 => {
-                    app.session.select_active_session("fixture");
-                }
-                8 => {
-                    app.terminal
-                        .editing
-                        .state_mut()
-                        .model
-                        .input
-                        .line_rewrite_required = true
-                }
-                9 => app.terminal.editing.state_mut().model.input.desynced = true,
-                10 => app.security.activate_screen_lock("test lock".into()),
-                _ => unreachable!(),
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Submitted
+            );
+            if change_input {
+                app.note_shell_editing_input(b"x", cx);
+            } else {
+                let now = Instant::now() + EDIT_CONFIRMATION_TIMEOUT;
+                assert!(app.terminal.editing.state_mut().model.expire(now));
+                let revision = app.sync_input.revision();
+                app.terminal
+                    .editing
+                    .state_mut()
+                    .cancel_stale_suggestion_fill(now, revision);
             }
             assert!(
-                app.handle_command_suggestion_key(&key("enter"), cx),
-                "scenario {scenario}"
+                app.terminal
+                    .editing
+                    .state()
+                    .unwrap()
+                    .suggestion_fill
+                    .is_none()
             );
-            assert!(app.terminal.assist.command_suggestions.is_none());
-            assert!(app.terminal.assist.pending_command_history_entry.is_none());
-            if app.sync_input.broadcast_to_all() {
-                app.sync_input.toggle_broadcast_to_all();
-            }
-            app.terminal.assist.credential_prompt_input_until_ms = 0;
-            app.security.deactivate_screen_lock();
-            app.session.select_active_session(id);
-            app.terminal.editing.state_mut().awaiting_snapshot = false;
+            echo(app, cx, id, "systemctl restart mihomo.service");
+            assert!(app.session.command_history_for(id).is_none());
         });
+        f.receive(b"\x7f\x7f\x7f\x7f\x7f\x7fsystemctl restart mihomo.service");
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn stale_versions_and_unsafe_terminal_states_reject_append_and_replacement() {
+    let mut f = Fixture::new();
+    for (current, target) in [
+        ("display ver", "display version"),
+        ("systmi", "systemctl restart mihomo.service"),
+    ] {
+        for scenario in 0..11 {
+            f.suggest_in_shell(current, target);
+            f.update(|app, cx, id| {
+                match scenario {
+                    0 => app.terminal.editing.state_mut().model.version += 1,
+                    1 => app.terminal.editing.state_mut().awaiting_snapshot = true,
+                    2 => {
+                        app.sync_input.toggle_broadcast_to_all();
+                    }
+                    3 => {
+                        app.sync_input.toggle_broadcast_to_all();
+                        app.sync_input.toggle_broadcast_to_all();
+                    }
+                    4 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
+                    5 => {
+                        app.terminal
+                            .view
+                            .views
+                            .get_mut(id)
+                            .unwrap()
+                            .protocol_state
+                            .mouse_reporting = true
+                    }
+                    6 => {
+                        app.terminal
+                            .view
+                            .views
+                            .get_mut(id)
+                            .unwrap()
+                            .protocol_state
+                            .alternate_screen = true
+                    }
+                    7 => {
+                        app.session.select_active_session("fixture");
+                    }
+                    8 => {
+                        app.terminal
+                            .editing
+                            .state_mut()
+                            .model
+                            .input
+                            .line_rewrite_required = true
+                    }
+                    9 => app.terminal.editing.state_mut().model.input.desynced = true,
+                    10 => app.security.activate_screen_lock("test lock".into()),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    app.handle_command_suggestion_key(&key("enter"), cx),
+                    "scenario {scenario}"
+                );
+                assert!(app.terminal.assist.command_suggestions.is_none());
+                assert!(app.terminal.assist.pending_command_history_entry.is_none());
+                if app.sync_input.broadcast_to_all() {
+                    app.sync_input.toggle_broadcast_to_all();
+                }
+                app.terminal.assist.credential_prompt_input_until_ms = 0;
+                app.security.deactivate_screen_lock();
+                app.session.select_active_session(id);
+                app.terminal.editing.state_mut().awaiting_snapshot = false;
+            });
+        }
     }
     f.assert_quiet();
 }

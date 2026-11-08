@@ -18,9 +18,20 @@ Updating the catalog requires changing the pinned revision and digest together,
 regenerating all three artifacts, and reviewing the statistics and diff.
 
 The runtime parses the artifact on its completion worker and only enumerates the
-active command's tree. It does not query paths, branches or containers. Ordinary
-terminal completion inserts only an exact raw suffix through the existing input
-confirmation transaction. Whole-command history is explicitly opened with Alt+R.
+active command's tree. It does not query paths, branches or containers.
+Automatic suggestions search whole commands from current-scope and legacy history
+and named quick commands first, then add contextual catalog and learned-history
+tokens. Alt+R searches only whole history and quick commands, using the same
+matching, ordering and deduplication rules; an empty query shows recent history
+and ranked quick commands. Quick commands match their label (or their command
+when the label is empty) and insert their full command, rather than contributing
+individual tokens. Final target lines are deduplicated before the 12-item limit.
+
+Suggestions append an exact raw suffix when possible. Non-prefix matches replace
+the current input only with confirmed shell editing capability and a fresh input
+mapping, using the same key encoder as smart selection. Both operations wait for
+echo confirmation and never synthesize Enter: execution requires another manual
+Enter. Unsupported text and uncertain terminal states cannot authorize a fill.
 
 Scoped history is device-local and excluded from portable backup and cloud-sync
 documents. Restoring/replacing history clears scoped contributions and registers

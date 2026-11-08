@@ -1,4 +1,4 @@
-//! Suggestions may append confirmed text, but never infer remote editing keys.
+//! Text-only suggestion plans; the caller must authorize shell replacement.
 
 use nyaterm_core::terminal::editing::supports_scalar_editing;
 use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInputState};
@@ -7,6 +7,7 @@ use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInp
 pub(super) enum SuggestionFill<'a> {
     NoChange,
     Append(&'a str),
+    Replace(&'a str),
     Rejected(&'static str),
 }
 
@@ -47,7 +48,7 @@ pub(super) fn plan_suggestion_fill<'a>(
     match command.strip_prefix(&input.value) {
         Some("") => SuggestionFill::NoChange,
         Some(suffix) => SuggestionFill::Append(suffix),
-        None => SuggestionFill::Rejected("Cannot safely replace input; edit the command manually"),
+        None => SuggestionFill::Replace(command),
     }
 }
 
@@ -55,7 +56,9 @@ pub(super) fn plan_suggestion_fill<'a>(
 mod tests {
     use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInputState};
 
-    use super::{SuggestionFill, plan_suggestion_fill};
+    use crate::features::terminal::command_suggestions::fill::{
+        SuggestionFill, plan_suggestion_fill,
+    };
 
     fn input(value: &str) -> TerminalInputState {
         TerminalInputState {
@@ -66,7 +69,7 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_only_append_an_exact_raw_suffix() {
+    fn suggestions_append_exact_suffixes_and_replace_non_prefix_matches() {
         for (current, target, suffix) in [
             ("display ver", "display version", "sion"),
             (" echo ", " echo  x ", " x "),
@@ -87,10 +90,10 @@ mod tests {
             (" echo", "echo x"),
             ("echo ", "echo"),
         ] {
-            assert!(matches!(
+            assert_eq!(
                 plan_suggestion_fill(&input(current), target),
-                SuggestionFill::Rejected(_)
-            ));
+                SuggestionFill::Replace(target)
+            );
         }
     }
 

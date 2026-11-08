@@ -3336,7 +3336,7 @@
   "suggestions": {
     "acceptSelected": "接受所选",
     "legacyHistory": "旧全局历史",
-    "unsafeSuffix": "无法安全追加，请手动编辑",
+    "unsafeSuffix": "无法安全填入，请手动编辑",
     "deleteHistory": "删除历史命令",
     "dismiss": "关闭",
     "execute": "执行",

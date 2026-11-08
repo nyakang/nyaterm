@@ -3336,7 +3336,7 @@
   "suggestions": {
     "acceptSelected": "accepter la sélection",
     "legacyHistory": "Ancien historique global",
-    "unsafeSuffix": "Ajout sûr impossible ; modifiez manuellement",
+    "unsafeSuffix": "Saisie sûre impossible ; modifiez manuellement",
     "deleteHistory": "Supprimer la commande de l'historique",
     "dismiss": "ignorer",
     "execute": "exécuter",

@@ -3336,7 +3336,7 @@
   "suggestions": {
     "acceptSelected": "accept selected",
     "legacyHistory": "Legacy global history",
-    "unsafeSuffix": "Cannot safely append; edit manually",
+    "unsafeSuffix": "Cannot safely fill; edit manually",
     "deleteHistory": "Delete history command",
     "dismiss": "dismiss",
     "execute": "execute",
