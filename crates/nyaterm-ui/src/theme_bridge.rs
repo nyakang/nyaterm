@@ -350,6 +350,22 @@ mod tests {
     }
 
     #[test]
+    fn custom_light_input_color_reaches_inputs_and_editor_projection() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut palette = theme_palette("github-light");
+            palette.input = 0xe4d1ba;
+            apply_component_theme(palette, cx);
+            assert_eq!(super::input_surface_color(cx), color(0xe4d1ba));
+            assert_eq!(
+                Theme::global(cx).highlight_theme.style.editor_background,
+                Some(color(0xe4d1ba))
+            );
+        });
+    }
+
+    #[test]
     fn editor_colors_follow_the_nyaterm_palette() {
         let cx = TestAppContext::single();
 
