@@ -221,12 +221,12 @@ impl RemoteStatsSampler {
     }
 
     /// Snapshot the local machine natively. Deltas live inside the collector.
-    pub fn local_snapshot(&self) -> RemoteStats {
+    pub fn local_snapshot(&self, collect_users: bool) -> RemoteStats {
         self.local
             .lock()
             .expect("local stats collector poisoned")
             .get_or_insert_with(crate::local_stats::LocalStatsCollector::new)
-            .snapshot()
+            .snapshot(collect_users)
     }
 
     pub fn clear_session(&self, session_id: &str) {
@@ -735,7 +735,7 @@ impl RemoteStatsService {
         options: RemoteStatsOptions,
     ) -> anyhow::Result<RemoteStats> {
         if self.target.is_local() {
-            return Ok(sampler.local_snapshot());
+            return Ok(sampler.local_snapshot(options.collect_logged_in_users));
         }
         self.target.ensure_probes_allowed()?;
         if self
@@ -766,7 +766,7 @@ fn friendly_os_name(uname: &str) -> String {
     }
 }
 
-fn parse_login_session(record: &str) -> Option<LoggedInSession> {
+pub(crate) fn parse_login_session(record: &str) -> Option<LoggedInSession> {
     // `who` date formats vary across systems. Preserve the time text instead of
     // interpreting it in the application's locale or timezone.
     if record.chars().any(|ch| ch.is_control() && ch != '\t') {

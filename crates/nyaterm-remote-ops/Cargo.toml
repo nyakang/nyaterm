@@ -24,3 +24,4 @@ tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(windows)'.dependencies]
 listeners = "0.5"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Services", "Win32_System_RemoteDesktop"] }

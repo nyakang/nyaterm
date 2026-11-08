@@ -6,6 +6,9 @@
 //! validated before they reach a command line.
 
 use crate::host::{Elevation, HostOs, HostTarget, sh_quote};
+
+#[cfg(windows)]
+mod windows_scm;
 use anyhow::bail;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -173,6 +176,14 @@ pub fn list_services(
     os: HostOs,
     elevation: Elevation,
 ) -> anyhow::Result<ServicesSnapshot> {
+    #[cfg(windows)]
+    if matches!(os, HostOs::Windows) && target.is_local() {
+        return windows_scm::list().map(|entries| ServicesSnapshot {
+            backend: ServiceBackend::Windows,
+            entries,
+            partial: false,
+        });
+    }
     if matches!(os, HostOs::Windows) {
         let output = target.run_powershell(WINDOWS_SERVICES_SCRIPT, SERVICES_TIMEOUT)?;
         if output.exit_status.is_some_and(|code| code != 0) && output.stdout.trim().is_empty() {
@@ -639,6 +650,11 @@ pub fn run_action(
     action: ServiceAction,
     elevation: Elevation,
 ) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if matches!(os, HostOs::Windows) && target.is_local() {
+        validate_service_name(&entry.name)?;
+        return windows_scm::run_action(&entry.name, action);
+    }
     let output = if matches!(os, HostOs::Windows) {
         target.run_powershell(&windows_action_script(entry, action)?, ACTION_TIMEOUT)?
     } else {

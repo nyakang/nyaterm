@@ -7,8 +7,8 @@
 //! like a freshly connected SSH host.
 
 use crate::stats::{
-    CpuCoreUsage, CpuInfo, CpuUsageSource, DiskInfo, LoadInfo, MemoryInfo, NetworkInfo,
-    NetworkSummaryInfo, RemoteStats, SystemInfo,
+    CpuCoreUsage, CpuInfo, CpuUsageSource, DiskInfo, LoadInfo, LoggedInUsersStatus, MemoryInfo,
+    NetworkInfo, NetworkSummaryInfo, RemoteStats, SystemInfo,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -44,7 +44,7 @@ impl LocalStatsCollector {
         }
     }
 
-    pub fn snapshot(&mut self) -> RemoteStats {
+    pub fn snapshot(&mut self, collect_users: bool) -> RemoteStats {
         let now = Instant::now();
         let elapsed = self
             .last_refresh
@@ -145,6 +145,12 @@ impl LocalStatsCollector {
 
         let load = System::load_average();
         self.last_refresh = Some(now);
+        let users = if collect_users {
+            let found = crate::login_sessions::collect_local();
+            (found.status, found.users, found.sessions)
+        } else {
+            (LoggedInUsersStatus::NotCollected, Vec::new(), Vec::new())
+        };
         RemoteStats {
             system: SystemInfo {
                 hostname: System::host_name().unwrap_or_default(),
@@ -162,7 +168,9 @@ impl LocalStatsCollector {
             networks,
             network_summary,
             disks,
-            ..Default::default()
+            users: users.1,
+            login_sessions: users.2,
+            users_status: users.0,
         }
     }
 }
@@ -188,7 +196,7 @@ mod tests {
     #[test]
     fn first_snapshot_warms_up_then_reports_cpu_and_real_memory() {
         let mut collector = LocalStatsCollector::new();
-        let first = collector.snapshot();
+        let first = collector.snapshot(false);
         assert_eq!(first.cpu.usage_source, CpuUsageSource::WarmingUp);
         assert!(first.memory.used > 0 && first.memory.available > 0);
         assert!(first.cpu.cores > 0);
@@ -200,7 +208,7 @@ mod tests {
         );
         assert!(!first.disks.is_empty());
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL * 2);
-        let second = collector.snapshot();
+        let second = collector.snapshot(false);
         assert_eq!(second.cpu.usage_source, CpuUsageSource::Aggregate);
         assert_eq!(second.cpu.per_core.len() as u32, second.cpu.cores);
         assert!(second.system.uptime_sec > 0);

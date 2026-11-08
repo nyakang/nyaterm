@@ -4,6 +4,7 @@ pub mod gpu;
 pub mod host;
 pub mod local_process;
 pub mod local_stats;
+pub mod login_sessions;
 pub mod ports;
 pub mod remote_process;
 pub mod services;
