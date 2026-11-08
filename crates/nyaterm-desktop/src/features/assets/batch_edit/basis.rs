@@ -1,6 +1,9 @@
 use super::draft::{AssetBatchEditDraft, BatchEditMode};
 use super::fields::{BatchFieldId, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
-use nyaterm_core::models::connection_batch::ConnectionBatchKind;
+use nyaterm_core::models::connection_batch::{
+    ConnectionBatchEdit, ConnectionBatchKind, ConnectionBatchSkipCounts, ConnectionBatchSkipReason,
+    rdp_batch_field_skip_reason,
+};
 use nyaterm_core::models::{
     ConnectionType, SavedConnection, SftpCwdFollowMode, SshAlgorithmMode, SshProfile,
     SshTerminalType,
@@ -877,6 +880,82 @@ type BatchBasis = (
     HashMap<BatchFieldId, String>,
     HashMap<BatchFieldId, bool>,
 );
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::features) struct BatchFieldApplicability {
+    pub total: usize,
+    pub applicable: usize,
+    pub skipped_reasons: ConnectionBatchSkipCounts,
+}
+
+pub(super) fn compute_rdp_field_basis(
+    connections: &[SavedConnection],
+    targets: &[(String, ConnectionBatchKind)],
+    field: BatchFieldId,
+    edit: &ConnectionBatchEdit,
+) -> (FieldBasis, Option<String>, BatchFieldApplicability) {
+    let group = field.rdp_group().expect("RDP field");
+    let by_id: HashMap<&str, &SavedConnection> = connections
+        .iter()
+        .map(|connection| (connection.id.as_str(), connection))
+        .collect();
+    let mut applicability = BatchFieldApplicability::default();
+    let mut first = None;
+    let mut mixed = false;
+    for (id, kind) in targets {
+        if *kind != ConnectionBatchKind::Rdp {
+            continue;
+        }
+        applicability.total += 1;
+        let connection = by_id.get(id.as_str()).copied();
+        let reason = connection.map_or(
+            Some(ConnectionBatchSkipReason::UnsupportedProtocol),
+            |connection| rdp_batch_field_skip_reason(&connection.config, edit, group),
+        );
+        if let Some(reason) = reason {
+            applicability.skipped_reasons.add(reason, 1);
+            continue;
+        }
+        applicability.applicable += 1;
+        let value = field_display_value(connection.expect("applicable connection"), field)
+            .expect("RDP field value");
+        match &first {
+            None => first = Some(value),
+            Some(existing) if *existing != value => mixed = true,
+            _ => {}
+        }
+    }
+    let basis = if applicability.applicable == 0 {
+        FieldBasis::Inapplicable
+    } else if mixed {
+        FieldBasis::Mixed
+    } else {
+        FieldBasis::Uniform
+    };
+    (basis, (!mixed).then_some(first).flatten(), applicability)
+}
+
+pub(super) fn batch_skip_reasons_label(counts: ConnectionBatchSkipCounts) -> String {
+    ConnectionBatchSkipReason::ALL
+        .into_iter()
+        .filter(|reason| counts.count(*reason) > 0)
+        .map(|reason| {
+            let count = counts.count(reason);
+            t!(
+                match reason {
+                    ConnectionBatchSkipReason::UnsupportedProtocol => "assets.batch.skipProtocol",
+                    ConnectionBatchSkipReason::MstscBackend => "assets.batch.skipMstsc",
+                    ConnectionBatchSkipReason::NonFixedRdpDisplay => "assets.batch.skipNonFixed",
+                    ConnectionBatchSkipReason::GlobalRecording =>
+                        "assets.batch.skipGlobalRecording",
+                },
+                count = count
+            )
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(&t!("assets.batch.mixedProtocolsSeparator"))
+}
 
 /// Common fields compare all targets; a protocol scope compares only its original members.
 pub(super) fn compute_batch_basis(

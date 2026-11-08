@@ -24,6 +24,19 @@ struct AssetFixture {
     app: Entity<NyaTermApp>,
 }
 
+struct AssetBatchFormFixture {
+    app: Entity<NyaTermApp>,
+}
+
+impl Render for AssetBatchFormFixture {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = self.app.update(cx, |app, cx| {
+            app.asset_batch_edit_window_view((620., 700.), cx)
+        });
+        div().w(px(620.)).h(px(700.)).child(body)
+    }
+}
+
 impl Render for AssetFixture {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = self.app.update(cx, |app, cx| app.asset_workspace_state(cx));
@@ -774,5 +787,77 @@ fn stale_batch_completion_preserves_a_new_editor_and_refresh_failure_reports_sav
             assert!(app.start_workspace.asset_batch_saving());
             assert!(app.start_workspace.asset_batch().error().is_none());
         })
+    });
+}
+
+#[test]
+fn narrow_batch_form_retains_zero_applicability_rows_and_enables_them_after_backend_change() {
+    use crate::features::assets::{BatchEditMode, BatchFieldId};
+    use nyaterm_core::models::connection_batch::ConnectionBatchKind;
+    let root = TestTempDir::new("nyaterm-batch-rdp-controls");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app(&mut cx, &root, AssetViewMode::List);
+    {
+        let visual = host(&mut cx, &app);
+        visual.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+                    "id": "rdp", "name": "RDP", "type": "rdp", "host": "example.test",
+                    "backend": "mstsc", "display": { "mode": "native" }
+                }))
+                .unwrap();
+                app.connection_state
+                    .replace_loaded(vec![connection], Vec::new());
+                app.start_workspace.select_asset_only("rdp");
+                app.open_asset_batch_edit(window, cx);
+                app.set_asset_batch_scope(Some(ConnectionBatchKind::Rdp), cx);
+            });
+        });
+    }
+    let form_app = app.clone();
+    let (_, visual) = cx.add_window_view(move |window, cx| {
+        cx.observe(&form_app, |_, _, cx| cx.notify()).detach();
+        let fixture = cx.new(|_| AssetBatchFormFixture { app: form_app });
+        nya_root(fixture, window, cx)
+    });
+    draw(visual);
+    assert!(
+        visual
+            .debug_bounds("asset-batch-field-rdp-use-nla")
+            .is_some()
+    );
+    let position = visual
+        .debug_bounds("asset-batch-mode-rdp-use-nla-Set")
+        .unwrap()
+        .center();
+    click(visual, position, MouseButton::Left, 1);
+    app.read_with(visual, |app, _| {
+        let draft = app.start_workspace.asset_batch();
+        assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Keep);
+        let state = draft.rdp_applicability(BatchFieldId::RdpUseNla).unwrap();
+        assert_eq!((state.applicable, state.total), (0, 1));
+    });
+    app.update(visual, |app, cx| {
+        app.set_asset_batch_mode(BatchFieldId::RdpBackend, BatchEditMode::Set, cx);
+        app.apply_asset_batch_select(&BatchFieldId::RdpBackend.select_id(), "builtin", cx);
+    });
+    draw(visual);
+    let position = visual
+        .debug_bounds("asset-batch-mode-rdp-use-nla-Set")
+        .unwrap()
+        .center();
+    click(visual, position, MouseButton::Left, 1);
+    app.read_with(visual, |app, _| {
+        let draft = app.start_workspace.asset_batch();
+        assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Set);
+        assert_eq!(
+            draft
+                .rdp_applicability(BatchFieldId::RdpUseNla)
+                .unwrap()
+                .applicable,
+            1
+        );
+        assert!(draft.field_available(BatchFieldId::RdpWidth));
     });
 }

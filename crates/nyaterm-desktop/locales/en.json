@@ -78,7 +78,7 @@
     "assets": "Assets",
     "batch": {
       "title": "Batch Edit Connections",
-      "scopeNote": "Common fields affect all selected connections. Protocol fields affect only connections that already use that protocol. Name, host and asset metadata are read-only.",
+      "scopeNote": "Common fields apply to all selected connections; protocol fields apply only to original members of that protocol. Field availability also depends on backend and display mode. Names and hosts are read-only.",
       "modeKeep": "Unchanged",
       "modeSet": "Set",
       "modeClear": "Clear",
@@ -124,7 +124,7 @@
       "saveFailed": "Batch update failed: %{error}",
       "commonScope": "Common (%{count})",
       "selectionSummary": "Selected %{count} connections: %{protocols}",
-      "summary": "Will modify %{connections} connections and %{fields} fields",
+      "summary": "Submit %{fields} field edits to %{connections} target connections",
       "clearMeaning": "Clear this field or restore its default",
       "chooseBoolean": "Choose enabled or disabled",
       "enabled": "Enabled",
@@ -136,7 +136,12 @@
       "clearRecording": "Use global recording settings",
       "clearEncoding": "Use global encoding",
       "clearFilenameEncoding": "Use terminal filename encoding",
-      "clearValue": "Remove the value or reference"
+      "clearValue": "Remove the value or reference",
+      "fieldApplicability": "Applies to %{applicable}/%{total} RDP connections",
+      "skipProtocol": "Unsupported protocol (%{count})",
+      "skipMstsc": "Unsupported by mstsc (%{count})",
+      "skipNonFixed": "Requires fixed resolution (%{count})",
+      "skipGlobalRecording": "Overridden by global recording settings (%{count})"
     },
     "batchEdit": "Batch Edit",
     "cards": "Cards",

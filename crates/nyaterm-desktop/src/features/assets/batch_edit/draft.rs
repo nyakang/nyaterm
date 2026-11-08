@@ -1,4 +1,6 @@
-use super::basis::{asset_batch_kind_counts, compute_batch_basis};
+use super::basis::{
+    BatchFieldApplicability, asset_batch_kind_counts, compute_batch_basis, compute_rdp_field_basis,
+};
 use super::fields::{BatchFieldId, EDITABLE_FIELDS, FieldBasis};
 use gpui::{ScrollHandle, SharedString};
 use nyaterm_core::SecretString;
@@ -32,9 +34,77 @@ pub(in crate::features) struct BatchScopeDraft {
     original_values: HashMap<BatchFieldId, String>,
     original_bools: HashMap<BatchFieldId, bool>,
     password: Option<SecretString>,
+    rdp_applicability: HashMap<BatchFieldId, BatchFieldApplicability>,
 }
 
 impl BatchScopeDraft {
+    pub(in crate::features) fn rdp_applicability(
+        &self,
+        field: BatchFieldId,
+    ) -> Option<BatchFieldApplicability> {
+        self.rdp_applicability.get(&field).copied()
+    }
+
+    pub(in crate::features) fn field_available(&self, field: BatchFieldId) -> bool {
+        self.rdp_applicability(field)
+            .is_none_or(|state| state.applicable > 0)
+            && (self.basis(field) != FieldBasis::Inapplicable || self.is_edited(field))
+    }
+
+    fn rdp_dependency_edit(&self) -> ConnectionBatchEdit {
+        let field = |id| {
+            if self.mode(id) == BatchEditMode::Set && self.value(id).trim().is_empty() {
+                // A selector awaiting a choice has not changed the backend yet.
+                BatchField::Unchanged
+            } else {
+                self.text_field(id, true)
+            }
+        };
+        ConnectionBatchEdit {
+            rdp_backend: field(BatchFieldId::RdpBackend),
+            rdp_display_mode: field(BatchFieldId::RdpDisplayMode),
+            ..Default::default()
+        }
+    }
+
+    fn refresh_rdp_basis(
+        &mut self,
+        connections: &[SavedConnection],
+        targets: &[(String, ConnectionBatchKind)],
+    ) {
+        let edit = self.rdp_dependency_edit();
+        for field in EDITABLE_FIELDS
+            .into_iter()
+            .filter(|field| field.rdp_group().is_some())
+        {
+            let (basis, value, applicability) =
+                compute_rdp_field_basis(connections, targets, field, &edit);
+            self.basis.insert(field, basis);
+            self.rdp_applicability.insert(field, applicability);
+            self.original_values.remove(&field);
+            self.original_bools.remove(&field);
+            if let Some(value) = value {
+                if field.is_bool() {
+                    self.original_bools.insert(field, value == "true");
+                } else {
+                    self.original_values.insert(field, value);
+                }
+            }
+            // Recomputing the applicable subset changes the Keep preview, never
+            // an explicit user patch, including one that is temporarily dormant.
+            if !self.is_edited(field) {
+                self.values.remove(&field);
+                self.bool_values.remove(&field);
+                if let Some(value) = self.original_values.get(&field) {
+                    self.values.insert(field, value.clone());
+                }
+                if let Some(value) = self.original_bools.get(&field) {
+                    self.bool_values.insert(field, *value);
+                }
+            }
+        }
+    }
+
     pub(in crate::features) fn basis(&self, field: BatchFieldId) -> FieldBasis {
         self.basis.get(&field).copied().unwrap_or_default()
     }
@@ -57,7 +127,9 @@ impl BatchScopeDraft {
         self.bool_values.contains_key(&field)
     }
     pub(in crate::features) fn disabled_text(&self, field: BatchFieldId) -> String {
-        if self.basis(field) == FieldBasis::Mixed {
+        if self.basis(field) == FieldBasis::Inapplicable {
+            t!("assets.batch.inapplicable").to_string()
+        } else if self.basis(field) == FieldBasis::Mixed {
             t!("assets.batch.mixed").to_string()
         } else if field.is_bool() {
             if self.bool_value(field) {
@@ -889,7 +961,13 @@ impl AssetBatchEditDraft {
             .any(|mode| *mode != BatchEditMode::Keep)
     }
     pub(in crate::features) fn set_mode(&mut self, field: BatchFieldId, mode: BatchEditMode) {
-        if self.saving {
+        if self.saving
+            || (mode != BatchEditMode::Keep
+                && self
+                    .current
+                    .rdp_applicability(field)
+                    .is_some_and(|state| state.applicable == 0))
+        {
             return;
         }
         self.current.modes.insert(field, mode);
@@ -917,7 +995,13 @@ impl AssetBatchEditDraft {
             .unwrap_or("")
     }
     pub(in crate::features) fn set_value(&mut self, field: BatchFieldId, value: String) {
-        if self.saving || self.mode(field) != BatchEditMode::Set {
+        if self.saving
+            || self.mode(field) != BatchEditMode::Set
+            || self
+                .current
+                .rdp_applicability(field)
+                .is_some_and(|state| state.applicable == 0)
+        {
             return;
         }
         if field == BatchFieldId::Password {
@@ -927,7 +1011,13 @@ impl AssetBatchEditDraft {
         }
     }
     pub(in crate::features) fn set_bool_value(&mut self, field: BatchFieldId, value: bool) {
-        if !self.saving && self.mode(field) == BatchEditMode::Set {
+        if !self.saving
+            && self.mode(field) == BatchEditMode::Set
+            && self
+                .current
+                .rdp_applicability(field)
+                .is_none_or(|state| state.applicable > 0)
+        {
             self.current.bool_values.insert(field, value);
         }
     }
@@ -988,6 +1078,14 @@ impl AssetBatchEditDraft {
                     ..Default::default()
                 },
             );
+        }
+        self.refresh_rdp_basis(connections);
+    }
+    pub(in crate::features) fn refresh_rdp_basis(&mut self, connections: &[SavedConnection]) {
+        if self.current.kind == Some(ConnectionBatchKind::Rdp) {
+            self.current.refresh_rdp_basis(connections, &self.targets);
+        } else if let Some(scope) = self.scopes.get_mut(&Some(ConnectionBatchKind::Rdp)) {
+            scope.refresh_rdp_basis(connections, &self.targets);
         }
     }
     pub(in crate::features) fn build_edits(

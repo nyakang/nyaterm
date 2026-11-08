@@ -1,5 +1,6 @@
 use super::{ASSET_BATCH_SELECT_PREFIX, ASSET_BATCH_TEXT_PREFIX};
 use gpui::SharedString;
+use nyaterm_core::models::connection_batch::RdpBatchFieldGroup;
 /// What the selected connections currently hold for one field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::features) enum FieldBasis {
@@ -122,6 +123,28 @@ pub(in crate::features) enum BatchFieldId {
 }
 
 impl BatchFieldId {
+    pub(super) fn rdp_group(self) -> Option<RdpBatchFieldGroup> {
+        match self {
+            Self::RdpDomain | Self::RdpBackend => Some(RdpBatchFieldGroup::General),
+            Self::RdpWidth | Self::RdpHeight => Some(RdpBatchFieldGroup::Dimensions),
+            Self::RdpUseNla
+            | Self::RdpCertificatePolicy
+            | Self::RdpAdminSession
+            | Self::RdpDisplayMode
+            | Self::RdpWallpaper
+            | Self::RdpThemes
+            | Self::RdpFontSmoothing
+            | Self::RdpDesktopComposition
+            | Self::RdpDisableFullWindowDrag
+            | Self::RdpDisableMenuAnimations
+            | Self::RdpDisableCursorShadow
+            | Self::RdpDisableCursorBlinking
+            | Self::RdpAutoReconnect
+            | Self::RdpReconnectAttempts => Some(RdpBatchFieldGroup::SecurityAndDisplay),
+            _ => None,
+        }
+    }
+
     pub(in crate::features) fn key(self) -> &'static str {
         match self {
             Self::Group => "group",

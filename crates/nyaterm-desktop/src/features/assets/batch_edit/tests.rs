@@ -187,5 +187,164 @@ fn every_batch_field_label_exists_in_all_supported_locales() {
                 "{locale}: {key}"
             );
         }
+        for (key, placeholders) in [
+            ("summary", &["connections", "fields"][..]),
+            ("fieldApplicability", &["applicable", "total"][..]),
+            ("skipProtocol", &["count"][..]),
+            ("skipMstsc", &["count"][..]),
+            ("skipNonFixed", &["count"][..]),
+            ("skipGlobalRecording", &["count"][..]),
+        ] {
+            let value = catalog["assets"]["batch"][key].as_str().unwrap();
+            for placeholder in placeholders {
+                assert!(
+                    value.contains(&format!("%{{{placeholder}}}")),
+                    "{locale}: {key}: {placeholder}"
+                );
+            }
+        }
     }
+}
+
+fn rdp_connection(id: &str, backend: &str, mode: &str, nla: bool) -> SavedConnection {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "name": id, "type": "rdp", "host": "example.test", "username": "user",
+        "backend": backend, "display": { "mode": mode }, "security": { "use_nla": nla }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn rdp_scope_compares_applicable_members_and_preserves_dormant_patches() {
+    let connections = [
+        rdp_connection("a", "builtin", "fixed", true),
+        rdp_connection("b", "mstsc", "fixed", false),
+        rdp_connection("c", "windows", "fixed", true),
+    ];
+    let mut draft = started(&connections);
+    draft.set_kind(ConnectionBatchKind::Rdp);
+    let state = draft.rdp_applicability(BatchFieldId::RdpUseNla).unwrap();
+    assert_eq!((state.applicable, state.total), (2, 3));
+    assert_eq!(draft.basis(BatchFieldId::RdpUseNla), FieldBasis::Uniform);
+    assert!(draft.bool_value(BatchFieldId::RdpUseNla));
+    draft.set_mode(BatchFieldId::RdpUseNla, BatchEditMode::Set);
+    draft.set_bool_value(BatchFieldId::RdpUseNla, false);
+    draft.set_mode(BatchFieldId::RdpBackend, BatchEditMode::Set);
+    draft.set_value(BatchFieldId::RdpBackend, "mstsc".into());
+    draft.refresh_rdp_basis(&connections);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpUseNla)
+            .unwrap()
+            .applicable,
+        0
+    );
+    assert!(!draft.field_available(BatchFieldId::RdpUseNla));
+    draft.set_mode(BatchFieldId::RdpUseNla, BatchEditMode::Clear);
+    draft.set_bool_value(BatchFieldId::RdpUseNla, true);
+    assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Set);
+    assert!(!draft.bool_value(BatchFieldId::RdpUseNla));
+    assert_eq!(
+        draft.build_edits().unwrap()[&Some(ConnectionBatchKind::Rdp)].rdp_use_nla,
+        BatchField::Set(false)
+    );
+    draft.set_scope(None);
+    draft.set_kind(ConnectionBatchKind::Rdp);
+    assert!(!draft.bool_value(BatchFieldId::RdpUseNla));
+    draft.set_mode(BatchFieldId::RdpBackend, BatchEditMode::Clear);
+    draft.refresh_rdp_basis(&connections);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpUseNla)
+            .unwrap()
+            .applicable,
+        3
+    );
+    assert!(draft.field_available(BatchFieldId::RdpUseNla));
+    assert_eq!(draft.basis(BatchFieldId::RdpUseNla), FieldBasis::Mixed);
+    assert!(!draft.bool_value(BatchFieldId::RdpUseNla));
+    draft.set_mode(BatchFieldId::RdpUseNla, BatchEditMode::Keep);
+    assert!(!draft.current_bool_is_set(BatchFieldId::RdpUseNla));
+    assert_eq!(
+        draft.build_edits().unwrap()[&Some(ConnectionBatchKind::Rdp)].rdp_use_nla,
+        BatchField::Unchanged
+    );
+}
+
+#[test]
+fn rdp_dimensions_follow_native_fixed_and_cleared_display_dependencies() {
+    let connections = [
+        rdp_connection("a", "builtin", "native", true),
+        rdp_connection("b", "windows", "fit-window", true),
+        rdp_connection("c", "mstsc", "fixed", true),
+    ];
+    let mut draft = started(&connections);
+    draft.set_kind(ConnectionBatchKind::Rdp);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpWidth)
+            .unwrap()
+            .applicable,
+        1
+    );
+    draft.set_mode(BatchFieldId::RdpWidth, BatchEditMode::Set);
+    draft.set_value(BatchFieldId::RdpWidth, "1600".into());
+    draft.set_mode(BatchFieldId::RdpDisplayMode, BatchEditMode::Clear);
+    draft.refresh_rdp_basis(&connections);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpWidth)
+            .unwrap()
+            .applicable,
+        0
+    );
+    assert!(!draft.field_available(BatchFieldId::RdpWidth));
+    assert_eq!(draft.value(BatchFieldId::RdpWidth), "1600");
+    draft.set_mode(BatchFieldId::RdpDisplayMode, BatchEditMode::Set);
+    draft.set_value(BatchFieldId::RdpDisplayMode, "fixed".into());
+    draft.refresh_rdp_basis(&connections);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpWidth)
+            .unwrap()
+            .applicable,
+        2
+    );
+    assert_eq!(draft.value(BatchFieldId::RdpWidth), "1600");
+    draft.set_mode(BatchFieldId::RdpBackend, BatchEditMode::Set);
+    draft.set_value(BatchFieldId::RdpBackend, "builtin".into());
+    draft.refresh_rdp_basis(&connections);
+    assert_eq!(
+        draft
+            .rdp_applicability(BatchFieldId::RdpWidth)
+            .unwrap()
+            .applicable,
+        3
+    );
+    let patch = draft
+        .build_edits()
+        .unwrap()
+        .remove(&Some(ConnectionBatchKind::Rdp))
+        .unwrap();
+    assert_eq!(patch.rdp_display_width, BatchField::Set(1600));
+}
+
+#[test]
+fn mstsc_only_fields_start_disabled_and_recover_after_backend_change() {
+    let connections = [rdp_connection("a", "mstsc", "native", true)];
+    let mut draft = started(&connections);
+    draft.set_kind(ConnectionBatchKind::Rdp);
+    assert!(!draft.field_available(BatchFieldId::RdpUseNla));
+    assert!(!draft.field_available(BatchFieldId::RdpWidth));
+    assert!(draft.field_available(BatchFieldId::RdpBackend));
+    draft.set_mode(BatchFieldId::RdpUseNla, BatchEditMode::Set);
+    assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Keep);
+    draft.set_mode(BatchFieldId::RdpBackend, BatchEditMode::Set);
+    draft.set_value(BatchFieldId::RdpBackend, "builtin".into());
+    draft.refresh_rdp_basis(&connections);
+    assert!(draft.field_available(BatchFieldId::RdpUseNla));
+    assert!(draft.field_available(BatchFieldId::RdpWidth));
+    assert!(draft.bool_value(BatchFieldId::RdpUseNla));
+    draft.set_mode(BatchFieldId::RdpUseNla, BatchEditMode::Set);
+    assert!(draft.build_edits().is_ok());
 }

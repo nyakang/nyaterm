@@ -78,7 +78,7 @@
     "assets": "资产",
     "batch": {
       "title": "批量编辑连接",
-      "scopeNote": "通用字段作用于全部所选连接；协议字段仅作用于原本属于该协议的连接。名称、主机和资产属性只读。",
+      "scopeNote": "通用字段作用于全部所选连接；协议字段仅作用于原本属于该协议的连接。字段适用范围还取决于后端和显示模式。名称与主机只读。",
       "modeKeep": "不修改",
       "modeSet": "设置",
       "modeClear": "清空",
@@ -124,7 +124,7 @@
       "saveFailed": "批量更新失败：%{error}",
       "commonScope": "通用（%{count}）",
       "selectionSummary": "已选择 %{count} 个连接：%{protocols}",
-      "summary": "将修改 %{connections} 个连接、%{fields} 个字段",
+      "summary": "向 %{connections} 个目标连接提交 %{fields} 个字段修改",
       "clearMeaning": "清空该字段或恢复默认值",
       "chooseBoolean": "请选择开启或关闭",
       "enabled": "开启",
@@ -136,7 +136,12 @@
       "clearRecording": "跟随全局录制设置",
       "clearEncoding": "跟随全局编码",
       "clearFilenameEncoding": "跟随终端文件名编码",
-      "clearValue": "移除此字段的值或引用"
+      "clearValue": "移除此字段的值或引用",
+      "fieldApplicability": "适用于 %{applicable}/%{total} 个 RDP 连接",
+      "skipProtocol": "协议不适用（%{count} 次）",
+      "skipMstsc": "mstsc 后端不支持（%{count} 次）",
+      "skipNonFixed": "需要固定分辨率（%{count} 次）",
+      "skipGlobalRecording": "被全局录制设置覆盖（%{count} 次）"
     },
     "batchEdit": "批量编辑",
     "cards": "卡片",

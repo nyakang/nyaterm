@@ -78,7 +78,7 @@
     "assets": "Ressources",
     "batch": {
       "title": "Modifier les connexions en lot",
-      "scopeNote": "Les champs communs concernent toutes les connexions sélectionnées. Les champs de protocole concernent uniquement les connexions utilisant déjà ce protocole. Nom, hôte et métadonnées sont en lecture seule.",
+      "scopeNote": "Les champs communs s’appliquent à toutes les connexions sélectionnées ; les champs de protocole uniquement aux connexions utilisant déjà ce protocole. Leur disponibilité dépend aussi du moteur et du mode d’affichage. Les noms et les hôtes sont en lecture seule.",
       "modeKeep": "Inchangé",
       "modeSet": "Définir",
       "modeClear": "Effacer",
@@ -124,7 +124,7 @@
       "saveFailed": "Échec de la modification en lot : %{error}",
       "commonScope": "Commun (%{count})",
       "selectionSummary": "%{count} connexions sélectionnées : %{protocols}",
-      "summary": "Modifier %{connections} connexions et %{fields} champs",
+      "summary": "Appliquer %{fields} modifications de champs à %{connections} connexions cibles",
       "clearMeaning": "Effacer ce champ ou restaurer sa valeur par défaut",
       "chooseBoolean": "Choisissez activé ou désactivé",
       "enabled": "Activé",
@@ -136,7 +136,12 @@
       "clearRecording": "Utiliser les réglages globaux d’enregistrement",
       "clearEncoding": "Utiliser l’encodage global",
       "clearFilenameEncoding": "Utiliser l’encodage des noms du terminal",
-      "clearValue": "Supprimer la valeur ou la référence"
+      "clearValue": "Supprimer la valeur ou la référence",
+      "fieldApplicability": "S’applique à %{applicable}/%{total} connexions RDP",
+      "skipProtocol": "Protocole incompatible (%{count})",
+      "skipMstsc": "Non pris en charge par mstsc (%{count})",
+      "skipNonFixed": "Résolution fixe requise (%{count})",
+      "skipGlobalRecording": "Remplacé par les paramètres globaux d’enregistrement (%{count})"
     },
     "batchEdit": "Modifier en lot",
     "cards": "Cartes",

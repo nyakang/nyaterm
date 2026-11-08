@@ -295,18 +295,132 @@ impl ConnectionBatchEdit {
     }
 }
 
+/// Why an explicitly selected leaf field could not be applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionBatchSkipReason {
+    UnsupportedProtocol,
+    MstscBackend,
+    NonFixedRdpDisplay,
+    GlobalRecording,
+}
+
+impl ConnectionBatchSkipReason {
+    pub const ALL: [Self; 4] = [
+        Self::UnsupportedProtocol,
+        Self::MstscBackend,
+        Self::NonFixedRdpDisplay,
+        Self::GlobalRecording,
+    ];
+
+    fn index(self) -> usize {
+        match self {
+            Self::UnsupportedProtocol => 0,
+            Self::MstscBackend => 1,
+            Self::NonFixedRdpDisplay => 2,
+            Self::GlobalRecording => 3,
+        }
+    }
+}
+
+/// Counts field/connection pairs, rather than distinct fields or connections.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionBatchSkipCounts {
+    counts: [usize; 4],
+}
+
+impl ConnectionBatchSkipCounts {
+    pub fn count(&self, reason: ConnectionBatchSkipReason) -> usize {
+        self.counts[reason.index()]
+    }
+
+    pub fn add(&mut self, reason: ConnectionBatchSkipReason, count: usize) {
+        self.counts[reason.index()] += count;
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        for reason in ConnectionBatchSkipReason::ALL {
+            self.add(reason, other.count(reason));
+        }
+    }
+}
+
+/// RDP fields with the same applicability rules. General fields include the
+/// backend selector itself, so an external connection can switch to a helper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RdpBatchFieldGroup {
+    General,
+    SecurityAndDisplay,
+    Dimensions,
+}
+
+/// Evaluate the effective configuration without changing the original or
+/// normalizing persisted aliases. Both UI previews and patch application use it.
+pub fn rdp_batch_field_skip_reason(
+    config: &ConnectionType,
+    edit: &ConnectionBatchEdit,
+    group: RdpBatchFieldGroup,
+) -> Option<ConnectionBatchSkipReason> {
+    let ConnectionType::Rdp {
+        backend, display, ..
+    } = config
+    else {
+        return Some(ConnectionBatchSkipReason::UnsupportedProtocol);
+    };
+    if group == RdpBatchFieldGroup::General {
+        return None;
+    }
+    let default_backend;
+    let backend = match &edit.rdp_backend {
+        BatchField::Unchanged => backend.as_str(),
+        BatchField::Set(value) => value.as_str(),
+        BatchField::Clear => {
+            default_backend = super::default_rdp_backend();
+            &default_backend
+        }
+    };
+    if backend == "mstsc" {
+        return Some(ConnectionBatchSkipReason::MstscBackend);
+    }
+    let default_mode;
+    let mode = match &edit.rdp_display_mode {
+        BatchField::Unchanged => display.mode.as_str(),
+        BatchField::Set(value) => value.as_str(),
+        BatchField::Clear => {
+            default_mode = super::default_rdp_display_mode();
+            &default_mode
+        }
+    };
+    if group == RdpBatchFieldGroup::Dimensions && !matches!(mode, "fixed" | "native") {
+        return Some(ConnectionBatchSkipReason::NonFixedRdpDisplay);
+    }
+    None
+}
+
 /// Result of applying one [`ConnectionBatchEdit`] to one connection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionBatchApplyReport {
     /// Leaf fields written on this connection.
     pub applied_fields: usize,
-    /// Leaf fields skipped because they do not apply to this connection type.
+    /// Leaf fields skipped because their protocol or dependencies do not apply.
     pub skipped_fields: usize,
+    pub skipped_reasons: ConnectionBatchSkipCounts,
 }
 
 impl ConnectionBatchApplyReport {
     pub fn changed(&self) -> bool {
         self.applied_fields > 0
+    }
+
+    fn record(&mut self, touched: bool, reason: Option<ConnectionBatchSkipReason>) {
+        if !touched {
+            return;
+        }
+        if let Some(reason) = reason {
+            self.skipped_fields += 1;
+            self.skipped_reasons.add(reason, 1);
+        } else {
+            self.applied_fields += 1;
+        }
     }
 }
 
@@ -374,29 +488,24 @@ pub fn apply_connection_batch_edit(
     let mut report = ConnectionBatchApplyReport::default();
 
     let apply = |condition: bool, touched: bool, report: &mut ConnectionBatchApplyReport| {
-        if !touched {
-            return;
-        }
-        if condition {
-            report.applied_fields += 1;
-        } else {
-            report.skipped_fields += 1;
-        }
+        report.record(
+            touched,
+            (!condition).then_some(ConnectionBatchSkipReason::UnsupportedProtocol),
+        );
     };
 
     let is_ssh = matches!(connection.config, ConnectionType::Ssh { .. });
     let is_rdp = matches!(connection.config, ConnectionType::Rdp { .. });
     let is_vnc = matches!(connection.config, ConnectionType::Vnc { .. });
     let endpoint_ok = supports_endpoint(&connection.config);
-    let rdp_security_ok = is_rdp
-        && match &edit.rdp_backend {
-            BatchField::Set(value) => value != "mstsc",
-            BatchField::Clear => super::default_rdp_backend() != "mstsc",
-            BatchField::Unchanged => match &connection.config {
-                ConnectionType::Rdp { backend, .. } => backend != "mstsc",
-                _ => true,
-            },
-        };
+    let rdp_reason = rdp_batch_field_skip_reason(
+        &connection.config,
+        edit,
+        RdpBatchFieldGroup::SecurityAndDisplay,
+    );
+    let rdp_dimensions_reason =
+        rdp_batch_field_skip_reason(&connection.config, edit, RdpBatchFieldGroup::Dimensions);
+    let rdp_security_ok = rdp_reason.is_none();
 
     if !edit.group_id.is_unchanged() {
         connection.group_id = match &edit.group_id {
@@ -663,7 +772,7 @@ pub fn apply_connection_batch_edit(
             !edit.rdp_administrative_session.is_unchanged(),
         ];
         for touched in touched {
-            apply(rdp_security_ok, touched, &mut report);
+            report.record(touched, rdp_reason);
         }
         if rdp_security_ok && let ConnectionType::Rdp { security, .. } = &mut connection.config {
             if !edit.rdp_use_nla.is_unchanged() {
@@ -729,7 +838,10 @@ pub fn apply_connection_batch_edit(
         BatchField::Set(true) | BatchField::Clear
     );
     for touched in recording_fields {
-        apply(!recording_blocked, touched, &mut report);
+        report.record(
+            touched,
+            recording_blocked.then_some(ConnectionBatchSkipReason::GlobalRecording),
+        );
     }
     if !recording_blocked && recording_fields.iter().any(|touched| *touched) {
         let recording = connection
@@ -1148,14 +1260,10 @@ pub fn apply_connection_batch_edit(
             };
         }
     }
-    let rdp_mstsc = matches!(
-        &connection.config,
-        ConnectionType::Rdp { backend, .. } if backend == "mstsc"
-    );
-    let rdp_display_ok = is_rdp && !rdp_mstsc;
+    let rdp_display_ok = rdp_reason.is_none();
 
     if !edit.rdp_display_mode.is_unchanged() {
-        apply(rdp_display_ok, true, &mut report);
+        report.record(true, rdp_reason);
         if let ConnectionType::Rdp { display, .. } = &mut connection.config
             && rdp_display_ok
         {
@@ -1166,18 +1274,13 @@ pub fn apply_connection_batch_edit(
             };
         }
     }
-    let rdp_fixed = matches!(
-        &connection.config,
-        ConnectionType::Rdp { display, .. } if display.mode == "fixed"
-    );
     for touched in [
         !edit.rdp_display_width.is_unchanged(),
         !edit.rdp_display_height.is_unchanged(),
     ] {
-        apply(rdp_display_ok && rdp_fixed, touched, &mut report);
+        report.record(touched, rdp_dimensions_reason);
     }
-    if rdp_display_ok
-        && rdp_fixed
+    if rdp_dimensions_reason.is_none()
         && let ConnectionType::Rdp { display, .. } = &mut connection.config
     {
         if !edit.rdp_display_width.is_unchanged() {
@@ -1209,7 +1312,7 @@ pub fn apply_connection_batch_edit(
         !edit.rdp_reconnect_attempts.is_unchanged(),
     ];
     for touched in rdp_display_effect_fields {
-        apply(rdp_display_ok, touched, &mut report);
+        report.record(touched, rdp_reason);
     }
     if rdp_display_ok
         && rdp_display_effect_fields.iter().any(|touched| *touched)

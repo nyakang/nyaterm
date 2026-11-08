@@ -1,5 +1,6 @@
 use super::{
-    BatchField, ConnectionBatchEdit, apply_connection_batch_edit, validate_connection_batch_edit,
+    BatchField, ConnectionBatchEdit, ConnectionBatchSkipReason, RdpBatchFieldGroup,
+    apply_connection_batch_edit, rdp_batch_field_skip_reason, validate_connection_batch_edit,
 };
 use crate::SecretString;
 use crate::models::{
@@ -994,4 +995,164 @@ fn setting_account_defaults_to_account_username_without_overwriting_auth_mode() 
         Some(ConnectionPasswordSource::Account)
     );
     assert_eq!(auth.mode, "agent");
+}
+
+#[test]
+fn rdp_backend_and_display_dependencies_match_preview_and_preserve_skipped_fields() {
+    for original_backend in ["builtin", "windows", "mstsc", "future-backend"] {
+        for original_mode in ["fit-window", "fixed", "native"] {
+            for backend_edit in [
+                BatchField::Unchanged,
+                BatchField::Set("builtin".into()),
+                BatchField::Set("windows".into()),
+                BatchField::Set("mstsc".into()),
+                BatchField::Clear,
+            ] {
+                for mode_edit in [
+                    BatchField::Unchanged,
+                    BatchField::Set("fixed".into()),
+                    BatchField::Set("fit-window".into()),
+                    BatchField::Clear,
+                ] {
+                    let mut connection = rdp_connection();
+                    if let ConnectionType::Rdp {
+                        backend, display, ..
+                    } = &mut connection.config
+                    {
+                        *backend = original_backend.into();
+                        display.mode = original_mode.into();
+                    }
+                    let edit = ConnectionBatchEdit {
+                        rdp_backend: backend_edit.clone(),
+                        rdp_display_mode: mode_edit.clone(),
+                        rdp_use_nla: BatchField::Set(false),
+                        rdp_display_width: BatchField::Set(1600),
+                        rdp_display_height: BatchField::Set(900),
+                        ..Default::default()
+                    };
+                    let mstsc = match &backend_edit {
+                        BatchField::Unchanged => original_backend == "mstsc",
+                        BatchField::Set(value) => value == "mstsc",
+                        BatchField::Clear => false,
+                    };
+                    let fixed = match &mode_edit {
+                        BatchField::Unchanged => matches!(original_mode, "fixed" | "native"),
+                        BatchField::Set(value) => value == "fixed",
+                        BatchField::Clear => false,
+                    };
+                    assert_eq!(
+                        rdp_batch_field_skip_reason(
+                            &connection.config,
+                            &edit,
+                            RdpBatchFieldGroup::SecurityAndDisplay
+                        ),
+                        mstsc.then_some(ConnectionBatchSkipReason::MstscBackend)
+                    );
+                    assert_eq!(
+                        rdp_batch_field_skip_reason(
+                            &connection.config,
+                            &edit,
+                            RdpBatchFieldGroup::Dimensions
+                        ),
+                        if mstsc {
+                            Some(ConnectionBatchSkipReason::MstscBackend)
+                        } else if !fixed {
+                            Some(ConnectionBatchSkipReason::NonFixedRdpDisplay)
+                        } else {
+                            None
+                        }
+                    );
+                    let original = connection.clone();
+                    let report = apply_connection_batch_edit(&mut connection, &edit);
+                    let skipped = if mstsc {
+                        3 + usize::from(!mode_edit.is_unchanged())
+                    } else if !fixed {
+                        2
+                    } else {
+                        0
+                    };
+                    assert_eq!(report.skipped_fields, skipped);
+                    assert_eq!(
+                        report.applied_fields + report.skipped_fields,
+                        3 + usize::from(!backend_edit.is_unchanged())
+                            + usize::from(!mode_edit.is_unchanged())
+                    );
+                    assert_eq!(
+                        report
+                            .skipped_reasons
+                            .count(ConnectionBatchSkipReason::MstscBackend),
+                        if mstsc { skipped } else { 0 }
+                    );
+                    assert_eq!(
+                        report
+                            .skipped_reasons
+                            .count(ConnectionBatchSkipReason::NonFixedRdpDisplay),
+                        if !mstsc && !fixed { 2 } else { 0 }
+                    );
+                    let ConnectionType::Rdp {
+                        security, display, ..
+                    } = &connection.config
+                    else {
+                        unreachable!()
+                    };
+                    let ConnectionType::Rdp {
+                        security: original_security,
+                        display: original_display,
+                        ..
+                    } = &original.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(
+                        security.use_nla,
+                        if mstsc {
+                            original_security.use_nla
+                        } else {
+                            false
+                        }
+                    );
+                    assert_eq!(
+                        (display.width, display.height),
+                        if !mstsc && fixed {
+                            (1600, 900)
+                        } else {
+                            (original_display.width, original_display.height)
+                        }
+                    );
+                    if mode_edit.is_unchanged() || mstsc {
+                        assert_eq!(display.mode, original_mode);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn skip_reasons_distinguish_protocol_from_global_recording_dependencies() {
+    let mut connection = ssh_connection();
+    let edit = ConnectionBatchEdit {
+        rdp_use_nla: BatchField::Clear,
+        rdp_display_width: BatchField::Set(1600),
+        recording_use_global: BatchField::Set(true),
+        recording_auto_start: BatchField::Set(true),
+        recording_mode: BatchField::Set(RecordingMode::default()),
+        ..Default::default()
+    };
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 1);
+    assert_eq!(report.skipped_fields, 4);
+    assert_eq!(
+        report
+            .skipped_reasons
+            .count(ConnectionBatchSkipReason::UnsupportedProtocol),
+        2
+    );
+    assert_eq!(
+        report
+            .skipped_reasons
+            .count(ConnectionBatchSkipReason::GlobalRecording),
+        2
+    );
+    assert!(connection.recording.is_none());
 }

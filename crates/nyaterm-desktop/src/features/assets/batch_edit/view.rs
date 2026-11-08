@@ -1,5 +1,5 @@
 use super::ASSET_BATCH_SELECT_PREFIX;
-use super::basis::asset_batch_kind_counts_label;
+use super::basis::{asset_batch_kind_counts_label, batch_skip_reasons_label};
 use super::fields::{BatchFieldId, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
 use super::options::batch_kind_label;
 use crate::features::NyaTermApp;
@@ -112,7 +112,10 @@ impl NyaTermApp {
         let rows = DISPLAY_FIELDS
             .into_iter()
             .chain(EDITABLE_FIELDS)
-            .filter(|field| draft.basis(*field) != FieldBasis::Inapplicable)
+            .filter(|field| {
+                draft.basis(*field) != FieldBasis::Inapplicable
+                    || draft.rdp_applicability(*field).is_some()
+            })
             .map(|field| self.asset_batch_mode_row(field, cx))
             .collect::<Vec<_>>();
         div()
@@ -209,6 +212,7 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let mode = draft.mode(field);
         let editable = field.is_editable();
+        let applicability = draft.rdp_applicability(field);
         let control = if editable && mode == BatchEditMode::Set {
             if field.is_bool() || batch_field_is_select(field) {
                 div()
@@ -291,6 +295,8 @@ impl NyaTermApp {
                 .into_any_element()
         };
         div()
+            .id(format!("asset-batch-field-{}", field.key()))
+            .debug_selector(move || format!("asset-batch-field-{}", field.key()))
             .w_full()
             .min_w_0()
             .flex()
@@ -318,23 +324,54 @@ impl NyaTermApp {
                             ]
                             .into_iter()
                             .map(|(choice, label)| {
-                                NyaButton::new(
-                                    format!("asset-batch-mode-{}-{choice:?}", field.key()),
-                                    t!(label),
-                                )
-                                .variant(NyaButtonVariant::Ghost)
-                                .selected(mode == choice)
-                                .disabled(draft.saving())
-                                .height(px(28.))
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.set_asset_batch_mode(field, choice, cx)
-                                    },
-                                ))
+                                div()
+                                    .debug_selector(move || {
+                                        format!("asset-batch-mode-{}-{choice:?}", field.key())
+                                    })
+                                    .child(
+                                        NyaButton::new(
+                                            format!("asset-batch-mode-{}-{choice:?}", field.key()),
+                                            t!(label),
+                                        )
+                                        .variant(NyaButtonVariant::Ghost)
+                                        .selected(mode == choice)
+                                        .disabled(
+                                            draft.saving()
+                                                || (choice != BatchEditMode::Keep
+                                                    && !draft.field_available(field)),
+                                        )
+                                        .height(px(28.))
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.set_asset_batch_mode(field, choice, cx)
+                                            }),
+                                        ),
+                                    )
                             }),
                         )
                     }),
             )
+            .when_some(applicability, |this, applicability| {
+                let reasons = batch_skip_reasons_label(applicability.skipped_reasons);
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!(
+                            "assets.batch.fieldApplicability",
+                            applicable = applicability.applicable,
+                            total = applicability.total
+                        )),
+                )
+                .when(!reasons.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(palette.text_muted))
+                            .child(reasons),
+                    )
+                })
+            })
             .child(control)
             .when(editable && mode == BatchEditMode::Set, |this| {
                 let empty = if field.is_bool() {

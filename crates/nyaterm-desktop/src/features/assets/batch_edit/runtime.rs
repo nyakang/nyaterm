@@ -61,6 +61,9 @@ impl NyaTermApp {
         }
     }
     fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
+        self.start_workspace
+            .asset_batch_mut()
+            .refresh_rdp_basis(self.connection_state.connections());
         if let Some(input) = self.existing_text_input(BatchFieldId::Password.text_input_id()) {
             input.update(cx, |state, cx| state.discard_content(cx));
         }
@@ -190,7 +193,7 @@ impl NyaTermApp {
                 let draft = self.start_workspace.asset_batch();
                 match draft.basis(field) {
                     FieldBasis::Inapplicable => (
-                        String::new(),
+                        draft.value(field).to_string(),
                         t!("assets.batch.inapplicable").to_string(),
                         true,
                     ),
@@ -218,6 +221,7 @@ impl NyaTermApp {
             );
 
             let disabled = disabled
+                || !self.start_workspace.asset_batch().field_available(field)
                 || self.start_workspace.asset_batch().mode(field) != BatchEditMode::Set
                 || self.start_workspace.asset_batch_saving();
             input.update(cx, |state, cx| state.set_disabled(disabled, cx));
@@ -282,7 +286,9 @@ impl NyaTermApp {
                 } else {
                     selected
                 };
-            let disabled = draft.mode(field) != BatchEditMode::Set || draft.saving();
+            let disabled = draft.mode(field) != BatchEditMode::Set
+                || draft.saving()
+                || !draft.field_available(field);
             self.select_entity(
                 field.select_id(),
                 vec![
@@ -482,9 +488,11 @@ impl NyaTermApp {
         let (selected, placeholder, disabled) = {
             let draft = self.start_workspace.asset_batch();
             match draft.basis(field) {
-                FieldBasis::Inapplicable => {
-                    (None, t!("assets.batch.inapplicable").to_string(), true)
-                }
+                FieldBasis::Inapplicable => (
+                    select_initial_value(draft, field),
+                    t!("assets.batch.inapplicable").to_string(),
+                    true,
+                ),
                 FieldBasis::Mixed => (
                     select_initial_value(draft, field),
                     t!("assets.batch.mixed").to_string(),
@@ -503,6 +511,7 @@ impl NyaTermApp {
             })
             .collect();
         let disabled = disabled
+            || !self.start_workspace.asset_batch().field_available(field)
             || self.start_workspace.asset_batch().mode(field) != BatchEditMode::Set
             || self.start_workspace.asset_batch_saving();
         let select = self.select_entity(field.select_id(), options, selected, disabled, cx);
@@ -550,7 +559,14 @@ impl NyaTermApp {
             } else {
                 self.start_workspace.set_asset_batch_value(field, value);
             }
-            cx.notify();
+            if matches!(
+                field,
+                BatchFieldId::RdpBackend | BatchFieldId::RdpDisplayMode
+            ) {
+                self.reseed_asset_batch_inputs(cx);
+            } else {
+                cx.notify();
+            }
         }
     }
 

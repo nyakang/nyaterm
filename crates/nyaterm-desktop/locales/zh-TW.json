@@ -78,7 +78,7 @@
     "assets": "資產",
     "batch": {
       "title": "批次編輯連線",
-      "scopeNote": "通用欄位套用至全部所選連線；協定欄位僅套用至原本使用該協定的連線。名稱、主機與資產屬性唯讀。",
+      "scopeNote": "通用欄位套用至所有所選連線；協定欄位僅套用至原本屬於該協定的連線。欄位適用範圍也取決於後端與顯示模式。名稱與主機唯讀。",
       "modeKeep": "不修改",
       "modeSet": "設定",
       "modeClear": "清除",
@@ -124,7 +124,7 @@
       "saveFailed": "批次更新失敗：%{error}",
       "commonScope": "通用（%{count}）",
       "selectionSummary": "已選取 %{count} 個連線：%{protocols}",
-      "summary": "將修改 %{connections} 個連線、%{fields} 個欄位",
+      "summary": "向 %{connections} 個目標連線提交 %{fields} 個欄位修改",
       "clearMeaning": "清空此欄位或還原預設值",
       "chooseBoolean": "請選擇開啟或關閉",
       "enabled": "開啟",
@@ -136,7 +136,12 @@
       "clearRecording": "使用全域錄製設定",
       "clearEncoding": "使用全域編碼",
       "clearFilenameEncoding": "使用終端檔名編碼",
-      "clearValue": "移除此欄位的值或參照"
+      "clearValue": "移除此欄位的值或參照",
+      "fieldApplicability": "適用於 %{applicable}/%{total} 個 RDP 連線",
+      "skipProtocol": "協定不適用（%{count} 次）",
+      "skipMstsc": "mstsc 後端不支援（%{count} 次）",
+      "skipNonFixed": "需要固定解析度（%{count} 次）",
+      "skipGlobalRecording": "被全域錄製設定覆蓋（%{count} 次）"
     },
     "batchEdit": "批次編輯",
     "cards": "卡片",

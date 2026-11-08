@@ -78,7 +78,7 @@
     "assets": "資産",
     "batch": {
       "title": "接続の一括編集",
-      "scopeNote": "共通項目は選択したすべての接続に適用されます。プロトコル項目は元からそのプロトコルを使う接続だけに適用されます。名前、ホスト、資産情報は読み取り専用です。",
+      "scopeNote": "共通フィールドは選択したすべての接続に、プロトコル固有フィールドは元からそのプロトコルを使用する接続にのみ適用されます。適用範囲はバックエンドと表示モードにも依存します。名前とホストは読み取り専用です。",
       "modeKeep": "変更しない",
       "modeSet": "設定",
       "modeClear": "クリア",
@@ -124,7 +124,7 @@
       "saveFailed": "一括更新に失敗しました：%{error}",
       "commonScope": "共通（%{count}）",
       "selectionSummary": "選択した接続 %{count} 件：%{protocols}",
-      "summary": "接続 %{connections} 件、項目 %{fields} 件を変更",
+      "summary": "%{connections} 件の対象接続に %{fields} 個のフィールド変更を送信",
       "clearMeaning": "項目をクリアするか既定値に戻す",
       "chooseBoolean": "有効または無効を選択してください",
       "enabled": "有効",
@@ -136,7 +136,12 @@
       "clearRecording": "全体の記録設定に従う",
       "clearEncoding": "全体の文字コードに従う",
       "clearFilenameEncoding": "端末のファイル名文字コードに従う",
-      "clearValue": "値または参照を削除"
+      "clearValue": "値または参照を削除",
+      "fieldApplicability": "%{applicable}/%{total} 件の RDP 接続に適用",
+      "skipProtocol": "対象外のプロトコル（%{count} 回）",
+      "skipMstsc": "mstsc では非対応（%{count} 回）",
+      "skipNonFixed": "固定解像度が必要（%{count} 回）",
+      "skipGlobalRecording": "グローバル録画設定により無効（%{count} 回）"
     },
     "batchEdit": "一括編集",
     "cards": "カード",

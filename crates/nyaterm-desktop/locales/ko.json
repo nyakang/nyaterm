@@ -78,7 +78,7 @@
     "assets": "자산",
     "batch": {
       "title": "연결 일괄 편집",
-      "scopeNote": "공통 필드는 선택한 모든 연결에 적용됩니다. 프로토콜 필드는 원래 해당 프로토콜을 사용하는 연결에만 적용됩니다. 이름, 호스트 및 자산 정보는 읽기 전용입니다.",
+      "scopeNote": "공통 필드는 선택한 모든 연결에 적용되며, 프로토콜 필드는 원래 해당 프로토콜을 사용하는 연결에만 적용됩니다. 적용 범위는 백엔드와 표시 모드에 따라서도 달라집니다. 이름과 호스트는 읽기 전용입니다.",
       "modeKeep": "변경 안 함",
       "modeSet": "설정",
       "modeClear": "지우기",
@@ -124,7 +124,7 @@
       "saveFailed": "일괄 업데이트 실패: %{error}",
       "commonScope": "공통 (%{count})",
       "selectionSummary": "선택한 연결 %{count}개: %{protocols}",
-      "summary": "연결 %{connections}개, 필드 %{fields}개 변경",
+      "summary": "대상 연결 %{connections}개에 필드 수정 %{fields}개 제출",
       "clearMeaning": "필드를 지우거나 기본값으로 복원",
       "chooseBoolean": "켜기 또는 끄기를 선택하세요",
       "enabled": "켜기",
@@ -136,7 +136,12 @@
       "clearRecording": "전역 녹화 설정 사용",
       "clearEncoding": "전역 인코딩 사용",
       "clearFilenameEncoding": "터미널 파일 이름 인코딩 사용",
-      "clearValue": "값 또는 참조 제거"
+      "clearValue": "값 또는 참조 제거",
+      "fieldApplicability": "RDP 연결 %{applicable}/%{total}개에 적용",
+      "skipProtocol": "지원하지 않는 프로토콜 (%{count}회)",
+      "skipMstsc": "mstsc에서 지원하지 않음 (%{count}회)",
+      "skipNonFixed": "고정 해상도 필요 (%{count}회)",
+      "skipGlobalRecording": "전역 녹화 설정으로 무시됨 (%{count}회)"
     },
     "batchEdit": "일괄 편집",
     "cards": "카드",
