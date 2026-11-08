@@ -6,6 +6,7 @@ pub(in crate::features) mod ai_execution;
 mod assist_state;
 mod command_suggestions;
 mod credential_autofill;
+mod editing_payload;
 mod editing_runtime;
 mod editing_state;
 mod ime_state;

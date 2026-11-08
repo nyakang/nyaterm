@@ -1,12 +1,15 @@
-//! Suggestions may append confirmed text, but never infer remote editing keys.
+//! Text-only suggestion plans; the caller must authorize shell replacement.
 
+use nyaterm_core::completion::types::supports_full_command_fill;
 use nyaterm_core::terminal::editing::supports_scalar_editing;
-use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInputState};
+use nyaterm_core::terminal::input_tracker::TerminalInputState;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SuggestionFill<'a> {
     NoChange,
     Append(&'a str),
+    Replace(&'a str),
+    PasteReview(&'a str),
     Rejected(&'static str),
 }
 
@@ -16,6 +19,7 @@ pub(super) enum SuggestionSubmitResult {
     Rejected,
     WriteFailed,
     Submitted,
+    PasteReviewRequested,
     NoChange,
 }
 
@@ -29,11 +33,8 @@ pub(super) fn plan_suggestion_fill<'a>(
     input: &TerminalInputState,
     command: &'a str,
 ) -> SuggestionFill<'a> {
-    if command.is_empty()
-        || command.len() > MAX_TRACKED_INPUT_BYTES
-        || !supports_scalar_editing(command)
-    {
-        return SuggestionFill::Rejected("Suggestion must be supported single-line text");
+    if !supports_full_command_fill(command) {
+        return SuggestionFill::Rejected("Suggestion contains unsupported text");
     }
     if input.desynced
         || input.line_rewrite_required
@@ -44,10 +45,13 @@ pub(super) fn plan_suggestion_fill<'a>(
     {
         return SuggestionFill::Rejected("Input is not confirmed at the end of the line");
     }
+    if command.contains(['\r', '\n']) {
+        return SuggestionFill::PasteReview(command);
+    }
     match command.strip_prefix(&input.value) {
         Some("") => SuggestionFill::NoChange,
         Some(suffix) => SuggestionFill::Append(suffix),
-        None => SuggestionFill::Rejected("Cannot safely replace input; edit the command manually"),
+        None => SuggestionFill::Replace(command),
     }
 }
 
@@ -55,7 +59,9 @@ pub(super) fn plan_suggestion_fill<'a>(
 mod tests {
     use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInputState};
 
-    use super::{SuggestionFill, plan_suggestion_fill};
+    use crate::features::terminal::command_suggestions::fill::{
+        SuggestionFill, plan_suggestion_fill,
+    };
 
     fn input(value: &str) -> TerminalInputState {
         TerminalInputState {
@@ -66,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_only_append_an_exact_raw_suffix() {
+    fn suggestions_append_exact_suffixes_and_replace_non_prefix_matches() {
         for (current, target, suffix) in [
             ("display ver", "display version", "sion"),
             (" echo ", " echo  x ", " x "),
@@ -87,19 +93,37 @@ mod tests {
             (" echo", "echo x"),
             ("echo ", "echo"),
         ] {
-            assert!(matches!(
+            assert_eq!(
                 plan_suggestion_fill(&input(current), target),
-                SuggestionFill::Rejected(_)
-            ));
+                SuggestionFill::Replace(target)
+            );
         }
+    }
+
+    #[test]
+    fn multiline_commands_request_full_paste_review_even_for_prefix_matches() {
+        for target in [
+            "echo first\necho second",
+            "echo first\\\r\n  second",
+            "echo e\u{301}\n\t😀",
+        ] {
+            for current in ["", "echo", "快捷命令"] {
+                assert_eq!(
+                    plan_suggestion_fill(&input(current), target),
+                    SuggestionFill::PasteReview(target)
+                );
+            }
+        }
+        assert!(matches!(
+            plan_suggestion_fill(&input("echo"), "echo first\n\x1b[201~"),
+            SuggestionFill::Rejected(_)
+        ));
     }
 
     #[test]
     fn unsafe_command_content_and_tracking_states_are_rejected() {
         for target in [
             "",
-            "echo\nhi",
-            "echo\rhi",
             "echo\t",
             "echo\x1b[A",
             "echo\x7f",

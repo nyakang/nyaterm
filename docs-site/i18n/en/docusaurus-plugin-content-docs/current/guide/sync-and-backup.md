@@ -1,10 +1,10 @@
 # Cloud Sync
 
-## Cloud Sync V3 preview
+## Sync scope and existing field-merge configurations
 
 Cloud Sync uses a fixed scope in both snapshot and field-merge modes: connections and groups, connection icons, proxies and groups, tunnels and groups, quick commands and categories, notes and folders, and custom themes. There are no scope switches. Passwords, private keys, OTP, AI configuration and keys, shortcuts, host trust and appearance preferences stay on each device. New devices need local authentication setup.
 
-Field merge supports Local Directory, WebDAV, S3, Google Drive, OneDrive and Aliyun Drive. Select the mode, save settings, then prepare a preview. Independent fields merge automatically; conflicting fields and concurrent deletion/editing retain candidates for local resolution. Missing local credentials or changes redirecting an existing secret defer the affected fields.
+The settings page no longer shows the version introduction or mode selector. Snapshot mode remains the default. Existing field-merge configurations retain their mode and support Local Directory, WebDAV, S3, Google Drive, OneDrive and Aliyun Drive. Click Push Now or Pull Now to prepare a preview, review and resolve conflicts in Conflict Handling, then click Confirm, apply and publish to synchronize. Independent fields merge automatically; conflicting fields and concurrent deletion/editing retain candidates for local resolution. Missing local credentials or changes redirecting an existing secret defer the affected fields.
 
 New field publications use schema 5 under `sync/v5/`. New sync snapshots use Sync schema 4; full `.nya` backups retain schema 3 and their complete data contract. All participating devices must upgrade. The first field confirmation creates and verifies an encrypted `cloud-sync-v3-safety-<id>.nya` backup. Old cloud publications and local replicas remain migration inputs; old scope settings remain readable but do not control sync. Only core values enter new publications, while causal references, core conflicts and deletions remain intact. Old pending payloads are retained and never retried in the new space. Later legacy writes require a manual import preview.
 

@@ -146,8 +146,6 @@ struct KeywordHighlightSettingsState {
     edit_id: Option<String>,
     edit_field: KeywordHighlightEditorField,
     focus: FocusHandle,
-    /// Reveal the rules that only feed the line-role parser.
-    show_specialized: bool,
 }
 
 struct AppearanceSettingsState {
@@ -177,8 +175,6 @@ pub(in crate::features) struct KeywordHighlightPresentationState {
     pub expanded_id: Option<String>,
     pub edit_id: Option<String>,
     pub edit_field: KeywordHighlightEditorField,
-    /// Reveal the rules that only feed the line-role parser.
-    pub show_specialized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +226,6 @@ impl SettingsFeatureState {
                 edit_id: None,
                 edit_field: KeywordHighlightEditorField::Name,
                 focus: focus.keyword_highlight,
-                show_specialized: false,
             },
             appearance: AppearanceSettingsState {
                 palette,
@@ -1181,9 +1176,12 @@ impl SettingsFeatureState {
     }
 
     /// Toggle field-level highlighting for recognised command output.
-    pub(in crate::features) fn toggle_line_role_highlights(&mut self) -> bool {
+    pub(in crate::features) fn toggle_line_role_highlights(&mut self) -> Option<bool> {
+        if !self.keyword_config.enabled {
+            return None;
+        }
         self.summary.ui_highlight_line_roles = !self.summary.ui_highlight_line_roles;
-        self.summary.ui_highlight_line_roles
+        Some(self.summary.ui_highlight_line_roles)
     }
 
     pub(in crate::features) fn toggle_file_explorer_auto_sync_cwd(
@@ -1392,13 +1390,7 @@ impl SettingsFeatureState {
             expanded_id: self.keyword_highlights.expanded_id.clone(),
             edit_id: self.keyword_highlights.edit_id.clone(),
             edit_field: self.keyword_highlights.edit_field,
-            show_specialized: self.keyword_highlights.show_specialized,
         }
-    }
-
-    /// Visibility of the line-role-only rules in the settings list.
-    pub(in crate::features) fn set_keyword_show_specialized(&mut self, enabled: bool) {
-        self.keyword_highlights.show_specialized = enabled;
     }
 
     pub(in crate::features) fn keyword_highlight_focus(&self) -> &FocusHandle {
@@ -2313,6 +2305,28 @@ mod tests {
         assert!(!config.rules[0].enabled);
         assert_eq!(config.rules[0].color_dark, "#123456");
         assert_eq!(config.rules[0].patterns, ["WARN", "ERROR"]);
+    }
+
+    #[test]
+    fn keyword_master_switch_retains_output_and_rule_preferences_while_disabled() {
+        for line_roles in [false, true] {
+            let mut state = settings_state();
+            state.summary.ui_highlight_line_roles = line_roles;
+            state.keyword_config.enabled = true;
+            state.toggle_keyword_highlight_builtin("builtin-variable".to_string());
+            state.toggle_keyword_highlight_builtin("builtin-net-address".to_string());
+            let original = state.keyword_config().clone();
+
+            assert!(!state.toggle_keyword_highlights());
+            assert_eq!(state.toggle_line_role_highlights(), None);
+            assert_eq!(state.summary().ui_highlight_line_roles, line_roles);
+            assert_eq!(state.keyword_config().builtin_rules, original.builtin_rules);
+
+            assert!(state.toggle_keyword_highlights());
+            assert_eq!(state.keyword_config(), &original);
+            assert_eq!(state.summary().ui_highlight_line_roles, line_roles);
+            assert_eq!(state.toggle_line_role_highlights(), Some(!line_roles));
+        }
     }
 
     #[test]

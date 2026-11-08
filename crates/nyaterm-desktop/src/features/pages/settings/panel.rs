@@ -167,7 +167,6 @@ impl SettingsPresentation {
                 expanded_id: None,
                 edit_id: None,
                 edit_field: KeywordHighlightEditorField::Name,
-                show_specialized: false,
             },
             keybinding_presentation: KeybindingPresentationState {
                 recording_id: None,
@@ -499,33 +498,6 @@ pub(in crate::features) struct SettingsPanel {
 }
 
 impl SettingsPanel {
-    /// Show or hide the rules that only feed the line-role parser.
-    pub(in crate::features) fn toggle_keyword_show_specialized(&mut self, cx: &mut Context<Self>) {
-        let enabled = !self
-            .settings
-            .keyword_highlight_presentation
-            .show_specialized;
-        // The panel renders from a cloned snapshot, so update it here as well;
-        // changing only the app state leaves the switch showing its old value.
-        self.settings
-            .keyword_highlight_presentation
-            .show_specialized = enabled;
-        if let Some(app) = self.app.upgrade() {
-            app.update(cx, |app, _| {
-                app.settings.set_keyword_show_specialized(enabled);
-            });
-        }
-        cx.notify();
-    }
-
-    /// Forward the line-role highlight toggle to the app so it can persist it.
-    pub(in crate::features) fn toggle_line_role_highlights(&mut self, cx: &mut Context<Self>) {
-        let Some(app) = self.app.upgrade() else {
-            return;
-        };
-        app.update(cx, |app, cx| app.toggle_line_role_highlights(cx));
-    }
-
     pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>, cx: &mut Context<Self>) -> Self {
         let image_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(100.));
         let content_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(82.));
@@ -2042,6 +2014,7 @@ forward_app_action!(
     toggle_interaction_copy_on_select,
     toggle_mouse_events_require_alt,
     toggle_keyword_highlights,
+    toggle_line_role_highlights,
     toggle_minimize_to_tray,
     toggle_multi_line_paste_dialog,
     toggle_osc52_clipboard_write,
@@ -2443,6 +2416,138 @@ mod tests {
                     .expect("read stored settings");
                 assert!(!saved.has_master_password);
             });
+        }
+    }
+
+    #[test]
+    fn keyword_highlights_keep_all_rules_visible_and_disable_dependent_controls() {
+        fn activate_key(vcx: &mut VisualTestContext, key: &str) {
+            let keystroke = vcx.update(|_, cx| {
+                gpui::Keystroke::parse_with_os(key, cx.platform_info().os).unwrap()
+            });
+            vcx.simulate_event(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            vcx.simulate_event(gpui::KeyUpEvent { keystroke });
+        }
+
+        struct KeywordHighlightsHost {
+            panel: Entity<SettingsPanel>,
+        }
+
+        impl Render for KeywordHighlightsHost {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                self.panel.update(cx, |panel, cx| {
+                    panel
+                        .keyword_highlights_settings_section(cx)
+                        .into_any_element()
+                })
+            }
+        }
+
+        for theme in ["github-dark", "github-light"] {
+            let dir = TestConfigDir::new("nyaterm-settings-keyword-highlights");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx, dir.path());
+            let panel = cx.update_entity(&app, |app, cx| {
+                app.open_page(NavItem::Settings, cx);
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+                app.update_appearance_theme(theme, cx);
+                let mut config = app.settings.keyword_config().clone();
+                config.enabled = true;
+                app.settings.replace_keyword_config(config);
+                app.request_settings_panel_refresh(cx);
+                app.flush_settings_panel_snapshots(cx);
+                app.settings_panel.clone()
+            });
+            let (_, vcx) = cx.add_window_view(|_, _| KeywordHighlightsHost { panel });
+            for width in [360., 720.] {
+                vcx.simulate_resize(gpui::size(px(width), px(1800.)));
+                draw(&app, vcx);
+                let left = vcx
+                    .debug_bounds("settings-keyword-builtin-row-builtin-command")
+                    .unwrap();
+                let right = vcx
+                    .debug_bounds("settings-keyword-builtin-row-builtin-path")
+                    .unwrap();
+                assert!(
+                    left.right() <= right.left(),
+                    "rule columns must not overlap"
+                );
+                assert!(right.right() <= px(width));
+                assert!(
+                    vcx.debug_bounds("settings-keyword-builtin-row-builtin-variable")
+                        .is_some()
+                );
+                assert!(
+                    vcx.debug_bounds("settings-keyword-builtin-row-builtin-perm-special")
+                        .is_some()
+                );
+            }
+
+            let control = "settings-line-role-highlights-control";
+            let output = vcx.debug_bounds(control).unwrap();
+            vcx.simulate_click(output.center(), Modifiers::default());
+            draw(&app, vcx);
+            vcx.update(|_, cx| assert!(!app.read(cx).settings.summary().ui_highlight_line_roles));
+
+            let specialized = vcx
+                .debug_bounds("settings-keyword-builtin-control-builtin-net-address")
+                .unwrap();
+            vcx.simulate_click(specialized.center(), Modifiers::default());
+            draw(&app, vcx);
+            vcx.update(|_, cx| {
+                assert!(
+                    app.read(cx)
+                        .settings
+                        .keyword_config()
+                        .builtin_rules
+                        .is_empty()
+                )
+            });
+
+            let variable = vcx
+                .debug_bounds("settings-keyword-builtin-control-builtin-variable")
+                .unwrap();
+            vcx.simulate_click(variable.center(), Modifiers::default());
+            draw(&app, vcx);
+            vcx.update(|_, cx| {
+                assert!(!app.read(cx).settings.keyword_config().builtin_rules["builtin-variable"])
+            });
+
+            // Keep focus on the dependent switch while the master is disabled,
+            // so keyboard activation exercises the disabled control itself.
+            let output = vcx.debug_bounds(control).unwrap();
+            vcx.simulate_click(output.center(), Modifiers::default());
+            draw(&app, vcx);
+            vcx.update(|_, cx| app.update(cx, |app, cx| app.toggle_keyword_highlights(cx)));
+            draw(&app, vcx);
+            activate_key(vcx, "space");
+            activate_key(vcx, "enter");
+            vcx.simulate_click(output.center(), Modifiers::default());
+            vcx.simulate_click(variable.center(), Modifiers::default());
+            draw(&app, vcx);
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                assert!(app.settings.summary().ui_highlight_line_roles);
+                assert!(!app.settings.keyword_config().enabled);
+                assert!(!app.settings.keyword_config().builtin_rules["builtin-variable"]);
+            });
+
+            vcx.update(|_, cx| app.update(cx, |app, cx| app.toggle_keyword_highlights(cx)));
+            draw(&app, vcx);
+            vcx.simulate_click(output.center(), Modifiers::default());
+            draw(&app, vcx);
+            activate_key(vcx, "space");
+            draw(&app, vcx);
+            vcx.update(|_, cx| assert!(app.read(cx).settings.summary().ui_highlight_line_roles));
         }
     }
 

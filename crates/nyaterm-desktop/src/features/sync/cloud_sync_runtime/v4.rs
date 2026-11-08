@@ -111,15 +111,6 @@ impl NyaTermApp {
         cx.notify();
         true
     }
-    pub(in crate::features) fn select_cloud_sync_v3(&mut self, cx: &mut Context<Self>) {
-        if !self.cloud_sync_form_enabled() {
-            return;
-        }
-        self.cloud_sync.select_v4();
-        self.request_settings_panel_refresh(cx);
-        cx.notify();
-    }
-
     pub(in crate::features) fn run_cloud_sync_v3_preview(&mut self, cx: &mut Context<Self>) {
         self.run_cloud_sync_v3_job(false, None, cx);
     }

@@ -13,12 +13,12 @@ use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
     CompletionScope, ShellCommandContext, ShellDialect,
 };
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditIntent, plan_edit};
 use nyaterm_core::{QuickCommand, TerminalInputState, terminal_input_tracker_below_min_chars};
-use nyaterm_terminal::editing::resolve_input;
 
 use crate::features::NyaTermApp;
-use crate::features::terminal::editing_state::SuggestionFillRequest;
+use crate::features::terminal::editing_payload::shell_edit_payload;
+use crate::features::terminal::editing_state::{SnapshotEvidence, SuggestionFillRequest};
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 use crate::models::{CommandSuggestionItem, CommandSuggestionState};
@@ -28,9 +28,11 @@ mod fill;
 #[cfg(test)]
 mod fill_tests;
 mod helpers;
+pub(super) mod paste;
 
 use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
 use self::helpers::command_suggestion_highlight_parts;
+use self::paste::SuggestionPasteContext;
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
 const COMMAND_SUGGESTION_REFRESH_SLOW_THRESHOLD: Duration = Duration::from_millis(8);
@@ -718,7 +720,7 @@ impl NyaTermApp {
             draft: pattern.clone(),
             items: results
                 .into_iter()
-                .map(|item| completion_suggestion_item(item, &pattern, mode))
+                .map(|item| completion_suggestion_item(item, &pattern))
                 .collect(),
             selected_index: None,
             cursor_row,
@@ -1003,71 +1005,31 @@ impl NyaTermApp {
         };
         if !item.fillable {
             return self.reject_command_suggestion(
-                "Cannot safely append this match; edit the command manually",
+                "Cannot safely fill this match; edit the command manually",
                 cx,
             );
         }
-        if popup.scope.as_ref().is_some_and(|scope| {
-            *scope != self.command_suggestion_context(&popup.session_id).scope
-                || self.commands.completion_runtime().revision() != popup.completion_revision
-        }) {
-            return self.reject_command_suggestion(
-                "Completion context changed; select a current suggestion",
-                cx,
-            );
-        }
-        if self.session.active_id() != Some(popup.session_id.as_str())
-            || self.session.is_disconnected(&popup.session_id)
-            || self.active_terminal_input_blocked()
-            || self.security.screen_locked()
-            || self.active_terminal_uses_alternate_screen()
-            || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.credential_suggestions.is_some()
-            || self.terminal.assist.command_suggestions_suppressed
-            || self
-                .terminal_protocol_state_for_session(&popup.session_id)
-                .mouse_reporting
-            || self.active_terminal_display_offset() != 0
-            || !self
-                .settings
-                .summary()
-                .interaction_command_suggestions_enabled
-            || self.sync_input.may_fan_out_from(&popup.session_id)
-            || self.sync_input.revision() != popup.sync_revision
-        {
-            return self.reject_command_suggestion(
-                "Cannot safely fill this suggestion in the current terminal state",
-                cx,
-            );
-        }
-        // Reconcile against the latest live frame; a typing prediction or an old
-        // matching search pattern is never sufficient evidence for a write.
-        self.reconcile_shell_editing(&popup.session_id, cx);
-        let snapshot = self.terminal_snapshot_for_session(Some(&popup.session_id), 0);
-        let Some(state) = self.terminal.editing.state() else {
-            return self
-                .reject_command_suggestion("Wait for the terminal to confirm the input", cx);
+        let context = SuggestionPasteContext::from_popup(&popup);
+        let snapshot = match self.validate_command_suggestion_input(&context, cx) {
+            Ok(snapshot) => snapshot,
+            Err(message) => return self.reject_command_suggestion(message, cx),
         };
-        if state.awaiting_snapshot
-            || state.model.phase != EditPhase::Ready
-            || state.model.version != popup.input_version
-            || state.mapping.is_none()
-            || resolve_input(
-                &snapshot,
-                &state.model.input.value,
-                state.model.input.cursor,
-            )
-            .as_ref()
-                != state.mapping.as_ref()
-        {
-            return self.reject_command_suggestion(
-                "Input changed or is not confirmed; select the suggestion again",
-                cx,
-            );
-        }
-        let suffix = match plan_suggestion_fill(&state.model.input, &item.command) {
+        let state = self
+            .terminal
+            .editing
+            .state()
+            .expect("validated editing state");
+        match plan_suggestion_fill(&state.model.input, &item.command) {
             SuggestionFill::Rejected(message) => {
                 return self.reject_command_suggestion(message, cx);
+            }
+            SuggestionFill::PasteReview(command) => {
+                self.terminal
+                    .paste
+                    .queue_suggestion(context, command.to_owned());
+                self.dismiss_command_suggestions(cx);
+                cx.notify();
+                return SuggestionSubmitResult::PasteReviewRequested;
             }
             SuggestionFill::NoChange => {
                 self.dismiss_command_suggestions(cx);
@@ -1079,16 +1041,71 @@ impl NyaTermApp {
                 cx.notify();
                 return SuggestionSubmitResult::NoChange;
             }
-            SuggestionFill::Append(suffix) => suffix,
-        };
-        // Logical input performs charset conversion and advances the shell model
-        // exactly once, after the primary write succeeds. The fan-out gate above
-        // is checked in the same GPUI update, without an asynchronous gap.
-        self.dismiss_command_suggestions(cx);
-        self.terminal.editing.state_mut().suggestion_fill = None;
-        if !self.send_terminal_input_without_suggestion_track(suffix.as_bytes().to_vec(), cx) {
-            self.terminal.editing.state_mut().invalidate();
-            return SuggestionSubmitResult::WriteFailed;
+            SuggestionFill::Append(suffix) => {
+                // Logical input converts the charset and advances the shell
+                // model once, after the primary write succeeds.
+                self.dismiss_command_suggestions(cx);
+                if !self
+                    .send_terminal_input_without_suggestion_track(suffix.as_bytes().to_vec(), cx)
+                {
+                    self.terminal.editing.state_mut().invalidate();
+                    return SuggestionSubmitResult::WriteFailed;
+                }
+            }
+            SuggestionFill::Replace(command) => {
+                if !state.allows_editing() {
+                    return self.reject_command_suggestion(
+                        "This terminal has no confirmed shell editing capability",
+                        cx,
+                    );
+                }
+                let Some(plan) = plan_edit(
+                    &state.model.input,
+                    state.model.version,
+                    EditIntent::Replace {
+                        range: 0..state.model.input.value.len(),
+                        text: command,
+                    },
+                ) else {
+                    return self
+                        .reject_command_suggestion("Cannot plan this shell replacement", cx);
+                };
+                let insertion_wire = match self
+                    .encode_session_outgoing(&popup.session_id, plan.insert_text.as_bytes())
+                {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.dismiss_command_suggestions(cx);
+                        self.terminal.editing.state_mut().invalidate();
+                        self.shell.set_status(format!("input failed: {error}"));
+                        cx.notify();
+                        return SuggestionSubmitResult::WriteFailed;
+                    }
+                };
+                let mode = self.terminal_key_mode_for_session(Some(&popup.session_id));
+                let (wire, logical) = shell_edit_payload(&plan, mode, insertion_wire);
+                self.dismiss_command_suggestions(cx);
+                self.terminal.view.frame_pipeline.arm_output_event_wake();
+                if let Err(error) =
+                    self.write_session_wire_input_recorded_as(&popup.session_id, &wire, &logical)
+                {
+                    self.terminal.editing.state_mut().invalidate();
+                    self.shell.set_status(format!("input failed: {error}"));
+                    cx.notify();
+                    return SuggestionSubmitResult::WriteFailed;
+                }
+                // The framed writer records logical input but does not update
+                // the editing model. Commit the prediction only after success.
+                let state = self.terminal.editing.state_mut();
+                state.model.accept_plan(plan, Instant::now());
+                state.pending_evidence = Some(SnapshotEvidence::from_snapshot(&snapshot));
+                state.mapping = None;
+                state.selection = None;
+                state.selection_origin_version = None;
+                self.clear_terminal_selection(cx);
+                self.arm_terminal_input_wake(cx);
+                self.schedule_shell_edit_confirmation_timeout(cx);
+            }
         }
         let state = self.terminal.editing.state_mut();
         state.suggestion_fill = Some(SuggestionFillRequest {
@@ -1184,6 +1201,13 @@ impl NyaTermApp {
             .and_then(|index| state.items.get(index))
             .filter(|item| item.command.chars().count() > 48)
             .map(|item| item.command.clone());
+        // Shell capability can become known after an asynchronous search. Keep
+        // text eligibility in the candidate and assess replacement separately.
+        let can_replace = self
+            .terminal
+            .editing
+            .state()
+            .is_some_and(|state| state.allows_editing());
 
         let mut list = div()
             .id(SharedString::from("command-suggestions-list"))
@@ -1208,7 +1232,9 @@ impl NyaTermApp {
             let is_history = matches!(item.source.as_str(), "history" | "legacyHistory");
             let description = item.description.clone();
             let show_description = state.mode == CompletionMode::Token && !description.is_empty();
-            let fillable = item.fillable;
+            let multiline = item.command.contains(['\r', '\n']);
+            let fillable = item.fillable
+                && (multiline || item.command.starts_with(&state.draft) || can_replace);
             let delete_command = item.command.clone();
             let mut row = div()
                 .id(SharedString::from(format!("command-suggestion-{index}")))
@@ -1233,11 +1259,12 @@ impl NyaTermApp {
                 .text_color(rgb(palette.text))
                 .opacity(if fillable { 1.0 } else { 0.5 })
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
                         state.selected_index = Some(index);
                     }
                     let _ = this.apply_selected_command_suggestion(true, cx);
+                    this.open_pending_suggestion_paste(window, cx);
                 }))
                 .child(
                     svg()
@@ -1266,6 +1293,14 @@ impl NyaTermApp {
                             selected,
                         )),
                 );
+            if multiline {
+                row = row.child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("suggestions.multiline")),
+                );
+            }
             if show_description {
                 row = row.child(
                     div()
@@ -1294,15 +1329,6 @@ impl NyaTermApp {
                     };
                     NyaTooltip::new(label).build(window, cx)
                 });
-            }
-            if item.source == "legacyHistory" {
-                row = row.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(9.))
-                        .text_color(rgb(palette.text_dimmed))
-                        .child(t!("suggestions.legacyHistory").to_string()),
-                );
             }
             if is_history {
                 row = row.child(
@@ -1457,20 +1483,14 @@ impl NyaTermApp {
     }
 }
 
-fn completion_suggestion_item(
-    item: CompletionCandidate,
-    input: &str,
-    mode: CompletionMode,
-) -> CommandSuggestionItem {
-    let source = if mode == CompletionMode::History {
-        if item.kind == CandidateKind::QuickCommand {
-            "quickCommand"
-        } else if item.sources.contains(&CandidateSource::History) {
+fn completion_suggestion_item(item: CompletionCandidate, input: &str) -> CommandSuggestionItem {
+    let source = if item.kind == CandidateKind::QuickCommand {
+        "quickCommand"
+    } else if item.kind == CandidateKind::History {
+        if item.sources.contains(&CandidateSource::History) {
             "history"
-        } else if item.sources.contains(&CandidateSource::LegacyHistory) {
-            "legacyHistory"
         } else {
-            "history"
+            "legacyHistory"
         }
     } else if item.sources.contains(&CandidateSource::Catalog) {
         "static"
@@ -1479,11 +1499,6 @@ fn completion_suggestion_item(
     } else {
         "quickToken"
     };
-    let description = if source == "legacyHistory" {
-        t!("suggestions.legacyHistory").to_string()
-    } else {
-        item.description.clone()
-    };
     CommandSuggestionItem {
         command: item.target_line(input).unwrap_or_default(),
         display: item.display,
@@ -1491,7 +1506,7 @@ fn completion_suggestion_item(
         score: item.score,
         indices: item.indices,
         fillable: item.fillable,
-        description,
+        description: item.description,
     }
 }
 
@@ -1805,6 +1820,54 @@ mod tests {
         command_suggestion_refresh_input_delay, command_suggestion_state_changed,
         command_suggestion_step_selection, terminal_line_prefix_for_cell_col,
     };
+
+    #[test]
+    fn whole_candidate_types_keep_their_presentation_without_legacy_descriptions() {
+        use crate::features::terminal::command_suggestions::completion_suggestion_item;
+        use nyaterm_core::completion::types::{
+            CandidateKind, CandidateSource, CompletionCandidate,
+        };
+
+        for (kind, sources, expected) in [
+            (
+                CandidateKind::History,
+                vec![CandidateSource::LegacyHistory],
+                "legacyHistory",
+            ),
+            (
+                CandidateKind::History,
+                vec![CandidateSource::Catalog, CandidateSource::History],
+                "history",
+            ),
+            (
+                CandidateKind::QuickCommand,
+                vec![CandidateSource::Catalog, CandidateSource::QuickCommand],
+                "quickCommand",
+            ),
+        ] {
+            let item = completion_suggestion_item(
+                CompletionCandidate {
+                    display: "重启代理".into(),
+                    insert_text: "systemctl restart example.service".into(),
+                    description: String::new(),
+                    range: 0.."重启代理".len(),
+                    kind,
+                    sources,
+                    use_count: 1,
+                    last_used_at_ms: 1,
+                    score: 1,
+                    indices: vec![0, 1],
+                    fillable: true,
+                    context_priority: 0,
+                },
+                "重启代理",
+            );
+            assert_eq!(item.source, expected);
+            assert_eq!(item.display, "重启代理");
+            assert_eq!(item.command, "systemctl restart example.service");
+            assert!(item.description.is_empty());
+        }
+    }
 
     #[test]
     fn disabling_credential_autofill_releases_command_suggestions_and_smart_input() {

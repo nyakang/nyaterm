@@ -210,30 +210,68 @@ fn docker_compose_header_stays_plain() {
 }
 
 #[test]
-fn shell_variables_colour_without_integration() {
-    let line = "echo $HOME ${PATH}";
-    let highlighter = SemanticHighlighter::compile(
-        &get_builtin_keyword_rules(false),
+fn disabling_line_roles_preserves_generic_and_user_highlights() {
+    let line = "-rw-r--r-- 1 root root 123 Oct 30 10:00 ERROR.txt";
+    let config = crate::keywords::TerminalKeywordHighlightConfig::default();
+    // Isolate the output-only month colour from overlapping generic date rules.
+    let rules: Vec<_> = get_builtin_keyword_rules(true)
+        .into_iter()
+        .filter(|rule| matches!(rule.id.as_str(), "builtin-month" | "builtin-error"))
+        .collect();
+    let enabled = SemanticHighlighter::compile(&rules, config);
+    let disabled = SemanticHighlighter::compile(
+        &rules,
         crate::keywords::TerminalKeywordHighlightConfig {
-            line_roles: true,
-            ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+            line_roles: false,
+            ..config
         },
     );
-    let context = SemanticContext {
-        integrated: false,
-        ..SemanticContext::default()
-    };
-    let ranges = highlighter.ranges(line, &context, &[]);
-    let home = line.find("$HOME").unwrap();
-    let path = line.find("${PATH}").unwrap();
+    let context = SemanticContext::default();
+    let root = line.find("root").unwrap();
+    let month = line.find("Oct").unwrap();
+    let error = line.find("ERROR").unwrap();
+    let user = [(root, root + 4, 0xabcdef)];
+    let on = enabled.ranges(line, &context, &user);
+    let off = disabled.ranges(line, &context, &user);
+    assert!(on.iter().any(|(start, end, color)| {
+        *start == month && *end == month + 3 && *color == swatch("builtin-month")
+    }));
     assert!(
-        ranges.iter().any(|(s, e, _)| *s <= home && *e >= home + 5),
-        "$HOME should be coloured: {ranges:?}"
+        !off.iter()
+            .any(|(start, end, _)| *start < month + 3 && *end > month)
     );
-    assert!(
-        ranges.iter().any(|(s, e, _)| *s <= path && *e >= path + 7),
-        "${{PATH}} should be coloured: {ranges:?}"
-    );
+    assert!(off.contains(&(error, error + 5, swatch("builtin-error"))));
+    assert!(on.contains(&user[0]));
+    assert!(off.contains(&user[0]));
+}
+
+#[test]
+fn shell_variables_colour_without_integration() {
+    for line_roles in [false, true] {
+        let line = "echo $HOME ${PATH}";
+        let highlighter = SemanticHighlighter::compile(
+            &get_builtin_keyword_rules(false),
+            crate::keywords::TerminalKeywordHighlightConfig {
+                line_roles,
+                ansi: nyaterm_ui::theme_palette("github-light").terminal_ansi,
+            },
+        );
+        let context = SemanticContext {
+            integrated: false,
+            ..SemanticContext::default()
+        };
+        let ranges = highlighter.ranges(line, &context, &[]);
+        let home = line.find("$HOME").unwrap();
+        let path = line.find("${PATH}").unwrap();
+        assert!(
+            ranges.iter().any(|(s, e, _)| *s <= home && *e >= home + 5),
+            "$HOME should be coloured: {ranges:?}"
+        );
+        assert!(
+            ranges.iter().any(|(s, e, _)| *s <= path && *e >= path + 7),
+            "${{PATH}} should be coloured: {ranges:?}"
+        );
+    }
 }
 
 #[test]

@@ -369,11 +369,6 @@ impl CloudSyncFeatureState {
         self.v4_preview.take()
     }
 
-    pub(in crate::features) fn select_v4(&mut self) {
-        self.settings.protocol_version = 4;
-        self.v4_preview = None;
-    }
-
     pub(in crate::features) fn select_provider(&mut self, provider: &str) {
         if self.settings.provider != provider {
             self.v4_preview = None;

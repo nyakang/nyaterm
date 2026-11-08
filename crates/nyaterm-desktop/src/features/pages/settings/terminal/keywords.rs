@@ -8,6 +8,10 @@ use gpui::{
 use crate::features::pages::settings::panel::SettingsPanel;
 use crate::models::KeywordHighlightEditorField;
 use crate::theme::ThemePalette;
+use nyaterm_core::keyword_highlight_presets::{
+    builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized, builtin_keyword_rule_label,
+    builtin_keyword_rule_swatch_ansi,
+};
 use nyaterm_ui::NyaSwitch;
 use nyaterm_ui::NyaTooltip;
 
@@ -27,18 +31,6 @@ impl SettingsPanel {
         let keyword_highlighting_enabled = self.settings.keyword_config().enabled;
         let line_role_highlights = self.settings.summary().ui_highlight_line_roles;
         let expanded = self.settings.keyword_highlight_presentation().expanded_id;
-        let builtin_ids = nyaterm_core::builtin_keyword_rule_ids();
-        let show_specialized = self
-            .settings
-            .keyword_highlight_presentation
-            .show_specialized;
-        // Specialized rules only feed the line-role parser; keeping them hidden
-        // by default leaves the common list short enough to scan.
-        let visible_ids: Vec<&'static str> = builtin_ids
-            .iter()
-            .copied()
-            .filter(|id| show_specialized || !nyaterm_core::builtin_keyword_rule_is_specialized(id))
-            .collect();
         let untitled_rule_label = t!("settings.keywordHighlightNewRule");
 
         settings_form_section(
@@ -52,7 +44,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.keywordHighlighting"),
-                    None,
+                    Some(t!("settings.keywordHighlightMasterHint").into()),
                     settings_switch(
                         palette,
                         "settings-keyword-highlights-enabled",
@@ -68,14 +60,17 @@ impl SettingsPanel {
                     Some(SharedString::from(
                         t!("settings.lineRoleHighlightingHint").to_string(),
                     )),
-                    settings_switch(
-                        palette,
-                        "settings-line-role-highlights",
-                        line_role_highlights,
-                        cx.listener(|this, _, _, cx| {
-                            this.toggle_line_role_highlights(cx);
-                        }),
-                    ),
+                    div()
+                        .debug_selector(|| "settings-line-role-highlights-control".into())
+                        .child(settings_switch_with_enabled(
+                            palette,
+                            "settings-line-role-highlights",
+                            line_role_highlights,
+                            keyword_highlighting_enabled,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_line_role_highlights(cx);
+                            }),
+                        )),
                 ))
                 .child(
                         div()
@@ -104,99 +99,8 @@ impl SettingsPanel {
                                                 "settings.keywordHighlightBuiltinNote",
                                             )),
                                     )
-                                    .child(settings_form_row(
-                                        palette,
-                                        t!("settings.keywordHighlightShowSpecialized"),
-                                        Some(SharedString::from(
-                                            t!("settings.keywordHighlightShowSpecializedHint")
-                                                .to_string(),
-                                        )),
-                                        settings_switch(
-                                            palette,
-                                            "settings-keyword-show-specialized",
-                                            show_specialized,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.toggle_keyword_show_specialized(cx);
-                                            }),
-                                        ),
-                                    ))
-                                    .child(
-                                        div()
-                                            .grid()
-                                            .grid_cols(2)
-                                            .gap_2()
-                                            .children(visible_ids.iter().map(|id| {
-                                                let id = (*id).to_string();
-                                                let label =
-                                                    nyaterm_core::builtin_keyword_rule_label(&id);
-                                                let swatch =
-                                                    nyaterm_core::builtin_keyword_rule_swatch_ansi(
-                                                        &id,
-                                                        palette.terminal_ansi,
-                                                        is_dark,
-                                                    );
-                                                let enabled = self
-                                                    .settings.keyword_config()
-                                                    .builtin_rules
-                                                    .get(&id)
-                                                    .copied()
-                                                    .unwrap_or(true);
-                                                let color =
-                                                    parse_keyword_swatch(&swatch).unwrap_or(0x79c0ff);
-                                                let rid = id.clone();
-                                                div()
-                                                    .rounded_md()
-                                                    .border_1()
-                                                    .border_color(rgb(palette.border))
-                                                    .bg(rgb(palette.bg))
-                                                    .px_3()
-                                                    .py_2()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap_2()
-                                                            .min_w_0()
-                                                            .child(
-                                                                div()
-                                                                    .size(px(10.))
-                                                                    .rounded_full()
-                                                                    .bg(rgb(color))
-                                                                    .border_1()
-                                                                    .border_color(rgb(
-                                                                        palette.border,
-                                                                    )),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(12.))
-                                                                    .text_color(rgb(
-                                                                        palette.text_muted,
-                                                                    ))
-                                                                    .overflow_hidden()
-                                                                    .child(label),
-                                                            ),
-                                                    )
-                                                    .child(settings_switch_with_enabled(
-                                                        palette,
-                                                        format!(
-                                                            "settings-keyword-builtin-{id}"
-                                                        ),
-                                                        enabled,
-                                                        keyword_highlighting_enabled,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            this.toggle_keyword_highlight_builtin(
-                                                                rid.clone(),
-                                                                cx,
-                                                            );
-                                                        }),
-                                                    ))
-                                            })),
-                                    ),
+                                    .child(self.keyword_highlight_builtin_group(false, cx))
+                                    .child(self.keyword_highlight_builtin_group(true, cx)),
                             )
                             .child(
                                 div()
@@ -761,6 +665,122 @@ impl SettingsPanel {
                             })),
                 ),
         )
+    }
+
+    fn keyword_highlight_builtin_group(
+        &self,
+        specialized: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let palette = self.theme_palette();
+        let is_dark = self.terminal_theme_is_dark();
+        let enabled = self.settings.keyword_config().enabled
+            && (!specialized || self.settings.summary().ui_highlight_line_roles);
+        let title = if specialized {
+            t!("settings.keywordHighlightSpecializedRules")
+        } else {
+            t!("settings.keywordHighlightGeneralRules")
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(title),
+            )
+            .when(specialized, |group| {
+                group.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("settings.keywordHighlightSpecializedHint")),
+                )
+            })
+            .child(
+                div().grid().grid_cols(2).gap_2().children(
+                    builtin_keyword_rule_ids()
+                        .iter()
+                        .copied()
+                        .filter(|id| builtin_keyword_rule_is_specialized(id) == specialized)
+                        .map(|id| {
+                            let swatch = builtin_keyword_rule_swatch_ansi(
+                                id,
+                                palette.terminal_ansi,
+                                is_dark,
+                            );
+                            let checked = self
+                                .settings
+                                .keyword_config()
+                                .builtin_rules
+                                .get(id)
+                                .copied()
+                                .unwrap_or(true);
+                            let color = parse_keyword_swatch(&swatch).unwrap_or(0x79c0ff);
+                            div()
+                                .debug_selector(move || {
+                                    format!("settings-keyword-builtin-row-{id}")
+                                })
+                                .min_w_0()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.bg))
+                                .px_3()
+                                .py_2()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .min_w_0()
+                                        .opacity(if enabled { 1.0 } else { 0.5 })
+                                        .child(
+                                            div()
+                                                .size(px(10.))
+                                                .flex_none()
+                                                .rounded_full()
+                                                .bg(rgb(color))
+                                                .border_1()
+                                                .border_color(rgb(palette.border)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(rgb(palette.text_muted))
+                                                .overflow_hidden()
+                                                .child(builtin_keyword_rule_label(id)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .debug_selector(move || {
+                                            format!("settings-keyword-builtin-control-{id}")
+                                        })
+                                        .child(settings_switch_with_enabled(
+                                            palette,
+                                            format!("settings-keyword-builtin-{id}"),
+                                            checked,
+                                            enabled,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.toggle_keyword_highlight_builtin(
+                                                    id.to_string(),
+                                                    cx,
+                                                );
+                                            }),
+                                        )),
+                                )
+                        }),
+                ),
+            )
     }
 }
 

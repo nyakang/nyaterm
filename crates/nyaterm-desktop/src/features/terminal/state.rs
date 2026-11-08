@@ -15,6 +15,7 @@ use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 use nyaterm_ui::NyaDocumentEditorState;
 
 use super::assist_state::TerminalAssistState;
+use super::command_suggestions::paste::SuggestionPasteContext;
 use super::editing_state::TerminalEditingState;
 use super::ime_state::TerminalImeState;
 use super::terminal_surface::TerminalScrollbarDragState;
@@ -91,7 +92,13 @@ pub(super) struct TerminalInputState {
 /// Dedicated multi-line paste editor state backed by gpui-kit's editor.
 pub(super) struct TerminalPasteReviewState {
     pub(super) editor: Option<Entity<NyaDocumentEditorState>>,
+    pub(super) suggestion: Option<SuggestionPasteReview>,
     _subscription: Option<Subscription>,
+}
+
+pub(super) struct SuggestionPasteReview {
+    pub(super) context: SuggestionPasteContext,
+    pub(super) pending_text: Option<String>,
 }
 
 /// Text selection and mouse reporting.
@@ -703,6 +710,7 @@ impl TerminalPasteReviewState {
     fn new() -> Self {
         Self {
             editor: None,
+            suggestion: None,
             _subscription: None,
         }
     }
@@ -712,13 +720,23 @@ impl TerminalPasteReviewState {
         editor: Entity<NyaDocumentEditorState>,
         subscription: Subscription,
     ) {
+        self.clear();
         self.editor = Some(editor);
         self._subscription = Some(subscription);
     }
 
     pub(super) fn clear(&mut self) {
         self.editor = None;
+        self.suggestion = None;
         self._subscription = None;
+    }
+
+    pub(super) fn queue_suggestion(&mut self, context: SuggestionPasteContext, text: String) {
+        self.clear();
+        self.suggestion = Some(SuggestionPasteReview {
+            context,
+            pending_text: Some(text),
+        });
     }
 }
 

@@ -8,13 +8,12 @@ use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
-    CompletionScope, ScopedHistoryRecord, ShellCommandContext,
+    CompletionScope, ShellCommandContext, supports_full_command_fill,
 };
 use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
 use nyaterm_core::models::quick_commands::{CommandHistoryEntry, QuickCommand};
-use nyaterm_core::terminal::editing::supports_scalar_editing;
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -75,8 +74,6 @@ impl CompletionRuntime {
                 let mut engine = CompletionEngine::embedded();
                 let mut whole_matcher = TextMatcher::default();
                 let mut history = TokenHistoryIndex::default();
-                let mut quick_index = TokenHistoryIndex::default();
-                let mut quick_key: Option<(CompletionScope, Arc<[QuickCommand]>)> = None;
                 let reload = |history: &mut TokenHistoryIndex| -> Result<(), String> {
                     let (_, records) = store
                         .request_fn(StoreDomain::Commands, |database| {
@@ -143,45 +140,12 @@ impl CompletionRuntime {
                                     history = TokenHistoryIndex::default();
                                 }
                             }
-                            let candidates = match query.mode {
-                                CompletionMode::Token => {
-                                    let rebuild =
-                                        quick_key.as_ref().is_none_or(|(scope, snapshot)| {
-                                            scope != &query.context.scope
-                                                || !Arc::ptr_eq(snapshot, &query.quick)
-                                        });
-                                    if rebuild {
-                                        quick_index = TokenHistoryIndex::default();
-                                        for command in query.quick.iter() {
-                                            quick_index.upsert(ScopedHistoryRecord {
-                                                version: 1,
-                                                scope: query.context.scope.clone(),
-                                                dialect: query.context.dialect,
-                                                command: command.command.clone(),
-                                                use_count: 0,
-                                                last_used_at_ms: 0,
-                                                extensions: BTreeMap::new(),
-                                            });
-                                        }
-                                        quick_key = Some((
-                                            query.context.scope.clone(),
-                                            query.quick.clone(),
-                                        ));
-                                    }
-                                    engine.complete(TokenCompletionRequest {
-                                        input: &query.input,
-                                        cursor: query.input.len(),
-                                        dialect: query.context.dialect,
-                                        scope: query.context.scope,
-                                        history: &history,
-                                        quick: &quick_index,
-                                        limit: 12,
-                                    })
-                                }
-                                CompletionMode::History => {
-                                    full_history(&history, &query, &mut whole_matcher)
-                                }
-                            };
+                            let candidates = search_candidates(
+                                &mut engine,
+                                &history,
+                                &query,
+                                &mut whole_matcher,
+                            );
                             let _ = response.send(CompletionResult {
                                 candidates,
                                 revision: revision.wrapping_add(loaded_generation),
@@ -219,7 +183,6 @@ impl CompletionRuntime {
                             if !loaded {
                                 history = TokenHistoryIndex::default();
                             }
-                            quick_key = None;
                         }
                     }
                 }
@@ -292,6 +255,51 @@ impl CompletionRuntime {
     }
 }
 
+fn search_candidates(
+    engine: &mut CompletionEngine,
+    history: &TokenHistoryIndex,
+    query: &CompletionQuery,
+    matcher: &mut TextMatcher,
+) -> Vec<CompletionCandidate> {
+    let mut candidates = full_history(history, query, matcher);
+    if query.mode == CompletionMode::History {
+        return candidates;
+    }
+    // Whole commands retain their display, kind and statistics when a token
+    // provider reaches the same target. Match scores from the two queries are
+    // not comparable, so complete commands precede the contextual token group.
+    let mut targets: HashMap<_, _> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| item.target_line(&query.input).map(|line| (line, index)))
+        .collect();
+    let tokens = engine.complete(TokenCompletionRequest {
+        input: &query.input,
+        cursor: query.input.len(),
+        dialect: query.context.dialect,
+        scope: query.context.scope.clone(),
+        history,
+        quick: &TokenHistoryIndex::default(),
+        limit: 12,
+    });
+    for token in tokens {
+        let Some(target) = token.target_line(&query.input) else {
+            continue;
+        };
+        if let Some(&index) = targets.get(&target) {
+            let sources = &mut candidates[index].sources;
+            sources.extend(token.sources);
+            sources.sort_unstable();
+            sources.dedup();
+        } else {
+            targets.insert(target, candidates.len());
+            candidates.push(token);
+        }
+    }
+    candidates.truncate(12);
+    candidates
+}
+
 fn full_history(
     index: &TokenHistoryIndex,
     query: &CompletionQuery,
@@ -345,8 +353,7 @@ fn full_history(
             } else {
                 (CandidateKind::History, CandidateSource::History)
             };
-            let fillable =
-                item.command.starts_with(&query.input) && supports_scalar_editing(&item.command);
+            let fillable = supports_full_command_fill(&item.command);
             let matching: Vec<_> = records
                 .iter()
                 .filter(|record| record.command == item.command)
@@ -398,7 +405,7 @@ fn full_history(
 #[cfg(test)]
 mod tests {
     use crate::features::commands::completion_runtime::{
-        CompletionQuery, CompletionRuntime, full_history,
+        CompletionQuery, CompletionRuntime, full_history, search_candidates,
     };
     use crate::test_support::{TestConfigDir, blocking_test_store};
     use futures::channel::mpsc::unbounded;
@@ -407,6 +414,231 @@ mod tests {
         ShellDialect,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn both_modes_offer_multiline_quick_commands_for_paste_review() {
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use nyaterm_core::completion::types::CandidateKind;
+
+        let command = "echo first\\\r\n  second\n\necho third";
+        let quick = serde_json::from_value(serde_json::json!({
+            "id": "multiline", "label": "下载驱动", "command": command
+        }))
+        .unwrap();
+        let mut query = CompletionQuery {
+            context: ShellCommandContext {
+                scope: CompletionScope::new(&["multiline"]),
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "下载驱动".into(),
+            mode: CompletionMode::History,
+            quick: Arc::from([quick]),
+            min: 2,
+            max: 64,
+        };
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        for mode in [CompletionMode::History, CompletionMode::Token] {
+            query.mode = mode;
+            for input in ["下载驱动", ""] {
+                query.input = input.into();
+                let candidates = search_candidates(
+                    &mut engine,
+                    &TokenHistoryIndex::default(),
+                    &query,
+                    &mut matcher,
+                );
+                let candidate = &candidates[0];
+                assert_eq!(candidate.kind, CandidateKind::QuickCommand);
+                assert_eq!(candidate.display, "下载驱动");
+                assert_eq!(candidate.target_line(input).as_deref(), Some(command));
+                assert!(candidate.fillable);
+            }
+        }
+    }
+
+    #[test]
+    fn both_modes_find_cross_word_history_and_named_quick_commands() {
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use nyaterm_core::models::quick_commands::QuickCommand;
+        use std::collections::BTreeMap;
+
+        let scope = CompletionScope::new(&["whole-command-search"]);
+        let mut index = TokenHistoryIndex::default();
+        for origin in [scope.clone(), CompletionScope::legacy()] {
+            index.upsert(ScopedHistoryRecord {
+                version: 1,
+                scope: origin,
+                dialect: ShellDialect::Bash,
+                command: "systemctl restart mihomo.service".into(),
+                use_count: 3,
+                last_used_at_ms: 10,
+                extensions: BTreeMap::new(),
+            });
+        }
+        let quick: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "restart-service", "label": "重启代理", "command": "systemctl restart example.service"
+        })).unwrap();
+        let unnamed: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "unnamed", "label": "", "command": "internal-tool deploy"
+        }))
+        .unwrap();
+        let mut query = CompletionQuery {
+            context: ShellCommandContext {
+                scope,
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "systmi".into(),
+            mode: CompletionMode::History,
+            quick: Arc::from([quick, unnamed]),
+            min: 2,
+            max: 64,
+        };
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        for mode in [CompletionMode::History, CompletionMode::Token] {
+            query.mode = mode;
+            for (input, command, display) in [
+                (
+                    "systmi",
+                    "systemctl restart mihomo.service",
+                    "systemctl restart mihomo.service",
+                ),
+                ("重启代理", "systemctl restart example.service", "重启代理"),
+                ("internal-t", "internal-tool deploy", "internal-tool deploy"),
+            ] {
+                query.input = input.into();
+                let candidates = search_candidates(&mut engine, &index, &query, &mut matcher);
+                assert_eq!(candidates[0].insert_text, command);
+                assert_eq!(candidates[0].display, display);
+                assert_eq!(candidates[0].range, 0..input.len());
+                assert!(candidates[0].fillable);
+                assert_eq!(
+                    candidates
+                        .iter()
+                        .filter(|c| c.insert_text == command)
+                        .count(),
+                    1
+                );
+            }
+        }
+        query.context.scope = CompletionScope::new(&["other-host"]);
+        query.input = "systmi".into();
+        let candidates = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].sources, [CandidateSource::LegacyHistory]);
+    }
+
+    #[test]
+    fn automatic_search_supplements_whole_commands_and_deduplicates_target_lines() {
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use nyaterm_core::models::quick_commands::QuickCommand;
+        use std::collections::HashSet;
+
+        let quick: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "docker", "label": "dock", "command": "docker"
+        }))
+        .unwrap();
+        let mut query = CompletionQuery {
+            context: ShellCommandContext {
+                scope: CompletionScope::legacy(),
+                dialect: ShellDialect::Bash,
+                command_events: false,
+            },
+            input: "dock".into(),
+            mode: CompletionMode::History,
+            quick: Arc::from([quick]),
+            min: 2,
+            max: 64,
+        };
+        let index = TokenHistoryIndex::default();
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        let manual = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert_eq!(manual.len(), 1);
+        assert_eq!(
+            manual[0].kind,
+            nyaterm_core::completion::types::CandidateKind::QuickCommand
+        );
+        query.mode = CompletionMode::Token;
+        let automatic = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert_eq!(automatic[0].display, "dock");
+        assert_eq!(automatic[0].kind, manual[0].kind);
+        assert_eq!(
+            automatic[0].sources,
+            [CandidateSource::Catalog, CandidateSource::QuickCommand]
+        );
+        let targets: HashSet<_> = automatic
+            .iter()
+            .map(|c| c.target_line(&query.input).unwrap())
+            .collect();
+        assert_eq!(automatic.len(), targets.len());
+
+        query.input = "docker run --na".into();
+        query.quick = Arc::from([]);
+        assert!(
+            search_candidates(&mut engine, &index, &query, &mut matcher)
+                .iter()
+                .any(|c| c.insert_text == "--name")
+        );
+        query.mode = CompletionMode::History;
+        assert!(search_candidates(&mut engine, &index, &query, &mut matcher).is_empty());
+    }
+
+    #[test]
+    fn whole_commands_keep_their_order_and_limit_before_catalog_supplements() {
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use std::collections::BTreeMap;
+
+        let scope = CompletionScope::new(&["ranking-fixture"]);
+        let mut index = TokenHistoryIndex::default();
+        for n in 0..16 {
+            index.upsert(ScopedHistoryRecord {
+                version: 1,
+                scope: scope.clone(),
+                dialect: ShellDialect::Bash,
+                command: format!("docker run fixture-{n}"),
+                use_count: 1,
+                last_used_at_ms: n,
+                extensions: BTreeMap::new(),
+            });
+        }
+        let mut query = CompletionQuery {
+            context: ShellCommandContext {
+                scope,
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "dock".into(),
+            mode: CompletionMode::History,
+            quick: Arc::from([]),
+            min: 2,
+            max: 64,
+        };
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        let manual = search_candidates(&mut engine, &index, &query, &mut matcher);
+        query.mode = CompletionMode::Token;
+        let automatic = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert_eq!(automatic.len(), 12);
+        assert_eq!(
+            automatic.iter().map(|c| &c.insert_text).collect::<Vec<_>>(),
+            manual.iter().map(|c| &c.insert_text).collect::<Vec<_>>()
+        );
+        query.max = 3;
+        query.mode = CompletionMode::History;
+        assert!(search_candidates(&mut engine, &index, &query, &mut matcher).is_empty());
+    }
     #[test]
     fn full_history_merges_origins_and_uses_current_scope_statistics_once() {
         use nyaterm_core::completion::history::TokenHistoryIndex;
