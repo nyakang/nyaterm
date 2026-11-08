@@ -124,6 +124,7 @@ impl NyaTermApp {
             return;
         }
         if self.handle_command_suggestion_key(event, cx) {
+            self.open_pending_suggestion_paste(window, cx);
             cx.stop_propagation();
             return;
         }

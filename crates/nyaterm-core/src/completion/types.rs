@@ -3,6 +3,20 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::terminal::editing::supports_scalar_editing;
+use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
+
+/// Multiline whole commands require paste review rather than scalar insertion.
+pub fn supports_full_command_fill(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= MAX_TRACKED_INPUT_BYTES
+        && (supports_scalar_editing(text)
+            || (text.contains(['\r', '\n'])
+                && !text
+                    .chars()
+                    .any(|ch| ch.is_control() && !matches!(ch, '\r' | '\n' | '\t'))))
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellDialect {
@@ -297,4 +311,35 @@ pub struct ShellCommandContext {
     pub scope: CompletionScope,
     pub dialect: ShellDialect,
     pub command_events: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::completion::types::supports_full_command_fill;
+    use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
+
+    #[test]
+    fn whole_command_fill_allows_reviewable_multiline_text_and_rejects_terminal_controls() {
+        for text in [
+            "echo hi",
+            "echo first\\\r\nsecond\n\nthird",
+            "echo e\u{301}\n\t😀",
+        ] {
+            assert!(supports_full_command_fill(text));
+        }
+        for text in [
+            "",
+            "echo\t",
+            "e\u{301}",
+            "echo\n\x1b[201~",
+            "echo\n\0",
+            "echo\r\x7f",
+        ] {
+            assert!(!supports_full_command_fill(text));
+        }
+        assert!(!supports_full_command_fill(&format!(
+            "{}\n",
+            "x".repeat(MAX_TRACKED_INPUT_BYTES)
+        )));
+    }
 }

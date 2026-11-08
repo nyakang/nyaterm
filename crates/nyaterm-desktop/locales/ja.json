@@ -3336,6 +3336,7 @@
   "suggestions": {
     "acceptSelected": "選択候補を確定",
     "legacyHistory": "以前のグローバル履歴",
+    "multiline": "複数行",
     "unsafeSuffix": "安全に入力できません。手動で編集してください",
     "deleteHistory": "履歴コマンドを削除",
     "dismiss": "閉じる",
@@ -3659,6 +3660,7 @@
     "multiLinePasteSendLineByLine": "1 行ずつ",
     "multiLinePasteStats": "%{lines} 行, %{chars} 文字",
     "multiLinePasteTextPlaceholder": "テキストを貼り付け",
+    "multiLineSuggestionRequiresBracketedPaste": "実行せずに貼り付けるには、ブラケット付きペーストに対応したシェルが必要です。テキストをコピーするか、行ごとに送信して実行できます。",
     "multiLinePasteTitle": "複数行の貼り付け",
     "newConnection": "新規接続",
     "newSession": "新規セッション",

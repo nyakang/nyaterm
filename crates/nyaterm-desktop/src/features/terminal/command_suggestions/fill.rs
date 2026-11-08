@@ -1,13 +1,15 @@
 //! Text-only suggestion plans; the caller must authorize shell replacement.
 
+use nyaterm_core::completion::types::supports_full_command_fill;
 use nyaterm_core::terminal::editing::supports_scalar_editing;
-use nyaterm_core::terminal::input_tracker::{MAX_TRACKED_INPUT_BYTES, TerminalInputState};
+use nyaterm_core::terminal::input_tracker::TerminalInputState;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SuggestionFill<'a> {
     NoChange,
     Append(&'a str),
     Replace(&'a str),
+    PasteReview(&'a str),
     Rejected(&'static str),
 }
 
@@ -17,6 +19,7 @@ pub(super) enum SuggestionSubmitResult {
     Rejected,
     WriteFailed,
     Submitted,
+    PasteReviewRequested,
     NoChange,
 }
 
@@ -30,11 +33,8 @@ pub(super) fn plan_suggestion_fill<'a>(
     input: &TerminalInputState,
     command: &'a str,
 ) -> SuggestionFill<'a> {
-    if command.is_empty()
-        || command.len() > MAX_TRACKED_INPUT_BYTES
-        || !supports_scalar_editing(command)
-    {
-        return SuggestionFill::Rejected("Suggestion must be supported single-line text");
+    if !supports_full_command_fill(command) {
+        return SuggestionFill::Rejected("Suggestion contains unsupported text");
     }
     if input.desynced
         || input.line_rewrite_required
@@ -44,6 +44,9 @@ pub(super) fn plan_suggestion_fill<'a>(
         || !supports_scalar_editing(&input.value)
     {
         return SuggestionFill::Rejected("Input is not confirmed at the end of the line");
+    }
+    if command.contains(['\r', '\n']) {
+        return SuggestionFill::PasteReview(command);
     }
     match command.strip_prefix(&input.value) {
         Some("") => SuggestionFill::NoChange,
@@ -98,11 +101,29 @@ mod tests {
     }
 
     #[test]
+    fn multiline_commands_request_full_paste_review_even_for_prefix_matches() {
+        for target in [
+            "echo first\necho second",
+            "echo first\\\r\n  second",
+            "echo e\u{301}\n\t😀",
+        ] {
+            for current in ["", "echo", "快捷命令"] {
+                assert_eq!(
+                    plan_suggestion_fill(&input(current), target),
+                    SuggestionFill::PasteReview(target)
+                );
+            }
+        }
+        assert!(matches!(
+            plan_suggestion_fill(&input("echo"), "echo first\n\x1b[201~"),
+            SuggestionFill::Rejected(_)
+        ));
+    }
+
+    #[test]
     fn unsafe_command_content_and_tracking_states_are_rejected() {
         for target in [
             "",
-            "echo\nhi",
-            "echo\rhi",
             "echo\t",
             "echo\x1b[A",
             "echo\x7f",

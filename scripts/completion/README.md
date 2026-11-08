@@ -27,11 +27,19 @@ and ranked quick commands. Quick commands match their label (or their command
 when the label is empty) and insert their full command, rather than contributing
 individual tokens. Final target lines are deduplicated before the 12-item limit.
 
-Suggestions append an exact raw suffix when possible. Non-prefix matches replace
+Single-line suggestions append an exact raw suffix when possible. Non-prefix matches replace
 the current input only with confirmed shell editing capability and a fresh input
 mapping, using the same key encoder as smart selection. Both operations wait for
 echo confirmation and never synthesize Enter: execution requires another manual
-Enter. Unsupported text and uncertain terminal states cannot authorize a fill.
+Enter. Multiline whole commands open the existing editable paste review in both
+entry points, regardless of the clipboard confirmation setting. Cancelling keeps
+the terminal input unchanged; confirmation revalidates the original session,
+input version, scope and terminal state before replacing the whole query. Direct
+paste requires confirmed shell editing capability and bracketed paste, preserves
+continuations and blank lines, and does not append Enter. The separate line-by-line
+send action explicitly submits the lines, following the existing paste semantics.
+Unsupported text and uncertain terminal states cannot authorize a write. Multiline
+buffers remain outside scalar editing and its single-line echo acknowledgement.
 
 Scoped history is device-local and excluded from portable backup and cloud-sync
 documents. Restoring/replacing history clears scoped contributions and registers
@@ -85,13 +93,16 @@ platform validation before claiming complete platform acceptance. On each:
 
 1. Verify `dock`, `docker r`, `docker run --na`, an empty argument and learned
    internal commands. Tab/Enter must fill a suffix without a space or execution.
-2. Open Alt+R, verify current-scope history and the legacy badge, then confirm
-   execution only after the input echo. Verify that `!` reaches the shell.
+2. Open Alt+R, verify current-scope and compatible legacy history without a legacy
+   badge, then execute only with another manual Enter. Verify that `!` reaches the shell.
 3. Submit on two hosts/users/distributions, restart, delete history from another
    window and restore a backup; unrelated scopes and stale popups must stay clear.
 4. Exercise delayed echo, passwords, alternate screen, broadcast, disconnect,
    lock screen, middle-of-line cursors and complex graphemes; unsafe fills must
    be rejected.
+5. Select a named multiline quick command in both entry points, edit/cancel its
+   paste review, then verify bracketed paste preserves its entire text without
+   executing. Confirm stale reviews cannot replace input or write to another tab.
 
 The first version deliberately excludes middle-of-line replacement, editing
 inside quoted/escaped tokens, Ghost Text and dynamic environment queries.

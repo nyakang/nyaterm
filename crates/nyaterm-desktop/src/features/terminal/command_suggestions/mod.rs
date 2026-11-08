@@ -13,11 +13,8 @@ use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
     CompletionScope, ShellCommandContext, ShellDialect,
 };
-use nyaterm_core::terminal::editing::{
-    EDIT_CONFIRMATION_TIMEOUT, EditIntent, EditPhase, plan_edit,
-};
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditIntent, plan_edit};
 use nyaterm_core::{QuickCommand, TerminalInputState, terminal_input_tracker_below_min_chars};
-use nyaterm_terminal::editing::resolve_input;
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::editing_payload::shell_edit_payload;
@@ -31,9 +28,11 @@ mod fill;
 #[cfg(test)]
 mod fill_tests;
 mod helpers;
+pub(super) mod paste;
 
 use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
 use self::helpers::command_suggestion_highlight_parts;
+use self::paste::SuggestionPasteContext;
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
 const COMMAND_SUGGESTION_REFRESH_SLOW_THRESHOLD: Duration = Duration::from_millis(8);
@@ -1010,67 +1009,27 @@ impl NyaTermApp {
                 cx,
             );
         }
-        if popup.scope.as_ref().is_some_and(|scope| {
-            *scope != self.command_suggestion_context(&popup.session_id).scope
-                || self.commands.completion_runtime().revision() != popup.completion_revision
-        }) {
-            return self.reject_command_suggestion(
-                "Completion context changed; select a current suggestion",
-                cx,
-            );
-        }
-        if self.session.active_id() != Some(popup.session_id.as_str())
-            || self.session.is_disconnected(&popup.session_id)
-            || self.active_terminal_input_blocked()
-            || self.security.screen_locked()
-            || self.active_terminal_uses_alternate_screen()
-            || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.credential_suggestions.is_some()
-            || self.terminal.assist.command_suggestions_suppressed
-            || self
-                .terminal_protocol_state_for_session(&popup.session_id)
-                .mouse_reporting
-            || self.active_terminal_display_offset() != 0
-            || !self
-                .settings
-                .summary()
-                .interaction_command_suggestions_enabled
-            || self.sync_input.may_fan_out_from(&popup.session_id)
-            || self.sync_input.revision() != popup.sync_revision
-        {
-            return self.reject_command_suggestion(
-                "Cannot safely fill this suggestion in the current terminal state",
-                cx,
-            );
-        }
-        // Reconcile against the latest live frame; a typing prediction or an old
-        // matching search pattern is never sufficient evidence for a write.
-        self.reconcile_shell_editing(&popup.session_id, cx);
-        let snapshot = self.terminal_snapshot_for_session(Some(&popup.session_id), 0);
-        let Some(state) = self.terminal.editing.state() else {
-            return self
-                .reject_command_suggestion("Wait for the terminal to confirm the input", cx);
+        let context = SuggestionPasteContext::from_popup(&popup);
+        let snapshot = match self.validate_command_suggestion_input(&context, cx) {
+            Ok(snapshot) => snapshot,
+            Err(message) => return self.reject_command_suggestion(message, cx),
         };
-        if state.awaiting_snapshot
-            || state.model.phase != EditPhase::Ready
-            || state.model.version != popup.input_version
-            || state.mapping.is_none()
-            || resolve_input(
-                &snapshot,
-                &state.model.input.value,
-                state.model.input.cursor,
-            )
-            .as_ref()
-                != state.mapping.as_ref()
-        {
-            return self.reject_command_suggestion(
-                "Input changed or is not confirmed; select the suggestion again",
-                cx,
-            );
-        }
+        let state = self
+            .terminal
+            .editing
+            .state()
+            .expect("validated editing state");
         match plan_suggestion_fill(&state.model.input, &item.command) {
             SuggestionFill::Rejected(message) => {
                 return self.reject_command_suggestion(message, cx);
+            }
+            SuggestionFill::PasteReview(command) => {
+                self.terminal
+                    .paste
+                    .queue_suggestion(context, command.to_owned());
+                self.dismiss_command_suggestions(cx);
+                cx.notify();
+                return SuggestionSubmitResult::PasteReviewRequested;
             }
             SuggestionFill::NoChange => {
                 self.dismiss_command_suggestions(cx);
@@ -1273,7 +1232,9 @@ impl NyaTermApp {
             let is_history = matches!(item.source.as_str(), "history" | "legacyHistory");
             let description = item.description.clone();
             let show_description = state.mode == CompletionMode::Token && !description.is_empty();
-            let fillable = item.fillable && (item.command.starts_with(&state.draft) || can_replace);
+            let multiline = item.command.contains(['\r', '\n']);
+            let fillable = item.fillable
+                && (multiline || item.command.starts_with(&state.draft) || can_replace);
             let delete_command = item.command.clone();
             let mut row = div()
                 .id(SharedString::from(format!("command-suggestion-{index}")))
@@ -1298,11 +1259,12 @@ impl NyaTermApp {
                 .text_color(rgb(palette.text))
                 .opacity(if fillable { 1.0 } else { 0.5 })
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
                         state.selected_index = Some(index);
                     }
                     let _ = this.apply_selected_command_suggestion(true, cx);
+                    this.open_pending_suggestion_paste(window, cx);
                 }))
                 .child(
                     svg()
@@ -1331,6 +1293,14 @@ impl NyaTermApp {
                             selected,
                         )),
                 );
+            if multiline {
+                row = row.child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("suggestions.multiline")),
+                );
+            }
             if show_description {
                 row = row.child(
                     div()

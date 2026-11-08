@@ -3336,6 +3336,7 @@
   "suggestions": {
     "acceptSelected": "接受所選",
     "legacyHistory": "舊全域歷史",
+    "multiline": "多行",
     "unsafeSuffix": "無法安全填入，請手動編輯",
     "deleteHistory": "刪除歷史命令",
     "dismiss": "關閉",
@@ -3659,6 +3660,7 @@
     "multiLinePasteSendLineByLine": "逐行傳送",
     "multiLinePasteStats": "%{lines} 行，%{chars} 個字元",
     "multiLinePasteTextPlaceholder": "貼上文字",
+    "multiLineSuggestionRequiresBracketedPaste": "貼上後等待執行需要 Shell 支援括號貼上。可以複製文字，或選擇逐行傳送執行。",
     "multiLinePasteTitle": "多行貼上",
     "newConnection": "新增連線",
     "newSession": "新增工作階段",

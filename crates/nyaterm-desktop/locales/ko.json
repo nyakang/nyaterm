@@ -3336,6 +3336,7 @@
   "suggestions": {
     "acceptSelected": "선택 항목 적용",
     "legacyHistory": "이전 전역 기록",
+    "multiline": "여러 줄",
     "unsafeSuffix": "안전하게 입력할 수 없습니다. 직접 편집하세요",
     "deleteHistory": "기록 명령 삭제",
     "dismiss": "닫기",
@@ -3659,6 +3660,7 @@
     "multiLinePasteSendLineByLine": "한 줄씩",
     "multiLinePasteStats": "%{lines}줄, %{chars}자",
     "multiLinePasteTextPlaceholder": "텍스트 붙여넣기",
+    "multiLineSuggestionRequiresBracketedPaste": "실행하지 않고 붙여넣으려면 괄호 붙여넣기를 지원하는 셸이 필요합니다. 텍스트를 복사하거나 한 줄씩 전송하여 실행할 수 있습니다.",
     "multiLinePasteTitle": "여러 줄 붙여넣기",
     "newConnection": "새 연결",
     "newSession": "새 세션",

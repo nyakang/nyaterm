@@ -98,7 +98,11 @@ impl Fixture {
     }
 
     fn suggest_in_shell(&mut self, current: &str, target: &str) {
-        self.suggest(current, target);
+        if current.is_empty() {
+            self.update(|app, _, _| app.terminal.editing.clear_active());
+        } else {
+            self.suggest(current, target);
+        }
         self.update(|app, cx, id| {
             app.terminal.seed_session_view(
                 id.into(),
@@ -118,6 +122,17 @@ impl Fixture {
         let mut actual = vec![0; expected.len()];
         self.peer.read_exact(&mut actual).unwrap();
         assert_eq!(actual, expected);
+    }
+
+    fn with_window<R>(
+        &mut self,
+        action: impl FnOnce(&mut NyaTermApp, &mut Window, &mut Context<NyaTermApp>, &str) -> R,
+    ) -> R {
+        let app = self.app.clone();
+        let host = app.clone();
+        let id = self.id.clone();
+        let (_, cx) = self.cx.add_window_view(|_, _| PopupView(host));
+        cx.update(|window, cx| app.update(cx, |app, cx| action(app, window, cx, &id)))
     }
 
     fn assert_quiet(&mut self) {
@@ -1066,4 +1081,323 @@ fn disabled_fuzzy_candidate_never_writes_editing_keys() {
         );
     });
     fixture.assert_quiet();
+}
+
+#[test]
+fn multiline_candidates_open_review_without_writing_and_cancellation_preserves_input() {
+    for mode in [
+        nyaterm_core::completion::types::CompletionMode::History,
+        nyaterm_core::completion::types::CompletionMode::Token,
+    ] {
+        let mut f = Fixture::new();
+        let target = "echo first\\\r\n  second\n\necho third";
+        f.suggest_in_shell("下载驱动", target);
+        let version = f.update(|app, cx, _| {
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_show_multi_line_paste_dialog = false;
+            app.settings.replace_summary(settings);
+            app.terminal
+                .assist
+                .command_suggestions
+                .as_mut()
+                .unwrap()
+                .mode = mode;
+            let version = app.terminal.editing.state().unwrap().model.version;
+            assert!(app.handle_command_suggestion_key(&key("enter"), cx));
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            version
+        });
+        f.with_window(|app, window, cx, id| {
+            app.open_pending_suggestion_paste(window, cx);
+            assert!(app.terminal.overlay_visibility().paste_review);
+            let editor = app.terminal.paste_review_editor().unwrap();
+            assert_eq!(
+                editor.read(cx).value(cx),
+                "echo first\\\n  second\n\necho third"
+            );
+            assert_eq!(app.terminal.editing.state().unwrap().model.version, version);
+            app.close_multi_line_paste(window, cx);
+            assert!(app.terminal.paste.suggestion.is_none());
+            assert_eq!(app.terminal.editing.predicted_input().value, "下载驱动");
+            assert!(app.session.command_history_for(id).is_none());
+        });
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn reviewed_multiline_paste_replaces_the_query_once_and_preserves_the_edited_script() {
+    for current in ["", "echo", "下载驱动"] {
+        let mut f = Fixture::new();
+        f.suggest_in_shell(current, "echo first\necho second");
+        let version = f.update(|app, cx, id| {
+            app.terminal
+                .view
+                .views
+                .get_mut(id)
+                .unwrap()
+                .protocol_state
+                .bracketed_paste = true;
+            let version = app.terminal.editing.state().unwrap().model.version;
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::PasteReviewRequested
+            );
+            version
+        });
+        let target = "echo first\\\n  '中文 e\u{301}'\n\necho 😀";
+        f.with_window(|app, window, cx, id| {
+            app.open_pending_suggestion_paste(window, cx);
+            let editor = app.terminal.paste_review_editor().unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.replace_content(target, window, cx);
+            });
+            assert!(!app.suggestion_paste_needs_bracketed_shell());
+            app.direct_multi_line_paste(window, cx);
+            let state = app.terminal.editing.state().unwrap();
+            assert_eq!(state.model.input.value, target);
+            assert_eq!(state.model.input.cursor, target.len());
+            assert!(state.model.input.multiline);
+            assert_eq!(state.model.version, version + 1);
+            assert!(state.suggestion_fill.is_none());
+            assert!(app.session.command_history_for(id).is_none());
+            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+            assert!(!app.terminal.overlay_visibility().paste_review);
+        });
+        let mut expected = vec![0x7f; current.chars().count()];
+        expected.extend_from_slice(b"\x1b[200~");
+        expected.extend_from_slice(target.as_bytes());
+        expected.extend_from_slice(b"\x1b[201~");
+        f.receive(&expected);
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn multiline_direct_paste_rejects_shells_without_bracketed_paste() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("下载驱动", "echo first\necho second");
+    f.update(|app, cx, _| {
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::PasteReviewRequested
+        );
+    });
+    f.with_window(|app, window, cx, id| {
+        app.open_pending_suggestion_paste(window, cx);
+        assert!(app.suggestion_paste_needs_bracketed_shell());
+        app.direct_multi_line_paste(window, cx);
+        assert_eq!(app.terminal.editing.predicted_input().value, "下载驱动");
+        assert!(app.session.command_history_for(id).is_none());
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn reviewed_multiline_line_by_line_send_replaces_the_query_and_explicitly_submits() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("脚本", "echo first\necho second");
+    f.update(|app, cx, _| {
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::PasteReviewRequested
+        );
+    });
+    f.with_window(|app, window, cx, _| {
+        app.open_pending_suggestion_paste(window, cx);
+        app.send_multi_line_paste_by_line(window, cx);
+        assert!(app.terminal.paste.suggestion.is_none());
+        assert!(!app.terminal.overlay_visibility().paste_review);
+    });
+    f.receive(b"\x7f\x7fecho first\recho second\r");
+    f.assert_quiet();
+}
+
+#[test]
+fn review_confirmation_rechecks_stale_input_and_terminal_state_for_both_send_modes() {
+    for by_line in [false, true] {
+        for scenario in 0..8 {
+            let mut f = Fixture::new();
+            f.suggest_in_shell("脚本", "echo first\necho second");
+            f.update(|app, cx, id| {
+                app.terminal
+                    .view
+                    .views
+                    .get_mut(id)
+                    .unwrap()
+                    .protocol_state
+                    .bracketed_paste = true;
+                assert_eq!(
+                    app.submit_selected_command_suggestion(false, cx),
+                    SuggestionSubmitResult::PasteReviewRequested
+                );
+            });
+            f.with_window(|app, window, cx, id| {
+                app.open_pending_suggestion_paste(window, cx);
+                match scenario {
+                    0 => {
+                        app.note_shell_editing_input(b"X", cx);
+                        echo(app, cx, id, "脚本X");
+                    }
+                    1 => app.terminal.editing.state_mut().awaiting_snapshot = true,
+                    2 => {
+                        app.sync_input.toggle_broadcast_to_all();
+                    }
+                    3 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
+                    4 => {
+                        app.terminal
+                            .view
+                            .views
+                            .get_mut(id)
+                            .unwrap()
+                            .protocol_state
+                            .alternate_screen = true
+                    }
+                    5 => {
+                        app.session.select_active_session("fixture");
+                    }
+                    6 => app.security.activate_screen_lock("test lock".into()),
+                    7 => app.terminal.editing.state_mut().model.version += 1,
+                    _ => unreachable!(),
+                }
+                if by_line {
+                    app.send_multi_line_paste_by_line(window, cx);
+                } else {
+                    app.direct_multi_line_paste(window, cx);
+                }
+                assert!(app.terminal.paste.suggestion.is_none());
+                assert!(app.session.command_history_for(id).is_none());
+                assert!(app.terminal.assist.pending_command_history_entry.is_none());
+            });
+            f.assert_quiet();
+        }
+    }
+}
+
+#[test]
+fn multiline_paste_encoding_failure_does_not_erase_the_query() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("脚本", "echo first\necho 😀");
+    f.update(|app, cx, id| {
+        app.terminal
+            .view
+            .views
+            .get_mut(id)
+            .unwrap()
+            .protocol_state
+            .bracketed_paste = true;
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::PasteReviewRequested
+        );
+        let mut metadata = app.session.metadata(id).unwrap().clone();
+        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
+            config.encoding = "GBK".into();
+        }
+        app.session.register_session_metadata(id, metadata);
+    });
+    f.with_window(|app, window, cx, _| {
+        app.open_pending_suggestion_paste(window, cx);
+        app.direct_multi_line_paste(window, cx);
+        assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+        assert!(app.terminal.paste.suggestion.is_none());
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn multiline_paste_uses_native_delete_keys_and_encodes_only_the_paste_body() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("脚本", "echo 中\necho 文");
+    f.update(|app, cx, id| {
+        let protocol = &mut app.terminal.view.views.get_mut(id).unwrap().protocol_state;
+        protocol.bracketed_paste = true;
+        protocol.kitty_keyboard_disambiguate = true;
+        protocol.kitty_keyboard_report_event_types = true;
+        protocol.kitty_keyboard_report_all_keys_as_esc = true;
+        let mut metadata = app.session.metadata(id).unwrap().clone();
+        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
+            config.encoding = "GBK".into();
+        }
+        app.session.register_session_metadata(id, metadata);
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::PasteReviewRequested
+        );
+    });
+    f.with_window(|app, window, cx, _| {
+        app.open_pending_suggestion_paste(window, cx);
+        app.direct_multi_line_paste(window, cx);
+        assert_eq!(
+            app.terminal.editing.predicted_input().value,
+            "echo 中\necho 文"
+        );
+    });
+    let mut expected = b"\x1b[127;1:1u\x1b[127;1:3u".repeat(2);
+    expected.extend_from_slice(b"\x1b[200~echo \xd6\xd0\necho \xce\xc4\x1b[201~");
+    f.receive(&expected);
+    f.assert_quiet();
+}
+
+#[test]
+fn multiline_paste_write_failure_keeps_the_original_prediction_and_does_not_retry() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("脚本", "echo first\necho second");
+    f.update(|app, cx, id| {
+        app.terminal
+            .view
+            .views
+            .get_mut(id)
+            .unwrap()
+            .protocol_state
+            .bracketed_paste = true;
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::PasteReviewRequested
+        );
+    });
+    f.with_window(|app, window, cx, _| app.open_pending_suggestion_paste(window, cx));
+    f.manager.close(&f.id).unwrap();
+    f.with_window(|app, window, cx, id| {
+        app.direct_multi_line_paste(window, cx);
+        assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+        assert!(app.terminal.paste.suggestion.is_none());
+        assert!(app.session.command_history_for(id).is_none());
+        app.direct_multi_line_paste(window, cx);
+        assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+    });
+}
+
+#[test]
+fn clicking_a_multiline_candidate_opens_review_even_without_shell_editing_capability() {
+    let mut f = Fixture::new();
+    f.suggest("脚本", "echo first\necho second");
+    let position = f.update(|app, _, id| {
+        let placement = app
+            .suggestion_overlay_position_for_session(Some(id), 0, 0, 380., 76.)
+            .unwrap();
+        gpui::point(
+            gpui::px(placement.x + 150.),
+            gpui::px(placement.y + super::SUGGESTION_OVERLAY_HEADER_HEIGHT + 14.),
+        )
+    });
+    let app = f.app.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app));
+    cx.simulate_click(position, gpui::Modifiers::default());
+    f.update(|app, cx, _| {
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(app.terminal.overlay_visibility().paste_review);
+        assert!(app.suggestion_paste_needs_bracketed_shell());
+        assert!(app.suggestion_paste_cannot_replace_input());
+        assert_eq!(
+            app.terminal
+                .paste_review_editor()
+                .unwrap()
+                .read(cx)
+                .value(cx),
+            "echo first\necho second"
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+    });
+    f.assert_quiet();
 }

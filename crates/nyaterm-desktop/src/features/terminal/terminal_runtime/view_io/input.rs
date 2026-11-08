@@ -1254,6 +1254,26 @@ impl NyaTermApp {
         wire_bytes: &[u8],
         recording_bytes: &[u8],
     ) -> Result<(), String> {
+        self.write_session_framed_input_recorded_as(session_id, wire_bytes, recording_bytes, false)
+    }
+
+    /// Literal framing must also bypass Telnet's typed-Enter normalization.
+    pub(in crate::features) fn write_session_literal_wire_input_recorded_as(
+        &mut self,
+        session_id: &str,
+        wire_bytes: &[u8],
+        recording_bytes: &[u8],
+    ) -> Result<(), String> {
+        self.write_session_framed_input_recorded_as(session_id, wire_bytes, recording_bytes, true)
+    }
+
+    fn write_session_framed_input_recorded_as(
+        &mut self,
+        session_id: &str,
+        wire_bytes: &[u8],
+        recording_bytes: &[u8],
+        literal: bool,
+    ) -> Result<(), String> {
         if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
             state.suggestion_fill = None;
         }
@@ -1275,12 +1295,12 @@ impl NyaTermApp {
             .note_manual_takeover(session_id);
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::FramedInput);
         debug_assert!(!disposition.encode_session_charset);
-        if let Err(error) = self
-            .session
-            .manager()
-            .write(session_id, wire_bytes)
-            .map_err(|error| error.to_string())
-        {
+        let result = if literal {
+            self.session.manager().write_raw(session_id, wire_bytes)
+        } else {
+            self.session.manager().write(session_id, wire_bytes)
+        };
+        if let Err(error) = result.map_err(|error| error.to_string()) {
             self.record_terminal_session_write_failure(session_id, "framed input", &error);
             return Err(error);
         }

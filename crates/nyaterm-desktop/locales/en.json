@@ -3336,6 +3336,7 @@
   "suggestions": {
     "acceptSelected": "accept selected",
     "legacyHistory": "Legacy global history",
+    "multiline": "Multiline",
     "unsafeSuffix": "Cannot safely fill; edit manually",
     "deleteHistory": "Delete history command",
     "dismiss": "dismiss",
@@ -3659,6 +3660,7 @@
     "multiLinePasteSendLineByLine": "Line by line",
     "multiLinePasteStats": "%{lines} lines, %{chars} characters",
     "multiLinePasteTextPlaceholder": "Paste text",
+    "multiLineSuggestionRequiresBracketedPaste": "Pasting without execution requires a shell with bracketed paste enabled. You can copy the text or explicitly send it line by line.",
     "multiLinePasteTitle": "Multi-line Paste",
     "newConnection": "New Conn.",
     "newSession": "New Session",

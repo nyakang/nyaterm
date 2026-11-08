@@ -3336,6 +3336,7 @@
   "suggestions": {
     "acceptSelected": "accepter la sélection",
     "legacyHistory": "Ancien historique global",
+    "multiline": "Multiligne",
     "unsafeSuffix": "Saisie sûre impossible ; modifiez manuellement",
     "deleteHistory": "Supprimer la commande de l'historique",
     "dismiss": "ignorer",
@@ -3659,6 +3660,7 @@
     "multiLinePasteSendLineByLine": "Ligne par ligne",
     "multiLinePasteStats": "%{lines} lignes, %{chars} caractères",
     "multiLinePasteTextPlaceholder": "Collez le texte",
+    "multiLineSuggestionRequiresBracketedPaste": "Le collage sans exécution nécessite un shell avec le mode de collage encadré activé. Vous pouvez copier le texte ou choisir de l’envoyer ligne par ligne pour l’exécuter.",
     "multiLinePasteTitle": "Collage multiligne",
     "newConnection": "Nouv. conn.",
     "newSession": "Nouvelle session",

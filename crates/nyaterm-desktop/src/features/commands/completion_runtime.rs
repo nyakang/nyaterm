@@ -8,12 +8,10 @@ use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
-    CompletionScope, ShellCommandContext,
+    CompletionScope, ShellCommandContext, supports_full_command_fill,
 };
 use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
 use nyaterm_core::models::quick_commands::{CommandHistoryEntry, QuickCommand};
-use nyaterm_core::terminal::editing::supports_scalar_editing;
-use nyaterm_core::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
 use std::collections::HashMap;
 use std::sync::{
@@ -355,9 +353,7 @@ fn full_history(
             } else {
                 (CandidateKind::History, CandidateSource::History)
             };
-            let fillable = !item.command.is_empty()
-                && item.command.len() <= MAX_TRACKED_INPUT_BYTES
-                && supports_scalar_editing(&item.command);
+            let fillable = supports_full_command_fill(&item.command);
             let matching: Vec<_> = records
                 .iter()
                 .filter(|record| record.command == item.command)
@@ -418,6 +414,51 @@ mod tests {
         ShellDialect,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn both_modes_offer_multiline_quick_commands_for_paste_review() {
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use nyaterm_core::completion::types::CandidateKind;
+
+        let command = "echo first\\\r\n  second\n\necho third";
+        let quick = serde_json::from_value(serde_json::json!({
+            "id": "multiline", "label": "下载驱动", "command": command
+        }))
+        .unwrap();
+        let mut query = CompletionQuery {
+            context: ShellCommandContext {
+                scope: CompletionScope::new(&["multiline"]),
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "下载驱动".into(),
+            mode: CompletionMode::History,
+            quick: Arc::from([quick]),
+            min: 2,
+            max: 64,
+        };
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        for mode in [CompletionMode::History, CompletionMode::Token] {
+            query.mode = mode;
+            for input in ["下载驱动", ""] {
+                query.input = input.into();
+                let candidates = search_candidates(
+                    &mut engine,
+                    &TokenHistoryIndex::default(),
+                    &query,
+                    &mut matcher,
+                );
+                let candidate = &candidates[0];
+                assert_eq!(candidate.kind, CandidateKind::QuickCommand);
+                assert_eq!(candidate.display, "下载驱动");
+                assert_eq!(candidate.target_line(input).as_deref(), Some(command));
+                assert!(candidate.fillable);
+            }
+        }
+    }
 
     #[test]
     fn both_modes_find_cross_word_history_and_named_quick_commands() {
