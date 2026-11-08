@@ -61,7 +61,7 @@ impl NyaTermApp {
         }
     }
     fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
-        if let Some(input) = self.existing_text_input(&BatchFieldId::Password.text_input_id()) {
+        if let Some(input) = self.existing_text_input(BatchFieldId::Password.text_input_id()) {
             input.update(cx, |state, cx| state.discard_content(cx));
         }
         self.forget_text_inputs(ASSET_BATCH_TEXT_PREFIX);
@@ -90,7 +90,7 @@ impl NyaTermApp {
     /// Close without touching the native window; used by the window's own
     /// close handler, which removes the window itself.
     pub(in crate::features) fn dismiss_asset_batch_edit(&mut self, cx: &mut Context<Self>) {
-        if let Some(input) = self.existing_text_input(&BatchFieldId::Password.text_input_id()) {
+        if let Some(input) = self.existing_text_input(BatchFieldId::Password.text_input_id()) {
             input.update(cx, |state, cx| state.discard_content(cx));
         }
         self.start_workspace.clear_asset_batch_edit();

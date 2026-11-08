@@ -686,7 +686,7 @@ fn batch_text_events_update_apply_state_and_keep_removes_patch() {
         app.set_asset_batch_mode(BatchFieldId::Description, BatchEditMode::Set, cx);
         assert!(app.start_workspace.asset_batch().build_edits().is_err());
         let input = app
-            .existing_text_input(&BatchFieldId::Description.text_input_id())
+            .existing_text_input(BatchFieldId::Description.text_input_id())
             .unwrap();
         input.update(cx, |_, cx| {
             cx.emit(NyaInputEvent::Changed("description".into()))
@@ -704,7 +704,7 @@ fn batch_text_events_update_apply_state_and_keep_removes_patch() {
         app.set_asset_batch_scope(Some(nyaterm_core::ConnectionBatchKind::Ssh), cx);
         app.set_asset_batch_mode(BatchFieldId::Password, BatchEditMode::Set, cx);
         let input = app
-            .existing_text_input(&BatchFieldId::Password.text_input_id())
+            .existing_text_input(BatchFieldId::Password.text_input_id())
             .unwrap();
         input.update(cx, |state, cx| {
             // This offscreen field has not mounted its component yet. Queue its

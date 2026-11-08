@@ -200,12 +200,10 @@ impl NyaTabs {
             .iter()
             .map(|item| {
                 let run = style.to_run(item.label.len());
-                let line = window.text_system().shape_line(
-                    item.label.clone(),
-                    font_size,
-                    &[run],
-                    None,
-                );
+                let line =
+                    window
+                        .text_system()
+                        .shape_line(item.label.clone(), font_size, &[run], None);
                 f32::from(line.width)
             })
             .collect()
@@ -257,7 +255,9 @@ impl NyaTabs {
                         tab.icon(Icon::default().path(path))
                     })
                     .when(show_tooltip, |tab| {
-                        tab.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                        tab.tooltip(move |window, cx| {
+                            Tooltip::new(tooltip.clone()).build(window, cx)
+                        })
                     })
                     .disabled(item.disabled)
                     .map(|tab| match layout {
@@ -479,7 +479,9 @@ mod tests {
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| LabelTabFixture);
         cx.run_until_parked();
-        let bounds = cx.debug_bounds("label-tab").expect("label tab not rendered");
+        let bounds = cx
+            .debug_bounds("label-tab")
+            .expect("label tab not rendered");
         assert_eq!(
             bounds.size.width,
             px(PROBE_CONTENT_WIDTH + SEGMENTED_LABEL_PADDING_X * 2.)

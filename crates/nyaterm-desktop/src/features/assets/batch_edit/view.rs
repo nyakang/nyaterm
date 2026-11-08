@@ -229,13 +229,10 @@ impl NyaTermApp {
                     .w_full()
                     .h(px(if multi_line { 80. } else { 32. }))
                     .children(
-                        self.existing_text_input(&field.text_input_id())
+                        self.existing_text_input(field.text_input_id())
                             .map(|entity| {
-                                let shell = NyaInputShell::new(
-                                    SharedString::from(field.text_input_id()),
-                                    &entity,
-                                )
-                                .height(px(if multi_line { 80. } else { 32. }));
+                                let shell = NyaInputShell::new(field.text_input_id(), &entity)
+                                    .height(px(if multi_line { 80. } else { 32. }));
                                 if multi_line {
                                     shell.multi_line()
                                 } else {
