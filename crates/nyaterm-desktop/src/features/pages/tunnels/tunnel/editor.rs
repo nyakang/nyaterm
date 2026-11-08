@@ -135,14 +135,14 @@ pub(in crate::features::pages::tunnels) fn network_tunnel_editor_content(
                     cx,
                 ))),
         )
-        .child(tunnel_editor_searchable_selector(
+        .child(tunnel_editor_selector_with_search(
             app,
             palette,
             "network-tunnel-editor-connection",
             t!("network.selectedConnection"),
             connection_options,
             selected_connection,
-            t!("network.searchConnections"),
+            Some(t!("network.searchConnections").into()),
             cx,
         ))
         .child(
@@ -292,31 +292,6 @@ where
     I: Into<String>,
 {
     tunnel_editor_selector_with_search(app, palette, id, label, options, selected_value, None, cx)
-}
-
-fn tunnel_editor_searchable_selector<I>(
-    app: &mut NyaTermApp,
-    palette: crate::theme::ThemePalette,
-    id: I,
-    label: impl Into<SharedString>,
-    options: Vec<NyaSelectOption>,
-    selected_value: String,
-    search_placeholder: impl Into<SharedString>,
-    cx: &mut Context<NyaTermApp>,
-) -> impl IntoElement
-where
-    I: Into<String>,
-{
-    tunnel_editor_selector_with_search(
-        app,
-        palette,
-        id,
-        label,
-        options,
-        selected_value,
-        Some(search_placeholder.into()),
-        cx,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]

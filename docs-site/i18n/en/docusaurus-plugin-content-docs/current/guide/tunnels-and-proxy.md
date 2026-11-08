@@ -44,9 +44,9 @@ Example:
 nc -X connect -x jump.example.com:1080 %h %p
 ```
 
-If your environment depends on a custom gateway, bastion command, or local proxy program, save it as a ProxyCommand profile and select it from the advanced section of an SSH connection.
+If your environment depends on a custom gateway, bastion command, or local proxy program, save it as a ProxyCommand profile and select it from the connection's network configuration page.
 
-Proxies are managed centrally in the Network panel, then selected from the advanced section of an SSH connection.
+Proxies are managed centrally in the Network panel. SSH, Telnet / Raw TCP, RDP, and VNC connections can select them from their network configuration page.
 
 Typical use cases:
 
@@ -56,7 +56,7 @@ Typical use cases:
 
 ## Jump hosts
 
-A jump host is SSH-specific. It does not replace a proxy. Instead, it uses another saved SSH connection as the intermediate entry point.
+A jump host uses another saved SSH connection as the intermediate entry point and can forward SSH, Telnet / Raw TCP, RDP, and VNC connections.
 
 Typical use cases:
 
@@ -69,6 +69,14 @@ In the SSH connection advanced section, you can pick an existing saved SSH conne
 - Missing referenced jump hosts are blocked or surfaced for correction
 - Recursive relationships are rejected so connections cannot loop forever
 - Multi-hop designs should stay as clear one-way chains, for example `local -> bastion -> internal host`
+
+### Telnet / Raw TCP
+
+Select a proxy or SSH jump host on the connection's network configuration page. Keep the target host and port set to the final device's address, for example `192.168.1.100:23`. Raw TCP mode uses the same network configuration.
+
+When both a proxy and a jump host are selected, the jump host takes priority and this connection's proxy is not used. If the jump host also needs a proxy, configure it on that jump host's SSH connection. Multi-hop chains use each jump host connection's settings.
+
+SSH encrypts the connection from the client to the jump host; the connection from the jump host to the Telnet / Raw TCP device remains unencrypted. ProxyCommand has no standard protocol for confirming the remote connection. Once the command and its pipes are established, startup is considered successful; a command exit or broken pipe ends the session.
 
 ## Tunnels
 
