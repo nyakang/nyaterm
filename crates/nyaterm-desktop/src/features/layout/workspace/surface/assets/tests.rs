@@ -14,6 +14,7 @@ use nyaterm_ui::{NyaDialogWindowExt as _, NyaInputEvent, nya_root};
 
 use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
+use crate::features::assets::AssetBatchSaveSummary;
 
 use super::{
     asset_action_left_in_decoration, asset_row_fills, contrast_ratio, relative_luminance,
@@ -767,7 +768,14 @@ fn stale_batch_completion_preserves_a_new_editor_and_refresh_failure_reports_sav
             assert!(app.start_workspace.asset_batch().matches_generation(new));
             assert!(app.start_workspace.asset_batch_saving());
             assert!(app.start_workspace.asset_batch().error().is_none());
-            app.finish_asset_batch_save(old, Ok((1, 0)), cx);
+            app.finish_asset_batch_save(
+                old,
+                Ok(AssetBatchSaveSummary {
+                    updated_connections: 1,
+                    ..Default::default()
+                }),
+                cx,
+            );
             assert!(app.start_workspace.asset_batch().matches_generation(new));
             assert!(app.start_workspace.asset_batch_saving());
         })
@@ -776,12 +784,28 @@ fn stale_batch_completion_preserves_a_new_editor_and_refresh_failure_reports_sav
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.finish_asset_batch_refresh(
+                AssetBatchSaveSummary {
+                    updated_connections: 1,
+                    ..Default::default()
+                },
                 Err(nyaterm_store::StorageError::InvalidData("refresh fixture".into()).into()),
                 cx,
             );
-            assert_eq!(
-                app.shell.status(),
-                rust_i18n::t!("assets.batch.refreshFailed").as_ref()
+            assert!(
+                app.shell
+                    .status()
+                    .contains(rust_i18n::t!("assets.batch.refreshFailed").as_ref())
+            );
+            assert!(
+                app.shell.status().contains(
+                    rust_i18n::t!(
+                        "assets.batch.saved",
+                        updated = 1,
+                        unchanged = 0,
+                        skippedFields = 0
+                    )
+                    .as_ref()
+                )
             );
             assert!(app.start_workspace.asset_batch_is_open());
             assert!(app.start_workspace.asset_batch_saving());

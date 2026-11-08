@@ -1,4 +1,7 @@
-use super::basis::{batch_kind_value, compute_batch_basis, parse_batch_kind, select_initial_value};
+use super::basis::{
+    batch_kind_value, batch_skip_reasons_label, compute_batch_basis, parse_batch_kind,
+    select_initial_value,
+};
 use super::fields::{BatchFieldId, EDITABLE_FIELDS, FieldBasis};
 use super::options;
 use super::{ASSET_BATCH_SELECT_PREFIX, ASSET_BATCH_TEXT_PREFIX};
@@ -8,10 +11,43 @@ use crate::features::text_inputs::TextInputSetup;
 use gpui::{Context, Window};
 use nyaterm_core::models::SshProfile;
 use nyaterm_core::models::connection_batch::{
-    ConnectionBatchKind, apply_connection_batch_edit, validate_connection_batch_edit,
+    ConnectionBatchKind, ConnectionBatchSkipCounts, apply_connection_batch_edit,
+    validate_connection_batch_edit,
 };
 use nyaterm_store::StoreDomain;
 use rust_i18n::t;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::features) struct AssetBatchSaveSummary {
+    pub updated_connections: usize,
+    pub unchanged_connections: usize,
+    pub skipped_fields: usize,
+    pub skipped_reasons: ConnectionBatchSkipCounts,
+}
+
+impl AssetBatchSaveSummary {
+    fn message(&self) -> String {
+        let summary = t!(
+            "assets.batch.saved",
+            updated = self.updated_connections,
+            unchanged = self.unchanged_connections,
+            skippedFields = self.skipped_fields
+        )
+        .to_string();
+        let reasons = batch_skip_reasons_label(self.skipped_reasons);
+        if reasons.is_empty() {
+            summary
+        } else {
+            format!("{summary} {reasons}")
+        }
+    }
+}
+
+struct PreparedAssetBatchUpdates {
+    connections: Vec<nyaterm_core::models::SavedConnection>,
+    summary: AssetBatchSaveSummary,
+}
+
 impl NyaTermApp {
     /// Open the editor for the current asset selection. Creating the widget
     /// entities here, in an event handler, keeps the render path read-only.
@@ -589,9 +625,9 @@ impl NyaTermApp {
         self.start_workspace.set_asset_batch_error(None);
         self.reseed_asset_batch_inputs(cx);
         let request = nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
-            let changed = prepare_asset_batch_updates(store, &targets, &edits)?;
-            store.save_connections_atomic(&changed)?;
-            Ok((changed.len(), targets.len() - changed.len()))
+            let prepared = prepare_asset_batch_updates(store, &targets, &edits)?;
+            store.save_connections_atomic(&prepared.connections)?;
+            Ok(prepared.summary)
         });
         let queued = self.submit_store_request(
             0,
@@ -608,7 +644,7 @@ impl NyaTermApp {
     pub(in crate::features) fn finish_asset_batch_save(
         &mut self,
         generation: u64,
-        outcome: Result<(usize, usize), nyaterm_store::StoreOperationError>,
+        outcome: Result<AssetBatchSaveSummary, nyaterm_store::StoreOperationError>,
         cx: &mut Context<Self>,
     ) {
         let current = self
@@ -616,27 +652,28 @@ impl NyaTermApp {
             .asset_batch()
             .matches_generation(generation);
         match outcome {
-            Ok((updated, skipped)) => {
+            Ok(summary) => {
                 if current {
                     self.close_asset_batch_edit(cx);
                 }
-                self.shell.set_status(
-                    t!("assets.batch.saved", updated = updated, skipped = skipped).to_string(),
-                );
+                self.shell.set_status(summary.message());
                 let reload = nyaterm_store::store_request(StoreDomain::Connections, |store| {
                     store.load_sessions()
                 });
                 let queued = self.submit_store_request(
                     0,
                     reload,
-                    |app, event, cx| {
-                        app.finish_asset_batch_refresh(event.outcome, cx);
+                    move |app, event, cx| {
+                        app.finish_asset_batch_refresh(summary, event.outcome, cx);
                     },
                     cx,
                 );
                 if !queued {
-                    self.shell
-                        .set_status(t!("assets.batch.refreshFailed").to_string());
+                    self.shell.set_status(format!(
+                        "{} {}",
+                        summary.message(),
+                        t!("assets.batch.refreshFailed")
+                    ));
                 }
             }
             Err(error) => {
@@ -656,14 +693,20 @@ impl NyaTermApp {
 
     pub(in crate::features) fn finish_asset_batch_refresh(
         &mut self,
+        summary: AssetBatchSaveSummary,
         outcome: Result<nyaterm_core::SessionsConfig, nyaterm_store::StoreOperationError>,
         cx: &mut Context<Self>,
     ) {
         match outcome {
-            Ok(sessions) => self.apply_loaded_sessions(sessions, cx),
-            Err(_) => self
-                .shell
-                .set_status(t!("assets.batch.refreshFailed").to_string()),
+            Ok(sessions) => {
+                self.apply_loaded_sessions(sessions, cx);
+                self.shell.set_status(summary.message());
+            }
+            Err(_) => self.shell.set_status(format!(
+                "{} {}",
+                summary.message(),
+                t!("assets.batch.refreshFailed")
+            )),
         }
         cx.notify();
     }
@@ -676,7 +719,7 @@ fn prepare_asset_batch_updates(
         Option<ConnectionBatchKind>,
         nyaterm_core::models::connection_batch::ConnectionBatchEdit,
     >,
-) -> Result<Vec<nyaterm_core::models::SavedConnection>, nyaterm_store::StorageError> {
+) -> Result<PreparedAssetBatchUpdates, nyaterm_store::StorageError> {
     let mut latest = Vec::with_capacity(targets.len());
     for (id, kind) in targets {
         let connection = store.get_connection(id)?.ok_or_else(|| {
@@ -694,19 +737,28 @@ fn prepare_asset_batch_updates(
         store.validate_connection_batch_references(edit)?;
     }
     let mut changed = Vec::new();
+    let mut summary = AssetBatchSaveSummary::default();
     for (mut connection, kind) in latest {
         let original = connection.clone();
-        if let Some(edit) = edits.get(&None) {
-            apply_connection_batch_edit(&mut connection, edit);
-        }
-        if let Some(edit) = edits.get(&Some(kind)) {
-            apply_connection_batch_edit(&mut connection, edit);
+        for edit in [edits.get(&None), edits.get(&Some(kind))]
+            .into_iter()
+            .flatten()
+        {
+            let report = apply_connection_batch_edit(&mut connection, edit);
+            summary.skipped_fields += report.skipped_fields;
+            summary.skipped_reasons.merge(report.skipped_reasons);
         }
         if connection != original {
             changed.push(connection);
+            summary.updated_connections += 1;
+        } else {
+            summary.unchanged_connections += 1;
         }
     }
-    Ok(changed)
+    Ok(PreparedAssetBatchUpdates {
+        connections: changed,
+        summary,
+    })
 }
 
 #[cfg(test)]
@@ -714,11 +766,167 @@ mod tests {
     use super::prepare_asset_batch_updates;
     use nyaterm_core::models::SavedConnection;
     use nyaterm_core::models::connection_batch::{
-        BatchField, ConnectionBatchEdit, ConnectionBatchKind,
+        BatchField, ConnectionBatchEdit, ConnectionBatchKind, ConnectionBatchSkipReason,
     };
     use nyaterm_core::test_support::TestTempDir;
     use nyaterm_store::ConnectionStore;
     use std::collections::HashMap;
+
+    fn rdp(id: &str, backend: &str) -> SavedConnection {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "type": "rdp", "host": "example.test", "username": "user",
+            "backend": backend, "description": "original", "future-option": { "enabled": true }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn partial_field_skips_are_reported_when_every_connection_updates() {
+        let dir = TestTempDir::new("nyaterm-batch-partial-fields");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let originals = [rdp("a", "builtin"), rdp("b", "mstsc")];
+        store.save_connections_atomic(&originals).unwrap();
+        let originals =
+            originals.map(|connection| store.get_connection(&connection.id).unwrap().unwrap());
+        let targets = vec![
+            ("a".into(), ConnectionBatchKind::Rdp),
+            ("b".into(), ConnectionBatchKind::Rdp),
+        ];
+        let edits = HashMap::from([
+            (
+                None,
+                ConnectionBatchEdit {
+                    description: BatchField::Set("updated".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                Some(ConnectionBatchKind::Rdp),
+                ConnectionBatchEdit {
+                    rdp_use_nla: BatchField::Set(false),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let prepared = prepare_asset_batch_updates(&store, &targets, &edits).unwrap();
+        assert_eq!(prepared.summary.updated_connections, 2);
+        assert_eq!(prepared.summary.unchanged_connections, 0);
+        assert_eq!(prepared.summary.skipped_fields, 1);
+        assert_eq!(
+            prepared
+                .summary
+                .skipped_reasons
+                .count(ConnectionBatchSkipReason::MstscBackend),
+            1
+        );
+        store
+            .save_connections_atomic(&prepared.connections)
+            .unwrap();
+        for (original, expected_nla) in originals.iter().zip([false, true]) {
+            let actual = store.get_connection(&original.id).unwrap().unwrap();
+            let mut expected = original.clone();
+            expected.description = Some("updated".into());
+            assert_eq!(actual.created_at_ms, original.created_at_ms);
+            assert!(actual.updated_at_ms >= original.updated_at_ms);
+            expected.updated_at_ms = actual.updated_at_ms;
+            if let nyaterm_core::models::ConnectionType::Rdp { security, .. } = &mut expected.config
+            {
+                security.use_nla = expected_nla;
+            }
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn identical_values_and_all_skipped_fields_preserve_data_and_report_no_changes() {
+        let dir = TestTempDir::new("nyaterm-batch-no-change");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let originals = [rdp("a", "mstsc"), rdp("b", "mstsc")];
+        store.save_connections_atomic(&originals).unwrap();
+        let originals =
+            originals.map(|connection| store.get_connection(&connection.id).unwrap().unwrap());
+        let targets = vec![
+            ("a".into(), ConnectionBatchKind::Rdp),
+            ("b".into(), ConnectionBatchKind::Rdp),
+        ];
+        for (scope, edit, skipped) in [
+            (
+                None,
+                ConnectionBatchEdit {
+                    description: BatchField::Set("original".into()),
+                    ..Default::default()
+                },
+                0,
+            ),
+            (
+                Some(ConnectionBatchKind::Rdp),
+                ConnectionBatchEdit {
+                    rdp_use_nla: BatchField::Set(false),
+                    ..Default::default()
+                },
+                2,
+            ),
+        ] {
+            let prepared =
+                prepare_asset_batch_updates(&store, &targets, &HashMap::from([(scope, edit)]))
+                    .unwrap();
+            assert!(prepared.connections.is_empty());
+            assert_eq!(prepared.summary.updated_connections, 0);
+            assert_eq!(prepared.summary.unchanged_connections, 2);
+            assert_eq!(prepared.summary.skipped_fields, skipped);
+            assert_eq!(
+                prepared
+                    .summary
+                    .skipped_reasons
+                    .count(ConnectionBatchSkipReason::MstscBackend),
+                skipped
+            );
+            store
+                .save_connections_atomic(&prepared.connections)
+                .unwrap();
+            for original in &originals {
+                assert_eq!(
+                    store.get_connection(&original.id).unwrap().unwrap(),
+                    *original
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_reference_rejects_all_updates_before_persistence() {
+        let dir = TestTempDir::new("nyaterm-batch-reference-conflict");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "a", "name": "a", "type": "ssh", "host": "example.test", "username": "user"
+        }))
+        .unwrap();
+        store
+            .save_connections_atomic(std::slice::from_ref(&original))
+            .unwrap();
+        let original = store.get_connection(&original.id).unwrap().unwrap();
+        let edits = HashMap::from([
+            (
+                None,
+                ConnectionBatchEdit {
+                    description: BatchField::Set("updated".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                Some(ConnectionBatchKind::Ssh),
+                ConnectionBatchEdit {
+                    account_id: BatchField::Set("missing-account".into()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert!(
+            prepare_asset_batch_updates(&store, &[("a".into(), ConnectionBatchKind::Ssh)], &edits)
+                .is_err()
+        );
+        assert_eq!(store.get_connection("a").unwrap().unwrap(), original);
+    }
 
     #[test]
     fn changed_protocol_or_deleted_target_rejects_the_whole_batch_without_writes() {

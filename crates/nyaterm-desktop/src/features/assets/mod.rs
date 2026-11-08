@@ -24,6 +24,8 @@ use std::sync::Arc;
 
 mod batch_edit;
 
+#[cfg(test)]
+pub(in crate::features) use batch_edit::AssetBatchSaveSummary;
 pub(in crate::features) use batch_edit::{
     AssetBatchEditDraft, BatchEditMode, BatchFieldId, FieldBasis,
 };

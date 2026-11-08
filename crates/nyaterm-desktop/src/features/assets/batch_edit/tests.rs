@@ -188,6 +188,7 @@ fn every_batch_field_label_exists_in_all_supported_locales() {
             );
         }
         for (key, placeholders) in [
+            ("saved", &["updated", "unchanged", "skippedFields"][..]),
             ("summary", &["connections", "fields"][..]),
             ("fieldApplicability", &["applicable", "total"][..]),
             ("skipProtocol", &["count"][..]),
