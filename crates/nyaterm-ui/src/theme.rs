@@ -83,6 +83,27 @@ impl ThemePalette {
         (mix(16) << 16) | (mix(8) << 8) | mix(0)
     }
 
+    /// True when this palette paints a dark shell.
+    pub fn is_dark(self) -> bool {
+        relative_luminance(self.bg) < 0.5
+    }
+
+    /// The single background token for every input surface: single-line and
+    /// multi-line text fields, password and search fields, number fields, and
+    /// select triggers.
+    ///
+    /// Light themes use pure white so inputs read as the same surface on any
+    /// panel. Dark themes keep the palette's own `input` token instead of
+    /// borrowing white, so the text colors written for that theme stay readable.
+    /// Do not use this for tabs, cards, hover fills, or terminal surfaces.
+    pub fn input_surface(self) -> u32 {
+        if self.is_dark() {
+            self.input
+        } else {
+            0x00ff_ffff
+        }
+    }
+
     /// Keep the cursor visible without changing terminal foreground/background colors.
     pub fn apply_cursor_contrast_ratio(&mut self, ratio: f32) {
         if ratio <= 1.01 {
@@ -1276,6 +1297,24 @@ mod tests {
             assert_eq!(palette.accent, accent, "{id} accent");
         }
     }
+    #[test]
+    fn input_surface_is_white_on_light_themes_and_keeps_dark_theme_input() {
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = super::theme_palette(id);
+            let surface = palette.input_surface();
+            if palette.is_dark() {
+                assert_eq!(surface, palette.input, "{id} dark input surface");
+            } else {
+                assert_eq!(surface, 0xffffff, "{id} light input surface");
+            }
+            // Normal input text must stay readable on the unified surface.
+            assert!(
+                super::contrast_ratio(palette.text, surface) >= 4.5,
+                "{id} text contrast on input surface"
+            );
+        }
+    }
+
     #[test]
     fn custom_colors_cover_extended_tokens_and_unknown_ids_fall_back() {
         let mut theme = nyaterm_core::themes::builtins()[0].copy_as_custom();

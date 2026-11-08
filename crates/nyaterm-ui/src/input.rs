@@ -14,6 +14,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Si
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
 use crate::menu::{NyaContextMenu, NyaMenuItem};
+use crate::theme_bridge::input_surface_color;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -752,6 +753,7 @@ impl Render for NyaInputState {
         match state {
             ComponentState::Input(state) => configure_secret_input(
                 Input::new(&state)
+                    .bg(input_surface_color(cx))
                     .disabled(self.disabled)
                     .readonly(self.readonly),
                 cx.entity(),
@@ -766,6 +768,7 @@ impl Render for NyaInputState {
             )
             .into_any_element(),
             ComponentState::Textarea(state) => Textarea::new(&state)
+                .bg(input_surface_color(cx))
                 .disabled(self.disabled)
                 .readonly(self.readonly)
                 .h_full()
@@ -866,6 +869,7 @@ impl RenderOnce for NyaInput {
         };
         div()
             .size_full()
+            .bg(input_surface_color(cx))
             .when(!multi_line, |this| this.flex().items_center())
             .capture_any_mouse_down(|_, _, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
@@ -1096,6 +1100,7 @@ impl RenderOnce for NyaInputShell {
         let debug_selector = id.to_string();
         let prefix_debug_selector = format!("{}-prefix", id);
         let has_footer = footer.is_some();
+        let input_surface = input_surface_color(cx);
         let input = match state {
             ComponentState::Input(state) => {
                 let mut input = Input::new(&state)
@@ -1104,7 +1109,8 @@ impl RenderOnce for NyaInputShell {
                     .bordered(framed)
                     .focus_bordered(framed)
                     .disabled(disabled)
-                    .readonly(readonly);
+                    .readonly(readonly)
+                    .when(framed, |this| this.bg(input_surface));
                 if multi_line || state_multi_line {
                     input = input.h(px(88.));
                 }
@@ -1149,7 +1155,7 @@ impl RenderOnce for NyaInputShell {
                         this.rounded(theme.radius)
                             .border_1()
                             .border_color(if focused { theme.ring } else { theme.input })
-                            .bg(theme.input.opacity(if theme.is_dark() { 0.3 } else { 0.0 }))
+                            .bg(input_surface)
                     })
                     .child(
                         div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
@@ -1169,12 +1175,14 @@ impl RenderOnce for NyaInputShell {
                 .bordered(framed)
                 .disabled(disabled)
                 .readonly(readonly)
+                .when(framed, |this| this.bg(input_surface))
                 .into_any_element(),
             ComponentState::Textarea(state) => Textarea::new(&state)
                 .appearance(framed)
                 .bordered(framed)
                 .disabled(disabled)
                 .readonly(readonly)
+                .when(framed, |this| this.bg(input_surface))
                 .h(if fill_height {
                     gpui::relative(1.)
                 } else {

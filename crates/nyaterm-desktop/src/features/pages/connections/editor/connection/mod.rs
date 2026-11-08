@@ -2,6 +2,7 @@ use crate::models::ConnectionEditorFocusTarget;
 mod authentication;
 mod layout;
 mod local;
+pub(in crate::features) mod options;
 mod rdp;
 mod recording;
 mod serial;
@@ -23,7 +24,7 @@ use gpui::{
     },
     px, rgb, rgba, svg,
 };
-use nyaterm_core::{ConnectionType, Group, SavedConnection, natural_compare, truncate_preview};
+use nyaterm_core::{Group, SavedConnection, natural_compare, truncate_preview};
 use nyaterm_ui::{
     NyaCheckbox, NyaInput, NyaPopover, NyaScrollArea, NyaScrollable, NyaSelectOption,
     NyaSelectState, NyaSwitch, NyaTooltip,
@@ -135,78 +136,6 @@ impl NyaTermApp {
                 option
             })
             .collect()
-    }
-
-    pub(super) fn ssh_agent_endpoint_value(
-        endpoint: &nyaterm_core::SshAgentEndpoint,
-    ) -> &'static str {
-        match endpoint {
-            nyaterm_core::SshAgentEndpoint::Auto => "auto",
-            nyaterm_core::SshAgentEndpoint::Environment { .. } => "environment",
-            nyaterm_core::SshAgentEndpoint::UnixSocket { .. } => "unix_socket",
-            nyaterm_core::SshAgentEndpoint::WindowsOpenSsh => "windows_openssh",
-            nyaterm_core::SshAgentEndpoint::Pageant => "pageant",
-        }
-    }
-
-    pub(super) fn ssh_agent_endpoint_choices(
-        endpoint: &nyaterm_core::SshAgentEndpoint,
-    ) -> Vec<ConnectionEditorChoice> {
-        let selected = Self::ssh_agent_endpoint_value(endpoint);
-        let mut choices = vec![ConnectionEditorChoice::new(
-            Some("auto".to_string()),
-            t!("dialog.sshAgentAuto"),
-            selected == "auto",
-        )];
-        if cfg!(unix) {
-            choices.extend([
-                ConnectionEditorChoice::new(
-                    Some("environment".to_string()),
-                    t!("dialog.sshAgentEnvironment"),
-                    selected == "environment",
-                ),
-                ConnectionEditorChoice::new(
-                    Some("unix_socket".to_string()),
-                    t!("dialog.sshAgentUnixSocket"),
-                    selected == "unix_socket",
-                ),
-            ]);
-        }
-        if cfg!(windows) {
-            choices.extend([
-                ConnectionEditorChoice::new(
-                    Some("windows_openssh".to_string()),
-                    t!("dialog.sshAgentWindowsOpenSsh"),
-                    selected == "windows_openssh",
-                ),
-                ConnectionEditorChoice::new(
-                    Some("pageant".to_string()),
-                    t!("dialog.sshAgentPageant"),
-                    selected == "pageant",
-                ),
-            ]);
-        }
-        if !nyaterm_core::ssh_agent_endpoint_supported_on_current_platform(endpoint) {
-            let label = match endpoint {
-                nyaterm_core::SshAgentEndpoint::Environment { .. } => {
-                    t!("dialog.sshAgentEnvironment")
-                }
-                nyaterm_core::SshAgentEndpoint::UnixSocket { .. } => {
-                    t!("dialog.sshAgentUnixSocket")
-                }
-                nyaterm_core::SshAgentEndpoint::Pageant => t!("dialog.sshAgentPageant"),
-                nyaterm_core::SshAgentEndpoint::WindowsOpenSsh => {
-                    t!("dialog.sshAgentWindowsOpenSsh")
-                }
-                nyaterm_core::SshAgentEndpoint::Auto => t!("dialog.sshAgentAuto"),
-            };
-            choices.push(ConnectionEditorChoice::new(
-                Some(selected.to_string()),
-                format!("{} ({})", label, t!("dialog.sshAgentUnavailableOnPlatform")),
-                true,
-            ));
-        }
-        choices
     }
 
     fn connection_editor_surface(
@@ -381,64 +310,18 @@ impl NyaTermApp {
                     .map(|connection| connection.name.clone())
             })
             .unwrap_or_else(|| t!("dialog.noProxyJump").to_string());
-        let auth_options = [
-            ("none", t!("dialog.noAuthentication")),
-            ("password", t!("dialog.password")),
-            ("key", t!("dialog.privateKey")),
-            ("agent", t!("dialog.sshAgent")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(Some(value.to_string()), label, editor.auth_mode == value)
-        })
-        .collect::<Vec<_>>();
-        let mut key_options = vec![ConnectionEditorChoice::new(
-            None,
-            none_label.clone(),
-            editor.key_id.is_none(),
-        )];
-        key_options.extend(self.security.ssh_keys().iter().map(|key| {
-            let search_text = [Some(key.name.as_str()), key.key_file_path.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let subtitle = key
-                .key_file_path
-                .clone()
-                .or_else(|| key.cert_file_path.clone());
-            let mut choice = ConnectionEditorChoice::new(
-                Some(key.id.clone()),
-                key.name.clone(),
-                editor.key_id.as_deref() == Some(key.id.as_str()),
-            )
-            .search_text(search_text);
-            if let Some(subtitle) = subtitle {
-                choice = choice.subtitle(subtitle);
-            }
-            choice
-        }));
-        let mut password_options = vec![ConnectionEditorChoice::new(
-            None,
-            none_label.clone(),
-            editor.account_id.is_none() && editor.password_id.is_none(),
-        )];
-        password_options.extend(self.security.passwords().iter().map(|password| {
-            ConnectionEditorChoice::new(
-                Some(password.id.clone()),
-                password.name.clone(),
-                if matches!(
-                    editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
-                ) {
-                    editor.account_id.as_deref() == Some(password.id.as_str())
-                } else {
-                    editor.password_id.as_deref() == Some(password.id.as_str())
-                },
-            )
-            .subtitle(password.username.clone())
-        }));
-        let reference = if matches!(
+        let auth_options = options::ssh_auth_choices(&editor.auth_mode);
+        let key_options =
+            options::ssh_key_choices(self.security.ssh_keys(), editor.key_id.as_deref());
+        let password_selected = if matches!(
+            editor.kind,
+            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+        ) {
+            editor.account_id.as_deref()
+        } else {
+            editor.password_id.as_deref()
+        };
+        let password_reference = if matches!(
             editor.kind,
             ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
         ) {
@@ -446,578 +329,71 @@ impl NyaTermApp {
         } else {
             editor.password_id.as_ref()
         };
-        if let Some(id) = reference.filter(|id| {
-            !self
-                .security
-                .passwords()
-                .iter()
-                .any(|entry| entry.id == **id)
-        }) {
-            password_options.push(ConnectionEditorChoice::new(
-                Some(id.clone()),
-                t!("passwordManager.missingAccount"),
-                true,
-            ));
-        }
-        let mut account_options = password_options.clone();
-        if let Some(choice) = account_options
-            .first_mut()
-            .filter(|choice| choice.value.is_none())
-        {
-            choice.label = t!("authForm.manualIdentity").to_string();
-        }
-        for choice in account_options
-            .iter_mut()
-            .filter(|choice| choice.value.is_some())
-        {
-            let Some(id) = choice.value.as_deref() else {
-                continue;
-            };
-            let Some(account) = self
-                .security
-                .passwords()
-                .iter()
-                .find(|entry| entry.id == id)
-            else {
-                continue;
-            };
-            let username = account.username.trim();
-            let username = if username.is_empty() {
-                t!("authForm.accountUsernameFallback").to_string()
-            } else {
-                username.to_string()
-            };
-            let password_status = if account.has_password {
-                t!("authForm.passwordSaved")
-            } else {
-                t!("authForm.passwordNotSaved")
-            };
-            choice.subtitle = Some(format!("{username} · {password_status}"));
-        }
+        let password_none_selected = editor.account_id.is_none() && editor.password_id.is_none();
+        let password_options = options::password_choices(
+            self.security.passwords(),
+            password_selected,
+            password_none_selected,
+            password_reference.map(String::as_str),
+        );
+        let account_options = options::account_choices(
+            self.security.passwords(),
+            password_selected,
+            password_none_selected,
+            password_reference.map(String::as_str),
+        );
         let account_placeholder = if editor.account_id.is_none() {
             t!("authForm.manualIdentity").to_string()
         } else {
             password_label.clone()
         };
-        let mut otp_options = vec![ConnectionEditorChoice::new(
-            None,
-            t!("dialog.noOtp"),
-            editor.otp_id.is_none(),
-        )];
-        otp_options.extend(self.security.otp_entries().iter().map(|entry| {
-            let label = if entry.issuer.is_empty() {
-                entry.username.clone()
-            } else if entry.username.is_empty() {
-                entry.issuer.clone()
-            } else {
-                format!("{} ({})", entry.issuer, entry.username)
-            };
-            let subtitle = [
-                entry.otp_type.to_ascii_uppercase(),
-                entry.algorithm.clone(),
-                entry.digits.to_string(),
-            ]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ");
-            let search_text = [
-                entry.issuer.as_str(),
-                entry.username.as_str(),
-                entry.otp_type.as_str(),
-                entry.algorithm.as_str(),
-            ]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-            ConnectionEditorChoice::new(
-                Some(entry.id.clone()),
-                label,
-                editor.otp_id.as_deref() == Some(entry.id.as_str()),
-            )
-            .search_text(search_text)
-            .subtitle(subtitle)
-        }));
-        let mut proxy_options = vec![ConnectionEditorChoice::new(
-            None,
-            t!("dialog.noProxy"),
-            editor.proxy_id.is_none(),
-        )];
-        proxy_options.extend(self.tunnel_state.proxies().iter().map(|proxy| {
-            let protocol = proxy.protocol.to_ascii_uppercase();
-            let subtitle = if proxy.protocol == "proxycommand" {
-                [protocol.as_str(), proxy.command.as_deref().unwrap_or("")]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            } else {
-                [
-                    format!("{} {}:{}", protocol, proxy.host, proxy.port),
-                    proxy.username.clone().unwrap_or_default(),
-                ]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ")
-            };
-            let search_text = [
-                proxy.name.clone(),
-                proxy.protocol.clone(),
-                proxy.host.clone(),
-                proxy.port.to_string(),
-                proxy.username.clone().unwrap_or_default(),
-                proxy.command.clone().unwrap_or_default(),
-            ]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-            ConnectionEditorChoice::new(
-                Some(proxy.id.clone()),
-                proxy.name.clone(),
-                editor.proxy_id.as_deref() == Some(proxy.id.as_str()),
-            )
-            .search_text(search_text)
-            .subtitle(subtitle)
-        }));
-        let mut jump_options = vec![ConnectionEditorChoice::new(
-            None,
-            t!("dialog.noProxyJump"),
-            editor.proxy_jump_id.is_none(),
-        )];
-        jump_options.extend(
-            self.connection_state
-                .connections()
-                .iter()
-                .filter(|connection| matches!(connection.config, ConnectionType::Ssh { .. }))
-                .filter(|connection| editor.id.as_deref() != Some(connection.id.as_str()))
-                .filter(|connection| {
-                    !connection_proxy_jump_would_cycle(
-                        self.connection_state.connections(),
-                        editor.id.as_deref(),
-                        connection,
-                    )
-                })
-                .map(|connection| {
-                    let (host, port, username) = match &connection.config {
-                        ConnectionType::Ssh {
-                            host,
-                            port,
-                            username,
-                            ..
-                        } => (host.as_str(), *port, username.as_str()),
-                        _ => ("", 22, ""),
-                    };
-                    let group_path = connection
-                        .group_id
-                        .as_deref()
-                        .and_then(|id| {
-                            connection_group_path_label(self.connection_state.groups(), id)
-                        })
-                        .unwrap_or_default();
-                    let host_port = format!("{host}:{port}");
-                    let subtitle = [group_path.as_str(), host_port.as_str(), username]
-                        .into_iter()
-                        .filter(|part| !part.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    let search_text = [
-                        connection.name.as_str(),
-                        host,
-                        username,
-                        group_path.as_str(),
-                    ]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                    ConnectionEditorChoice::new(
-                        Some(connection.id.clone()),
-                        connection.name.clone(),
-                        editor.proxy_jump_id.as_deref() == Some(connection.id.as_str()),
-                    )
-                    .search_text(search_text)
-                    .subtitle(subtitle)
-                }),
+        let otp_options =
+            options::otp_choices(self.security.otp_entries(), editor.otp_id.as_deref());
+        let proxy_options =
+            options::proxy_choices(self.tunnel_state.proxies(), editor.proxy_id.as_deref());
+        let jump_options = options::proxy_jump_choices(
+            self.connection_state.connections(),
+            self.connection_state.groups(),
+            editor.id.as_deref(),
+            editor.proxy_jump_id.as_deref(),
         );
-        let backspace_options = [
-            ("del", t!("dialog.backspaceDel")),
-            ("ctrl-h", t!("dialog.backspaceCtrlH")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                match value {
-                    "ctrl-h" => {
-                        matches!(editor.backspace_mode.as_str(), "ctrl-h" | "bs" | "ctrl_h")
-                    }
-                    _ => !matches!(editor.backspace_mode.as_str(), "ctrl-h" | "bs" | "ctrl_h"),
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-        let telnet_enter_options = [
-            ("crlf", "CRLF (\\r\\n)"),
-            ("cr", "CR (\\r)"),
-            ("lf", "LF (\\n)"),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.telnet_enter_mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let sftp_pipeline_options = std::iter::once(ConnectionEditorChoice::new(
-            None,
-            t!("dialog.sftpPipelineAutomatic"),
-            editor.sftp_pipeline_depth.is_none(),
-        ))
-        .chain((4..=64).map(|depth| {
-            ConnectionEditorChoice::new(
-                Some(depth.to_string()),
-                depth.to_string(),
-                editor.sftp_pipeline_depth == Some(depth),
-            )
-        }))
-        .collect::<Vec<_>>();
-        let encoding_options = std::iter::once("global")
-            .chain(
-                nyaterm_core::character_encoding::CharacterEncoding::ALL
-                    .into_iter()
-                    .map(|encoding| encoding.label()),
-            )
-            .map(|value| {
-                let label = if value == "global" {
-                    t!("connection.encodingFollowGlobal").to_string()
-                } else {
-                    value.to_string()
-                };
-                ConnectionEditorChoice::new(
-                    Some(value.to_string()),
-                    label,
-                    (value == "global"
-                        && (editor.encoding.trim().is_empty()
-                            || editor.encoding.trim().eq_ignore_ascii_case("global")))
-                        || editor.encoding == value
-                        || nyaterm_core::character_encoding::CharacterEncoding::parse(
-                            &editor.encoding,
-                        )
-                        .is_ok_and(|encoding| encoding.label() == value),
-                )
-            })
-            .collect::<Vec<_>>();
-        let ssh_profile_options = [
-            ("standard", t!("dialog.sshProfileStandard")),
-            ("network_device", t!("dialog.sshProfileNetworkDevice")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                matches!(
-                    (editor.ssh_profile, value),
-                    (nyaterm_core::SshProfile::Standard, "standard")
-                        | (nyaterm_core::SshProfile::NetworkDevice, "network_device")
-                ),
-            )
-        })
-        .collect::<Vec<_>>();
-        let effective_terminal =
-            nyaterm_core::resolve_ssh_terminal_type(editor.ssh_profile, editor.terminal_type);
-        let mut ssh_terminal_options = vec![ConnectionEditorChoice::new(
-            None,
-            t!(
-                "dialog.sshTerminalTypeDefault",
-                value = effective_terminal.as_str()
-            ),
-            editor.terminal_type.is_none(),
-        )];
-        ssh_terminal_options.extend(
-            ["xterm-256color", "xterm", "vt100", "vt220", "ansi", "linux"]
-                .into_iter()
-                .map(|value| {
-                    ConnectionEditorChoice::new(
-                        Some(value.to_string()),
-                        value,
-                        editor.terminal_type.is_some() && effective_terminal.as_str() == value,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-        let mut rdp_backend_options = vec![ConnectionEditorChoice::new(
-            Some("builtin".into()),
-            t!("dialog.rdpBackendBuiltin"),
-            matches!(editor.rdp_backend.as_str(), "builtin" | "internal" | "auto"),
-        )];
-        let mut windows_backend = ConnectionEditorChoice::new(
-            Some("windows".into()),
-            t!("dialog.rdpBackendWindows"),
-            matches!(editor.rdp_backend.as_str(), "windows" | "active-x"),
-        );
-        windows_backend.disabled = !cfg!(windows);
-        rdp_backend_options.push(windows_backend);
-        let mut mstsc_backend = ConnectionEditorChoice::new(
-            Some("mstsc".into()),
-            t!("dialog.rdpBackendMstsc"),
-            editor.uses_mstsc_rdp(),
-        );
-        mstsc_backend.disabled = !cfg!(windows);
-        rdp_backend_options.push(mstsc_backend);
-        if !matches!(
-            editor.rdp_backend.as_str(),
-            "auto" | "builtin" | "internal" | "windows" | "active-x" | "mstsc"
-        ) {
-            rdp_backend_options.push(ConnectionEditorChoice::new(
-                Some(editor.rdp_backend.clone()),
-                t!("dialog.rdpBackendUnsupported"),
-                true,
-            ));
-        }
-        let rdp_certificate_options = [
-            ("prompt", t!("dialog.rdpCertificatePrompt")),
-            ("strict", t!("dialog.rdpCertificateStrict")),
-            ("accept-temporarily", t!("dialog.rdpCertificateTemporary")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            let selected = match editor.rdp_security.certificate_policy.as_str() {
-                "strict" | "reject_changed" | "reject-changed" => value == "strict",
-                "insecure" | "accept-temporarily" => value == "accept-temporarily",
-                _ => value == "prompt",
-            };
-            ConnectionEditorChoice::new(Some(value.to_string()), label, selected)
-        })
-        .collect::<Vec<_>>();
-        let rdp_display_options = [
-            ("fit-window", t!("dialog.rdpDisplayFitWindow")),
-            ("fixed", t!("dialog.rdpDisplayFixed")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            let current = match editor.rdp_display.mode.as_str() {
-                "fixed" | "native" => "fixed",
-                _ => "fit-window",
-            };
-            ConnectionEditorChoice::new(Some(value.to_string()), label, current == value)
-        })
-        .collect::<Vec<_>>();
-        let vnc_security_options = [
-            ("auto", t!("dialog.vncSecurityAuto")),
-            ("none", t!("dialog.vncSecurityNone")),
-            ("vnc-auth", t!("dialog.vncSecurityPassword")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.vnc_security.mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let vnc_scale_options = [
-            ("fit", t!("dialog.vncScaleFit")),
-            ("stretch", t!("dialog.vncScaleStretch")),
-            ("actual", t!("dialog.vncScaleActual")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.vnc_display.scale_mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
+        let backspace_options = options::backspace_choices(&editor.backspace_mode);
+        let telnet_enter_options = options::telnet_enter_choices(&editor.telnet_enter_mode);
+        let sftp_pipeline_options =
+            options::sftp_pipeline_depth_choices(editor.sftp_pipeline_depth);
+        let encoding_options = options::encoding_choices(&editor.encoding);
+        let ssh_profile_options = options::ssh_profile_choices(editor.ssh_profile);
+        let ssh_terminal_options =
+            options::ssh_terminal_type_choices(editor.ssh_profile, editor.terminal_type);
+        let rdp_backend_options =
+            options::rdp_backend_choices(&editor.rdp_backend, editor.uses_mstsc_rdp());
+        let rdp_certificate_options =
+            options::rdp_certificate_policy_choices(&editor.rdp_security.certificate_policy);
+        let rdp_display_options = options::rdp_display_mode_choices(&editor.rdp_display.mode);
+        let vnc_security_options = options::vnc_security_choices(&editor.vnc_security.mode);
+        let vnc_scale_options = options::vnc_scale_choices(&editor.vnc_display.scale_mode);
         let recording_mode = editor
             .recording
             .as_ref()
             .and_then(|settings| settings.mode)
             .unwrap_or(nyaterm_core::RecordingMode::Transcript);
-        let recording_mode_options = [
-            ("transcript", t!("dialog.recordingModeTranscript")),
-            ("raw", t!("dialog.recordingModeRaw")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                matches!(
-                    (recording_mode, value),
-                    (nyaterm_core::RecordingMode::Transcript, "transcript")
-                        | (nyaterm_core::RecordingMode::Raw, "raw")
-                ),
-            )
-        })
-        .collect::<Vec<_>>();
-        let sftp_cwd_options = [
-            ("off", t!("dialog.sftpCwdFollowOff")),
-            (
-                "shell_integration",
-                t!("dialog.sftpCwdFollowShellIntegration"),
-            ),
-            ("rc_file", t!("dialog.sftpCwdFollowRcFile")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.sftp_cwd_follow_mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let sftp_filename_encoding_options = std::iter::once("terminal")
-            .chain(
-                nyaterm_core::character_encoding::CharacterEncoding::ALL
-                    .into_iter()
-                    .map(|encoding| encoding.label()),
-            )
-            .map(|value| {
-                let label = if value == "terminal" {
-                    t!("dialog.sftpFilenameEncodingFollowTerminal").to_string()
-                } else {
-                    value.to_string()
-                };
-                ConnectionEditorChoice::new(
-                    Some(value.to_string()),
-                    label,
-                    (value == "terminal"
-                        && (editor.sftp_filename_encoding.trim().is_empty()
-                            || ["terminal", "global"].iter().any(|follow| {
-                                editor
-                                    .sftp_filename_encoding
-                                    .trim()
-                                    .eq_ignore_ascii_case(follow)
-                            })))
-                        || editor.sftp_filename_encoding == value
-                        || nyaterm_core::character_encoding::CharacterEncoding::parse(
-                            &editor.sftp_filename_encoding,
-                        )
-                        .is_ok_and(|encoding| encoding.label() == value),
-                )
-            })
-            .collect::<Vec<_>>();
-        let ssh_algorithm_mode_options = [
-            ("compatible", t!("dialog.algorithmModeCompatible")),
-            ("secure", t!("dialog.algorithmModeSecure")),
-            ("custom", t!("dialog.algorithmModeCustom")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.ssh_algorithm_mode == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let mut serial_port_options = Vec::new();
-        if !editor.serial_port.is_empty()
-            && !self
-                .connection_state
-                .serial_ports()
-                .contains(&editor.serial_port)
-        {
-            serial_port_options.push(ConnectionEditorChoice::new(
-                Some(editor.serial_port.clone()),
-                editor.serial_port.clone(),
-                true,
-            ));
-        }
-        serial_port_options.extend(self.connection_state.serial_ports().iter().map(|port| {
-            ConnectionEditorChoice::new(
-                Some(port.clone()),
-                port.clone(),
-                editor.serial_port == *port,
-            )
-        }));
-        let baud_options = [
-            "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600",
-        ]
-        .into_iter()
-        .map(|value| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                value.to_string(),
-                editor.baud_rate == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let data_bits_options = ["5", "6", "7", "8"]
-            .into_iter()
-            .map(|value| {
-                ConnectionEditorChoice::new(
-                    Some(value.to_string()),
-                    value.to_string(),
-                    editor.data_bits == value,
-                )
-            })
-            .collect::<Vec<_>>();
-        let parity_options = [
-            ("none", t!("dialog.parityNone")),
-            ("odd", t!("dialog.parityOdd")),
-            ("even", t!("dialog.parityEven")),
-            ("mark", t!("dialog.parityMark")),
-            ("space", t!("dialog.paritySpace")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(Some(value.to_string()), label, editor.parity == value)
-        })
-        .collect::<Vec<_>>();
-        let flow_control_options = [
-            ("none", t!("dialog.serialFlowControlNone")),
-            ("software", t!("dialog.serialFlowControlSoftware")),
-            ("hardware", t!("dialog.serialFlowControlHardware")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(
-                Some(value.to_string()),
-                label,
-                editor.flow_control.as_str() == value,
-            )
-        })
-        .collect::<Vec<_>>();
-        let stop_bits_options = ["1", "1.5", "2"]
-            .into_iter()
-            .map(|value| {
-                ConnectionEditorChoice::new(
-                    Some(value.to_string()),
-                    value.to_string(),
-                    editor.stop_bits == value,
-                )
-            })
-            .collect::<Vec<_>>();
-        let policy_options = [
-            ConnectionEditorChoice::new(
-                Some("allowlist".to_string()),
-                t!("dialog.sshAgentPolicyAllowlist"),
-                matches!(
-                    editor.agent_forwarding_config.policy,
-                    nyaterm_core::SshAgentForwardingPolicy::Allowlist { .. }
-                ),
-            ),
-            ConnectionEditorChoice::new(
-                Some("all".to_string()),
-                t!("dialog.sshAgentPolicyAll"),
-                matches!(
-                    editor.agent_forwarding_config.policy,
-                    nyaterm_core::SshAgentForwardingPolicy::All
-                ),
-            ),
-        ];
-        let ssh_agent_endpoint_options = Self::ssh_agent_endpoint_choices(&editor.agent_endpoint);
+        let recording_mode_options = options::recording_mode_choices(recording_mode);
+        let sftp_cwd_options = options::sftp_cwd_follow_choices(&editor.sftp_cwd_follow_mode);
+        let sftp_filename_encoding_options =
+            options::sftp_filename_encoding_choices(&editor.sftp_filename_encoding);
+        let ssh_algorithm_mode_options =
+            options::ssh_algorithm_mode_choices(&editor.ssh_algorithm_mode);
+        let serial_port_options =
+            options::serial_port_choices(self.connection_state.serial_ports(), &editor.serial_port);
+        let baud_options = options::baud_rate_choices(&editor.baud_rate);
+        let data_bits_options = options::data_bits_choices(&editor.data_bits);
+        let parity_options = options::parity_choices(&editor.parity);
+        let flow_control_options = options::flow_control_choices(editor.flow_control.as_str());
+        let stop_bits_options = options::stop_bits_choices(&editor.stop_bits);
+        let policy_options =
+            options::ssh_agent_forwarding_policy_choices(&editor.agent_forwarding_config.policy);
+        let ssh_agent_endpoint_options =
+            options::ssh_agent_endpoint_choices(&editor.agent_endpoint);
         let shell_label = match editor.shell_path.as_str() {
             "powershell.exe" => t!("dialog.shellPowerShell"),
             "cmd.exe" => t!("dialog.shellCmd"),
@@ -1026,18 +402,7 @@ impl NyaTermApp {
             "wt.exe" => t!("dialog.shellWindowsTerminal"),
             _ => t!("dialog.shellCustom"),
         };
-        let shell_options = [
-            ("powershell.exe", t!("dialog.shellPowerShell")),
-            ("cmd.exe", t!("dialog.shellCmd")),
-            ("bash", t!("dialog.shellBash")),
-            ("wsl.exe", t!("dialog.shellWsl")),
-            ("wt.exe", t!("dialog.shellWindowsTerminal")),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            ConnectionEditorChoice::new(Some(value.to_string()), label, editor.shell_path == value)
-        })
-        .collect::<Vec<_>>();
+        let shell_options = options::shell_choices(&editor.shell_path);
         let serial_port_placeholder = if self.connection_state.serial_ports_loading() {
             t!("dialog.loadingSerialPorts").to_string()
         } else if let Some(error) = self.connection_state.serial_ports_error() {
@@ -1220,9 +585,9 @@ impl NyaTermApp {
             .iter()
             .enumerate()
             .map(|(index, endpoint)| {
-                let choices = Self::ssh_agent_endpoint_choices(endpoint);
+                let choices = options::ssh_agent_endpoint_choices(endpoint);
                 let options = Self::connection_editor_select_options(&choices);
-                let selected_value = Some(Self::ssh_agent_endpoint_value(endpoint).to_string());
+                let selected_value = Some(options::ssh_agent_endpoint_value(endpoint).to_string());
                 let select = self.select_entity(
                     format!("connection-editor-ssh-agent-forwarding-endpoint-{index}"),
                     options,
@@ -1483,7 +848,7 @@ impl NyaTermApp {
             } else {
                 rgb(palette.border)
             })
-            .bg(rgb(palette.input))
+            .bg(rgb(palette.input_surface()))
             .cursor_pointer()
             .hover(|this| this.bg(rgb(palette.hover)))
             .child(if let Some(image) = selected_image {
@@ -2499,7 +1864,7 @@ fn connection_editor_group_control(
                         } else {
                             rgb(palette.border)
                         })
-                        .bg(rgb(palette.input))
+                        .bg(rgb(palette.input_surface()))
                         .cursor_pointer()
                         .hover(|this| this.bg(rgb(palette.hover)))
                         .child(
@@ -2594,7 +1959,7 @@ fn connection_editor_group_control(
                                                                 ordinary_input_focus_ring(palette),
                                                             )
                                                         })
-                                                        .bg(rgb(palette.input))
+                                                        .bg(rgb(palette.input_surface()))
                                                         .children(new_group_field.map(|field| {
                                                             div()
                                                                 .min_w_0()
@@ -2896,7 +2261,7 @@ fn connection_description_field(
                 .when(focused, |this| {
                     this.shadow(ordinary_input_focus_ring(palette))
                 })
-                .bg(rgb(palette.input))
+                .bg(rgb(palette.input_surface()))
                 .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
                 // Textarea supplies its own top padding; adding shell padding
                 // here pushes the first line toward the center of this short box.

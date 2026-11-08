@@ -724,7 +724,7 @@ impl AiPanel {
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
-                    .bg(rgb(palette.input))
+                    .bg(rgb(palette.input_surface()))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         nyaterm_ui::NyaButton::new("ai-model-selector", "")

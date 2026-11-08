@@ -454,7 +454,7 @@ impl NyaTermApp {
                             } else {
                                 palette.border
                             }))
-                            .bg(rgb(palette.input))
+                            .bg(rgb(palette.input_surface()))
                             .px_2()
                             .flex()
                             .items_center()

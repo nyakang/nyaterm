@@ -84,7 +84,7 @@ impl NyaTermApp {
                     } else {
                         palette.border
                     }))
-                    .bg(rgb(palette.input))
+                    .bg(rgb(palette.input_surface()))
                     .text_size(px(14.))
                     .text_color(rgb(palette.text))
                     .cursor_text()

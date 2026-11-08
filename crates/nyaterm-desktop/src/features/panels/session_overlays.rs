@@ -488,7 +488,7 @@ impl NyaTermApp {
                     .rounded_sm()
                     .border_1()
                     .border_color(rgb(palette.border))
-                    .bg(rgb(palette.input))
+                    .bg(rgb(palette.input_surface()))
                     .flex()
                     .items_center()
                     .justify_between()

@@ -36,7 +36,7 @@ pub(super) fn connection_tags_field(
         .when(focused, |this| {
             this.shadow(ordinary_input_focus_ring(palette))
         })
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .cursor_text()
         .when_some(handle.clone(), |this, handle| {
             this.on_click(move |_, window, cx| window.focus(&handle, cx))

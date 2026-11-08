@@ -8,6 +8,7 @@ use super::super::super::list::{
     required,
 };
 use super::ConnectionEditorSectionContext;
+use super::options;
 use crate::features::NyaTermApp;
 use crate::models::{
     ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
@@ -314,6 +315,12 @@ pub(super) fn password_authentication(
     let editor = section.editor;
     let protocol_requires_no_auth =
         editor.kind == ConnectionKindTab::Vnc && editor.vnc_security.mode == "none";
+    let choices = options::password_auth_choices(&editor.auth_mode, protocol_requires_no_auth);
+    let selected_index = choices
+        .iter()
+        .position(|choice| choice.selected)
+        .unwrap_or(0);
+    let values: Vec<Option<String>> = choices.iter().map(|choice| choice.value.clone()).collect();
     let body = div()
         .flex()
         .flex_col()
@@ -321,17 +328,18 @@ pub(super) fn password_authentication(
         .child(div().text_xs().child(t!("dialog.authentication")))
         .child(
             NyaTabs::new("connection-password-auth")
-                .items([
-                    NyaTabItem::new(t!("dialog.password")).disabled(protocol_requires_no_auth),
-                    NyaTabItem::new(t!("dialog.noAuthentication")),
-                ])
-                .selected_index(usize::from(
-                    editor.auth_mode == "none" || protocol_requires_no_auth,
-                ))
-                .on_select(cx.listener(|this, index, _, cx| {
+                .items(
+                    choices
+                        .into_iter()
+                        .map(|choice| NyaTabItem::new(choice.label).disabled(choice.disabled)),
+                )
+                .selected_index(selected_index)
+                .on_select(cx.listener(move |this, index, _, cx| {
                     this.set_connection_editor_select_value(
                         ConnectionEditorSelect::Authentication,
-                        Some(if *index == 0 { "password" } else { "none" }),
+                        values
+                            .get(*index)
+                            .and_then(|value: &Option<String>| value.as_deref()),
                         cx,
                     )
                 })),

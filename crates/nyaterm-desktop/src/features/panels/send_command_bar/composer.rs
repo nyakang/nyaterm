@@ -45,7 +45,7 @@ impl NyaTermApp {
             .rounded(px(6.))
             .border_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(palette.input))
+            .bg(rgb(palette.input_surface()))
             .overflow_hidden()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::sizing::{form_control_height, form_control_size};
+use crate::theme_bridge::input_surface_color;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, RenderOnce,
@@ -658,6 +659,7 @@ impl Render for NyaSelectState {
         Select::new(&state)
             .with_size(form_control_size())
             .h(form_control_height())
+            .bg(input_surface_color(cx))
             .placeholder(self.placeholder.clone())
             .when_some(self.search_placeholder.clone(), |this, placeholder| {
                 this.search_placeholder(placeholder)
@@ -719,10 +721,12 @@ impl RenderOnce for NyaSelect {
                 state.disabled,
             )
         });
+        let input_surface = input_surface_color(cx);
         let select = Select::new(&state)
             .with_size(form_control_size())
             .h(form_control_height())
             .appearance(appearance)
+            .when(appearance, |this| this.bg(input_surface))
             .placeholder(if placeholder_content.is_some() {
                 SharedString::default()
             } else {

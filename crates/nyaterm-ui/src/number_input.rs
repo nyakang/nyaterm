@@ -11,6 +11,7 @@ use gpui_kit::component::input::{
 
 use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
 use crate::sizing::{form_control_height, form_control_size};
+use crate::theme_bridge::input_surface_color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NyaNumberStep {
@@ -350,6 +351,7 @@ impl Render for NyaNumberInputState {
         NumberInput::new(&state)
             .with_size(form_control_size())
             .h(form_control_height())
+            .bg(input_surface_color(cx))
             .disabled(self.options.disabled)
             .when_some(self.options.prefix.clone(), |this, prefix| {
                 this.prefix(text_affix(prefix).into_any_element())
@@ -408,6 +410,7 @@ impl RenderOnce for NyaNumberInput {
                     .with_size(form_control_size())
                     .h(form_control_height())
                     .appearance(self.appearance)
+                    .when(self.appearance, |this| this.bg(input_surface_color(cx)))
                     .disabled(options.disabled)
                     .when_some(options.prefix, |this, prefix| {
                         this.prefix(text_affix(prefix).into_any_element())

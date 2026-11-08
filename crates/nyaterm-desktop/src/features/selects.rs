@@ -230,6 +230,11 @@ impl NyaTermApp {
             return;
         };
 
+        if id.starts_with("asset-batch.select.") {
+            self.apply_asset_batch_select(id, value, cx);
+            return;
+        }
+
         if self.change_runtime_auth_select(id, value, cx) {
             return;
         }

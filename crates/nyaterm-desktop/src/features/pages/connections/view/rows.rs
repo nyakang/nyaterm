@@ -478,7 +478,7 @@ fn connection_group_editor_input_box(
         .when(focused, |this| {
             this.shadow(ordinary_input_focus_ring(palette))
         })
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .cursor_text()
         .on_mouse_down(
             MouseButton::Left,
