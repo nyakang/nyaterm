@@ -333,4 +333,25 @@ mod tests {
             );
         });
     }
+
+    /// Regression: the top-bar status line kept saying "open a local terminal to
+    /// view resources" while a local terminal was open.
+    #[test]
+    fn the_header_status_line_sees_a_live_local_terminal_as_a_host() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            assert!(!app.header_status_has_host(), "no terminal, no host");
+            register_session(app, "local-a", false);
+            app.activate_session_id("local-a", cx);
+            assert!(app.header_status_has_host());
+            register_session_with_state(app, "dead", false, true);
+            app.activate_session_id("dead", cx);
+            assert!(
+                !app.header_status_has_host(),
+                "a disconnected shell is not a host"
+            );
+        });
+    }
 }
