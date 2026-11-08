@@ -45,12 +45,14 @@ impl NyaTermApp {
         .overflow_y_scrollbar();
 
         let panel_width = self.security_panel_width();
-        let tab_width = ((panel_width - SECURITY_LIST_HORIZONTAL_PADDING) / 5.).max(1.);
+        let tabs_width = (panel_width - SECURITY_LIST_HORIZONTAL_PADDING).max(1.);
         let tabs = NyaTabs::new("security-auth-tabs")
-            .max_tab_width(px(tab_width))
+            .fit_width(px(tabs_width))
             .items(SECURITY_AUTH_TABS.map(|tab| {
                 let label = t!(tab.i18n_key());
-                NyaTabItem::new(label.clone()).accessible_label(label)
+                NyaTabItem::new(label.clone())
+                    .accessible_label(label)
+                    .icon(tab.icon_path())
             }))
             .selected_index(
                 SECURITY_AUTH_TABS

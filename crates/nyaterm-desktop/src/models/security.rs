@@ -36,6 +36,19 @@ impl SecurityAuthTab {
         }
     }
 
+    /// Tintable icon used when the tab bar is too narrow for labels. Every
+    /// security page repeats its title below the bar, so an icon-only bar
+    /// never hides which page is open.
+    pub(crate) const fn icon_path(self) -> &'static str {
+        match self {
+            Self::Keys => "icons/key-round.svg",
+            Self::Passwords => "icons/lock-keyhole.svg",
+            Self::Credentials => "icons/id-card.svg",
+            Self::Otp => "icons/clock.svg",
+            Self::KnownHosts => "icons/shield-check.svg",
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Keys => "Keys",
