@@ -104,6 +104,7 @@ fn prepare_electerm_import(file: ElectermBookmarksFile) -> AppResult<PreparedJso
         passwords: Vec::new(),
         ssh_keys: Vec::new(),
         connections,
+        notices: Vec::new(),
     })
 }
 

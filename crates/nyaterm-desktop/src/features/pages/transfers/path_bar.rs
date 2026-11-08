@@ -62,7 +62,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 .flex()
                 .items_center()
                 .rounded_sm()
-                .bg(rgb(palette.input))
+                .bg(rgb(palette.input_surface()))
                 .cursor_text()
                 .on_click(move |_, window, cx| {
                     window.focus(&focus, cx);

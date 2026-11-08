@@ -630,7 +630,11 @@ impl NyaTermApp {
         let sync_group_color = active_sync_group
             .map(|group| group.color)
             .unwrap_or(palette.link);
-        let sync_status_label = if sync_is_paused { "Paused" } else { "Syncing" };
+        let sync_status_label = if sync_is_paused {
+            t!("syncGroup.paused")
+        } else {
+            t!("syncGroup.broadcastActive")
+        };
         let output_session_id = session_id.clone();
         let performance_overlay = self
             .terminal
@@ -1129,9 +1133,9 @@ impl NyaTermApp {
                                                         .text_xs()
                                                         .text_color(rgb(sync_group_color))
                                                         .child(if sync_is_paused {
-                                                            "Resume"
+                                                            t!("syncGroup.resumeSync")
                                                         } else {
-                                                            "Pause"
+                                                            t!("syncGroup.pauseSync")
                                                         }),
                                                 ),
                                         )
@@ -1155,7 +1159,7 @@ impl NyaTermApp {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(sync_group_color))
-                                                        .child("Leave"),
+                                                        .child(t!("syncGroup.leaveGroup")),
                                                 ),
                                         )
                                         .child(
@@ -1167,7 +1171,9 @@ impl NyaTermApp {
                                                 .px_1()
                                                 .py(px(2.))
                                                 .cursor_pointer()
-                                                .hover(|style| style.bg(rgba(0xef44441a)))
+                                                .hover(|style| {
+                                                    style.bg(rgba((palette.danger << 8) | 0x1a))
+                                                })
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.close_active_sync_group_for_session(
                                                         close_session_id.clone(),
@@ -1178,7 +1184,7 @@ impl NyaTermApp {
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(palette.danger))
-                                                        .child("Close Group"),
+                                                        .child(t!("syncGroup.closeGroup")),
                                                 ),
                                         ),
                                 )

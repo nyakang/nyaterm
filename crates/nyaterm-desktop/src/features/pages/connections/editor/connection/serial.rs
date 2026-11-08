@@ -58,7 +58,7 @@ fn serial_baud_picker(
         } else {
             rgb(palette.danger)
         })
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .cursor_pointer()
         .child(
             div()

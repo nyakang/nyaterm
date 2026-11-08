@@ -5,13 +5,111 @@ use std::collections::HashSet;
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, rgba};
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSearchInput, mode_button,
+    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSearchInput, ThemePalette,
+    mode_button,
 };
 
 use crate::features::formatting::session_kind_label;
 use crate::features::sync_input::SyncGroupSessionFilter;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::widgets::{small_button, status_pill};
+
+/// Tint strength for group-list selection and session-list membership rows.
+///
+/// `ThemePalette::hover` and `ThemePalette::surface_elevated` resolve to the
+/// same colour in most bundled themes, so a membership row filled with
+/// `surface_elevated` would look exactly like an ordinary hovered row. The
+/// accent wash below is the selection language already used by the quick
+/// switch overlay and the quick-command sidebar, and it stays distinct from a
+/// neutral `hover` in every theme without adding a palette token.
+/// Light themes need a slightly stronger wash: pale accents (`nord-light`,
+/// `catppuccin-latte`) otherwise land within a few RGB levels of their own
+/// neutral hover surface.
+const SYNC_SELECTION_TINT_ALPHA_DARK: u8 = 0x4d;
+const SYNC_SELECTION_TINT_ALPHA_LIGHT: u8 = 0x60;
+
+/// Background roles for the selectable rows in the sync-groups window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SyncRowFills {
+    /// Resting row surface.
+    base: u32,
+    /// Pointer-hover surface; deliberately distinct from `selected`.
+    hover: u32,
+    /// Selected/member surface encoded as `0xRRGGBBAA` so it can be painted
+    /// with `rgba` over the window surface.
+    selected: u32,
+}
+
+/// Smallest per-channel step that still reads as a separate hover surface.
+const MIN_HOVER_CHANNEL_DELTA: u32 = 6;
+
+/// Smallest per-channel step between a neutral hover row and the accent-tinted
+/// selection row. Themes with muted accents (`nord`) can otherwise place
+/// `hover` almost on top of the selection wash.
+const MIN_SELECTION_HOVER_CHANNEL_DELTA: u32 = 0x14;
+
+fn sync_row_fills(palette: ThemePalette) -> SyncRowFills {
+    let base = palette.input;
+    let selected = (palette.primary << 8) | u32::from(selection_tint_alpha(palette));
+    let hover = if channel_delta(palette.hover, base) >= MIN_HOVER_CHANNEL_DELTA
+        && channel_delta(palette.hover, flatten_over(palette.bg, selected))
+            >= MIN_SELECTION_HOVER_CHANNEL_DELTA
+    {
+        palette.hover
+    } else {
+        // Some themes point `hover` at `input` (`windterm-dark`, `nord-light`)
+        // or keep it within a few levels of the selection wash (`nord`,
+        // `catppuccin-latte`), which would leave no visible distinction.
+        derived_hover_fill(palette, base)
+    };
+    SyncRowFills {
+        base,
+        hover,
+        selected,
+    }
+}
+
+fn selection_tint_alpha(palette: ThemePalette) -> u8 {
+    if palette.is_dark() {
+        SYNC_SELECTION_TINT_ALPHA_DARK
+    } else {
+        SYNC_SELECTION_TINT_ALPHA_LIGHT
+    }
+}
+
+fn channel_delta(first: u32, second: u32) -> u32 {
+    let delta = |shift: u32| ((first >> shift) & 0xff).abs_diff((second >> shift) & 0xff);
+    delta(16).max(delta(8)).max(delta(0))
+}
+
+/// Hover step for themes whose `hover` token cannot separate a row from
+/// `input` or from the accent wash.
+///
+/// `ThemePalette::hover_fill` always moves 12% away from the text colour, so
+/// on light surfaces it gets almost invisibly lighter. Moving toward the
+/// theme's own `text` colour instead darkens light rows and lightens dark
+/// rows, keeping the step visible in both directions.
+fn derived_hover_fill(palette: ThemePalette, base: u32) -> u32 {
+    const AMOUNT: u32 = 0x1e; // 30/255 ≈ 12%
+    let mix = |shift: u32| {
+        let start = (base >> shift) & 0xff;
+        let end = (palette.text >> shift) & 0xff;
+        (start * (255 - AMOUNT) + end * AMOUNT + 127) / 255
+    };
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
+/// Flattens a `0xRRGGBBAA` fill onto an opaque surface, matching what GPUI
+/// paints for an `rgba` row over the window background.
+fn flatten_over(background: u32, fill: u32) -> u32 {
+    let alpha = fill & 0xff;
+    let mix = |shift: u32| {
+        let base = (background >> shift) & 0xff;
+        let tint = (fill >> (shift + 8)) & 0xff;
+        (base * (255 - alpha) + tint * alpha + 127) / 255
+    };
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn sync_groups_window_view(
@@ -20,6 +118,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
+        let row_fills = sync_row_fills(palette);
         let groups_width = (viewport_width * 0.25).clamp(176., 224.);
         let selected_group = self.sync_input.selected_group().cloned();
         let selected_group_id = selected_group.as_ref().map(|group| group.id.clone());
@@ -100,14 +199,14 @@ impl NyaTermApp {
                         rgb(palette.border)
                     })
                     .bg(if selected {
-                        rgb(palette.hover)
+                        rgba(row_fills.selected)
                     } else {
-                        rgb(palette.input)
+                        rgb(row_fills.base)
                     })
                     .px_2p5()
                     .py_2()
                     .cursor_pointer()
-                    .hover(|this| this.bg(rgb(0x151b24)))
+                    .hover(move |this| this.bg(rgb(row_fills.hover)))
                     .child(
                         div()
                             .flex()
@@ -254,14 +353,14 @@ impl NyaTermApp {
                         rgb(palette.border)
                     })
                     .bg(if in_group {
-                        rgb(0x111827)
+                        rgba(row_fills.selected)
                     } else {
-                        rgb(palette.input)
+                        rgb(row_fills.base)
                     })
                     .px_3()
                     .py_2()
                     .cursor_pointer()
-                    .hover(|this| this.bg(rgb(0x151b24)))
+                    .hover(move |this| this.bg(rgb(row_fills.hover)))
                     .on_click(cx.listener({
                         let session_id = session_id.clone();
                         move |this, _, _, cx| {
@@ -302,7 +401,7 @@ impl NyaTermApp {
                                             .justify_center()
                                             .text_xs()
                                             .font_weight(FontWeight(800.))
-                                            .text_color(rgb(0xffffff))
+                                            .text_color(rgb(palette.text_on_fill(selected_group_color)))
                                             .when(in_group, |this| this.child("✓")),
                                     )
                                     .child(
@@ -344,12 +443,12 @@ impl NyaTermApp {
                                                 t!("syncGroup.broadcastActive")
                                             },
                                             if paused {
-                                                rgb(0xfacc15)
+                                                rgb(palette.warning)
                                             } else {
                                                 rgb(palette.success)
                                             },
                                             if paused {
-                                                rgb(0x3a2f14)
+                                                rgba((palette.warning << 8) | 0x1a)
                                             } else {
                                                 rgb(palette.hover)
                                             },
@@ -745,5 +844,137 @@ impl NyaTermApp {
                             ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nyaterm_ui::APPEARANCE_THEME_IDS;
+    use nyaterm_ui::theme_palette;
+
+    use crate::features::sync_input::GROUP_COLORS;
+
+    use super::{
+        MIN_HOVER_CHANNEL_DELTA, MIN_SELECTION_HOVER_CHANNEL_DELTA, channel_delta,
+        derived_hover_fill, flatten_over, selection_tint_alpha, sync_row_fills,
+    };
+
+    fn relative_luminance(color: u32) -> f32 {
+        let channel = |value: u32| -> f32 {
+            let value = (value & 0xff) as f32 / 255.0;
+            if value <= 0.03928 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let red = channel(color >> 16);
+        let green = channel(color >> 8);
+        let blue = channel(color);
+        0.2126 * red + 0.7152 * green + 0.0722 * blue
+    }
+
+    fn contrast_ratio(first: u32, second: u32) -> f32 {
+        let first = relative_luminance(first);
+        let second = relative_luminance(second);
+        let (lighter, darker) = if first > second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// A pair of surfaces reads as two different states when either the
+    /// luminance step is measurable or the hue/channel shift is. A tinted
+    /// selection can keep the same luminance as the neutral base (`windterm-dark`
+    /// is such a theme), so contrast alone would reject a clearly different fill.
+    fn fills_are_distinct(first: u32, second: u32) -> bool {
+        contrast_ratio(first, second) >= 1.10 || channel_delta(first, second) >= 0x14
+    }
+
+    #[test]
+    fn sync_row_fills_follow_theme_and_keep_states_distinct() {
+        for theme in APPEARANCE_THEME_IDS {
+            let palette = theme_palette(theme);
+            let fills = sync_row_fills(palette);
+            let selected = flatten_over(palette.bg, fills.selected);
+
+            assert_eq!(fills.base, palette.input, "{theme}: base must stay input");
+            let theme_hover_usable = channel_delta(palette.hover, fills.base)
+                >= MIN_HOVER_CHANNEL_DELTA
+                && channel_delta(palette.hover, selected) >= MIN_SELECTION_HOVER_CHANNEL_DELTA;
+            if theme_hover_usable {
+                assert_eq!(
+                    fills.hover, palette.hover,
+                    "{theme}: a usable hover token must be used as-is"
+                );
+            } else {
+                assert_eq!(
+                    fills.hover,
+                    derived_hover_fill(palette, fills.base),
+                    "{theme}: a theme without a usable hover token must fall back to a \
+                     derived theme step"
+                );
+            }
+            assert_eq!(
+                fills.selected >> 8,
+                palette.primary,
+                "{theme}: membership must stay the primary accent wash"
+            );
+            assert_eq!(
+                fills.selected & 0xff,
+                u32::from(selection_tint_alpha(palette))
+            );
+
+            assert!(
+                channel_delta(fills.hover, fills.base) >= MIN_HOVER_CHANNEL_DELTA,
+                "{theme}: hover {:06x} is indistinguishable from base {:06x}",
+                fills.hover,
+                fills.base
+            );
+            assert!(
+                fills_are_distinct(selected, fills.base),
+                "{theme}: selected {selected:06x} is too close to base {:06x}",
+                fills.base
+            );
+            assert!(
+                fills_are_distinct(selected, fills.hover),
+                "{theme}: selected {selected:06x} is too close to hover {:06x}",
+                fills.hover
+            );
+            // Bold row titles must stay legible on the wash. 3.0 (the WCAG
+            // large-text floor) instead of 4.5 because `solarized-light`
+            // authors its own `text` token at ~5:1 and the accent wash costs
+            // it more than one step; the theme's authored pairing is the
+            // ceiling for what the wash may spend.
+            assert!(
+                contrast_ratio(palette.text, selected) >= 3.0,
+                "{theme}: title {:06x} is unreadable on selected {selected:06x}",
+                palette.text
+            );
+            // Secondary rows keep the theme's muted token. A few light themes
+            // author that token near 2.2:1 on their own base surface, so the
+            // wash may only erode it to the legibility floor.
+            assert!(
+                contrast_ratio(palette.text_muted, selected) >= 1.5,
+                "{theme}: meta {:06x} is unreadable on selected {selected:06x}",
+                palette.text_muted
+            );
+        }
+    }
+
+    #[test]
+    fn membership_checkmark_stays_readable_on_every_group_color() {
+        for theme in APPEARANCE_THEME_IDS {
+            let palette = theme_palette(theme);
+            for color in GROUP_COLORS {
+                let glyph = palette.text_on_fill(color);
+                assert!(
+                    contrast_ratio(glyph, color) >= 2.0,
+                    "{theme}: checkmark {glyph:06x} is unreadable on group color {color:06x}"
+                );
+            }
+        }
     }
 }

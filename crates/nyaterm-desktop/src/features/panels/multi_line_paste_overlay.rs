@@ -98,7 +98,7 @@ impl NyaTermApp {
                             } else {
                                 rgb(0x7f1d1d)
                             })
-                            .bg(rgb(palette.input))
+                            .bg(rgb(palette.input_surface()))
                             .child(NyaDocumentEditor::new(&editor)),
                     )
                     .child(

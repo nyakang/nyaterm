@@ -1,4 +1,5 @@
 pub mod connection;
+pub mod connection_batch;
 pub mod credentials;
 pub mod network;
 pub mod notes;
@@ -13,6 +14,7 @@ pub mod window_state;
 pub mod workspace;
 pub mod workspace_manifest;
 pub use connection::*;
+pub use connection_batch::*;
 pub use credentials::*;
 pub use network::*;
 pub use notes::*;

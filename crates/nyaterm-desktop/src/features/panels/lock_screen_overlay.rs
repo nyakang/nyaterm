@@ -12,8 +12,9 @@ use crate::features::view_widgets::{nyaterm_app_icon, window_control_button};
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 
 const LOCK_SCREEN_TITLE_BAR_HEIGHT: f32 = 40.;
-const LOCK_SCREEN_BACKGROUND: u32 = 0x0b0f14;
 const LOCK_SCREEN_FORM_WIDTH: f32 = 320.;
+const LOCK_SCREEN_CARD_PADDING: f32 = 24.;
+const LOCK_SCREEN_CARD_WIDTH: f32 = LOCK_SCREEN_FORM_WIDTH + LOCK_SCREEN_CARD_PADDING * 2.;
 const LOCK_SCREEN_CONTROL_HEIGHT: f32 = 44.;
 
 impl NyaTermApp {
@@ -23,6 +24,13 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
+        let backdrop = palette.lock_screen_backdrop();
+        let card = palette.lock_screen_card();
+        let on_backdrop_text = palette.lock_screen_on_backdrop_text();
+        let muted_text = palette.lock_screen_muted_text();
+        let danger_text = palette.lock_screen_danger();
+        let on_primary_text = palette.lock_screen_on_primary();
+        let chrome_palette = palette.lock_screen_chrome_palette();
         let chrome = WindowChrome::main(window);
         let unlock_busy = self.security.screen_lock_unlock_busy();
         let password_draft = self.security.screen_lock_password_draft().to_string();
@@ -84,7 +92,7 @@ impl NyaTermApp {
                     } else {
                         palette.border
                     }))
-                    .bg(rgb(palette.input))
+                    .bg(rgb(palette.input_surface()))
                     .text_size(px(14.))
                     .text_color(rgb(palette.text))
                     .cursor_text()
@@ -110,9 +118,9 @@ impl NyaTermApp {
                     .line_height(px(18.))
                     .text_xs()
                     .text_color(rgb(if status_is_error {
-                        palette.danger
+                        danger_text
                     } else {
-                        0x9aa6b2
+                        muted_text
                     }))
                     .child(lock_status.clone()),
             );
@@ -129,7 +137,7 @@ impl NyaTermApp {
                     div()
                         .text_center()
                         .text_xs()
-                        .text_color(rgb(0x9aa6b2))
+                        .text_color(rgb(muted_text))
                         .child(lock_status),
                 )
             })
@@ -150,7 +158,7 @@ impl NyaTermApp {
                         .variant(NyaButtonVariant::Primary)
                         .full_width()
                         .height(px(LOCK_SCREEN_CONTROL_HEIGHT))
-                        .text_color(rgb(0xffffff))
+                        .text_color(rgb(on_primary_text))
                         .text_size(px(14.))
                         .font_weight(FontWeight(600.))
                         .when(unlock_busy, |button| {
@@ -173,9 +181,10 @@ impl NyaTermApp {
             .occlude()
             .flex()
             .flex_col()
-            // The lock screen must fully hide private workspace content.
-            .bg(rgb(LOCK_SCREEN_BACKGROUND))
-            .text_color(rgb(0xffffff))
+            // The opaque, theme-derived backdrop must fully hide private
+            // workspace content while staying below the page brightness.
+            .bg(rgb(backdrop))
+            .text_color(rgb(on_backdrop_text))
             .track_focus(self.security.screen_lock_focus())
             .on_any_mouse_down(|event, _, cx| {
                 // Windows starts caption dragging only if the native mouse-down
@@ -205,7 +214,7 @@ impl NyaTermApp {
                         .flex_none()
                         .flex()
                         .items_center()
-                        .text_color(rgb(0xb6bfcc))
+                        .text_color(rgb(on_backdrop_text))
                         .child(
                             div()
                                 .debug_selector(|| "lock-title-drag".to_string())
@@ -225,7 +234,7 @@ impl NyaTermApp {
                         )
                         .when(chrome.minimize, |this| {
                             this.child(window_control_button(
-                                palette,
+                                chrome_palette,
                                 "lock-window-min",
                                 "icons/window/minimize.svg",
                                 WindowControlArea::Min,
@@ -234,7 +243,7 @@ impl NyaTermApp {
                         })
                         .when(chrome.maximize, |this| {
                             this.child(window_control_button(
-                                palette,
+                                chrome_palette,
                                 "lock-window-max",
                                 if chrome.restore {
                                     "icons/window/restore.svg"
@@ -247,7 +256,7 @@ impl NyaTermApp {
                         })
                         .when(chrome.close, |this| {
                             this.child(window_control_button(
-                                palette,
+                                chrome_palette,
                                 "lock-window-close",
                                 "icons/window/close.svg",
                                 WindowControlArea::Close,
@@ -268,75 +277,88 @@ impl NyaTermApp {
                     .px_6()
                     .child(
                         div()
-                            .id("lock-screen-content")
-                            .w(px(LOCK_SCREEN_FORM_WIDTH))
+                            .id("lock-screen-card")
+                            .w(px(LOCK_SCREEN_CARD_WIDTH))
                             .max_w_full()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap_6()
-                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .p(px(LOCK_SCREEN_CARD_PADDING))
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(card))
+                            .text_color(rgb(palette.text))
+                            .shadow_lg()
                             .child(
                                 div()
-                                    .relative()
-                                    .child(
-                                        div()
-                                            .size(px(72.))
-                                            .rounded_lg()
-                                            .shadow_lg()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(nyaterm_app_icon(palette, 72.)),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .right(px(-4.))
-                                            .bottom(px(-4.))
-                                            .size(px(24.))
-                                            .rounded_full()
-                                            .border_2()
-                                            .border_color(rgb(LOCK_SCREEN_BACKGROUND))
-                                            .bg(rgb(0x1f2937))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                svg()
-                                                    .size(px(14.))
-                                                    .path("icons/lock.svg")
-                                                    .text_color(rgb(0xffffff)),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
+                                    .id("lock-screen-content")
                                     .w_full()
                                     .flex()
                                     .flex_col()
-                                    .gap_2()
-                                    .text_center()
+                                    .items_center()
+                                    .gap_6()
+                                    .on_click(|_, _, cx| cx.stop_propagation())
                                     .child(
                                         div()
-                                            .text_size(px(20.))
-                                            .font_weight(FontWeight(600.))
-                                            .child(t!("lockScreen.title")),
+                                            .relative()
+                                            .child(
+                                                div()
+                                                    .size(px(72.))
+                                                    .rounded_lg()
+                                                    .shadow_lg()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(nyaterm_app_icon(palette, 72.)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .right(px(-4.))
+                                                    .bottom(px(-4.))
+                                                    .size(px(24.))
+                                                    .rounded_full()
+                                                    .border_2()
+                                                    .border_color(rgb(card))
+                                                    .bg(rgb(palette.surface))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(
+                                                        svg()
+                                                            .size(px(14.))
+                                                            .path("icons/lock.svg")
+                                                            .text_color(rgb(palette.text)),
+                                                    ),
+                                            ),
                                     )
-                                    .when(self.security.screen_lock_is_idle(), |this| {
-                                        this.child(
-                                            div()
-                                                .debug_selector(|| {
-                                                    "lock-screen-idle-message".to_string()
-                                                })
-                                                .text_size(px(14.))
-                                                .line_height(px(20.))
-                                                .text_color(rgb(0x9aa6b2))
-                                                .child(t!("lockScreen.message")),
-                                        )
-                                    }),
-                            )
-                            .child(unlock_form),
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .text_center()
+                                            .child(
+                                                div()
+                                                    .text_size(px(20.))
+                                                    .font_weight(FontWeight(600.))
+                                                    .text_color(rgb(palette.text))
+                                                    .child(t!("lockScreen.title")),
+                                            )
+                                            .when(self.security.screen_lock_is_idle(), |this| {
+                                                this.child(
+                                                    div()
+                                                        .debug_selector(|| {
+                                                            "lock-screen-idle-message".to_string()
+                                                        })
+                                                        .text_size(px(14.))
+                                                        .line_height(px(20.))
+                                                        .text_color(rgb(muted_text))
+                                                        .child(t!("lockScreen.message")),
+                                                )
+                                            }),
+                                    )
+                                    .child(unlock_form),
+                            ),
                     ),
             )
     }

@@ -802,7 +802,7 @@ fn keyword_highlight_static_input(
         .rounded_sm()
         .border_1()
         .border_color(rgb(palette.border))
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .flex()
         .text_xs()
         .text_color(rgb(palette.text_muted))

@@ -593,6 +593,164 @@ impl ConnectionStore {
         Ok(())
     }
 
+    /// Persist a prepared batch in one transaction, including secrets, indexes and sync changes.
+    /// No catalog-wide replacement is performed; unselected records are untouched.
+    pub fn save_connections_atomic(
+        &self,
+        connections: &[SavedConnection],
+    ) -> Result<(), StorageError> {
+        let mut ids = std::collections::HashSet::new();
+        for connection in connections {
+            if connection.id.is_empty() || !ids.insert(&connection.id) {
+                return Err(StorageError::InvalidData(
+                    "empty or duplicate connection id in batch".into(),
+                ));
+            }
+            self.validate_changed_connection_references(connection)?;
+        }
+        // Validate changed Agent settings, while retaining unrelated legacy or
+        // foreign-platform settings verbatim during common-field edits.
+        let mut validate_agents = Vec::with_capacity(connections.len());
+        for connection in connections {
+            let previous = self.get_connection(&connection.id)?;
+            validate_agents.push(previous.as_ref().is_none_or(|old| {
+                match (&old.config, &connection.config) {
+                    (
+                        ConnectionType::Ssh {
+                            agent_forwarding_config: old,
+                            ..
+                        },
+                        ConnectionType::Ssh {
+                            agent_forwarding_config: new,
+                            ..
+                        },
+                    ) => old != new,
+                    _ => true,
+                }
+            }));
+        }
+        let prepared = self.prepare_connections_for_storage(connections)?;
+        let txn = self.db.begin_write()?;
+        for (connection, validate_agent) in prepared.iter().zip(validate_agents) {
+            remove_connection_index_entries(&txn, &connection.0.id)?;
+            save_connection_with_clean_indexes_checked_in_txn(&txn, connection, validate_agent)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Validate only explicit reference patches; legacy references on untouched fields are retained.
+    pub fn validate_connection_batch_references(
+        &self,
+        edit: &nyaterm_core::models::connection_batch::ConnectionBatchEdit,
+    ) -> Result<(), StorageError> {
+        use nyaterm_core::models::connection_batch::BatchField;
+        let missing = |label: &str| {
+            StorageError::InvalidData(format!(
+                "missing {label} reference; reopen the batch editor"
+            ))
+        };
+        for field in [&edit.account_id, &edit.password_id] {
+            if let BatchField::Set(id) = field
+                && self.load_password_by_id(id)?.is_none()
+            {
+                return Err(missing("account"));
+            }
+        }
+        if let BatchField::Set(id) = &edit.key_id
+            && self.load_ssh_key_by_id(id)?.is_none()
+        {
+            return Err(missing("SSH key"));
+        }
+        if let BatchField::Set(id) = &edit.otp_id
+            && self.load_otp_entry_by_id(id)?.is_none()
+        {
+            return Err(missing("OTP"));
+        }
+        if let BatchField::Set(id) = &edit.proxy_id
+            && !self
+                .list_json_by_prefix::<ProxyConfig>(PROXIES_TABLE, PROXY_PREFIX)?
+                .iter()
+                .any(|value| &value.id == id)
+        {
+            return Err(missing("proxy"));
+        }
+        if let BatchField::Set(id) = &edit.group_id
+            && !self.list_groups()?.iter().any(|value| &value.id == id)
+        {
+            return Err(missing("group"));
+        }
+        if let BatchField::Set(id) = &edit.proxy_jump_id {
+            let jump = self
+                .get_connection(id)?
+                .ok_or_else(|| missing("jump host"))?;
+            if !matches!(jump.config, ConnectionType::Ssh { .. }) {
+                return Err(missing("SSH jump host"));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_changed_connection_references(
+        &self,
+        connection: &SavedConnection,
+    ) -> Result<(), StorageError> {
+        let previous = self.get_connection(&connection.id)?;
+        let old_auth = previous.as_ref().and_then(|value| value.auth.as_ref());
+        let missing = |label: &str| {
+            StorageError::InvalidData(format!(
+                "missing {label} reference; reopen the batch editor"
+            ))
+        };
+        if let Some(auth) = &connection.auth {
+            for id in [&auth.account_id, &auth.password_id].into_iter().flatten() {
+                let unchanged = old_auth.is_some_and(|old| {
+                    old.account_id.as_ref() == Some(id) || old.password_id.as_ref() == Some(id)
+                });
+                if !unchanged && self.load_password_by_id(id)?.is_none() {
+                    return Err(missing("account"));
+                }
+            }
+            if let Some(id) = &auth.key_id
+                && old_auth.and_then(|old| old.key_id.as_ref()) != Some(id)
+                && self.load_ssh_key_by_id(id)?.is_none()
+            {
+                return Err(missing("SSH key"));
+            }
+            if let Some(id) = &auth.otp_id
+                && old_auth.and_then(|old| old.otp_id.as_ref()) != Some(id)
+                && self.load_otp_entry_by_id(id)?.is_none()
+            {
+                return Err(missing("OTP"));
+            }
+        }
+        if let Some(network) = &connection.network {
+            let old = previous.as_ref().and_then(|value| value.network.as_ref());
+            if let Some(id) = &network.proxy_id
+                && old.and_then(|old| old.proxy_id.as_ref()) != Some(id)
+                && !self
+                    .list_json_by_prefix::<ProxyConfig>(PROXIES_TABLE, PROXY_PREFIX)?
+                    .iter()
+                    .any(|proxy| &proxy.id == id)
+            {
+                return Err(missing("proxy"));
+            }
+            if let Some(id) = &network.proxy_jump_id
+                && old.and_then(|old| old.proxy_jump_id.as_ref()) != Some(id)
+            {
+                let jump = self
+                    .get_connection(id)?
+                    .ok_or_else(|| missing("jump host"))?;
+                if id == &connection.id || !matches!(jump.config, ConnectionType::Ssh { .. }) {
+                    return Err(StorageError::InvalidData(
+                        "jump host must reference another SSH connection".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_group_and_connection(
         &self,
         group: &Group,
@@ -1641,6 +1799,14 @@ fn save_connection_with_clean_indexes_in_txn(
     txn: &redb::WriteTransaction,
     connection: &PreparedConnectionForStorage,
 ) -> Result<(), StorageError> {
+    save_connection_with_clean_indexes_checked_in_txn(txn, connection, true)
+}
+
+fn save_connection_with_clean_indexes_checked_in_txn(
+    txn: &redb::WriteTransaction,
+    connection: &PreparedConnectionForStorage,
+    validate_agent: bool,
+) -> Result<(), StorageError> {
     // User configuration writes also invalidate an in-flight V4 Apply when
     // only a device-local binding changed. Runtime usage/monitoring writes use
     // their own paths and do not pass through this user-save boundary.
@@ -1649,10 +1815,11 @@ fn save_connection_with_clean_indexes_in_txn(
     // Canonicalize legacy fields before every write so input-only aliases are
     // never silently discarded by unrelated updates.
     migrate_legacy_ssh_agent_settings(&mut connection);
-    if let ConnectionType::Ssh {
-        agent_forwarding_config: Some(config),
-        ..
-    } = &connection.config
+    if validate_agent
+        && let ConnectionType::Ssh {
+            agent_forwarding_config: Some(config),
+            ..
+        } = &connection.config
     {
         validate_ssh_agent_forwarding_config(config).map_err(|error| {
             StorageError::InvalidData(format!(

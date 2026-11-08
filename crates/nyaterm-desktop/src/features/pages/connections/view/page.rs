@@ -461,6 +461,13 @@ fn import_report_sections(
             &report.unsupported_one_key_sessions,
         ));
     }
+    if !report.notice_messages.is_empty() {
+        sections.push(import_report_section(
+            palette,
+            t!("savedConnections.importReportNotices").to_string(),
+            &report.notice_messages,
+        ));
+    }
     sections
 }
 

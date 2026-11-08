@@ -83,6 +83,88 @@ impl ThemePalette {
         (mix(16) << 16) | (mix(8) << 8) | mix(0)
     }
 
+    /// True when this palette paints a dark shell.
+    pub fn is_dark(self) -> bool {
+        relative_luminance(self.bg) < 0.5
+    }
+
+    /// The single background token for every input surface: single-line and
+    /// multi-line text fields, password and search fields, number fields, and
+    /// select triggers.
+    ///
+    /// Preserve the theme's input token, including user-provided custom colors.
+    /// Do not use this for tabs, cards, hover fills, or terminal surfaces.
+    pub fn input_surface(self) -> u32 {
+        self.input
+    }
+
+    /// Opaque full-screen backdrop of the lock screen.
+    ///
+    /// It must hide private workspace content, so it stays fully opaque. The
+    /// scrim is mixed from the theme's own shell color and accent before it is
+    /// darkened, so light themes show a tinted veil that still belongs to their
+    /// palette instead of a neutral near-black sheet, while dark themes keep
+    /// their own hue and stay at or below the page brightness. The result is
+    /// darkened below the page so the raised card separates from it.
+    pub fn lock_screen_backdrop(self) -> u32 {
+        let tinted = blend_rgb(
+            self.bg,
+            self.primary,
+            if self.is_dark() { 0.2 } else { 0.65 },
+        );
+        let target_luminance = if self.is_dark() {
+            relative_luminance(self.bg) * 0.85
+        } else {
+            0.05
+        };
+        darken_to_luminance(tinted, target_luminance)
+    }
+
+    /// The raised card surface hosting the lock screen content.
+    pub fn lock_screen_card(self) -> u32 {
+        if self.is_dark() {
+            self.surface_elevated
+        } else {
+            self.bg
+        }
+    }
+
+    /// Secondary copy inside the lock screen card, adjusted for the card surface.
+    pub fn lock_screen_muted_text(self) -> u32 {
+        ensure_contrast(self.text_muted, self.lock_screen_card(), 4.5)
+    }
+
+    /// Chrome text drawn directly on the lock screen backdrop.
+    pub fn lock_screen_on_backdrop_text(self) -> u32 {
+        ensure_contrast(self.text_muted, self.lock_screen_backdrop(), 4.5)
+    }
+
+    /// Error copy inside the lock screen card.
+    pub fn lock_screen_danger(self) -> u32 {
+        ensure_contrast(self.danger, self.lock_screen_card(), 4.5)
+    }
+
+    /// Label color for the primary unlock button.
+    ///
+    /// Uses the theme's own `on_primary` pair; some themes (solarized-light)
+    /// top out just above 4:1 because their primary fill cannot host 4.5:1 text,
+    /// and recoloring the fill would invent a visual style the theme does not
+    /// define.
+    pub fn lock_screen_on_primary(self) -> u32 {
+        ensure_contrast(self.on_primary, self.primary, 4.0)
+    }
+
+    /// Palette copy for window chrome rendered over the lock screen backdrop.
+    pub fn lock_screen_chrome_palette(self) -> ThemePalette {
+        let backdrop = self.lock_screen_backdrop();
+        let card = self.lock_screen_card();
+        let mut palette = self;
+        palette.text_muted = ensure_contrast(self.text_muted, backdrop, 4.5);
+        palette.text = ensure_contrast(self.text, card, 4.5);
+        palette.hover = card;
+        palette
+    }
+
     /// Keep the cursor visible without changing terminal foreground/background colors.
     pub fn apply_cursor_contrast_ratio(&mut self, ratio: f32) {
         if ratio <= 1.01 {
@@ -91,6 +173,42 @@ impl ThemePalette {
         self.terminal_cursor =
             ensure_contrast(self.terminal_cursor, self.terminal_bg, ratio.min(4.5));
     }
+}
+
+/// Scale an RGB color's channels toward black, keeping the same hue.
+fn scale_rgb(color: u32, keep: f32) -> u32 {
+    let scale = |channel: u32| ((channel as f32) * keep).round().clamp(0.0, 255.0) as u32;
+    (scale((color >> 16) & 0xff) << 16) | (scale((color >> 8) & 0xff) << 8) | scale(color & 0xff)
+}
+
+/// Mix `amount` of `tint` into `base`, channel by channel.
+fn blend_rgb(base: u32, tint: u32, amount: f32) -> u32 {
+    let mix = |shift: u32| {
+        let base = ((base >> shift) & 0xff) as f32;
+        let tint = ((tint >> shift) & 0xff) as f32;
+        (base + (tint - base) * amount).round().clamp(0.0, 255.0) as u32
+    };
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
+/// Multiplicatively darken `color` until its luminance sits just below `target`.
+///
+/// Scaling every channel by the same factor keeps the blended hue; only the
+/// chroma of the already dark result shrinks, which is the point of a scrim.
+fn darken_to_luminance(color: u32, target: f32) -> u32 {
+    if relative_luminance(color) <= target {
+        return color;
+    }
+    let (mut low, mut high) = (0.0f32, 1.0f32);
+    for _ in 0..20 {
+        let mid = (low + high) / 2.;
+        if relative_luminance(scale_rgb(color, mid)) <= target {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    scale_rgb(color, low)
 }
 
 fn relative_luminance(rgb: u32) -> f32 {
@@ -960,7 +1078,41 @@ pub fn palette_from_theme(theme: &nyaterm_core::themes::ThemeConfig) -> ThemePal
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::theme_palette;
+
+    fn channel_span(color: u32) -> u32 {
+        let r = (color >> 16) & 0xff;
+        let g = (color >> 8) & 0xff;
+        let b = color & 0xff;
+        r.max(g).max(b) - r.min(g).min(b)
+    }
+
+    fn hue_degrees(color: u32) -> Option<f32> {
+        let r = ((color >> 16) & 0xff) as f32;
+        let g = ((color >> 8) & 0xff) as f32;
+        let b = (color & 0xff) as f32;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        if delta < 5. {
+            return None;
+        }
+        let hue = if max == r {
+            60. * (((g - b) / delta) % 6.)
+        } else if max == g {
+            60. * ((b - r) / delta + 2.)
+        } else {
+            60. * ((r - g) / delta + 4.)
+        };
+        Some(hue.rem_euclid(360.))
+    }
+
+    fn hue_distance(a: f32, b: f32) -> f32 {
+        let distance = (a - b).abs();
+        distance.min(360. - distance)
+    }
 
     #[test]
     fn selectable_builtins_match_the_core_theme_catalog() {
@@ -1276,6 +1428,111 @@ mod tests {
             assert_eq!(palette.accent, accent, "{id} accent");
         }
     }
+    #[test]
+    fn input_surface_preserves_builtin_and_custom_theme_tokens() {
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = super::theme_palette(id);
+            assert_eq!(palette.input_surface(), palette.input, "{id}");
+            let mut custom = palette;
+            custom.input = 0xe4d1ba;
+            assert_eq!(custom.input_surface(), 0xe4d1ba, "custom input for {id}");
+        }
+    }
+
+    #[test]
+    fn lock_screen_layers_follow_theme_and_stay_readable() {
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = super::theme_palette(id);
+            let backdrop = palette.lock_screen_backdrop();
+            let card = palette.lock_screen_card();
+            let backdrop_luminance = super::relative_luminance(backdrop);
+            let card_luminance = super::relative_luminance(card);
+
+            // The opaque backdrop hides the workspace and never outshines it.
+            assert!(
+                backdrop_luminance <= super::relative_luminance(palette.bg) + 1e-6,
+                "{id} backdrop brighter than the page"
+            );
+            if !palette.is_dark() {
+                assert!(
+                    backdrop_luminance < 0.08,
+                    "{id} light-theme backdrop must be visibly dimmed"
+                );
+            }
+
+            // The card has to separate from the backdrop in both theme modes.
+            assert!(
+                card_luminance > backdrop_luminance,
+                "{id} card is not raised above the backdrop"
+            );
+            assert!(
+                super::contrast_ratio(card, backdrop) >= 1.15,
+                "{id} card/backdrop contrast too low"
+            );
+
+            assert!(
+                super::contrast_ratio(palette.text, card) >= 4.5,
+                "{id} title contrast on the card"
+            );
+            assert!(
+                super::contrast_ratio(palette.lock_screen_muted_text(), card) >= 4.5,
+                "{id} secondary copy contrast on the card"
+            );
+            assert!(
+                super::contrast_ratio(palette.lock_screen_danger(), card) >= 4.5,
+                "{id} error copy contrast on the card"
+            );
+            assert!(
+                super::contrast_ratio(palette.lock_screen_on_backdrop_text(), backdrop) >= 4.5,
+                "{id} chrome copy contrast on the backdrop"
+            );
+            assert!(
+                super::contrast_ratio(palette.lock_screen_on_primary(), palette.primary) >= 4.0,
+                "{id} unlock label contrast on the primary button"
+            );
+
+            let chrome = palette.lock_screen_chrome_palette();
+            assert!(
+                super::contrast_ratio(chrome.text_muted, backdrop) >= 4.5,
+                "{id} window control icon contrast on the backdrop"
+            );
+            assert!(
+                super::contrast_ratio(chrome.text, chrome.hover) >= 4.5,
+                "{id} window control hover label contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_screen_backdrop_keeps_each_theme_identity() {
+        let mut backdrops = HashSet::new();
+        for id in super::APPEARANCE_THEME_IDS {
+            let palette = super::theme_palette(id);
+            let backdrop = palette.lock_screen_backdrop();
+            assert!(
+                backdrops.insert(backdrop),
+                "{id} reuses another theme's backdrop color"
+            );
+            // A neutral scrim would collapse the channels together; each theme
+            // has to keep a visible tint of its own shell or accent.
+            assert!(
+                channel_span(backdrop) >= 6,
+                "{id} backdrop collapsed into neutral near-black"
+            );
+            let backdrop_hue = hue_degrees(backdrop)
+                .unwrap_or_else(|| panic!("{id} backdrop hue collapsed into neutral"));
+            let related = [hue_degrees(palette.primary), hue_degrees(palette.bg)]
+                .into_iter()
+                .flatten()
+                .map(|hue| hue_distance(backdrop_hue, hue))
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                related <= 30.,
+                "{id} backdrop hue is not derived from bg or primary"
+            );
+        }
+    }
+
     #[test]
     fn custom_colors_cover_extended_tokens_and_unknown_ids_fall_back() {
         let mut theme = nyaterm_core::themes::builtins()[0].copy_as_custom();

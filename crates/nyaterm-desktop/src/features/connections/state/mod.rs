@@ -2,6 +2,7 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -56,7 +57,7 @@ use self::editor_logic::{
     set_connection_group_editor_error, toggle_connection_editor_agent_allowlist_fingerprint,
     toggle_connection_editor_flag,
 };
-use self::import::ConnectionImportState;
+use self::import::{ConnectionImportState, MobaImportSlot};
 use self::list_logic::{
     AppliedSearchExpansion, clear_connection_list_runtime_state, clear_selected_connection_ids,
     connection_drop_position_for_target, cycle_connection_sort_mode,
@@ -1794,6 +1795,65 @@ impl ConnectionFeatureState {
 
     pub fn finish_import_path_prompt(&mut self) {
         self.import.finish_path_prompt();
+    }
+
+    pub(in crate::features) fn mobaxterm_session_path(&self) -> Option<&Path> {
+        self.import.mobaxterm_session_path()
+    }
+
+    pub(in crate::features) fn mobaxterm_passwords_path(&self) -> Option<&Path> {
+        self.import.mobaxterm_passwords_path()
+    }
+
+    pub(in crate::features) fn mobaxterm_import_ready(&self) -> bool {
+        self.import.mobaxterm_import_ready()
+    }
+
+    pub(in crate::features) fn mobaxterm_passwords_missing(&self) -> bool {
+        self.import.mobaxterm_passwords_missing()
+    }
+
+    pub(in crate::features) fn mobaxterm_session_extension_warning(&self) -> bool {
+        self.import.mobaxterm_session_extension_warning()
+    }
+
+    pub(in crate::features) fn mobaxterm_passwords_extension_warning(&self) -> bool {
+        self.import.mobaxterm_passwords_extension_warning()
+    }
+
+    pub(in crate::features) fn mobaxterm_drop_hover(&self) -> Option<MobaImportSlot> {
+        self.import.mobaxterm_drop_hover()
+    }
+
+    pub(in crate::features) fn set_mobaxterm_drop_hover(
+        &mut self,
+        slot: Option<MobaImportSlot>,
+    ) -> bool {
+        self.import.set_mobaxterm_drop_hover(slot)
+    }
+
+    pub(in crate::features) fn set_mobaxterm_file(
+        &mut self,
+        slot: MobaImportSlot,
+        path: PathBuf,
+    ) -> bool {
+        self.import.set_mobaxterm_file(slot, path)
+    }
+
+    pub(in crate::features) fn clear_mobaxterm_slot(&mut self, slot: MobaImportSlot) -> bool {
+        self.import.clear_mobaxterm_slot(slot)
+    }
+
+    pub(in crate::features) fn apply_mobaxterm_drop(
+        &mut self,
+        slot: MobaImportSlot,
+        paths: &[PathBuf],
+    ) -> bool {
+        self.import.apply_mobaxterm_drop(slot, paths)
+    }
+
+    pub(in crate::features) fn cancel_mobaxterm_prompt(&mut self) -> bool {
+        self.import.cancel_mobaxterm_prompt()
     }
 }
 

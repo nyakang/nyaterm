@@ -10,7 +10,7 @@ mod window;
 use super::NyaTermApp;
 use crate::models::SyncInputGroup;
 
-const GROUP_COLORS: [u32; 8] = [
+pub(in crate::features) const GROUP_COLORS: [u32; 8] = [
     0x3b82f6, 0xef4444, 0x22c55e, 0xf59e0b, 0x8b5cf6, 0xec4899, 0x06b6d4, 0xf97316,
 ];
 
@@ -202,7 +202,7 @@ impl SyncInputFeatureState {
         let index = self.groups.len();
         let group = SyncInputGroup {
             id: format!("sync-group-{}", uuid()),
-            name: format!("Sync Group {}", index + 1),
+            name: rust_i18n::t!("syncGroup.defaultGroupName", index = index + 1).to_string(),
             color: self.next_group_color(),
             session_ids: Vec::new(),
             paused_session_ids: Vec::new(),

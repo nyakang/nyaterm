@@ -1,10 +1,12 @@
-use super::{ConnectionType, prepare_session_import, read_file_limited};
 use super::{
-    mobaxterm::parse_moba_entry,
+    ConnectionType, SessionImportNoticeKind,
+    mobaxterm::parse_mobaxterm_content_with_passwords,
     nyaterm_json::parse_nyaterm_json_content,
+    prepare_session_import, read_file_limited,
     windterm::{parse_windterm_content, parse_windterm_target},
     xshell::parse_xsh_content,
 };
+use crate::{ConnectionPasswordSource, ConnectionUsernameSource, SerialFlowControl};
 
 const SAMPLE_JSON: &str = r#"
 {
@@ -110,17 +112,335 @@ UserKey=C:\keys\deploy.key
 }
 
 #[test]
-fn mobaxterm_session_parser_reads_ssh_bookmark_fields() {
-    let group = Some(vec!["Production".to_string()]);
-    let session = parse_moba_entry("Prod web", "#109#0%web.example.com%2200%deploy%", &group)
-        .expect("parse MobaXterm session");
+fn mobaxterm_import_reads_every_bookmark_section_with_nested_groups() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+ImgNum=1
+Root web=#109#0%web.example.com%2222%deploy%
 
-    assert_eq!(session.name, "Prod web");
-    assert_eq!(session.host, "web.example.com");
-    assert_eq!(session.port, 2200);
-    assert_eq!(session.username, "deploy");
-    assert_eq!(session.auth_type, "password");
-    assert_eq!(session.group_path, group);
+[Bookmarks_1]
+SubRep=Lab
+ImgNum=2
+Lab desktop=#91#4%rdp.example.com%3389%[rdp-login]%
+
+[Bookmarks_2]
+SubRep=Lab\Prod
+ImgNum=3
+Prod console=#98#1%telnet.example.com%23%netops%
+
+[Bookmarks_3]
+SubRep=Empty
+ImgNum=4
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, None);
+
+    assert_eq!(imported.connections.len(), 3);
+    assert_eq!(imported.connections[0].name, "Root web");
+    assert_eq!(imported.connections[0].group_path, None);
+    assert_eq!(imported.connections[0].sort_order, 0);
+    assert_eq!(
+        imported.connections[1].group_path,
+        Some(vec!["Lab".to_string()])
+    );
+    assert_eq!(imported.connections[1].sort_order, 1);
+    assert_eq!(
+        imported.connections[2].group_path,
+        Some(vec!["Lab".to_string(), "Prod".to_string()])
+    );
+    assert_eq!(imported.connections[2].sort_order, 2);
+
+    assert!(matches!(
+        &imported.connections[0].config,
+        ConnectionType::Ssh { host, port: 2222, username, .. }
+            if host == "web.example.com" && username == "deploy"
+    ));
+    assert!(matches!(
+        &imported.connections[1].config,
+        ConnectionType::Rdp { host, port: 3389, username, .. }
+            if host == "rdp.example.com" && username == "rdp-login"
+    ));
+    assert!(matches!(
+        &imported.connections[2].config,
+        ConnectionType::Telnet { host, port: 23, username, .. }
+            if host == "telnet.example.com" && username == "netops"
+    ));
+
+    // Folders are kept even when their section holds no sessions.
+    assert!(imported.groups.contains(&vec!["Lab".to_string()]));
+    assert!(
+        imported
+            .groups
+            .contains(&vec!["Lab".to_string(), "Prod".to_string()])
+    );
+    assert!(imported.groups.contains(&vec!["Empty".to_string()]));
+}
+
+#[test]
+fn mobaxterm_import_maps_serial_and_skips_unsupported_session_types() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+Serial console=#131#8%0%115200%3%0%0%1%2%COM3  (synthetic port)#SyntheticFont%12%0
+Ftp site=#130#6%files.example.com%
+
+[Bookmarks_1]
+SubRep=Supported
+Ssh host=#109#0%ssh.example.com%22%ops%
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, None);
+
+    assert_eq!(imported.connections.len(), 2);
+    assert_eq!(imported.connections[0].name, "Serial console");
+    assert!(imported.connections[0].auth.is_none());
+    assert!(matches!(
+        &imported.connections[0].config,
+        ConnectionType::Serial { port_name, .. } if port_name == "COM3"
+    ));
+    assert_eq!(imported.connections[1].name, "Ssh host");
+    assert_eq!(
+        imported.connections[1].group_path,
+        Some(vec!["Supported".to_string()])
+    );
+    assert!(imported.notices.iter().any(|notice| {
+        notice.session_name == "Ftp site"
+            && notice.kind == SessionImportNoticeKind::SkippedUnsupportedType
+    }));
+    assert!(imported.notices.iter().any(|notice| {
+        notice.session_name == "Serial console"
+            && notice.kind == SessionImportNoticeKind::SerialSettingsDefaulted
+    }));
+}
+
+#[test]
+fn mobaxterm_import_maps_serial_defaults_without_credentials() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+Serial console=#131#8%0%115200%3%0%0%1%2%COM3  (synthetic port)#SyntheticFont%12%0
+"#;
+    let passwords = "Serial console(com-user) = synthetic-secret\n";
+
+    let imported = parse_mobaxterm_content_with_passwords(content, Some(passwords));
+
+    assert_eq!(imported.connections.len(), 1);
+    assert!(imported.passwords.is_empty());
+    assert!(imported.connections[0].auth.is_none());
+    assert!(matches!(
+        &imported.connections[0].config,
+        ConnectionType::Serial {
+            port_name,
+            baud_rate,
+            data_bits,
+            parity,
+            flow_control,
+            stop_bits,
+            backspace_mode,
+            ..
+        } if port_name == "COM3"
+            && *baud_rate == 115_200
+            && *data_bits == 8
+            && parity == "none"
+            && *flow_control == SerialFlowControl::None
+            && stop_bits == "1"
+            && backspace_mode == "ctrl_h"
+    ));
+    assert!(imported.notices.iter().any(|notice| {
+        notice.session_name == "Serial console"
+            && notice.kind == SessionImportNoticeKind::SerialSettingsDefaulted
+    }));
+}
+
+#[test]
+fn mobaxterm_import_maps_vnc_session_fields() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+VNC desktop=#128#5%vnc.example.com%5900%-1%0%%%%%-1%0%0%%0%%1080%%%0#SyntheticFont%12%0
+VNC with user=#128#5%vnc-user.example.com%5901%vnc-user%0
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, None);
+
+    assert_eq!(imported.connections.len(), 2);
+    assert!(matches!(
+        &imported.connections[0].config,
+        ConnectionType::Vnc { username, host, port, shared, view_only, .. }
+            if username.is_empty()
+                && host == "vnc.example.com"
+                && *port == 5900
+                && *shared
+                && !*view_only
+    ));
+    assert!(matches!(
+        &imported.connections[1].config,
+        ConnectionType::Vnc { username, host, port, .. }
+            if username == "vnc-user" && host == "vnc-user.example.com" && *port == 5901
+    ));
+    assert_eq!(
+        imported
+            .notices
+            .iter()
+            .filter(|notice| notice.kind == SessionImportNoticeKind::VncSettingsDefaulted)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn mobaxterm_import_reports_skipped_entries_with_names_and_reasons() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+Malformed=not-a-session
+Vnc broken=#128#5%%5900%-1%0
+Serial broken=#131#8%0%115200%3%0%0%1%2%#SyntheticFont
+Ftp site=#130#6%files.example.com%
+Valid telnet=#98#1%telnet.example.com%23%netops%
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, None);
+
+    assert_eq!(imported.connections.len(), 1);
+    assert_eq!(imported.connections[0].name, "Valid telnet");
+
+    let kinds: Vec<(&str, SessionImportNoticeKind)> = imported
+        .notices
+        .iter()
+        .map(|notice| (notice.session_name.as_str(), notice.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ("Malformed", SessionImportNoticeKind::SkippedMalformedEntry),
+            (
+                "Vnc broken",
+                SessionImportNoticeKind::SkippedMissingEndpoint
+            ),
+            (
+                "Serial broken",
+                SessionImportNoticeKind::SkippedMissingSerialPort
+            ),
+            ("Ftp site", SessionImportNoticeKind::SkippedUnsupportedType),
+        ]
+    );
+    assert_eq!(
+        imported
+            .notices
+            .iter()
+            .filter(|notice| notice.kind.is_skipped())
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn mobaxterm_stored_passwords_link_accounts_by_login_and_host() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+Ssh by reference=#109#0%ssh-a.example.com%22%[cred-a]%
+Ssh unmatched=#109#0%ssh-c.example.com%22%other-user%
+
+[Bookmarks_1]
+SubRep=Desktops
+Rdp by host=#91#4%rdp-b.example.com%3389%[rdp-b.example.com]%
+"#;
+    let passwords = r#"
+cred-a(actual-user) = synthetic-secret-1
+rdp-b.example.com(actual-rdp-user) = synthetic-secret-2
+malformed line without separator
+empty(ignored) =
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, Some(passwords));
+
+    assert_eq!(imported.connections.len(), 3);
+    assert_eq!(imported.passwords.len(), 2);
+
+    let linked: Vec<_> = imported
+        .connections
+        .iter()
+        .filter_map(|connection| connection.auth.as_ref()?.account_id.clone())
+        .collect();
+    assert_eq!(linked.len(), 2);
+
+    let ssh = &imported.connections[0];
+    assert!(matches!(
+        &ssh.config,
+        ConnectionType::Ssh { username, .. } if username == "actual-user"
+    ));
+    let accounts = ssh.auth.as_ref().expect("ssh auth");
+    assert_eq!(
+        accounts.password_source,
+        Some(ConnectionPasswordSource::Account)
+    );
+    assert_eq!(
+        accounts.username_source,
+        Some(ConnectionUsernameSource::Account)
+    );
+    assert_eq!(accounts.account_id, accounts.password_id);
+
+    let rdp = &imported.connections[2];
+    assert!(matches!(
+        &rdp.config,
+        ConnectionType::Rdp { username, .. } if username == "actual-rdp-user"
+    ));
+    assert_eq!(
+        imported.connections[1]
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.account_id.clone()),
+        None
+    );
+    assert!(matches!(
+        &imported.connections[1].config,
+        ConnectionType::Ssh { username, .. } if username == "other-user"
+    ));
+}
+
+#[test]
+fn mobaxterm_import_without_passwords_file_links_nothing() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+Ssh host=#109#0%ssh.example.com%22%ops%
+"#;
+
+    let imported = parse_mobaxterm_content_with_passwords(content, None);
+
+    assert!(imported.passwords.is_empty());
+    let auth = imported.connections[0].auth.as_ref().expect("auth");
+    assert_eq!(auth.account_id, None);
+    assert_eq!(auth.password_id, None);
+    assert_eq!(auth.mode, "password");
+}
+
+#[test]
+fn mobaxterm_default_username_never_claims_stored_password() {
+    let content = r#"
+[Bookmarks]
+SubRep=
+No user=#109#0%ssh.example.com%22%
+"#;
+    let passwords = "root(actual-user) = synthetic-secret\n";
+
+    let imported = parse_mobaxterm_content_with_passwords(content, Some(passwords));
+
+    assert!(imported.passwords.is_empty());
+    assert!(matches!(
+        &imported.connections[0].config,
+        ConnectionType::Ssh { username, .. } if username == "root"
+    ));
+    assert_eq!(
+        imported.connections[0]
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.account_id.clone()),
+        None
+    );
 }
 
 #[test]

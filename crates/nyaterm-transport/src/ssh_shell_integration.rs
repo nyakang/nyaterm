@@ -604,7 +604,10 @@ fn wrap_shell_integration_payload(
         ShellKind::Bash => {
             " if [[ -o history ]]; then NYATERM_INJ_HISTORY_WAS_ENABLED=1; NYATERM_PRUNE_HISTORY=1; else unset NYATERM_INJ_HISTORY_WAS_ENABLED NYATERM_PRUNE_HISTORY; fi; NYATERM_LAST_HISTCMD=\"${HISTCMD-}\"; export NYATERM_INJ=1; set +o history\n"
         }
-        ShellKind::Zsh => " fc -p /dev/null 2>/dev/null\n export NYATERM_INJ=1;\n",
+        // The first physical line pushes an anonymous in-memory history list.
+        // Record its status only on the next line, after history has switched, so
+        // injection variables never enter the user's original history.
+        ShellKind::Zsh => " fc -p\n NYATERM_INJ_HISTORY_PUSHED=$?; export NYATERM_INJ=1;\n",
         ShellKind::Fish => " set -gx NYATERM_INJ 1\n",
         ShellKind::PosixSh | ShellKind::Unknown => return None,
     };
@@ -614,8 +617,11 @@ fn wrap_shell_integration_payload(
                 "\nif [ -n \"${{NYATERM_INJ_HISTORY_WAS_ENABLED:-}}\" ]; then set -o history; __nyaterm_prune_history; else unset NYATERM_PRUNE_HISTORY; fi; unset NYATERM_INJ_HISTORY_WAS_ENABLED; __nyaterm_install_prompt {install_arg} 2>/dev/null || true; printf '{ready}'\n"
             )
         }
+        // The ready marker must be emitted before `fc -P`: a failed pop aborts the
+        // remainder of its physical line, which previously swallowed the marker and
+        // stalled startup for the full integration timeout.
         ShellKind::Zsh => format!(
-            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true; fc -P 2>/dev/null; printf '{ready}'\n"
+            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true\nprintf '{ready}'\nif [ \"${{NYATERM_INJ_HISTORY_PUSHED:-1}}\" = 0 ]; then unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P 2>/dev/null; else unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fi\n"
         ),
         ShellKind::Fish => format!(
             "\n __nyaterm_install_prompt {install_arg} 2>/dev/null; or true\n printf '{ready}'\n"
@@ -1667,7 +1673,8 @@ mod tests {
                     assert!(uploaded.contains("set -o history; __nyaterm_prune_history"));
                 }
                 ShellKind::Zsh => {
-                    assert!(uploaded.starts_with(" fc -p /dev/null"));
+                    assert!(uploaded.starts_with(" fc -p\n"));
+                    assert!(!uploaded.contains("mktemp"));
                     assert!(uploaded.contains("fc -P 2>/dev/null"));
                 }
                 ShellKind::Fish => {
@@ -1710,10 +1717,37 @@ mod tests {
             assert!(script.contains("NyaTermReady:rc-history-guard"));
             match shell {
                 ShellKind::Bash => assert!(script.contains("if [[ -o history ]]")),
-                ShellKind::Zsh => assert!(script.starts_with(" fc -p /dev/null")),
+                ShellKind::Zsh => {
+                    assert!(script.starts_with(" fc -p\n"));
+                    assert!(!script.contains("mktemp"));
+                }
                 ShellKind::Fish => assert!(script.starts_with(" set -gx NYATERM_INJ 1")),
                 ShellKind::PosixSh | ShellKind::Unknown => unreachable!(),
             }
+        }
+    }
+
+    #[test]
+    fn zsh_history_guard_is_anonymous_and_emits_ready_before_guarded_pop() {
+        let ready_marker = build_ssh_ready_marker("zsh-history-lock");
+        for mode in [ShellIntegrationMode::Full, ShellIntegrationMode::CwdOnly] {
+            let integration =
+                super::prepare_shell_integration(ShellKind::Zsh, &ready_marker, mode).unwrap();
+            let script = String::from_utf8(integration.inline_script()).unwrap();
+            assert_eq!(script.lines().next(), Some(" fc -p"));
+            assert!(
+                script
+                    .lines()
+                    .nth(1)
+                    .unwrap()
+                    .starts_with(" NYATERM_INJ_HISTORY_PUSHED=$?;")
+            );
+            assert!(!script.contains("mktemp"));
+            assert!(!script.contains(".LOCK"));
+            let ready = script.find("NyaTermReady:zsh-history-lock").unwrap();
+            let pop = script.find("fc -P 2>/dev/null").unwrap();
+            assert!(ready < pop);
+            assert!(script.contains("unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P"));
         }
     }
 

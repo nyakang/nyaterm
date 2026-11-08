@@ -32,6 +32,21 @@ pub(crate) fn component_typography(cx: &App) -> ComponentTypography {
         .unwrap_or_default()
 }
 
+/// Projection of [`ThemePalette::input_surface`] for GPUI component rendering.
+/// Every input control reads this instead of deriving a surface from border or
+/// background tokens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InputSurfaceColor(pub(crate) Hsla);
+
+impl Global for InputSurfaceColor {}
+
+pub(crate) fn input_surface_color(cx: &App) -> Hsla {
+    cx.try_global::<InputSurfaceColor>()
+        .copied()
+        .map(|surface| surface.0)
+        .unwrap_or_else(|| Theme::global(cx).input_background())
+}
+
 fn color(rgb_value: u32) -> Hsla {
     rgb(rgb_value).into()
 }
@@ -79,6 +94,7 @@ pub fn apply_component_theme(
         font: ui_font.clone(),
         font_size: ui_font_size,
     });
+    cx.set_global(InputSurfaceColor(color(palette.input_surface())));
 
     let component_theme = Theme::global_mut(cx);
     component_theme.mode = mode;
@@ -220,7 +236,7 @@ pub fn apply_component_theme(
     component_theme.colors.cyan = color(palette.link);
     component_theme.colors.cyan_light = color(palette.link);
     let editor_style = &mut Arc::make_mut(&mut component_theme.highlight_theme).style;
-    editor_style.editor_background = Some(color(palette.input));
+    editor_style.editor_background = Some(color(palette.input_surface()));
     editor_style.editor_active_line = None;
     editor_style.editor_gutter_background = Some(color(palette.surface_elevated));
     editor_style.editor_line_number = Some(color(palette.text_dimmed));
@@ -334,6 +350,22 @@ mod tests {
     }
 
     #[test]
+    fn custom_light_input_color_reaches_inputs_and_editor_projection() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut palette = theme_palette("github-light");
+            palette.input = 0xe4d1ba;
+            apply_component_theme(palette, cx);
+            assert_eq!(super::input_surface_color(cx), color(0xe4d1ba));
+            assert_eq!(
+                Theme::global(cx).highlight_theme.style.editor_background,
+                Some(color(0xe4d1ba))
+            );
+        });
+    }
+
+    #[test]
     fn editor_colors_follow_the_nyaterm_palette() {
         let cx = TestAppContext::single();
 
@@ -344,7 +376,10 @@ mod tests {
             apply_component_theme(palette, cx);
 
             let style = &Theme::global(cx).highlight_theme.style;
-            assert_eq!(style.editor_background, Some(color(palette.input)));
+            assert_eq!(
+                style.editor_background,
+                Some(color(palette.input_surface()))
+            );
             assert_eq!(style.editor_active_line, None);
             assert_eq!(
                 style.editor_gutter_background,

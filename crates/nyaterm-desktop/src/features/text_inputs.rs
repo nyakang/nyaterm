@@ -500,6 +500,8 @@ impl NyaTermApp {
         let remote_panel_input = id.starts_with("remote.");
         if let Some(host) = id.strip_prefix("tmux.command.") {
             self.on_tmux_command_draft(host, text, cx);
+        } else if id.starts_with("asset-batch.") {
+            self.apply_asset_batch_input(id.as_ref(), &text, cx);
         } else if let Some(rest) = id.strip_prefix("settings.number.") {
             self.apply_settings_number_input(rest, &text, cx);
         } else if let Some(rest) = id.strip_prefix("ai.number.") {
@@ -795,7 +797,7 @@ pub(in crate::features) fn ordinary_input_box(
         .when(focused, |this| {
             this.shadow(ordinary_input_focus_ring(palette))
         })
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .cursor_text()
         .on_click(move |_, window, cx| {
             window.focus(&handle, cx);

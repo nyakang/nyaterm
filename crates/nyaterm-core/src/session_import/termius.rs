@@ -781,6 +781,7 @@ fn prepare_termius_import(store: TermiusRawStore) -> AppResult<PreparedJsonImpor
         passwords: prepared_passwords.passwords,
         ssh_keys: prepared_keys.keys,
         connections,
+        notices: Vec::new(),
     })
 }
 

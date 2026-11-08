@@ -396,7 +396,7 @@ pub(in crate::features) fn widest_connection_row(
 }
 
 #[derive(Clone)]
-pub(super) struct ConnectionEditorChoice {
+pub(in crate::features) struct ConnectionEditorChoice {
     pub value: Option<String>,
     pub label: String,
     pub search_text: Option<String>,
@@ -1419,7 +1419,7 @@ pub(super) fn forwarding_endpoint_editor_field(
                 .when(focused, |this| {
                     this.shadow(ordinary_input_focus_ring(palette))
                 })
-                .bg(rgb(palette.input))
+                .bg(rgb(palette.input_surface()))
                 .cursor_text()
                 .on_click(move |_, window, cx| {
                     window.focus(&handle, cx);
@@ -1479,7 +1479,7 @@ pub(super) fn editor_field_box(
         .when(focused, |this| {
             this.shadow(ordinary_input_focus_ring(palette))
         })
-        .bg(rgb(palette.input))
+        .bg(rgb(palette.input_surface()))
         .cursor_text()
         .when_some(handle, |row, handle| {
             row.on_click(move |_, window, cx| {

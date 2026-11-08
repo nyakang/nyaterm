@@ -15,7 +15,10 @@ use nyaterm_ui::{NyaDialogWindowExt as _, NyaInputEvent, nya_root};
 use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
 
-use super::{asset_action_left_in_decoration, responsive_asset_card_columns};
+use super::{
+    asset_action_left_in_decoration, asset_row_fills, contrast_ratio, relative_luminance,
+    responsive_asset_card_columns,
+};
 
 struct AssetFixture {
     app: Entity<NyaTermApp>,
@@ -473,4 +476,303 @@ fn asset_actions_stay_fixed_at_the_viewport_right_edge() {
             "the 104px action column must stay pinned to the 960px viewport"
         );
     }
+}
+
+/// Every built-in dark theme must show a measurable zebra step above its base
+/// row, and a hover fill one step above that stripe.
+#[test]
+fn asset_row_stripes_are_visible_on_every_dark_theme() {
+    let mut failures = Vec::new();
+    for id in nyaterm_ui::APPEARANCE_THEME_IDS {
+        let palette = nyaterm_ui::theme_palette(id);
+        if !palette.is_dark() {
+            continue;
+        }
+        let fills = asset_row_fills(palette);
+        let base = relative_luminance(palette.bg);
+        let stripe = relative_luminance(fills.stripe);
+        let hover = relative_luminance(fills.hover);
+        if base >= stripe || stripe >= hover {
+            failures.push(format!("{id}: luminance order base < stripe < hover"));
+        }
+        if contrast_ratio(palette.bg, fills.stripe) < 1.10 {
+            failures.push(format!("{id}: base->stripe contrast below 1.10"));
+        }
+        if contrast_ratio(fills.stripe, fills.hover) < 1.10 {
+            failures.push(format!("{id}: stripe->hover contrast below 1.10"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Light themes keep the established subtle tint, but it still has to read as
+/// a stripe instead of collapsing into the white base.
+#[test]
+fn asset_row_stripes_stay_subtle_but_visible_on_every_light_theme() {
+    let mut failures = Vec::new();
+    for id in nyaterm_ui::APPEARANCE_THEME_IDS {
+        let palette = nyaterm_ui::theme_palette(id);
+        if palette.is_dark() {
+            continue;
+        }
+        let fills = asset_row_fills(palette);
+        if fills.stripe != palette.surface {
+            failures.push(format!("{id}: light stripe must stay on the surface token"));
+        }
+        // Some light palettes raise `surface` above `bg` (windterm-light), so the
+        // stripe may be lighter or darker; it only has to be a distinct step.
+        if (relative_luminance(fills.stripe) - relative_luminance(palette.bg)).abs() <= f32::EPSILON
+        {
+            failures.push(format!("{id}: light stripe must differ from the base"));
+        }
+        if contrast_ratio(palette.bg, fills.stripe) < 1.05 {
+            failures.push(format!("{id}: light stripe is indistinguishable"));
+        }
+        if contrast_ratio(fills.stripe, fills.hover) < 1.05 {
+            failures.push(format!(
+                "{id}: light hover is indistinguishable from the stripe"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+fn ssh_connection(id: &str) -> SavedConnection {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "name": id, "type": "ssh", "host": "example.com", "username": "root",
+    }))
+    .unwrap()
+}
+
+fn rdp_connection(id: &str) -> SavedConnection {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "name": id, "type": "rdp", "host": "example.invalid",
+    }))
+    .unwrap()
+}
+
+/// Three SSH connections, one local terminal, and two RDP connections, all
+/// selected, so every protocol in the selection has a distinct count.
+fn mixed_protocol_app(cx: &mut TestAppContext, root: &TestTempDir) -> Entity<NyaTermApp> {
+    let app = app(cx, root, AssetViewMode::List);
+    app.update(cx, |app, _| {
+        let connections = vec![
+            ssh_connection("ssh-1"),
+            ssh_connection("ssh-2"),
+            ssh_connection("ssh-3"),
+            connection("local-1"),
+            rdp_connection("rdp-1"),
+            rdp_connection("rdp-2"),
+        ];
+        let ids: Vec<String> = connections.iter().map(|record| record.id.clone()).collect();
+        app.connection_state.replace_loaded(connections, Vec::new());
+        app.start_workspace.clear_asset_selection();
+        for id in &ids {
+            app.start_workspace.toggle_asset_selection(id);
+        }
+    });
+    app
+}
+
+#[test]
+fn asset_batch_edit_opens_mixed_selection_in_common_scope_without_confirmation() {
+    let root = TestTempDir::new("nyaterm-assets-batch-mixed-protocols");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = mixed_protocol_app(&mut cx, &root);
+    let cx = host(&mut cx, &app);
+    let selected = app.read_with(cx, |app, _| app.start_workspace.selected_asset_ids());
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_asset_batch_edit(window, cx)));
+    draw(cx);
+    cx.update(|window, cx| assert!(!window.has_active_nya_dialog(cx)));
+    app.read_with(cx, |app, _| {
+        assert!(app.start_workspace.asset_batch_is_open());
+        assert_eq!(app.start_workspace.asset_batch().display_kind(), None);
+        assert_eq!(app.start_workspace.selected_asset_ids(), selected);
+    });
+}
+
+#[test]
+fn asset_batch_edit_opens_directly_when_the_selection_has_one_protocol() {
+    let root = TestTempDir::new("nyaterm-assets-batch-single-protocol");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app(&mut cx, &root, AssetViewMode::List);
+    let cx = host(&mut cx, &app);
+    app.update(cx, |app, _| {
+        app.start_workspace.clear_asset_selection();
+        app.start_workspace.toggle_asset_selection("first");
+        app.start_workspace.toggle_asset_selection("second");
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.open_asset_batch_edit(window, cx));
+    });
+    draw(cx);
+    cx.update(|window, cx| assert!(!window.has_active_nya_dialog(cx)));
+    app.read_with(cx, |app, _| {
+        assert!(app.start_workspace.asset_batch_is_open())
+    });
+}
+
+#[test]
+fn visible_selection_keeps_shift_anchor_and_preserves_hidden_items() {
+    let root = TestTempDir::new("nyaterm-visible-selection");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = mixed_protocol_app(&mut cx, &root);
+    let cx = host(&mut cx, &app);
+    draw(cx);
+    app.update(cx, |app, cx| {
+        let records = app.start_workspace.visible_records().to_vec();
+        let ids = records
+            .iter()
+            .map(|record| record.connection.id.clone())
+            .collect::<Vec<_>>();
+        app.start_workspace.select_asset_only(&ids[1]);
+        app.start_workspace
+            .select_asset_range(&records, &ids[4], false);
+        assert_eq!(app.start_workspace.selected_asset_count(), 4);
+        app.start_workspace
+            .select_asset_range(&records, &ids[2], false);
+        assert_eq!(app.start_workspace.selected_asset_count(), 2);
+        assert!(app.start_workspace.is_asset_selected(&ids[1]));
+        app.start_workspace
+            .select_asset_range(&records, &ids[5], true);
+        assert_eq!(app.start_workspace.selected_asset_count(), 5);
+        let filtered = &records[3..];
+        app.start_workspace.deselect_visible_assets(filtered);
+        assert_eq!(app.start_workspace.selected_asset_count(), 2);
+        assert_eq!(app.start_workspace.hidden_selected_count(filtered), 2);
+        app.start_workspace
+            .select_asset_range(filtered, &ids[4], false);
+        assert_eq!(
+            app.start_workspace.selected_asset_ids(),
+            vec![ids[4].clone()]
+        );
+        app.start_workspace
+            .select_asset_range(filtered, &ids[5], false);
+        assert_eq!(app.start_workspace.selected_asset_count(), 2);
+        app.start_workspace.clear_asset_selection();
+        assert_eq!(app.start_workspace.hidden_selected_count(filtered), 0);
+        app.start_workspace.select_asset_only(&ids[0]);
+        app.start_workspace.toggle_asset_selection(&ids[1]);
+        let connections = app
+            .connection_state
+            .connections()
+            .iter()
+            .filter(|connection| connection.id != ids[1])
+            .cloned()
+            .collect();
+        app.connection_state.replace_loaded(connections, Vec::new());
+        _ = app.asset_workspace_state(cx);
+        assert_eq!(
+            app.start_workspace.selected_asset_ids(),
+            vec![ids[0].clone()]
+        );
+    });
+}
+
+#[test]
+fn batch_text_events_update_apply_state_and_keep_removes_patch() {
+    use crate::features::assets::BatchEditMode;
+    use crate::features::assets::BatchFieldId;
+    let root = TestTempDir::new("nyaterm-batch-live-input");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = mixed_protocol_app(&mut cx, &root);
+    let cx = host(&mut cx, &app);
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_asset_batch_edit(window, cx)));
+    app.update(cx, |app, cx| {
+        app.set_asset_batch_mode(BatchFieldId::Description, BatchEditMode::Set, cx);
+        assert!(app.start_workspace.asset_batch().build_edits().is_err());
+        let input = app
+            .existing_text_input(BatchFieldId::Description.text_input_id())
+            .unwrap();
+        input.update(cx, |_, cx| {
+            cx.emit(NyaInputEvent::Changed("description".into()))
+        });
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(app.start_workspace.asset_batch().build_edits().is_ok())
+    });
+    app.update(cx, |app, cx| {
+        app.set_asset_batch_mode(BatchFieldId::Description, BatchEditMode::Keep, cx);
+        assert!(app.start_workspace.asset_batch().build_edits().is_err());
+    });
+    let password = app.update(cx, |app, cx| {
+        app.set_asset_batch_scope(Some(nyaterm_core::ConnectionBatchKind::Ssh), cx);
+        app.set_asset_batch_mode(BatchFieldId::Password, BatchEditMode::Set, cx);
+        let input = app
+            .existing_text_input(BatchFieldId::Password.text_input_id())
+            .unwrap();
+        input.update(cx, |state, cx| {
+            // This offscreen field has not mounted its component yet. Queue its
+            // content and send the user-edit event explicitly, as for description.
+            state.set_content("  replacement  ", cx);
+            cx.emit(NyaInputEvent::Changed("  replacement  ".into()));
+        });
+        input
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(
+            app.start_workspace.asset_batch().replacement_password(),
+            "  replacement  "
+        )
+    });
+    app.update(cx, |app, cx| {
+        app.set_asset_batch_mode(BatchFieldId::Password, BatchEditMode::Keep, cx)
+    });
+    password.read_with(cx, |input, cx| assert_eq!(input.value(cx), ""));
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.start_workspace.asset_batch().replacement_password(), "")
+    });
+}
+
+#[test]
+fn stale_batch_completion_preserves_a_new_editor_and_refresh_failure_reports_saved() {
+    let root = TestTempDir::new("nyaterm-batch-completion");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app(&mut cx, &root, AssetViewMode::List);
+    let cx = host(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_workspace.select_asset_only("first");
+            app.open_asset_batch_edit(window, cx);
+            let old = app.start_workspace.asset_batch().generation();
+            app.close_asset_batch_edit(cx);
+            app.open_asset_batch_edit(window, cx);
+            let new = app.start_workspace.asset_batch().generation();
+            app.start_workspace.set_asset_batch_saving(true);
+            app.finish_asset_batch_save(
+                old,
+                Err(nyaterm_store::StorageError::InvalidData("old request".into()).into()),
+                cx,
+            );
+            assert!(app.start_workspace.asset_batch().matches_generation(new));
+            assert!(app.start_workspace.asset_batch_saving());
+            assert!(app.start_workspace.asset_batch().error().is_none());
+            app.finish_asset_batch_save(old, Ok((1, 0)), cx);
+            assert!(app.start_workspace.asset_batch().matches_generation(new));
+            assert!(app.start_workspace.asset_batch_saving());
+        })
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.finish_asset_batch_refresh(
+                Err(nyaterm_store::StorageError::InvalidData("refresh fixture".into()).into()),
+                cx,
+            );
+            assert_eq!(
+                app.shell.status(),
+                rust_i18n::t!("assets.batch.refreshFailed").as_ref()
+            );
+            assert!(app.start_workspace.asset_batch_is_open());
+            assert!(app.start_workspace.asset_batch_saving());
+            assert!(app.start_workspace.asset_batch().error().is_none());
+        })
+    });
 }
