@@ -14,9 +14,13 @@ serde.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "user"] }
 
 [dev-dependencies]
 russh.workspace = true
 tempfile.workspace = true
 nyaterm-core = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(windows)'.dependencies]
+listeners = "0.5"

@@ -1,3 +1,4 @@
+use crate::host::HostTarget;
 use nyaterm_transport::ssh_execution::{RemoteCommandOutput, ensure_remote_command_success};
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 use serde::Serialize;
@@ -117,8 +118,7 @@ pub struct RemoteDockerOverview {
 
 #[derive(Debug, Clone)]
 pub struct DockerService {
-    config: SshSessionConfig,
-    multiplex: Option<SshMultiplexHandle>,
+    target: HostTarget,
     elevation: DockerConnectionState,
 }
 
@@ -237,11 +237,17 @@ pub const DOCKER_CONTAINER_DETAILS_STATS_END: &str = "CONTAINER_STATS_END";
 
 impl DockerService {
     pub fn new(config: SshSessionConfig) -> Self {
-        Self {
-            config,
-            multiplex: None,
-            elevation: Default::default(),
-        }
+        Self::with_target(
+            HostTarget::Ssh {
+                config,
+                multiplex: None,
+            },
+            Default::default(),
+        )
+    }
+
+    pub fn with_target(target: HostTarget, elevation: DockerConnectionState) -> Self {
+        Self { target, elevation }
     }
 
     pub fn with_multiplex(
@@ -250,11 +256,13 @@ impl DockerService {
         elevation: DockerConnectionState,
     ) -> anyhow::Result<Self> {
         multiplex.ensure_matches_config(&config)?;
-        Ok(Self {
-            config,
+        Ok(Self::with_target(
+            HostTarget::Ssh {
+                config,
+                multiplex: Some(multiplex),
+            },
             elevation,
-            multiplex: Some(multiplex),
-        })
+        ))
     }
 
     pub fn overview(&self) -> anyhow::Result<RemoteDockerOverview> {
@@ -435,14 +443,8 @@ impl DockerService {
         input: Option<nyaterm_core::SecretString>,
         timeout: Duration,
     ) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
-        nyaterm_transport::ssh_execution::run_ssh_command_with_input(
-            self.config.clone(),
-            self.multiplex.clone(),
-            command,
-            input,
-            timeout,
-        )
+        self.target.ensure_probes_allowed()?;
+        self.target.run_raw(command, input, timeout)
     }
 
     fn detect_elevation(&self) -> anyhow::Result<DockerElevation> {
@@ -503,7 +505,11 @@ impl DockerService {
             "sudo -S -p '' -- sh -c {}",
             sh_quote(&docker_environment("docker info"))
         );
-        if let Some(password) = self.config.password.clone()
+        let config = self
+            .target
+            .ssh_config()
+            .ok_or_else(|| anyhow::anyhow!("Docker requires sudo authorization"))?;
+        if let Some(password) = config.password.clone()
             && remote_command_succeeded(&self.raw_exec(
                 probe.clone(),
                 Some(password.clone()),
@@ -512,18 +518,17 @@ impl DockerService {
         {
             return Ok(DockerElevation::Password(password));
         }
-        let provider = self
-            .config
+        let provider = config
             .credential_provider
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Docker requires sudo authorization"))?;
-        self.config.attempt.check().map_err(anyhow::Error::msg)?;
+        config.attempt.check().map_err(anyhow::Error::msg)?;
         let response = provider
             .request_secret(&nyaterm_transport::SshCredentialPrompt {
-                host: self.config.host.clone(),
-                port: self.config.port,
-                username: self.config.username.clone(),
-                connection_name: self.config.name.clone(),
+                host: config.host.clone(),
+                port: config.port,
+                username: config.username.clone(),
+                connection_name: config.name.clone(),
                 kind: nyaterm_transport::SshCredentialPromptKind::Password,
                 reason: nyaterm_transport::SshCredentialPromptReason::DockerElevation,
                 attempt: 1,
@@ -547,7 +552,7 @@ impl DockerService {
     }
 
     fn exec(&self, command: &str, timeout: Duration) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
+        self.target.ensure_probes_allowed()?;
         let cached = self
             .elevation
             .inner

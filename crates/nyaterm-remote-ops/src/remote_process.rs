@@ -2,9 +2,8 @@
 //!
 //! Commands run through transport execution APIs without exposing SSH handlers.
 
-use nyaterm_transport::ssh_execution::{
-    RemoteCommandOutput, ensure_remote_command_success, run_ssh_command,
-};
+use crate::host::{HostOs, HostTarget};
+use nyaterm_transport::ssh_execution::{RemoteCommandOutput, ensure_remote_command_success};
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 use std::time::Duration;
 
@@ -29,8 +28,7 @@ pub struct RemoteProcess {
 
 #[derive(Debug, Clone)]
 pub struct SshProcessService {
-    config: SshSessionConfig,
-    multiplex: Option<SshMultiplexHandle>,
+    target: HostTarget,
 }
 
 pub const PROCESS_LIST_SCRIPT: &str = r#"sh -s <<'NYATERM_PROCESS_SCRIPT'
@@ -191,10 +189,14 @@ NYATERM_PROCESS_SCRIPT
 "#;
 impl SshProcessService {
     pub fn new(config: SshSessionConfig) -> Self {
-        Self {
+        Self::with_target(HostTarget::Ssh {
             config,
             multiplex: None,
-        }
+        })
+    }
+
+    pub fn with_target(target: HostTarget) -> Self {
+        Self { target }
     }
 
     pub fn with_multiplex(
@@ -202,10 +204,10 @@ impl SshProcessService {
         multiplex: SshMultiplexHandle,
     ) -> anyhow::Result<Self> {
         multiplex.ensure_matches_config(&config)?;
-        Ok(Self {
+        Ok(Self::with_target(HostTarget::Ssh {
             config,
             multiplex: Some(multiplex),
-        })
+        }))
     }
 
     fn exec_command_bytes(
@@ -213,16 +215,30 @@ impl SshProcessService {
         command: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<RemoteCommandOutput> {
-        run_ssh_command(
-            self.config.clone(),
-            self.multiplex.clone(),
-            command,
+        self.target.run_raw(
+            String::from_utf8_lossy(&command).into_owned(),
+            None,
             timeout,
         )
     }
 
+    /// Windows has no `ps`: the local machine is read natively instead.
+    fn native_windows(&self) -> bool {
+        self.target.is_local() && matches!(HostOs::local(), HostOs::Windows)
+    }
+
     pub fn list_processes(&self) -> anyhow::Result<Vec<RemoteProcess>> {
-        self.config.ensure_remote_resource_probes_allowed()?;
+        if self.native_windows() {
+            return Ok(crate::local_process::list_local_processes());
+        }
+        #[cfg(unix)]
+        if self.target.is_local()
+            && let Ok(rows) = crate::local_process::list_local_unix_processes()
+        {
+            // BusyBox and other minimal `ps` builds fall through to the script.
+            return Ok(rows);
+        }
+        self.target.ensure_probes_allowed()?;
         let output =
             self.exec_command_bytes(PROCESS_LIST_SCRIPT.as_bytes().to_vec(), PROCESS_TIMEOUT)?;
         if is_process_list_unsupported(&output.stdout)
@@ -244,8 +260,16 @@ impl SshProcessService {
         pid: u32,
         signal: impl AsRef<str>,
     ) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
+        self.target.ensure_probes_allowed()?;
         let signal = normalize_process_signal(signal.as_ref())?;
+        if self.native_windows() {
+            crate::local_process::kill_local_process(pid, signal == "KILL")?;
+            return Ok(RemoteCommandOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_status: Some(0),
+            });
+        }
         let output = self.exec_command_bytes(
             format!("kill -{signal} -- {pid}").into_bytes(),
             PROCESS_TIMEOUT,
@@ -254,7 +278,10 @@ impl SshProcessService {
     }
 
     pub fn renice_process(&self, pid: u32, nice: i32) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
+        self.target.ensure_probes_allowed()?;
+        if self.native_windows() {
+            anyhow::bail!("changing priority is not supported on Windows");
+        }
         if !(-20..=19).contains(&nice) {
             anyhow::bail!("Nice value must be between -20 and 19");
         }

@@ -1,6 +1,5 @@
-use nyaterm_transport::ssh_execution::{
-    RemoteCommandOutput, ensure_remote_command_success, run_ssh_command,
-};
+use crate::host::HostTarget;
+use nyaterm_transport::ssh_execution::{RemoteCommandOutput, ensure_remote_command_success};
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
@@ -185,6 +184,8 @@ struct CachedRemoteSample {
 #[derive(Default)]
 pub struct RemoteStatsSampler {
     samples: Mutex<HashMap<String, CachedRemoteSample>>,
+    /// Native collector for the local machine; created lazily on first use.
+    local: Mutex<Option<crate::local_stats::LocalStatsCollector>>,
 }
 
 impl RemoteStatsSampler {
@@ -217,6 +218,15 @@ impl RemoteStatsSampler {
 
         update_network_summary(&mut stats);
         stats
+    }
+
+    /// Snapshot the local machine natively. Deltas live inside the collector.
+    pub fn local_snapshot(&self) -> RemoteStats {
+        self.local
+            .lock()
+            .expect("local stats collector poisoned")
+            .get_or_insert_with(crate::local_stats::LocalStatsCollector::new)
+            .snapshot()
     }
 
     pub fn clear_session(&self, session_id: &str) {
@@ -682,18 +692,21 @@ fi
 
 #[derive(Debug, Clone)]
 pub struct RemoteStatsService {
-    config: SshSessionConfig,
-    multiplex: Option<SshMultiplexHandle>,
+    target: HostTarget,
 }
 
 const STATS_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl RemoteStatsService {
     pub fn new(config: SshSessionConfig) -> Self {
-        Self {
+        Self::with_target(HostTarget::Ssh {
             config,
             multiplex: None,
-        }
+        })
+    }
+
+    pub fn with_target(target: HostTarget) -> Self {
+        Self { target }
     }
 
     pub fn with_multiplex(
@@ -701,10 +714,10 @@ impl RemoteStatsService {
         multiplex: SshMultiplexHandle,
     ) -> anyhow::Result<Self> {
         multiplex.ensure_matches_config(&config)?;
-        Ok(Self {
+        Ok(Self::with_target(HostTarget::Ssh {
             config,
             multiplex: Some(multiplex),
-        })
+        }))
     }
 
     pub fn snapshot(
@@ -721,8 +734,15 @@ impl RemoteStatsService {
         session_id: &str,
         options: RemoteStatsOptions,
     ) -> anyhow::Result<RemoteStats> {
-        self.config.ensure_remote_resource_probes_allowed()?;
-        if !self.config.remote_stats_enabled() {
+        if self.target.is_local() {
+            return Ok(sampler.local_snapshot());
+        }
+        self.target.ensure_probes_allowed()?;
+        if self
+            .target
+            .ssh_config()
+            .is_some_and(|c| !c.remote_stats_enabled())
+        {
             anyhow::bail!("remote stats are disabled for this SSH profile");
         }
         let output = self.exec_success(&options.command(), "Failed to fetch stats")?;
@@ -731,16 +751,21 @@ impl RemoteStatsService {
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
-        let output = run_ssh_command(
-            self.config.clone(),
-            self.multiplex.clone(),
-            command.as_bytes().to_vec(),
-            STATS_TIMEOUT,
-        )?;
+        self.target.ensure_probes_allowed()?;
+        let output = self
+            .target
+            .run_raw(command.to_string(), None, STATS_TIMEOUT)?;
         ensure_remote_command_success(output, context)
     }
 }
+/// `uname -s` names the kernel; people know the product.
+fn friendly_os_name(uname: &str) -> String {
+    match uname.trim() {
+        "Darwin" => "macOS".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn parse_login_session(record: &str) -> Option<LoggedInSession> {
     // `who` date formats vary across systems. Preserve the time text instead of
     // interpreting it in the application's locale or timezone.
@@ -806,7 +831,7 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
                 stats.system = SystemInfo {
                     hostname: cols[1].to_string(),
                     uptime_sec,
-                    os: cols[3].to_string(),
+                    os: friendly_os_name(cols[3]),
                     arch: cols[4].to_string(),
                 };
             }
@@ -1081,6 +1106,14 @@ mod tests {
         assert_eq!(stats.disks[0].available, 4000);
         assert!(parsed.cpu_snapshot.is_some());
         assert_eq!(parsed.networks.len(), 2);
+    }
+
+    #[test]
+    fn darwin_is_reported_as_macos() {
+        let stats = parse_stats_output("SYSTEM\tmac\t100\tDarwin\tarm64\n").unwrap();
+        assert_eq!(stats.stats.system.os, "macOS");
+        let linux = parse_stats_output("SYSTEM\tbox\t100\tLinux\tx86_64\n").unwrap();
+        assert_eq!(linux.stats.system.os, "Linux");
     }
 
     #[test]

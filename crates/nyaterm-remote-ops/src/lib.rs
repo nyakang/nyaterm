@@ -1,5 +1,10 @@
 pub mod ascend_npu;
 pub mod docker;
 pub mod gpu;
+pub mod host;
+pub mod local_process;
+pub mod local_stats;
+pub mod ports;
 pub mod remote_process;
+pub mod services;
 pub mod stats;
