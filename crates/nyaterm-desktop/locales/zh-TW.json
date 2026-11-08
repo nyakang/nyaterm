@@ -3287,8 +3287,10 @@
     "advanced": "進階設定",
     "lineRoleHighlighting": "依指令輸出類型上色",
     "lineRoleHighlightingHint": "辨識 ip addr、ls -l、ps aux、git status、docker ps、systemctl 的輸出，精確為各欄位上色",
-    "keywordHighlightShowSpecialized": "顯示專用高亮規則",
-    "keywordHighlightShowSpecializedHint": "僅供指令輸出上色使用的顏色類別（網路設備、權限、日誌、SQL）"
+    "keywordHighlightMasterHint": "關閉後，通用規則、自訂規則和指令輸出高亮均不生效；各項設定會保留。",
+    "keywordHighlightGeneralRules": "通用規則",
+    "keywordHighlightSpecializedRules": "指令輸出專用規則",
+    "keywordHighlightSpecializedHint": "用於網路設備、權限、日誌、SQL 等輸出，需開啟「依指令輸出類型上色」。"
   },
   "sshAuth": {
     "additionalPasswordRequired": "伺服器要求額外驗證帳戶密碼。此密碼僅用於本次連線。",

@@ -3287,8 +3287,10 @@
     "advanced": "高级设置",
     "lineRoleHighlighting": "按命令输出类型高亮",
     "lineRoleHighlightingHint": "识别 ip addr、ls -l、ps aux、git status、docker ps、systemctl 的输出，按字段精确着色",
-    "keywordHighlightShowSpecialized": "显示专用高亮规则",
-    "keywordHighlightShowSpecializedHint": "网络设备、权限、日志、SQL 等场景专用的颜色类别（不影响通用规则）"
+    "keywordHighlightMasterHint": "关闭后，通用规则、自定义规则和命令输出高亮均不生效；各项设置会保留。",
+    "keywordHighlightGeneralRules": "通用规则",
+    "keywordHighlightSpecializedRules": "命令输出专用规则",
+    "keywordHighlightSpecializedHint": "用于网络设备、权限、日志、SQL 等输出，需开启「按命令输出类型高亮」。"
   },
   "sshAuth": {
     "additionalPasswordRequired": "服务器要求额外验证账户密码。此密码仅用于本次连接。",

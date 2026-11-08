@@ -4149,6 +4149,74 @@ fn applying_and_painting_a_frame_does_not_compile_or_parse_keywords() {
 }
 
 #[test]
+fn output_highlight_preferences_follow_draft_cancel_and_settings_reload_on_open_terminals() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+
+    for original_line_roles in [false, true] {
+        let dir = TestConfigDir::new("nyaterm-highlight-settings-restore");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        let surfaces = cx.update_entity(&app, |app, cx| {
+            let mut settings = app.settings.summary().clone();
+            settings.ui_highlight_line_roles = original_line_roles;
+            app.apply_gpui_settings(settings, cx);
+            let mut keywords = app.settings.keyword_config().clone();
+            keywords.enabled = true;
+            keywords
+                .builtin_rules
+                .insert("builtin-net-address".into(), false);
+            app.settings.replace_keyword_config(keywords);
+            app.invalidate_paint_theme_caches();
+            [
+                app.ensure_terminal_surface("s1", cx),
+                app.ensure_terminal_surface("s2", cx),
+            ]
+        });
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_line_role_highlights(cx);
+            app.toggle_keyword_highlights(cx);
+            assert!(app.resolved_keyword_highlight_rules().is_empty());
+            app.toggle_line_role_highlights(cx);
+            assert_eq!(
+                app.settings.summary().ui_highlight_line_roles,
+                !original_line_roles
+            );
+            app.toggle_keyword_highlights(cx);
+            assert!(!app.resolved_keyword_highlight_rules().is_empty());
+            assert!(!app.settings.keyword_config().builtin_rules["builtin-net-address"]);
+            for surface in &surfaces {
+                assert_eq!(
+                    surface.read(cx).keyword_highlight_config().line_roles,
+                    !original_line_roles
+                );
+            }
+            app.cancel_settings(cx);
+            assert!(app.settings.keyword_config().enabled);
+            assert!(!app.settings.keyword_config().builtin_rules["builtin-net-address"]);
+            for surface in &surfaces {
+                assert_eq!(
+                    surface.read(cx).keyword_highlight_config().line_roles,
+                    original_line_roles
+                );
+            }
+
+            let mut reloaded = app.settings.summary().clone();
+            reloaded.ui_highlight_line_roles = !original_line_roles;
+            app.apply_gpui_settings(reloaded, cx);
+            for surface in &surfaces {
+                assert_eq!(
+                    surface.read(cx).keyword_highlight_config().line_roles,
+                    !original_line_roles
+                );
+            }
+        });
+    }
+}
+
+#[test]
 fn line_role_changes_reject_the_in_flight_configuration_and_recompute() {
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

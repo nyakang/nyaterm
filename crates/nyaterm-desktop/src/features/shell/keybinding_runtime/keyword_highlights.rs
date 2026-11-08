@@ -21,7 +21,9 @@ impl NyaTermApp {
 
     /// Toggle the line-role highlighter from Settings → Terminal → Keyword highlights.
     pub(in crate::features) fn toggle_line_role_highlights(&mut self, cx: &mut Context<Self>) {
-        let enabled = self.settings.toggle_line_role_highlights();
+        let Some(enabled) = self.settings.toggle_line_role_highlights() else {
+            return;
+        };
         // Open terminals compiled the flag into their highlighter, so push the
         // new value to them instead of waiting for the session to be reopened.
         self.terminal.apply_line_role_highlighting(enabled, cx);

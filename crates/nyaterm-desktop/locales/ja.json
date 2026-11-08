@@ -3287,8 +3287,10 @@
     "unappliedChanges": "未適用の変更があります",
     "lineRoleHighlighting": "コマンド出力ごとに色分け",
     "lineRoleHighlightingHint": "ip addr、ls -l、ps aux、git status、docker ps、systemctl の出力を判別し、項目ごとに色分けします",
-    "keywordHighlightShowSpecialized": "専用ルールを表示",
-    "keywordHighlightShowSpecializedHint": "コマンド出力の色分け専用の色クラス（ネットワーク機器・パーミッション・ログ・SQL）"
+    "keywordHighlightMasterHint": "オフにすると、汎用ルール、カスタムルール、コマンド出力の強調表示が無効になります。各設定は保持されます。",
+    "keywordHighlightGeneralRules": "汎用ルール",
+    "keywordHighlightSpecializedRules": "コマンド出力専用ルール",
+    "keywordHighlightSpecializedHint": "ネットワーク機器、パーミッション、ログ、SQL などの出力用です。コマンド出力の強調表示を有効にする必要があります。"
   },
   "sshAuth": {
     "additionalPasswordRequired": "サーバーで追加のアカウントパスワード認証が必要です。このパスワードは今回の接続にのみ使用されます。",

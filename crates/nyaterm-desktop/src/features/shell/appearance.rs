@@ -47,6 +47,10 @@ impl NyaTermApp {
             settings.diagnostics_retention_days,
         );
         self.settings.replace_summary(settings);
+        // Settings reload and draft cancellation must update existing surfaces,
+        // which cache this flag independently of their compiled rule list.
+        self.terminal
+            .apply_line_role_highlighting(self.settings.summary().ui_highlight_line_roles, cx);
         if users_changed {
             self.remote_stats_users_setting_changed(cx);
         }

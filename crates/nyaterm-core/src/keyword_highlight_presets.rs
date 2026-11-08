@@ -98,8 +98,8 @@ pub fn builtin_keyword_rule_ids() -> &'static [&'static str] {
 
 /// Rules that exist only as colour sources for the line-role parser.
 ///
-/// They never match text on their own, so listing them next to the general
-/// rules just makes the settings list long. The UI hides them behind a toggle.
+/// Unlike these rules, `builtin-variable` also colours shell parameter
+/// expansion and remains active when command-output highlighting is disabled.
 pub fn builtin_keyword_rule_is_specialized(id: &str) -> bool {
     matches!(
         id,
@@ -109,7 +109,6 @@ pub fn builtin_keyword_rule_is_specialized(id: &str) -> bool {
             | "builtin-net-vlan"
             | "builtin-net-secondary"
             | "builtin-keyword"
-            | "builtin-variable"
             | "builtin-comment"
             | "builtin-link"
             | "builtin-weekday"
@@ -738,14 +737,15 @@ pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str]
 #[cfg(test)]
 mod tests {
     use super::{
-        KeywordHighlightRule, get_builtin_keyword_rules, merge_keyword_highlight_rules_for_paint,
+        KeywordHighlightRule, builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized,
+        get_builtin_keyword_rules, merge_keyword_highlight_rules_for_paint,
     };
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn builtin_catalog_is_stable() {
         let rules = get_builtin_keyword_rules(true);
-        // 21 general + 5 network + 10 semantic classes.
+        // 22 general + 14 command-output-only colour classes.
         assert_eq!(rules.len(), 36);
         assert!(rules.iter().all(|rule| rule.id.starts_with("builtin-")));
         assert!(
@@ -754,6 +754,24 @@ mod tests {
                 .find(|r| r.id == "builtin-url")
                 .is_some_and(|r| !r.patterns.is_empty())
         );
+    }
+
+    #[test]
+    fn builtin_groups_cover_the_catalog_and_keep_shell_variables_general() {
+        let ids = builtin_keyword_rule_ids();
+        let unique: HashSet<_> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), 36);
+        let (specialized, general): (Vec<_>, Vec<_>) = ids
+            .iter()
+            .copied()
+            .partition(|id| builtin_keyword_rule_is_specialized(id));
+        assert_eq!(general.len(), 22);
+        assert_eq!(specialized.len(), 14);
+        assert!(general.contains(&"builtin-variable"));
+        assert!(specialized.contains(&"builtin-perm-read"));
+        assert!(specialized.contains(&"builtin-net-address"));
+        assert!(general.iter().all(|id| !specialized.contains(id)));
+        assert_eq!(general.len() + specialized.len(), ids.len());
     }
 
     #[test]

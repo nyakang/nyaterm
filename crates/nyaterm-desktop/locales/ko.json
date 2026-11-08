@@ -3287,8 +3287,10 @@
     "advanced": "고급 설정",
     "lineRoleHighlighting": "명령 출력별 색상 강조",
     "lineRoleHighlightingHint": "ip addr, ls -l, ps aux, git status, docker ps, systemctl 출력을 인식해 항목별로 색을 입힙니다",
-    "keywordHighlightShowSpecialized": "전용 규칙 표시",
-    "keywordHighlightShowSpecializedHint": "명령 출력 강조 전용 색상 클래스(네트워크 장비, 권한, 로그, SQL)"
+    "keywordHighlightMasterHint": "끄면 일반 규칙, 사용자 지정 규칙 및 명령 출력 강조가 비활성화됩니다. 각 설정은 유지됩니다.",
+    "keywordHighlightGeneralRules": "일반 규칙",
+    "keywordHighlightSpecializedRules": "명령 출력 전용 규칙",
+    "keywordHighlightSpecializedHint": "네트워크 장비, 권한, 로그, SQL 등의 출력에 사용됩니다. 명령 출력 강조를 켜야 합니다."
   },
   "sshAuth": {
     "additionalPasswordRequired": "서버에서 추가 계정 비밀번호 인증을 요구합니다. 이 비밀번호는 이번 연결에만 사용됩니다.",

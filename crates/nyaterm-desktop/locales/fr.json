@@ -3287,8 +3287,10 @@
     "unappliedChanges": "Modifications non appliquées",
     "lineRoleHighlighting": "Colorer selon la sortie de commande",
     "lineRoleHighlightingHint": "Reconnaît la sortie de ip addr, ls -l, ps aux, git status, docker ps et systemctl et colore ses champs",
-    "keywordHighlightShowSpecialized": "Afficher les règles spécialisées",
-    "keywordHighlightShowSpecializedHint": "Classes de couleur réservées à la coloration des sorties de commande (équipements réseau, permissions, journaux, SQL)"
+    "keywordHighlightMasterHint": "La désactivation suspend les règles générales, les règles personnalisées et la coloration des sorties de commande. Vos préférences sont conservées.",
+    "keywordHighlightGeneralRules": "Règles générales",
+    "keywordHighlightSpecializedRules": "Règles des sorties de commande",
+    "keywordHighlightSpecializedHint": "Pour les sorties réseau, les permissions, les journaux et SQL. Nécessite la coloration des sorties de commande."
   },
   "sshAuth": {
     "additionalPasswordRequired": "Le serveur demande un mot de passe de compte supplémentaire. Il sera utilisé uniquement pour cette connexion.",
