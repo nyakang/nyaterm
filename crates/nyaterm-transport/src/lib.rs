@@ -69,6 +69,7 @@ use russh::{cipher, kex, mac};
 
 mod directory_command;
 mod environment;
+mod http_proxy;
 pub mod local_shell;
 mod local_shell_integration;
 mod reconnect_cwd;

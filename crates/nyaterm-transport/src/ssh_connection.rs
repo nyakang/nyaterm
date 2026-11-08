@@ -680,25 +680,17 @@ pub(crate) async fn connect_ssh_transport(
             let mut stream = tokio::net::TcpStream::connect(&proxy_addr)
                 .await
                 .map_err(|error| anyhow::anyhow!("HTTP proxy connection failed: {error}"))?;
-            match (
-                proxy.username.as_deref().filter(|value| !value.is_empty()),
-                proxy.password.as_deref().filter(|value| !value.is_empty()),
-            ) {
-                (Some(username), Some(password)) => {
-                    async_http_proxy::http_connect_tokio_with_basic_auth(
-                        &mut stream,
-                        &config.host,
-                        config.port,
-                        username,
-                        password,
-                    )
-                    .await
-                }
-                _ => {
-                    async_http_proxy::http_connect_tokio(&mut stream, &config.host, config.port)
-                        .await
-                }
-            }
+            crate::http_proxy::connect(
+                &mut stream,
+                &config.host,
+                config.port,
+                proxy
+                    .username
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .zip(proxy.password.as_deref().filter(|value| !value.is_empty())),
+            )
+            .await
             .map_err(|error| anyhow::anyhow!("HTTP proxy tunnel failed: {error}"))?;
             client::connect_stream(ssh_client_config(config)?, stream, handler)
                 .await

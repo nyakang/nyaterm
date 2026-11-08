@@ -290,25 +290,13 @@ async fn open_stream(
                 }
                 "http" => {
                     let mut stream = tokio::net::TcpStream::connect(address).await?;
-                    if let (Some(username), Some(password)) =
-                        (proxy.username.as_deref(), proxy.password.as_deref())
-                    {
-                        async_http_proxy::http_connect_tokio_with_basic_auth(
-                            &mut stream,
-                            &config.host,
-                            config.port,
-                            username,
-                            password,
-                        )
-                        .await?;
-                    } else {
-                        async_http_proxy::http_connect_tokio(
-                            &mut stream,
-                            &config.host,
-                            config.port,
-                        )
-                        .await?;
-                    }
+                    crate::http_proxy::connect(
+                        &mut stream,
+                        &config.host,
+                        config.port,
+                        proxy.username.as_deref().zip(proxy.password.as_deref()),
+                    )
+                    .await?;
                     tcp_stream(stream)
                 }
                 "proxycommand" => Box::new(
