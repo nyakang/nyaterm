@@ -44,6 +44,7 @@ fn ssh_connection() -> SavedConnection {
             macs: vec!["hmac-sha2-256".to_string()],
             host_keys: vec!["ssh-ed25519".to_string()],
         }),
+        ssh_compatibility_mode: true,
         ssh_profile: SshProfile::NetworkDevice,
         terminal_type: Some(SshTerminalType::Vt100),
         sftp: SftpSettings {
