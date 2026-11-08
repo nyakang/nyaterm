@@ -21,8 +21,8 @@ use super::super::{
     settings_form_row, settings_form_section, settings_input_control, settings_switch_with_enabled,
 };
 
+mod preview;
 mod providers;
-mod v3;
 impl SettingsPanel {
     fn cloud_sync_provider_select(
         &mut self,
@@ -522,7 +522,6 @@ impl SettingsPanel {
                     ))
                     .child(provider_fields),
             ))
-            .child(self.cloud_sync_v3_section(can_run_enabled_actions, form_enabled, cx))
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.autoSyncStrategy")),
@@ -703,7 +702,12 @@ impl SettingsPanel {
                 palette,
                 Some(t!("settings.syncConflictSection")),
                 None,
-                if let Some(conflict) = cloud_conflict {
+                if crate::features::sync::effective_protocol_version(self.cloud_sync.settings())
+                    == 4
+                    && self.cloud_sync.v4_preview.is_some()
+                {
+                    self.cloud_sync_preview(can_run_enabled_actions, cx)
+                } else if let Some(conflict) = cloud_conflict {
                     self.cloud_sync_conflict_banner(conflict, cx)
                         .into_any_element()
                 } else {
