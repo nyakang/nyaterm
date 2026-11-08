@@ -15,6 +15,7 @@ use nyaterm_core::models::connection_batch::{
     validate_connection_batch_edit,
 };
 use nyaterm_store::StoreDomain;
+use nyaterm_ui::notification::NyaNotificationKind;
 use rust_i18n::t;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -656,7 +657,7 @@ impl NyaTermApp {
                 if current {
                     self.close_asset_batch_edit(cx);
                 }
-                self.shell.set_status(summary.message());
+                self.report_asset_batch_result(summary, false, cx);
                 let reload = nyaterm_store::store_request(StoreDomain::Connections, |store| {
                     store.load_sessions()
                 });
@@ -669,11 +670,7 @@ impl NyaTermApp {
                     cx,
                 );
                 if !queued {
-                    self.shell.set_status(format!(
-                        "{} {}",
-                        summary.message(),
-                        t!("assets.batch.refreshFailed")
-                    ));
+                    self.report_asset_batch_result(summary, true, cx);
                 }
             }
             Err(error) => {
@@ -700,15 +697,37 @@ impl NyaTermApp {
         match outcome {
             Ok(sessions) => {
                 self.apply_loaded_sessions(sessions, cx);
-                self.shell.set_status(summary.message());
+                self.report_asset_batch_result(summary, false, cx);
             }
-            Err(_) => self.shell.set_status(format!(
-                "{} {}",
-                summary.message(),
-                t!("assets.batch.refreshFailed")
-            )),
+            Err(_) => self.report_asset_batch_result(summary, true, cx),
         }
         cx.notify();
+    }
+
+    fn report_asset_batch_result(
+        &mut self,
+        summary: AssetBatchSaveSummary,
+        refresh_failed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let message = if refresh_failed {
+            format!("{} {}", summary.message(), t!("assets.batch.refreshFailed"))
+        } else {
+            summary.message()
+        };
+        self.shell.set_status(message.clone());
+        // The asset list has no terminal status bar. Keep partial-result feedback
+        // visible on the main window, including when a newer editor is open.
+        self.notify_background_operation(
+            "asset-batch-save",
+            if refresh_failed || summary.skipped_fields > 0 {
+                NyaNotificationKind::Warning
+            } else {
+                NyaNotificationKind::Success
+            },
+            message,
+            cx,
+        );
     }
 }
 
