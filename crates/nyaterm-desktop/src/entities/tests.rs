@@ -31,6 +31,11 @@ fn startup_restore_store_tracks_queue_admission() {
         Some("two")
     );
     assert!(!store.can_pump_queue(false));
+    assert!(!store.can_finish_restore(false));
+    assert!(store.mark_open_tabs_restored());
+    assert!(store.can_finish_restore(false));
+    assert!(!store.can_finish_restore(true));
+    assert!(!store.can_pump_queue(true));
 }
 
 struct OverlayTestView;
