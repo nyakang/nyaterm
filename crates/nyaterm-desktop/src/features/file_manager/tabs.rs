@@ -178,68 +178,6 @@ impl NyaTermApp {
         self.persist_file_manager_settings(cx);
     }
 
-    pub(in crate::features) fn open_file_manager_for_session(
-        &mut self,
-        session_id: &str,
-        pane: Option<PaneId>,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .session
-            .file_browser_backend_support_for_session(session_id)
-            .is_none()
-        {
-            return;
-        }
-        let pane = pane.unwrap_or(PaneId::Right);
-        let endpoint = if self
-            .session
-            .file_browser_backend_support_for_session(session_id)
-            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
-        {
-            PaneEndpoint::Local
-        } else {
-            PaneEndpoint::Session(session_id.into())
-        };
-        let browser = self.transfer.browser_view();
-        let path = if self.session.active_id() == Some(session_id) && !browser.path.is_empty() {
-            Some(RemoteFilePath {
-                display_path: browser.path.clone(),
-                raw_path_token: browser.raw_path_token.clone(),
-            })
-        } else {
-            None
-        };
-        if let Some(id) = self.file_manager.active_id().map(str::to_string)
-            && let Some(workspace) = self.file_manager.workspace(&id)
-        {
-            workspace.update(cx, |workspace, _| {
-                let state = workspace.pane_mut(pane);
-                state.set_endpoint(endpoint);
-                if let Some(path) = path {
-                    state.path = path;
-                }
-                state.clear_selection();
-                workspace.set_active(pane);
-            });
-            self.activate_workspace_tab(&WorkspaceTabId::FileManager(id.clone()).layout_key(), cx);
-            self.refresh_file_manager_pane(id, pane, cx);
-        } else {
-            let mut seed = self.default_file_manager_seed();
-            match pane {
-                PaneId::Left => {
-                    seed.left = endpoint;
-                    seed.left_path = path;
-                }
-                PaneId::Right => {
-                    seed.right = endpoint;
-                    seed.right_path = path;
-                }
-            }
-            self.open_file_manager_tab(Some(seed), cx);
-        }
-    }
-
     fn collapse_sidebars_for_file_manager(&mut self, cx: &mut Context<Self>) {
         if !self
             .settings

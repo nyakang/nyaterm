@@ -139,6 +139,7 @@ impl FileManagerWorkspace {
         self.pane(self.active)
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn set_active(&mut self, id: PaneId) {
         self.active = id;
     }
