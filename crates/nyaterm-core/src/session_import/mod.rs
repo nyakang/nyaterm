@@ -50,6 +50,8 @@ type AppResult<T> = Result<T, SessionImportError>;
 #[derive(Default)]
 pub struct SessionImportOptions<'a> {
     pub windterm_master_password: Option<&'a str>,
+    /// Optional `MobaXterm Stored Passwords.txt` chosen alongside the session file.
+    pub mobaxterm_passwords_path: Option<&'a Path>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +67,45 @@ pub enum SessionImportWarningKind {
 pub struct SessionImportWarning {
     pub session_index: usize,
     pub kind: SessionImportWarningKind,
+}
+
+/// Why a source entry was skipped, or why an imported entry uses defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionImportNoticeKind {
+    SkippedUnsupportedType,
+    SkippedMalformedEntry,
+    SkippedMissingEndpoint,
+    SkippedMissingSerialPort,
+    SerialSettingsDefaulted,
+    VncSettingsDefaulted,
+}
+
+impl SessionImportNoticeKind {
+    /// Only entries that were not imported count as skipped.
+    pub fn is_skipped(self) -> bool {
+        !matches!(
+            self,
+            Self::SerialSettingsDefaulted | Self::VncSettingsDefaulted
+        )
+    }
+}
+
+/// Per-entry import notice shown in the result. The session name is user data,
+/// so `Debug` deliberately omits it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SessionImportNotice {
+    pub session_name: String,
+    pub kind: SessionImportNoticeKind,
+}
+
+impl std::fmt::Debug for SessionImportNotice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionImportNotice")
+            .field("kind", &self.kind)
+            .field("session_name_len", &self.session_name.chars().count())
+            .finish()
+    }
 }
 
 struct ImportedSession {
@@ -96,6 +137,8 @@ pub struct PreparedSessionImport {
     pub passwords: Vec<SavedPassword>,
     pub ssh_keys: Vec<SshKey>,
     pub connections: Vec<PreparedSessionConnection>,
+    /// Entries skipped during parsing, plus entries imported with defaults.
+    pub notices: Vec<SessionImportNotice>,
 }
 
 type PreparedJsonConnection = PreparedSessionConnection;
@@ -110,6 +153,7 @@ impl std::fmt::Debug for PreparedSessionImport {
             .field("ssh_key_count", &self.ssh_keys.len())
             .field("connection_count", &self.connections.len())
             .field("warning_count", &self.warnings.len())
+            .field("notice_count", &self.notices.len())
             .finish()
     }
 }
@@ -257,6 +301,7 @@ fn prepare_legacy_sessions(imported: Vec<ImportedSession>) -> PreparedSessionImp
         passwords: Vec::new(),
         ssh_keys: Vec::new(),
         connections,
+        notices: Vec::new(),
     }
 }
 
@@ -281,7 +326,7 @@ pub fn prepare_session_import_with_options(
     let prepared = if lower.ends_with(".xts") {
         prepare_legacy_sessions(parse_xshell(&path)?)
     } else if lower.ends_with(".mxtsessions") {
-        prepare_legacy_sessions(parse_mobaxterm(&path)?)
+        parse_mobaxterm(&path, options.mobaxterm_passwords_path)?
     } else if lower.ends_with(".sessions") {
         parse_windterm(file_path, options.windterm_master_password)?
     } else if lower.ends_with(".xml") {

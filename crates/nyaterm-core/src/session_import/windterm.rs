@@ -515,6 +515,7 @@ fn parse_content_full(
         passwords: Vec::new(),
         ssh_keys: Vec::new(),
         connections: Vec::new(),
+        notices: Vec::new(),
     };
     let mut key_ids = HashMap::new();
     let mut session_counts = HashMap::new();

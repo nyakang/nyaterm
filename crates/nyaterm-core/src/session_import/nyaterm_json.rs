@@ -310,6 +310,7 @@ fn prepare_nyaterm_json_import(file: NyatermJsonImportFile) -> AppResult<Prepare
         passwords,
         ssh_keys,
         connections,
+        notices: Vec::new(),
     })
 }
 

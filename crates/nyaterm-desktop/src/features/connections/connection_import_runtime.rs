@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use nyaterm_core::SecretString;
 use nyaterm_core::session_import::{
-    SessionImportError, SessionImportOptions, prepare_session_import_with_options,
-    prepare_windterm_import_with_decisions, prepare_windterm_preview,
+    SessionImportError, SessionImportNotice, SessionImportNoticeKind, SessionImportOptions,
+    prepare_session_import_with_options, prepare_windterm_import_with_decisions,
+    prepare_windterm_preview,
 };
 use nyaterm_core::{PreparedSessionImport, WindtermImportReport, WindtermPreview};
 
@@ -15,16 +16,25 @@ use nyaterm_store::StoreDomain;
 use nyaterm_ui::NyaDialogWindowExt as _;
 use zeroize::Zeroize as _;
 
-use crate::features::connections::state::import::ConnectionImportReportView;
+use crate::features::connections::state::import::{ConnectionImportReportView, MobaImportSlot};
 use crate::features::text_inputs::TextInputSetup;
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
 use crate::models::ConnectionImportSource;
+
+#[derive(Default)]
+struct ConnectionImportRequest {
+    path: Option<PathBuf>,
+    master_password: Option<SecretString>,
+    mobaxterm_passwords: Option<PathBuf>,
+    auto_termius: bool,
+}
 
 enum ConnectionImportResult {
     Imported {
         count: usize,
         incomplete: usize,
         report: Option<WindtermImportReport>,
+        notices: Vec<SessionImportNotice>,
     },
     NeedsWindtermPassword(PathBuf),
     /// WindTerm files parsed with OneKey accounts; the import waits for the user
@@ -93,6 +103,12 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 程序化关窗（`close_nya_dialog`）不会触发对话框的 `on_close`，取消
+        // 路径可能只关掉了窗口却把导入阶段留在 `Selecting`。以「是否真有活动
+        // 对话框」为准清掉这种残留，避免导入入口被永久拦住。
+        if self.connection_state.import_path_prompt_active() && !window.has_active_nya_dialog(cx) {
+            let _ = self.connection_state.cancel_mobaxterm_prompt();
+        }
         if self.connection_state.import_path_prompt_active()
             || self.settings.config_path_prompt_active()
         {
@@ -129,11 +145,193 @@ impl NyaTermApp {
             self.prompt_encrypted_portable_snapshot_import(window, cx);
             return;
         }
+        if source == ConnectionImportSource::MobaXterm {
+            self.open_mobaxterm_import_dialog(window, cx);
+            return;
+        }
         if source == ConnectionImportSource::Termius {
-            self.start_connection_import(source, None, None, true, window, cx);
+            self.start_connection_import(
+                source,
+                ConnectionImportRequest {
+                    auto_termius: true,
+                    ..ConnectionImportRequest::default()
+                },
+                window,
+                cx,
+            );
             return;
         }
         self.prompt_connection_session_import(source, window, cx);
+    }
+
+    pub(in crate::features) fn open_mobaxterm_import_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_state.import_path_prompt_active() {
+            return;
+        }
+        self.connection_state
+            .begin_import_path_prompt(ConnectionImportSource::MobaXterm);
+        self.open_content_dialog(
+            t!("savedConnections.mobaxtermImportTitle").to_string(),
+            640.,
+            |app, _, cx| app.mobaxterm_import_dialog_content(cx).into_any_element(),
+            |app, cx| app.close_mobaxterm_import_dialog(cx),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(in crate::features) fn close_mobaxterm_import_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.connection_state.cancel_mobaxterm_prompt() {
+            self.shell
+                .set_status(t!("savedConnections.importCancelled").to_string());
+        }
+        cx.notify();
+    }
+
+    /// 取消按钮专用：`window.close_nya_dialog` 不会触发 `on_close`，所以先
+    /// 复位阶段与槽位草稿再关窗，确保下次能重新打开且不残留旧文件。
+    pub(in crate::features) fn cancel_mobaxterm_import(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_mobaxterm_import_dialog(cx);
+        window.close_nya_dialog(cx);
+    }
+
+    pub(in crate::features) fn browse_mobaxterm_session_file(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Do not open a picker once the window is gone or the background import
+        // has already started.
+        if !self.connection_state.import_path_prompt_active() {
+            return;
+        }
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(SharedString::from(
+                t!("savedConnections.mobaxtermSessionFilePrompt").to_string(),
+            )),
+        });
+        cx.spawn(async move |this, cx| {
+            let picked = receiver.await;
+            if let Ok(Ok(Some(paths))) = picked
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |app, cx| {
+                    app.connection_state
+                        .set_mobaxterm_file(MobaImportSlot::Session, path);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(in crate::features) fn browse_mobaxterm_passwords_file(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_state.import_path_prompt_active() {
+            return;
+        }
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(SharedString::from(
+                t!("savedConnections.mobaxtermPasswordsFilePrompt").to_string(),
+            )),
+        });
+        cx.spawn(async move |this, cx| {
+            let picked = receiver.await;
+            if let Ok(Ok(Some(paths))) = picked
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |app, cx| {
+                    app.connection_state
+                        .set_mobaxterm_file(MobaImportSlot::Passwords, path);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(in crate::features) fn clear_mobaxterm_slot(
+        &mut self,
+        slot: MobaImportSlot,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_state.clear_mobaxterm_slot(slot) {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn handle_mobaxterm_slot_drop(
+        &mut self,
+        slot: MobaImportSlot,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_state.apply_mobaxterm_drop(slot, &paths) {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn set_mobaxterm_drop_hover(
+        &mut self,
+        slot: MobaImportSlot,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .connection_state
+            .set_mobaxterm_drop_hover(hovered.then_some(slot))
+        {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn start_mobaxterm_import(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session_path) = self
+            .connection_state
+            .mobaxterm_session_path()
+            .map(std::path::Path::to_path_buf)
+        else {
+            return;
+        };
+        let passwords_path = self
+            .connection_state
+            .mobaxterm_passwords_path()
+            .map(std::path::Path::to_path_buf);
+        self.start_connection_import(
+            ConnectionImportSource::MobaXterm,
+            ConnectionImportRequest {
+                path: Some(session_path),
+                mobaxterm_passwords: passwords_path,
+                ..ConnectionImportRequest::default()
+            },
+            window,
+            cx,
+        );
+        window.close_nya_dialog(cx);
     }
 
     fn prompt_connection_session_import(
@@ -163,9 +361,10 @@ impl NyaTermApp {
                             if let Some(path) = paths.into_iter().next() {
                                 app.start_connection_import(
                                     source,
-                                    Some(path),
-                                    None,
-                                    false,
+                                    ConnectionImportRequest {
+                                        path: Some(path),
+                                        ..ConnectionImportRequest::default()
+                                    },
                                     window,
                                     cx,
                                 );
@@ -192,12 +391,16 @@ impl NyaTermApp {
     fn start_connection_import(
         &mut self,
         source: ConnectionImportSource,
-        path: Option<PathBuf>,
-        master_password: Option<SecretString>,
-        auto_termius: bool,
+        request: ConnectionImportRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let ConnectionImportRequest {
+            path,
+            master_password,
+            mobaxterm_passwords,
+            auto_termius,
+        } = request;
         self.connection_state.begin_session_import_job();
         self.shell
             .set_status(t!("savedConnections.importInProgress"));
@@ -210,16 +413,22 @@ impl NyaTermApp {
                 let prepared = if source == ConnectionImportSource::WindTerm {
                     prepare_windterm_source(path.as_deref(), master_password.as_deref())
                 } else {
-                    prepare_connection_source(source, path.as_deref(), master_password.as_deref())
-                        .map(|prepared| PreparedConnectionImport::Commit {
-                            prepared,
-                            report: None,
-                        })
+                    prepare_connection_source(
+                        source,
+                        path.as_deref(),
+                        master_password.as_deref(),
+                        mobaxterm_passwords.as_deref(),
+                    )
+                    .map(|prepared| PreparedConnectionImport::Commit {
+                        prepared,
+                        report: None,
+                    })
                 };
                 drop(master_password);
                 match prepared {
                     Ok(PreparedConnectionImport::Commit { prepared, report }) => {
                         let incomplete = prepared.incomplete_credentials_count();
+                        let notices = prepared.notices.clone();
                         match store.request_mutation_fn(StoreDomain::Connections, move |database| {
                             database.commit_session_import(prepared)
                         }) {
@@ -227,6 +436,7 @@ impl NyaTermApp {
                                 count,
                                 incomplete,
                                 report,
+                                notices,
                             },
                             Err(error) => ConnectionImportResult::Failed {
                                 source,
@@ -300,9 +510,11 @@ impl NyaTermApp {
         self.forget_text_inputs("windterm-password.");
         self.start_connection_import(
             ConnectionImportSource::WindTerm,
-            Some(path),
-            Some(password),
-            false,
+            ConnectionImportRequest {
+                path: Some(path),
+                master_password: Some(password),
+                ..ConnectionImportRequest::default()
+            },
             window,
             cx,
         );
@@ -372,6 +584,7 @@ impl NyaTermApp {
                         count,
                         incomplete: report.credential_warning_sessions,
                         report: Some(report),
+                        notices: Vec::new(),
                     },
                     Err(error) => ConnectionImportResult::Failed {
                         source: ConnectionImportSource::WindTerm,
@@ -512,6 +725,7 @@ impl NyaTermApp {
                 count,
                 incomplete,
                 report,
+                notices,
             } => {
                 self.refresh_store_from_runtime_and_sync_theme(cx);
                 self.connection_state.expand_all_catalog_groups();
@@ -524,9 +738,28 @@ impl NyaTermApp {
                         incomplete = incomplete
                     )
                 };
+                let skipped = notices
+                    .iter()
+                    .filter(|notice| notice.kind.is_skipped())
+                    .count();
+                let notice_messages = notices
+                    .iter()
+                    .map(|notice| {
+                        format!(
+                            "{} — {}",
+                            notice.session_name,
+                            connection_import_notice_reason(notice.kind)
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 let report_view = match &report {
                     Some(report) => ConnectionImportReportView::from_windterm(report),
-                    None => ConnectionImportReportView::from_basic(count, incomplete),
+                    None => ConnectionImportReportView::from_basic(
+                        count,
+                        incomplete,
+                        skipped,
+                        notice_messages,
+                    ),
                 };
                 let missing = report_view.missing_one_key.len();
                 let one_key_notice = report_view.one_key_state.map(|state| match state {
@@ -591,6 +824,29 @@ impl NyaTermApp {
     }
 }
 
+fn connection_import_notice_reason(kind: SessionImportNoticeKind) -> String {
+    match kind {
+        SessionImportNoticeKind::SkippedUnsupportedType => {
+            t!("savedConnections.importNoticeUnsupportedType").to_string()
+        }
+        SessionImportNoticeKind::SkippedMalformedEntry => {
+            t!("savedConnections.importNoticeMalformedEntry").to_string()
+        }
+        SessionImportNoticeKind::SkippedMissingEndpoint => {
+            t!("savedConnections.importNoticeMissingEndpoint").to_string()
+        }
+        SessionImportNoticeKind::SkippedMissingSerialPort => {
+            t!("savedConnections.importNoticeMissingSerialPort").to_string()
+        }
+        SessionImportNoticeKind::SerialSettingsDefaulted => {
+            t!("savedConnections.importNoticeSerialDefaults").to_string()
+        }
+        SessionImportNoticeKind::VncSettingsDefaulted => {
+            t!("savedConnections.importNoticeVncDefaults").to_string()
+        }
+    }
+}
+
 fn prepare_windterm_source(
     path: Option<&std::path::Path>,
     master_password: Option<&str>,
@@ -615,6 +871,7 @@ fn prepare_connection_source(
     source: ConnectionImportSource,
     path: Option<&std::path::Path>,
     master_password: Option<&str>,
+    mobaxterm_passwords: Option<&std::path::Path>,
 ) -> Result<nyaterm_core::PreparedSessionImport, SessionImportError> {
     match source {
         ConnectionImportSource::Termius => {
@@ -640,6 +897,7 @@ fn prepare_connection_source(
                 path,
                 SessionImportOptions {
                     windterm_master_password: master_password,
+                    mobaxterm_passwords_path: mobaxterm_passwords,
                 },
             )
         }

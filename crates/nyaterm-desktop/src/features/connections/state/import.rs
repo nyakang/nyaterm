@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nyaterm_core::{
     SavedPassword, SecretString, WindtermAccountAction, WindtermAccountDecision,
@@ -102,6 +102,7 @@ pub(in crate::features) struct ConnectionImportReportView {
     pub missing_one_key: Vec<String>,
     pub skipped_account_sessions: Vec<String>,
     pub unsupported_one_key_sessions: Vec<String>,
+    pub notice_messages: Vec<String>,
     pub one_key_state: Option<WindtermOneKeyConfigState>,
     pub expanded: bool,
 }
@@ -132,15 +133,23 @@ impl ConnectionImportReportView {
                 .collect(),
             skipped_account_sessions,
             unsupported_one_key_sessions,
+            notice_messages: Vec::new(),
             one_key_state: Some(report.one_key_state),
             expanded: false,
         }
     }
 
-    pub(in crate::features) fn from_basic(imported: usize, failed: usize) -> Self {
+    pub(in crate::features) fn from_basic(
+        imported: usize,
+        failed: usize,
+        skipped: usize,
+        notice_messages: Vec<String>,
+    ) -> Self {
         Self {
             imported,
             failed,
+            skipped,
+            notice_messages,
             ..Self::default()
         }
     }
@@ -149,6 +158,7 @@ impl ConnectionImportReportView {
         !self.missing_one_key.is_empty()
             || !self.skipped_account_sessions.is_empty()
             || !self.unsupported_one_key_sessions.is_empty()
+            || !self.notice_messages.is_empty()
     }
 
     #[cfg(test)]
@@ -173,6 +183,29 @@ impl WindtermAccountsContext {
     }
 }
 
+/// The two file slots the MobaXterm import prompt presents in one window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::features) enum MobaImportSlot {
+    #[default]
+    Session,
+    Passwords,
+}
+
+#[derive(Default)]
+struct MobaImportSelection {
+    session_path: Option<PathBuf>,
+    passwords_path: Option<PathBuf>,
+    session_extension_warning: bool,
+    passwords_extension_warning: bool,
+    drop_hover: Option<MobaImportSlot>,
+}
+
+fn moba_extension_matches(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+}
+
 #[derive(Default)]
 pub(super) struct ConnectionImportState {
     phase: ImportPhase,
@@ -184,6 +217,7 @@ pub(super) struct ConnectionImportState {
     windterm_master_password: Option<SecretString>,
     windterm_drafts: Vec<WindtermAccountDraft>,
     import_report: Option<ConnectionImportReportView>,
+    mobaxterm: MobaImportSelection,
 }
 
 impl ConnectionImportState {
@@ -191,9 +225,12 @@ impl ConnectionImportState {
         !matches!(self.phase, ImportPhase::Idle)
     }
 
-    pub fn begin_path_prompt(&mut self, _source: ConnectionImportSource) {
+    pub fn begin_path_prompt(&mut self, source: ConnectionImportSource) {
         if !self.path_prompt_active() {
             self.phase = ImportPhase::Selecting;
+            if source == ConnectionImportSource::MobaXterm {
+                self.mobaxterm = MobaImportSelection::default();
+            }
         }
     }
 
@@ -203,6 +240,102 @@ impl ConnectionImportState {
         self.windterm_path = None;
         self.windterm_master_password = None;
         self.windterm_drafts.clear();
+        self.mobaxterm = MobaImportSelection::default();
+    }
+
+    pub(super) fn mobaxterm_session_path(&self) -> Option<&Path> {
+        self.mobaxterm.session_path.as_deref()
+    }
+
+    pub(super) fn mobaxterm_passwords_path(&self) -> Option<&Path> {
+        self.mobaxterm.passwords_path.as_deref()
+    }
+
+    pub(super) fn mobaxterm_import_ready(&self) -> bool {
+        self.mobaxterm.session_path.is_some()
+    }
+
+    pub(super) fn mobaxterm_passwords_missing(&self) -> bool {
+        self.mobaxterm.passwords_path.is_none()
+    }
+
+    pub(super) fn mobaxterm_session_extension_warning(&self) -> bool {
+        self.mobaxterm.session_extension_warning
+    }
+
+    pub(super) fn mobaxterm_passwords_extension_warning(&self) -> bool {
+        self.mobaxterm.passwords_extension_warning
+    }
+
+    pub(super) fn mobaxterm_drop_hover(&self) -> Option<MobaImportSlot> {
+        self.mobaxterm.drop_hover
+    }
+
+    pub(super) fn set_mobaxterm_drop_hover(&mut self, slot: Option<MobaImportSlot>) -> bool {
+        if self.mobaxterm.drop_hover == slot {
+            return false;
+        }
+        self.mobaxterm.drop_hover = slot;
+        true
+    }
+
+    pub(super) fn set_mobaxterm_file(&mut self, slot: MobaImportSlot, path: PathBuf) -> bool {
+        match slot {
+            MobaImportSlot::Session => {
+                self.mobaxterm.session_extension_warning =
+                    !moba_extension_matches(&path, "mxtsessions");
+                self.mobaxterm.session_path = Some(path);
+                if self.mobaxterm.drop_hover == Some(MobaImportSlot::Session) {
+                    self.mobaxterm.drop_hover = None;
+                }
+            }
+            MobaImportSlot::Passwords => {
+                self.mobaxterm.passwords_extension_warning = !moba_extension_matches(&path, "txt");
+                self.mobaxterm.passwords_path = Some(path);
+                if self.mobaxterm.drop_hover == Some(MobaImportSlot::Passwords) {
+                    self.mobaxterm.drop_hover = None;
+                }
+            }
+        }
+        true
+    }
+
+    pub(super) fn clear_mobaxterm_slot(&mut self, slot: MobaImportSlot) -> bool {
+        let hovered = self.mobaxterm.drop_hover == Some(slot);
+        if hovered {
+            self.mobaxterm.drop_hover = None;
+        }
+        let changed = match slot {
+            MobaImportSlot::Session => {
+                let changed = self.mobaxterm.session_path.take().is_some()
+                    || self.mobaxterm.session_extension_warning;
+                self.mobaxterm.session_extension_warning = false;
+                changed
+            }
+            MobaImportSlot::Passwords => {
+                let changed = self.mobaxterm.passwords_path.take().is_some()
+                    || self.mobaxterm.passwords_extension_warning;
+                self.mobaxterm.passwords_extension_warning = false;
+                changed
+            }
+        };
+        changed || hovered
+    }
+
+    pub(super) fn apply_mobaxterm_drop(&mut self, slot: MobaImportSlot, paths: &[PathBuf]) -> bool {
+        match paths.first() {
+            Some(path) => self.set_mobaxterm_file(slot, path.clone()),
+            None => false,
+        }
+    }
+
+    pub(super) fn cancel_mobaxterm_prompt(&mut self) -> bool {
+        if !matches!(self.phase, ImportPhase::Selecting) {
+            return false;
+        }
+        self.phase = ImportPhase::Idle;
+        self.mobaxterm = MobaImportSelection::default();
+        true
     }
 
     fn begin_running(&mut self) {
@@ -471,7 +604,10 @@ mod tests {
 
     use crate::models::ConnectionImportSource;
 
-    use super::{ConnectionImportReportView, ConnectionImportState, ImportPhase, build_drafts};
+    use super::{
+        ConnectionImportReportView, ConnectionImportState, ImportPhase, MobaImportSlot,
+        build_drafts,
+    };
 
     fn preview_with_accounts() -> WindtermPreview {
         WindtermPreview {
@@ -482,6 +618,7 @@ mod tests {
                 passwords: Vec::new(),
                 ssh_keys: Vec::new(),
                 connections: Vec::new(),
+                notices: Vec::new(),
             },
             accounts: vec![WindtermAccountPreview {
                 id: "account-1".into(),
@@ -674,5 +811,167 @@ mod tests {
         assert!(state.take_password_path().is_none());
         state.begin_path_prompt(ConnectionImportSource::WindTerm);
         assert!(state.path_prompt_active());
+    }
+
+    #[test]
+    fn mobaxterm_drop_assigns_and_replaces_slots_independently() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        assert!(state.apply_mobaxterm_drop(
+            MobaImportSlot::Session,
+            &[PathBuf::from("synthetic-a.mxtsessions")]
+        ));
+        assert!(state.apply_mobaxterm_drop(
+            MobaImportSlot::Passwords,
+            &[PathBuf::from("synthetic-passwords.txt")]
+        ));
+        assert!(state.apply_mobaxterm_drop(
+            MobaImportSlot::Session,
+            &[PathBuf::from("synthetic-b.mxtsessions")]
+        ));
+        assert_eq!(
+            state.mobaxterm_session_path(),
+            Some(std::path::Path::new("synthetic-b.mxtsessions"))
+        );
+        assert_eq!(
+            state.mobaxterm_passwords_path(),
+            Some(std::path::Path::new("synthetic-passwords.txt"))
+        );
+    }
+
+    #[test]
+    fn mobaxterm_clear_only_clears_requested_slot() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic.mxtsessions"),
+        );
+        state.set_mobaxterm_file(MobaImportSlot::Passwords, PathBuf::from("synthetic.txt"));
+        assert!(state.clear_mobaxterm_slot(MobaImportSlot::Session));
+        assert!(state.mobaxterm_session_path().is_none());
+        assert_eq!(
+            state.mobaxterm_passwords_path(),
+            Some(std::path::Path::new("synthetic.txt"))
+        );
+        assert!(state.clear_mobaxterm_slot(MobaImportSlot::Passwords));
+        assert!(state.mobaxterm_passwords_path().is_none());
+        assert!(!state.clear_mobaxterm_slot(MobaImportSlot::Passwords));
+    }
+
+    #[test]
+    fn mobaxterm_import_requires_session_file() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        assert!(!state.mobaxterm_import_ready());
+        state.set_mobaxterm_file(MobaImportSlot::Passwords, PathBuf::from("synthetic.txt"));
+        assert!(!state.mobaxterm_import_ready());
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic.mxtsessions"),
+        );
+        assert!(state.mobaxterm_import_ready());
+    }
+
+    #[test]
+    fn mobaxterm_password_missing_shows_warning() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        assert!(state.mobaxterm_passwords_missing());
+        state.set_mobaxterm_file(MobaImportSlot::Passwords, PathBuf::from("synthetic.txt"));
+        assert!(!state.mobaxterm_passwords_missing());
+    }
+
+    #[test]
+    fn mobaxterm_unexpected_extension_is_accepted_with_warning() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic-sessions.txt"),
+        );
+        assert_eq!(
+            state.mobaxterm_session_path(),
+            Some(std::path::Path::new("synthetic-sessions.txt"))
+        );
+        assert!(state.mobaxterm_session_extension_warning());
+        assert!(state.mobaxterm_import_ready());
+
+        state.set_mobaxterm_file(
+            MobaImportSlot::Passwords,
+            PathBuf::from("synthetic-passwords"),
+        );
+        assert_eq!(
+            state.mobaxterm_passwords_path(),
+            Some(std::path::Path::new("synthetic-passwords"))
+        );
+        assert!(state.mobaxterm_passwords_extension_warning());
+    }
+
+    #[test]
+    fn mobaxterm_cancel_only_resets_selecting_phase() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic.mxtsessions"),
+        );
+        assert!(state.cancel_mobaxterm_prompt());
+        assert!(state.mobaxterm_session_path().is_none());
+
+        state.begin_running();
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic.mxtsessions"),
+        );
+        assert!(!state.cancel_mobaxterm_prompt());
+        assert_eq!(
+            state.mobaxterm_session_path(),
+            Some(std::path::Path::new("synthetic.mxtsessions"))
+        );
+    }
+
+    #[test]
+    fn mobaxterm_cancel_allows_reopening_import_without_draft() {
+        let mut state = ConnectionImportState::default();
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        state.set_mobaxterm_file(
+            MobaImportSlot::Session,
+            PathBuf::from("synthetic-a.mxtsessions"),
+        );
+        state.set_mobaxterm_file(
+            MobaImportSlot::Passwords,
+            PathBuf::from("synthetic-passwords.txt"),
+        );
+        state.set_mobaxterm_drop_hover(Some(MobaImportSlot::Passwords));
+        state.set_mobaxterm_file(
+            MobaImportSlot::Passwords,
+            PathBuf::from("synthetic-passwords"),
+        );
+        assert!(state.mobaxterm_passwords_extension_warning());
+
+        assert!(state.cancel_mobaxterm_prompt());
+        assert!(
+            !state.path_prompt_active(),
+            "取消后必须允许再次打开导入入口"
+        );
+        assert!(
+            state.mobaxterm_session_path().is_none(),
+            "取消不得保留会话文件"
+        );
+        assert!(
+            state.mobaxterm_passwords_path().is_none(),
+            "取消不得保留密码文件"
+        );
+        assert!(
+            state.mobaxterm_drop_hover().is_none(),
+            "取消不得保留拖放悬停"
+        );
+        assert!(!state.mobaxterm_session_extension_warning());
+        assert!(!state.mobaxterm_passwords_extension_warning());
+
+        state.begin_path_prompt(ConnectionImportSource::MobaXterm);
+        assert!(state.path_prompt_active(), "取消后再次打开应进入选择阶段");
+        assert!(!state.mobaxterm_import_ready(), "重新打开时不得带上旧草稿");
     }
 }

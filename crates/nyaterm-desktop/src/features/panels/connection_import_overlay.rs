@@ -1,11 +1,14 @@
+use std::path::PathBuf;
+
 use rust_i18n::t;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg,
+    AnyElement, App, ClickEvent, Context, DragMoveEvent, ExternalPaths, FontWeight, IntoElement,
+    KeyDownEvent, SharedString, Window, div, prelude::*, px, rgb, rgba, svg,
 };
-use nyaterm_ui::{NyaDialogWindowExt as _, NyaInputShell};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaDialogWindowExt as _, NyaInputShell};
 
+use crate::features::connections::MobaImportSlot;
 use crate::features::{
     NyaTermApp, text_inputs::TextInputSetup, view_widgets::color_icon, view_widgets::mono_icon,
     view_widgets::nyaterm_app_icon,
@@ -346,6 +349,266 @@ impl NyaTermApp {
                             ),
                     ),
             )
+    }
+
+    pub(in crate::features) fn mobaxterm_import_dialog_content(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let palette = self.theme_palette();
+        let session_path = self
+            .connection_state
+            .mobaxterm_session_path()
+            .map(std::path::Path::to_path_buf);
+        let passwords_path = self
+            .connection_state
+            .mobaxterm_passwords_path()
+            .map(std::path::Path::to_path_buf);
+        let session_warning = self.connection_state.mobaxterm_session_extension_warning();
+        let passwords_warning = self
+            .connection_state
+            .mobaxterm_passwords_extension_warning();
+        let ready = self.connection_state.mobaxterm_import_ready();
+
+        div()
+            .id("mobaxterm-import-content")
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("savedConnections.sessionImportTitle")),
+            )
+            .child(
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .gap_4()
+                    .child(self.mobaxterm_slot_card(
+                        palette,
+                        MobaImportSlot::Session,
+                        session_path,
+                        session_warning,
+                        cx,
+                    ))
+                    .child(self.mobaxterm_slot_card(
+                        palette,
+                        MobaImportSlot::Passwords,
+                        passwords_path,
+                        passwords_warning,
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        NyaButton::new(
+                            "mobaxterm-import-cancel",
+                            t!("savedConnections.mobaxtermCancel").to_string(),
+                        )
+                        .variant(NyaButtonVariant::Secondary)
+                        .height(px(32.))
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.cancel_mobaxterm_import(window, cx);
+                        })),
+                    )
+                    .child(
+                        NyaButton::new(
+                            "mobaxterm-import-start",
+                            t!("savedConnections.mobaxtermImport").to_string(),
+                        )
+                        .variant(NyaButtonVariant::Primary)
+                        .height(px(32.))
+                        .disabled(!ready)
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.start_mobaxterm_import(window, cx);
+                        })),
+                    ),
+            )
+    }
+
+    fn mobaxterm_slot_card(
+        &mut self,
+        palette: ThemePalette,
+        slot: MobaImportSlot,
+        path: Option<PathBuf>,
+        extension_warning: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (title, hint) = match slot {
+            MobaImportSlot::Session => (
+                t!("savedConnections.mobaxtermSessionLabel").to_string(),
+                t!("savedConnections.mobaxtermSessionHint").to_string(),
+            ),
+            MobaImportSlot::Passwords => (
+                t!("savedConnections.mobaxtermPasswordsLabel").to_string(),
+                t!("savedConnections.mobaxtermPasswordsHint").to_string(),
+            ),
+        };
+        let hovered = self.connection_state.mobaxterm_drop_hover() == Some(slot);
+        let passwords_missing = matches!(slot, MobaImportSlot::Passwords)
+            && self.connection_state.mobaxterm_passwords_missing();
+        let file_name = path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned);
+        let full_path = path.as_ref().map(|path| path.display().to_string());
+        let has_path = path.is_some();
+        let drop_id = match slot {
+            MobaImportSlot::Session => "mobaxterm-session-drop",
+            MobaImportSlot::Passwords => "mobaxterm-passwords-drop",
+        };
+        let browse_id = match slot {
+            MobaImportSlot::Session => "mobaxterm-session-browse",
+            MobaImportSlot::Passwords => "mobaxterm-passwords-browse",
+        };
+        let clear_id = match slot {
+            MobaImportSlot::Session => "mobaxterm-session-clear",
+            MobaImportSlot::Passwords => "mobaxterm-passwords-clear",
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if hovered {
+                palette.primary
+            } else {
+                palette.border
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .id(drop_id)
+                    .min_h(px(96.))
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .p_3()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(if hovered {
+                        palette.primary
+                    } else {
+                        palette.border
+                    }))
+                    .bg(rgb(palette.surface_elevated))
+                    .can_drop(move |drag, _, _| drag.is::<ExternalPaths>())
+                    .on_drag_move(cx.listener(
+                        move |app, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                            app.set_mobaxterm_drop_hover(
+                                slot,
+                                event.bounds.contains(&event.event.position),
+                                cx,
+                            );
+                        },
+                    ))
+                    .on_drop(cx.listener(move |app, paths: &ExternalPaths, _, cx| {
+                        app.handle_mobaxterm_slot_drop(slot, paths.paths().to_vec(), cx);
+                    }))
+                    .child(match file_name {
+                        Some(name) => div()
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .max_w_full()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_weight(FontWeight(600.))
+                                    .text_color(rgb(palette.text))
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .max_w_full()
+                                    .truncate()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(full_path.unwrap_or_default()),
+                            )
+                            .into_any_element(),
+                        None => div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette.text_muted))
+                            .child(hint)
+                            .into_any_element(),
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        NyaButton::new(
+                            browse_id,
+                            t!("savedConnections.mobaxtermBrowse").to_string(),
+                        )
+                        .variant(NyaButtonVariant::Secondary)
+                        .height(px(30.))
+                        .on_click(cx.listener(
+                            move |app, _, window, cx| match slot {
+                                MobaImportSlot::Session => {
+                                    app.browse_mobaxterm_session_file(window, cx)
+                                }
+                                MobaImportSlot::Passwords => {
+                                    app.browse_mobaxterm_passwords_file(window, cx)
+                                }
+                            },
+                        )),
+                    )
+                    .child(
+                        NyaButton::new(clear_id, t!("savedConnections.mobaxtermClear").to_string())
+                            .variant(NyaButtonVariant::Secondary)
+                            .height(px(30.))
+                            .disabled(!has_path)
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                app.clear_mobaxterm_slot(slot, cx);
+                            })),
+                    ),
+            )
+            .when(extension_warning, |this| {
+                this.child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.warning))
+                        .child(t!("savedConnections.mobaxtermUnexpectedExtension")),
+                )
+            })
+            .when(passwords_missing, |this| {
+                this.child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.warning))
+                        .child(t!("savedConnections.mobaxtermNoPasswordsWarning")),
+                )
+            })
+            .into_any_element()
     }
 }
 

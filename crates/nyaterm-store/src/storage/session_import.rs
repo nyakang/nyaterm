@@ -452,6 +452,7 @@ mod tests {
             }],
             ssh_keys: Vec::new(),
             connections: vec![connection],
+            notices: Vec::new(),
         };
 
         store
@@ -505,6 +506,7 @@ mod tests {
             passwords: Vec::new(),
             ssh_keys: Vec::new(),
             connections: vec![jump, target],
+            notices: Vec::new(),
         };
 
         store
@@ -549,6 +551,7 @@ mod tests {
             passwords: Vec::new(),
             ssh_keys: Vec::new(),
             connections: vec![connection],
+            notices: Vec::new(),
         };
 
         store
@@ -608,6 +611,7 @@ mod tests {
                 icon: None,
                 auth: None,
             }],
+            notices: Vec::new(),
         }
     }
 
