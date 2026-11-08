@@ -501,7 +501,7 @@ impl NyaTermApp {
         if let Some(host) = id.strip_prefix("tmux.command.") {
             self.on_tmux_command_draft(host, text, cx);
         } else if id.starts_with("asset-batch.") {
-            self.apply_asset_batch_input(id.as_ref(), &text);
+            self.apply_asset_batch_input(id.as_ref(), &text, cx);
         } else if let Some(rest) = id.strip_prefix("settings.number.") {
             self.apply_settings_number_input(rest, &text, cx);
         } else if let Some(rest) = id.strip_prefix("ai.number.") {

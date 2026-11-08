@@ -6,8 +6,8 @@ use gpui::{
 use nyaterm_core::{
     AssetAcceleratorSnapshot, AssetAcceleratorType, AssetDiskSnapshot, AssetDisplayLabels,
     AssetFilterKey, AssetMonitoringCache, AssetRecord, AssetSortDirection, AssetSortKey,
-    AssetSortState, AssetStatsSnapshot, AssetViewMode, ConnectionBatchEdit, ConnectionBatchKind,
-    ConnectionType, Group, RecordAssetMonitoringPatch, SavedConnection, StartWorkspaceMode,
+    AssetSortState, AssetStatsSnapshot, AssetViewMode, ConnectionType, Group,
+    RecordAssetMonitoringPatch, SavedConnection, StartWorkspaceMode,
     build_asset_patch_from_accelerator_snapshot, build_asset_patch_from_stats_snapshot,
     build_asset_records, build_group_options, connection_matches_filters,
     normalize_asset_sort_state, parse_start_workspace_mode, records_in_group, sort_asset_records,
@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 mod batch_edit;
 
-use crate::models::ConnectionEditorSection;
-
-pub(in crate::features) use batch_edit::{AssetBatchEditDraft, BatchFieldId, FieldBasis};
+pub(in crate::features) use batch_edit::{
+    AssetBatchEditDraft, BatchEditMode, BatchFieldId, FieldBasis,
+};
 
 pub(in crate::features) const ASSET_TABLE_ROW_HEIGHT: f32 = 56.;
 // The Tauri table uses an 88px action column. GPUI scrollbars overlay their
@@ -116,7 +116,8 @@ pub(in crate::features) struct StartWorkspaceFeatureState {
     group_options_revision: Option<(u64, String)>,
     asset_selection: HashSet<String>,
     asset_selection_anchor: Option<String>,
-    asset_batch: AssetBatchEditDraft,
+    asset_hovered_id: Option<String>,
+    asset_batch: Box<AssetBatchEditDraft>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -203,7 +204,8 @@ impl StartWorkspaceFeatureState {
             group_options_revision: None,
             asset_selection: HashSet::new(),
             asset_selection_anchor: None,
-            asset_batch: AssetBatchEditDraft::default(),
+            asset_hovered_id: None,
+            asset_batch: Box::default(),
         }
     }
 
@@ -296,8 +298,8 @@ impl StartWorkspaceFeatureState {
             }
         } else {
             self.asset_selection.insert(connection_id.to_string());
+            self.asset_selection_anchor = Some(connection_id.to_string());
         }
-        self.asset_selection_anchor = Some(connection_id.to_string());
         true
     }
 
@@ -314,6 +316,40 @@ impl StartWorkspaceFeatureState {
         changed
     }
 
+    pub fn deselect_visible_assets(&mut self, records: &[AssetRecord]) -> bool {
+        let before = self.asset_selection.len();
+        for record in records {
+            self.asset_selection.remove(&record.connection.id);
+        }
+        before != self.asset_selection.len()
+    }
+    pub fn visible_selected_count(&self, records: &[AssetRecord]) -> usize {
+        records
+            .iter()
+            .filter(|record| self.is_asset_selected(&record.connection.id))
+            .count()
+    }
+    pub fn hidden_selected_count(&self, records: &[AssetRecord]) -> usize {
+        self.selected_asset_count()
+            .saturating_sub(self.visible_selected_count(records))
+    }
+    pub fn is_asset_hovered(&self, id: &str) -> bool {
+        self.asset_hovered_id.as_deref() == Some(id)
+    }
+    pub fn set_asset_hovered(&mut self, id: &str, hovered: bool) -> bool {
+        if hovered {
+            if self.is_asset_hovered(id) {
+                return false;
+            }
+            self.asset_hovered_id = Some(id.into());
+        } else {
+            if !self.is_asset_hovered(id) {
+                return false;
+            }
+            self.asset_hovered_id = None;
+        }
+        true
+    }
     pub fn clear_asset_selection(&mut self) -> bool {
         if self.asset_selection.is_empty() && self.asset_selection_anchor.is_none() {
             false
@@ -332,11 +368,17 @@ impl StartWorkspaceFeatureState {
     }
 
     pub fn selected_asset_ids(&self) -> Vec<String> {
-        self.asset_selection.iter().cloned().collect()
+        let mut ids: Vec<_> = self.asset_selection.iter().cloned().collect();
+        ids.sort();
+        ids
     }
 
     pub fn asset_batch(&self) -> &AssetBatchEditDraft {
         &self.asset_batch
+    }
+
+    pub fn asset_batch_mut(&mut self) -> &mut AssetBatchEditDraft {
+        &mut self.asset_batch
     }
 
     pub fn asset_batch_is_open(&self) -> bool {
@@ -346,32 +388,11 @@ impl StartWorkspaceFeatureState {
     pub fn start_asset_batch_edit(
         &mut self,
         ids: Vec<String>,
-        kind_basis: FieldBasis,
-        uniform_kind: Option<ConnectionBatchKind>,
         basis: HashMap<BatchFieldId, FieldBasis>,
         values: HashMap<BatchFieldId, String>,
         bool_values: HashMap<BatchFieldId, bool>,
     ) {
-        self.asset_batch
-            .start(ids, kind_basis, uniform_kind, basis, values, bool_values);
-    }
-
-    pub fn asset_batch_set_kind(&mut self, kind: ConnectionBatchKind) -> bool {
-        self.asset_batch.set_kind(kind)
-    }
-
-    pub fn refresh_asset_batch_fields(
-        &mut self,
-        kind_basis: FieldBasis,
-        uniform_kind: Option<ConnectionBatchKind>,
-        basis: HashMap<BatchFieldId, FieldBasis>,
-        values: HashMap<BatchFieldId, String>,
-        bool_values: HashMap<BatchFieldId, bool>,
-    ) {
-        self.asset_batch
-            .replace_kind_basis(kind_basis, uniform_kind);
-        self.asset_batch
-            .refresh_for_kind(basis, values, bool_values);
+        self.asset_batch.start(ids, basis, values, bool_values);
     }
 
     pub fn clear_asset_batch_edit(&mut self) {
@@ -394,32 +415,12 @@ impl StartWorkspaceFeatureState {
         self.asset_batch.set_error(error);
     }
 
-    pub fn set_asset_batch_section(&mut self, section: ConnectionEditorSection) -> bool {
-        self.asset_batch.set_section(section)
-    }
-
     pub fn set_asset_batch_value(&mut self, field: BatchFieldId, value: &str) {
         self.asset_batch.set_value(field, value.to_string());
     }
 
     pub fn set_asset_batch_bool(&mut self, field: BatchFieldId, value: bool) {
         self.asset_batch.set_bool_value(field, value);
-    }
-
-    pub fn set_asset_batch_icon_picker_open(&mut self, open: bool) -> bool {
-        self.asset_batch.set_icon_picker_open(open)
-    }
-
-    pub fn set_asset_batch_forwarding_x11(&mut self, x11: bool) -> bool {
-        self.asset_batch.set_forwarding_x11(x11)
-    }
-
-    pub fn set_asset_batch_algorithm_tab(&mut self, tab: usize) -> bool {
-        self.asset_batch.set_algorithm_tab(tab)
-    }
-
-    pub fn build_asset_batch_edit(&self) -> Result<ConnectionBatchEdit, String> {
-        self.asset_batch.build_edit()
     }
 
     pub fn asset_batch_window_handle(&self) -> Option<NyaWindowHandle> {

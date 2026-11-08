@@ -22,16 +22,19 @@ pub(in crate::features) struct AssetBatchEditWindow {
     app: Entity<NyaTermApp>,
     shell_focus: FocusHandle,
     chrome: ChildWindowChrome,
+    generation: u64,
     _app_subscription: Subscription,
 }
 
 impl AssetBatchEditWindow {
     fn new(app: Entity<NyaTermApp>, chrome: ChildWindowChrome, cx: &mut Context<Self>) -> Self {
+        let generation = app.read(cx).start_workspace.asset_batch().generation();
         let app_subscription = cx.observe(&app, |_, _, cx| cx.notify());
         Self {
             app,
             shell_focus: cx.focus_handle(),
             chrome,
+            generation,
             _app_subscription: app_subscription,
         }
     }
@@ -39,9 +42,13 @@ impl AssetBatchEditWindow {
 
 impl Render for AssetBatchEditWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.app.read(cx).start_workspace.asset_batch_is_open() {
-            self.app
-                .update(cx, |app, cx| app.dismiss_asset_batch_edit(cx));
+        if !self
+            .app
+            .read(cx)
+            .start_workspace
+            .asset_batch()
+            .matches_generation(self.generation)
+        {
             window.defer(cx, |window, _| window.remove_window());
             return div().size_full().into_any_element();
         }
@@ -65,9 +72,18 @@ impl Render for AssetBatchEditWindow {
             )
         });
         let close_app = self.app.clone();
+        let generation = self.generation;
         let on_close: ChildWindowCloseHandler =
             Rc::new(move |window: &mut Window, cx: &mut App| {
-                close_app.update(cx, |app, cx| app.dismiss_asset_batch_edit(cx));
+                close_app.update(cx, |app, cx| {
+                    if app
+                        .start_workspace
+                        .asset_batch()
+                        .matches_generation(generation)
+                    {
+                        app.dismiss_asset_batch_edit(cx);
+                    }
+                });
                 window.remove_window();
             });
         let header_close = on_close.clone();
@@ -161,11 +177,20 @@ fn open_asset_batch_edit_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut A
     let chrome = spec.chrome();
     let parent = app.read(cx).shell.main_window();
     let options = child_window_options(&spec, parent, cx);
+    let generation = app.read(cx).start_workspace.asset_batch().generation();
     let close_app = app.clone();
     let view_app = app.clone();
     let result: anyhow::Result<NyaWindowHandle> = cx.open_window(options, move |window, cx| {
         window.on_window_should_close(cx, move |_, cx| {
-            close_app.update(cx, |app, cx| app.dismiss_asset_batch_edit(cx));
+            close_app.update(cx, |app, cx| {
+                if app
+                    .start_workspace
+                    .asset_batch()
+                    .matches_generation(generation)
+                {
+                    app.dismiss_asset_batch_edit(cx);
+                }
+            });
             true
         });
         let view = cx.new(|cx| AssetBatchEditWindow::new(view_app, chrome, cx));

@@ -68,7 +68,7 @@ impl UniformListDecoration for AssetRowActionsDecoration {
         item_height: Pixels,
         _item_count: usize,
         _window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> AnyElement {
         let viewport_width = self.horizontal_scroll.bounds().size.width;
         let horizontal_offset = self.horizontal_scroll.offset().x;
@@ -87,6 +87,23 @@ impl UniformListDecoration for AssetRowActionsDecoration {
             let menu_id = connection.id.clone();
             let selector = format!("asset-actions-{}", connection.id);
 
+            let background = self
+                .app
+                .upgrade()
+                .map(|app| {
+                    let app = app.read(cx);
+                    let palette = app.theme_palette();
+                    if app.start_workspace.is_asset_selected(&record.connection.id) {
+                        app.shell_surface_color(asset_selected_fill(palette))
+                    } else if app.start_workspace.is_asset_hovered(&record.connection.id) {
+                        app.shell_surface_color(asset_row_fills(palette).hover)
+                    } else {
+                        self.row_backgrounds[index % 2]
+                    }
+                })
+                .unwrap_or(self.row_backgrounds[index % 2]);
+            let hover_app = self.app.clone();
+            let hover_id = record.connection.id.clone();
             layer = layer.child(
                 div()
                     .id(SharedString::from(selector.clone()))
@@ -114,7 +131,16 @@ impl UniformListDecoration for AssetRowActionsDecoration {
                     .gap_1()
                     .border_b_1()
                     .border_color(rgb(self.border))
-                    .bg(self.row_backgrounds[index % 2])
+                    .bg(background)
+                    .on_hover(move |hovered, _, cx| {
+                        if let Some(app) = hover_app.upgrade() {
+                            app.update(cx, |app, cx| {
+                                if app.start_workspace.set_asset_hovered(&hover_id, *hovered) {
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(asset_action_button(
                         format!("asset-connect-{}", connection.id),
@@ -155,6 +181,16 @@ impl UniformListDecoration for AssetRowActionsDecoration {
 
         layer.into_any_element()
     }
+}
+
+fn asset_selected_fill(palette: ThemePalette) -> u32 {
+    let mix = if palette.is_dark() { 0.28 } else { 0.16 };
+    let channel = |shift: u32| {
+        let base = ((palette.bg >> shift) & 255u32) as f32;
+        let accent = ((palette.primary >> shift) & 255u32) as f32;
+        (base * (1. - mix) + accent * mix).round() as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 fn asset_action_left_in_decoration(viewport_width: Pixels, horizontal_scroll: Pixels) -> Pixels {
@@ -317,6 +353,7 @@ impl NyaTermApp {
         let menu_id = connection_id.to_string();
         let connect_id = connection_id.to_string();
         let select_id = connection_id.to_string();
+        let hover_id = connection_id.to_string();
         let selector = format!("asset-{view}-{connection_id}");
         div()
             .id(SharedString::from(selector.clone()))
@@ -325,6 +362,11 @@ impl NyaTermApp {
                 if event.button == MouseButton::Right {
                     this.start_workspace
                         .set_context_connection_id(Some(menu_id.clone()));
+                }
+            }))
+            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                if this.start_workspace.set_asset_hovered(&hover_id, *hovered) {
+                    cx.notify();
                 }
             }))
             .on_click(
@@ -383,23 +425,48 @@ impl NyaTermApp {
     }
 
     /// Header checkbox that selects or clears everything currently visible.
-    fn asset_select_all_checkbox(&self, checked: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn asset_select_all_checkbox(
+        &self,
+        checked: bool,
+        header: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self
+            .start_workspace
+            .visible_selected_count(self.start_workspace.visible_records());
         div()
-            .id("asset-select-all-shell")
+            .id(if header {
+                "asset-select-all-header-shell"
+            } else {
+                "asset-select-all-shell"
+            })
             .debug_selector(|| "asset-select-all-shell".to_string())
             .flex_none()
-            .h_full()
+            .min_h(px(32.))
             .flex()
             .items_center()
+            .justify_center()
+            .when(header, |this| this.w(px(ASSET_SELECT_COLUMN_WIDTH)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                NyaCheckbox::new("asset-select-all")
-                    .checked(checked)
-                    .label(t!("assets.selectAll"))
-                    .on_click(cx.listener(move |this, _: &bool, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_asset_select_all(cx);
-                    })),
+                NyaCheckbox::new(if header {
+                    "asset-select-all-header"
+                } else {
+                    "asset-select-all"
+                })
+                .checked(checked)
+                .indeterminate(selected > 0 && !checked)
+                .map(|checkbox| {
+                    if header {
+                        checkbox
+                    } else {
+                        checkbox.label(t!("assets.selectAll"))
+                    }
+                })
+                .on_click(cx.listener(move |this, _: &bool, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_asset_select_all(cx);
+                })),
             )
             .into_any_element()
     }
@@ -438,7 +505,7 @@ impl NyaTermApp {
     pub(in crate::features) fn toggle_asset_select_all(&mut self, cx: &mut Context<Self>) {
         let records = self.start_workspace.visible_records().to_vec();
         let changed = if self.start_workspace.all_assets_selected(&records) {
-            self.start_workspace.clear_asset_selection()
+            self.start_workspace.deselect_visible_assets(&records)
         } else {
             self.start_workspace.select_all_assets(&records)
         };
@@ -701,7 +768,9 @@ impl NyaTermApp {
             )
             .child(
                 div()
-                    .h(px(38.))
+                    .min_h(px(38.))
+                    .py_1()
+                    .flex_wrap()
                     .flex_none()
                     .px_5()
                     .border_t_1()
@@ -717,13 +786,15 @@ impl NyaTermApp {
                         div()
                             .ml_auto()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .gap_2()
-                            .child(self.asset_select_all_checkbox(all_selected, cx))
+                            .child(self.asset_select_all_checkbox(all_selected, false, cx))
                             .when(selected_count > 0, |this| {
                                 this.child(
                                     div()
                                         .flex()
+                                        .flex_wrap()
                                         .items_center()
                                         .gap_2()
                                         .child(
@@ -732,7 +803,11 @@ impl NyaTermApp {
                                                 .text_color(rgb(palette.text))
                                                 .child(t!(
                                                     "assets.selectedCount",
-                                                    count = selected_count
+                                                    count = selected_count,
+                                                    hidden =
+                                                        self.start_workspace.hidden_selected_count(
+                                                            self.start_workspace.visible_records()
+                                                        )
                                                 )),
                                         )
                                         .child(
@@ -939,7 +1014,11 @@ impl NyaTermApp {
             .border_b_1()
             .border_color(rgb(palette.border))
             .bg(self.shell_surface_color(palette.section_header))
-            .child(div().w(px(ASSET_SELECT_COLUMN_WIDTH)).h_full().flex_none());
+            .child(self.asset_select_all_checkbox(
+                self.start_workspace.all_assets_selected(&records),
+                true,
+                cx,
+            ));
         for (column, label) in [
             (AssetColumn::Name, t!("assets.name")),
             (AssetColumn::Address, t!("assets.address")),
@@ -1185,12 +1264,17 @@ impl NyaTermApp {
             .items_center()
             .border_b_1()
             .border_color(rgb(palette.border))
-            .when(index % 2 == 1, |this| {
-                this.bg(self.shell_surface_color(fills.stripe))
-            })
-            // The derived hover fill keeps a full step above the stripe on
-            // every theme instead of collapsing into it on dark palettes.
-            .hover(|this| this.bg(self.shell_surface_color(fills.hover)))
+            .bg(self.shell_surface_color(
+                if self.start_workspace.is_asset_selected(&connection.id) {
+                    asset_selected_fill(palette)
+                } else if self.start_workspace.is_asset_hovered(&connection.id) {
+                    fills.hover
+                } else if index % 2 == 1 {
+                    fills.stripe
+                } else {
+                    palette.bg
+                },
+            ))
             .child(self.asset_select_checkbox(&connection.id, "row", cx))
             .child(
                 div()
@@ -1408,7 +1492,15 @@ impl NyaTermApp {
             .rounded_md()
             .border_1()
             .border_color(rgb(palette.border))
-            .bg(self.shell_surface_color(palette.surface))
+            .bg(self.shell_surface_color(
+                if self.start_workspace.is_asset_selected(&connection.id) {
+                    asset_selected_fill(palette)
+                } else if self.start_workspace.is_asset_hovered(&connection.id) {
+                    asset_row_fills(palette).hover
+                } else {
+                    palette.surface
+                },
+            ))
             .flex()
             .flex_col()
             .child(
