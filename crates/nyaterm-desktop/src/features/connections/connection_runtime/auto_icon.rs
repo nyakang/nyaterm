@@ -12,6 +12,13 @@ use nyaterm_store::StoreDomain;
 
 impl NyaTermApp {
     pub(in crate::features) fn connection_icon_probe_needed(&self) -> bool {
+        if !self
+            .session
+            .active_ssh_config()
+            .is_some_and(|config| config.remote_stats_enabled())
+        {
+            return false;
+        }
         let Some(session_id) = self.session.active_id() else {
             return false;
         };

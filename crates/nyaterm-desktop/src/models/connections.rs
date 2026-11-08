@@ -354,6 +354,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) agent_preview_loading: bool,
     pub(crate) backspace_mode: String,
     pub(crate) encoding: String,
+    pub(crate) ssh_compatibility_mode: bool,
     pub(crate) ssh_profile: nyaterm_core::SshProfile,
     pub(crate) terminal_type: Option<nyaterm_core::SshTerminalType>,
     pub(crate) sftp_enabled: bool,

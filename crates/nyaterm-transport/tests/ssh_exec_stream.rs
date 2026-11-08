@@ -65,6 +65,57 @@ impl server::Handler for Peer {
         }
         Ok(())
     }
+    async fn shell_request(
+        &mut self,
+        id: ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(id)?;
+        Ok(())
+    }
+    async fn pty_request(
+        &mut self,
+        id: ChannelId,
+        _: &str,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: &[(russh::Pty, u32)],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(id)?;
+        Ok(())
+    }
+    async fn data(
+        &mut self,
+        id: ChannelId,
+        data: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.data(id, data.to_vec())?;
+        Ok(())
+    }
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: russh::Channel<server::Msg>,
+        host: &str,
+        port: u32,
+        _: &str,
+        _: u32,
+        reply: server::ChannelOpenHandle,
+        _: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        let mut target = tokio::net::TcpStream::connect((host, port as u16))
+            .await
+            .unwrap();
+        reply.accept().await;
+        tokio::spawn(async move {
+            let mut stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut target).await;
+        });
+        Ok(())
+    }
     async fn signal(
         &mut self,
         id: ChannelId,
@@ -79,6 +130,103 @@ impl server::Handler for Peer {
             session.close(id)?;
         }
         Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_compatibility_mode_preserves_interactive_shell_and_shared_tunnel_channels() {
+    use nyaterm_transport::{
+        SessionEvent, SessionManager, SftpCwdFollowMode, SshTunnelConfig, SshTunnelManager,
+        SshTunnelMode, open_ssh_multiplex_handle,
+    };
+    use std::io::{Read as _, Write as _};
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    for enabled in [false, true] {
+        let (mut config, _, server) = peer().await;
+        config.ssh_compatibility_mode = enabled;
+        config.terminal_shell_integration = false;
+        config.sftp.cwd_follow_mode = SftpCwdFollowMode::Off;
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let echo = tokio::spawn(async move {
+            let (mut socket, _) = target.accept().await.unwrap();
+            let mut input = [0; 6];
+            socket.read_exact(&mut input).await.unwrap();
+            socket.write_all(&input).await.unwrap();
+        });
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || {
+                let multiplex = open_ssh_multiplex_handle(config.clone()).unwrap();
+                let sessions = SessionManager::new();
+                let session = sessions
+                    .create_ssh_session_with_multiplex(config.clone(), multiplex.clone())
+                    .unwrap();
+                sessions.write_raw(&session.id, b"shell-input").unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut output = Vec::new();
+                while Instant::now() < deadline {
+                    for event in sessions.drain_events(64).unwrap().events {
+                        if let SessionEvent::Output { data, .. } = event {
+                            output.extend(data);
+                        }
+                    }
+                    if output
+                        .windows(b"shell-input".len())
+                        .any(|part| part == b"shell-input")
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(
+                    output
+                        .windows(b"shell-input".len())
+                        .any(|part| part == b"shell-input")
+                );
+                let tunnels = SshTunnelManager::new();
+                let tunnel = tunnels
+                    .open_with_multiplex(
+                        SshTunnelConfig {
+                            id: "compatibility-tunnel".into(),
+                            ssh_config: config,
+                            mode: SshTunnelMode::Local,
+                            bind_host: "127.0.0.1".into(),
+                            listen_port: 0,
+                            target_host: Some("127.0.0.1".into()),
+                            target_port: Some(target_port),
+                        },
+                        multiplex.clone(),
+                    )
+                    .unwrap();
+                let mut client =
+                    std::net::TcpStream::connect(("127.0.0.1", tunnel.listen_port)).unwrap();
+                client
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                client.write_all(b"tunnel").unwrap();
+                let mut returned = [0; 6];
+                client.read_exact(&mut returned).unwrap();
+                assert_eq!(&returned, b"tunnel");
+                drop(client);
+                tunnels.close(&tunnel.id).unwrap();
+                sessions.close(&session.id).unwrap();
+                multiplex.disconnect().unwrap();
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), echo)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
 struct Verify;

@@ -52,6 +52,8 @@ pub struct SavedConnection {
     pub post_login: Option<ConnectionPostLogin>,
     pub recording: Option<ConnectionRecordingSettings>,
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
+    /// Disable optional remote resource probes without restricting SSH channels.
+    pub ssh_compatibility_mode: bool,
     pub ssh_profile: SshProfile,
     pub terminal_type: Option<SshTerminalType>,
     pub sftp: SftpSettings,
@@ -102,6 +104,8 @@ struct SavedConnectionKnown {
     pub recording: Option<ConnectionRecordingSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ssh_compatibility_mode: bool,
     #[serde(default, skip_serializing_if = "is_standard_ssh_profile")]
     pub ssh_profile: SshProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +126,10 @@ struct SavedConnectionKnown {
     pub last_used_at_ms: Option<u64>,
     #[serde(skip)]
     pub extensions: ConnectionExtensions,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl SavedConnection {
@@ -321,6 +329,7 @@ fn omitted_fields(path: &str) -> &'static [&'static str] {
             "recording",
             "ssh_algorithms",
             "ssh_profile",
+            "ssh_compatibility_mode",
             "terminal_type",
             "sftp",
             "asset",

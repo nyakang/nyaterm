@@ -318,3 +318,23 @@ fn login_monitoring_remains_local_and_does_not_affect_cloud_projection() {
     };
     assert_eq!(project(false), project(true));
 }
+
+#[test]
+fn ssh_compatibility_mode_syncs_as_a_terminal_option_and_can_be_cleared() {
+    let original = json!({"type":"ssh", "name":"SSH", "host":"example.test",
+        "ssh_compatibility_mode":true, "ssh_profile":"standard", "future_local":"retained"});
+    let mut projection = project_record("connection", &original).unwrap();
+    assert_eq!(projection["terminal"]["ssh_compatibility_mode"], true);
+    for enabled in [false, true] {
+        projection["terminal"]["ssh_compatibility_mode"] = json!(enabled);
+        let applied = apply_record("connection", &original, &projection).unwrap();
+        assert_eq!(applied["ssh_compatibility_mode"], enabled);
+        assert_eq!(applied["future_local"], "retained");
+    }
+    projection["terminal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ssh_compatibility_mode");
+    let applied = apply_record("connection", &original, &projection).unwrap();
+    assert!(applied.get("ssh_compatibility_mode").is_none());
+}

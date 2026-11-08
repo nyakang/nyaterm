@@ -135,6 +135,7 @@ impl russh::server::Handler for SshPeer {
 async fn delete_with_server(
     exec_status: Option<u32>,
     multiplexed: bool,
+    ssh_compatibility_mode: bool,
 ) -> (Vec<Vec<u8>>, Arc<Mutex<Files>>) {
     let files = files();
     let commands = Arc::new(Mutex::new(Vec::new()));
@@ -174,6 +175,7 @@ async fn delete_with_server(
         }
     });
     let config = SshSessionConfig {
+        ssh_compatibility_mode,
         host: "127.0.0.1".into(),
         port,
         username: "test".into(),
@@ -274,25 +276,29 @@ async fn delete_with_server(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ssh_directory_fast_path_skips_recursive_sftp_for_dedicated_and_multiplexed_connections() {
-    for multiplexed in [false, true] {
-        let (commands, files) = delete_with_server(Some(0), multiplexed).await;
-        assert_eq!(commands, vec![b"rm -rf -- '/dir'".to_vec()]);
-        let files = files.lock().unwrap();
-        assert_eq!(files.entries.len(), 1);
-        assert!(files.removed.is_empty());
-        assert_eq!(files.lstat_calls, 1);
+    for enabled in [false, true] {
+        for multiplexed in [false, true] {
+            let (commands, files) = delete_with_server(Some(0), multiplexed, enabled).await;
+            assert_eq!(commands, vec![b"rm -rf -- '/dir'".to_vec()]);
+            let files = files.lock().unwrap();
+            assert_eq!(files.entries.len(), 1);
+            assert!(files.removed.is_empty());
+            assert_eq!(files.lstat_calls, 1);
+        }
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_and_unavailable_exec_fall_back_to_sftp_directory_deletion() {
-    for status in [Some(1), None] {
-        let (commands, files) = delete_with_server(status, true).await;
-        assert_eq!(commands.len(), usize::from(status.is_some()));
-        let files = files.lock().unwrap();
-        assert_eq!(files.entries.len(), 1);
-        assert_eq!(files.removed.len(), 5);
-        assert_eq!(files.lstat_calls, 1);
+    for enabled in [false, true] {
+        for status in [Some(1), None] {
+            let (commands, files) = delete_with_server(status, true, enabled).await;
+            assert_eq!(commands.len(), usize::from(status.is_some()));
+            let files = files.lock().unwrap();
+            assert_eq!(files.entries.len(), 1);
+            assert_eq!(files.removed.len(), 5);
+            assert_eq!(files.lstat_calls, 1);
+        }
     }
 }
 
@@ -356,72 +362,78 @@ async fn runtime_mode_server(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_modes_send_only_the_expected_server_requests_and_release_sessions() {
     use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
-    for (mode, shell, sftp, expected, ready) in [
-        (
-            SshRuntimeMode::Terminal,
-            true,
-            true,
-            vec!["pty", "shell"],
-            true,
-        ),
-        (
-            SshRuntimeMode::Terminal,
-            false,
-            true,
-            vec!["pty", "shell"],
-            false,
-        ),
-        (SshRuntimeMode::Sftp, true, true, vec!["sftp"], true),
-        (SshRuntimeMode::Sftp, true, false, vec!["sftp"], false),
-        (
-            SshRuntimeMode::Standard,
-            false,
-            true,
-            vec!["pty", "shell", "sftp"],
-            true,
-        ),
-    ] {
-        let (mut config, requests, _, server) = runtime_mode_server(shell, sftp).await;
-        config.runtime_mode = mode;
-        tokio::time::timeout(
-            Duration::from_secs(15),
-            tokio::task::spawn_blocking(move || {
-                let handle = nyaterm_transport::open_ssh_multiplex_handle(config.clone()).unwrap();
-                // A multiplexed copy has its own cancellation attempt while
-                // observing shell capability discovered on the shared connection.
-                config.bind_attempt(Default::default());
-                let observed_config = config.clone();
-                let manager = nyaterm_transport::SessionManager::with_ssh_services(
-                    nyaterm_transport::ssh_services::SshSessionServices {
-                        file_session_probe: Some(Arc::new(crate::session_probe::SftpSessionProbe)),
-                    },
-                );
-                let result = manager.create_ssh_session_with_multiplex(config, handle.clone());
-                assert_eq!(result.is_ok(), ready);
-                if let Ok(session) = result {
-                    if mode == SshRuntimeMode::Sftp {
-                        assert!(manager.write(&session.id, b"never execute\r").is_err());
-                        assert_eq!(
-                            handle.shell_availability(),
-                            nyaterm_transport::connection_attempt::ShellAvailability::Unknown
-                        );
+    for enabled in [false, true] {
+        for (mode, shell, sftp, expected, ready) in [
+            (
+                SshRuntimeMode::Terminal,
+                true,
+                true,
+                vec!["pty", "shell"],
+                true,
+            ),
+            (
+                SshRuntimeMode::Terminal,
+                false,
+                true,
+                vec!["pty", "shell"],
+                false,
+            ),
+            (SshRuntimeMode::Sftp, true, true, vec!["sftp"], true),
+            (SshRuntimeMode::Sftp, true, false, vec!["sftp"], false),
+            (
+                SshRuntimeMode::Standard,
+                false,
+                true,
+                vec!["pty", "shell", "sftp"],
+                true,
+            ),
+        ] {
+            let (mut config, requests, _, server) = runtime_mode_server(shell, sftp).await;
+            config.runtime_mode = mode;
+            config.ssh_compatibility_mode = enabled;
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::task::spawn_blocking(move || {
+                    let handle =
+                        nyaterm_transport::open_ssh_multiplex_handle(config.clone()).unwrap();
+                    // A multiplexed copy has its own cancellation attempt while
+                    // observing shell capability discovered on the shared connection.
+                    config.bind_attempt(Default::default());
+                    let observed_config = config.clone();
+                    let manager = nyaterm_transport::SessionManager::with_ssh_services(
+                        nyaterm_transport::ssh_services::SshSessionServices {
+                            file_session_probe: Some(Arc::new(
+                                crate::session_probe::SftpSessionProbe,
+                            )),
+                        },
+                    );
+                    let result = manager.create_ssh_session_with_multiplex(config, handle.clone());
+                    assert_eq!(result.is_ok(), ready);
+                    if let Ok(session) = result {
+                        if mode == SshRuntimeMode::Sftp {
+                            assert!(manager.write(&session.id, b"never execute\r").is_err());
+                            assert_eq!(
+                                handle.shell_availability(),
+                                nyaterm_transport::connection_attempt::ShellAvailability::Unknown
+                            );
+                        }
+                        if mode == SshRuntimeMode::Standard {
+                            assert_eq!(
+                                observed_config.effective_runtime_mode(),
+                                SshRuntimeMode::Sftp
+                            );
+                        }
+                        manager.close(&session.id).unwrap();
                     }
-                    if mode == SshRuntimeMode::Standard {
-                        assert_eq!(
-                            observed_config.effective_runtime_mode(),
-                            SshRuntimeMode::Sftp
-                        );
-                    }
-                    manager.close(&session.id).unwrap();
-                }
-                assert!(manager.list_sessions().unwrap().is_empty());
-            }),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(*requests.lock().unwrap(), expected, "mode {mode:?}");
-        server.abort();
+                    assert!(manager.list_sessions().unwrap().is_empty());
+                }),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(*requests.lock().unwrap(), expected, "mode {mode:?}");
+            server.abort();
+        }
     }
 }
 

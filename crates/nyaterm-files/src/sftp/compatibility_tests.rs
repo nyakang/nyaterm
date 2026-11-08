@@ -46,8 +46,11 @@ impl russh_sftp::server::Handler for Peer {
     }
 }
 
-fn seeded_service() -> (SftpService, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+fn seeded_service(
+    ssh_compatibility_mode: bool,
+) -> (SftpService, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let service = SftpService::new(SshSessionConfig {
+        ssh_compatibility_mode,
         sftp: SftpSettings {
             compatibility_mode: true,
             ..Default::default()
@@ -78,27 +81,29 @@ fn seeded_service() -> (SftpService, Arc<AtomicUsize>, Arc<AtomicUsize>) {
 
 #[test]
 fn repeated_operations_and_clones_reuse_one_live_peer_session() {
-    let (service, initializations, renames) = seeded_service();
-    service.rename_path("/a", "/b").unwrap();
-    service.clone().rename_path("/b", "/c").unwrap();
-    assert_eq!(initializations.load(Ordering::SeqCst), 1);
-    assert_eq!(renames.load(Ordering::SeqCst), 2);
-    assert!(
-        service
-            .compatibility
-            .as_ref()
-            .unwrap()
-            .cache
-            .lock()
-            .unwrap()
-            .is_some()
-    );
+    for enabled in [false, true] {
+        let (service, initializations, renames) = seeded_service(enabled);
+        service.rename_path("/a", "/b").unwrap();
+        service.clone().rename_path("/b", "/c").unwrap();
+        assert_eq!(initializations.load(Ordering::SeqCst), 1);
+        assert_eq!(renames.load(Ordering::SeqCst), 2);
+        assert!(
+            service
+                .compatibility
+                .as_ref()
+                .unwrap()
+                .cache
+                .lock()
+                .unwrap()
+                .is_some()
+        );
+    }
 }
 
 #[test]
 fn destination_scope_selects_its_own_session_and_restores_source_scope() {
-    let (source, _, _) = seeded_service();
-    let (destination, _, _) = seeded_service();
+    let (source, _, _) = seeded_service(true);
+    let (destination, _, _) = seeded_service(true);
     let source_state = source.compatibility.as_ref().unwrap();
     let destination_cache = destination.compatibility.as_ref().unwrap().cache.clone();
     let source_session = source_state
@@ -134,7 +139,7 @@ fn destination_scope_selects_its_own_session_and_restores_source_scope() {
 
 #[test]
 fn closed_session_is_evicted_without_retrying_the_operation() {
-    let (service, _, renames) = seeded_service();
+    let (service, _, renames) = seeded_service(true);
     let state = service.compatibility.as_ref().unwrap();
     let session = state.cache.lock().unwrap().as_ref().unwrap().sftp.clone();
     // Make the close/write race deterministic: a request queued immediately after the close
@@ -188,7 +193,7 @@ fn compatibility_download_limits_do_not_change_normal_mode_policy() {
     let normal_options = normal.effective_transfer_options(options.clone());
     assert_eq!(normal_options.download_threads(), 4);
     assert_eq!(normal_options.directory_upload_threads(), 8);
-    let (compatible, _, _) = seeded_service();
+    let (compatible, _, _) = seeded_service(true);
     let compatibility_options = compatible.effective_transfer_options(options);
     assert_eq!(compatibility_options.download_threads(), 1);
     assert_eq!(compatibility_options.directory_upload_threads(), 1);

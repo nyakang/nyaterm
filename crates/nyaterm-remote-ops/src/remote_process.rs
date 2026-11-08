@@ -222,6 +222,7 @@ impl SshProcessService {
     }
 
     pub fn list_processes(&self) -> anyhow::Result<Vec<RemoteProcess>> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         let output =
             self.exec_command_bytes(PROCESS_LIST_SCRIPT.as_bytes().to_vec(), PROCESS_TIMEOUT)?;
         if is_process_list_unsupported(&output.stdout)
@@ -243,6 +244,7 @@ impl SshProcessService {
         pid: u32,
         signal: impl AsRef<str>,
     ) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         let signal = normalize_process_signal(signal.as_ref())?;
         let output = self.exec_command_bytes(
             format!("kill -{signal} -- {pid}").into_bytes(),
@@ -252,6 +254,7 @@ impl SshProcessService {
     }
 
     pub fn renice_process(&self, pid: u32, nice: i32) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         if !(-20..=19).contains(&nice) {
             anyhow::bail!("Nice value must be between -20 and 19");
         }

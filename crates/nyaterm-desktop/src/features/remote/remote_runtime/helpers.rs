@@ -22,6 +22,9 @@ impl NyaTermApp {
             .session
             .active_ssh_config_owned()
             .ok_or_else(|| format!("start an SSH session before {action}"))?;
+        config
+            .ensure_remote_resource_probes_allowed()
+            .map_err(|_| rust_i18n::t!("panel.sshCompatibilityModeUnavailable").to_string())?;
         // `session_id` may be a tmux pane leaf — the SSH connection and its
         // multiplex handle live on the host session, so look the connection
         // up through the host while keeping the pane id for job bookkeeping.

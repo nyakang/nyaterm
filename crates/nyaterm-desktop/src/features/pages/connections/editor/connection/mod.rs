@@ -3345,6 +3345,7 @@ mod tests {
             agent_preview_loading: false,
             backspace_mode: "del".to_string(),
             encoding: String::new(),
+            ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
             sftp_enabled: true,

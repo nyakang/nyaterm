@@ -7084,6 +7084,7 @@ dependencies = [
  "anyhow",
  "nyaterm-core",
  "nyaterm-transport",
+ "russh",
  "serde",
  "serde_json",
  "tempfile",

@@ -1547,3 +1547,79 @@ fn migration_safety_backup_is_read_only_and_restores_with_the_existing_nya_reade
     assert!(restored.record.replica.is_none());
     assert!(restored.record.pending.is_none());
 }
+
+#[test]
+fn ssh_compatibility_mode_survives_database_json_backup_and_cloud_sync_round_trips() {
+    let dir = TestTempDir::new("nyaterm-ssh-compatibility-storage");
+    let mut store = ConnectionStore::open(dir.path()).unwrap();
+    enable(&store);
+    for enabled in [true, false] {
+        let mut saved = connection();
+        saved.ssh_compatibility_mode = enabled;
+        store.save_connection(&saved).unwrap();
+        drop(store);
+        store = ConnectionStore::open(dir.path()).unwrap();
+        let loaded = store.get_connection(&saved.id).unwrap().unwrap();
+        assert_eq!(loaded.ssh_compatibility_mode, enabled);
+
+        let import_dir = TestTempDir::new("nyaterm-ssh-compatibility-json");
+        std::fs::create_dir_all(import_dir.path()).unwrap();
+        let json_path = import_dir.path().join("connections.json");
+        std::fs::write(
+            &json_path,
+            serde_json::to_vec(&json!({"version":1,"sessions":[loaded]})).unwrap(),
+        )
+        .unwrap();
+        let prepared_import =
+            nyaterm_core::session_import::prepare_session_import(&json_path).unwrap();
+        assert_eq!(
+            prepared_import.connections[0]
+                .saved
+                .as_ref()
+                .unwrap()
+                .ssh_compatibility_mode,
+            enabled
+        );
+        let imported = ConnectionStore::open(import_dir.path().join("imported")).unwrap();
+        assert_eq!(imported.commit_session_import(prepared_import).unwrap(), 1);
+        assert_eq!(
+            imported.list_connections().unwrap()[0].ssh_compatibility_mode,
+            enabled
+        );
+
+        let backup_dir = TestTempDir::new("nyaterm-ssh-compatibility-backup");
+        let backup = backup_dir.path().join("connections.nya");
+        store
+            .export_encrypted_portable_snapshot_from_open_store(
+                &backup, "source", "fixture", "password",
+            )
+            .unwrap();
+        let restored = ConnectionStore::open(backup_dir.path().join("restored")).unwrap();
+        restored
+            .import_encrypted_portable_snapshot_into_open_store(&backup, "password")
+            .unwrap();
+        assert_eq!(
+            restored
+                .get_connection(&saved.id)
+                .unwrap()
+                .unwrap()
+                .ssh_compatibility_mode,
+            enabled
+        );
+
+        store.apply_v4_plan(prepared(&store), "password").unwrap();
+        let view = store
+            .load_v4_view("destination", "password", &SyncScope::default())
+            .unwrap();
+        assert!(view.projection.edited.is_empty());
+        assert_eq!(view.record.effective, view.projection.values);
+        assert_eq!(
+            store
+                .get_connection(&saved.id)
+                .unwrap()
+                .unwrap()
+                .ssh_compatibility_mode,
+            enabled
+        );
+    }
+}

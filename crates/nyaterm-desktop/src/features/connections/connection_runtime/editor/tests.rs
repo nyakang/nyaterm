@@ -375,3 +375,34 @@ fn keeping_unreadable_ciphertext_survives_saving_and_reopening() {
         );
     }
 }
+
+#[test]
+fn ssh_compatibility_mode_survives_editor_save_reload_and_profile_changes() {
+    let root = TestTempDir::new("nyaterm-ssh-compatibility-editor");
+    let store = ConnectionStore::open(&root).unwrap();
+    let original = connection("ssh-compatibility", None, 0);
+    assert!(!connection_editor_from_saved(original.clone(), false).ssh_compatibility_mode);
+    store.save_connection(&original).unwrap();
+    for profile in [
+        nyaterm_core::SshProfile::Standard,
+        nyaterm_core::SshProfile::NetworkDevice,
+    ] {
+        for enabled in [true, false] {
+            let stored = store.get_connection(&original.id).unwrap().unwrap();
+            let mut editor = connection_editor_from_saved(stored, false);
+            editor.ssh_profile = profile;
+            editor.ssh_compatibility_mode = enabled;
+            let built = build_saved_connection_from_editor(&editor).unwrap();
+            assert_eq!(built.ssh_compatibility_mode, enabled);
+            save_editor_connection(&store, built, None, Some(ConnectionPasswordEdit::Keep))
+                .unwrap();
+            let reloaded = store.get_connection(&original.id).unwrap().unwrap();
+            assert_eq!(reloaded.ssh_profile, profile);
+            assert_eq!(reloaded.ssh_compatibility_mode, enabled);
+            assert_eq!(
+                connection_editor_from_saved(reloaded, false).ssh_compatibility_mode,
+                enabled
+            );
+        }
+    }
+}

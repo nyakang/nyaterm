@@ -138,6 +138,7 @@ struct RemoteMonitorKey {
     revision: u64,
     chrome: PanelChrome,
     has_session: bool,
+    ssh_compatibility_mode: bool,
     /// Right-panel width, which decides the process table's columns and row heights.
     /// Zero for the panes that do not depend on it.
     panel_width: f32,
@@ -432,6 +433,16 @@ impl Render for RemoteMonitorPanel {
                 return div().into_any_element();
             };
             let chrome = snapshot.key.chrome;
+            if snapshot.key.ssh_compatibility_mode {
+                return div()
+                    .size_full()
+                    .bg(chrome.transparent_surface)
+                    .child(nyaterm_ui::empty_panel(
+                        t!("panel.sshCompatibilityModeUnavailable"),
+                        chrome.palette,
+                    ))
+                    .into_any_element();
+            }
             let has_session = snapshot.key.has_session;
             let panel_width = snapshot.key.panel_width;
             return match &snapshot.data {
@@ -630,6 +641,10 @@ impl NyaTermApp {
             revision,
             chrome: self.panel_chrome(),
             has_session: self.session.active_ssh_config().is_some(),
+            ssh_compatibility_mode: self
+                .session
+                .active_ssh_config()
+                .is_some_and(|config| config.ssh_compatibility_mode),
             panel_width: match kind {
                 // Width is a presentation input, including accelerator card layouts.
                 RemoteMonitorKind::Processes
@@ -1521,6 +1536,67 @@ mod tests {
             vec![RemoteMonitorKind::Gpu],
             "a paint arms only the visible GPU panel"
         );
+    }
+    #[test]
+    fn ssh_compatibility_mode_blocks_panel_header_icon_and_manual_refresh_jobs() {
+        let test_dir = TestConfigDir::new("nyaterm-ssh-compatibility-panels");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        activate_ssh_session(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            let connection: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+                "id":"icon-test", "name":"SSH", "type":"ssh", "host":"example.test", "icon_auto_detect":true
+            })).unwrap();
+            app.connection_state.replace_loaded(vec![connection], Vec::new());
+            app.session.metadata_mut("remote-panel-test").unwrap().source_connection_id = Some("icon-test".into());
+            let mut metadata = app.session.metadata("remote-panel-test").unwrap().clone();
+            metadata.ssh_config.as_mut().unwrap().ssh_compatibility_mode = true;
+            app.session.register_session_metadata("compatible-panel-test", metadata);
+            app.session.select_active_session("compatible-panel-test");
+            for mode in [crate::models::HeaderStatusMode::Resources, crate::models::HeaderStatusMode::Host,
+                crate::models::HeaderStatusMode::Gpu, crate::models::HeaderStatusMode::Npu] {
+                let mut settings = app.settings.summary().clone();
+                settings.ui_header_status_visible = true;
+                settings.ui_header_status_mode = mode.persistence_id().into();
+                app.settings.replace_summary(settings);
+                for kind in ALL_KINDS {
+                    app.open_or_toggle_panel(kind.nav_item(), cx);
+                    app.sync_remote_panel_demand(cx);
+                    app.flush_remote_panel_snapshots(cx);
+                    assert!(!app.remote_panels.entity(kind).read(cx).is_polling());
+                    assert!(app.remote_panels.entity(kind).read(cx).snapshot.as_ref().unwrap().key.ssh_compatibility_mode);
+                    assert!(!app.refresh_remote_monitor_if_due(kind, cx));
+                }
+            }
+            assert!(!app.connection_icon_probe_needed());
+            assert!(!app.refresh_connection_icon_if_due(cx));
+            assert!(!app.refresh_stats_if_due(cx));
+            assert!(!app.refresh_gpu_if_due(cx));
+            assert!(!app.refresh_npu_if_due(cx));
+            assert!(!app.refresh_processes_if_due(cx));
+            assert!(!app.refresh_docker_if_due(cx));
+            app.refresh_stats(cx);
+            app.refresh_gpu(cx);
+            app.refresh_npu(cx);
+            app.refresh_processes(cx);
+            app.refresh_docker(cx);
+            app.load_docker_details("container".into(), cx);
+            assert!(app.shell.status().contains(&rust_i18n::t!("panel.sshCompatibilityModeUnavailable").to_string()));
+            assert!(!app.remote_ops.stats_is_pending());
+            assert!(!app.remote_ops.gpu_is_pending());
+            assert!(!app.remote_ops.npu_is_pending());
+            assert!(!app.remote_ops.process_is_pending());
+            assert!(!app.remote_ops.docker_is_pending());
+            app.session.select_active_session("remote-panel-test");
+            app.sync_remote_panel_demand(cx);
+            assert!(app.remote_panels.entity(RemoteMonitorKind::Npu).read(cx).is_polling());
+            app.session.select_active_session("compatible-panel-test");
+            app.sync_remote_panel_demand(cx);
+            for kind in ALL_KINDS {
+                assert!(!app.remote_panels.entity(kind).read(cx).is_polling());
+            }
+        });
     }
 }
 

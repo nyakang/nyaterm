@@ -87,7 +87,7 @@ enum ListingOperation {
     Properties,
 }
 
-async fn assert_numeric_ownership(operation: ListingOperation) {
+async fn assert_numeric_ownership(operation: ListingOperation, ssh_compatibility_mode: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let commands = Arc::new(Mutex::new(Vec::new()));
@@ -119,6 +119,7 @@ async fn assert_numeric_ownership(operation: ListingOperation) {
         Duration::from_secs(15),
         tokio::task::spawn_blocking(move || {
             let config = SshSessionConfig {
+                ssh_compatibility_mode,
                 host: "127.0.0.1".into(),
                 port,
                 username: "test".into(),
@@ -170,10 +171,14 @@ async fn assert_numeric_ownership(operation: ListingOperation) {
 
 #[tokio::test]
 async fn normal_directory_listing_requests_numeric_ownership() {
-    assert_numeric_ownership(ListingOperation::Directory).await;
+    for enabled in [false, true] {
+        assert_numeric_ownership(ListingOperation::Directory, enabled).await;
+    }
 }
 
 #[tokio::test]
 async fn normal_file_properties_request_numeric_ownership() {
-    assert_numeric_ownership(ListingOperation::Properties).await;
+    for enabled in [false, true] {
+        assert_numeric_ownership(ListingOperation::Properties, enabled).await;
+    }
 }

@@ -2358,6 +2358,7 @@ fn saved_connection(
         auth: None,
         recording: None,
         ssh_algorithms: None,
+        ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
         sftp: Default::default(),
@@ -2439,6 +2440,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         agent_preview_loading: false,
         backspace_mode: "del".to_string(),
         encoding: "global".to_string(),
+        ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
         sftp_enabled: true,
@@ -2926,4 +2928,26 @@ fn selecting_windows_rdp_preserves_clipboard_data_and_selects_system_authenticat
         draft.rdp_security.windows_authentication.as_deref(),
         Some("system")
     );
+}
+
+#[test]
+fn ssh_compatibility_toggle_preserves_profile_terminal_and_sftp_settings() {
+    let editor = connection_editor_state_with_secret_draft();
+    assert!(!editor.ssh_compatibility_mode);
+    let mut draft = Some(editor.clone());
+    for enabled in [true, false] {
+        assert!(toggle_connection_editor_flag(
+            &mut draft,
+            ConnectionEditorToggle::SshCompatibilityMode
+        ));
+        let updated = draft.as_ref().unwrap();
+        assert_eq!(updated.ssh_compatibility_mode, enabled);
+        assert_eq!(updated.ssh_profile, editor.ssh_profile);
+        assert_eq!(updated.terminal_type, editor.terminal_type);
+        assert_eq!(updated.sftp_enabled, editor.sftp_enabled);
+        assert_eq!(
+            updated.sftp_compatibility_mode,
+            editor.sftp_compatibility_mode
+        );
+    }
 }

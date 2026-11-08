@@ -1285,6 +1285,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
         proxy,
         allow_none_auth,
         backspace_mode,
+        ssh_compatibility_mode: connection.ssh_compatibility_mode,
         profile: match connection.ssh_profile {
             SshProfile::Standard => SshSessionProfile::Standard,
             SshProfile::NetworkDevice => SshSessionProfile::NetworkDevice,
@@ -1986,6 +1987,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
             sftp: Default::default(),
@@ -2040,6 +2042,7 @@ mod tests {
                 mode: SshAlgorithmMode::Secure,
                 ..Default::default()
             }),
+            ssh_compatibility_mode: false,
             ssh_profile: SshProfile::NetworkDevice,
             terminal_type: None,
             sftp: SftpSettings {
@@ -2086,5 +2089,23 @@ mod tests {
         let explicit =
             build_ssh_session_config_with_context(&connection, &mut Vec::new(), &context).unwrap();
         assert_eq!(explicit.term, "ansi");
+        for profile in [SshProfile::Standard, SshProfile::NetworkDevice] {
+            connection.ssh_profile = profile;
+            for enabled in [false, true] {
+                connection.ssh_compatibility_mode = enabled;
+                let config =
+                    build_ssh_session_config_with_context(&connection, &mut Vec::new(), &context)
+                        .unwrap();
+                assert_eq!(config.ssh_compatibility_mode, enabled);
+                assert_eq!(
+                    config.remote_stats_enabled(),
+                    !enabled && profile == SshProfile::Standard
+                );
+                assert_eq!(
+                    config.remote_file_browser_enabled(),
+                    profile == SshProfile::Standard
+                );
+            }
+        }
     }
 }

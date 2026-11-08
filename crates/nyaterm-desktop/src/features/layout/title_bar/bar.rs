@@ -575,6 +575,22 @@ impl NyaTermApp {
 
     fn header_status_content(&self) -> HeaderStatusContent {
         let mode = HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode);
+        if matches!(
+            mode,
+            HeaderStatusMode::Resources
+                | HeaderStatusMode::Host
+                | HeaderStatusMode::Gpu
+                | HeaderStatusMode::Npu
+        ) && self
+            .session
+            .active_ssh_config()
+            .is_some_and(|config| config.ssh_compatibility_mode)
+        {
+            return HeaderStatusContent::simple(
+                header_status_mode_icon(mode),
+                t!("panel.sshCompatibilityModeUnavailable").to_string(),
+            );
+        }
         match mode {
             HeaderStatusMode::Session => HeaderStatusContent::simple(
                 self.title_context_icon()

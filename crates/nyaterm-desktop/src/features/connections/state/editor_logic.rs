@@ -652,6 +652,9 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::DynamicTabTitle => {
             editor.dynamic_tab_title = !editor.dynamic_tab_title;
         }
+        ConnectionEditorToggle::SshCompatibilityMode => {
+            editor.ssh_compatibility_mode = !editor.ssh_compatibility_mode;
+        }
         ConnectionEditorToggle::X11 => editor.x11_forwarding = !editor.x11_forwarding,
         ConnectionEditorToggle::AgentForwarding => {
             editor.agent_forwarding_config.enabled = !editor.agent_forwarding_config.enabled;

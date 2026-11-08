@@ -721,6 +721,7 @@ impl RemoteStatsService {
         session_id: &str,
         options: RemoteStatsOptions,
     ) -> anyhow::Result<RemoteStats> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         if !self.config.remote_stats_enabled() {
             anyhow::bail!("remote stats are disabled for this SSH profile");
         }
@@ -730,6 +731,7 @@ impl RemoteStatsService {
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         let output = run_ssh_command(
             self.config.clone(),
             self.multiplex.clone(),

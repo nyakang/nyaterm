@@ -1219,6 +1219,24 @@ fn ssh_terminal(
                 )
                 .child(editor_switch_row(
                     palette,
+                    "connection-editor-ssh-compatibility",
+                    t!("dialog.sshCompatibilityMode"),
+                    editor.ssh_compatibility_mode,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::SshCompatibilityMode,
+                            cx,
+                        );
+                    }),
+                ))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("dialog.sshCompatibilityModeDesc")),
+                )
+                .child(editor_switch_row(
+                    palette,
                     "connection-editor-dynamic-tab-title",
                     t!("dialog.dynamicTabTitle"),
                     editor.dynamic_tab_title,

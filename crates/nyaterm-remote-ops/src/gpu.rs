@@ -112,6 +112,7 @@ impl RemoteGpuService {
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         let output = run_ssh_command(
             self.config.clone(),
             self.multiplex.clone(),

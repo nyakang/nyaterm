@@ -298,6 +298,8 @@ pub struct SshSessionConfig {
     pub allow_none_auth: bool,
     pub backspace_mode: String,
     pub profile: SshSessionProfile,
+    /// Only resource-management services enforce this flag; SSH channels remain available.
+    pub ssh_compatibility_mode: bool,
     pub term: String,
     pub x11_forwarding: bool,
     pub x11_display: String,
@@ -324,7 +326,19 @@ pub struct SshSessionConfig {
     pub otp_provider: Option<Arc<dyn SshOtpProvider>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Remote resource probes are unavailable because SSH compatibility mode is enabled")]
+pub struct SshResourceProbesDisabled;
+
 impl SshSessionConfig {
+    pub fn ensure_remote_resource_probes_allowed(&self) -> Result<(), SshResourceProbesDisabled> {
+        if self.ssh_compatibility_mode {
+            Err(SshResourceProbesDisabled)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn effective_runtime_mode(&self) -> nyaterm_core::models::ssh_runtime::SshRuntimeMode {
         use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
         if self.runtime_mode == SshRuntimeMode::Standard
@@ -394,7 +408,8 @@ impl SshSessionConfig {
     }
 
     pub fn remote_stats_enabled(&self) -> bool {
-        !self.is_network_device()
+        !self.ssh_compatibility_mode
+            && !self.is_network_device()
             && self.effective_runtime_mode()
                 == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
     }
@@ -501,6 +516,7 @@ impl std::fmt::Debug for SshSessionConfig {
             .field("allow_none_auth", &self.allow_none_auth)
             .field("backspace_mode", &self.backspace_mode)
             .field("profile", &self.profile)
+            .field("ssh_compatibility_mode", &self.ssh_compatibility_mode)
             .field("term", &self.term)
             .field("x11_forwarding", &self.x11_forwarding)
             .field("x11_display", &self.x11_display)
@@ -764,6 +780,7 @@ impl Default for SshSessionConfig {
             allow_none_auth: false,
             backspace_mode: "del".to_string(),
             profile: SshSessionProfile::Standard,
+            ssh_compatibility_mode: false,
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),
@@ -936,5 +953,52 @@ mod tests {
             config.shell_integration_detection_timeout_ms(SftpCwdFollowMode::ShellIntegration),
             3_000
         );
+    }
+    #[test]
+    fn ssh_compatibility_mode_only_changes_resource_probe_capabilities() {
+        for profile in [
+            SshSessionProfile::Standard,
+            SshSessionProfile::NetworkDevice,
+        ] {
+            for runtime_mode in [
+                SshRuntimeMode::Standard,
+                SshRuntimeMode::Terminal,
+                SshRuntimeMode::Sftp,
+            ] {
+                let original = SshSessionConfig {
+                    profile,
+                    runtime_mode,
+                    ..Default::default()
+                };
+                assert!(!original.ssh_compatibility_mode);
+                assert!(original.ensure_remote_resource_probes_allowed().is_ok());
+                let compatible = SshSessionConfig {
+                    ssh_compatibility_mode: true,
+                    ..original.clone()
+                };
+                assert!(compatible.ensure_remote_resource_probes_allowed().is_err());
+                assert!(!compatible.remote_stats_enabled());
+                assert_eq!(
+                    compatible.remote_file_browser_enabled(),
+                    original.remote_file_browser_enabled()
+                );
+                assert_eq!(
+                    compatible.effective_cwd_follow_mode(),
+                    original.effective_cwd_follow_mode()
+                );
+                assert_eq!(
+                    compatible.effective_terminal_shell_integration(),
+                    original.effective_terminal_shell_integration()
+                );
+                assert_eq!(
+                    compatible.effective_runtime_mode(),
+                    original.effective_runtime_mode()
+                );
+                assert_eq!(
+                    compatible.ensure_shell_available().is_ok(),
+                    original.ensure_shell_available().is_ok()
+                );
+            }
+        }
     }
 }

@@ -126,8 +126,9 @@ pub use session_config::{
     SshAlgorithmPreferences, SshCredentialPrompt, SshCredentialPromptKind,
     SshCredentialPromptReason, SshCredentialProvider, SshHostKey, SshHostKeyDecision,
     SshHostKeyVerifier, SshKeyAuthConfig, SshKeyboardInteractivePrompt,
-    SshKeyboardInteractiveRequest, SshOtpProvider, SshProxyConfig, SshSessionConfig,
-    SshSessionProfile, TelnetAutoLoginConfig, TelnetEnterMode, TelnetSessionConfig,
+    SshKeyboardInteractiveRequest, SshOtpProvider, SshProxyConfig, SshResourceProbesDisabled,
+    SshSessionConfig, SshSessionProfile, TelnetAutoLoginConfig, TelnetEnterMode,
+    TelnetSessionConfig,
 };
 use session_event_queue::SessionEventQueue;
 #[cfg(test)]

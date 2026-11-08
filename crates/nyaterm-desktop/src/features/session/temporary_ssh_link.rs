@@ -263,6 +263,7 @@ impl NyaTermApp {
             allow_none_auth: false,
             backspace_mode: "del".to_string(),
             profile: SshSessionProfile::Standard,
+            ssh_compatibility_mode: false,
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),

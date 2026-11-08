@@ -435,6 +435,7 @@ impl DockerService {
         input: Option<nyaterm_core::SecretString>,
         timeout: Duration,
     ) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         nyaterm_transport::ssh_execution::run_ssh_command_with_input(
             self.config.clone(),
             self.multiplex.clone(),
@@ -546,6 +547,7 @@ impl DockerService {
     }
 
     fn exec(&self, command: &str, timeout: Duration) -> anyhow::Result<RemoteCommandOutput> {
+        self.config.ensure_remote_resource_probes_allowed()?;
         let cached = self
             .elevation
             .inner

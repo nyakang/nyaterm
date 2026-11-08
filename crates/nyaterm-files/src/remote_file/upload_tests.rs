@@ -182,7 +182,7 @@ async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
         let local_root = tempfile::tempdir().unwrap();
         let local = local_root.path().join("source");
         std::fs::write(&local, b"new\0data").unwrap();
-        let config = SshSessionConfig { host: "127.0.0.1".into(), port, username: "test".into(),
+        let config = SshSessionConfig { ssh_compatibility_mode: true, host: "127.0.0.1".into(), port, username: "test".into(),
             allow_none_auth: true, host_key_verifier: Some(Arc::new(AcceptKey)), ..Default::default() };
         let multiplex = nyaterm_transport::open_ssh_multiplex_handle(config.clone()).unwrap();
         let service = RemoteFileService::with_multiplex(config, multiplex.clone()).unwrap();
