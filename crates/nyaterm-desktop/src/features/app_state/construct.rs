@@ -256,6 +256,11 @@ impl NyaTermApp {
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
 
         let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
+        let host_tool_panels = crate::features::remote::HostToolPanels::new(
+            app_entity.downgrade(),
+            blocking_jobs.clone(),
+            cx,
+        );
         let send_command = SendCommandFeatureState::new(cx);
         cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
             .detach();
@@ -369,6 +374,7 @@ impl NyaTermApp {
             ),
             remote_ops: RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {}),
             remote_panels,
+            host_tool_panels,
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
             translation: TranslationFeatureState::new(translation_settings),
             update,

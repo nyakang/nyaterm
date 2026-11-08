@@ -61,6 +61,15 @@ mod tests {
     }
 
     fn register_session(app: &mut NyaTermApp, session_id: &str, ssh: bool) {
+        register_session_with_state(app, session_id, ssh, false);
+    }
+
+    fn register_session_with_state(
+        app: &mut NyaTermApp,
+        session_id: &str,
+        ssh: bool,
+        disconnected: bool,
+    ) {
         app.session.register_session_metadata(
             session_id,
             crate::models::SessionRuntimeMetadata {
@@ -71,7 +80,7 @@ mod tests {
                 launch_config: crate::models::SessionLaunchConfig::Local(
                     nyaterm_transport::LocalSessionConfig::default(),
                 ),
-                disconnected: false,
+                disconnected,
             },
         );
     }
@@ -154,11 +163,173 @@ mod tests {
                  here, not at the next paint"
             );
 
+            // A local shell is a host too: the panels inspect this machine.
             app.activate_session_id("local-b", cx);
             assert!(
+                gpu_polling(app, cx),
+                "a live local shell keeps the host panels polling"
+            );
+
+            register_session_with_state(app, "dead-c", false, true);
+            app.activate_session_id("dead-c", cx);
+            assert!(
                 !gpu_polling(app, cx),
-                "switching to a session with no SSH config must drop the clock in the \
+                "switching to a disconnected session must drop the clock in the \
                  same update"
+            );
+        });
+    }
+
+    /// The whole Ports path against the real machine: a live local shell resolves to
+    /// "this machine", the panel arms its clock, the job runs on the scheduler, and
+    /// the listeners come back. Leaving for a dead session drops the clock again.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_local_shell_makes_the_ports_panel_list_real_listeners() {
+        use crate::features::pages::remote::HostToolKind;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            register_session(app, "local-a", false);
+            app.open_or_toggle_panel(NavItem::Ports, cx);
+            app.activate_session_id("local-a", cx);
+            let panel = app.host_tool_panels.entity(HostToolKind::Ports).clone();
+            assert!(
+                panel.read(cx).host_ready(),
+                "a local shell is a usable host"
+            );
+            assert!(panel.read(cx).is_polling(), "an open panel polls");
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let loaded = loop {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(60));
+            cx.run_until_parked();
+            let loaded = cx.update_entity(&app, |app, cx| {
+                app.host_tool_panels
+                    .entity(HostToolKind::Ports)
+                    .read(cx)
+                    .loaded_port_count()
+            });
+            if loaded > 0 || std::time::Instant::now() > deadline {
+                break loaded;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        };
+        assert!(
+            loaded > 0,
+            "the local machine always has a listening socket"
+        );
+        cx.update_entity(&app, |app, cx| {
+            register_session_with_state(app, "dead", false, true);
+            // A disconnected local shell still resolves to this machine, so the
+            // panel keeps its host; closing the panel is what drops the clock.
+            app.open_or_toggle_panel(NavItem::Ports, cx);
+            app.activate_session_id("dead", cx);
+            assert!(
+                !app.host_tool_panels
+                    .entity(HostToolKind::Ports)
+                    .read(cx)
+                    .is_polling(),
+                "a hidden panel must not poll"
+            );
+        });
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_local_shell_makes_the_services_panel_list_real_services() {
+        use crate::features::pages::remote::HostToolKind;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            register_session(app, "local-a", false);
+            app.open_or_toggle_panel(NavItem::Services, cx);
+            app.activate_session_id("local-a", cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let loaded = loop {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(60));
+            cx.run_until_parked();
+            let loaded = cx.update_entity(&app, |app, cx| {
+                app.host_tool_panels
+                    .entity(HostToolKind::Services)
+                    .read(cx)
+                    .loaded_service_count()
+            });
+            if loaded > 0 || std::time::Instant::now() > deadline {
+                break loaded;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        };
+        assert!(loaded > 0, "this machine runs at least one service");
+    }
+
+    /// Regression: the periodic refresh gates only let SSH sessions through, so a
+    /// local shell showed "Loading..." in Resources forever.
+    #[test]
+    fn a_local_shell_is_refreshed_by_the_periodic_remote_probes() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            register_session(app, "local-a", false);
+            app.activate_session_id("local-a", cx);
+            assert!(
+                app.refresh_stats_if_due(cx),
+                "stats must start for a local shell"
+            );
+            assert!(
+                app.refresh_processes_if_due(cx),
+                "processes must start for a local shell"
+            );
+            register_session_with_state(app, "dead", false, true);
+            app.activate_session_id("dead", cx);
+            assert!(
+                !app.refresh_docker_if_due(cx),
+                "a disconnected shell must not be probed"
+            );
+        });
+    }
+
+    /// Like Resources and Processes, Ports and Services need an open terminal:
+    /// with none (or a dead local one) there is no host to inspect.
+    #[test]
+    fn ports_and_services_need_a_live_terminal() {
+        use crate::features::pages::remote::HostToolKind;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.open_or_toggle_panel(NavItem::Ports, cx);
+            app.sync_remote_panel_demand(cx);
+            for kind in [HostToolKind::Ports, HostToolKind::Services] {
+                let panel = app.host_tool_panels.entity(kind).clone();
+                assert!(
+                    !panel.read(cx).host_ready(),
+                    "{kind:?}: no terminal, no host"
+                );
+                assert!(!panel.read(cx).is_polling());
+            }
+            register_session(app, "local-a", false);
+            app.activate_session_id("local-a", cx);
+            assert!(
+                app.host_tool_panels
+                    .entity(HostToolKind::Ports)
+                    .read(cx)
+                    .host_ready()
+            );
+            register_session_with_state(app, "dead", false, true);
+            app.activate_session_id("dead", cx);
+            assert!(
+                !app.host_tool_panels
+                    .entity(HostToolKind::Ports)
+                    .read(cx)
+                    .host_ready(),
+                "a disconnected local terminal is not a host"
             );
         });
     }

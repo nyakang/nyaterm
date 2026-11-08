@@ -44,6 +44,9 @@ pub(in crate::features) struct RemoteOpsFeatureState {
     stats: StatsPaneState,
     gpu: AcceleratorPaneState<RemoteGpuOverview, GpuJobResult>,
     npu: AcceleratorPaneState<RemoteNpuOverview, NpuJobResult>,
+    /// Docker sudo/authorization is per connection; the local machine is one
+    /// long-lived connection, so its state lives here instead of on an SSH lease.
+    local_docker_state: nyaterm_remote_ops::docker::DockerConnectionState,
 }
 
 /// Focus handles the Remote page needs at construction time.
@@ -57,7 +60,14 @@ impl RemoteOpsFeatureState {
             stats: StatsPaneState::new(),
             gpu: AcceleratorPaneState::new("start an SSH session to inspect NVIDIA GPU"),
             npu: AcceleratorPaneState::new("start an SSH session to inspect Ascend NPU"),
+            local_docker_state: Default::default(),
         }
+    }
+
+    pub(in crate::features) fn local_docker_state(
+        &self,
+    ) -> nyaterm_remote_ops::docker::DockerConnectionState {
+        self.local_docker_state.clone()
     }
 
     pub(in crate::features) fn reset_for_session_switch(&mut self) {

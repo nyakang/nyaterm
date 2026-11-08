@@ -640,7 +640,8 @@ impl NyaTermApp {
         RemoteMonitorKey {
             revision,
             chrome: self.panel_chrome(),
-            has_session: self.session.active_ssh_config().is_some(),
+            has_session: self.session.active_ssh_config().is_some()
+                || self.session.active_is_local_pty(),
             ssh_compatibility_mode: self
                 .session
                 .active_ssh_config()
@@ -658,7 +659,7 @@ impl NyaTermApp {
         }
     }
 
-    fn panel_chrome(&self) -> PanelChrome {
+    pub(in crate::features) fn panel_chrome(&self) -> PanelChrome {
         let palette = self.theme_palette();
         PanelChrome {
             transparent_surface: self.shell_transparent_color(palette.surface),
@@ -828,14 +829,16 @@ impl NyaTermApp {
     }
 
     fn remote_monitor_session_active(&self) -> bool {
-        self.session
-            .active_ssh_config()
-            .is_some_and(|config| config.remote_stats_enabled())
-            && self
+        self.session.active_is_local_pty()
+            || self
                 .session
-                .active_id()
-                .and_then(|id| self.session.metadata(id))
-                .is_some_and(|metadata| !metadata.disconnected)
+                .active_ssh_config()
+                .is_some_and(|config| config.remote_stats_enabled())
+                && self
+                    .session
+                    .active_id()
+                    .and_then(|id| self.session.metadata(id))
+                    .is_some_and(|metadata| !metadata.disconnected)
     }
 
     /// Rendering reconciles all layout consumers; session activation and replies
@@ -848,6 +851,7 @@ impl NyaTermApp {
             let panel = self.remote_panels.entity(kind).clone();
             panel.update(cx, |panel, cx| panel.set_demand(demand, cx));
         }
+        self.sync_host_tools(cx);
     }
 }
 

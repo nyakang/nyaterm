@@ -58,6 +58,8 @@ pub(crate) enum NavItem {
     AscendNpuMonitor,
     Processes,
     Docker,
+    Ports,
+    Services,
     Transfers,
     Notes,
     Settings,
@@ -80,6 +82,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "panel.npuMonitor",
             NavItem::Processes => "panel.processManager",
             NavItem::Docker => "panel.dockerManager",
+            NavItem::Ports => "hostTools.portsTitle",
+            NavItem::Services => "hostTools.servicesTitle",
             NavItem::Transfers => "panel.fileExplorer",
             NavItem::Notes => "panel.notes",
             NavItem::Settings => "settings.title",
@@ -104,6 +108,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "Ascend NPU Monitor",
             NavItem::Processes => "Process Manager",
             NavItem::Docker => "Docker",
+            NavItem::Ports => "Ports",
+            NavItem::Services => "Services",
             NavItem::Transfers => "File Explorer",
             NavItem::Notes => "Notes",
             NavItem::Settings => "Settings",
@@ -132,6 +138,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "NPU",
             NavItem::Processes => "Processes",
             NavItem::Docker => "Docker",
+            NavItem::Ports => "Ports",
+            NavItem::Services => "Services",
             NavItem::SyncBackupHistory => "Cloud Sync",
             NavItem::SecurityAuth => "Security",
             NavItem::Recording => "Recording",
@@ -161,6 +169,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "icons/npu.svg",
             NavItem::Processes => "icons/processes.svg",
             NavItem::Docker => "icons/docker.svg",
+            NavItem::Ports => "icons/ports.svg",
+            NavItem::Services => "icons/services.svg",
             NavItem::Recording => "icons/record.svg",
             NavItem::Workspace => "icons/workspace.svg",
         }
@@ -190,6 +200,8 @@ impl NavItem {
                 | NavItem::AscendNpuMonitor
                 | NavItem::Processes
                 | NavItem::Docker
+                | NavItem::Ports
+                | NavItem::Services
                 | NavItem::Recording
                 | NavItem::Workspace
         )
@@ -210,6 +222,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "ascendNpuMonitor",
             NavItem::Processes => "processManager",
             NavItem::Docker => "dockerManager",
+            NavItem::Ports => "portsManager",
+            NavItem::Services => "servicesManager",
             NavItem::Transfers => "fileExplorer",
             NavItem::Notes => "notes",
             NavItem::Settings => "settings",
@@ -233,6 +247,8 @@ impl NavItem {
             "npu" | "ascendNpuMonitor" => Some(NavItem::AscendNpuMonitor),
             "processes" | "processManager" => Some(NavItem::Processes),
             "docker" | "dockerManager" => Some(NavItem::Docker),
+            "ports" | "portsManager" => Some(NavItem::Ports),
+            "services" | "servicesManager" => Some(NavItem::Services),
             "fileExplorer" | "fileTransfer" | "transfers" => Some(NavItem::Transfers),
             "notes" => Some(NavItem::Notes),
             "settings" => Some(NavItem::Settings),
@@ -392,6 +408,8 @@ impl Default for ActivityBarLayoutState {
                 "ascendNpuMonitor".to_string(),
                 "processManager".to_string(),
                 "dockerManager".to_string(),
+                "portsManager".to_string(),
+                "servicesManager".to_string(),
             ],
             right_bottom: vec![
                 "quickCmdBar".to_string(),
@@ -802,7 +820,25 @@ mod tests {
                 "ascendNpuMonitor",
                 "processManager",
                 "dockerManager",
+                "portsManager",
+                "servicesManager",
             ]
+        );
+    }
+
+    #[test]
+    fn ports_and_services_panels_have_stable_ids_and_sit_on_the_right() {
+        assert_eq!(NavItem::Ports.persistence_id(), "portsManager");
+        assert_eq!(NavItem::Services.persistence_id(), "servicesManager");
+        assert_eq!(
+            NavItem::from_persistence_id("servicesManager"),
+            Some(NavItem::Services)
+        );
+        assert!(NavItem::Ports.is_right_panel() && !NavItem::Ports.is_left_panel());
+        assert!(NavItem::Services.is_right_panel() && !NavItem::Services.is_left_panel());
+        assert_eq!(
+            ActivityBarLayoutState::default().side_for_entry("portsManager"),
+            Some(PanelSide::Right)
         );
     }
 

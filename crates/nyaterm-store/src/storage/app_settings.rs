@@ -2028,6 +2028,8 @@ fn default_activity_right_top() -> Vec<String> {
         "ascendNpuMonitor".to_string(),
         "processManager".to_string(),
         "dockerManager".to_string(),
+        "portsManager".to_string(),
+        "servicesManager".to_string(),
     ]
 }
 

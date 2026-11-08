@@ -155,8 +155,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if self.remote_ops.process_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -177,12 +176,10 @@ impl NyaTermApp {
         if let Err(error) = self
             .blocking_jobs
             .submit_detached("remote-process-list", move |_| {
-                let result = (|| {
-                    SshProcessService::with_multiplex(config, multiplex)?
-                        .list_processes()
-                        .map(ProcessJobOutput::Listed)
-                })()
-                .map_err(|error: anyhow::Error| error.to_string());
+                let result = SshProcessService::with_target(target)
+                    .list_processes()
+                    .map(ProcessJobOutput::Listed)
+                    .map_err(|error: anyhow::Error| error.to_string());
                 let _ = tx.unbounded_send(ProcessJobResult {
                     job_id,
                     session_id: job_session_id,
@@ -216,8 +213,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if self.remote_ops.process_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -237,7 +233,7 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_detached("remote-process-signal", move |_| {
                 let result = (|| {
-                    let service = SshProcessService::with_multiplex(config, multiplex)?;
+                    let service = SshProcessService::with_target(target);
                     service.signal_process(pid, signal)?;
                     let processes = service.list_processes()?;
                     Ok(ProcessJobOutput::Signalled {
@@ -280,8 +276,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if self.remote_ops.process_is_pending_for(&job_session_id) {
             self.remote_ops
@@ -301,7 +296,7 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_detached("remote-process-renice", move |_| {
                 let result = (|| {
-                    let service = SshProcessService::with_multiplex(config, multiplex)?;
+                    let service = SshProcessService::with_target(target);
                     service.renice_process(pid, nice)?;
                     let processes = service.list_processes()?;
                     Ok(ProcessJobOutput::Reniced {

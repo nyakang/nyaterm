@@ -1221,6 +1221,36 @@ impl SessionFeatureState {
             .and_then(|metadata| metadata.ssh_config.as_ref())
     }
 
+    /// A plain local shell: host tools run on this machine, no SSH involved.
+    pub(in crate::features) fn is_local_pty(&self, session_id: &str) -> bool {
+        self.metadata.get(session_id).is_some_and(|metadata| {
+            metadata.ssh_config.is_none()
+                && matches!(metadata.launch_config, SessionLaunchConfig::Local(_))
+        })
+    }
+
+    /// The active session has a machine the host panels can inspect: an SSH
+    /// connection, or this machine for a local shell.
+    pub(in crate::features) fn active_has_inspectable_host(&self) -> bool {
+        self.active_ssh_config().is_some() || self.active_is_local_pty()
+    }
+
+    /// Periodic probes may run: this machine for a live local shell, or an SSH
+    /// profile that has not disabled remote stats.
+    pub(in crate::features) fn active_remote_probes_enabled(&self) -> bool {
+        self.active_is_local_pty()
+            || self
+                .active_ssh_config()
+                .is_some_and(|config| config.remote_stats_enabled())
+    }
+
+    pub(in crate::features) fn active_is_local_pty(&self) -> bool {
+        self.active
+            .id
+            .as_deref()
+            .is_some_and(|id| self.is_local_pty(id) && !self.is_disconnected(id))
+    }
+
     pub(in crate::features) fn active_ssh_config_owned(&self) -> Option<SshSessionConfig> {
         self.active_ssh_config().cloned()
     }

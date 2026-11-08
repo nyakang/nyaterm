@@ -1601,7 +1601,10 @@ fn format_resource_rate(bytes_per_sec: f64) -> String {
 
 fn format_resource_uptime(seconds: u64) -> String {
     let days = seconds / 86_400;
-    if days == 1 {
+    if days == 0 {
+        // Under a day, "0 days" says nothing: show hours and minutes instead.
+        crate::features::formatting::format_uptime(seconds)
+    } else if days == 1 {
         t!("resourceMonitor.day", count = days).to_string()
     } else {
         t!("resourceMonitor.days", count = days).to_string()
@@ -2155,10 +2158,17 @@ mod tests {
 
     use super::{
         build_gpu_summary, build_npu_summary, format_memory_mb, format_resource_bytes,
-        format_resource_percent, format_resource_rate, format_temperature,
+        format_resource_percent, format_resource_rate, format_resource_uptime, format_temperature,
     };
     use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview};
     use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview};
+
+    #[test]
+    fn uptime_under_a_day_shows_hours_and_minutes_not_zero_days() {
+        assert_eq!(format_resource_uptime(3_900), "1h 5m");
+        assert_eq!(format_resource_uptime(600), "10m");
+        assert!(!format_resource_uptime(3_900).contains('0'));
+    }
 
     fn gpu(index: u32, used: u64, total: u64, temp: Option<f64>, util: Option<f64>) -> RemoteGpu {
         RemoteGpu {

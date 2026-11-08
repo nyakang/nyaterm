@@ -52,8 +52,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if skip_unavailable && self.remote_ops.gpu_unavailable_for(&job_session_id) {
             return;
@@ -74,7 +73,8 @@ impl NyaTermApp {
         let rejected_tx = tx.clone();
         let rejected_session_id = job_session_id.clone();
         if let Err(error) = self.blocking_jobs.submit_detached("remote-gpu", move |_| {
-            let result = (|| RemoteGpuService::with_multiplex(config, multiplex)?.overview())()
+            let result = RemoteGpuService::with_target(target)
+                .overview()
                 .map_err(|error| error.to_string());
             let _ = tx.unbounded_send(GpuJobResult {
                 job_id,
@@ -175,8 +175,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if skip_unavailable && self.remote_ops.npu_unavailable_for(&job_session_id) {
             return;
@@ -197,7 +196,8 @@ impl NyaTermApp {
         let rejected_tx = tx.clone();
         let rejected_session_id = job_session_id.clone();
         if let Err(error) = self.blocking_jobs.submit_detached("remote-npu", move |_| {
-            let result = (|| RemoteNpuService::with_multiplex(config, multiplex)?.overview())()
+            let result = RemoteNpuService::with_target(target)
+                .overview()
                 .map_err(|error| error.to_string());
             let _ = tx.unbounded_send(NpuJobResult {
                 job_id,
