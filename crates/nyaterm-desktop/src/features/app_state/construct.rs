@@ -472,6 +472,9 @@ impl NyaTermApp {
         stores: crate::entities::UiStoreHandles,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Tests bypass main(), which preloads the catalog on a dedicated worker
+        // before any view translates on the smaller Windows UI thread stack.
+        crate::preload_i18n().expect("preload translations for test app");
         let test_config_dir =
             crate::test_support::TestConfigDir::from_path(runtime.data_dir().to_path_buf());
         let store_runtime = StoreRuntime::spawn(StoreConfig {

@@ -204,7 +204,8 @@ fn smart_tile_menu_renders_on_a_one_mib_stack_in_a_separate_process() {
         );
         return;
     }
-    crate::preload_i18n().unwrap();
+    // Keep the catalog cold so app construction must preload it before the
+    // first translation on the one-MiB UI thread, just like isolated Windows CI.
     std::thread::Builder::new()
         .name("one-mib-workspace".into())
         .stack_size(1024 * 1024)
