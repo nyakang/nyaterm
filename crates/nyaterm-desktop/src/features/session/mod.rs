@@ -1,5 +1,4 @@
 //! Session lifecycle, prompts, recording and file-transfer session runtimes.
-mod transfer_inbox;
 mod transfer_wire;
 
 use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;

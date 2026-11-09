@@ -2177,6 +2177,7 @@ fn collect_workspace_pane_node_visible_session_ids<'a>(
 
 #[cfg(test)]
 mod frame_event_queue_tests {
+    use nyaterm_terminal::action_links::prepare_terminal_frame_action_links;
     #[test]
     fn manual_wheel_at_live_bottom_and_input_end_same_screen_navigation() {
         use crate::features::test_support::app_with_visible_local_session;
@@ -2375,7 +2376,7 @@ mod frame_event_queue_tests {
         TerminalFrameActionLinks, TerminalFrameEvent, TerminalFrameOutputEvent,
         TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
         TerminalFrameSearchResult, TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
-        TerminalProtocolState, TerminalViewState, prepare_terminal_frame_action_links,
+        TerminalProtocolState, TerminalViewState,
     };
     use nyaterm_core::ActionLinksMatcherSettings;
 

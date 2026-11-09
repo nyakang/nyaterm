@@ -1,8 +1,6 @@
 use crate::features::NyaTermApp;
 use crate::features::transfers::TransferFileClipboard;
-#[cfg(test)]
-use crate::features::transfers::clipboard_copy::copied_tree_matches;
-use crate::features::transfers::clipboard_copy::{ClipboardCopyRequest, run_clipboard_copy};
+use crate::features::transfers::clipboard_copy::file_operation_output;
 use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState, TransferJobStatus,
@@ -12,6 +10,7 @@ use nyaterm_files::file_browser::{
     FileBrowserBackendKind, FileBrowserService, file_browser_copy_destination_invalid,
     file_browser_join, file_browser_name, file_browser_path_is_root,
 };
+use nyaterm_files::operations::{VerifiedCopyRequest, copy_verified};
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType, SftpTransferControl};
 use nyaterm_files::sftp_transfer_types::{
     SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
@@ -315,20 +314,21 @@ impl NyaTermApp {
                 self.transfer
                     .track_cut_job(id.clone(), clipboard.generation, entry.path.clone());
             }
-            let request = ClipboardCopyRequest {
+            let request = VerifiedCopyRequest {
                 source_service: source_service.clone(),
                 target_service: target_service.clone(),
                 source: entry.remote_path(),
                 target_path: RemoteFilePath::new(target_path),
-                target_session_id: target_session_id.clone(),
                 cut: clipboard.cut,
                 control,
                 options: options.clone(),
             };
             let tx = self.transfer.transfer_event_sender();
+            let output_target_session_id = target_session_id.clone();
             self.submit_bulk_transfer_job("file-clipboard", id.clone(), tx.clone(), move || {
                 let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
-                let result = run_clipboard_copy(request, move |value| progress.send(value));
+                let result = copy_verified(request, move |value| progress.send(value))
+                    .map(|result| file_operation_output(result, output_target_session_id));
                 let _ = tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -345,126 +345,12 @@ impl NyaTermApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        TransferFileClipboard, copied_tree_matches, invalid_copy_destination,
-        local_clipboard_entry, prefer_external_paths,
+        TransferFileClipboard, invalid_copy_destination, local_clipboard_entry,
+        prefer_external_paths,
     };
     use nyaterm_files::file_browser::FileBrowserBackendKind;
     use nyaterm_files::sftp::SftpFileType;
-    use std::collections::BTreeMap;
     use std::path::PathBuf;
-
-    #[test]
-    fn clipboard_copy_reports_partial_progress_before_the_finished_output() {
-        use super::{ClipboardCopyRequest, run_clipboard_copy};
-        use crate::models::TransferJobOutput;
-        use nyaterm_files::file_browser::FileBrowserService;
-        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
-        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
-        use std::sync::{Arc, Mutex};
-
-        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-progress");
-        std::fs::create_dir_all(root.path()).unwrap();
-        let source = root.join("source");
-        let target = root.join("target");
-        let payload = vec![7_u8; 512 * 1024];
-        std::fs::write(&source, &payload).unwrap();
-        let values = Arc::new(Mutex::new(Vec::new()));
-        let record = values.clone();
-        let output = run_clipboard_copy(
-            ClipboardCopyRequest {
-                source_service: FileBrowserService::local(),
-                target_service: FileBrowserService::local(),
-                source: RemoteFilePath::new(source.to_string_lossy()),
-                target_path: RemoteFilePath::new(target.to_string_lossy()),
-                target_session_id: "target".into(),
-                cut: false,
-                control: SftpTransferControl::new(),
-                options: SftpPathTransferOptions::default(),
-            },
-            move |p| record.lock().unwrap().push(p),
-        )
-        .unwrap();
-        assert!(
-            matches!(output, TransferJobOutput::Sent { bytes, .. } if bytes == payload.len() as u64)
-        );
-        let values = values.lock().unwrap();
-        assert!(
-            values
-                .iter()
-                .any(|p| p.bytes_transferred > 0 && p.bytes_transferred < payload.len() as u64)
-        );
-        assert_eq!(
-            values.last().unwrap().bytes_transferred,
-            payload.len() as u64
-        );
-        assert_eq!(std::fs::read(target).unwrap(), payload);
-    }
-
-    #[test]
-    fn local_cut_deletes_source_only_after_a_successful_copy() {
-        use super::{ClipboardCopyRequest, run_clipboard_copy};
-        use nyaterm_files::file_browser::FileBrowserService;
-        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
-        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
-
-        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut");
-        std::fs::create_dir_all(root.path()).unwrap();
-        // macOS temporary paths can contain symlink ancestors such as /var.
-        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        let source = canonical_root.join("source.txt");
-        let target = canonical_root.join("target.txt");
-        std::fs::write(&source, b"payload").unwrap();
-        run_clipboard_copy(
-            ClipboardCopyRequest {
-                source_service: FileBrowserService::local(),
-                target_service: FileBrowserService::local(),
-                source: RemoteFilePath::new(source.to_string_lossy()),
-                target_path: RemoteFilePath::new(target.to_string_lossy()),
-                target_session_id: "local".into(),
-                cut: true,
-                control: SftpTransferControl::new(),
-                options: SftpPathTransferOptions::default(),
-            },
-            |_| {},
-        )
-        .unwrap();
-        assert!(!source.exists());
-        assert_eq!(std::fs::read(target).unwrap(), b"payload");
-    }
-
-    #[test]
-    fn cancelled_cut_keeps_the_source() {
-        use super::{ClipboardCopyRequest, run_clipboard_copy};
-        use nyaterm_files::file_browser::FileBrowserService;
-        use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
-        use nyaterm_files::sftp_transfer_types::SftpPathTransferOptions;
-
-        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut-cancel");
-        std::fs::create_dir_all(root.path()).unwrap();
-        // Exercise cancellation without failing the symlink-ancestor check first.
-        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        let source = canonical_root.join("source.txt");
-        let target = canonical_root.join("target.txt");
-        std::fs::write(&source, b"keep-me").unwrap();
-        let control = SftpTransferControl::new();
-        control.cancel();
-        let result = run_clipboard_copy(
-            ClipboardCopyRequest {
-                source_service: FileBrowserService::local(),
-                target_service: FileBrowserService::local(),
-                source: RemoteFilePath::new(source.to_string_lossy()),
-                target_path: RemoteFilePath::new(target.to_string_lossy()),
-                target_session_id: "local".into(),
-                cut: true,
-                control,
-                options: SftpPathTransferOptions::default(),
-            },
-            |_| {},
-        );
-        assert!(result.is_err());
-        assert!(source.exists());
-        assert_eq!(std::fs::read(source).unwrap(), b"keep-me");
-    }
 
     #[test]
     fn remote_copy_rejects_self_descendant_and_root_after_normalization() {
@@ -492,18 +378,6 @@ mod tests {
             "/other/file",
             true
         ));
-    }
-
-    #[test]
-    fn cut_verification_checks_every_file_not_only_total_bytes() {
-        let before = BTreeMap::from([
-            (String::new(), (SftpFileType::Directory, None, None)),
-            ("/a".into(), (SftpFileType::File, Some(3), Some(1))),
-        ]);
-        let mut after = before.clone();
-        assert!(copied_tree_matches(&before, &after));
-        after.insert("/a".into(), (SftpFileType::File, Some(2), Some(1)));
-        assert!(!copied_tree_matches(&before, &after));
     }
 
     #[test]

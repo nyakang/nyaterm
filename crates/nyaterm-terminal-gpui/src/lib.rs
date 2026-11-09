@@ -9,12 +9,15 @@ mod types;
 mod ansi;
 mod contrast;
 mod element;
+pub mod fonts;
+pub mod geometry;
 mod glyphs;
 mod images;
 mod input;
 mod keywords;
 mod paint;
 mod paint_mask;
+pub mod render_cache;
 mod semantic;
 mod semantic_roles;
 

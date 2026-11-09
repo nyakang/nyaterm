@@ -1,19 +1,8 @@
 //! Terminal cell coordinates and absolute-buffer selection state.
 
-/// Inclusive cell coordinate inside the visible terminal grid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TerminalCellPos {
-    pub(crate) row: usize,
-    pub(crate) col: usize,
-}
-
-impl TerminalCellPos {
-    pub(crate) fn new(row: usize, col: usize) -> Self {
-        Self { row, col }
-    }
-}
-
-pub(crate) use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
+pub(crate) use nyaterm_terminal::selection::{
+    TerminalBufferCellPos, TerminalCellPos, TerminalSelection,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalSelectionTextError {

@@ -10,21 +10,19 @@ repository.workspace = true
 tempfile.workspace = true
 anyhow.workspace = true
 base64.workspace = true
-bytemuck = "=1.25.2"
 dirs.workspace = true
-encoding_rs.workspace = true
 futures.workspace = true
 gpui.workspace = true
-hayro.workspace = true
 hex.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 keyring.workspace = true
-md5.workspace = true
 nyaterm-ai-client.workspace = true
 nyaterm-cloud-storage.workspace = true
 nyaterm-core.workspace = true
 nyaterm-mcp-protocol.workspace = true
 nyaterm-otp.workspace = true
+nyaterm-preview.workspace = true
+nyaterm-translation-client.workspace = true
 nyaterm-plugin-host.workspace = true
 nyaterm-remote-desktop.workspace = true
 nyaterm-store.workspace = true
@@ -52,7 +50,6 @@ raw-window-handle = "0.6"
 tray-icon = { version = "=0.24.2", default-features = false, features = ["gtk"] }
 uuid.workspace = true
 url.workspace = true
-zed_reqwest.workspace = true
 zip.workspace = true
 zeroize.workspace = true
 

@@ -19,7 +19,7 @@ class PluginDependencyTests(unittest.TestCase):
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
                 "nyaterm-core", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
-                "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater",
+                "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
             )
             for crate in crates:
                 directory = root / "crates" / crate
@@ -67,17 +67,17 @@ class PluginDependencyTests(unittest.TestCase):
                 self.assertEqual(errors, [f"crate_boundary: {source} must not depend on {target}"])
 
     def test_native_adapters_accept_core_and_network_dependencies(self):
-        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"]:
+        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]:
             with self.subTest(crate=crate):
                 self.assertEqual(self.check_dependencies("", "", {crate:
                     '[dependencies]\nnyaterm-core = "1"\nreqwest = "0.13"\ntokio = "1"\n'}), [])
 
     def test_native_adapters_reject_all_other_project_crates_in_every_dependency_category(self):
-        for source in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"]:
+        for source in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]:
             for target in ["nyaterm-desktop", "nyaterm-store", "nyaterm-ui",
                            "nyaterm-transport", "nyaterm-files", "nyaterm-sync",
                            "nyaterm-recording", "nyaterm-remote-ops",
-                           *[crate for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"]
+                           *[crate for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]
                              if crate != source]]:
                 for section in ["dependencies", "dev-dependencies", "build-dependencies",
                                 "target.'cfg(windows)'.dependencies",
@@ -89,14 +89,14 @@ class PluginDependencyTests(unittest.TestCase):
                         self.assertEqual(errors, [f"crate_boundary: {source} must not depend on {target}"])
 
     def test_workspace_alias_cannot_hide_native_adapter_transport_dependency(self):
-        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"]:
+        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]:
             with self.subTest(crate=crate):
                 errors = self.check_dependencies("", "", {crate:
                     '[dev-dependencies]\nhidden-transport.workspace = true\n'})
                 self.assertEqual(errors, [f"crate_boundary: {crate} must not depend on nyaterm-transport"])
 
     def test_native_adapters_reject_aliased_gpui_platform_and_components(self):
-        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"]:
+        for crate in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]:
             for package in ["gpui", "gpui_platform", "gpui-kit", "gpui-base"]:
                 with self.subTest(crate=crate, package=package):
                     errors = self.check_dependencies("", "", {crate:
