@@ -269,8 +269,8 @@ mod tests {
             );
         });
         let settings_close = vcx
-            .debug_bounds("settings-close")
-            .expect("the settings surface paints its own close control");
+            .debug_bounds("settings-tab-close")
+            .expect("the settings tab paints its close control");
         vcx.simulate_click(settings_close.center(), gpui::Modifiers::default());
         draw(vcx);
         vcx.update(|_, cx| {
@@ -279,7 +279,7 @@ mod tests {
                     .workspace_tab_ids()
                     .iter()
                     .any(|tab| tab == &key),
-                "the in-panel close control must close the settings tab"
+                "the tab close control must close the settings tab"
             );
             assert_eq!(
                 app.read(cx).active_workspace_tab(),
@@ -378,8 +378,8 @@ mod tests {
     }
 
     #[test]
-    fn dirty_panel_close_opens_the_confirmation_from_the_rendered_surface() {
-        let dir = TestConfigDir::new("nyaterm-settings-tab-panel-close");
+    fn dirty_tab_close_opens_the_confirmation_from_the_rendered_strip() {
+        let dir = TestConfigDir::new("nyaterm-settings-tab-strip-close");
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
@@ -405,14 +405,14 @@ mod tests {
             draw(vcx);
         }
         let close = vcx
-            .debug_bounds("settings-close")
-            .expect("the settings surface paints its own close control");
+            .debug_bounds("settings-tab-close")
+            .expect("the settings tab paints its close control");
         vcx.simulate_click(close.center(), gpui::Modifiers::default());
         draw(vcx);
         vcx.update(|window, cx| {
             assert!(
                 window.has_active_nya_dialog(cx),
-                "the panel close control must ask before discarding edits"
+                "the tab close control must ask before discarding edits"
             );
             assert!(
                 app.read(cx)
