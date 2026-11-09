@@ -5,7 +5,7 @@ use crate::local_shell::LocalShellPathStyle;
 use crate::session_event_queue::SessionEventQueue;
 use crate::ssh_services::SshSessionServices;
 use crate::ssh_worker::{SshCommand, TmuxCommandSender, run_ssh_worker};
-use crate::telnet_codec::maybe_build_naws;
+use crate::telnet_codec::{TelnetNawsState, naws_offer};
 use crate::telnet_input::TelnetInputState;
 use crate::transport_io::{
     QueuedTransportWriter, TelnetAutoLoginState, TelnetWriterLifecycle, TelnetWriterPolicy,
@@ -550,15 +550,17 @@ impl SessionManager {
             }),
         )
         .map_err(SessionError::Worker)?;
-        if let Some(naws) = maybe_build_naws(config.cols, config.rows, &config) {
-            let _ = writer.write_telnet_control(naws);
+        if let Some(offer) = naws_offer(&config) {
+            let _ = writer.write_telnet_control(offer);
         }
+        let naws = Arc::new(TelnetNawsState::new(config.cols, config.rows));
         let reader_thread = spawn_tcp_reader_thread(
             session_id.clone(),
             reader_stream,
             writer.command_tx.clone(),
             lifecycle.clone(),
             config.clone(),
+            naws.clone(),
             auto_login.clone(),
             self.event_queue.clone(),
         )
@@ -579,6 +581,7 @@ impl SessionManager {
                 == nyaterm_core::terminal::connection_input::BackspaceMode::Backspace,
             input: TelnetInputState::default(),
             auto_login,
+            naws,
             event_queue: self.event_queue.clone(),
             config,
             reader_thread: Some(reader_thread),

@@ -510,7 +510,9 @@ async fn stalled_proxy_handshake_has_a_network_timeout() {
 
 #[tokio::test]
 async fn routed_telnet_keeps_negotiation_naws_login_and_escaped_input_intact() {
-    use crate::telnet_codec::{DO, IAC, OPT_SUPPRESS_GO_AHEAD, WILL, maybe_build_naws};
+    use crate::telnet_codec::{
+        DO, IAC, OPT_NAWS, OPT_SUPPRESS_GO_AHEAD, WILL, naws_subnegotiation,
+    };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (proxy, proxy_server) = proxy("http", port, true).await;
@@ -527,17 +529,24 @@ async fn routed_telnet_keeps_negotiation_naws_login_and_escaped_input_intact() {
         },
         ..Default::default()
     };
-    let expected_config = config.clone();
+    let (negotiated_tx, negotiated_rx) = tokio::sync::oneshot::channel();
     let target = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
+        let mut offer = [0; 3];
+        stream.read_exact(&mut offer).await.unwrap();
+        assert_eq!(offer, [IAC, WILL, OPT_NAWS]);
+        stream.write_all(&[IAC, DO, OPT_NAWS]).await.unwrap();
+        let mut negotiated = [0; 9];
+        stream.read_exact(&mut negotiated).await.unwrap();
+        assert_eq!(negotiated, naws_subnegotiation(80, 24)[..]);
+        negotiated_tx.send(()).unwrap();
         for byte in [IAC, WILL, OPT_SUPPRESS_GO_AHEAD] {
             stream.write_all(&[byte]).await.unwrap();
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         stream.write_all(b"Username: ").await.unwrap();
         let mut packets = vec![
-            maybe_build_naws(80, 24, &expected_config).unwrap(),
-            maybe_build_naws(100, 40, &expected_config).unwrap(),
+            naws_subnegotiation(100, 40),
             vec![IAC, DO, OPT_SUPPRESS_GO_AHEAD],
             b"operator\r".to_vec(),
             b"a\xff\xffb".to_vec(),
@@ -560,6 +569,7 @@ async fn routed_telnet_keeps_negotiation_naws_login_and_escaped_input_intact() {
         .await
         .unwrap()
         .unwrap();
+    negotiated_rx.await.unwrap();
     manager.write_raw(&info.id, b"a\xffb").unwrap();
     manager.resize(&info.id, 100, 40).unwrap();
     tokio::time::timeout(Duration::from_secs(5), target)

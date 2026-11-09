@@ -5,7 +5,7 @@ use crate::session_event_queue::SessionEventQueue;
 use crate::ssh_shell_integration::SshIntegrationOutput;
 use crate::ssh_worker::{SshCommand, TmuxCommandSender, send_session_error};
 use crate::telnet_codec::{
-    TelnetCommandDecoder, maybe_build_naws, negotiate_response, unescape_iac_iac,
+    DO, DONT, OPT_NAWS, TelnetCommandDecoder, TelnetNawsState, negotiate_response, unescape_iac_iac,
 };
 use crate::telnet_input::{TelnetInputState, telnet_auto_login_line_bytes};
 use crate::telnet_prompts::{
@@ -53,6 +53,7 @@ pub struct TelnetTransport {
     pub(crate) backspace_as_bs: bool,
     pub(crate) input: TelnetInputState,
     pub(crate) auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
+    pub(crate) naws: Arc<TelnetNawsState>,
     pub(crate) event_queue: SessionEventQueue,
     pub(crate) reader_thread: Option<JoinHandle<()>>,
 }
@@ -511,7 +512,8 @@ impl TerminalTransport for TelnetTransport {
     ) -> anyhow::Result<()> {
         self.info.cols = cols;
         self.info.rows = rows;
-        if let Some(naws) = maybe_build_naws(cols, rows, &self.config) {
+        self.naws.update_size(cols, rows);
+        if let Some(naws) = self.naws.payload() {
             self.writer.write_telnet_control(naws)?;
         }
         Ok(())
@@ -743,12 +745,14 @@ pub(crate) fn spawn_reader_thread(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_tcp_reader_thread(
     session_id: String,
     mut reader: TcpStream,
     command_tx: WriterMailbox,
     lifecycle: Arc<TelnetWriterLifecycle>,
     config: TelnetSessionConfig,
+    naws: Arc<TelnetNawsState>,
     auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
     event_queue: SessionEventQueue,
 ) -> std::io::Result<JoinHandle<()>> {
@@ -776,12 +780,14 @@ pub(crate) fn spawn_tcp_reader_thread(
                         unescape_iac_iac(&buffer[..read])
                     } else {
                         decoder.decode(&buffer[..read], &mut |command, option| {
-                            let response = negotiate_response(
-                                command,
-                                option,
-                                config.send_naws,
-                                config.send_sga,
-                            );
+                            let response = match (command, option) {
+                                (DO, OPT_NAWS) if config.send_naws => naws.accept(),
+                                (DONT, OPT_NAWS) => {
+                                    naws.reject();
+                                    negotiate_response(command, option, config.send_sga)
+                                }
+                                _ => negotiate_response(command, option, config.send_sga),
+                            };
                             if !response.is_empty()
                                 && let Err(error) = queue_telnet_control(&command_tx, response)
                             {

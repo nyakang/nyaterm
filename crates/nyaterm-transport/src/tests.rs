@@ -3572,17 +3572,29 @@ fn telnet_single_writer_keeps_naws_negotiation_login_and_escaped_input_intact() 
         ..Default::default()
     };
     let manager = SessionManager::new();
-    let info = manager.create_telnet_session(config.clone()).unwrap();
+    let info = manager.create_telnet_session(config).unwrap();
     let (mut peer, _) = listener.accept().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+
+    let mut offer = [0; 3];
+    peer.read_exact(&mut offer).unwrap();
+    assert_eq!(offer, [IAC, WILL, crate::telnet_codec::OPT_NAWS]);
+    peer.write_all(&[IAC, DO, crate::telnet_codec::OPT_NAWS])
+        .unwrap();
+    let mut negotiated = [0; 9];
+    peer.read_exact(&mut negotiated).unwrap();
+    assert_eq!(
+        negotiated,
+        crate::telnet_codec::naws_subnegotiation(80, 24)[..]
+    );
+
     peer.write_all(&[IAC, WILL, OPT_SUPPRESS_GO_AHEAD]).unwrap();
     peer.write_all(b"Username: ").unwrap();
     manager.write_raw(&info.id, b"a\xffb").unwrap();
     manager.resize(&info.id, 100, 40).unwrap();
 
     let mut packets = vec![
-        crate::telnet_codec::maybe_build_naws(80, 24, &config).unwrap(),
-        crate::telnet_codec::maybe_build_naws(100, 40, &config).unwrap(),
+        crate::telnet_codec::naws_subnegotiation(100, 40),
         vec![IAC, DO, OPT_SUPPRESS_GO_AHEAD],
         b"operator\r".to_vec(),
         b"a\xff\xffb".to_vec(),
@@ -3598,6 +3610,48 @@ fn telnet_single_writer_keeps_naws_negotiation_login_and_escaped_input_intact() 
         remaining = &remaining[packets.remove(index).len()..];
     }
     assert!(packets.is_empty());
+    manager.close(&info.id).unwrap();
+}
+
+#[test]
+fn telnet_resize_waits_for_naws_acceptance_and_reports_the_latest_size() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let manager = SessionManager::new();
+    let info = manager
+        .create_telnet_session(TelnetSessionConfig {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            keep_alive_interval_secs: 0,
+            auto_login: crate::TelnetAutoLoginConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut offer = [0; 3];
+    peer.read_exact(&mut offer).unwrap();
+    assert_eq!(offer, [IAC, WILL, crate::telnet_codec::OPT_NAWS]);
+
+    manager.resize(&info.id, 100, 40).unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    assert!(
+        peer.read(&mut [0; 9]).is_err(),
+        "resize must not send NAWS before the peer accepts the offer"
+    );
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+
+    peer.write_all(&[IAC, DO, crate::telnet_codec::OPT_NAWS])
+        .unwrap();
+    let mut negotiated = [0; 9];
+    peer.read_exact(&mut negotiated).unwrap();
+    assert_eq!(
+        negotiated,
+        crate::telnet_codec::naws_subnegotiation(100, 40)[..]
+    );
     manager.close(&info.id).unwrap();
 }
 
