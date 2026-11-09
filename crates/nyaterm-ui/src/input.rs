@@ -692,7 +692,13 @@ fn forward_input_event(
             }
             cx.emit(NyaInputEvent::Changed(value));
         }
-        InputEvent::PressEnter { .. } => cx.emit(NyaInputEvent::Submitted(value)),
+        // Multi-line boxes also emit PressEnter for `Shift+Enter`, where the
+        // component itself inserted the newline; only an unmodified Enter
+        // means submit.
+        InputEvent::PressEnter { shift, .. } if !shift => {
+            cx.emit(NyaInputEvent::Submitted(value));
+        }
+        InputEvent::PressEnter { .. } => {}
         InputEvent::Focus => {
             state.focused = true;
             cx.notify();
@@ -2279,15 +2285,26 @@ mod tests {
             _ = window.draw(cx);
             window.focus(&field.read(cx).focus_handle(), cx);
         });
+        let submissions = Rc::new(Cell::new(0));
+        let _subscription = cx.update(|_, cx| {
+            let submissions = submissions.clone();
+            cx.subscribe(&field, move |_, event: &super::NyaInputEvent, _| {
+                if matches!(event, super::NyaInputEvent::Submitted(_)) {
+                    submissions.set(submissions.get() + 1);
+                }
+            })
+        });
 
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(submitted.get(), 1);
+        assert_eq!(submissions.get(), 1);
         assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "hello");
 
         cx.simulate_keystrokes("shift-enter");
         cx.run_until_parked();
         assert_eq!(submitted.get(), 1);
+        assert_eq!(submissions.get(), 1);
         assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "\nhello");
     }
 
