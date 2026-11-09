@@ -14,6 +14,8 @@ use nyaterm_transport::{LocalSessionConfig, SessionInfo};
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 use crate::models::{SessionLaunchConfig, WorkspacePaneNode, WorkspaceSplitDirection};
 
+mod focus;
+
 impl NyaTermApp {
     fn mark_startup_restore_complete(&mut self) {
         self.session.mark_restore_complete();
@@ -435,6 +437,7 @@ impl NyaTermApp {
                 store.push_pending_active_pane_index(index);
             }
             store.set_queue(expanded);
+            store.request_focus_handoff();
         });
         self.shell
             .set_status(format!("restoring {} workspace tab(s)...", queue_len));
@@ -923,6 +926,7 @@ mod tests {
                     saved.workspace_pane_layout,
                 );
                 store.set_queue(saved.open_tabs);
+                store.request_focus_handoff();
                 assert_eq!(
                     store.pop_next_tab().unwrap().connection_id.as_deref(),
                     Some("saved-left")
@@ -940,6 +944,8 @@ mod tests {
             assert!(!app.shell.terminal_windows_is_multi_leaf());
         });
         let cx = session_focus_test_window(&mut cx, &restored);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
         cx.update(|window, cx| {
             restored.update(cx, |app, cx| {
                 let placement = app.session.start.allocate_tab_placement(2);
@@ -968,7 +974,11 @@ mod tests {
                     app.shell.terminal_group_for_tab("after-right")
                 );
                 assert!(!app.pump_startup_restore_queue_if_ready(window, cx));
+                app.ensure_startup_restore_focus_handoff(window, cx);
             });
+            let _ = window.draw(cx);
+            window.simulate_next_frame(cx);
+            assert!(restored.read(cx).terminal.input_focus().is_focused(window));
         });
     }
 

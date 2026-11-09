@@ -9,7 +9,7 @@
 
 mod handles;
 mod overlay;
-mod startup_restore;
+pub(crate) mod startup_restore;
 
 #[cfg(test)]
 mod tests;

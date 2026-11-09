@@ -68,6 +68,10 @@ pub(in crate::features) struct OverlayFlags {
 impl OverlayFlags {
     #[cfg(any(windows, test))]
     pub(in crate::features) fn obscures_native_surface(self) -> bool {
+        self.blocks_workspace_focus()
+    }
+
+    pub(in crate::features) fn blocks_workspace_focus(self) -> bool {
         let Self {
             tab_actions_open,
             color_picker_open,
@@ -332,6 +336,8 @@ impl NyaTermApp {
         self.ensure_pending_focus_clock(cx);
         self.ensure_post_start_work_clock(cx);
         self.resume_startup_restore_if_unlocked(window, cx);
+
+        self.observe_startup_restore_focus_activation(window, cx);
 
         self.ensure_terminal_focus_reporting(window, cx);
         self.ensure_rdp_focus_reporting(window, cx);
@@ -1502,6 +1508,7 @@ impl Render for NyaTermApp {
         let root_duration = root_started_at.elapsed();
         let overlay_started_at = Instant::now();
         let output = self.overlay_host(content, window, cx);
+        self.ensure_startup_restore_focus_handoff(window, cx);
         let overlay_duration = overlay_started_at.elapsed();
         let render_duration = render_started_at.elapsed();
         record_gpui_perf_sample(

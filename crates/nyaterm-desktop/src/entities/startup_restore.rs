@@ -1,4 +1,22 @@
+use gpui::FocusHandle;
 use nyaterm_core::{RestorableOpenTab, RestorableTerminalWindowNode, RestorableWorkspacePaneNode};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StartupRestoreFocusSnapshot {
+    pub(crate) workspace_tab: String,
+    pub(crate) active_session: Option<String>,
+    pub(crate) terminal_group: Option<String>,
+    pub(crate) focus: Option<FocusHandle>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) enum StartupRestoreFocusHandoff {
+    #[default]
+    Unrequested,
+    Waiting(Option<StartupRestoreFocusSnapshot>),
+    Scheduled(StartupRestoreFocusSnapshot),
+    Finished,
+}
 
 #[derive(Debug, Default)]
 pub struct StartupRestoreStore {
@@ -10,9 +28,58 @@ pub struct StartupRestoreStore {
     loaded_open_tabs: Option<Vec<RestorableOpenTab>>,
     loaded_terminal_window_layout: Option<Option<RestorableTerminalWindowNode>>,
     loaded_workspace_pane_layout: Option<Option<RestorableWorkspacePaneNode>>,
+    focus_handoff: StartupRestoreFocusHandoff,
 }
 
 impl StartupRestoreStore {
+    pub(crate) fn request_focus_handoff(&mut self) {
+        if !self.queue.is_empty()
+            && matches!(self.focus_handoff, StartupRestoreFocusHandoff::Unrequested)
+        {
+            self.focus_handoff = StartupRestoreFocusHandoff::Waiting(None);
+        }
+    }
+
+    pub(crate) fn focus_handoff(&self) -> &StartupRestoreFocusHandoff {
+        &self.focus_handoff
+    }
+
+    pub(crate) fn prepare_focus_handoff(&mut self, snapshot: StartupRestoreFocusSnapshot) -> bool {
+        let StartupRestoreFocusHandoff::Waiting(previous) = &mut self.focus_handoff else {
+            return false;
+        };
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous != &snapshot)
+        {
+            self.finish_focus_handoff();
+            return false;
+        }
+        *previous = Some(snapshot);
+        true
+    }
+
+    pub(crate) fn schedule_focus_handoff(&mut self) -> Option<StartupRestoreFocusSnapshot> {
+        let StartupRestoreFocusHandoff::Waiting(Some(snapshot)) = &self.focus_handoff else {
+            return None;
+        };
+        let snapshot = snapshot.clone();
+        self.focus_handoff = StartupRestoreFocusHandoff::Scheduled(snapshot.clone());
+        Some(snapshot)
+    }
+
+    pub(crate) fn defer_focus_handoff(&mut self) {
+        if let StartupRestoreFocusHandoff::Scheduled(snapshot) = &self.focus_handoff {
+            // Preserve the target while waiting for activation, so a later user
+            // selection cannot turn the old startup request into a new handoff.
+            self.focus_handoff = StartupRestoreFocusHandoff::Waiting(Some(snapshot.clone()));
+        }
+    }
+
+    pub(crate) fn finish_focus_handoff(&mut self) {
+        self.focus_handoff = StartupRestoreFocusHandoff::Finished;
+    }
+
     pub fn mark_started_after_window_open(&mut self) -> bool {
         if self.started_after_window_open {
             return false;
