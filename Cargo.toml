@@ -72,6 +72,7 @@ crypto_secretbox = "0.1"
 digest = "0.11.0-rc.5"
 dirs = "6"
 encoding_rs = "0.8"
+flate2 = "1.1"
 futures = "0.3"
 genai = { version = "=0.7.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "stream", "socks", "system-proxy"] }

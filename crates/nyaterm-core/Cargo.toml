@@ -22,6 +22,7 @@ base64.workspace = true
 crypto_secretbox.workspace = true
 dirs.workspace = true
 encoding_rs.workspace = true
+flate2.workspace = true
 futures.workspace = true
 glob.workspace = true
 nyaterm-mcp-protocol.workspace = true

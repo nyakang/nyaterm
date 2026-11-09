@@ -158,7 +158,13 @@ pub trait StoreRequest: Send + 'static {
         false
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError>;
+    /// Whether a failure should reach the flush barrier as a user-visible
+    /// storage error. Silent maintenance requests opt out.
+    fn records_failures(&self) -> bool {
+        true
+    }
+
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError>;
 }
 
 pub struct StoreFnRequest<F, T> {
@@ -206,7 +212,33 @@ where
         self.changes_sync_payload
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
+        (self.operation)(&*store)
+    }
+}
+
+struct StoreExclusiveFnRequest<F, T> {
+    domain: StoreDomain,
+    operation: F,
+    response: PhantomData<fn() -> T>,
+}
+
+impl<F, T> StoreRequest for StoreExclusiveFnRequest<F, T>
+where
+    F: FnOnce(&mut ConnectionStore) -> Result<T, StorageError> + Send + 'static,
+    T: Send + 'static,
+{
+    type Response = T;
+
+    fn domain(&self) -> StoreDomain {
+        self.domain
+    }
+
+    fn records_failures(&self) -> bool {
+        false
+    }
+
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         (self.operation)(store)
     }
 }
@@ -261,7 +293,7 @@ impl<T> Future for StoreTask<T> {
 }
 
 type WorkerJob = Box<
-    dyn FnOnce(Result<&ConnectionStore, &StoreOperationError>) -> Option<StoreOperationError>
+    dyn FnOnce(Result<&mut ConnectionStore, &StoreOperationError>) -> Option<StoreOperationError>
         + Send,
 >;
 
@@ -312,16 +344,21 @@ impl StoreUiClient {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let domain = request.domain();
         let changes_sync_payload = request.changes_sync_payload();
+        let records_failures = request.records_failures();
         let sync_mutation_generation = self.sync_mutation_generation.clone();
         let mutation_sender = self.mutation_sender.clone();
         let (sender, receiver) = oneshot::channel();
         let job = Box::new(
-            move |store: Result<&ConnectionStore, &StoreOperationError>| {
+            move |store: Result<&mut ConnectionStore, &StoreOperationError>| {
                 let outcome = match store {
                     Ok(store) => request.execute(store).map_err(StoreOperationError::from),
                     Err(error) => Err(error.clone()),
                 };
-                let failure = outcome.as_ref().err().cloned();
+                let failure = if records_failures {
+                    outcome.as_ref().err().cloned()
+                } else {
+                    None
+                };
                 if changes_sync_payload && outcome.is_ok() {
                     let generation = sync_mutation_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let _ = mutation_sender.unbounded_send(StoreMutationEvent {
@@ -387,6 +424,32 @@ impl StoreBlockingClient {
             .map_err(StoreClientError::Operation)
     }
 
+    /// Runs a maintenance operation that needs exclusive access to the open
+    /// database handle, such as compaction. Unlike the ordinary blocking
+    /// requests this hands out `&mut ConnectionStore`, so it must stay off the
+    /// UI thread and is never used for ordinary reads or writes.
+    pub fn request_exclusive_fn<F, T>(
+        &self,
+        domain: StoreDomain,
+        operation: F,
+    ) -> Result<T, StoreClientError>
+    where
+        F: FnOnce(&mut ConnectionStore) -> Result<T, StorageError> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.request(
+            0,
+            StoreExclusiveFnRequest {
+                domain,
+                operation,
+                response: PhantomData,
+            },
+        )
+        .map_err(StoreClientError::Submit)?
+        .outcome
+        .map_err(StoreClientError::Operation)
+    }
+
     pub fn sync_mutation_generation(&self) -> u64 {
         self.sync_mutation_generation.load(Ordering::Acquire)
     }
@@ -416,16 +479,21 @@ impl StoreBlockingClient {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let domain = request.domain();
         let changes_sync_payload = request.changes_sync_payload();
+        let records_failures = request.records_failures();
         let sync_mutation_generation = self.sync_mutation_generation.clone();
         let mutation_sender = self.mutation_sender.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         let job = Box::new(
-            move |store: Result<&ConnectionStore, &StoreOperationError>| {
+            move |store: Result<&mut ConnectionStore, &StoreOperationError>| {
                 let outcome = match store {
                     Ok(store) => request.execute(store).map_err(StoreOperationError::from),
                     Err(error) => Err(error.clone()),
                 };
-                let failure = outcome.as_ref().err().cloned();
+                let failure = if records_failures {
+                    outcome.as_ref().err().cloned()
+                } else {
+                    None
+                };
                 if changes_sync_payload && outcome.is_ok() {
                     let generation = sync_mutation_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let _ = mutation_sender.unbounded_send(StoreMutationEvent {
@@ -657,7 +725,7 @@ impl nyaterm_core::CloudLocalStore for StoreBlockingClient {
                     &snapshot,
                     snapshot_password.expose_secret(),
                 )?;
-                LoadBootstrap.execute(store)?;
+                LoadBootstrap.load(store)?;
                 Ok(backup)
             }),
         ))?;
@@ -700,7 +768,7 @@ impl nyaterm_core::CloudLocalStore for StoreBlockingClient {
                 state.last_synced_content_hash = Some(applied.sync_content_hash()?);
                 state.last_synced_payload_hash = Some(applied.meta.payload_hash);
                 store.save_cloud_sync_state(&state)?;
-                LoadBootstrap.execute(store)?;
+                LoadBootstrap.load(store)?;
                 Ok((
                     nyaterm_core::CloudSyncBackupInfo {
                         database_path: store.db_path().to_path_buf(),
@@ -760,7 +828,7 @@ fn cloud_store_response<T>(
 }
 
 fn store_worker(config: StoreConfig, receiver: mpsc::Receiver<WorkerMessage>) {
-    let store =
+    let mut store =
         ConnectionStore::open_with_portable_key_path(config.config_dir, config.portable_key_path)
             .map_err(StoreOperationError::from);
     let mut barrier_failures = Vec::new();
@@ -774,11 +842,18 @@ fn store_worker(config: StoreConfig, receiver: mpsc::Receiver<WorkerMessage>) {
                 if let Some(error) = aggregate.as_ref() {
                     job(Err(error));
                 } else {
-                    job(store.as_ref());
+                    match store.as_mut() {
+                        Ok(database) => job(Ok(database)),
+                        Err(error) => job(Err(&*error)),
+                    };
                 }
             }
             WorkerMessage::Execute { domain, job } => {
-                if let Some(error) = job(store.as_ref()) {
+                let failure = match store.as_mut() {
+                    Ok(database) => job(Ok(database)),
+                    Err(error) => job(Err(&*error)),
+                };
+                if let Some(error) = failure {
                     barrier_failures.push((domain, error));
                 } else {
                     clear_resolved_barrier_failures(&mut barrier_failures, domain);
@@ -872,7 +947,7 @@ impl StoreRequest for LoadMainWindowState {
         StoreDomain::WindowState
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.load_main_window_state()
     }
 }
@@ -887,7 +962,7 @@ impl StoreRequest for SaveMainWindowState {
         StoreDomain::WindowState
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.save_main_window_state(&self.0)
     }
 }
@@ -902,7 +977,7 @@ impl StoreRequest for LoadWorkspaceRestoreManifest {
         StoreDomain::Sessions
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.load_workspace_restore_manifest()
     }
 }
@@ -917,7 +992,7 @@ impl StoreRequest for SaveWorkspaceRestoreManifest {
         StoreDomain::Sessions
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.save_workspace_restore_manifest(&self.0)
     }
 }
@@ -932,7 +1007,7 @@ impl StoreRequest for LoadDeviceWindowManifest {
         StoreDomain::WindowState
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.load_device_window_manifest(self.0)
     }
 }
@@ -947,21 +1022,17 @@ impl StoreRequest for SaveDeviceWindowManifest {
         StoreDomain::WindowState
     }
 
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         store.save_device_window_manifest(&self.0)
     }
 }
 
 pub struct LoadBootstrap;
 
-impl StoreRequest for LoadBootstrap {
-    type Response = BootstrapSnapshot;
-
-    fn domain(&self) -> StoreDomain {
-        StoreDomain::Bootstrap
-    }
-
-    fn execute(self, store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+impl LoadBootstrap {
+    /// Read-only bootstrap load, also usable from jobs that only hold a shared
+    /// store reference.
+    pub fn load(self, store: &ConnectionStore) -> Result<BootstrapSnapshot, StorageError> {
         let sessions = store.load_sessions()?;
         let quick_commands = store.load_quick_commands()?;
         let ai_history = store.load_ai_history()?;
@@ -1007,6 +1078,18 @@ impl StoreRequest for LoadBootstrap {
     }
 }
 
+impl StoreRequest for LoadBootstrap {
+    type Response = BootstrapSnapshot;
+
+    fn domain(&self) -> StoreDomain {
+        StoreDomain::Bootstrap
+    }
+
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
+        self.load(&*store)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FlushBarrier;
 
@@ -1017,7 +1100,7 @@ impl StoreRequest for FlushBarrier {
         StoreDomain::Barrier
     }
 
-    fn execute(self, _store: &ConnectionStore) -> Result<Self::Response, StorageError> {
+    fn execute(self, _store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
         Ok(())
     }
 }
