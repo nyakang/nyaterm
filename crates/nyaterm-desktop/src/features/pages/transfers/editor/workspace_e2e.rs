@@ -1,4 +1,4 @@
-use super::workspace::{external_edit_path, prepare_external_edit_workspace};
+use super::workspace::{ExternalEditTestCleanup, prepare_external_edit_workspace};
 use nyaterm_files::remote_file::{RemoteFileBackendKind, RemoteFileService};
 use nyaterm_files::sftp::{RemoteFilePath, SftpAttributeUpdate, SftpTransferControl};
 use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
@@ -39,12 +39,12 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
     service.create_dir_path(&remote_dir, Some(0o700))?;
     let backend = service.selected_backend().expect("probed backend");
     let remote_path = RemoteFilePath::new(format!("{remote_dir}/file ' [x].txt"));
-    let local_path = external_edit_path("file.txt");
-    let local_root = nyaterm_core::test_support::TestTempDir::from_path(
-        local_path.parent().unwrap().to_path_buf(),
-    );
+    let mut local_root = None;
 
     let result = (|| -> anyhow::Result<()> {
+        let workspace = prepare_external_edit_workspace("file.txt", || false)?;
+        let local_path = &workspace.local_path;
+        local_root = Some(ExternalEditTestCleanup::new(&workspace));
         anyhow::ensure!(
             backend != RemoteFileBackendKind::Sftp,
             "Server must disable SFTP"
@@ -73,22 +73,21 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
         let before = service.file_properties(&remote_path.display_path)?;
         // Cover the built-in save as well as the external edit replacement.
         service.write_text_file(&remote_path.display_path, "original", None, None, true)?;
-        let _workspace = prepare_external_edit_workspace(&local_path)?;
         service.download_remote_file_with_progress_and_control_options(
             &remote_path,
-            &local_path,
+            local_path,
             SftpTransferControl::default(),
             SftpTransferOptions::default(),
             |_| {},
         )?;
         anyhow::ensure!(
-            fs::read(&local_path)? == b"original",
+            fs::read(local_path)? == b"original",
             "Initial download differs"
         );
         let edited = b"external edit\0binary bytes";
-        fs::write(&local_path, edited)?;
+        fs::write(local_path, edited)?;
         let summary = service.upload_remote_edit_with_progress_and_control_options(
-            &local_path,
+            local_path,
             &remote_path,
             SftpTransferControl::default(),
             SftpTransferOptions::default(),
@@ -104,13 +103,13 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
         );
         service.download_remote_file_with_progress_and_control_options(
             &remote_path,
-            &local_path,
+            local_path,
             SftpTransferControl::default(),
             SftpTransferOptions::default(),
             |_| {},
         )?;
         anyhow::ensure!(
-            fs::read(&local_path)? == edited,
+            fs::read(local_path)? == edited,
             "Round-trip download differs"
         );
         anyhow::ensure!(

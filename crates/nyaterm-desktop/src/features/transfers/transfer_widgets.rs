@@ -70,7 +70,10 @@ pub(in crate::features) fn transfer_job_title(kind: &TransferJobKind) -> String 
         TransferJobKind::OpenExternal {
             remote_path,
             local_path,
-        } => format!("Open {remote_path} -> {}", local_path.display()),
+        } => match local_path {
+            Some(local_path) => format!("Open {remote_path} -> {}", local_path.display()),
+            None => format!("Open {remote_path}"),
+        },
         TransferJobKind::AiFileAction {
             remote_path,
             action_name,

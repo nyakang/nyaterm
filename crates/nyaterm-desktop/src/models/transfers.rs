@@ -117,7 +117,7 @@ pub(crate) enum TransferJobKind {
     },
     OpenExternal {
         remote_path: String,
-        local_path: PathBuf,
+        local_path: Option<PathBuf>,
     },
     AiFileAction {
         remote_path: String,
@@ -432,7 +432,7 @@ mod transfer_job_state_tests {
         let external = job(
             TransferJobKind::OpenExternal {
                 remote_path: "/remote/file.txt".to_string(),
-                local_path: PathBuf::from("/tmp/file.txt"),
+                local_path: Some(PathBuf::from("/tmp/file.txt")),
             },
             Some("session-a"),
         );
@@ -471,7 +471,7 @@ mod transfer_job_state_tests {
         assert_eq!(
             TransferJobState::display_name_for_kind(&TransferJobKind::OpenExternal {
                 remote_path: "/remote/project/file.txt".to_string(),
-                local_path: PathBuf::from("/tmp/file.txt"),
+                local_path: Some(PathBuf::from("/tmp/file.txt")),
             }),
             "file.txt"
         );
@@ -517,6 +517,9 @@ pub(crate) enum TransferJobEvent {
     },
     Started {
         detail: String,
+    },
+    ExternalWorkspacePrepared {
+        local_path: PathBuf,
     },
     ExternalModified {
         remote_path: String,

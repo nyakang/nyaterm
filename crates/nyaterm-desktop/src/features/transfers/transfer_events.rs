@@ -582,6 +582,14 @@ impl NyaTermApp {
                 job.speed.reset();
                 job.summary = None;
             }
+            TransferJobEvent::ExternalWorkspacePrepared { local_path } => {
+                if let TransferJobKind::OpenExternal {
+                    local_path: target, ..
+                } = &mut job.kind
+                {
+                    *target = Some(local_path);
+                }
+            }
             TransferJobEvent::ExternalModified {
                 remote_path,
                 raw_path_token,
@@ -1259,6 +1267,12 @@ impl NyaTermApp {
                 local_path,
                 baseline,
             })) => {
+                if let TransferJobKind::OpenExternal {
+                    local_path: target, ..
+                } = &mut job.kind
+                {
+                    *target = Some(local_path.clone());
+                }
                 job.status = TransferJobStatus::Completed;
                 job.detail = format!("Opened {}", local_path.display());
                 job.summary = None;
@@ -1684,6 +1698,149 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
     use std::time::Duration;
+
+    #[test]
+    fn external_workspace_path_is_unknown_until_prepared_and_finished_path_is_authoritative() {
+        let test_dir = TestConfigDir::new("nyaterm-external-prepared-path");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        let prepared = test_dir.path().join("local/example.txt");
+        let opened = test_dir.path().join("final/example.txt");
+        // A closed source session lets this test inspect completion without starting a watcher.
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut job = running_job("external");
+                job.session_id = Some("closed-source".into());
+                job.kind = TransferJobKind::OpenExternal {
+                    remote_path: "/remote/example.txt".into(),
+                    local_path: None,
+                };
+                app.transfer.enqueue_transfer_job(job);
+                assert!(matches!(
+                    &app.transfer.transfer_job("external").unwrap().kind,
+                    TransferJobKind::OpenExternal { local_path: None, .. }
+                ));
+                app.apply_transfer_event(TransferJobResult {
+                    id: "external".into(),
+                    event: TransferJobEvent::ExternalWorkspacePrepared { local_path: prepared.clone() },
+                }, window, cx);
+                assert!(matches!(
+                    &app.transfer.transfer_job("external").unwrap().kind,
+                    TransferJobKind::OpenExternal { local_path: Some(path), .. } if path == &prepared
+                ));
+                app.apply_transfer_event(TransferJobResult {
+                    id: "external".into(),
+                    event: TransferJobEvent::Progress(SftpTransferProgress {
+                        remote_path: "/remote/example.txt".into(),
+                        local_path: prepared.clone(),
+                        bytes_transferred: 3,
+                        total_bytes: Some(3),
+                        item_count_completed: None,
+                        item_count_total: None,
+                    }),
+                }, window, cx);
+                assert_eq!(app.transfer.transfer_job("external").unwrap().progress.as_ref().unwrap().local_path, prepared);
+                app.apply_transfer_event(TransferJobResult {
+                    id: "external".into(),
+                    event: TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalOpened {
+                        remote_path: "/remote/example.txt".into(),
+                        raw_path_token: None,
+                        local_path: opened.clone(),
+                        baseline: crate::models::external_editor::ExternalEditorFileVersion {
+                            len: 3, modified: None, digest: [0; 32],
+                        },
+                    })),
+                }, window, cx);
+                let job = app.transfer.transfer_job("external").unwrap();
+                assert_eq!(job.status, TransferJobStatus::Completed);
+                assert!(job.progress.is_none());
+                assert!(matches!(&job.kind, TransferJobKind::OpenExternal { local_path: Some(path), .. } if path == &opened));
+                assert!(job.detail.contains(&opened.display().to_string()));
+            });
+        });
+    }
+
+    #[test]
+    fn prepared_workspace_for_a_removed_job_is_ignored() {
+        let test_dir = TestConfigDir::new("nyaterm-external-late-prepared");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(!app.apply_transfer_event(
+                    TransferJobResult {
+                        id: "removed".into(),
+                        event: TransferJobEvent::ExternalWorkspacePrepared {
+                            local_path: test_dir.path().join("example.txt"),
+                        },
+                    },
+                    window,
+                    cx
+                ));
+                assert!(app.transfer.transfer_jobs().is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn external_open_completion_watches_the_final_path_and_reports_changes_from_it() {
+        let test_dir = TestConfigDir::new("nyaterm-external-final-watch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        let path = test_dir.path().join("LocalAppData 文件.txt");
+        std::fs::write(&path, "original").unwrap();
+        let baseline =
+            crate::features::transfers::external_sync_runtime::read_external_editor_version(
+                &path,
+                || false,
+            )
+            .unwrap();
+        // An edit before watcher startup must be compared with the downloaded baseline.
+        std::fs::write(&path, "edited").unwrap();
+        let mut receiver = vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut job = running_job("external-watch");
+                job.kind = TransferJobKind::OpenExternal {
+                    remote_path: "/remote/example.txt".into(),
+                    local_path: None,
+                };
+                app.transfer.enqueue_transfer_job(job);
+                let receiver = app.transfer.take_transfer_event_receiver().unwrap();
+                app.apply_transfer_event(
+                    TransferJobResult {
+                        id: "external-watch".into(),
+                        event: TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalOpened {
+                            remote_path: "/remote/example.txt".into(),
+                            raw_path_token: Some("opaque-remote-path".into()),
+                            local_path: path.clone(),
+                            baseline,
+                        })),
+                    },
+                    window,
+                    cx,
+                );
+                receiver
+            })
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let event = loop {
+            if let Ok(event) = receiver.try_recv() {
+                break event;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "final-path watcher did not report the edit"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(event.id, "external-watch");
+        assert!(matches!(event.event, TransferJobEvent::ExternalModified {
+            local_path, raw_path_token: Some(token), ..
+        } if local_path == path && token == "opaque-remote-path"));
+    }
 
     #[test]
     fn closing_shared_app_child_window_keeps_transfer_events_alive() {

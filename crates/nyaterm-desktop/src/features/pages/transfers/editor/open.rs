@@ -1,6 +1,6 @@
 use super::super::helpers::remote_file_name;
 use super::helpers::{RemoteFileTextKind, open_local_path_with_editor, remote_file_text_kind};
-use super::workspace::{external_edit_path, prepare_external_edit_workspace};
+use super::workspace::{ExternalEditWorkspace, prepare_external_edit_workspace};
 use crate::features::NyaTermApp;
 use crate::models::{
     TransferEditorField, TransferEditorState, TransferJobEvent, TransferJobKind, TransferJobOutput,
@@ -12,6 +12,7 @@ use nyaterm_files::remote_file::RemoteTextGeneration;
 use nyaterm_files::sftp::{
     SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
 };
+use std::path::Path;
 
 impl NyaTermApp {
     pub(in crate::features) fn enabled_transfer_file_ai_actions_for_entry(
@@ -464,7 +465,6 @@ impl NyaTermApp {
         } else {
             entry.name.clone()
         };
-        let local_path = external_edit_path(&file_name);
         let default_editor = self.settings.summary().transfer_default_editor.clone();
         let transfer_options = self.sftp_transfer_options();
         let id = self.transfer.next_transfer_job_id("sftp-open-external");
@@ -474,7 +474,7 @@ impl NyaTermApp {
             session_id,
             kind: TransferJobKind::OpenExternal {
                 remote_path: remote_path.clone(),
-                local_path: local_path.clone(),
+                local_path: None,
             },
             status: TransferJobStatus::Running,
             detail: format!("Opening {remote_path} externally"),
@@ -497,13 +497,21 @@ impl NyaTermApp {
             finished_tx.clone(),
             move || {
                 let progress_id = id.clone();
-                let result = prepare_external_edit_workspace(&local_path)
-                    .map_err(|error| error.to_string())
-                    .and_then(|_workspace| {
+                let result = run_external_open(
+                    &control,
+                    || prepare_external_edit_workspace(&file_name, || control.is_cancelled())
+                        .map_err(|error| format!("{error:#}")),
+                    |local_path| {
+                        let _ = progress_tx.unbounded_send(TransferJobResult {
+                            id: id.clone(),
+                            event: TransferJobEvent::ExternalWorkspacePrepared {
+                                local_path: local_path.to_path_buf(),
+                            },
+                        });
                         service
                             .download_remote_file_with_progress_and_control_options(
                                 &remote_file_path,
-                                local_path.clone(),
+                                local_path,
                                 control.clone(),
                                 transfer_options,
                                 move |progress| {
@@ -513,32 +521,34 @@ impl NyaTermApp {
                                     });
                                 },
                             )
+                            .map(|_| ())
                             .map_err(|error| error.to_string())
-                            .and_then(|_| {
-                                let baseline = crate::features::transfers::external_sync_runtime::read_external_editor_version(
-                                    &local_path,
-                                    || control.is_cancelled(),
-                                )
-                                .map_err(|error| {
-                                    if error.kind() == std::io::ErrorKind::Interrupted {
-                                        SFTP_TRANSFER_CANCELLED.to_string()
-                                    } else {
-                                        error.to_string()
-                                    }
-                                })?;
-                                if control.is_cancelled() {
-                                    return Err(SFTP_TRANSFER_CANCELLED.to_string());
-                                }
-                                open_local_path_with_editor(&local_path, &default_editor).map(
-                                    |_| TransferJobOutput::ExternalOpened {
-                                        baseline,
-                                        remote_path: remote_path.clone(),
-                                        raw_path_token: remote_file_path.raw_path_token.clone(),
-                                        local_path: local_path.clone(),
-                                    },
-                                )
-                            })
-                    });
+                    },
+                    |local_path| {
+                        let baseline = crate::features::transfers::external_sync_runtime::read_external_editor_version(
+                            local_path,
+                            || control.is_cancelled(),
+                        )
+                        .map_err(|error| {
+                            if error.kind() == std::io::ErrorKind::Interrupted {
+                                SFTP_TRANSFER_CANCELLED.to_string()
+                            } else {
+                                error.to_string()
+                            }
+                        })?;
+                        if control.is_cancelled() {
+                            return Err(SFTP_TRANSFER_CANCELLED.to_string());
+                        }
+                        open_local_path_with_editor(local_path, &default_editor).map(
+                            |_| TransferJobOutput::ExternalOpened {
+                                baseline,
+                                remote_path: remote_path.clone(),
+                                raw_path_token: remote_file_path.raw_path_token.clone(),
+                                local_path: local_path.to_path_buf(),
+                            },
+                        )
+                    },
+                );
                 let _ = finished_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -546,5 +556,127 @@ impl NyaTermApp {
             },
         );
         cx.notify();
+    }
+}
+
+// Keep the directory protection alive through both I/O stages. Only preparation owns
+// root selection; a download or launch error must never repeat that selection.
+fn run_external_open<T>(
+    control: &SftpTransferControl,
+    prepare: impl FnOnce() -> Result<ExternalEditWorkspace, String>,
+    download: impl FnOnce(&Path) -> Result<(), String>,
+    launch: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    if control.is_cancelled() {
+        return Err(SFTP_TRANSFER_CANCELLED.to_string());
+    }
+    let workspace = prepare()?;
+    if control.is_cancelled() {
+        return Err(SFTP_TRANSFER_CANCELLED.to_string());
+    }
+    download(&workspace.local_path)?;
+    if control.is_cancelled() {
+        return Err(SFTP_TRANSFER_CANCELLED.to_string());
+    }
+    launch(&workspace.local_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_external_open;
+    use crate::features::pages::transfers::editor::workspace::{
+        ExternalEditTestCleanup, prepare_external_edit_workspace,
+    };
+    use nyaterm_files::sftp::{SFTP_TRANSFER_CANCELLED, SftpTransferControl};
+    use std::cell::Cell;
+
+    #[test]
+    fn failed_workspace_preparation_never_downloads_or_launches() {
+        let attempts = Cell::new(0);
+        let result: Result<(), String> = run_external_open(
+            &SftpTransferControl::new(),
+            || {
+                attempts.set(attempts.get() + 1);
+                Err("TEMP win32_error=50; LocalAppData win32_error=5".into())
+            },
+            |_| panic!("download must not run without a private workspace"),
+            |_| panic!("editor must not launch without a private workspace"),
+        );
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(
+            result.unwrap_err(),
+            "TEMP win32_error=50; LocalAppData win32_error=5"
+        );
+    }
+
+    #[test]
+    fn download_failure_or_cancellation_never_launches_or_prepares_again() -> anyhow::Result<()> {
+        for cancel in [false, true] {
+            let control = SftpTransferControl::new();
+            let workspace = prepare_external_edit_workspace("example.txt", || false)?;
+            let _cleanup = ExternalEditTestCleanup::new(&workspace);
+            let expected = workspace.local_path.clone();
+            let attempts = Cell::new(0);
+            let result: Result<(), String> = run_external_open(
+                &control,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    Ok(workspace)
+                },
+                |path| {
+                    assert_eq!(path, expected);
+                    if cancel {
+                        control.cancel();
+                        Ok(())
+                    } else {
+                        Err("download failed".into())
+                    }
+                },
+                |_| panic!("editor must not launch after failed or cancelled download"),
+            );
+            assert_eq!(attempts.get(), 1);
+            assert_eq!(
+                result.unwrap_err(),
+                if cancel {
+                    SFTP_TRANSFER_CANCELLED
+                } else {
+                    "download failed"
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn launch_failure_keeps_the_downloaded_file_and_never_prepares_again() -> anyhow::Result<()> {
+        let workspace = prepare_external_edit_workspace("example.txt", || false)?;
+        let _cleanup = ExternalEditTestCleanup::new(&workspace);
+        let expected = workspace.local_path.clone();
+        let attempts = Cell::new(0);
+        let result: Result<(), String> = run_external_open(
+            &SftpTransferControl::new(),
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok(workspace)
+            },
+            |path| std::fs::write(path, b"downloaded").map_err(|error| error.to_string()),
+            |path| {
+                assert_eq!(path, expected);
+                assert_eq!(std::fs::read(path).unwrap(), b"downloaded");
+                #[cfg(windows)]
+                assert!(
+                    std::fs::rename(
+                        path.parent().unwrap(),
+                        path.parent().unwrap().with_extension("replaced")
+                    )
+                    .is_err()
+                );
+                Err("launch failed".into())
+            },
+        );
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(result.unwrap_err(), "launch failed");
+        assert_eq!(std::fs::read(&expected)?, b"downloaded");
+        Ok(())
     }
 }

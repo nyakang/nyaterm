@@ -151,8 +151,8 @@ pub(super) fn transfer_job_local_target_path(job: &TransferJobState) -> Option<P
                 .map(|progress| progress.local_path.clone())
         })
         .or_else(|| match &job.kind {
-            TransferJobKind::Download { local_path, .. }
-            | TransferJobKind::OpenExternal { local_path, .. } => Some(local_path.clone()),
+            TransferJobKind::Download { local_path, .. } => Some(local_path.clone()),
+            TransferJobKind::OpenExternal { local_path, .. } => local_path.clone(),
             _ => None,
         })
 }
@@ -161,11 +161,47 @@ pub(super) fn transfer_job_local_target_path(job: &TransferJobState) -> Option<P
 mod tests {
     use super::{
         TransferProgressEventSender, submit_transfer_blocking_job,
-        submit_transfer_cancellable_blocking_job,
+        submit_transfer_cancellable_blocking_job, transfer_job_local_target_path,
     };
     use crate::blocking_jobs::BlockingJobScheduler;
     use crate::models::TransferJobEvent;
     use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+
+    #[test]
+    fn external_edit_target_and_title_only_expose_a_prepared_path() {
+        use crate::features::transfers::transfer_widgets::transfer_job_title;
+        use crate::models::{TransferJobKind, TransferJobState, TransferJobStatus};
+        use std::path::PathBuf;
+
+        let mut job = TransferJobState {
+            id: "external".into(),
+            session_id: None,
+            kind: TransferJobKind::OpenExternal {
+                remote_path: "/remote/example.txt".into(),
+                local_path: None,
+            },
+            status: TransferJobStatus::Running,
+            detail: String::new(),
+            created_at_ms: 0,
+            display_name: String::new(),
+            entries: Vec::new(),
+            summary: None,
+            progress: None,
+            control: None,
+            speed: Default::default(),
+        };
+        assert_eq!(transfer_job_local_target_path(&job), None);
+        assert_eq!(transfer_job_title(&job.kind), "Open /remote/example.txt");
+        let target = PathBuf::from("local-data/example.txt");
+        if let TransferJobKind::OpenExternal { local_path, .. } = &mut job.kind {
+            *local_path = Some(target.clone());
+        }
+        for status in [TransferJobStatus::Running, TransferJobStatus::Completed] {
+            job.status = status;
+            assert_eq!(transfer_job_local_target_path(&job), Some(target.clone()));
+            assert!(transfer_job_title(&job.kind).contains(&target.display().to_string()));
+        }
+    }
 
     #[test]
     fn cancelling_a_queued_directory_request_skips_io_and_emits_one_terminal_event() {
