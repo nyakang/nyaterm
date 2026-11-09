@@ -5,6 +5,7 @@ pub mod matching;
 pub mod parser;
 pub mod privacy;
 pub mod types;
+pub mod whole_history;
 
 use crate::completion::catalog::Catalog;
 use crate::completion::history::TokenHistoryIndex;

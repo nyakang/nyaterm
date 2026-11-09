@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::models::quick_commands::CommandHistoryEntry;
 use crate::terminal::editing::supports_scalar_editing;
 use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
 
@@ -230,6 +231,23 @@ impl std::fmt::Debug for ScopedHistoryRecord {
             .field("version", &self.version)
             .field("command", &"[REDACTED]")
             .finish_non_exhaustive()
+    }
+}
+
+/// A consistent, schema-neutral view of both history tables. Never serialized.
+pub struct CompletionHistorySnapshot {
+    pub revision: u64,
+    pub global_history: Vec<CommandHistoryEntry>,
+    pub scoped_history: Vec<ScopedHistoryRecord>,
+}
+
+impl std::fmt::Debug for CompletionHistorySnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionHistorySnapshot")
+            .field("revision", &self.revision)
+            .field("global_count", &self.global_history.len())
+            .field("scoped_count", &self.scoped_history.len())
+            .finish()
     }
 }
 

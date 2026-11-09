@@ -1,9 +1,13 @@
 //! Synthetic completion benchmark. All text is generated fixture data.
-use nyaterm_core::command_search::fuzzy_search_items;
+use nyaterm_core::command_search::{
+    RankedCommandSourceQuery, fuzzy_search_items, search_ranked_command_sources_using,
+};
 use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{CompletionScope, ScopedHistoryRecord, ShellDialect};
+use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
 use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
+use nyaterm_core::models::quick_commands::CommandHistoryEntry;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -60,6 +64,7 @@ fn measure(label: &str, size: usize, query: &str, mut run: impl FnMut()) {
 }
 
 fn main() {
+    let weighted_only = std::env::args().any(|arg| arg == "--weighted-only");
     println!("engine,candidates,query,p50_ms,p95_ms,allocations,peak_increment_bytes");
     for size in [64, 1000, 10000, 50000] {
         let candidates: Vec<_> = (0..size)
@@ -69,9 +74,63 @@ fn main() {
             .iter()
             .map(|text| (text.as_str(), text.as_str()))
             .collect();
-        measure("search_adapter", size, "dcr", || {
-            black_box(fuzzy_search_items(&items, "dcr", "history", 12, None, None));
-        });
+        if !weighted_only {
+            measure("search_adapter", size, "dcr", || {
+                black_box(fuzzy_search_items(&items, "dcr", "history", 12, None, None));
+            });
+        }
+        let scope = CompletionScope::new(&["synthetic-current-host"]);
+        let other = CompletionScope::new(&["synthetic-other-host"]);
+        let global: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, command)| CommandHistoryEntry {
+                command: command.clone(),
+                use_count: (i % 32 + 1) as u32,
+                last_used_at_ms: i as u64,
+            })
+            .collect();
+        let scoped: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .step_by(4)
+            .map(|(i, command)| ScopedHistoryRecord {
+                version: 1,
+                scope: if i % 8 == 0 {
+                    scope.clone()
+                } else {
+                    other.clone()
+                },
+                dialect: ShellDialect::Bash,
+                command: command.clone(),
+                use_count: 3,
+                last_used_at_ms: i as u64,
+                extensions: BTreeMap::new(),
+            })
+            .collect();
+        let mut whole = WholeCommandHistoryIndex::default();
+        whole.reconcile(&global, &scoped);
+        let mut weighted_matcher = TextMatcher::default();
+        for query in ["dcr", "dockerco", "工具", "zzzz"] {
+            measure("weighted_whole", size, query, || {
+                black_box(search_ranked_command_sources_using(
+                    &mut weighted_matcher,
+                    RankedCommandSourceQuery {
+                        history: &whole,
+                        scope: &scope,
+                        quick_commands: &[],
+                        pattern: query,
+                        limit: 12,
+                        min_history_command_length: Some(2),
+                        max_history_command_length: Some(64),
+                        now_ms: 100 * 86_400_000,
+                    },
+                ));
+            });
+        }
+        if weighted_only {
+            continue;
+        }
         for query in [
             "d",
             "doc",
@@ -94,6 +153,9 @@ fn main() {
                 }
             });
         }
+    }
+    if weighted_only {
+        return;
     }
     let scope = CompletionScope::new(&["synthetic-host"]);
     let mut history = TokenHistoryIndex::default();

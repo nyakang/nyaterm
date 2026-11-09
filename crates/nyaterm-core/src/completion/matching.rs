@@ -2,6 +2,10 @@
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(crate) fn matching_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.graphemes(true).filter_map(|g| g.chars().next())
+}
+
 pub struct TextMatcher {
     matcher: Matcher,
     needle: Vec<char>,
@@ -40,8 +44,15 @@ impl TextMatcher {
 
     fn prepare(&mut self, text: &str) {
         self.haystack.clear();
-        self.haystack
-            .extend(text.graphemes(true).filter_map(|g| g.chars().next()));
+        self.haystack.extend(matching_chars(text));
+    }
+
+    /// Prepared catalog words share the exact grapheme representation used by
+    /// `score`; highlighting still converts only selected words to scalar indices.
+    pub(crate) fn score_prepared(&mut self, text: &[char]) -> Option<u32> {
+        self.matcher
+            .fuzzy_match(Utf32Str::Unicode(text), Utf32Str::Unicode(&self.needle))
+            .map(u32::from)
     }
 
     pub fn score(&mut self, text: &str) -> Option<u32> {
@@ -89,7 +100,27 @@ impl TextMatcher {
 
 #[cfg(test)]
 mod tests {
-    use crate::completion::matching::TextMatcher;
+    use crate::completion::matching::{TextMatcher, matching_chars};
+
+    #[test]
+    fn cached_unicode_scores_match_unprepared_scores() {
+        let mut matcher = TextMatcher::default();
+        for text in [
+            "docker compose run 工具",
+            "curl https://例子.test/路径",
+            "echo e\u{301}x CAFÉ",
+            "printf 👩\u{200d}💻 中文",
+        ] {
+            let prepared: Vec<_> = matching_chars(text).collect();
+            for query in [
+                "dcr", "工具", "curl h", "路径", "ex", "café", "中文", "zzzz",
+            ] {
+                matcher.set_query(query);
+                assert_eq!(matcher.score_prepared(&prepared), matcher.score(text));
+            }
+        }
+    }
+
     #[test]
     fn highlights_scalars_after_combining_characters() {
         let mut matcher = TextMatcher::default();

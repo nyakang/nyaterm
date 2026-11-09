@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use redb::ReadableTable;
+use redb::{ReadTransaction, ReadableDatabase, ReadableTable};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -47,30 +47,7 @@ impl ConnectionStore {
         &self,
         limit: usize,
     ) -> Result<Vec<CommandHistoryEntry>, StorageError> {
-        let mut entries: Vec<(String, CommandHistoryEntry)> =
-            self.list_keyed_json_by_prefix(COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)?;
-        entries.sort_by(|left, right| right.0.cmp(&left.0));
-        let mut history = Vec::new();
-        let mut positions = HashMap::new();
-        for (_, entry) in entries {
-            if let Some(command) = sanitize_history_command(&entry.command) {
-                if let Some(&index) = positions.get(&command) {
-                    let existing: &mut CommandHistoryEntry = &mut history[index];
-                    existing.last_used_at_ms = existing.last_used_at_ms.max(entry.last_used_at_ms);
-                    existing.use_count = existing.use_count.saturating_add(entry.use_count.max(1));
-                } else {
-                    positions.insert(command.clone(), history.len());
-                    history.push(CommandHistoryEntry {
-                        command,
-                        last_used_at_ms: entry.last_used_at_ms,
-                        use_count: entry.use_count.max(1),
-                    });
-                }
-            }
-        }
-        history.sort_by_key(|entry| std::cmp::Reverse(entry.last_used_at_ms));
-        history.truncate(limit);
-        Ok(history)
+        list_command_history_in_txn(&self.db.begin_read()?, limit)
     }
 
     pub fn delete_command_history(&self, command: &str) -> Result<(), StorageError> {
@@ -114,9 +91,55 @@ impl ConnectionStore {
     fn save_command_history_entry(&self, entry: &CommandHistoryEntry) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
         save_command_history_entry_in_txn(&txn, entry)?;
+        super::completion_history::bump_revision(&txn)?;
         txn.commit()?;
+        self.invalidate_completion();
         Ok(())
     }
+}
+
+pub(super) fn list_command_history_in_txn(
+    txn: &ReadTransaction,
+    limit: usize,
+) -> Result<Vec<CommandHistoryEntry>, StorageError> {
+    let table = match txn.open_table(COMMAND_HISTORY_TABLE) {
+        Ok(table) => table,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut entries = Vec::new();
+    for row in table.range(COMMAND_HISTORY_PREFIX..)? {
+        let (key, value) = row?;
+        if !key.value().starts_with(COMMAND_HISTORY_PREFIX) {
+            break;
+        }
+        entries.push((
+            key.value().to_string(),
+            serde_json::from_slice::<CommandHistoryEntry>(value.value())?,
+        ));
+    }
+    entries.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut history = Vec::new();
+    let mut positions = HashMap::new();
+    for (_, entry) in entries {
+        if let Some(command) = sanitize_history_command(&entry.command) {
+            if let Some(&index) = positions.get(&command) {
+                let existing: &mut CommandHistoryEntry = &mut history[index];
+                existing.last_used_at_ms = existing.last_used_at_ms.max(entry.last_used_at_ms);
+                existing.use_count = existing.use_count.saturating_add(entry.use_count.max(1));
+            } else {
+                positions.insert(command.clone(), history.len());
+                history.push(CommandHistoryEntry {
+                    command,
+                    last_used_at_ms: entry.last_used_at_ms,
+                    use_count: entry.use_count.max(1),
+                });
+            }
+        }
+    }
+    history.sort_by_key(|entry| std::cmp::Reverse(entry.last_used_at_ms));
+    history.truncate(limit);
+    Ok(history)
 }
 
 pub(super) fn replace_command_history_in_txn(

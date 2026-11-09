@@ -1,15 +1,13 @@
 //! A single background owner for the catalog, token index and scoped mutations.
 use crate::features::runtime_jobs::CommandPersistenceResult;
 use futures::channel::{mpsc::UnboundedSender, oneshot};
-use nyaterm_core::command_search::{
-    CommandSourceQuery, manual_empty_command_suggestions, search_command_sources_using,
-};
+use nyaterm_core::command_search::{RankedCommandSourceQuery, search_ranked_command_sources_using};
 use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{
-    CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
-    CompletionScope, ShellCommandContext, supports_full_command_fill,
+    CompletionCandidate, CompletionMode, CompletionResult, ShellCommandContext,
 };
+use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
 use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
 use nyaterm_core::models::quick_commands::{CommandHistoryEntry, QuickCommand};
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
@@ -70,118 +68,69 @@ impl CompletionRuntime {
                         .get()
                         .map_or(0, |value| value.load(Ordering::Acquire))
                 };
-                let mut loaded_generation = generation();
                 let mut engine = CompletionEngine::embedded();
                 let mut whole_matcher = TextMatcher::default();
                 let mut history = TokenHistoryIndex::default();
-                let reload = |history: &mut TokenHistoryIndex| -> Result<(), String> {
-                    let (_, records) = store
-                        .request_fn(StoreDomain::Commands, |database| {
-                            database.list_completion_history()
-                        })
-                        .map_err(|e| e.to_string())?;
-                    history.reconcile(records);
-                    Ok(())
-                };
-                let mut loaded = reload(&mut history).is_ok();
-                if !loaded {
-                    history = TokenHistoryIndex::default();
-                }
+                let mut whole_history = WholeCommandHistoryIndex::default();
+                let mut loaded_generation =
+                    reload_history(&store, &mut history, &mut whole_history).ok();
                 while let Ok(request) = rx.recv() {
                     match request {
                         Request::Observe(context, command, include_global) => {
-                            let scope = context.scope.clone();
-                            let result = store.request_fn(StoreDomain::Commands, move |database| {
-                                let before =
-                                    database.completion_generation().load(Ordering::Acquire);
-                                let update = database.append_completion_contribution(
-                                    &context.scope,
-                                    context.dialect,
-                                    &command,
-                                    include_global,
-                                )?;
-                                Ok((
-                                    update,
-                                    database.list_command_history(64)?,
-                                    before,
-                                    database.completion_generation().load(Ordering::Acquire),
-                                ))
-                            });
-                            let outcome = match result {
-                                Ok((Some((_, record, evicted)), global, before, after)) => {
-                                    history.upsert(record);
-                                    for command in evicted {
-                                        history.remove_scoped(&scope, &command);
-                                    }
-                                    // Our contribution is already applied. Advance only if
-                                    // no other window changed the snapshot before this write.
-                                    if loaded
-                                        && loaded_generation == before
-                                        && after == before.wrapping_add(1)
-                                    {
-                                        loaded_generation = after;
-                                    }
-                                    Ok(global)
-                                }
-                                Ok((None, global, _, _)) => Ok(global),
-                                Err(error) => Err(error.to_string()),
-                            };
+                            let outcome = store
+                                .request_fn(StoreDomain::Commands, move |database| {
+                                    database.append_completion_contribution(
+                                        &context.scope,
+                                        context.dialect,
+                                        &command,
+                                        include_global,
+                                    )?;
+                                    database.list_command_history(64)
+                                })
+                                .map_err(|error| error.to_string());
+                            // Keep the previous generation until both indexes are refreshed.
                             let _ =
                                 events.unbounded_send(CommandPersistenceResult::History(outcome));
                         }
                         Request::Search(query, revision, response) => {
                             if worker_dirty.swap(false, Ordering::AcqRel)
-                                || !loaded
-                                || loaded_generation != generation()
+                                || loaded_generation != Some(generation())
                             {
-                                loaded_generation = generation();
-                                loaded = reload(&mut history).is_ok();
-                                if !loaded {
+                                loaded_generation =
+                                    reload_history(&store, &mut history, &mut whole_history).ok();
+                                if loaded_generation.is_none() {
                                     history = TokenHistoryIndex::default();
+                                    whole_history = WholeCommandHistoryIndex::default();
                                 }
                             }
                             let candidates = search_candidates(
                                 &mut engine,
                                 &history,
+                                &whole_history,
                                 &query,
                                 &mut whole_matcher,
                             );
                             let _ = response.send(CompletionResult {
                                 candidates,
-                                revision: revision.wrapping_add(loaded_generation),
+                                revision: revision
+                                    .wrapping_add(loaded_generation.unwrap_or_else(generation)),
                             });
                         }
                         Request::Delete(command, response) => {
-                            let persisted = command.clone();
                             let outcome = store
                                 .request_fn(StoreDomain::Commands, move |database| {
-                                    let before =
-                                        database.completion_generation().load(Ordering::Acquire);
-                                    database.delete_command_history(&persisted)?;
-                                    Ok((
-                                        database.list_command_history(64)?,
-                                        before,
-                                        database.completion_generation().load(Ordering::Acquire),
-                                    ))
+                                    database.delete_command_history(&command)?;
+                                    database.list_command_history(64)
                                 })
-                                .map(|(global, before, after)| {
-                                    history.remove_command(&command);
-                                    if loaded
-                                        && loaded_generation == before
-                                        && after == before.wrapping_add(1)
-                                    {
-                                        loaded_generation = after;
-                                    }
-                                    global
-                                })
-                                .map_err(|e| e.to_string());
+                                .map_err(|error| error.to_string());
                             let _ = response.send(outcome);
                         }
                         Request::Reload => {
-                            loaded_generation = generation();
-                            loaded = reload(&mut history).is_ok();
-                            if !loaded {
+                            loaded_generation =
+                                reload_history(&store, &mut history, &mut whole_history).ok();
+                            if loaded_generation.is_none() {
                                 history = TokenHistoryIndex::default();
+                                whole_history = WholeCommandHistoryIndex::default();
                             }
                         }
                     }
@@ -255,13 +204,31 @@ impl CompletionRuntime {
     }
 }
 
+fn reload_history(
+    store: &StoreBlockingClient,
+    tokens: &mut TokenHistoryIndex,
+    whole: &mut WholeCommandHistoryIndex,
+) -> Result<u64, String> {
+    let (snapshot, generation) = store
+        .request_fn(StoreDomain::Commands, |database| {
+            // Capture before opening the snapshot; concurrent later writes cause another refresh.
+            let generation = database.completion_generation().load(Ordering::Acquire);
+            Ok((database.completion_history_snapshot()?, generation))
+        })
+        .map_err(|error| error.to_string())?;
+    whole.reconcile(&snapshot.global_history, &snapshot.scoped_history);
+    tokens.reconcile(snapshot.scoped_history);
+    Ok(generation)
+}
+
 fn search_candidates(
     engine: &mut CompletionEngine,
     history: &TokenHistoryIndex,
+    whole: &WholeCommandHistoryIndex,
     query: &CompletionQuery,
     matcher: &mut TextMatcher,
 ) -> Vec<CompletionCandidate> {
-    let mut candidates = full_history(history, query, matcher);
+    let mut candidates = full_history(whole, query, matcher);
     if query.mode == CompletionMode::History {
         return candidates;
     }
@@ -301,124 +268,87 @@ fn search_candidates(
 }
 
 fn full_history(
-    index: &TokenHistoryIndex,
+    index: &WholeCommandHistoryIndex,
     query: &CompletionQuery,
     matcher: &mut TextMatcher,
 ) -> Vec<CompletionCandidate> {
-    let records = index.records_for(&query.context.scope);
-    let mut origins = HashMap::new();
-    for record in &records {
-        let legacy = record.scope == CompletionScope::legacy();
-        origins
-            .entry(record.command.as_str())
-            .and_modify(|value| *value &= legacy)
-            .or_insert(legacy);
-    }
-    let entries: Vec<_> = records
-        .iter()
-        .map(|r| CommandHistoryEntry {
-            command: r.command.clone(),
-            last_used_at_ms: r.last_used_at_ms,
-            use_count: r.use_count,
-        })
-        .collect();
-    let results = if query.input.trim().is_empty() {
-        manual_empty_command_suggestions(
-            &entries,
-            &query.quick,
-            12,
-            Some(query.min),
-            Some(query.max),
-        )
-    } else {
-        search_command_sources_using(
-            matcher,
-            CommandSourceQuery {
-                history: &entries,
-                quick_commands: &query.quick,
-                pattern: &query.input,
-                limit: 12,
-                min_history_command_length: Some(query.min),
-                max_history_command_length: Some(query.max),
-            },
-        )
-    };
-    results
-        .into_iter()
-        .map(|item| {
-            let (kind, source) = if item.source == "quickCommand" {
-                (CandidateKind::QuickCommand, CandidateSource::QuickCommand)
-            } else if origins.get(item.command.as_str()) == Some(&true) {
-                (CandidateKind::History, CandidateSource::LegacyHistory)
-            } else {
-                (CandidateKind::History, CandidateSource::History)
-            };
-            let fillable = supports_full_command_fill(&item.command);
-            let matching: Vec<_> = records
-                .iter()
-                .filter(|record| record.command == item.command)
-                .collect();
-            let stats = matching
-                .iter()
-                .find(|record| record.scope != CompletionScope::legacy())
-                .or_else(|| matching.first());
-            let mut sources = vec![source];
-            if matching
-                .iter()
-                .any(|record| record.scope != CompletionScope::legacy())
-            {
-                sources.push(CandidateSource::History);
-            }
-            if matching
-                .iter()
-                .any(|record| record.scope == CompletionScope::legacy())
-            {
-                sources.push(CandidateSource::LegacyHistory);
-            }
-            if query
-                .quick
-                .iter()
-                .any(|command| command.command == item.command)
-            {
-                sources.push(CandidateSource::QuickCommand);
-            }
-            sources.sort_unstable();
-            sources.dedup();
-            CompletionCandidate {
-                display: item.display,
-                insert_text: item.command,
-                description: String::new(),
-                range: 0..query.input.len(),
-                kind,
-                sources,
-                use_count: stats.map_or(0, |record| record.use_count),
-                last_used_at_ms: stats.map_or(0, |record| record.last_used_at_ms),
-                score: item.score,
-                indices: item.indices,
-                fillable,
-                context_priority: 0,
-            }
-        })
-        .collect()
+    search_ranked_command_sources_using(
+        matcher,
+        RankedCommandSourceQuery {
+            history: index,
+            scope: &query.context.scope,
+            quick_commands: &query.quick,
+            pattern: &query.input,
+            limit: 12,
+            min_history_command_length: Some(query.min),
+            max_history_command_length: Some(query.max),
+            now_ms: u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX),
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use crate::features::commands::completion_runtime::{
-        CompletionQuery, CompletionRuntime, full_history, search_candidates,
+        CompletionQuery, CompletionRuntime, full_history as search_whole,
+        search_candidates as search_with_indexes,
     };
     use crate::test_support::{TestConfigDir, blocking_test_store};
     use futures::channel::mpsc::unbounded;
     use nyaterm_core::completion::types::{
-        CandidateSource, CompletionMode, CompletionScope, ScopedHistoryRecord, ShellCommandContext,
-        ShellDialect,
+        CandidateKind, CandidateSource, CompletionMode, CompletionScope, ScopedHistoryRecord,
+        ShellCommandContext, ShellDialect,
     };
     use std::sync::Arc;
 
+    use nyaterm_core::completion::CompletionEngine;
+    use nyaterm_core::completion::history::TokenHistoryIndex;
+    use nyaterm_core::completion::matching::TextMatcher;
+    use nyaterm_core::completion::types::CompletionCandidate;
+    use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
+
+    #[derive(Default)]
+    struct HistoryFixture {
+        tokens: TokenHistoryIndex,
+        whole: WholeCommandHistoryIndex,
+        records: Vec<ScopedHistoryRecord>,
+    }
+
+    impl HistoryFixture {
+        fn upsert(&mut self, record: ScopedHistoryRecord) {
+            self.tokens.upsert(record.clone());
+            self.records.push(record);
+            self.whole.reconcile(&[], &self.records);
+        }
+    }
+
+    fn search_candidates(
+        engine: &mut CompletionEngine,
+        index: &HistoryFixture,
+        query: &CompletionQuery,
+        matcher: &mut TextMatcher,
+    ) -> Vec<CompletionCandidate> {
+        search_with_indexes(engine, &index.tokens, &index.whole, query, matcher)
+    }
+
+    fn full_history(
+        index: &HistoryFixture,
+        query: &CompletionQuery,
+        matcher: &mut TextMatcher,
+    ) -> Vec<CompletionCandidate> {
+        search_whole(&index.whole, query, matcher)
+    }
+
     #[test]
     fn both_modes_offer_multiline_quick_commands_for_paste_review() {
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
         use nyaterm_core::completion::CompletionEngine;
-        use nyaterm_core::completion::history::TokenHistoryIndex;
         use nyaterm_core::completion::matching::TextMatcher;
         use nyaterm_core::completion::types::CandidateKind;
 
@@ -447,7 +377,7 @@ mod tests {
                 query.input = input.into();
                 let candidates = search_candidates(
                     &mut engine,
-                    &TokenHistoryIndex::default(),
+                    &HistoryFixture::default(),
                     &query,
                     &mut matcher,
                 );
@@ -462,14 +392,14 @@ mod tests {
 
     #[test]
     fn both_modes_find_cross_word_history_and_named_quick_commands() {
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
         use nyaterm_core::completion::CompletionEngine;
-        use nyaterm_core::completion::history::TokenHistoryIndex;
         use nyaterm_core::completion::matching::TextMatcher;
         use nyaterm_core::models::quick_commands::QuickCommand;
         use std::collections::BTreeMap;
 
         let scope = CompletionScope::new(&["whole-command-search"]);
-        let mut index = TokenHistoryIndex::default();
+        let mut index = HistoryFixture::default();
         for origin in [scope.clone(), CompletionScope::legacy()] {
             index.upsert(ScopedHistoryRecord {
                 version: 1,
@@ -532,13 +462,16 @@ mod tests {
         query.input = "systmi".into();
         let candidates = search_candidates(&mut engine, &index, &query, &mut matcher);
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].sources, [CandidateSource::LegacyHistory]);
+        assert_eq!(
+            candidates[0].sources,
+            [CandidateSource::History, CandidateSource::LegacyHistory]
+        );
     }
 
     #[test]
     fn automatic_search_supplements_whole_commands_and_deduplicates_target_lines() {
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
         use nyaterm_core::completion::CompletionEngine;
-        use nyaterm_core::completion::history::TokenHistoryIndex;
         use nyaterm_core::completion::matching::TextMatcher;
         use nyaterm_core::models::quick_commands::QuickCommand;
         use std::collections::HashSet;
@@ -559,7 +492,7 @@ mod tests {
             min: 2,
             max: 64,
         };
-        let index = TokenHistoryIndex::default();
+        let index = HistoryFixture::default();
         let mut engine = CompletionEngine::embedded();
         let mut matcher = TextMatcher::default();
         let manual = search_candidates(&mut engine, &index, &query, &mut matcher);
@@ -595,13 +528,13 @@ mod tests {
 
     #[test]
     fn whole_commands_keep_their_order_and_limit_before_catalog_supplements() {
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
         use nyaterm_core::completion::CompletionEngine;
-        use nyaterm_core::completion::history::TokenHistoryIndex;
         use nyaterm_core::completion::matching::TextMatcher;
         use std::collections::BTreeMap;
 
         let scope = CompletionScope::new(&["ranking-fixture"]);
-        let mut index = TokenHistoryIndex::default();
+        let mut index = HistoryFixture::default();
         for n in 0..16 {
             index.upsert(ScopedHistoryRecord {
                 version: 1,
@@ -641,12 +574,12 @@ mod tests {
     }
     #[test]
     fn full_history_merges_origins_and_uses_current_scope_statistics_once() {
-        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
         use nyaterm_core::completion::matching::TextMatcher;
         use nyaterm_core::models::quick_commands::QuickCommand;
         use std::collections::BTreeMap;
         let scope = CompletionScope::new(&["history-origin-fixture"]);
-        let mut index = TokenHistoryIndex::default();
+        let mut index = HistoryFixture::default();
         for (scope, count, time) in [(scope.clone(), 8, 2), (CompletionScope::legacy(), 10, 1)] {
             index.upsert(ScopedHistoryRecord {
                 version: 1,
@@ -723,7 +656,9 @@ mod tests {
         assert!(
             futures::executor::block_on(runtime.search(query(other)))
                 .candidates
-                .is_empty()
+                .iter()
+                .any(|candidate| candidate.insert_text == "internal-tool deploy"
+                    && candidate.kind == CandidateKind::History)
         );
         let before = futures::executor::block_on(second.search(query(context.clone())));
         assert!(!before.candidates.is_empty());
@@ -757,5 +692,205 @@ mod tests {
                 .candidates
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn both_modes_find_other_host_whole_commands_without_learning_its_argument_tokens() {
+        let a = CompletionScope::new(&["host-a"]);
+        let b = CompletionScope::new(&["host-b"]);
+        let mut index = HistoryFixture::default();
+        index.upsert(ScopedHistoryRecord {
+            version: 1,
+            scope: a.clone(),
+            dialect: ShellDialect::Bash,
+            command: "curl https://www.baidu.com".into(),
+            use_count: 1,
+            last_used_at_ms: 1,
+            extensions: std::collections::BTreeMap::new(),
+        });
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        for scope in [a, b] {
+            for mode in [CompletionMode::Token, CompletionMode::History] {
+                let query = CompletionQuery {
+                    context: ShellCommandContext {
+                        scope: scope.clone(),
+                        dialect: ShellDialect::Bash,
+                        command_events: true,
+                    },
+                    input: "curl h".into(),
+                    mode,
+                    quick: Arc::from([]),
+                    min: 2,
+                    max: 64,
+                };
+                let results = search_candidates(&mut engine, &index, &query, &mut matcher);
+                let history = results
+                    .iter()
+                    .find(|item| item.insert_text == "curl https://www.baidu.com")
+                    .unwrap();
+                assert_eq!(history.kind, CandidateKind::History);
+                assert_eq!(
+                    history.target_line("curl h").as_deref(),
+                    Some("curl https://www.baidu.com")
+                );
+                assert!(history.fillable);
+                assert!(
+                    !results
+                        .iter()
+                        .any(|item| item.kind == CandidateKind::Argument
+                            && item.insert_text == "https://www.baidu.com")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_completion_queries_search_cache_while_database_worker_is_busy() {
+        use nyaterm_store::StoreDomain;
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let dir = TestConfigDir::new("nyaterm-cached-completion-worker");
+        let store = blocking_test_store(dir.path());
+        store
+            .request_fn(StoreDomain::Commands, |db| {
+                db.append_command_history("curl https://www.baidu.com")
+            })
+            .unwrap();
+        let (events, _rx) = unbounded();
+        let runtime = CompletionRuntime::new(store.clone(), events);
+        let query = || CompletionQuery {
+            context: ShellCommandContext {
+                scope: CompletionScope::new(&["host-b"]),
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "curl h".into(),
+            mode: CompletionMode::Token,
+            quick: Arc::from([]),
+            min: 2,
+            max: 64,
+        };
+        let first = futures::executor::block_on(runtime.search(query()));
+        assert_eq!(
+            first.candidates[0].insert_text,
+            "curl https://www.baidu.com"
+        );
+
+        let (started, waiting) = channel();
+        let (release, blocked) = channel();
+        let blocker = std::thread::spawn(move || {
+            store.request_fn(StoreDomain::Commands, move |_db| {
+                started.send(()).unwrap();
+                let _ = blocked.recv_timeout(Duration::from_secs(10));
+                Ok(())
+            })
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (finished, result) = channel();
+        let searcher = std::thread::spawn(move || {
+            let _ = finished.send(futures::executor::block_on(runtime.search(query())));
+        });
+        let cached = result.recv_timeout(Duration::from_secs(5));
+        // Release before asserting so a regression cannot strand the actor.
+        let _ = release.send(());
+        blocker.join().unwrap().unwrap();
+        searcher.join().unwrap();
+        let cached = cached.expect("unchanged queries must not wait for the database actor");
+        assert_eq!(cached.revision, first.revision);
+        assert_eq!(
+            cached.candidates[0].insert_text,
+            first.candidates[0].insert_text
+        );
+    }
+
+    #[test]
+    fn workers_refresh_global_only_appends_deletion_and_backup_restore() {
+        use nyaterm_store::StoreDomain;
+
+        let dir = TestConfigDir::new("nyaterm-global-completion-worker");
+        let store = blocking_test_store(dir.path());
+        let (tx, _rx) = unbounded();
+        let runtime = CompletionRuntime::new(store.clone(), tx.clone());
+        let second = CompletionRuntime::new(store.clone(), tx);
+        let context = ShellCommandContext {
+            scope: CompletionScope::new(&["host-a"]),
+            dialect: ShellDialect::Bash,
+            command_events: true,
+        };
+        let other = ShellCommandContext {
+            scope: CompletionScope::new(&["host-b"]),
+            ..context.clone()
+        };
+        let query = |input: &str| CompletionQuery {
+            context: other.clone(),
+            input: input.into(),
+            mode: CompletionMode::Token,
+            quick: Arc::from([]),
+            min: 2,
+            max: 64,
+        };
+        let search = |worker: &CompletionRuntime, input: &str| {
+            futures::executor::block_on(worker.search(query(input)))
+        };
+        assert!(runtime.observe(context.clone(), "curl https://www.baidu.com".into()));
+        assert!(
+            search(&runtime, "curl h")
+                .candidates
+                .iter()
+                .any(|item| item.insert_text == "curl https://www.baidu.com")
+        );
+        assert!(!search(&second, "curl h").candidates.is_empty());
+        let backup_path = dir.path().join("fixture-backup.nya");
+        let export_path = backup_path.clone();
+        store
+            .request_fn(StoreDomain::Commands, move |db| {
+                db.export_encrypted_portable_snapshot_from_open_store(
+                    &export_path,
+                    "fixture",
+                    "fixture",
+                    "fixture-backup-password",
+                )
+            })
+            .unwrap();
+        assert!(search(&second, "fixture-only-glo").candidates.is_empty());
+        store
+            .request_fn(StoreDomain::Commands, |db| {
+                db.append_command_history("fixture-only-global command")
+            })
+            .unwrap();
+        let first = search(&second, "fixture-only-glo");
+        assert_eq!(
+            first.candidates[0].insert_text,
+            "fixture-only-global command"
+        );
+        let repeated = search(&second, "fixture-only-glo");
+        assert_eq!(first.revision, repeated.revision);
+        assert_eq!(first.candidates[0].score, repeated.candidates[0].score);
+        futures::executor::block_on(runtime.delete("curl https://www.baidu.com".into())).unwrap();
+        assert!(
+            !search(&second, "curl h")
+                .candidates
+                .iter()
+                .any(|item| item.insert_text == "curl https://www.baidu.com")
+        );
+        store
+            .request_fn(StoreDomain::Commands, move |db| {
+                db.import_encrypted_portable_snapshot_into_open_store(
+                    &backup_path,
+                    "fixture-backup-password",
+                )
+            })
+            .unwrap();
+        assert!(
+            search(&second, "curl h")
+                .candidates
+                .iter()
+                .any(|item| item.insert_text == "curl https://www.baidu.com")
+        );
+        assert!(search(&second, "fixture-only-glo").candidates.is_empty());
+        assert!(runtime.observe(context, "curl --user fixture-sensitive".into()));
+        assert!(search(&runtime, "fixture-sensitive").candidates.is_empty());
     }
 }

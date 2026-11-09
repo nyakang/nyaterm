@@ -1,10 +1,14 @@
 //! Device-local command provenance. Existing history documents remain unchanged.
-use super::command_history::{append_global_history_in_txn, sanitize_history_command};
+use super::command_history::{
+    append_global_history_in_txn, list_command_history_in_txn, sanitize_history_command,
+};
 use super::{ConnectionStore, StorageError, current_time_ms, lower_hex};
 use nyaterm_core::completion::privacy::command_may_be_learned;
-use nyaterm_core::completion::types::{CompletionScope, ScopedHistoryRecord, ShellDialect};
+use nyaterm_core::completion::types::{
+    CompletionHistorySnapshot, CompletionScope, ScopedHistoryRecord, ShellDialect,
+};
 use nyaterm_core::models::quick_commands::CommandHistoryEntry;
-use redb::{ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 
@@ -88,26 +92,18 @@ impl ConnectionStore {
     }
 
     pub fn list_completion_history(&self) -> Result<(u64, Vec<ScopedHistoryRecord>), StorageError> {
+        list_completion_history_in_txn(&self.db.begin_read()?)
+    }
+
+    pub fn completion_history_snapshot(&self) -> Result<CompletionHistorySnapshot, StorageError> {
         let txn = self.db.begin_read()?;
-        let table = txn.open_table(COMPLETION_HISTORY_TABLE)?;
-        check_version(&table)?;
-        let revision = table
-            .get("revision")?
-            .map(|v| serde_json::from_slice::<u64>(v.value()))
-            .transpose()?
-            .unwrap_or_default();
-        let mut records = Vec::new();
-        for entry in table.range("entry/".."entry0")? {
-            let (_, value) = entry?;
-            let record: ScopedHistoryRecord = serde_json::from_slice(value.value())?;
-            if record.version != VERSION {
-                return Err(StorageError::CompletionHistory(
-                    "unsupported completion history record",
-                ));
-            }
-            records.push(record);
-        }
-        Ok((revision, records))
+        let (revision, scoped_history) = list_completion_history_in_txn(&txn)?;
+        let global_history = list_command_history_in_txn(&txn, usize::MAX)?;
+        Ok(CompletionHistorySnapshot {
+            revision,
+            global_history,
+            scoped_history,
+        })
     }
 
     /// Adds one accepted logical command, updating global and scoped rows atomically.
@@ -191,6 +187,201 @@ impl ConnectionStore {
         txn.commit()?;
         self.invalidate_completion();
         Ok(Some((revision, record, evicted)))
+    }
+}
+
+fn list_completion_history_in_txn(
+    txn: &ReadTransaction,
+) -> Result<(u64, Vec<ScopedHistoryRecord>), StorageError> {
+    let table = txn.open_table(COMPLETION_HISTORY_TABLE)?;
+    check_version(&table)?;
+    let revision = table
+        .get("revision")?
+        .map(|v| serde_json::from_slice::<u64>(v.value()))
+        .transpose()?
+        .unwrap_or_default();
+    let mut records = Vec::new();
+    for entry in table.range("entry/".."entry0")? {
+        let (_, value) = entry?;
+        let record: ScopedHistoryRecord = serde_json::from_slice(value.value())?;
+        if record.version != VERSION {
+            return Err(StorageError::CompletionHistory(
+                "unsupported completion history record",
+            ));
+        }
+        records.push(record);
+    }
+    Ok((revision, records))
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use crate::storage::completion_history::{COMPLETION_HISTORY_TABLE, record_key};
+    use crate::storage::{COMMAND_HISTORY_TABLE, ConnectionStore, write_json_in_txn};
+    use nyaterm_core::completion::types::{CompletionScope, ShellDialect};
+    use nyaterm_core::models::quick_commands::CommandHistoryEntry;
+    use nyaterm_core::test_support::TestTempDir;
+    use redb::{ReadableDatabase, ReadableTable};
+    use std::sync::{Arc, Barrier, atomic::Ordering};
+
+    #[test]
+    fn missing_global_table_keeps_scoped_history_available_in_snapshot() {
+        let dir = TestTempDir::new("nyaterm-completion-missing-global-table");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let scope = CompletionScope::new(&["fixture"]);
+        store
+            .append_completion_history(&scope, ShellDialect::Bash, "fixture scoped")
+            .unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.delete_table(COMMAND_HISTORY_TABLE).unwrap();
+        txn.commit().unwrap();
+        let snapshot = store.completion_history_snapshot().unwrap();
+        assert!(snapshot.global_history.is_empty());
+        assert_eq!(snapshot.scoped_history[0].command, "fixture scoped");
+        assert!(store.list_command_history(64).unwrap().is_empty());
+    }
+
+    #[test]
+    fn future_table_version_rolls_back_global_append_without_invalidating_cache() {
+        let dir = TestTempDir::new("nyaterm-completion-future-global");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let generation = store.completion_generation();
+        let previous = generation.load(Ordering::Acquire);
+        let txn = store.db.begin_write().unwrap();
+        txn.open_table(COMPLETION_HISTORY_TABLE)
+            .unwrap()
+            .insert("version", b"99".as_slice())
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(store.append_command_history("fixture rejected").is_err());
+        assert!(store.list_command_history(64).unwrap().is_empty());
+        assert!(store.completion_history_snapshot().is_err());
+        assert_eq!(generation.load(Ordering::Acquire), previous);
+    }
+
+    #[test]
+    fn global_only_append_invalidates_snapshot_and_survives_restart_without_scope_membership() {
+        let dir = TestTempDir::new("nyaterm-completion-global-snapshot");
+        let before;
+        {
+            let store = ConnectionStore::open(dir.path()).unwrap();
+            before = store.completion_history_snapshot().unwrap().revision;
+            let generation = store.completion_generation();
+            let previous = generation.load(Ordering::Acquire);
+            store.append_command_history("fixture global-only").unwrap();
+            assert_eq!(generation.load(Ordering::Acquire), previous.wrapping_add(1));
+            let snapshot = store.completion_history_snapshot().unwrap();
+            assert!(snapshot.revision > before);
+            assert_eq!(snapshot.global_history[0].command, "fixture global-only");
+            assert!(snapshot.scoped_history.is_empty());
+            assert!(!format!("{snapshot:?}").contains("fixture global-only"));
+        }
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let snapshot = store.completion_history_snapshot().unwrap();
+        assert!(snapshot.revision > before);
+        assert_eq!(snapshot.global_history[0].use_count, 1);
+        assert!(snapshot.scoped_history.is_empty());
+        store.delete_command_history("fixture global-only").unwrap();
+        assert!(
+            store
+                .completion_history_snapshot()
+                .unwrap()
+                .global_history
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn snapshot_reads_global_and_scoped_contributions_from_one_transaction() {
+        let dir = TestTempDir::new("nyaterm-completion-consistent-snapshot");
+        let store = Arc::new(ConnectionStore::open(dir.path()).unwrap());
+        let barrier = Arc::new(Barrier::new(2));
+        let scope = CompletionScope::new(&["fixture"]);
+        let writer_store = store.clone();
+        let writer_barrier = barrier.clone();
+        let writer_scope = scope.clone();
+        let writer = std::thread::spawn(move || {
+            writer_barrier.wait();
+            for _ in 0..16 {
+                writer_store
+                    .append_completion_history(&writer_scope, ShellDialect::Bash, "fixture atomic")
+                    .unwrap();
+            }
+        });
+        barrier.wait();
+        for _ in 0..32 {
+            let snapshot = store.completion_history_snapshot().unwrap();
+            let global = snapshot
+                .global_history
+                .first()
+                .map_or(0, |row| row.use_count);
+            let scoped = snapshot
+                .scoped_history
+                .first()
+                .map_or(0, |row| row.use_count);
+            assert_eq!(global, scoped);
+        }
+        writer.join().unwrap();
+        let snapshot = store.completion_history_snapshot().unwrap();
+        assert_eq!(snapshot.global_history[0].use_count, 16);
+        assert_eq!(snapshot.scoped_history[0].use_count, 16);
+    }
+
+    #[test]
+    fn snapshot_preserves_legacy_normalization_and_raw_unknown_fields() {
+        let dir = TestTempDir::new("nyaterm-completion-compatible-snapshot");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        store
+            .replace_command_history(&[CommandHistoryEntry {
+                command: "fixture legacy".into(),
+                use_count: 2,
+                last_used_at_ms: 10,
+            }])
+            .unwrap();
+        let scope = CompletionScope::new(&["fixture"]);
+        store
+            .append_completion_history(&scope, ShellDialect::Bash, "fixture scoped")
+            .unwrap();
+        let txn = store.db.begin_write().unwrap();
+        let global = serde_json::json!({"command":"\u{0005}\u{0015}fixture legacy", "use_count":3, "last_used_at_ms":20, "future":{"retain":true}});
+        let key = "command_history/00000000000000000020|fixture-legacy-rewrite";
+        write_json_in_txn(&txn, COMMAND_HISTORY_TABLE, key, &global).unwrap();
+        let scoped_key = record_key(&scope, "fixture scoped");
+        let mut table = txn.open_table(COMPLETION_HISTORY_TABLE).unwrap();
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(table.get(scoped_key.as_str()).unwrap().unwrap().value())
+                .unwrap();
+        raw["future"] = serde_json::json!({"retain":true});
+        table
+            .insert(
+                scoped_key.as_str(),
+                serde_json::to_vec(&raw).unwrap().as_slice(),
+            )
+            .unwrap();
+        drop(table);
+        txn.commit().unwrap();
+        let snapshot = store.completion_history_snapshot().unwrap();
+        let legacy = snapshot
+            .global_history
+            .iter()
+            .find(|entry| entry.command == "fixture legacy")
+            .unwrap();
+        assert_eq!(legacy.use_count, 5);
+        assert_eq!(legacy.last_used_at_ms, 20);
+        assert_eq!(
+            snapshot
+                .scoped_history
+                .iter()
+                .find(|entry| entry.scope == scope)
+                .unwrap()
+                .extensions["future"],
+            raw["future"]
+        );
+        let txn = store.db.begin_read().unwrap();
+        let table = txn.open_table(COMMAND_HISTORY_TABLE).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(table.get(key).unwrap().unwrap().value()).unwrap();
+        assert_eq!(persisted, global);
     }
 }
 
