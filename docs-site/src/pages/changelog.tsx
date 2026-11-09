@@ -10,7 +10,7 @@ import {getChangelogReleases} from '../data/changelogData';
 function formatVersionLabel(version: string) {
   const match = version.match(/^\[(.+?)\]\s*-\s*(.+)$/);
   if (!match) {
-    return {tag: version, date: ''};
+    return {tag: version.replace(/^\[(.+)\]$/, '$1'), date: ''};
   }
 
   const isSemver = /^\d+\.\d+\.\d+/.test(match[1]);
@@ -57,8 +57,8 @@ export default function ChangelogPage(): React.ReactElement {
               </Heading>
               <p className={styles.description}>
                 {currentLocale === 'zh-CN'
-                  ? '早期版本记录包含 GPUI 迁移前的历史实现（包括 Tauri/WebView）；当前应用架构以 GPUI 原生实现为准。'
-                  : 'Earlier entries include pre-GPUI history such as Tauri/WebView implementation details; the current application architecture is native GPUI.'}
+                  ? '2.x 为原生 GPUI 桌面应用；1.x 记录对应早期 Tauri/WebView 实现（含历史 Web 测试版）。1.x 稳定版与 2.0.0 预览版曾并行开发；未发布部分记录最新版本标签之后的改动。'
+                  : '2.x is the native GPUI desktop application. 1.x entries describe the earlier Tauri/WebView implementation, including its historical web beta. The 1.x stable line and 2.0.0 previews were developed in parallel; Unreleased covers changes after the latest release tag.'}
               </p>
             </div>
           </div>
