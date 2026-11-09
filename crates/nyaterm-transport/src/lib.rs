@@ -62,6 +62,7 @@ pub mod connection_attempt;
 #[cfg(windows)]
 pub mod local_conpty;
 pub mod network_route;
+pub mod protocol_transfer;
 pub mod ssh_channel;
 pub mod ssh_services;
 #[cfg(test)]
@@ -106,7 +107,7 @@ pub use x11::{
     prepare_x11_forwarding, resolve_x11_display_spec, resolve_x11_display_targets,
     rewrite_x11_auth_setup_packet,
 };
-mod trzsz;
+pub mod trzsz;
 pub mod xymodem;
 pub mod zmodem;
 

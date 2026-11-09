@@ -1170,7 +1170,9 @@ impl NyaTermApp {
         let viewport_cell = terminal_cell_for_visual_geometry(position, geometry);
         Some(TerminalSelectionEndpoint::new(
             TerminalBufferCellPos::new(absolute_line, viewport_cell.col),
-            super::metrics::terminal_cell_side_for_visual_geometry(position, geometry),
+            nyaterm_terminal_gpui::geometry::terminal_cell_side_for_visual_geometry(
+                position, geometry,
+            ),
         ))
     }
 }

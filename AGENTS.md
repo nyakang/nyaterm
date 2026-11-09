@@ -24,6 +24,12 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-ai-client`: UI-independent native AI provider HTTP clients,
   request and streaming-response adapters, model discovery, and proxy handling.
   Runtime/task ownership and AI feature orchestration remain in desktop.
+* `crates/nyaterm-preview`: UI-independent image/PDF decoding, text preview
+  parsing, pixel transformations and decoded-content contracts. Desktop owns
+  fetching, job lifecycle, GPUI image conversion and preview caches.
+* `crates/nyaterm-translation-client`: UI-independent native translation HTTP
+  clients and provider request/response adapters. Desktop owns translation
+  tasks, settings persistence, credential state and presentation.
 * `crates/nyaterm-cloud-storage`: UI-independent native and OpenDAL cloud-storage
   adapters, OAuth device authorization, token-refresh sinks, and HTTP I/O counters.
   Sync orchestration, caches, and credential persistence remain in desktop/store.
@@ -32,7 +38,7 @@ must include explicit conversion logic and tests.
   downloads, installation preparation, helper execution, and portable recovery.
   Desktop owns update state, scheduling, close guards, and native progress UI;
   cancellation and helper progress execution are injected through callbacks.
-  All three adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
+  These adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
   store, other business crates, or each other, including in development dependencies.
 * `crates/nyaterm-terminal`: terminal state machine, snapshots,
   control-sequence handling, encoding, and graphics protocols. It must remain

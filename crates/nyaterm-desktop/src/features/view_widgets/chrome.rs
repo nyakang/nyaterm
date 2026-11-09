@@ -20,77 +20,9 @@ pub(in crate::features) fn logo_mark(palette: ThemePalette) -> impl IntoElement 
         .child(super::icons::nyaterm_app_icon(palette, 22.))
 }
 
-pub(in crate::features) fn vertical_resize_handle_visual(
-    palette: ThemePalette,
-    dragging: bool,
-    highlighted: bool,
-) -> gpui::Div {
-    div()
-        .relative()
-        .w(px(5.))
-        .ml(px(-2.))
-        .mr(px(-2.))
-        .h_full()
-        .flex_none()
-        .child(
-            div()
-                .absolute()
-                .left(px(2.))
-                .top_0()
-                .bottom_0()
-                .w(px(1.))
-                .bg(rgb(palette.border)),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(1.))
-                .top_0()
-                .bottom_0()
-                .w(px(3.))
-                .bg(if dragging || highlighted {
-                    rgb(palette.primary)
-                } else {
-                    rgba(0x00000000)
-                }),
-        )
-}
-
-pub(in crate::features) fn horizontal_resize_handle_visual(
-    palette: ThemePalette,
-    dragging: bool,
-    highlighted: bool,
-) -> gpui::Div {
-    div()
-        .relative()
-        .h(px(5.))
-        .mt(px(-2.))
-        .mb(px(-2.))
-        .w_full()
-        .flex_none()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px(2.))
-                .h(px(1.))
-                .bg(rgb(palette.border)),
-        )
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px(1.))
-                .h(px(3.))
-                .bg(if dragging || highlighted {
-                    rgb(palette.primary)
-                } else {
-                    rgba(0x00000000)
-                }),
-        )
-}
+pub(in crate::features) use nyaterm_ui::resize_handle::{
+    horizontal_resize_handle_visual, vertical_resize_handle_visual,
+};
 
 pub(in crate::features) fn window_control_button(
     palette: ThemePalette,

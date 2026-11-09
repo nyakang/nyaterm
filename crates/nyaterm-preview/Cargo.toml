@@ -1,0 +1,14 @@
+[package]
+name = "nyaterm-preview"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nyaterm-core.workspace = true
+bytemuck = "=1.25.2"
+hayro.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+serde_json.workspace = true

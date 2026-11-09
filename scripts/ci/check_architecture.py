@@ -79,6 +79,8 @@ def dependency_errors() -> list[str]:
         "nyaterm-ai-client",
         "nyaterm-cloud-storage",
         "nyaterm-updater",
+        "nyaterm-preview",
+        "nyaterm-translation-client",
         "nyaterm-core",
         "nyaterm-transport",
         "nyaterm-files",
@@ -106,6 +108,8 @@ def dependency_errors() -> list[str]:
         ("nyaterm-ai-client", set()),
         ("nyaterm-cloud-storage", set()),
         ("nyaterm-updater", set()),
+        ("nyaterm-preview", set()),
+        ("nyaterm-translation-client", set()),
         ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
         ("nyaterm-transport", {"nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-files", {"nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
@@ -131,7 +135,7 @@ def dependency_errors() -> list[str]:
                 and package != "nyaterm-core"
             )
             wrong_adapter_direction = (
-                crate in {"nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater"}
+                crate in {"nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
             )

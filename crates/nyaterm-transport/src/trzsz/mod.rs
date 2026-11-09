@@ -20,6 +20,7 @@ mod archive;
 mod codec;
 mod modern;
 mod resume;
+pub mod runtime;
 
 const TRZSZ_PREFIX: &[u8] = b"::TRZSZ:TRANSFER:";
 // Bare colons are common shell echoes. A recognizable marker gets more time

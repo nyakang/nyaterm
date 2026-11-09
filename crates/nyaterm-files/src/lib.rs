@@ -2,6 +2,7 @@ pub mod download_path;
 pub mod drag_export;
 pub mod file_browser;
 pub mod local_fs;
+pub mod operations;
 pub mod remote_file;
 pub mod session_probe;
 pub mod sftp;

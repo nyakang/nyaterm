@@ -3,6 +3,10 @@ use gpui::{
     SharedString, WeakEntity, Window, div, font, prelude::*, px, rgb, rgba,
 };
 use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
+pub(in crate::features) use nyaterm_terminal_gpui::geometry::{
+    TerminalVisualScrollGeometry, terminal_effective_visual_scroll_offset_px,
+    terminal_snapshot_anchor_row_for_display_offset, terminal_snapshot_covers_display_offset,
+};
 use nyaterm_terminal_gpui::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 
 use crate::features::NyaTermApp;
@@ -45,6 +49,16 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use nyaterm_terminal::snapshot_window::terminal_snapshot_absolute_window;
+
+fn terminal_surface_text_first_repaint_ready(
+    state: &TerminalScrollVisualState,
+    text_updated: bool,
+    text_snapshot_cached: bool,
+) -> bool {
+    terminal_scroll_needs_text_first_repaint(state, text_updated) && text_snapshot_cached
+}
 
 mod wheel_zoom;
 mod wrapping;
@@ -320,18 +334,6 @@ pub(in crate::features) struct TerminalCursorBlinkBasis {
     /// Cursor visibility evaluated as if the blink phase were lit.
     pub cursor_visible_when_lit: bool,
     pub blink_enabled: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::features) struct TerminalVisualScrollGeometry {
-    pub snapshot_pending: bool,
-    pub target_offset: usize,
-    pub displayed_offset: usize,
-    pub residual_lines: f32,
-    pub viewport_anchor_row: usize,
-    pub snapshot_rows: usize,
-    pub viewport_rows: usize,
-    pub cell_height: f32,
 }
 
 pub(in crate::features) fn terminal_surface_paint_count() -> u64 {
@@ -2905,123 +2907,6 @@ impl TerminalSurface {
     }
 }
 
-pub(in crate::features) fn terminal_visual_scroll_offset_px(
-    target_offset: usize,
-    displayed_offset: usize,
-    residual_lines: f32,
-    cell_height: f32,
-) -> f32 {
-    terminal_visual_scroll_line_delta(target_offset, displayed_offset, residual_lines)
-        * cell_height.max(1.0)
-}
-
-fn terminal_visual_scroll_line_delta(
-    target_offset: usize,
-    displayed_offset: usize,
-    residual_lines: f32,
-) -> f32 {
-    let line_delta = target_offset as isize - displayed_offset as isize;
-    line_delta as f32 + residual_lines
-}
-
-fn terminal_surface_text_first_repaint_ready(
-    state: &TerminalScrollVisualState,
-    text_updated: bool,
-    text_snapshot_cached: bool,
-) -> bool {
-    terminal_scroll_needs_text_first_repaint(state, text_updated) && text_snapshot_cached
-}
-
-fn terminal_retained_visual_scroll_line_bounds(
-    viewport_anchor_row: usize,
-    snapshot_rows: usize,
-    viewport_rows: usize,
-) -> (f32, f32) {
-    let viewport_rows = viewport_rows.max(1);
-    let older_rows = viewport_anchor_row.min(snapshot_rows);
-    let newer_rows = snapshot_rows.saturating_sub(
-        viewport_anchor_row
-            .saturating_add(viewport_rows)
-            .min(snapshot_rows),
-    );
-    (-(newer_rows as f32), older_rows as f32)
-}
-
-pub(in crate::features) fn terminal_effective_visual_scroll_offset_px(
-    geometry: TerminalVisualScrollGeometry,
-) -> f32 {
-    let TerminalVisualScrollGeometry {
-        snapshot_pending,
-        target_offset,
-        displayed_offset,
-        residual_lines,
-        viewport_anchor_row,
-        snapshot_rows,
-        viewport_rows,
-        cell_height,
-    } = geometry;
-    if !snapshot_pending {
-        return terminal_visual_scroll_offset_px(
-            target_offset,
-            displayed_offset,
-            residual_lines,
-            cell_height,
-        );
-    }
-    let (min_lines, max_lines) = terminal_retained_visual_scroll_line_bounds(
-        viewport_anchor_row,
-        snapshot_rows,
-        viewport_rows,
-    );
-    terminal_visual_scroll_line_delta(target_offset, displayed_offset, residual_lines)
-        .clamp(min_lines, max_lines)
-        * cell_height.max(1.0)
-}
-
-pub(in crate::features) fn terminal_snapshot_covers_display_offset(
-    snapshot: &TerminalSnapshot,
-    display_offset: usize,
-    viewport_rows: usize,
-    scrollback_len: usize,
-) -> bool {
-    let viewport_rows = viewport_rows.max(1);
-    let real_total_rows = scrollback_len.saturating_add(viewport_rows);
-    let Some((snapshot_start, snapshot_end)) = terminal_snapshot_absolute_window(snapshot) else {
-        return false;
-    };
-    let desired_end = real_total_rows.saturating_sub(display_offset);
-    let desired_start = desired_end.saturating_sub(viewport_rows);
-    if let Some(index) = snapshot.logical_lines.as_ref() {
-        if index.physical_rows() != real_total_rows {
-            return false;
-        }
-        let max_top = index.logical_rows().saturating_sub(viewport_rows);
-        let top = if display_offset == 0 {
-            max_top
-        } else {
-            index.logical_row(desired_start).min(max_top)
-        };
-        return snapshot_start <= index.physical_row(top)
-            && index.physical_row((top + viewport_rows).min(index.logical_rows())) <= snapshot_end;
-    }
-    snapshot_start <= desired_start && desired_end <= snapshot_end
-}
-
-pub(in crate::features) fn terminal_snapshot_anchor_row_for_display_offset(
-    snapshot: &TerminalSnapshot,
-    display_offset: usize,
-    viewport_rows: usize,
-    scrollback_len: usize,
-) -> usize {
-    let viewport_rows = viewport_rows.max(1);
-    let real_total_rows = scrollback_len.saturating_add(viewport_rows);
-    let desired_end = real_total_rows.saturating_sub(display_offset);
-    let desired_start = desired_end.saturating_sub(viewport_rows);
-    terminal_snapshot_absolute_window(snapshot)
-        .map(|(snapshot_start, _)| desired_start.saturating_sub(snapshot_start))
-        .unwrap_or(0)
-}
-
 fn terminal_keyword_highlight_visible_rows(
     snapshot: &TerminalSnapshot,
     display_offset: usize,
@@ -3137,15 +3022,6 @@ fn terminal_snapshot_row_for_absolute_row(
         return None;
     }
     Some(absolute_row - start)
-}
-
-fn terminal_snapshot_absolute_window(snapshot: &TerminalSnapshot) -> Option<(usize, usize)> {
-    if snapshot.row_count() == 0 {
-        return None;
-    }
-    let end = snapshot.total_rows.saturating_sub(snapshot.display_offset);
-    let start = end.saturating_sub(snapshot.row_count());
-    Some((start, end))
 }
 
 fn terminal_surface_visible_rows_for_viewport(

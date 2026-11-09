@@ -16,6 +16,8 @@ members = [
     "crates/nyaterm-mcp",
     "crates/nyaterm-mcp-protocol",
     "crates/nyaterm-otp",
+    "crates/nyaterm-preview",
+    "crates/nyaterm-translation-client",
     "crates/nyaterm-plugin-api",
     "crates/nyaterm-plugin-host",
     "crates/nyaterm-rdp-helper",
@@ -104,6 +106,8 @@ nyaterm-desktop = { path = "crates/nyaterm-desktop" }
 nyaterm-ai-client = { path = "crates/nyaterm-ai-client" }
 nyaterm-cloud-storage = { path = "crates/nyaterm-cloud-storage" }
 nyaterm-otp = { path = "crates/nyaterm-otp" }
+nyaterm-preview = { path = "crates/nyaterm-preview" }
+nyaterm-translation-client = { path = "crates/nyaterm-translation-client" }
 nyaterm-plugin-api = { path = "crates/nyaterm-plugin-api" }
 nyaterm-plugin-host = { path = "crates/nyaterm-plugin-host" }
 nyaterm-remote-desktop = { path = "crates/nyaterm-remote-desktop" }

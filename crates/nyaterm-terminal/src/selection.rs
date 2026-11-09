@@ -630,3 +630,16 @@ mod tests {
         assert!(outside.expanded_for_snapshot(&snapshot).is_none());
     }
 }
+
+/// Inclusive cell coordinate inside the visible terminal grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TerminalCellPos {
+    pub row: usize,
+    pub col: usize,
+}
+
+impl TerminalCellPos {
+    pub fn new(row: usize, col: usize) -> Self {
+        Self { row, col }
+    }
+}

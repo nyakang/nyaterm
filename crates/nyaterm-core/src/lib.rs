@@ -1,3 +1,4 @@
+pub mod action_links;
 pub mod activation;
 pub mod agent_capture;
 pub mod ai;
@@ -28,6 +29,8 @@ pub mod note_export;
 pub mod packaging;
 pub mod plugins;
 pub mod portable_snapshot;
+pub mod quick_command_import;
+pub mod quick_command_script;
 pub mod raw_cli_capture;
 pub mod remote_preview;
 pub mod runtime;
@@ -35,10 +38,12 @@ pub mod secret;
 pub mod session_import;
 pub mod ssh_keys;
 pub mod sync_schema;
+pub mod temporary_connection;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod vnc_known_hosts;
+pub mod workspace_layout;
 pub mod terminal_file_drop {
     pub use super::terminal::file_drop::*;
 }

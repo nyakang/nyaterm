@@ -1,34 +1,43 @@
-use super::{
-    FindSearchJob, SELECTED_OCCURRENCE_SEARCH_CHUNK_ROWS, SelectedOccurrenceSearchJob,
-    TERMINAL_FRAME_COMMAND_QUEUE_CAP, TERMINAL_FRAME_EVENT_WAKE_ALL,
-    TERMINAL_FRAME_EVENT_WAKE_OUTPUT, TERMINAL_FRAME_EVENT_WAKE_SEARCH,
-    TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT, TERMINAL_FRAME_OUTPUT_BURST_BYTE_LIMIT,
-    TERMINAL_FRAME_OUTPUT_CHUNK_SIZE, TERMINAL_FRAME_OUTPUT_COALESCE_BYTE_LIMIT,
-    TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP, TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP,
-    TERMINAL_PERFORMANCE_RECOVERY_NOTICE, TERMINAL_RENDER_DEGRADATION_RECOVERY_CALM,
-    TERMINAL_SCROLLBACK_SNAPSHOT_CACHE_LIMIT, TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalDecorationCache,
-    TerminalFrameActionLinks, TerminalFrameCommand, TerminalFrameEvent, TerminalFrameEventQueue,
-    TerminalFrameEventQueuePushOutcome, TerminalFrameOutputBatch, TerminalFrameOutputEvent,
-    TerminalFrameOutputSubmission, TerminalFrameParts, TerminalFramePipeline,
-    TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
-    TerminalFrameSearchResult, TerminalFrameSession, TerminalFrameSnapshotEvent,
-    TerminalFrameSnapshotPurpose, TerminalPerformanceMode, TerminalPerformanceOverlay,
-    TerminalPresentation, TerminalProtocolState, TerminalRenderCache, TerminalViewState,
-    TerminalWorkPolicy, append_terminal_ui_output_tail, coalesce_terminal_frame_output_command,
+use super::frame_commands::{
+    TERMINAL_FRAME_COMMAND_QUEUE_CAP, TERMINAL_FRAME_OUTPUT_CHUNK_SIZE, TerminalFrameCommand,
     compact_stale_terminal_frame_commands, compact_terminal_frame_command_queue,
-    next_terminal_frame_command, prepare_terminal_frame_action_links,
-    prepare_terminal_frame_action_links_reusing, process_next_find_search_chunk,
-    process_next_selected_occurrence_search_chunk, process_terminal_frame_output_burst,
-    protect_terminal_output_burst, replace_selected_occurrence_search_job,
-    terminal_expensive_interactions_enabled, terminal_frame_command_channel,
-    terminal_frame_output_commands, terminal_frame_scroll_window_extra_rows,
-    terminal_frame_search_result_is_current, terminal_frame_snapshot_with_scroll_window,
-    terminal_line_decorations_estimated_bytes, terminal_snapshot_matches_grid_geometry,
+    terminal_frame_command_channel,
+};
+use super::frame_events::{
+    TERMINAL_FRAME_EVENT_WAKE_ALL, TERMINAL_FRAME_EVENT_WAKE_OUTPUT,
+    TERMINAL_FRAME_EVENT_WAKE_SEARCH, TERMINAL_FRAME_EVENT_WAKE_SNAPSHOT, TerminalFrameEvent,
+    TerminalFrameEventQueue, TerminalFrameEventQueuePushOutcome, TerminalFrameOutputEvent,
+    TerminalFrameSearchEvent, TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
+};
+use super::frame_pipeline::{
+    TerminalFrameOutputSubmission, TerminalFramePipeline, terminal_frame_output_commands,
+};
+use super::frame_search::{
+    FindSearchJob, SELECTED_OCCURRENCE_SEARCH_CHUNK_ROWS, SelectedOccurrenceSearchJob,
+    TerminalFrameSearchKey, TerminalFrameSearchPurpose, TerminalFrameSearchResult,
+    process_next_find_search_chunk, process_next_selected_occurrence_search_chunk,
+    replace_selected_occurrence_search_job, terminal_frame_search_result_is_current,
+};
+use super::frame_worker::{
+    TERMINAL_FRAME_OUTPUT_BURST_BYTE_LIMIT, TERMINAL_FRAME_OUTPUT_COALESCE_BYTE_LIMIT,
+    TerminalFrameOutputBatch, TerminalFrameSession, coalesce_terminal_frame_output_command,
+    next_terminal_frame_command, process_terminal_frame_output_burst,
     try_next_terminal_frame_command,
 };
+use super::{
+    TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP, TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP,
+    TERMINAL_PERFORMANCE_RECOVERY_NOTICE, TERMINAL_RENDER_DEGRADATION_RECOVERY_CALM,
+    TERMINAL_SCROLLBACK_SNAPSHOT_CACHE_LIMIT, TERMINAL_UI_OUTPUT_TAIL_CAP,
+    TerminalFrameActionLinks, TerminalFrameParts, TerminalPerformanceMode,
+    TerminalPerformanceOverlay, TerminalPresentation, TerminalProtocolState, TerminalViewState,
+    TerminalWorkPolicy, append_terminal_ui_output_tail, protect_terminal_output_burst,
+    terminal_expensive_interactions_enabled, terminal_frame_scroll_window_extra_rows,
+    terminal_frame_snapshot_with_scroll_window, terminal_snapshot_matches_grid_geometry,
+};
 use crate::models::recording::RecordingWritePipeline;
-use crate::terminal::{TerminalLineDecorations, terminal_screen_from_output};
+use crate::terminal::terminal_screen_from_output;
 use nyaterm_core::ActionLinksMatcherSettings;
+use nyaterm_terminal::action_links::prepare_terminal_frame_action_links;
 use nyaterm_terminal::{
     TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
     TerminalSearchQuery, TerminalSnapshot,
@@ -196,55 +205,6 @@ fn terminal_presentation_work_policy_is_total_and_distinguishes_visible_inactive
         TerminalPresentation::resolve(true, false),
         TerminalPresentation::Background
     );
-}
-
-#[test]
-fn terminal_decoration_cache_reuses_shared_lines() {
-    let cache = TerminalRenderCache::default();
-    let first = cache.line_decorations(7, || {
-        vec![TerminalLineDecorations {
-            link_ranges: vec![(1, 3)],
-            ..TerminalLineDecorations::default()
-        }]
-    });
-    let second = cache.line_decorations(7, || panic!("cache hit should not rebuild"));
-
-    assert!(Arc::ptr_eq(&first, &second));
-    assert_eq!(cache.decoration_stats(), (1, 1));
-}
-
-#[test]
-fn terminal_decoration_cache_evicts_incrementally_by_lru() {
-    let mut cache = TerminalDecorationCache::default();
-    let build = || vec![TerminalLineDecorations::default()];
-
-    cache.line_decorations_with_limits(1, build, 2, usize::MAX);
-    cache.line_decorations_with_limits(2, build, 2, usize::MAX);
-    cache.line_decorations_with_limits(1, build, 2, usize::MAX);
-    cache.line_decorations_with_limits(3, build, 2, usize::MAX);
-
-    assert!(cache.decoration_lines.contains_key(&1));
-    assert!(!cache.decoration_lines.contains_key(&2));
-    assert!(cache.decoration_lines.contains_key(&3));
-    assert_eq!(cache.decoration_lines.len(), 2);
-}
-
-#[test]
-fn terminal_decoration_cache_respects_estimated_byte_budget() {
-    let sample = vec![TerminalLineDecorations {
-        search_ranges: vec![(1, 2); 8],
-        ..TerminalLineDecorations::default()
-    }];
-    let entry_bytes = terminal_line_decorations_estimated_bytes(&sample);
-    let mut cache = TerminalDecorationCache::default();
-
-    for key in 1..=3 {
-        cache.line_decorations_with_limits(key, || sample.clone(), 10, entry_bytes * 2);
-    }
-
-    assert!(cache.estimated_bytes <= entry_bytes * 2);
-    assert_eq!(cache.decoration_lines.len(), 2);
-    assert!(!cache.decoration_lines.contains_key(&1));
 }
 
 fn output_frame_with_sizes(
@@ -712,16 +672,6 @@ fn terminal_priority_snapshot_event_covers_predictive_user_scroll_runs() {
         offset + fast_delta,
         viewport_rows
     ));
-}
-
-#[test]
-fn terminal_frame_scroll_window_extra_rows_covers_fast_scroll_runs() {
-    assert_eq!(terminal_frame_scroll_window_extra_rows(12, false), 32);
-    assert_eq!(terminal_frame_scroll_window_extra_rows(40, false), 80);
-    assert_eq!(terminal_frame_scroll_window_extra_rows(120, false), 192);
-    assert_eq!(terminal_frame_scroll_window_extra_rows(12, true), 64);
-    assert_eq!(terminal_frame_scroll_window_extra_rows(40, true), 120);
-    assert_eq!(terminal_frame_scroll_window_extra_rows(160, true), 256);
 }
 
 #[test]
@@ -1557,52 +1507,6 @@ fn terminal_view_backend_resize_detects_pixel_only_changes() {
 }
 
 #[test]
-fn terminal_protocol_state_encodes_sgr_mouse_report() {
-    let protocol = TerminalProtocolState {
-        mouse_reporting: true,
-        mouse_sgr: true,
-        ..TerminalProtocolState::default()
-    };
-
-    assert_eq!(
-        protocol.encode_mouse_report(0, 1, 2, true, false, false, false, false),
-        b"\x1b[<0;2;3M".to_vec()
-    );
-    assert_eq!(
-        protocol.encode_mouse_report(0, 1, 2, false, false, false, false, false),
-        b"\x1b[<0;2;3m".to_vec()
-    );
-}
-
-#[test]
-fn terminal_protocol_state_blocks_alternate_scroll_when_mouse_reporting() {
-    let protocol = TerminalProtocolState {
-        alternate_screen: true,
-        alternate_scroll: true,
-        mouse_reporting: true,
-        application_cursor_keys: true,
-        ..TerminalProtocolState::default()
-    };
-
-    assert_eq!(protocol.alternate_scroll_payload(1), None);
-}
-
-#[test]
-fn terminal_protocol_state_emits_alternate_scroll_payload() {
-    let protocol = TerminalProtocolState {
-        alternate_screen: true,
-        alternate_scroll: true,
-        application_cursor_keys: true,
-        ..TerminalProtocolState::default()
-    };
-
-    assert_eq!(
-        protocol.alternate_scroll_payload(1),
-        Some(b"\x1bOA".to_vec())
-    );
-}
-
-#[test]
 fn terminal_frame_event_queue_coalesces_pure_output_to_latest() {
     let queue = TerminalFrameEventQueue::new(8);
     let mut first = output_frame_with_sizes(1, 0);
@@ -2231,125 +2135,6 @@ fn terminal_frame_event_queue_drains_batch_with_limit() {
         Some(TerminalFrameEvent::Output(frame)) if frame.revision == 3
     ));
     assert_eq!(queue.len(), 0);
-}
-
-#[test]
-fn terminal_frame_action_links_align_with_snapshot_lines() {
-    let mut screen = TerminalScreen::default();
-    screen.advance_decoded_text("visit http://example.com\nping 10.0.0.1");
-    let snapshot = screen.viewport_snapshot(0);
-    let matchers = ActionLinksMatcherSettings::default();
-
-    let links = prepare_terminal_frame_action_links(&snapshot, true, &matchers).unwrap();
-    let absolute_end_row = snapshot.total_rows.saturating_sub(snapshot.display_offset);
-    let absolute_start_row = absolute_end_row.saturating_sub(snapshot.row_count());
-
-    assert_eq!(links.absolute_start_row, absolute_start_row);
-    assert_eq!(links.absolute_end_row, absolute_end_row);
-    assert_eq!(links.matches_by_line.len(), snapshot.row_count());
-    assert_eq!(links.cell_ranges_by_line.len(), snapshot.row_count());
-    assert!(
-        links
-            .matches_by_line
-            .iter()
-            .flatten()
-            .any(|item| item.value == "http://example.com")
-    );
-    assert!(
-        links
-            .cell_ranges_by_line
-            .iter()
-            .flatten()
-            .any(|range| *range == (6, 24))
-    );
-    assert!(
-        links
-            .matches_by_line
-            .iter()
-            .flatten()
-            .any(|item| item.value == "10.0.0.1")
-    );
-
-    let disabled = prepare_terminal_frame_action_links(&snapshot, false, &matchers).unwrap();
-    assert!(disabled.matches_by_line.iter().all(Vec::is_empty));
-    assert!(disabled.cell_ranges_by_line.iter().all(Vec::is_empty));
-    assert_ne!(links.matcher_key, disabled.matcher_key);
-}
-
-#[test]
-fn mac_ranges_map_wide_text_and_invalidate_only_when_the_matcher_changes() {
-    let mut screen = TerminalScreen::new(80, 3);
-    screen.advance_decoded_text("设备 [905d.7c16.b6d9]");
-    let snapshot = screen.viewport_snapshot(0);
-    let mut matchers = ActionLinksMatcherSettings::default();
-    let links = prepare_terminal_frame_action_links(&snapshot, true, &matchers).unwrap();
-    assert_eq!(
-        links.matches_by_line[0][0].kind,
-        crate::action_links::ActionLinkKind::Mac
-    );
-    assert_eq!(links.cell_ranges_by_line[0], [(6, 20)]);
-    let (_, stats) =
-        prepare_terminal_frame_action_links_reusing(&snapshot, true, &matchers, Some(&links));
-    assert_eq!(stats.reused_rows, snapshot.row_count());
-    assert_eq!(stats.rebuilt_rows, 0);
-    matchers.mac = false;
-    let (disabled, stats) =
-        prepare_terminal_frame_action_links_reusing(&snapshot, true, &matchers, Some(&links));
-    let disabled = disabled.unwrap();
-    assert_ne!(links.matcher_key, disabled.matcher_key);
-    assert_eq!(stats.reused_rows, 0);
-    assert_eq!(stats.rebuilt_rows, snapshot.row_count());
-    assert!(disabled.matches_by_line.iter().all(Vec::is_empty));
-    assert!(disabled.cell_ranges_by_line.iter().all(Vec::is_empty));
-}
-
-#[test]
-fn terminal_frame_action_links_reuse_unchanged_rows() {
-    let mut screen = TerminalScreen::new(80, 8);
-    screen.advance_decoded_text("visit http://example.com");
-    let first_snapshot = screen.viewport_snapshot(0);
-    let matchers = ActionLinksMatcherSettings::default();
-    let first = prepare_terminal_frame_action_links(&first_snapshot, true, &matchers).unwrap();
-
-    let (_, unchanged_stats) =
-        prepare_terminal_frame_action_links_reusing(&first_snapshot, true, &matchers, Some(&first));
-    assert_eq!(unchanged_stats.reused_rows, first_snapshot.row_count());
-    assert_eq!(unchanged_stats.rebuilt_rows, 0);
-
-    screen.advance_decoded_text(" updated");
-    let changed_snapshot = screen.viewport_snapshot(0);
-    let (_, changed_stats) = prepare_terminal_frame_action_links_reusing(
-        &changed_snapshot,
-        true,
-        &matchers,
-        Some(&first),
-    );
-    assert!(changed_stats.reused_rows > 0);
-    assert!(changed_stats.rebuilt_rows > 0);
-    assert_eq!(
-        changed_stats.reused_rows + changed_stats.rebuilt_rows,
-        changed_snapshot.row_count()
-    );
-}
-
-#[test]
-fn terminal_frame_action_link_matcher_change_rebuilds_all_rows() {
-    let mut screen = TerminalScreen::new(80, 8);
-    screen.advance_decoded_text("visit http://example.com and 10.0.0.1");
-    let snapshot = screen.viewport_snapshot(0);
-    let matchers = ActionLinksMatcherSettings::default();
-    let first = prepare_terminal_frame_action_links(&snapshot, true, &matchers).unwrap();
-    let mut changed_matchers = matchers.clone();
-    changed_matchers.ipv4 = false;
-
-    let (_, stats) = prepare_terminal_frame_action_links_reusing(
-        &snapshot,
-        true,
-        &changed_matchers,
-        Some(&first),
-    );
-    assert_eq!(stats.reused_rows, 0);
-    assert_eq!(stats.rebuilt_rows, snapshot.row_count());
 }
 
 #[test]
@@ -3813,7 +3598,7 @@ fn decoded_output_is_an_ordering_barrier_and_uses_utf8_in_a_gbk_session() {
         1000,
         &recording.writer(),
     );
-    let decoded = super::terminal_advance_decoded_result(
+    let decoded = super::frame_worker::terminal_advance_decoded_result(
         &mut session.screen,
         "s1",
         "\x1b[31m😀\x1b[0m",

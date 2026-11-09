@@ -49,6 +49,28 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::{fs, path::PathBuf};
 
+#[cfg(unix)]
+async fn run_script_fixture<T, F, Fut>(mut operation: F) -> Result<T, ShellEnvironmentError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ShellEnvironmentError>>,
+{
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match operation().await {
+            // A parallel fork can briefly retain a just-written script's writer
+            // until exec closes it. ETXTBSY means the fixture never started, so
+            // retrying admission cannot duplicate its observable shell effects.
+            Err(ShellEnvironmentError::Spawn(error))
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(any(unix, windows))]
 impl super::ShellEnvironmentCache {
     pub(crate) fn with_values_for_test(
@@ -749,8 +771,7 @@ async fn shell_loader_reads_a_custom_exported_value() {
     fs::set_permissions(&shell, permissions).expect("make shell test wrapper executable");
 
     let cache = ShellEnvironmentCache::with_shell_path_for_test(PathBuf::from(&shell));
-    let value = cache
-        .refresh("NYATERM_TEST_CUSTOM_AGENT")
+    let value = run_script_fixture(|| cache.refresh("NYATERM_TEST_CUSTOM_AGENT"))
         .await
         .expect("load custom exported value")
         .expect("custom exported value is present");
@@ -780,8 +801,7 @@ async fn targeted_shell_lookup_preserves_empty_and_unset_values() {
         "NYATERM_TEST_TARGETED_EMPTY".to_string(),
         "HOME".to_string(),
     ];
-    cache
-        .refresh_many(&variables)
+    run_script_fixture(|| cache.refresh_many(&variables))
         .await
         .expect("load targeted shell values");
 
@@ -815,8 +835,7 @@ async fn initialize_reads_the_complete_custom_shell_environment() {
     fs::set_permissions(&shell, permissions).expect("make complete shell test wrapper executable");
 
     let cache = ShellEnvironmentCache::with_shell_path_for_test(shell);
-    cache
-        .initialize()
+    run_script_fixture(|| cache.initialize())
         .await
         .expect("load complete shell environment");
     let snapshot = cache.snapshot().unwrap().expect("complete shell snapshot");
@@ -867,8 +886,7 @@ async fn resolve_refreshes_the_complete_snapshot_once_for_a_new_variable() {
     fs::set_permissions(&shell, permissions).expect("make refresh shell test wrapper executable");
 
     let cache = ShellEnvironmentCache::with_shell_path_for_test(shell);
-    cache
-        .initialize()
+    run_script_fixture(|| cache.initialize())
         .await
         .expect("load initial shell snapshot");
     assert!(cache.cached("NYATERM_TEST_LATE_VALUE").unwrap().is_none());
@@ -910,8 +928,7 @@ async fn cancelled_auto_refresh_does_not_leave_the_cache_stuck() {
         .expect("make cancelled refresh shell wrapper executable");
 
     let cache = ShellEnvironmentCache::with_shell_path_for_test(shell);
-    cache
-        .initialize()
+    run_script_fixture(|| cache.initialize())
         .await
         .expect("load initial shell snapshot");
     assert!(cache.cached(&variable).unwrap().is_none());
