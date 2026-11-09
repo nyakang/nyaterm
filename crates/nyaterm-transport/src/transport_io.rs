@@ -1,11 +1,13 @@
 //! Protocol writers, readers, and terminal transport adapters.
+pub(crate) mod telnet_naws;
+
 use crate::local_shell::LocalShellPathStyle;
 use crate::session::{ManagedSession, local_pty_size};
 use crate::session_event_queue::SessionEventQueue;
 use crate::ssh_shell_integration::SshIntegrationOutput;
 use crate::ssh_worker::{SshCommand, TmuxCommandSender, send_session_error};
 use crate::telnet_codec::{
-    DO, DONT, OPT_NAWS, TelnetCommandDecoder, TelnetNawsState, negotiate_response, unescape_iac_iac,
+    DO, DONT, OPT_NAWS, TelnetCommandDecoder, negotiate_response, unescape_iac_iac,
 };
 use crate::telnet_input::{TelnetInputState, telnet_auto_login_line_bytes};
 use crate::telnet_prompts::{
@@ -13,6 +15,7 @@ use crate::telnet_prompts::{
     default_username_regex, default_wake_regex, last_chars, last_login_regex, last_non_empty_line,
     prompt_candidates, strip_telnet_auto_login_control_sequences,
 };
+use crate::transport_io::telnet_naws::TelnetNawsWriter;
 use crate::writer_mailbox::WriterMailbox;
 use crate::{
     CleanupOperation, SerialSessionConfig, SessionEvent, TelnetSessionConfig, TerminalTransport,
@@ -53,7 +56,7 @@ pub struct TelnetTransport {
     pub(crate) backspace_as_bs: bool,
     pub(crate) input: TelnetInputState,
     pub(crate) auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
-    pub(crate) naws: Arc<TelnetNawsState>,
+    pub(crate) naws: TelnetNawsWriter,
     pub(crate) event_queue: SessionEventQueue,
     pub(crate) reader_thread: Option<JoinHandle<()>>,
 }
@@ -235,10 +238,6 @@ impl QueuedTransportWriter {
             telnet_lifecycle,
             cancellation: None,
         })
-    }
-
-    pub(crate) fn write_telnet_control(&self, data: Vec<u8>) -> anyhow::Result<()> {
-        queue_telnet_control(&self.command_tx, data)
     }
 
     pub(crate) fn write(&self, data: Vec<u8>) -> anyhow::Result<()> {
@@ -510,12 +509,9 @@ impl TerminalTransport for TelnetTransport {
         _pixel_width: u16,
         _pixel_height: u16,
     ) -> anyhow::Result<()> {
+        self.naws.resize(cols, rows)?;
         self.info.cols = cols;
         self.info.rows = rows;
-        self.naws.update_size(cols, rows);
-        if let Some(naws) = self.naws.payload() {
-            self.writer.write_telnet_control(naws)?;
-        }
         Ok(())
     }
 
@@ -752,7 +748,7 @@ pub(crate) fn spawn_tcp_reader_thread(
     command_tx: WriterMailbox,
     lifecycle: Arc<TelnetWriterLifecycle>,
     config: TelnetSessionConfig,
-    naws: Arc<TelnetNawsState>,
+    naws: TelnetNawsWriter,
     auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
     event_queue: SessionEventQueue,
 ) -> std::io::Result<JoinHandle<()>> {
@@ -780,17 +776,19 @@ pub(crate) fn spawn_tcp_reader_thread(
                         unescape_iac_iac(&buffer[..read])
                     } else {
                         decoder.decode(&buffer[..read], &mut |command, option| {
-                            let response = match (command, option) {
-                                (DO, OPT_NAWS) if config.send_naws => naws.accept(),
-                                (DONT, OPT_NAWS) => {
-                                    naws.reject();
-                                    negotiate_response(command, option, config.send_sga)
+                            if lifecycle.is_stopped() {
+                                return;
+                            }
+                            let queued = match (command, option) {
+                                (DO | DONT, OPT_NAWS) => {
+                                    naws.negotiate(command).map_err(anyhow::Error::from)
                                 }
-                                _ => negotiate_response(command, option, config.send_sga),
+                                _ => queue_telnet_control(
+                                    &command_tx,
+                                    negotiate_response(command, option, config.send_sga),
+                                ),
                             };
-                            if !response.is_empty()
-                                && let Err(error) = queue_telnet_control(&command_tx, response)
-                            {
+                            if let Err(error) = queued {
                                 send_session_error(&event_queue, &session_id, error);
                                 lifecycle.stop();
                             }

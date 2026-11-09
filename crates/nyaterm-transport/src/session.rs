@@ -5,8 +5,8 @@ use crate::local_shell::LocalShellPathStyle;
 use crate::session_event_queue::SessionEventQueue;
 use crate::ssh_services::SshSessionServices;
 use crate::ssh_worker::{SshCommand, TmuxCommandSender, run_ssh_worker};
-use crate::telnet_codec::{TelnetNawsState, naws_offer};
 use crate::telnet_input::TelnetInputState;
+use crate::transport_io::telnet_naws::TelnetNawsWriter;
 use crate::transport_io::{
     QueuedTransportWriter, TelnetAutoLoginState, TelnetWriterLifecycle, TelnetWriterPolicy,
     WriteCapacity, WriterFlushPolicy, open_serial_port, spawn_serial_reader_thread,
@@ -550,10 +550,15 @@ impl SessionManager {
             }),
         )
         .map_err(SessionError::Worker)?;
-        if let Some(offer) = naws_offer(&config) {
-            let _ = writer.write_telnet_control(offer);
-        }
-        let naws = Arc::new(TelnetNawsState::new(config.cols, config.rows));
+        let naws = TelnetNawsWriter::new(writer.command_tx.clone(), &config);
+        naws.offer().map_err(|error| {
+            lifecycle.stop();
+            writer.close();
+            if let Some(route) = &route {
+                route.close();
+            }
+            SessionError::Worker(error)
+        })?;
         let reader_thread = spawn_tcp_reader_thread(
             session_id.clone(),
             reader_stream,

@@ -1,11 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-use crate::TelnetSessionConfig;
-
 pub(super) const IAC: u8 = 255;
 pub(super) const NOP: [u8; 2] = [IAC, 241];
 pub(super) const WILL: u8 = 251;
-const WONT: u8 = 252;
+pub(super) const WONT: u8 = 252;
 pub(super) const DO: u8 = 253;
 pub(super) const DONT: u8 = 254;
 const SB: u8 = 250;
@@ -36,73 +32,84 @@ pub(super) fn negotiate_response(command: u8, option: u8, send_sga: bool) -> Vec
     }
 }
 
-/// RFC 1073 requires an offer before any window-size subnegotiation. Sending
-/// the subnegotiation first makes embedded Telnet servers echo its binary
-/// payload as typed input, which corrupts the login prompt.
-pub(super) fn naws_offer(config: &TelnetSessionConfig) -> Option<Vec<u8>> {
-    if config.raw_tcp || !config.send_naws {
-        return None;
-    }
-    Some(vec![IAC, WILL, OPT_NAWS])
-}
-
 pub(super) fn naws_subnegotiation(cols: u16, rows: u16) -> Vec<u8> {
-    vec![
-        IAC,
-        SB,
-        OPT_NAWS,
-        (cols >> 8) as u8,
-        (cols & 0xff) as u8,
-        (rows >> 8) as u8,
-        (rows & 0xff) as u8,
-        IAC,
-        SE,
-    ]
+    let mut wire = Vec::with_capacity(13);
+    wire.extend_from_slice(&[IAC, SB, OPT_NAWS]);
+    // RFC 1073: escape only the binary dimensions, not the frame delimiters.
+    for byte in cols.to_be_bytes().into_iter().chain(rows.to_be_bytes()) {
+        wire.push(byte);
+        if byte == IAC {
+            wire.push(IAC);
+        }
+    }
+    wire.extend_from_slice(&[IAC, SE]);
+    wire
 }
 
-/// Shared between the Telnet reader and transport so resizes only send NAWS
-/// after the peer accepted the offer, using the latest dimensions.
+#[derive(Clone, Copy)]
+enum NawsNegotiation {
+    Disabled,
+    Offered,
+    Enabled,
+}
+
+/// Pure NAWS transitions. The transport adapter serializes each transition
+/// with its control-message enqueue, including failed enqueue handling.
+#[derive(Clone, Copy)]
 pub(super) struct TelnetNawsState {
-    accepted: AtomicBool,
-    size: AtomicU64,
+    negotiation: NawsNegotiation,
+    cols: u16,
+    rows: u16,
 }
 
 impl TelnetNawsState {
     pub(super) fn new(cols: u16, rows: u16) -> Self {
         Self {
-            accepted: AtomicBool::new(false),
-            size: AtomicU64::new(pack_size(cols, rows)),
+            negotiation: NawsNegotiation::Disabled,
+            cols,
+            rows,
         }
     }
 
-    pub(super) fn accept(&self) -> Vec<u8> {
-        self.accepted.store(true, Ordering::Relaxed);
-        let (cols, rows) = unpack_size(self.size.load(Ordering::Relaxed));
-        naws_subnegotiation(cols, rows)
+    pub(super) fn offer(&mut self) -> Vec<u8> {
+        if !matches!(self.negotiation, NawsNegotiation::Disabled) {
+            return Vec::new();
+        }
+        self.negotiation = NawsNegotiation::Offered;
+        vec![IAC, WILL, OPT_NAWS]
     }
 
-    pub(super) fn reject(&self) {
-        self.accepted.store(false, Ordering::Relaxed);
+    pub(super) fn accept(&mut self) -> Vec<u8> {
+        let mut response = match self.negotiation {
+            NawsNegotiation::Disabled => vec![IAC, WILL, OPT_NAWS],
+            NawsNegotiation::Offered => Vec::new(),
+            // RFC 854 prohibits acknowledging a mode already in effect.
+            NawsNegotiation::Enabled => return Vec::new(),
+        };
+        self.negotiation = NawsNegotiation::Enabled;
+        response.extend(naws_subnegotiation(self.cols, self.rows));
+        response
     }
 
-    pub(super) fn update_size(&self, cols: u16, rows: u16) {
-        self.size.store(pack_size(cols, rows), Ordering::Relaxed);
+    pub(super) fn reject(&mut self) -> Vec<u8> {
+        let response = if matches!(self.negotiation, NawsNegotiation::Enabled) {
+            vec![IAC, WONT, OPT_NAWS]
+        } else {
+            Vec::new()
+        };
+        self.negotiation = NawsNegotiation::Disabled;
+        response
     }
 
-    pub(super) fn payload(&self) -> Option<Vec<u8>> {
-        self.accepted.load(Ordering::Relaxed).then(|| {
-            let (cols, rows) = unpack_size(self.size.load(Ordering::Relaxed));
+    pub(super) fn resize(&mut self, cols: u16, rows: u16) -> Vec<u8> {
+        self.cols = cols;
+        self.rows = rows;
+        if matches!(self.negotiation, NawsNegotiation::Enabled) {
             naws_subnegotiation(cols, rows)
-        })
+        } else {
+            Vec::new()
+        }
     }
-}
-
-fn pack_size(cols: u16, rows: u16) -> u64 {
-    (u64::from(cols) << 16) | u64::from(rows)
-}
-
-fn unpack_size(size: u64) -> (u16, u16) {
-    ((size >> 16) as u16, size as u16)
 }
 
 pub(super) fn unescape_iac_iac(data: &[u8]) -> Vec<u8> {
@@ -183,6 +190,82 @@ pub(super) fn escape_telnet_application_data(data: &[u8], raw_tcp: bool) -> Vec<
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod naws_tests {
+    use super::{TelnetNawsState, naws_subnegotiation};
+
+    #[test]
+    fn dimensions_use_network_order_and_escape_iac_only_inside_the_payload() {
+        let cases: &[(u16, u16, &[u8])] = &[
+            (80, 24, &[255, 250, 31, 0, 80, 0, 24, 255, 240]),
+            (0, 0, &[255, 250, 31, 0, 0, 0, 0, 255, 240]),
+            (255, 24, &[255, 250, 31, 0, 255, 255, 0, 24, 255, 240]),
+            (80, 255, &[255, 250, 31, 0, 80, 0, 255, 255, 255, 240]),
+            (256, 256, &[255, 250, 31, 1, 0, 1, 0, 255, 240]),
+            (
+                65280,
+                65280,
+                &[255, 250, 31, 255, 255, 0, 255, 255, 0, 255, 240],
+            ),
+            (
+                255,
+                255,
+                &[255, 250, 31, 0, 255, 255, 0, 255, 255, 255, 240],
+            ),
+            (
+                65535,
+                65535,
+                &[
+                    255, 250, 31, 255, 255, 255, 255, 255, 255, 255, 255, 255, 240,
+                ],
+            ),
+        ];
+        for &(cols, rows, expected) in cases {
+            assert_eq!(naws_subnegotiation(cols, rows), expected, "{cols}x{rows}");
+        }
+    }
+
+    #[test]
+    fn offer_acceptance_reports_cached_size_and_duplicate_acceptance_is_silent() {
+        let mut state = TelnetNawsState::new(80, 24);
+        assert!(state.resize(90, 30).is_empty());
+        assert_eq!(state.offer(), [255, 251, 31]);
+        assert!(state.offer().is_empty());
+        assert!(state.resize(100, 40).is_empty());
+        assert_eq!(state.accept(), [255, 250, 31, 0, 100, 0, 40, 255, 240]);
+        assert!(state.accept().is_empty());
+        assert_eq!(
+            state.resize(120, 50),
+            [255, 250, 31, 0, 120, 0, 50, 255, 240]
+        );
+    }
+
+    #[test]
+    fn refusal_and_disable_require_a_new_will_before_reacceptance() {
+        for previously_enabled in [false, true] {
+            let mut state = TelnetNawsState::new(80, 24);
+            state.offer();
+            if previously_enabled {
+                state.accept();
+            }
+            assert_eq!(
+                state.reject(),
+                if previously_enabled {
+                    vec![255, 252, 31]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(state.reject().is_empty());
+            assert!(state.resize(100, 40).is_empty());
+            assert_eq!(
+                state.accept(),
+                [255, 251, 31, 255, 250, 31, 0, 100, 0, 40, 255, 240]
+            );
+        }
+    }
 }
 
 #[cfg(test)]

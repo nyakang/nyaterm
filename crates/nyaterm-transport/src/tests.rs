@@ -3302,7 +3302,7 @@ fn telnet_writer_resets_idle_after_application_control_and_login_sends() {
             Err(mpsc::RecvTimeoutError::Timeout)
         ));
         if control {
-            writer.write_telnet_control(payload.clone()).unwrap();
+            crate::transport_io::queue_telnet_control(&writer.command_tx, payload.clone()).unwrap();
         } else {
             writer.write(payload.clone()).unwrap();
         }
