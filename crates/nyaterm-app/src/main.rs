@@ -40,6 +40,11 @@ fn main() -> anyhow::Result<()> {
         SingleInstanceOutcome::Owner(owner) => owner,
         SingleInstanceOutcome::Forwarded => return Ok(()),
     };
+    if initial_activation.parse().has_conflicting_window_options() {
+        return Err(
+            nyaterm_core::activation::ActivationParseError::ConflictingWindowOptions.into(),
+        );
+    }
     let activation_tx = instance_owner.activation_sender();
     let activation_rx = instance_owner.take_activation_receiver();
     let _log_guard = init_tracing(&runtime)?;

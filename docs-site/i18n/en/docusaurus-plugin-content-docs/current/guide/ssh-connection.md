@@ -221,14 +221,19 @@ A temporary session never becomes a saved connection: NyaTerm strips the connect
 
 ## External invocation and protocol links
 
-Open SSH, Telnet, or local terminals from browsers, scripts, and launchers. External connections reuse the most recently used workspace, creating a window when none is available. Launching without arguments opens a new window; use `--reuse-window` to explicitly reuse one.
+Open SSH, Telnet, or local terminals from browsers, scripts, and launchers. Launching the app or opening an external connection restores and activates the most recently used workspace window, creating one when none is available. `--reuse-window` remains supported; `--new-window` explicitly creates an independent workspace and handles any accompanying connection there. These flags are mutually exclusive: a conflicting invocation is rejected without opening connections or creating windows.
 
 ```powershell
+NyaTerm.exe
 NyaTerm.exe ssh://root@example.com:22
 NyaTerm.exe --reuse-window
+NyaTerm.exe --new-window
+NyaTerm.exe --new-window ssh://root@example.com:22
 NyaTerm.exe --local --cwd "C:\中文 目录"
 NyaTerm.exe --local "--cwd=C:\My Projects"
 ```
+
+When the process is not running, a normal launch restores the workspace windows in the saved list. `--new-window` restores them and creates one additional active window. A fresh installation with no saved workspaces opens only one window. The session-tab restoration setting does not control independent workspace window restoration.
 
 Stable installers declare the `nyaterm`, `ssh`, and `telnet` protocols. Preview installers declare only `nyaterm-preview`. Your OS may ask you to choose a default handler. Uninstall removes a registration only while it still points to that installation. Portable packages do not register protocols automatically.
 
@@ -257,7 +262,7 @@ Links without passwords first match saved connections by protocol, normalized ho
 
 One-time passwords are allowed only in `ssh://` user information. Such links always create temporary sessions and never match or change saved credentials. The password remains in memory for reconnects in the current process and is excluded from restoration, backups, and sync. Authenticate again after restarting the app. Calling tools and browsers may retain links in history, so treat password-bearing links as sensitive.
 
-Links cannot supply startup commands, proxies, jump hosts, private keys, or forwarding configuration. Unknown/duplicate parameters, invalid ports, and malformed encoding are rejected. Batches are processed independently so invalid entries do not block valid ones, with at most 16 connection intents and 4 KiB per argument. Duplicate OS deliveries are suppressed within 500ms. Requests wait for startup, restoration, unlocking, and existing dialogs; closing a window cancels its remaining requests.
+Links cannot supply startup commands, proxies, jump hosts, private keys, or forwarding configuration. Unknown/duplicate parameters, invalid ports, and malformed encoding are rejected. Batches are processed independently so invalid entries do not block valid ones, with at most 16 connection intents and 4 KiB per argument. Repeated connection intents are suppressed within 500ms; explicit window creation still takes place. Requests wait for startup, restoration, unlocking, and existing dialogs; closing a window cancels its remaining requests.
 
 ## Session input synchronization
 

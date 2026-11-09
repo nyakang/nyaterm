@@ -3,12 +3,12 @@
     "confirmShellReady": "已恢復 Shell，確認允許自動執行"
   },
   "tray": {
-    "show": "顯示主視窗",
+    "show": "顯示最近使用的視窗",
     "newWindow": "新增視窗",
     "newConnection": "新增連線…",
     "push": "立即推送",
     "pull": "立即拉取",
-    "minimizeToTray": "關閉時最小化到系統匣",
+    "minimizeToTray": "關閉最後一個視窗時最小化到系統匣",
     "lock": "鎖定介面",
     "update": "檢查更新",
     "quit": "結束 NyaTerm",
@@ -2993,8 +2993,8 @@
     "masterPasswordSwitchDesc": "開啟後可保護鎖屏和本機敏感資料；雲端同步啟用時必須保持開啟。",
     "maxTransferRetries": "最大重試次數",
     "maxTransferRetriesDesc": "傳輸失敗時的重試次數 (0-10)。",
-    "minimizeToTray": "關閉時最小化到系統匣",
-    "minimizeToTrayDesc": "視窗關閉時保持應用程式在背景執行。",
+    "minimizeToTray": "關閉最後一個視窗時最小化到系統匣",
+    "minimizeToTrayDesc": "關閉最後一個工作區視窗時保留工作區並在背景執行；有多個工作區視窗時，關閉會移除目前工作區。",
     "minimumContrastRatio": "最小對比度",
     "boldDefaultForeground": "粗體預設前景色增強",
     "boldDefaultForegroundDesc": "僅對未指定 ANSI 前景色的粗體終端文字使用高亮前景色。",
@@ -3190,7 +3190,7 @@
     "showWorkspacePaddingDesc": "在終端內容左側增加一點空白區域。",
     "startupBehavior": "啟動行為",
     "startupRestore": "啟動時恢復先前的工作階段標籤",
-    "startupRestoreDesc": "自動重新開啟在應用程式上次關閉時處於活動狀態的終端工作階段。",
+    "startupRestoreDesc": "自動重新開啟上次結束時的終端工作階段分頁。此選項不控制獨立工作區視窗還原；視窗仍依儲存清單還原。",
     "startupRestoreWindowLayout": "恢復標籤視窗分屏佈局",
     "startupRestoreWindowLayoutDesc": "恢復上次關閉前的左右或上下標籤視窗布局。",
     "strategyAsk": "每次詢問",
@@ -4180,6 +4180,7 @@
     "commandPlaceholder": "tmux 指令，例如 resize-pane -Z"
   },
   "externalOpen": {
+    "conflictingWindowOptions": "--new-window 與 --reuse-window 不能同時使用；此次呼叫未執行。",
     "queueFull": "外部連線請求過多，請稍後重試。",
     "invalidUrl": "外部連線請求遭拒：參數無效或不受支援。",
     "matchTitle": "選擇連線",

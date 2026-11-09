@@ -3,12 +3,12 @@
     "confirmShellReady": "已恢复 Shell，确认允许自动执行"
   },
   "tray": {
-    "show": "显示主窗口",
+    "show": "显示最近使用的窗口",
     "newWindow": "新建窗口",
     "newConnection": "新建连接…",
     "push": "立即推送",
     "pull": "立即拉取",
-    "minimizeToTray": "关闭时最小化到托盘",
+    "minimizeToTray": "关闭最后一个窗口时最小化到托盘",
     "lock": "锁定界面",
     "update": "检查更新",
     "quit": "退出 NyaTerm",
@@ -2993,8 +2993,8 @@
     "masterPasswordSwitchDesc": "开启后可保护锁屏和本地敏感数据；云同步启用时必须保持开启。",
     "maxTransferRetries": "最大重试次数",
     "maxTransferRetriesDesc": "传输失败时的重试次数 (0-10)。",
-    "minimizeToTray": "关闭时最小化到系统托盘",
-    "minimizeToTrayDesc": "窗口关闭时保持应用程序在后台运行。",
+    "minimizeToTray": "关闭最后一个窗口时最小化到托盘",
+    "minimizeToTrayDesc": "关闭最后一个工作区窗口时保留工作区并在后台运行；有多个工作区窗口时，关闭会移除当前工作区。",
     "minimumContrastRatio": "最小对比度",
     "boldDefaultForeground": "粗体默认前景色增强",
     "boldDefaultForegroundDesc": "仅对未指定 ANSI 前景色的粗体终端文本使用高亮前景色。",
@@ -3190,7 +3190,7 @@
     "showWorkspacePaddingDesc": "在终端内容左侧增加一点空白区域。",
     "startupBehavior": "启动行为",
     "startupRestore": "启动时恢复先前的会话标签",
-    "startupRestoreDesc": "自动重新打开在应用程序上次关闭时处于活动状态的终端会话。",
+    "startupRestoreDesc": "自动重新打开上次退出时的终端会话标签。此选项不控制独立工作区窗口恢复；窗口仍按保存清单恢复。",
     "startupRestoreWindowLayout": "恢复标签窗口分屏布局",
     "startupRestoreWindowLayoutDesc": "恢复上次关闭前的左右或上下标签窗口布局。",
     "strategyAsk": "每次询问",
@@ -4180,6 +4180,7 @@
     "commandPlaceholder": "tmux 命令，例如 resize-pane -Z"
   },
   "externalOpen": {
+    "conflictingWindowOptions": "--new-window 与 --reuse-window 不能同时使用；本次调用未执行。",
     "queueFull": "外部连接请求过多，请稍后重试。",
     "invalidUrl": "外部连接请求被拒绝：参数无效或不受支持。",
     "matchTitle": "选择连接",

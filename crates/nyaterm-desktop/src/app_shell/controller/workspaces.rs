@@ -220,7 +220,9 @@ impl DesktopController {
         }
         let mut request = request.parse();
         self.deduplicate_connections(&mut request);
-        if request.actions.is_empty() {
+        // Deduplicating a connection does not cancel explicit workspace creation.
+        if request.actions.is_empty() && request.open_behavior != ActivationOpenBehavior::NewWindow
+        {
             return;
         }
         if request.open_behavior == ActivationOpenBehavior::ReuseMostRecent {
@@ -240,6 +242,12 @@ impl DesktopController {
             if self.activate_and_deliver(target, request.clone(), cx) {
                 return;
             }
+        }
+        if request.has_conflicting_window_options() {
+            // An invalid destination must not create a workspace, even when all
+            // existing windows are closing and cannot display the error.
+            tracing::warn!("--new-window and --reuse-window cannot be used together");
+            return;
         }
         if let Err(error) = self.open_workspace(
             OpenWorkspaceRequest {

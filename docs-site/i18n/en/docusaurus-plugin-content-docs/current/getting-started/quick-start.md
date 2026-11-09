@@ -53,7 +53,7 @@ After the connection is established, you will see:
 - **Right activity bar** — saved connections, AI Assistant, active sessions, command history, and resource monitor
 - **Bottom area** — quick commands, serial send, recording, and lock actions
 
-If you want the app to keep running in the background when the main window closes, enable **Minimize to tray when closing** in **Settings → General**.
+To keep the app running after closing the last workspace window, enable **Minimize the last window to tray on close** in **Settings → General**. With multiple workspace windows, × closes the current workspace normally. Launching again or clicking the tray wakes an existing window; use **New Window** or `--new-window` to create a workspace.
 
 ## Step 5: Try the highest-frequency workflows
 
@@ -125,7 +125,7 @@ To collect recordings in a fixed directory, set **Recording path** in **Settings
 
 ### 9. Review the settings
 
-Before settling in, read through these settings groups: **General** (startup restore, minimize to tray on close), **Interaction** (command suggestions, copy and paste behavior), **Terminal** (scrollback, Keep-Alive, optional enhancements), **Transfer** (download directory, default editor, concurrency), **Security** (master password, screen lock, host key policy), and **AI** (provider, model, risk thresholds).
+Before settling in, read through these settings groups: **General** (session-tab restoration, minimizing the last window to tray on close), **Interaction** (command suggestions, copy and paste behavior), **Terminal** (scrollback, Keep-Alive, optional enhancements), **Transfer** (download directory, default editor, concurrency), **Security** (master password, screen lock, host key policy), and **AI** (provider, model, risk thresholds).
 
 When troubleshooting, **Settings → General** can open the local log directory and export a diagnostics bundle directly.
 

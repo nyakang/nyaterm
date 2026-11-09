@@ -5,7 +5,7 @@ use nyaterm_core::{
 };
 use nyaterm_store::{
     BootstrapSnapshot, LoadBootstrap, LoadDeviceWindowManifest, LoadMainWindowState,
-    LoadWorkspaceRestoreManifest, StoreConfig, StoreRuntime, StoreTask,
+    LoadWorkspaceStartupRestore, StoreConfig, StoreRuntime, StoreTask,
 };
 
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1280.;
@@ -18,6 +18,7 @@ pub struct AppShellStartup {
     main_window_state: Option<MainWindowState>,
     pub(super) workspace_id: WorkspaceId,
     pub(super) workspace_restore: WorkspaceRestoreManifest,
+    is_default_workspace: bool,
     pub(super) device_windows: DeviceWindowManifest,
     pub(super) workspace_seed: Option<WorkspaceRestoreState>,
 }
@@ -62,15 +63,16 @@ impl AppShellStartup {
                     workspace_restore: WorkspaceRestoreManifest::single(
                         WorkspaceRestoreState::empty(workspace_id),
                     ),
+                    is_default_workspace: true,
                     device_windows: DeviceWindowManifest::empty(),
                     workspace_seed: None,
                 };
             }
         };
 
-        let workspace_restore = match store_runtime
+        let restore = match store_runtime
             .blocking_client()
-            .request(0, LoadWorkspaceRestoreManifest)
+            .request(0, LoadWorkspaceStartupRestore)
         {
             Ok(event) => match event.outcome {
                 Ok(manifest) => manifest,
@@ -90,6 +92,8 @@ impl AppShellStartup {
                 );
             }
         };
+        let is_default_workspace = restore.is_default_workspace;
+        let workspace_restore = restore.manifest;
         let workspace_id = workspace_restore
             .most_recent()
             .map(|workspace| workspace.id)
@@ -139,6 +143,7 @@ impl AppShellStartup {
                 main_window_state,
                 workspace_id,
                 workspace_restore,
+                is_default_workspace,
                 device_windows,
                 workspace_seed: None,
             },
@@ -152,6 +157,7 @@ impl AppShellStartup {
                 main_window_state,
                 workspace_id,
                 workspace_restore,
+                is_default_workspace,
                 device_windows,
                 workspace_seed: None,
             },
@@ -172,6 +178,7 @@ impl AppShellStartup {
             workspace_restore: WorkspaceRestoreManifest::single(WorkspaceRestoreState::empty(
                 workspace_id,
             )),
+            is_default_workspace: true,
             device_windows: DeviceWindowManifest::empty(),
             workspace_seed: None,
         }
@@ -181,13 +188,21 @@ impl AppShellStartup {
         self.workspace_id
     }
 
-    pub fn restored_workspace_ids(&self) -> Vec<WorkspaceId> {
+    pub(super) fn saved_workspace_ids(&self) -> Vec<WorkspaceId> {
+        if self.is_default_workspace {
+            return Vec::new();
+        }
         let mut ids = self.device_windows.window_order.clone();
         for workspace in &self.workspace_restore.workspaces {
             if !ids.contains(&workspace.id) {
                 ids.push(workspace.id);
             }
         }
+        ids
+    }
+
+    pub fn restored_workspace_ids(&self) -> Vec<WorkspaceId> {
+        let mut ids = self.saved_workspace_ids();
         if ids.is_empty() {
             ids.push(self.workspace_id);
         }
@@ -215,6 +230,7 @@ impl AppShellStartup {
                 main_window_state,
                 workspace_id,
                 workspace_restore: self.workspace_restore.clone(),
+                is_default_workspace: self.is_default_workspace,
                 device_windows: self.device_windows.clone(),
                 workspace_seed: None,
             };
@@ -226,6 +242,7 @@ impl AppShellStartup {
             main_window_state,
             workspace_id,
             workspace_restore: self.workspace_restore.clone(),
+            is_default_workspace: self.is_default_workspace,
             device_windows: self.device_windows.clone(),
             workspace_seed: None,
         }
@@ -243,6 +260,7 @@ impl AppShellStartup {
         startup.workspace_restore.most_recent_workspace_id = Some(workspace_id);
         startup.main_window_state = None;
         startup.workspace_seed = Some(workspace);
+        startup.is_default_workspace = false;
         startup
     }
 
@@ -502,6 +520,7 @@ mod tests {
             )),
             workspace_id: source_id,
             workspace_restore: WorkspaceRestoreManifest::single(source),
+            is_default_workspace: false,
             device_windows: DeviceWindowManifest::empty(),
             workspace_seed: None,
         };

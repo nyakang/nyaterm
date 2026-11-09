@@ -24,6 +24,7 @@ use nyaterm_core::{
 
 mod ai_history;
 mod app_settings;
+pub use app_settings::WorkspaceStartupRestore;
 mod cloud_sync;
 mod cloud_sync_v4;
 mod command_history;

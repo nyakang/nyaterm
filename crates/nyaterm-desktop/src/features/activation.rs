@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use gpui::{AppContext as _, Context, Window};
 use nyaterm_core::activation::{
-    ActivationAction, ExternalConnectionRequest, ParsedActivationRequest, normalize_external_host,
+    ActivationAction, ActivationParseError, ExternalConnectionRequest, ParsedActivationRequest,
+    normalize_external_host,
 };
 use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
 use nyaterm_core::{AiExecutionProfile, ConnectionType, SavedConnection};
@@ -32,6 +33,9 @@ impl NyaTermApp {
                 Ok(ActivationAction::Activate) => None,
                 Ok(ActivationAction::Connect(request)) => (!self.activation.enqueue(request))
                     .then(|| rust_i18n::t!("externalOpen.queueFull").to_string()),
+                Err(ActivationParseError::ConflictingWindowOptions) => {
+                    Some(rust_i18n::t!("externalOpen.conflictingWindowOptions").to_string())
+                }
                 Err(_) => Some(rust_i18n::t!("externalOpen.invalidUrl").to_string()),
             };
             if let Some(error) = error {

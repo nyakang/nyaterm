@@ -138,7 +138,11 @@ Child-window position and size are not persisted yet, so each one re-centers whe
 
 ## Tray and window state
 
-With **Minimize to tray when closing** enabled in **Settings → General**, closing the main window keeps the app running in the background instead of quitting, and you can restore it from the tray. Active sessions, sync, and backup jobs keep running in the background.
+Enable **Minimize the last window to tray on close** in **Settings → General** to keep the last workspace running in the background when you click ×. With multiple workspace windows, × follows the normal confirmation, save, and cleanup flow, closes that workspace, and removes it from the restore list. The next cold launch restores only retained workspaces. Hidden workspace windows still count toward the total.
+
+Launching the app again, clicking the tray icon, or choosing **Show Most Recent Window** wakes an existing window. Use **New Window** in the menu or tray, or `--new-window`, to create an independent workspace. **Quit NyaTerm** saves and exits the entire app. Active sessions, sync, and backup jobs continue while the last window is hidden; if the tray is unavailable, closing minimizes the window normally.
+
+The session-tab restoration setting only controls session tabs; independent workspace windows still restore from the saved list. Existing extra workspaces are not deleted automatically; close unwanted windows individually.
 
 ## Synchronized input groups
 

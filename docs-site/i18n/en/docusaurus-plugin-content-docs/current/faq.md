@@ -77,9 +77,9 @@ When using a custom provider, confirm it is OpenAI-compatible and that the base 
 
 ### Why doesn't the app quit when I close the window?
 
-Check **Minimize to tray when closing** in **Settings → General**.
+Check **Minimize the last window to tray on close** in **Settings → General**.
 
-When it is on, closing the main window moves the app to the tray instead of quitting, and active sessions and sync jobs keep running.
+When enabled, only closing the last workspace window hides it to the tray; active sessions and sync continue. With multiple windows, × closes the current workspace normally. Launching again or clicking the tray wakes an existing window. Choose **Quit NyaTerm** to exit the entire app. The session-tab restoration setting does not control workspace window restoration, and existing extra windows are not deleted automatically.
 
 ## File transfer
 

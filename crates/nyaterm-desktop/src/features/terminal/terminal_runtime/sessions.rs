@@ -304,7 +304,12 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.summary().minimize_to_tray {
+        let workspace_count = self
+            .desktop_controller
+            .as_ref()
+            .and_then(gpui::WeakEntity::upgrade)
+            .map_or(1, |controller| controller.read(cx).workspace_count());
+        if self.settings.summary().minimize_to_tray && workspace_count == 1 {
             if self.minimize_to_system_tray(window, cx) {
                 return;
             }
@@ -550,11 +555,13 @@ mod tests {
     }
 
     fn close_request_outcome(
+        workspace_count: usize,
         minimize_to_tray: bool,
         confirm_on_close: bool,
         request: CloseRequest,
     ) -> (usize, bool) {
         let root = TestTempDir::new("nyaterm-close-to-tray");
+        let controller_root = TestTempDir::new("nyaterm-close-workspaces");
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "session");
@@ -566,6 +573,30 @@ mod tests {
             app.settings.replace_summary(summary);
             app.sync_component_theme(cx);
         });
+
+        let runtime = nyaterm_core::AppRuntime::from_parts_for_test(
+            nyaterm_core::RuntimeMode::Portable,
+            controller_root.path().into(),
+            controller_root.join("config"),
+            controller_root.join("logs"),
+            controller_root.join("cache"),
+            None,
+        );
+        let startup = crate::app_shell::AppShellStartup::prepare(&runtime);
+        let controller =
+            cx.new(|cx| crate::app_shell::DesktopController::new(runtime, startup, cx));
+        controller.update(&mut cx, |controller, cx| {
+            for _ in 0..workspace_count {
+                controller
+                    .open_workspace(nyaterm_core::OpenWorkspaceRequest::default(), cx)
+                    .unwrap();
+            }
+        });
+        if workspace_count > 0 {
+            app.update(&mut cx, |app, _| {
+                app.desktop_controller = Some(controller.downgrade())
+            });
+        }
 
         let shutdown_requests = Rc::new(Cell::new(0));
         let observed = Rc::clone(&shutdown_requests);
@@ -595,17 +626,19 @@ mod tests {
     }
 
     #[test]
-    fn close_request_keeps_running_when_minimize_to_tray_is_enabled() {
-        assert_eq!(
-            close_request_outcome(true, true, CloseRequest::Window),
-            (0, false)
-        );
+    fn last_workspace_close_keeps_running_when_minimize_to_tray_is_enabled() {
+        for count in [0, 1] {
+            assert_eq!(
+                close_request_outcome(count, true, true, CloseRequest::Window),
+                (0, false)
+            );
+        }
     }
 
     #[test]
     fn close_request_shuts_down_when_minimize_to_tray_is_disabled() {
         assert_eq!(
-            close_request_outcome(false, false, CloseRequest::Window),
+            close_request_outcome(1, false, false, CloseRequest::Window),
             (1, false)
         );
     }
@@ -613,16 +646,32 @@ mod tests {
     #[test]
     fn close_request_preserves_session_confirmation_when_minimize_to_tray_is_disabled() {
         assert_eq!(
-            close_request_outcome(false, true, CloseRequest::Window),
+            close_request_outcome(1, false, true, CloseRequest::Window),
             (0, true)
         );
     }
 
     #[test]
+    fn multiple_workspaces_close_normally_even_when_minimize_to_tray_is_enabled() {
+        for count in [2, 3] {
+            assert_eq!(
+                close_request_outcome(count, true, false, CloseRequest::Window),
+                (1, false)
+            );
+            assert_eq!(
+                close_request_outcome(count, true, true, CloseRequest::Window),
+                (0, true)
+            );
+        }
+    }
+
+    #[test]
     fn explicit_quit_bypasses_minimize_to_tray() {
-        assert_eq!(
-            close_request_outcome(true, true, CloseRequest::ExplicitQuit),
-            (1, false)
-        );
+        for count in [1, 2] {
+            assert_eq!(
+                close_request_outcome(count, true, true, CloseRequest::ExplicitQuit),
+                (1, false)
+            );
+        }
     }
 }

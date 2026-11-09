@@ -7,6 +7,7 @@ use url::{Host, Url};
 
 use super::{ActivationRequest, RawActivationArg};
 use crate::models::ssh_runtime::SshRuntimeMode;
+use crate::models::workspace_manifest::ActivationOpenBehavior;
 use crate::secret::SecretString;
 use zeroize::Zeroizing;
 
@@ -71,6 +72,8 @@ pub enum ActivationParseError {
     UnknownParameter,
     #[error("invalid external invocation option")]
     InvalidOption,
+    #[error("--new-window and --reuse-window cannot be used together")]
+    ConflictingWindowOptions,
     #[error("invalid SSH runtime mode")]
     InvalidMode,
 }
@@ -85,12 +88,25 @@ pub fn parse_activation_request(
 pub fn parse_activation_batch(
     request: &ActivationRequest,
 ) -> Vec<Result<ActivationAction, ActivationParseError>> {
+    parse_activation_with_behavior(request).1
+}
+
+pub(super) fn parse_activation_with_behavior(
+    request: &ActivationRequest,
+) -> (
+    ActivationOpenBehavior,
+    Vec<Result<ActivationAction, ActivationParseError>>,
+) {
     if request.args.len() > super::MAX_ACTIVATION_ARGS {
-        return vec![Err(ActivationParseError::TooManyActions)];
+        return (
+            ActivationOpenBehavior::ReuseMostRecent,
+            vec![Err(ActivationParseError::TooManyActions)],
+        );
     }
     let mut actions = Vec::new();
     let mut local = false;
     let mut reuse = false;
+    let mut new_window = false;
     let mut cwd = None;
     let mut local_error = None;
     let mut args = request.args.iter().peekable();
@@ -108,6 +124,12 @@ pub fn parse_activation_batch(
                     actions.push(Err(ActivationParseError::DuplicateParameter));
                 }
                 reuse = true;
+            }
+            "--new-window" => {
+                if new_window {
+                    actions.push(Err(ActivationParseError::DuplicateParameter));
+                }
+                new_window = true;
             }
             "--local" => {
                 if local {
@@ -142,6 +164,14 @@ pub fn parse_activation_batch(
             _ => actions.push(parse_deep_link(&text)),
         }
     }
+    // Window selection applies to the entire invocation, unlike individual links.
+    // Do not execute any connection when its destination is contradictory.
+    if new_window && reuse {
+        return (
+            ActivationOpenBehavior::ReuseMostRecent,
+            vec![Err(ActivationParseError::ConflictingWindowOptions)],
+        );
+    }
     if cwd.is_some() && !local {
         local_error = Some(ActivationParseError::InvalidOption);
     }
@@ -160,7 +190,14 @@ pub fn parse_activation_batch(
     if actions.is_empty() {
         actions.push(Ok(ActivationAction::Activate));
     }
-    actions
+    (
+        if new_window {
+            ActivationOpenBehavior::NewWindow
+        } else {
+            ActivationOpenBehavior::ReuseMostRecent
+        },
+        actions,
+    )
 }
 
 fn activation_text(arg: &RawActivationArg) -> Result<Zeroizing<String>, ActivationParseError> {
@@ -561,7 +598,7 @@ mod tests {
         assert!(parsed.actions[2].is_ok());
         assert_eq!(
             invocation(&[]).parse().open_behavior,
-            ActivationOpenBehavior::NewWindow
+            ActivationOpenBehavior::ReuseMostRecent
         );
         assert_eq!(
             invocation(&["ssh://host"]).parse().open_behavior,
@@ -571,6 +608,70 @@ mod tests {
             invocation(&["--reuse-window"]).parse().actions,
             vec![Ok(ActivationAction::Activate)]
         );
+    }
+
+    #[test]
+    fn explicit_new_window_routes_activation_and_connections_to_a_new_workspace() {
+        for args in [
+            vec!["--new-window"],
+            vec!["--new-window", "ssh://host"],
+            vec!["telnet://host", "--new-window"],
+            vec!["--new-window", "--local", "--cwd", "C:\\中文 目录"],
+        ] {
+            let parsed = invocation(&args).parse();
+            assert_eq!(parsed.open_behavior, ActivationOpenBehavior::NewWindow);
+            assert!(parsed.actions.iter().all(Result::is_ok));
+            let wide = ActivationRequest {
+                request_id: [7; 16],
+                args: args
+                    .iter()
+                    .map(|arg| RawActivationArg::Wide(arg.encode_utf16().collect()))
+                    .collect(),
+            }
+            .parse();
+            assert_eq!(wide.open_behavior, parsed.open_behavior);
+            assert_eq!(wide.actions, parsed.actions);
+        }
+        assert_eq!(
+            invocation(&["--new-window"]).parse().actions,
+            vec![Ok(ActivationAction::Activate)]
+        );
+        let mixed = invocation(&["--new-window", "ssh://host", "ssh://host?command=id"]).parse();
+        assert_eq!(mixed.open_behavior, ActivationOpenBehavior::NewWindow);
+        assert!(mixed.actions[0].is_ok());
+        assert!(mixed.actions[1].is_err());
+    }
+
+    #[test]
+    fn conflicting_window_options_reject_the_entire_invocation_in_either_order() {
+        for args in [
+            vec!["--new-window", "--reuse-window", "ssh://host"],
+            vec!["telnet://host", "--reuse-window", "--local", "--new-window"],
+        ] {
+            let parsed = invocation(&args).parse();
+            assert!(parsed.has_conflicting_window_options());
+            assert_eq!(
+                parsed.open_behavior,
+                ActivationOpenBehavior::ReuseMostRecent
+            );
+            assert_eq!(
+                parsed.actions,
+                vec![Err(ActivationParseError::ConflictingWindowOptions)]
+            );
+            assert_eq!(
+                parse_activation_request(&invocation(&args)),
+                Err(ActivationParseError::ConflictingWindowOptions)
+            );
+            let wide = ActivationRequest {
+                request_id: [8; 16],
+                args: args
+                    .iter()
+                    .map(|arg| RawActivationArg::Wide(arg.encode_utf16().collect()))
+                    .collect(),
+            }
+            .parse();
+            assert_eq!(wide.actions, parsed.actions);
+        }
     }
 
     #[test]
@@ -604,6 +705,7 @@ mod tests {
             vec!["--local", "--local"],
             vec!["--local", "--cwd=x", "--cwd=y"],
             vec!["--reuse-window", "--reuse-window"],
+            vec!["--new-window", "--new-window"],
         ] {
             assert!(parse_activation_request(&invocation(&args)).is_err());
         }

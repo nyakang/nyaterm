@@ -13,12 +13,15 @@ use gpui::Context;
 use gpui::Task;
 use gpui::WeakEntity;
 use nyaterm_core::ACTIVATION_QUEUE_CAPACITY;
+use nyaterm_core::ActivationOpenBehavior;
 use nyaterm_core::ActivationReceiver;
 use nyaterm_core::ActivationRequest;
 use nyaterm_core::AppRuntime;
 use nyaterm_core::DeviceWindowManifest;
 use nyaterm_core::MoveTabTreeRequest;
+use nyaterm_core::OpenWorkspaceRequest;
 use nyaterm_core::WorkspaceId;
+use nyaterm_core::activation::{ActivationParseError, ParsedActivationRequest};
 use nyaterm_store::BootstrapSnapshot;
 use nyaterm_store::StoreTask;
 use std::collections::HashMap;
@@ -167,21 +170,9 @@ impl DesktopController {
         activation_rx: ActivationReceiver,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        let mut ids = self.startup.restored_workspace_ids();
-        if let Some(recent) = self.most_recent_workspace_id
-            && let Some(index) = ids.iter().position(|id| *id == recent)
-        {
-            ids.swap(0, index);
-        }
-        for workspace_id in ids {
-            let startup = self.startup.for_workspace(workspace_id);
-            self.open_workspace_with_startup(startup, None, false, None, cx)?;
-        }
         self.recent_activations
             .remember(initial_activation.request_id);
-        let mut initial_activation = initial_activation.parse();
-        self.deduplicate_connections(&mut initial_activation);
-        let _ = self.activate_and_deliver(self.most_recent_workspace_id, initial_activation, cx);
+        self.open_startup_workspaces(initial_activation.parse(), cx)?;
         self.launch_initial_bootstrap(cx);
         if let Some(recent) = self.most_recent_workspace_id
             && let Some(entry) = self.windows.get(&recent)
@@ -208,6 +199,43 @@ impl DesktopController {
         self.start_update_runtime(cx);
         self.start_auto_sync_runtime(cx);
         self.start_tray(cx);
+        Ok(())
+    }
+
+    fn open_startup_workspaces(
+        &mut self,
+        mut initial_activation: ParsedActivationRequest,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if initial_activation.has_conflicting_window_options() {
+            return Err(ActivationParseError::ConflictingWindowOptions.into());
+        }
+        let new_window = initial_activation.open_behavior == ActivationOpenBehavior::NewWindow
+            && self.startup.recovery.is_none()
+            && !self.startup.saved_workspace_ids().is_empty();
+        let mut ids = self.startup.restored_workspace_ids();
+        if let Some(recent) = self.most_recent_workspace_id
+            && let Some(index) = ids.iter().position(|id| *id == recent)
+        {
+            ids.swap(0, index);
+        }
+        for workspace_id in ids {
+            let startup = self.startup.for_workspace(workspace_id);
+            self.open_workspace_with_startup(startup, None, false, None, cx)?;
+        }
+        self.deduplicate_connections(&mut initial_activation);
+        if new_window {
+            self.open_workspace(
+                OpenWorkspaceRequest {
+                    activation: Some(initial_activation),
+                    ..Default::default()
+                },
+                cx,
+            )?;
+        } else {
+            let _ =
+                self.activate_and_deliver(self.most_recent_workspace_id, initial_activation, cx);
+        }
         Ok(())
     }
 

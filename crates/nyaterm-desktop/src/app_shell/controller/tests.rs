@@ -5,6 +5,121 @@ use super::{
 use nyaterm_core::{ACTIVATION_QUEUE_CAPACITY, WorkspaceId, WorkspaceUiState};
 
 #[test]
+fn cold_start_restores_workspaces_and_adds_only_an_explicit_new_window() {
+    use super::DesktopController;
+    use crate::app_shell::AppShellStartup;
+    use crate::test_support::TestAppCleanup;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{
+        ActivationRequest, AppRuntime, RuntimeMode, WorkspaceRestoreManifest,
+        WorkspaceRestoreState, test_support::TestTempDir,
+    };
+    use nyaterm_store::ConnectionStore;
+
+    for (saved_count, args, expected_count) in [
+        (0, vec![], 1),
+        (0, vec!["--new-window", "ssh://host"], 1),
+        (2, vec![], 2),
+        (2, vec!["--reuse-window"], 2),
+        (2, vec!["--new-window", "ssh://host"], 3),
+    ] {
+        let root = TestTempDir::new("nyaterm-cold-window-routing");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let saved_ids = (0..saved_count)
+            .map(|_| WorkspaceId::new())
+            .collect::<Vec<_>>();
+        if !saved_ids.is_empty() {
+            let store = ConnectionStore::open(root.join("config")).unwrap();
+            store
+                .save_workspace_restore_manifest(&WorkspaceRestoreManifest {
+                    version: nyaterm_core::WORKSPACE_RESTORE_MANIFEST_VERSION,
+                    workspaces: saved_ids
+                        .iter()
+                        .copied()
+                        .map(WorkspaceRestoreState::empty)
+                        .collect(),
+                    most_recent_workspace_id: saved_ids.last().copied(),
+                    extra: Default::default(),
+                })
+                .unwrap();
+        }
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.path().into(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let startup = AppShellStartup::prepare(&runtime);
+        assert!(startup.recovery.is_none());
+        let controller = cx.new(|cx| DesktopController::new(runtime, startup, cx));
+        let request =
+            ActivationRequest::from_os_args([1; 16], args.iter().map(std::ffi::OsString::from));
+        controller.update(&mut cx, |controller, cx| {
+            controller
+                .open_startup_workspaces(request.parse(), cx)
+                .unwrap();
+            assert_eq!(controller.workspace_count(), expected_count);
+            assert!(
+                saved_ids
+                    .iter()
+                    .all(|id| controller.windows.contains_key(id))
+            );
+            let recent = controller.most_recent_workspace_id.unwrap();
+            if saved_count > 0 && !args.contains(&"--new-window") {
+                assert_eq!(Some(recent), saved_ids.last().copied());
+            } else if saved_count > 0 {
+                assert!(!saved_ids.contains(&recent));
+            }
+            for (id, entry) in &controller.windows {
+                let shell = entry.shell.upgrade().unwrap();
+                assert_eq!(
+                    shell.read(cx).pending_activations.len(),
+                    usize::from(*id == recent)
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn cold_start_conflicting_options_open_no_windows() {
+    use super::DesktopController;
+    use crate::app_shell::AppShellStartup;
+    use crate::test_support::TestAppCleanup;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{ActivationRequest, AppRuntime, RuntimeMode, test_support::TestTempDir};
+
+    let root = TestTempDir::new("nyaterm-cold-window-conflict");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        root.path().into(),
+        root.join("config"),
+        root.join("logs"),
+        root.join("cache"),
+        None,
+    );
+    let startup = AppShellStartup::prepare(&runtime);
+    let controller = cx.new(|cx| DesktopController::new(runtime, startup, cx));
+    let request = ActivationRequest::from_os_args(
+        [1; 16],
+        ["--new-window", "--reuse-window", "ssh://host"].map(std::ffi::OsString::from),
+    );
+    controller.update(&mut cx, |controller, cx| {
+        assert!(
+            controller
+                .open_startup_workspaces(request.parse(), cx)
+                .is_err()
+        );
+        assert_eq!(controller.workspace_count(), 0);
+    });
+}
+
+#[test]
 fn activation_ids_are_deduplicated_until_fifo_eviction() {
     let mut cache = RecentActivationCache::default();
     let id = |index: u64| {
@@ -76,7 +191,7 @@ fn shared_state_refresh_does_not_retrigger_startup_screen_lock() {
 }
 
 #[test]
-fn external_routing_reuses_recent_loading_windows_deduplicates_and_opens_plain_launches() {
+fn external_routing_reuses_plain_launches_and_opens_only_explicit_new_windows() {
     use super::{DesktopController, WorkspaceWindow};
     use crate::app_shell::{AppShell, AppShellStartup};
     use crate::test_support::TestAppCleanup;
@@ -148,11 +263,45 @@ fn external_routing_reuses_recent_loading_windows_deduplicates_and_opens_plain_l
         assert_eq!(shells[1].read(cx).pending_activations.len(), 1);
 
         controller.route_activation(request(5, &[]), cx);
+        assert_eq!(controller.windows.len(), 2);
+        assert_eq!(shells[0].read(cx).pending_activations.len(), 3);
+        controller.route_activation(request(6, &["--new-window", "ssh://new.example.com"]), cx);
         assert_eq!(controller.windows.len(), 3);
-        controller.closing_workspaces.extend(ids);
         let third = controller.most_recent_workspace_id.unwrap();
-        controller.closing_workspaces.insert(third);
-        controller.route_activation(request(6, &["ssh://other.example.com"]), cx);
+        let new_shell = controller.windows[&third].shell.upgrade().unwrap();
+        assert_eq!(new_shell.read(cx).pending_activations.len(), 1);
+        // Connection deduplication must not swallow an explicit window operation.
+        controller.route_activation(request(7, &["--new-window", "ssh://new.example.com"]), cx);
         assert_eq!(controller.windows.len(), 4);
+        let fourth = controller.most_recent_workspace_id.unwrap();
+        let new_shell = controller.windows[&fourth].shell.upgrade().unwrap();
+        assert!(new_shell.read(cx).pending_activations[0].actions.is_empty());
+        controller.route_activation(
+            request(
+                8,
+                &[
+                    "--new-window",
+                    "--reuse-window",
+                    "ssh://rejected.example.com",
+                ],
+            ),
+            cx,
+        );
+        assert_eq!(controller.windows.len(), 4);
+        assert!(
+            new_shell
+                .read(cx)
+                .pending_activations
+                .back()
+                .unwrap()
+                .has_conflicting_window_options()
+        );
+        controller.closing_workspaces.extend(ids);
+        controller.closing_workspaces.insert(third);
+        controller.closing_workspaces.insert(fourth);
+        controller.route_activation(request(9, &["--reuse-window", "--new-window"]), cx);
+        assert_eq!(controller.windows.len(), 4);
+        controller.route_activation(request(10, &[]), cx);
+        assert_eq!(controller.windows.len(), 5);
     });
 }

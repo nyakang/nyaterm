@@ -95,19 +95,11 @@ impl ActivationRequest {
     }
 
     pub fn parse(&self) -> ParsedActivationRequest {
-        let actions = parse_activation_batch(self);
-        let reuse = self.args.iter().any(|arg| arg.matches("--reuse-window"))
-            || actions
-                .iter()
-                .any(|action| matches!(action, Ok(ActivationAction::Connect(_))));
+        let (open_behavior, actions) = deep_link::parse_activation_with_behavior(self);
         ParsedActivationRequest {
             request_id: self.request_id,
             actions,
-            open_behavior: if reuse {
-                crate::ActivationOpenBehavior::ReuseMostRecent
-            } else {
-                crate::ActivationOpenBehavior::NewWindow
-            },
+            open_behavior,
         }
     }
 
@@ -125,12 +117,10 @@ pub struct ParsedActivationRequest {
     pub open_behavior: crate::ActivationOpenBehavior,
 }
 
-impl RawActivationArg {
-    fn matches(&self, expected: &str) -> bool {
-        match self {
-            Self::Bytes(bytes) => String::from_utf8_lossy(bytes) == expected,
-            Self::Wide(units) => String::from_utf16_lossy(units) == expected,
-        }
+impl ParsedActivationRequest {
+    pub fn has_conflicting_window_options(&self) -> bool {
+        self.actions
+            .contains(&Err(ActivationParseError::ConflictingWindowOptions))
     }
 }
 

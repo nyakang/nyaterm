@@ -22,7 +22,7 @@ use nyaterm_core::{
 };
 
 use crate::maintenance::LocalStorageMaintenanceResult;
-use crate::storage::{ConnectionStore, StorageError};
+use crate::storage::{ConnectionStore, StorageError, WorkspaceStartupRestore};
 
 const STORE_QUEUE_CAPACITY: usize = 256;
 
@@ -1138,6 +1138,21 @@ impl StoreRequest for SaveMainWindowState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LoadWorkspaceRestoreManifest;
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoadWorkspaceStartupRestore;
+
+impl StoreRequest for LoadWorkspaceStartupRestore {
+    type Response = WorkspaceStartupRestore;
+
+    fn domain(&self) -> StoreDomain {
+        StoreDomain::Sessions
+    }
+
+    fn execute(self, store: &mut ConnectionStore) -> Result<Self::Response, StorageError> {
+        store.load_workspace_startup_restore()
+    }
+}
 
 impl StoreRequest for LoadWorkspaceRestoreManifest {
     type Response = WorkspaceRestoreManifest;

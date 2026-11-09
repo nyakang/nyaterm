@@ -3,12 +3,12 @@
     "confirmShellReady": "I have recovered the shell; allow automatic commands"
   },
   "tray": {
-    "show": "Show Main Window",
+    "show": "Show Most Recent Window",
     "newWindow": "New Window",
     "newConnection": "New Connection…",
     "push": "Push Now",
     "pull": "Pull Now",
-    "minimizeToTray": "Minimize to Tray on Close",
+    "minimizeToTray": "Minimize the last window to tray on close",
     "lock": "Lock Screen",
     "update": "Check for updates",
     "quit": "Quit NyaTerm",
@@ -2993,8 +2993,8 @@
     "masterPasswordSwitchDesc": "Protects the lock screen and local secrets. It must stay enabled while cloud sync is enabled.",
     "maxTransferRetries": "Max Retries",
     "maxTransferRetriesDesc": "Retry attempts after transfer failure (0-10).",
-    "minimizeToTray": "Minimize to tray on close",
-    "minimizeToTrayDesc": "Keep running in the background when closed.",
+    "minimizeToTray": "Minimize the last window to tray on close",
+    "minimizeToTrayDesc": "Closing the last workspace window keeps it running in the background. With multiple workspace windows, closing removes the current workspace.",
     "minimumContrastRatio": "Minimum Contrast",
     "boldDefaultForeground": "Bold default foreground",
     "boldDefaultForegroundDesc": "Use the intense foreground only for bold terminal text that has no explicit ANSI foreground color.",
@@ -3190,7 +3190,7 @@
     "showWorkspacePaddingDesc": "Add a little blank space on the left side of terminal content.",
     "startupBehavior": "Startup",
     "startupRestore": "Restore tabs on startup",
-    "startupRestoreDesc": "Reopen terminal sessions active before last close.",
+    "startupRestoreDesc": "Reopen terminal session tabs from the previous exit. This option does not control independent workspace window restoration; windows still restore from the saved list.",
     "startupRestoreWindowLayout": "Restore split tab layout",
     "startupRestoreWindowLayoutDesc": "Restore the left/right or top/bottom tab windows from the last close.",
     "strategyAsk": "Ask",
@@ -4180,6 +4180,7 @@
     "commandPlaceholder": "tmux command, e.g. resize-pane -Z"
   },
   "externalOpen": {
+    "conflictingWindowOptions": "--new-window and --reuse-window cannot be used together. This invocation was not executed.",
     "queueFull": "Too many external connection requests. Try again later.",
     "invalidUrl": "An external connection request was rejected: invalid or unsupported parameters.",
     "matchTitle": "Choose a connection",

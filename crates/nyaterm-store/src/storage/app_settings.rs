@@ -13,9 +13,12 @@ use std::collections::HashMap;
 
 use super::{
     ConnectionStore, LEGACY_TEXT_MASTER_KEY, META_MASTER_KEY, META_TABLE, SETTINGS_DEFAULT,
-    SETTINGS_TABLE, StorageError, TEXT_DOCS_TABLE, json_bool, json_path, json_string_vec,
-    set_nested_json_value, write_json_in_txn,
+    SETTINGS_DEVICE_WINDOW_MANIFEST, SETTINGS_MAIN_WINDOW_STATE, SETTINGS_TABLE, StorageError,
+    TEXT_DOCS_TABLE, json_bool, json_path, json_string_vec, set_nested_json_value,
+    write_json_in_txn,
 };
+
+use nyaterm_core::models::workspace_manifest::DeviceWindowManifest;
 use nyaterm_core::{
     AppSettingsSummary, CredentialCrypto, DEFAULT_RECORDING_PATH_TEMPLATE,
     DEFAULT_TERMINAL_TIMESTAMP_FORMAT, ExistingFileBehavior, FileManagerUiSettings,
@@ -24,6 +27,13 @@ use nyaterm_core::{
     WorkspaceRestoreState, WorkspaceSessionState, WorkspaceUiState, default_panel_open_mode,
     default_search_engines, normalize_panel_open_mode,
 };
+
+/// Read-only provenance for startup; never serialized into user settings.
+#[derive(Debug, Clone)]
+pub struct WorkspaceStartupRestore {
+    pub manifest: WorkspaceRestoreManifest,
+    pub is_default_workspace: bool,
+}
 
 // Reject malformed known fields before an unrelated save can replace their data.
 fn read_window_appearance(
@@ -1823,6 +1833,45 @@ impl ConnectionStore {
             extra: Default::default(),
         };
         Ok(WorkspaceRestoreManifest::single(workspace))
+    }
+
+    pub fn load_workspace_startup_restore(&self) -> Result<WorkspaceStartupRestore, StorageError> {
+        let manifest = self.load_workspace_restore_manifest()?;
+        let value = self.load_settings_value()?;
+        // Presence matters: an intentionally saved empty workspace is still a
+        // workspace. Legacy layouts and window-only saves also count as history.
+        let saved_restore = [
+            "workspaces",
+            "open_tabs",
+            "terminal_window_layout",
+            "workspace_pane_layout",
+        ]
+        .into_iter()
+        .any(|key| json_path(&value, &["ui", key]).is_some_and(|raw| !raw.is_null()));
+        let saved_window = self
+            .read_json_table::<serde_json::Value>(SETTINGS_TABLE, SETTINGS_MAIN_WINDOW_STATE)?
+            .is_some_and(|raw| !raw.is_null())
+            || self
+                .read_json_table::<serde_json::Value>(
+                    SETTINGS_TABLE,
+                    SETTINGS_DEVICE_WINDOW_MANIFEST,
+                )?
+                .is_some_and(|raw| {
+                    if raw.is_null() {
+                        return false;
+                    }
+                    // An empty device manifest has no historical windows. Treat
+                    // unrecognized data conservatively as saved history.
+                    serde_json::from_value::<DeviceWindowManifest>(raw).map_or(true, |manifest| {
+                        manifest.validate().is_err()
+                            || !manifest.windows.is_empty()
+                            || !manifest.window_order.is_empty()
+                    })
+                });
+        Ok(WorkspaceStartupRestore {
+            manifest,
+            is_default_workspace: !saved_restore && !saved_window,
+        })
     }
 
     pub fn save_workspace_restore_manifest(

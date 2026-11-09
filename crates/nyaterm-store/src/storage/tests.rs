@@ -4570,6 +4570,112 @@ fn terminal_window_layout_roundtrip() {
 }
 
 #[test]
+fn workspace_startup_restore_distinguishes_default_from_saved_and_legacy_workspaces() {
+    let dir = unique_temp_dir("workspace-startup-provenance");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let before = store.load_settings_value().unwrap();
+    let loaded = store.load_workspace_startup_restore().unwrap();
+    assert!(loaded.is_default_workspace);
+    assert_eq!(
+        loaded.manifest,
+        store.load_workspace_restore_manifest().unwrap()
+    );
+    assert_eq!(store.load_settings_value().unwrap(), before);
+
+    store
+        .save_device_window_manifest(&nyaterm_core::DeviceWindowManifest::empty())
+        .unwrap();
+    assert!(
+        store
+            .load_workspace_startup_restore()
+            .unwrap()
+            .is_default_workspace
+    );
+
+    for key in [
+        "open_tabs",
+        "terminal_window_layout",
+        "workspace_pane_layout",
+    ] {
+        let mut raw = before.clone();
+        raw["ui"] = serde_json::json!({key: [], "future_restore_field": {"preserve": true}});
+        store.save_settings_value(&raw).unwrap();
+        assert!(
+            !store
+                .load_workspace_startup_restore()
+                .unwrap()
+                .is_default_workspace
+        );
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
+    let mut manifest = loaded.manifest;
+    manifest.extra.insert(
+        "future_manifest".into(),
+        serde_json::json!({"preserve": true}),
+    );
+    store.save_workspace_restore_manifest(&manifest).unwrap();
+    let saved = store.load_workspace_startup_restore().unwrap();
+    assert!(!saved.is_default_workspace);
+    assert_eq!(saved.manifest, manifest);
+    manifest.workspaces.clear();
+    manifest.most_recent_workspace_id = None;
+    store.save_workspace_restore_manifest(&manifest).unwrap();
+    let empty = store.load_workspace_startup_restore().unwrap();
+    assert!(!empty.is_default_workspace);
+    assert!(empty.manifest.workspaces.is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn workspace_startup_restore_preserves_window_only_history_and_rejects_corruption() {
+    let dir = unique_temp_dir("workspace-startup-window-history");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let state = MainWindowState::new(
+        None,
+        MainWindowBounds {
+            x: 10,
+            y: 20,
+            width: 900,
+            height: 700,
+        },
+        false,
+    );
+    store.save_main_window_state(&state).unwrap();
+    assert!(
+        !store
+            .load_workspace_startup_restore()
+            .unwrap()
+            .is_default_workspace
+    );
+    assert_eq!(store.load_main_window_state().unwrap(), Some(state.clone()));
+    let id = nyaterm_core::WorkspaceId::legacy();
+    let mut device = nyaterm_core::DeviceWindowManifest::empty();
+    device.window_order.push(id);
+    device.windows.push(nyaterm_core::DeviceWindowState {
+        workspace_id: id,
+        window: state,
+        extra: Default::default(),
+    });
+    store.save_device_window_manifest(&device).unwrap();
+    assert!(store.load_main_window_state().unwrap().is_none());
+    assert!(
+        !store
+            .load_workspace_startup_restore()
+            .unwrap()
+            .is_default_workspace
+    );
+    let mut raw = store.load_settings_value().unwrap();
+    raw["ui"] =
+        serde_json::json!({"workspaces": {"version": 99, "workspaces": []}, "future": true});
+    store.save_settings_value(&raw).unwrap();
+    assert!(store.load_workspace_startup_restore().is_err());
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn legacy_workspace_fields_migrate_and_new_manifest_dual_writes_recent_workspace() {
     let dir = unique_temp_dir("workspace-manifest-migration");
     let store = ConnectionStore::open(&dir).expect("store");
