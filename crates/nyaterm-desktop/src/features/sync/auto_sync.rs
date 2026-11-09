@@ -112,13 +112,6 @@ fn run_auto_sync_inner(
             ))
         })
         .map_err(|error| CloudSyncError::LocalStore(error.category().to_string()))?;
-    // One-shot rewrite of pre-compression replicas. It runs before the skip
-    // checks so a disabled or misconfigured sync still shrinks the database,
-    // and the store skips itself when no readable master password exists.
-    // Failures stay silent and resume on the next start.
-    let _ = store.request_exclusive_fn(StoreDomain::CloudSync, |database| {
-        database.migrate_local_replica_storage()
-    });
     if let Some(skipped) = auto_sync_skip(&settings, trigger, change_elapsed) {
         return Ok(skipped);
     }

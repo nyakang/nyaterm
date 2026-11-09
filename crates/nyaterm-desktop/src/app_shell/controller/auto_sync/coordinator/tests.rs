@@ -5,6 +5,24 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[test]
+fn oversized_local_replica_pauses_auto_sync_until_settings_change() {
+    let mut coordinator = AutoSyncCoordinator::new(0);
+    let error = CloudSyncError::PortableSnapshot(
+        nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge {
+            limit_bytes: 256 * 1024 * 1024,
+        },
+    );
+    coordinator.complete(AutoSyncTrigger::Startup, &Err(error), None);
+    assert!(
+        coordinator
+            .next_job(Instant::now() + Duration::from_secs(16 * 60), 0, || true)
+            .is_none()
+    );
+    coordinator.settings_changed();
+    assert!(coordinator.next_job(Instant::now(), 0, || true).is_some());
+}
+
+#[test]
 fn storage_errors_pause_only_when_configuration_or_access_must_change() {
     use nyaterm_core::cloud_sync::error::CloudStorageErrorKind;
     for (kind, permanent) in [

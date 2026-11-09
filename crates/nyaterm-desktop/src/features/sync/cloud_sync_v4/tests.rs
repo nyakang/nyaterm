@@ -11,9 +11,31 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::features::sync::cloud_sync_v4::{
-    apply_and_publish, destination, prepare_remote, preview, preview_manual, publish, publish_bytes,
+    apply_and_publish, destination, prepare_remote, preview, preview_manual, publish,
+    publish_bytes, store_error,
 };
 use crate::test_support::{TestConfigDir, blocking_test_store};
+
+#[test]
+fn local_replica_size_errors_keep_their_typed_limit_instead_of_becoming_stale_previews() {
+    let operation =
+        nyaterm_store::StoreOperationError::from(nyaterm_store::StorageError::PortableSnapshot(
+            nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { limit_bytes: 42 },
+        ));
+    assert!(matches!(
+        store_error(nyaterm_store::StoreClientError::Operation(operation)),
+        CloudSyncError::PortableSnapshot(
+            nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { limit_bytes: 42 }
+        )
+    ));
+    let operation = nyaterm_store::StoreOperationError::from(
+        nyaterm_store::StorageError::CloudSyncLocalChanged,
+    );
+    assert!(matches!(
+        store_error(nyaterm_store::StoreClientError::Operation(operation)),
+        CloudSyncError::LocalChangedDuringSync
+    ));
+}
 
 fn setup(
     dir: &TestConfigDir,

@@ -8745,7 +8745,7 @@ fn atomic_common_edits_preserve_untouched_unsupported_legacy_agent_values() {
 }
 
 #[test]
-fn startup_compaction_reclaims_large_free_space() {
+fn opening_defers_large_free_space_reclaim_until_maintenance() {
     use redb::TableDefinition;
     let dir = unique_temp_dir("startup-compaction");
     let first: TableDefinition<&str, &[u8]> = TableDefinition::new("compaction_probe_first");
@@ -8775,21 +8775,28 @@ fn startup_compaction_reclaims_large_free_space() {
     }
     let path = dir.path().join("nyaterm.redb");
     let before = std::fs::metadata(&path).unwrap().len();
-    let store = ConnectionStore::open(&dir).unwrap();
+    let mut store = ConnectionStore::open(&dir).unwrap();
+    let opened = std::fs::metadata(&path).unwrap().len();
+    assert!(before.saturating_sub(opened) < 4 * 1024 * 1024);
+    let result = store.maintain_local_storage().unwrap();
     let after = std::fs::metadata(&path).unwrap().len();
-    assert!(after < before, "before={before} after={after}");
+    assert!(after < opened, "opened={opened} after={after}");
+    assert!(matches!(
+        result.compaction,
+        crate::maintenance::StorageCompactionOutcome::Completed { .. }
+    ));
     assert!(store.list_connections().unwrap().is_empty());
 }
 
 #[test]
-fn failed_compaction_does_not_prevent_startup() {
-    use redb::{Database, ReadableDatabase, TableDefinition};
+fn failed_maintenance_compaction_keeps_the_store_usable_and_can_be_retried() {
+    use redb::{ReadableDatabase, TableDefinition};
     let dir = unique_temp_dir("compaction-failure");
     std::fs::create_dir_all(dir.path()).unwrap();
     let path = dir.path().join("nyaterm.redb");
     let probe: TableDefinition<&str, &[u8]> = TableDefinition::new("compaction_probe");
-    let mut db = Database::create(&path).unwrap();
-    let txn = db.begin_write().unwrap();
+    let mut store = ConnectionStore::open(&dir).unwrap();
+    let txn = store.db.begin_write().unwrap();
     {
         let mut table = txn.open_table(probe).unwrap();
         let chunk = vec![9_u8; 64 * 1024];
@@ -8800,18 +8807,82 @@ fn failed_compaction_does_not_prevent_startup() {
         }
     }
     txn.commit().unwrap();
-    let txn = db.begin_write().unwrap();
+    let txn = store.db.begin_write().unwrap();
     txn.delete_table(probe).unwrap();
     txn.commit().unwrap();
+    store.ensure_tables().unwrap();
     let before = std::fs::metadata(&path).unwrap().len();
     // A live read reference makes Database::compact() fail; the helper must
     // swallow that error and leave the file untouched.
-    let read = db.begin_read().unwrap();
-    super::compact_if_beneficial(&mut db, &path);
+    let read = store.db.begin_read().unwrap();
+    let result = store.maintain_local_storage().unwrap();
+    assert_eq!(
+        result.compaction,
+        crate::maintenance::StorageCompactionOutcome::Failed
+    );
     assert_eq!(std::fs::metadata(&path).unwrap().len(), before);
     drop(read);
-    drop(db);
-    let store = ConnectionStore::open(&dir).unwrap();
+    store.maintain_local_storage().unwrap();
     assert!(std::fs::metadata(&path).unwrap().len() < before);
     assert!(store.list_connections().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "manual large-database benchmark; set NYATERM_MAINTENANCE_BENCH_MIB to change fixture size"]
+fn large_database_bootstrap_and_maintenance_benchmark() {
+    use redb::{ReadableTableMetadata, TableDefinition};
+    use std::time::Instant;
+    let dir = unique_temp_dir("maintenance-benchmark");
+    let mib = std::env::var("NYATERM_MAINTENANCE_BENCH_MIB")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(128)
+        .max(16);
+    let first: TableDefinition<&str, &[u8]> = TableDefinition::new("benchmark_first");
+    let second: TableDefinition<&str, &[u8]> = TableDefinition::new("benchmark_second");
+    let chunk = vec![7_u8; 64 * 1024];
+    let count = mib * 8;
+    for probe in [first, second] {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(probe).unwrap();
+            for index in 0..count {
+                table
+                    .insert(format!("chunk-{index}").as_str(), chunk.as_slice())
+                    .unwrap();
+            }
+        }
+        txn.commit().unwrap();
+    }
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.delete_table(first).unwrap();
+        txn.commit().unwrap();
+    }
+    let started = Instant::now();
+    let mut store = ConnectionStore::open(&dir).unwrap();
+    crate::LoadBootstrap.load(&store).unwrap();
+    let bootstrap = started.elapsed();
+    let result = store.maintain_local_storage().unwrap();
+    assert!(result.bytes_after.unwrap() < result.bytes_before.unwrap());
+    assert_eq!(
+        store
+            .db
+            .begin_write()
+            .unwrap()
+            .open_table(second)
+            .unwrap()
+            .len()
+            .unwrap(),
+        count as u64
+    );
+    eprintln!(
+        "fixture_mib={mib} bootstrap_ms={} maintenance_ms={} bytes_before={:?} bytes_after={:?}",
+        bootstrap.as_millis(),
+        result.elapsed.as_millis(),
+        result.bytes_before,
+        result.bytes_after
+    );
 }

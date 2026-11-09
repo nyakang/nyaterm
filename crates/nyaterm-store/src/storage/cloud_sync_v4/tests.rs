@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::sync_v4::PreparedApply;
 use crate::{ConnectionStore, StorageError};
 
-fn connection() -> SavedConnection {
+pub(super) fn connection() -> SavedConnection {
     serde_json::from_value(json!({"id":"server","name":"Server","type":"ssh","host":"server.example","port":22,"username":"root"})).unwrap()
 }
 
@@ -185,7 +185,7 @@ fn batch_index_cleanup_preserves_legacy_suffix_matching_and_unaffected_rows() {
     txn.commit().unwrap();
 }
 
-fn enable(store: &ConnectionStore) {
+pub(super) fn enable(store: &ConnectionStore) {
     let mut settings = store.load_cloud_sync_settings().unwrap();
     settings.protocol_version = 4;
     store.save_cloud_sync_settings(settings).unwrap();
@@ -216,7 +216,7 @@ fn provider_switch_preserves_per_destination_v4_records() {
     }
 }
 
-fn prepared(store: &ConnectionStore) -> PreparedApply {
+pub(super) fn prepared(store: &ConnectionStore) -> PreparedApply {
     prepared_scope(store, SyncScope::default())
 }
 
@@ -1810,7 +1810,7 @@ fn consumed_field_edits_are_purged_and_newer_edits_are_kept() {
     assert_eq!(edits.get("field/newer").unwrap().unwrap().value(), 9);
 }
 
-fn migration_record(applied_generation: u64) -> crate::sync_v4::LocalReplica {
+pub(super) fn migration_record(applied_generation: u64) -> crate::sync_v4::LocalReplica {
     crate::sync_v4::LocalReplica {
         owner: "fixture-owner".into(),
         applied_generation,
@@ -1822,7 +1822,7 @@ fn migration_record(applied_generation: u64) -> crate::sync_v4::LocalReplica {
     }
 }
 
-fn legacy_bytes(record: &crate::sync_v4::LocalReplica, destination: &str) -> Vec<u8> {
+pub(super) fn legacy_bytes(record: &crate::sync_v4::LocalReplica, destination: &str) -> Vec<u8> {
     nyaterm_core::sync_schema::encryption::seal(
         "fixture-password",
         "local-replica",
@@ -1844,6 +1844,10 @@ fn legacy_replicas_migrate_once_and_purge_consumed_edits() {
             .save_master_password(Some("fixture-password"))
             .unwrap();
         let txn = store.db.begin_write().unwrap();
+        txn.open_table(crate::storage::META_TABLE)
+            .unwrap()
+            .insert(super::GENERATION, "9")
+            .unwrap();
         txn.open_table(super::REPLICAS)
             .unwrap()
             .insert("destination", legacy.as_slice())
@@ -1953,6 +1957,10 @@ fn unreadable_legacy_replica_aborts_migration_without_marker() {
         .save_master_password(Some("fixture-password"))
         .unwrap();
     let txn = store.db.begin_write().unwrap();
+    txn.open_table(crate::storage::META_TABLE)
+        .unwrap()
+        .insert(super::GENERATION, "9")
+        .unwrap();
     {
         let mut table = txn.open_table(super::REPLICAS).unwrap();
         table.insert("good", legacy.as_slice()).unwrap();

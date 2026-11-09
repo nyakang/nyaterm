@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::maintenance::ReplicaMigrationPreparation;
 use super::notes::{replace_notes_snapshot_in_txn, validate_notes_snapshot};
 use super::{
     CONNECTION_PASSWORD_PREFIX, CONNECTION_PREFIX, CONNECTIONS_TABLE, CREDENTIALS_TABLE,
@@ -32,10 +33,6 @@ pub(super) const REPLICAS: TableDefinition<&str, &[u8]> = TableDefinition::new("
 const EDITS: TableDefinition<&str, u64> = TableDefinition::new("sync_v4_field_edits");
 const GENERATION: &str = "sync_v4/generation";
 static PROCESS_ACTOR: OnceLock<Uuid> = OnceLock::new();
-
-/// Rewritten `(destination, sealed bytes)` pairs together with the smallest
-/// applied generation across every replica.
-type LocalReplicaRewrites = (Vec<(String, Vec<u8>)>, Option<u64>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ApplyPoint {
@@ -223,7 +220,7 @@ fn record_secret_edit(txn: &redb::WriteTransaction, key: &str) -> Result<(), Sto
 fn purge_consumed_edits(
     txn: &redb::WriteTransaction,
     applied_generation: u64,
-) -> Result<(), StorageError> {
+) -> Result<usize, StorageError> {
     let mut consumed = Vec::new();
     {
         let edits = txn.open_table(EDITS)?;
@@ -235,13 +232,57 @@ fn purge_consumed_edits(
         }
     }
     if consumed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let count = consumed.len();
     let mut edits = txn.open_table(EDITS)?;
     for key in consumed {
         edits.remove(key.as_str())?;
     }
-    Ok(())
+    Ok(count)
+}
+
+/// An unreadable or unsupported destination cannot prove that shared edits
+/// were consumed. Validate every record before the visitor's prepared bytes
+/// can be committed, and derive the watermark from this same transaction.
+fn visit_local_replicas(
+    txn: &redb::WriteTransaction,
+    password: &str,
+    just_applied: Option<(&str, u64)>,
+    mut visit: impl FnMut(&str, &[u8], &[u8]) -> Result<(), StorageError>,
+) -> Result<Option<u64>, StorageError> {
+    let current_generation = generation(txn)?;
+    let mut watermark = None::<u64>;
+    for row in txn.open_table(REPLICAS)?.iter()? {
+        let (destination, raw) = row?;
+        if let Some((applied_destination, applied_generation)) = just_applied
+            && destination.value() == applied_destination
+        {
+            // The caller just sealed and inserted this validated record in
+            // this transaction. Avoid another password KDF for the usual
+            // single-destination Apply.
+            watermark = Some(watermark.map_or(applied_generation, |previous| {
+                previous.min(applied_generation)
+            }));
+            continue;
+        }
+        let Ok(plaintext) =
+            encryption::open(password, "local-replica", destination.value(), raw.value())
+        else {
+            return Ok(None);
+        };
+        let Ok(record) = serde_json::from_slice::<LocalReplica>(&plaintext) else {
+            return Ok(None);
+        };
+        if record.schema != 4 || record.applied_generation > current_generation {
+            return Ok(None);
+        }
+        watermark = Some(watermark.map_or(record.applied_generation, |previous| {
+            previous.min(record.applied_generation)
+        }));
+        visit(destination.value(), raw.value(), &plaintext)?;
+    }
+    Ok(watermark)
 }
 
 const LOCAL_REPLICA_MIGRATION: &str = "sync_v4/local_replica_compression";
@@ -249,104 +290,95 @@ const MIGRATION_RECORDS: &str = "records";
 const MIGRATION_DONE: &str = "done";
 
 impl ConnectionStore {
-    /// One-shot maintenance for databases written before the compressed
-    /// envelope: rewrite legacy local replicas, drop journal rows an applied
-    /// generation already covers, then compact without the startup heuristic.
-    ///
-    /// The staged `meta` marker makes this interruption-safe. Only a fully
-    /// committed rewrite advances to `records`, and only a successful compact
-    /// advances to `done`; anything unreadable aborts before a single write so
-    /// the old records stay exactly as they were. Callers run this on the
-    /// store worker because compaction needs exclusive database access.
+    /// Compatibility facade for explicit migration callers. Runtime startup
+    /// uses the unified, deferred maintenance operation instead.
     pub fn migrate_local_replica_storage(&mut self) -> Result<bool, StorageError> {
-        match self.local_replica_migration_state()?.as_deref() {
-            Some(MIGRATION_DONE) => return Ok(false),
-            Some(MIGRATION_RECORDS) => return self.compact_after_local_replica_migration(),
-            _ => {}
+        let preparation = self.prepare_local_replica_migration()?;
+        if !preparation.pending_compaction {
+            return Ok(false);
         }
-        let Some(password) = self.load_cloud_sync_master_password()? else {
-            return Ok(false);
-        };
-        let Some((rewrites, applied_generation)) =
-            self.prepare_local_replica_rewrites(password.expose_secret())?
-        else {
-            return Ok(false);
-        };
-        let Some(applied_generation) = applied_generation else {
-            // No local replica exists, so no journal row can be proven consumed.
-            // Leaving the marker unset lets a later restore of legacy data
-            // still be upgraded by this same maintenance.
-            return Ok(false);
-        };
-        {
-            let txn = self.db.begin_write()?;
-            {
-                let mut table = txn.open_table(REPLICAS)?;
-                for (destination, sealed) in &rewrites {
-                    table.insert(destination.as_str(), sealed.as_slice())?;
-                }
-            }
-            purge_consumed_edits(&txn, applied_generation)?;
-            txn.commit()?;
-        }
-        self.set_local_replica_migration_state(MIGRATION_RECORDS)?;
-        self.compact_after_local_replica_migration()
-    }
-
-    fn compact_after_local_replica_migration(&mut self) -> Result<bool, StorageError> {
         if self.db.compact().is_err() {
-            // Keep the intermediate marker so the next start retries the
-            // compaction instead of blocking this one.
             return Ok(false);
         }
-        self.set_local_replica_migration_state(MIGRATION_DONE)?;
+        self.finish_local_replica_migration()?;
         Ok(true)
     }
 
-    /// Decodes every replica before touching the database. `Ok(None)` means a
-    /// record could not be read by this build and nothing may be rewritten.
-    fn prepare_local_replica_rewrites(
+    pub(super) fn prepare_local_replica_migration(
         &self,
-        password: &str,
-    ) -> Result<Option<LocalReplicaRewrites>, StorageError> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(REPLICAS)?;
-        let mut rewrites = Vec::new();
-        let mut applied_generation = None::<u64>;
-        for row in table.iter()? {
-            let (key, value) = row?;
-            let destination = key.value().to_owned();
-            let raw = value.value();
-            let Ok(plaintext) = encryption::open(password, "local-replica", &destination, raw)
-            else {
-                return Ok(None);
-            };
-            let Ok(record) = serde_json::from_slice::<LocalReplica>(plaintext.as_slice()) else {
-                return Ok(None);
-            };
-            if record.schema != 4 {
-                return Ok(None);
+    ) -> Result<ReplicaMigrationPreparation, StorageError> {
+        // Ciphertext hashes are part of a durable password-rotation ticket.
+        // Rewriting them would invalidate its exact-byte restart recovery.
+        if self.has_staged_v4_password_rotation()? {
+            return Ok(ReplicaMigrationPreparation::default());
+        }
+        match self.local_replica_migration_state()?.as_deref() {
+            Some(MIGRATION_DONE) => return Ok(ReplicaMigrationPreparation::default()),
+            Some(MIGRATION_RECORDS) => {
+                return Ok(ReplicaMigrationPreparation {
+                    pending_compaction: true,
+                    ..Default::default()
+                });
             }
-            // The smallest applied generation keeps pending edits that another
-            // destination record still needs.
-            applied_generation = Some(
-                applied_generation.map_or(record.applied_generation, |applied: u64| {
-                    applied.min(record.applied_generation)
-                }),
-            );
-            if encryption::is_legacy_envelope(raw) {
-                rewrites.push((
-                    destination.clone(),
-                    encryption::seal_compressed(
-                        password,
-                        "local-replica",
-                        &destination,
-                        plaintext.as_slice(),
-                    )?,
-                ));
+            // A future maintenance stage is not permission to rewrite its
+            // records or replace its durable marker with this build's state.
+            Some(_) => return Ok(ReplicaMigrationPreparation::default()),
+            None => {}
+        }
+        let Some(password) = self.load_cloud_sync_master_password()? else {
+            return Ok(ReplicaMigrationPreparation::default());
+        };
+        let txn = self.db.begin_write()?;
+        let mut rewrites = Vec::new();
+        let watermark = visit_local_replicas(
+            &txn,
+            password.expose_secret(),
+            None,
+            |destination, raw, plaintext| {
+                if encryption::is_legacy_envelope(raw) {
+                    rewrites.push((
+                        destination.to_owned(),
+                        encryption::seal_compressed(
+                            password.expose_secret(),
+                            "local-replica",
+                            destination,
+                            plaintext,
+                        )?,
+                    ));
+                }
+                Ok(())
+            },
+        )?;
+        let Some(watermark) = watermark else {
+            // Missing or unreadable replicas leave all bytes and markers intact.
+            return Ok(ReplicaMigrationPreparation::default());
+        };
+        {
+            let mut table = txn.open_table(REPLICAS)?;
+            for (destination, sealed) in &rewrites {
+                table.insert(destination.as_str(), sealed.as_slice())?;
             }
         }
-        Ok(Some((rewrites, applied_generation)))
+        let journal_rows_removed = purge_consumed_edits(&txn, watermark)?;
+        let pending_compaction = !rewrites.is_empty() || journal_rows_removed > 0;
+        txn.open_table(META_TABLE)?.insert(
+            LOCAL_REPLICA_MIGRATION,
+            if pending_compaction {
+                MIGRATION_RECORDS
+            } else {
+                MIGRATION_DONE
+            },
+        )?;
+        txn.commit()?;
+        Ok(ReplicaMigrationPreparation {
+            replicas_rewritten: rewrites.len(),
+            journal_rows_removed,
+            pending_compaction,
+        })
+    }
+
+    pub(super) fn finish_local_replica_migration(&self) -> Result<(), StorageError> {
+        self.set_local_replica_migration_state(MIGRATION_DONE)
     }
 
     fn local_replica_migration_state(&self) -> Result<Option<String>, StorageError> {
@@ -973,7 +1005,6 @@ impl ConnectionStore {
                 }));
         }
         prepared.local.applied_generation = generation(&txn)?;
-        purge_consumed_edits(&txn, prepared.local.applied_generation)?;
         if !snapshot_only {
             let plaintext = Zeroizing::new(serde_json::to_vec(&prepared.local)?);
             let bytes = encryption::seal_compressed(
@@ -984,6 +1015,14 @@ impl ConnectionStore {
             )?;
             txn.open_table(REPLICAS)?
                 .insert(prepared.destination.as_str(), bytes.as_slice())?;
+            if let Some(watermark) = visit_local_replicas(
+                &txn,
+                password,
+                Some((&prepared.destination, prepared.local.applied_generation)),
+                |_, _, _| Ok(()),
+            )? {
+                purge_consumed_edits(&txn, watermark)?;
+            }
         }
         observe(ApplyPoint::Replica);
         // Every mutation here belongs to this one Redb transaction. A process
@@ -1738,5 +1777,9 @@ fn validate_relationships(entities: &BTreeMap<String, Value>) -> Result<(), Stor
     Ok(())
 }
 
+#[cfg(test)]
+mod journal_tests;
+#[cfg(test)]
+mod maintenance_tests;
 #[cfg(test)]
 mod tests;

@@ -6,7 +6,7 @@ use nyaterm_core::CredentialCrypto;
 use nyaterm_core::sync_schema::{encryption, secrets::SecretValueCodec};
 use nyaterm_sync::engine::digest;
 use nyaterm_sync::protocol::{MAX_PUBLICATION_BYTES, PendingPublication, PublishedReplica};
-use redb::{ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -63,6 +63,15 @@ fn matches(txn: &redb::WriteTransaction, stage: &StagedRotation) -> Result<bool,
 }
 
 impl ConnectionStore {
+    pub(in crate::storage) fn has_staged_v4_password_rotation(&self) -> Result<bool, StorageError> {
+        let txn = self.db.begin_read()?;
+        let table = match txn.open_table(ROTATIONS) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(table.get(STAGED)?.is_some())
+    }
     pub fn has_v4_replicas(&self) -> Result<bool, StorageError> {
         let txn = self.db.begin_write()?;
         Ok(txn.open_table(REPLICAS)?.len()? > 0)

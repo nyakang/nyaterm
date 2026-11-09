@@ -70,6 +70,37 @@ impl DesktopController {
         for workspace_id in workspace_ids {
             self.deliver_process_state(workspace_id, process_state.clone(), cx);
         }
+        if let Some(store) = self.startup.shared_store_runtime() {
+            cx.spawn(async move |_, cx| {
+                let task = loop {
+                    match store.schedule_local_storage_maintenance() {
+                        Ok(task) => break task,
+                        Err(nyaterm_store::StoreSubmitError::QueueFull) => {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(250))
+                                .await;
+                        }
+                        Err(_) => return,
+                    }
+                };
+                match task.await.outcome {
+                    Ok(result) => tracing::debug!(
+                        bytes_before = result.bytes_before,
+                        bytes_after = result.bytes_after,
+                        elapsed_ms = result.elapsed.as_millis() as u64,
+                        replicas_rewritten = result.replicas_rewritten,
+                        journal_rows_removed = result.journal_rows_removed,
+                        compaction = ?result.compaction,
+                        "local storage maintenance completed"
+                    ),
+                    Err(error) => tracing::debug!(
+                        category = error.category(),
+                        "local storage maintenance skipped"
+                    ),
+                }
+            })
+            .detach();
+        }
     }
 
     pub(super) fn broadcast_shared_state(&self, event: SharedStateEvent, cx: &mut Context<Self>) {

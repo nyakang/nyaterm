@@ -6,6 +6,7 @@ pub use portable_decode_helper::run_cloud_snapshot_decode_helper_if_requested;
 pub mod plugin_preferences;
 mod runtime;
 mod storage;
+pub use storage::maintenance;
 pub use storage::runtime_auth;
 
 pub use runtime::{

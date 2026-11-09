@@ -45,6 +45,8 @@ pub enum PortableSnapshotError {
     },
     #[error("portable snapshot redb payload is corrupt or incomplete")]
     CorruptPayload,
+    #[error("local replica payload exceeds the {limit_bytes}-byte limit")]
+    LocalReplicaPayloadTooLarge { limit_bytes: u64 },
     #[error("portable snapshot is missing metadata")]
     MissingMetadata,
     #[error("portable snapshot missing entity '{0}'")]

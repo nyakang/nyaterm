@@ -6,6 +6,10 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Poll};
+use std::time::Instant;
+
+mod maintenance;
+use self::maintenance::MaintenanceSchedule;
 
 use futures::channel::mpsc as futures_mpsc;
 use futures::channel::oneshot;
@@ -17,6 +21,7 @@ use nyaterm_core::{
     WorkspaceRestoreManifest,
 };
 
+use crate::maintenance::LocalStorageMaintenanceResult;
 use crate::storage::{ConnectionStore, StorageError};
 
 const STORE_QUEUE_CAPACITY: usize = 256;
@@ -72,6 +77,7 @@ pub struct StoreMutationEvent {
 pub struct StoreOperationError {
     category: &'static str,
     message: String,
+    local_replica_payload_limit: Option<u64>,
 }
 
 impl StoreOperationError {
@@ -83,17 +89,32 @@ impl StoreOperationError {
         &self.message
     }
 
+    /// Typed, non-secret detail retained across the worker boundary.
+    pub fn local_replica_payload_limit(&self) -> Option<u64> {
+        self.local_replica_payload_limit
+    }
+
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             category: "unavailable",
             message: message.into(),
+            local_replica_payload_limit: None,
         }
     }
 }
 
 impl From<StorageError> for StoreOperationError {
     fn from(error: StorageError) -> Self {
+        let local_replica_payload_limit = match &error {
+            StorageError::PortableSnapshot(
+                nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { limit_bytes },
+            ) => Some(*limit_bytes),
+            _ => None,
+        };
         let category = match &error {
+            StorageError::PortableSnapshot(
+                nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { .. },
+            ) => "replica_payload_too_large",
             StorageError::CloudSyncLocalChanged => "sync_local_changed",
             StorageError::CreateDir { .. } => "create_dir",
             StorageError::Open { .. } => "open",
@@ -108,6 +129,7 @@ impl From<StorageError> for StoreOperationError {
         Self {
             category,
             message: error.to_string(),
+            local_replica_payload_limit,
         }
     }
 }
@@ -158,8 +180,8 @@ pub trait StoreRequest: Send + 'static {
         false
     }
 
-    /// Whether a failure should reach the flush barrier as a user-visible
-    /// storage error. Silent maintenance requests opt out.
+    /// Whether this request updates flush-barrier failures. Opting out means
+    /// neither recording a failure nor resolving any earlier domain failure.
     fn records_failures(&self) -> bool {
         true
     }
@@ -292,13 +314,41 @@ impl<T> Future for StoreTask<T> {
     }
 }
 
-type WorkerJob = Box<
-    dyn FnOnce(Result<&mut ConnectionStore, &StoreOperationError>) -> Option<StoreOperationError>
-        + Send,
->;
+enum BarrierEffect {
+    Ignore,
+    Success,
+    Failure(StoreOperationError),
+}
+
+impl BarrierEffect {
+    fn from_outcome<T>(records_failures: bool, outcome: &Result<T, StoreOperationError>) -> Self {
+        if !records_failures {
+            Self::Ignore
+        } else if let Err(error) = outcome {
+            Self::Failure(error.clone())
+        } else {
+            Self::Success
+        }
+    }
+}
+
+type WorkerJob =
+    Box<dyn FnOnce(Result<&mut ConnectionStore, &StoreOperationError>) -> BarrierEffect + Send>;
+
+struct MaintenanceWaiter {
+    request_id: RequestId,
+    sender: oneshot::Sender<StoreEvent<LocalStorageMaintenanceResult>>,
+}
 
 enum WorkerMessage {
-    Execute { domain: StoreDomain, job: WorkerJob },
+    Execute {
+        domain: StoreDomain,
+        job: WorkerJob,
+    },
+    ScheduleMaintenance {
+        requested_at: Instant,
+        waiter: MaintenanceWaiter,
+    },
 }
 
 #[derive(Clone)]
@@ -354,11 +404,7 @@ impl StoreUiClient {
                     Ok(store) => request.execute(store).map_err(StoreOperationError::from),
                     Err(error) => Err(error.clone()),
                 };
-                let failure = if records_failures {
-                    outcome.as_ref().err().cloned()
-                } else {
-                    None
-                };
+                let failure = BarrierEffect::from_outcome(records_failures, &outcome);
                 if changes_sync_payload && outcome.is_ok() {
                     let generation = sync_mutation_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let _ = mutation_sender.unbounded_send(StoreMutationEvent {
@@ -489,11 +535,7 @@ impl StoreBlockingClient {
                     Ok(store) => request.execute(store).map_err(StoreOperationError::from),
                     Err(error) => Err(error.clone()),
                 };
-                let failure = if records_failures {
-                    outcome.as_ref().err().cloned()
-                } else {
-                    None
-                };
+                let failure = BarrierEffect::from_outcome(records_failures, &outcome);
                 if changes_sync_payload && outcome.is_ok() {
                     let generation = sync_mutation_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let _ = mutation_sender.unbounded_send(StoreMutationEvent {
@@ -579,9 +621,10 @@ impl StoreRuntime {
         let submission_gate = Arc::new(Mutex::new(()));
         let sync_mutation_generation = Arc::new(AtomicU64::new(0));
         let (mutation_sender, mutation_receiver) = futures_mpsc::unbounded();
+        let worker_accepting = accepting.clone();
         std::thread::Builder::new()
             .name("nyaterm-store".to_string())
-            .spawn(move || store_worker(config, receiver))?;
+            .spawn(move || store_worker(config, receiver, worker_accepting))?;
         Ok(Self {
             ui_client: StoreUiClient {
                 sender: sender.clone(),
@@ -609,6 +652,34 @@ impl StoreRuntime {
 
     pub fn blocking_client(&self) -> StoreBlockingClient {
         self.blocking_client.clone()
+    }
+
+    /// Schedule after the first successful bootstrap. Duplicate callers share
+    /// the same deferred attempt and result; this never changes flush failures.
+    pub fn schedule_local_storage_maintenance(
+        &self,
+    ) -> Result<StoreTask<LocalStorageMaintenanceResult>, StoreSubmitError> {
+        let client = &self.ui_client;
+        let _gate = client
+            .submission_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !client.accepting.load(Ordering::Acquire) {
+            return Err(StoreSubmitError::ShuttingDown);
+        }
+        let request_id = client.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        match client.sender.try_send(WorkerMessage::ScheduleMaintenance {
+            requested_at: Instant::now(),
+            waiter: MaintenanceWaiter { request_id, sender },
+        }) {
+            Ok(()) => Ok(StoreTask {
+                request_id,
+                receiver,
+            }),
+            Err(mpsc::TrySendError::Full(_)) => Err(StoreSubmitError::QueueFull),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(StoreSubmitError::Disconnected),
+        }
     }
 
     pub fn sync_mutation_generation(&self) -> u64 {
@@ -827,13 +898,81 @@ fn cloud_store_response<T>(
     })
 }
 
-fn store_worker(config: StoreConfig, receiver: mpsc::Receiver<WorkerMessage>) {
+fn store_worker(
+    config: StoreConfig,
+    receiver: mpsc::Receiver<WorkerMessage>,
+    accepting: Arc<AtomicBool>,
+) {
     let mut store =
         ConnectionStore::open_with_portable_key_path(config.config_dir, config.portable_key_path)
             .map_err(StoreOperationError::from);
     let mut barrier_failures = Vec::new();
-    while let Ok(message) = receiver.recv() {
+    let mut maintenance = MaintenanceSchedule::new(Instant::now());
+    let mut waiters = Vec::new();
+    let mut maintenance_result = None;
+    loop {
+        if !accepting.load(Ordering::Acquire) && maintenance.deadline().is_some() {
+            maintenance.finish();
+            let outcome = Err(StoreOperationError::unavailable(
+                "storage maintenance cancelled during shutdown",
+            ));
+            complete_maintenance_waiters(&mut waiters, &outcome);
+            maintenance_result = Some(outcome);
+        }
+        let message = if let Some(deadline) = maintenance.deadline() {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(message) => message,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Check admission and queued work again before entering the
+                    // non-preemptible compaction. Never acquire the submission
+                    // gate here: a full queue may hold it while waiting for us.
+                    if !accepting.load(Ordering::Acquire) {
+                        continue;
+                    }
+                    match receiver.try_recv() {
+                        Ok(message) => message,
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            maintenance.finish();
+                            let outcome = match store.as_mut() {
+                                Ok(database) => database
+                                    .maintain_local_storage()
+                                    .map_err(StoreOperationError::from),
+                                Err(error) => Err(error.clone()),
+                            };
+                            complete_maintenance_waiters(&mut waiters, &outcome);
+                            maintenance_result = Some(outcome);
+                            continue;
+                        }
+                    }
+                }
+            }
+        } else {
+            let Ok(message) = receiver.recv() else { break };
+            message
+        };
+        let ordinary_request = matches!(message, WorkerMessage::Execute { .. });
         match message {
+            WorkerMessage::ScheduleMaintenance {
+                requested_at,
+                waiter,
+            } => {
+                if let Some(outcome) = &maintenance_result {
+                    send_maintenance_result(waiter, outcome);
+                } else if !accepting.load(Ordering::Acquire) {
+                    let outcome = Err(StoreOperationError::unavailable(
+                        "storage maintenance cancelled during shutdown",
+                    ));
+                    send_maintenance_result(waiter, &outcome);
+                    complete_maintenance_waiters(&mut waiters, &outcome);
+                    maintenance.finish();
+                    maintenance_result = Some(outcome);
+                } else {
+                    maintenance.request(requested_at);
+                    waiters.push(waiter);
+                }
+            }
             WorkerMessage::Execute {
                 domain: StoreDomain::Barrier,
                 job,
@@ -853,13 +992,42 @@ fn store_worker(config: StoreConfig, receiver: mpsc::Receiver<WorkerMessage>) {
                     Ok(database) => job(Ok(database)),
                     Err(error) => job(Err(&*error)),
                 };
-                if let Some(error) = failure {
-                    barrier_failures.push((domain, error));
-                } else {
-                    clear_resolved_barrier_failures(&mut barrier_failures, domain);
+                match failure {
+                    BarrierEffect::Ignore => {}
+                    BarrierEffect::Success => {
+                        clear_resolved_barrier_failures(&mut barrier_failures, domain)
+                    }
+                    BarrierEffect::Failure(error) => barrier_failures.push((domain, error)),
                 }
             }
         }
+        // Scheduling messages do not represent storage activity.
+        // A duplicate cannot change the original startup deadline.
+        // Barrier requests do count: shutdown's final writes must run first.
+        if ordinary_request {
+            maintenance.request_completed(Instant::now());
+        }
+    }
+}
+
+fn send_maintenance_result(
+    waiter: MaintenanceWaiter,
+    outcome: &Result<LocalStorageMaintenanceResult, StoreOperationError>,
+) {
+    let _ = waiter.sender.send(StoreEvent {
+        request_id: waiter.request_id,
+        domain: StoreDomain::CloudSync,
+        generation: 0,
+        outcome: outcome.clone(),
+    });
+}
+
+fn complete_maintenance_waiters(
+    waiters: &mut Vec<MaintenanceWaiter>,
+    outcome: &Result<LocalStorageMaintenanceResult, StoreOperationError>,
+) {
+    for waiter in waiters.drain(..) {
+        send_maintenance_result(waiter, outcome);
     }
 }
 
@@ -898,6 +1066,7 @@ fn aggregate_barrier_failures(
     categories.dedup();
     Some(StoreOperationError {
         category: "barrier",
+        local_replica_payload_limit: None,
         message: format!(
             "{} storage request(s) failed before the flush barrier ({})",
             failures.len(),
@@ -1109,13 +1278,236 @@ impl StoreRequest for FlushBarrier {
 mod tests {
     use super::{
         FlushBarrier, LoadBootstrap, LoadMainWindowState, SaveMainWindowState, StoreClientError,
-        StoreConfig, StoreDomain, StoreOperationError, StoreRuntime,
+        StoreConfig, StoreDomain, StoreExclusiveFnRequest, StoreOperationError, StoreRuntime,
+        store_request,
     };
-    use futures::StreamExt as _;
+    use futures::{FutureExt as _, StreamExt as _};
     use nyaterm_core::{MainWindowBounds, MainWindowState};
+    use std::time::Instant;
 
     fn temp_dir(label: &str) -> nyaterm_core::test_support::TestTempDir {
         nyaterm_core::test_support::TestTempDir::new(&format!("nyaterm-store-runtime-{label}"))
+    }
+
+    fn fixture_outcome(success: bool) -> Result<(), crate::StorageError> {
+        if success {
+            Ok(())
+        } else {
+            Err(crate::StorageError::InvalidData(
+                "synthetic private fixture".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn replica_payload_limit_remains_typed_across_the_worker_boundary() {
+        let dir = temp_dir("replica-limit-error");
+        let runtime = StoreRuntime::spawn(StoreConfig {
+            config_dir: dir.path().into(),
+            portable_key_path: None,
+        })
+        .unwrap();
+        let error = runtime
+            .blocking_client()
+            .request_fn(
+                StoreDomain::CloudSync,
+                |_| -> Result<(), crate::StorageError> {
+                    Err(crate::StorageError::PortableSnapshot(
+                        nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge {
+                            limit_bytes: 42,
+                        },
+                    ))
+                },
+            )
+            .unwrap_err();
+        let StoreClientError::Operation(error) = error else {
+            panic!("expected operation error")
+        };
+        assert_eq!(error.category(), "replica_payload_too_large");
+        assert_eq!(error.local_replica_payload_limit(), Some(42));
+        assert_eq!(
+            error.user_message(),
+            "portable snapshot error: local replica payload exceeds the 42-byte limit"
+        );
+    }
+
+    fn fixture_request(
+        runtime: &StoreRuntime,
+        asynchronous: bool,
+        silent: bool,
+        domain: StoreDomain,
+        success: bool,
+    ) -> bool {
+        if silent {
+            let request = StoreExclusiveFnRequest {
+                domain,
+                operation: move |_: &mut crate::ConnectionStore| fixture_outcome(success),
+                response: std::marker::PhantomData,
+            };
+            if asynchronous {
+                futures::executor::block_on(runtime.ui_client().try_submit(0, request).unwrap())
+                    .outcome
+                    .is_ok()
+            } else {
+                runtime
+                    .blocking_client()
+                    .request(0, request)
+                    .unwrap()
+                    .outcome
+                    .is_ok()
+            }
+        } else {
+            let request = store_request(domain, move |_| fixture_outcome(success));
+            if asynchronous {
+                futures::executor::block_on(runtime.ui_client().try_submit(0, request).unwrap())
+                    .outcome
+                    .is_ok()
+            } else {
+                runtime
+                    .blocking_client()
+                    .request(0, request)
+                    .unwrap()
+                    .outcome
+                    .is_ok()
+            }
+        }
+    }
+
+    #[test]
+    fn silent_maintenance_neither_adds_nor_resolves_barrier_failures_in_both_clients() {
+        for asynchronous in [false, true] {
+            for maintenance_success in [false, true] {
+                for prior_failure in [false, true] {
+                    let dir = temp_dir("silent-maintenance");
+                    let runtime = StoreRuntime::spawn(StoreConfig {
+                        config_dir: dir.path().into(),
+                        portable_key_path: None,
+                    })
+                    .unwrap();
+                    let client = runtime.blocking_client();
+                    if prior_failure {
+                        assert!(!fixture_request(
+                            &runtime,
+                            asynchronous,
+                            false,
+                            StoreDomain::CloudSync,
+                            false
+                        ));
+                    }
+                    assert_eq!(
+                        fixture_request(
+                            &runtime,
+                            asynchronous,
+                            true,
+                            StoreDomain::CloudSync,
+                            maintenance_success
+                        ),
+                        maintenance_success
+                    );
+                    assert_eq!(
+                        client.request(0, FlushBarrier).unwrap().outcome.is_err(),
+                        prior_failure
+                    );
+                    assert!(fixture_request(
+                        &runtime,
+                        asynchronous,
+                        true,
+                        StoreDomain::Settings,
+                        true
+                    ));
+                    assert_eq!(
+                        client.request(0, FlushBarrier).unwrap().outcome.is_err(),
+                        prior_failure
+                    );
+                    assert!(fixture_request(
+                        &runtime,
+                        asynchronous,
+                        false,
+                        StoreDomain::Settings,
+                        true
+                    ));
+                    assert_eq!(
+                        client.request(0, FlushBarrier).unwrap().outcome.is_err(),
+                        prior_failure
+                    );
+                    assert!(fixture_request(
+                        &runtime,
+                        asynchronous,
+                        false,
+                        StoreDomain::CloudSync,
+                        true
+                    ));
+                    assert!(client.request(0, FlushBarrier).unwrap().outcome.is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pending_maintenance_allows_bootstrap_and_requests_and_is_cancelled_before_shutdown_barrier()
+    {
+        let dir = temp_dir("maintenance-shutdown");
+        let runtime = StoreRuntime::spawn(StoreConfig {
+            config_dir: dir.path().into(),
+            portable_key_path: None,
+        })
+        .unwrap();
+        let client = runtime.blocking_client();
+        client.request(0, LoadBootstrap).unwrap().outcome.unwrap();
+        let mut first = runtime.schedule_local_storage_maintenance().unwrap();
+        let mut duplicate = runtime.schedule_local_storage_maintenance().unwrap();
+        client
+            .request_fn(StoreDomain::Connections, |_| Ok(()))
+            .unwrap();
+        assert!((&mut first).now_or_never().is_none());
+        assert!((&mut duplicate).now_or_never().is_none());
+        runtime.begin_shutdown();
+        client
+            .request_shutdown(0, FlushBarrier)
+            .unwrap()
+            .outcome
+            .unwrap();
+        let first_error = futures::executor::block_on(first).outcome.unwrap_err();
+        let duplicate_error = futures::executor::block_on(duplicate).outcome.unwrap_err();
+        assert!(first_error == duplicate_error);
+        assert!(runtime.schedule_local_storage_maintenance().is_err());
+        runtime.resume_after_failed_shutdown();
+        let cached =
+            futures::executor::block_on(runtime.schedule_local_storage_maintenance().unwrap())
+                .outcome
+                .unwrap_err();
+        assert!(cached == first_error);
+        client.request(0, FlushBarrier).unwrap().outcome.unwrap();
+    }
+
+    #[test]
+    #[ignore = "manual integration check of the real thirty-second startup delay"]
+    fn deferred_maintenance_executes_once_and_duplicate_windows_receive_the_cached_result() {
+        let dir = temp_dir("maintenance-completion");
+        let runtime = StoreRuntime::spawn(StoreConfig {
+            config_dir: dir.path().into(),
+            portable_key_path: None,
+        })
+        .unwrap();
+        runtime
+            .blocking_client()
+            .request(0, LoadBootstrap)
+            .unwrap()
+            .outcome
+            .unwrap();
+        let started = Instant::now();
+        let first = runtime.schedule_local_storage_maintenance().unwrap();
+        let second = runtime.schedule_local_storage_maintenance().unwrap();
+        let result = futures::executor::block_on(first).outcome.unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_secs(30));
+        assert_eq!(futures::executor::block_on(second).outcome.unwrap(), result);
+        assert_eq!(
+            futures::executor::block_on(runtime.schedule_local_storage_maintenance().unwrap())
+                .outcome
+                .unwrap(),
+            result
+        );
+        assert_eq!(runtime.sync_mutation_generation(), 0);
     }
 
     #[test]
@@ -1312,6 +1704,7 @@ mod tests {
         let error = StoreClientError::Operation(StoreOperationError {
             category: "storage",
             message: "secret-token-value".to_string(),
+            local_replica_payload_limit: None,
         });
 
         let debug = format!("{error:?}");

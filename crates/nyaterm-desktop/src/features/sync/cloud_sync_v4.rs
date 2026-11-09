@@ -9,7 +9,7 @@ use nyaterm_core::cloud_sync::{CloudSyncRemote, control::CloudSyncOperationContr
 use nyaterm_core::sync_schema::{FIXED_CLOUD_SYNC_SCOPE, encryption};
 use nyaterm_core::{CloudSyncError, CloudSyncSettings, LocalCloudSyncOptions};
 use nyaterm_store::sync_v4::{LocalReplica, PreparedApply};
-use nyaterm_store::{StoreBlockingClient, StoreDomain};
+use nyaterm_store::{StoreBlockingClient, StoreClientError, StoreDomain};
 use nyaterm_sync::engine::{SyncReplica, digest, prepare};
 use nyaterm_sync::protocol::{
     MAX_PUBLICATION_BYTES, PendingPublication, ProviderCapabilities, PublicationId,
@@ -187,7 +187,14 @@ fn invalid() -> CloudSyncError {
         "Invalid or incompatible Cloud Sync V3 data; no data was overwritten".into(),
     )
 }
-fn store_error(_: impl std::fmt::Display) -> CloudSyncError {
+fn store_error(error: StoreClientError) -> CloudSyncError {
+    if let StoreClientError::Operation(error) = &error
+        && let Some(limit_bytes) = error.local_replica_payload_limit()
+    {
+        return CloudSyncError::PortableSnapshot(
+            nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { limit_bytes },
+        );
+    }
     CloudSyncError::LocalChangedDuringSync
 }
 

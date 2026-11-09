@@ -31,6 +31,7 @@ mod completion_history;
 mod config_backup;
 mod keyword_highlights;
 mod known_hosts;
+pub mod maintenance;
 mod notes;
 mod portable;
 mod remote_file_backend;
@@ -213,34 +214,6 @@ struct ConnectionPasswordRecord {
 
 struct PreparedConnectionForStorage(SavedConnection);
 
-// Startup compaction only runs when reclaimable space is both large in
-// absolute terms and a significant share of the file, and a failed attempt is
-// ignored so a slow or locked database never blocks startup.
-const COMPACT_MIN_FREE_BYTES: u64 = 4 * 1024 * 1024;
-const COMPACT_MIN_FREE_PERCENT: u64 = 25;
-
-fn compact_if_beneficial(db: &mut Database, db_path: &Path) {
-    let Ok(file_len) = std::fs::metadata(db_path).map(|metadata| metadata.len()) else {
-        return;
-    };
-    if file_len == 0 {
-        return;
-    }
-    let allocated = match db.begin_write() {
-        Ok(txn) => match txn.stats() {
-            Ok(stats) => Some(stats.allocated_pages() * stats.page_size() as u64),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    };
-    let Some(allocated) = allocated else { return };
-    let free = file_len.saturating_sub(allocated);
-    if free < COMPACT_MIN_FREE_BYTES || free * 100 <= file_len * COMPACT_MIN_FREE_PERCENT {
-        return;
-    }
-    let _ = db.compact();
-}
-
 impl ConnectionStore {
     pub fn open(config_dir: impl AsRef<Path>) -> Result<Self, StorageError> {
         Self::open_with_portable_key_path(config_dir, None)
@@ -260,17 +233,13 @@ impl ConnectionStore {
             path: db_path.clone(),
             source,
         })?;
-        let mut store = Self {
+        let store = Self {
             db,
             db_path,
             portable_key_path,
             completion_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         store.ensure_tables()?;
-        // Compaction runs after the table-creation commit, which is where redb
-        // first drains pages freed by the previous session. Measured earlier,
-        // those pages still count as allocated and hide the space to reclaim.
-        compact_if_beneficial(&mut store.db, &store.db_path);
         store.initialize_completion_history()?;
         store.ensure_portable_key()?;
         store.migrate_legacy_panel_visibility()?;
