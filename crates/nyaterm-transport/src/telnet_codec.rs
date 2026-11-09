@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 use crate::TelnetSessionConfig;
 
 pub(super) const IAC: u8 = 255;
@@ -5,19 +7,14 @@ pub(super) const NOP: [u8; 2] = [IAC, 241];
 pub(super) const WILL: u8 = 251;
 const WONT: u8 = 252;
 pub(super) const DO: u8 = 253;
-const DONT: u8 = 254;
+pub(super) const DONT: u8 = 254;
 const SB: u8 = 250;
 const SE: u8 = 240;
 const OPT_ECHO: u8 = 1;
 pub(super) const OPT_SUPPRESS_GO_AHEAD: u8 = 3;
-const OPT_NAWS: u8 = 31;
+pub(super) const OPT_NAWS: u8 = 31;
 
-pub(super) fn negotiate_response(
-    command: u8,
-    option: u8,
-    send_naws: bool,
-    send_sga: bool,
-) -> Vec<u8> {
+pub(super) fn negotiate_response(command: u8, option: u8, send_sga: bool) -> Vec<u8> {
     match command {
         WILL => {
             if option == OPT_ECHO || (send_sga && option == OPT_SUPPRESS_GO_AHEAD) {
@@ -27,7 +24,7 @@ pub(super) fn negotiate_response(
             }
         }
         DO => {
-            if send_naws && option == OPT_NAWS {
+            if send_sga && option == OPT_SUPPRESS_GO_AHEAD {
                 vec![IAC, WILL, option]
             } else {
                 vec![IAC, WONT, option]
@@ -39,15 +36,18 @@ pub(super) fn negotiate_response(
     }
 }
 
-pub(super) fn maybe_build_naws(
-    cols: u16,
-    rows: u16,
-    config: &TelnetSessionConfig,
-) -> Option<Vec<u8>> {
+/// RFC 1073 requires an offer before any window-size subnegotiation. Sending
+/// the subnegotiation first makes embedded Telnet servers echo its binary
+/// payload as typed input, which corrupts the login prompt.
+pub(super) fn naws_offer(config: &TelnetSessionConfig) -> Option<Vec<u8>> {
     if config.raw_tcp || !config.send_naws {
         return None;
     }
-    Some(vec![
+    Some(vec![IAC, WILL, OPT_NAWS])
+}
+
+pub(super) fn naws_subnegotiation(cols: u16, rows: u16) -> Vec<u8> {
+    vec![
         IAC,
         SB,
         OPT_NAWS,
@@ -57,7 +57,52 @@ pub(super) fn maybe_build_naws(
         (rows & 0xff) as u8,
         IAC,
         SE,
-    ])
+    ]
+}
+
+/// Shared between the Telnet reader and transport so resizes only send NAWS
+/// after the peer accepted the offer, using the latest dimensions.
+pub(super) struct TelnetNawsState {
+    accepted: AtomicBool,
+    size: AtomicU64,
+}
+
+impl TelnetNawsState {
+    pub(super) fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            accepted: AtomicBool::new(false),
+            size: AtomicU64::new(pack_size(cols, rows)),
+        }
+    }
+
+    pub(super) fn accept(&self) -> Vec<u8> {
+        self.accepted.store(true, Ordering::Relaxed);
+        let (cols, rows) = unpack_size(self.size.load(Ordering::Relaxed));
+        naws_subnegotiation(cols, rows)
+    }
+
+    pub(super) fn reject(&self) {
+        self.accepted.store(false, Ordering::Relaxed);
+    }
+
+    pub(super) fn update_size(&self, cols: u16, rows: u16) {
+        self.size.store(pack_size(cols, rows), Ordering::Relaxed);
+    }
+
+    pub(super) fn payload(&self) -> Option<Vec<u8>> {
+        self.accepted.load(Ordering::Relaxed).then(|| {
+            let (cols, rows) = unpack_size(self.size.load(Ordering::Relaxed));
+            naws_subnegotiation(cols, rows)
+        })
+    }
+}
+
+fn pack_size(cols: u16, rows: u16) -> u64 {
+    (u64::from(cols) << 16) | u64::from(rows)
+}
+
+fn unpack_size(size: u64) -> (u16, u16) {
+    ((size >> 16) as u16, size as u16)
 }
 
 pub(super) fn unescape_iac_iac(data: &[u8]) -> Vec<u8> {
