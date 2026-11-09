@@ -750,6 +750,69 @@ mod tests {
     }
 
     #[test]
+    fn command_output_highlighting_draft_cancel_and_apply_preserve_committed_preferences() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let load = |cx: &mut TestAppContext| {
+            app.update(cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+                    .ui_highlight_line_roles
+            })
+        };
+        app.update(&mut cx, |app, cx| {
+            let mut keywords = app.settings.keyword_config().clone();
+            keywords.enabled = true;
+            let keywords = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, move |store| {
+                    store.save_keyword_highlights(&keywords)
+                })
+                .unwrap();
+            app.settings.replace_keyword_config(keywords);
+            assert!(app.settings.summary().ui_highlight_line_roles);
+            app.begin_settings_draft(cx);
+            app.toggle_line_role_highlights(cx);
+            assert!(!app.settings.summary().ui_highlight_line_roles);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert!(app.settings.summary().ui_highlight_line_roles);
+        });
+        assert!(load(&mut cx));
+        for enabled in [false, true, false] {
+            app.update(&mut cx, |app, cx| {
+                app.begin_settings_draft(cx);
+                app.toggle_line_role_highlights(cx);
+                assert_eq!(app.settings.summary().ui_highlight_line_roles, enabled);
+                assert!(app.settings_draft_dirty());
+            });
+            assert_eq!(load(&mut cx), !enabled);
+            app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                cx.run_until_parked();
+                if app.read_with(&cx, |app, _| !app.settings_draft_dirty()) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "command-output highlighting save did not finish"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(load(&mut cx), enabled);
+            app.update(&mut cx, |app, _| {
+                assert_eq!(app.settings.summary().ui_highlight_line_roles, enabled);
+                assert!(!app.settings_draft_dirty());
+            });
+        }
+    }
+
+    #[test]
     fn terminal_wrapping_draft_cancel_and_save_preserve_committed_preferences() {
         use nyaterm_core::models::settings::TerminalWrapMode;
         let mut cx = TestAppContext::single();
