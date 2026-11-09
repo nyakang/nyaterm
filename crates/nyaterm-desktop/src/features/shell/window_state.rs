@@ -132,7 +132,7 @@ impl ShellFeatureState {
     }
 
     pub(in crate::features) fn place_started_terminal_tab(&mut self, tab: &str, sequence: u64) {
-        let group = self.workspace.windows.start_groups.get(&sequence).cloned();
+        let group = self.terminal_start_display_group(sequence);
         if let Some(root) = self.workspace.windows.tree.as_mut()
             && let Some(group) = group.filter(|group| root.leaf_tabs(group).is_some())
         {

@@ -25,6 +25,24 @@ impl NyaTermApp {
     ) {
         let tab_placement = tab_placement.map(|p| self.session.resolve_start_tab_placement(p));
         let active_tab = self.active_workspace_tab();
+        // Capture the successor before registration reconciles the layout and
+        // appends the new tab. Ordinary workspace tabs also bound reserved slots.
+        let before = tab_placement.and_then(|placement| {
+            let group = self
+                .shell
+                .terminal_start_display_group(placement.request_sequence);
+            let tabs = group
+                .as_deref()
+                .and_then(|group| self.shell.terminal_group_tabs(group))
+                .map(|(tabs, _)| tabs)
+                .unwrap_or_else(|| self.workspace_tab_ids());
+            tabs.into_iter().enumerate().find_map(|(index, id)| {
+                (id != session_id
+                    && self.session.workspace_tab_position(&id, index)
+                        > (placement.insert_index, placement.request_sequence))
+                    .then_some(id)
+            })
+        });
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         let is_terminal = encoding.is_some();
         self.session.prepare_session_metadata_for_start(
@@ -39,21 +57,6 @@ impl NyaTermApp {
         if let Some(placement) = tab_placement {
             self.shell
                 .place_started_terminal_tab(session_id, placement.request_sequence);
-            // Worker completion order must not reorder requests issued in the same group.
-            let before = self
-                .shell
-                .terminal_group_for_tab(session_id)
-                .and_then(|group| self.shell.terminal_group_tabs(&group))
-                .and_then(|(tabs, _)| {
-                    tabs.into_iter().find(|id| {
-                        self.session
-                            .session_start_tab_placement(id)
-                            .is_some_and(|other| {
-                                (other.insert_index, other.request_sequence)
-                                    > (placement.insert_index, placement.request_sequence)
-                            })
-                    })
-                });
             if let Some(before) = before {
                 self.shell
                     .place_tab_before_in_terminal_windows(session_id, &before);

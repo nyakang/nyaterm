@@ -508,6 +508,15 @@ impl SessionFeatureState {
         self.start.set_tab_position(placement, index);
         self.start_tab_placements.insert(key.to_string(), placement);
     }
+    pub(in crate::features) fn workspace_tab_position(
+        &self,
+        key: &str,
+        fallback_index: usize,
+    ) -> (usize, u64) {
+        self.session_start_tab_placement(key)
+            .map(|placement| (placement.insert_index, placement.request_sequence))
+            .unwrap_or((fallback_index, u64::MAX))
+    }
     pub(in crate::features) fn metadata(
         &self,
         session_id: &str,

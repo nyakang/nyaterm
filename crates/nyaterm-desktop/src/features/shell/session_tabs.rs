@@ -182,11 +182,7 @@ impl NyaTermApp {
         let mut starts = starts.into_iter().peekable();
         let mut tabs = Vec::new();
         for (index, key) in workspace.into_iter().enumerate() {
-            let position = self
-                .session
-                .session_start_tab_placement(&key)
-                .map(|p| (p.insert_index, p.request_sequence))
-                .unwrap_or((index, u64::MAX));
+            let position = self.session.workspace_tab_position(&key, index);
             while starts.peek().is_some_and(|(next, _)| *next < position) {
                 tabs.push(starts.next().unwrap().1);
             }
@@ -250,23 +246,7 @@ impl NyaTermApp {
         }
         for (index, key) in order.iter().enumerate() {
             let tab = tabs.iter().find(|tab| tab.id.layout_key() == *key).unwrap();
-            match tab.id {
-                SessionStripTabId::Start(sequence) => {
-                    let placement = self
-                        .session
-                        .start_pending_entries()
-                        .map(|(_, p)| p)
-                        .chain(self.session.start_failed_entries().map(|(_, f)| &f.pending))
-                        .filter_map(|p| p.tab_placement)
-                        .find(|p| p.request_sequence == sequence);
-                    if let Some(placement) = placement {
-                        self.session.set_start_tab_position(placement, index);
-                    }
-                }
-                SessionStripTabId::Workspace(_) => {
-                    self.session.set_workspace_tab_position(key, index)
-                }
-            }
+            self.set_session_strip_tab_position(tab, index);
         }
         if let Some(tab) = tabs.iter().find(|tab| tab.id.layout_key() == source) {
             self.activate_session_strip_tab(tab, cx);
@@ -280,5 +260,33 @@ impl NyaTermApp {
         }
         self.settle_session_start_tab_placements_if_idle();
         cx.notify();
+    }
+
+    pub(in crate::features) fn set_session_strip_tab_position(
+        &mut self,
+        tab: &SessionStripTab,
+        index: usize,
+    ) {
+        match tab.id {
+            SessionStripTabId::Start(sequence) => {
+                let placement = self
+                    .session
+                    .start_pending_entries()
+                    .map(|(_, pending)| pending)
+                    .chain(
+                        self.session
+                            .start_failed_entries()
+                            .map(|(_, failed)| &failed.pending),
+                    )
+                    .filter_map(|pending| pending.tab_placement)
+                    .find(|placement| placement.request_sequence == sequence);
+                if let Some(placement) = placement {
+                    self.session.set_start_tab_position(placement, index);
+                }
+            }
+            SessionStripTabId::Workspace(_) => self
+                .session
+                .set_workspace_tab_position(&tab.id.layout_key(), index),
+        }
     }
 }

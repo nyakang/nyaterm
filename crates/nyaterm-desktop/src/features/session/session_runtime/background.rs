@@ -68,23 +68,36 @@ impl NyaTermApp {
             return options;
         }
 
-        let insert_index = options
-            .insert_index
-            .or_else(|| {
-                options.after_session_id.as_ref().and_then(|after_id| {
-                    self.ordered_tab_sessions()
-                        .iter()
-                        .position(|session| session.id == *after_id)
-                        .map(|index| index + 1)
-                })
-            })
-            .unwrap_or_else(|| {
-                self.ordered_tab_session_count()
-                    .saturating_add(self.session.start_visible_tab_reservation_count())
-            });
-        let placement = self.session.start.allocate_tab_placement(insert_index);
         self.ensure_terminal_windows_root();
-        if let Some(group) = self.current_terminal_group() {
+        let group = options
+            .after_session_id
+            .as_deref()
+            .and_then(|id| {
+                self.shell
+                    .terminal_group_for_tab(&self.tab_root_for_session(id))
+            })
+            .or_else(|| self.current_terminal_group());
+        let tabs = self.session_strip_tabs(&group);
+        let after_index = options.after_session_id.as_deref().and_then(|id| {
+            let key = self.tab_root_for_session(id);
+            tabs.iter()
+                .position(|tab| tab.id.layout_key() == key)
+                .map(|index| index + 1)
+        });
+        let insert_index = options.insert_index.or(after_index).unwrap_or_else(|| {
+            self.ordered_tab_session_count()
+                .saturating_add(self.session.start_visible_tab_reservation_count())
+        });
+        let placement = self.session.start.allocate_tab_placement(insert_index);
+        if options.insert_index.is_none() && after_index.is_some() {
+            // Reserve a visible slot, including attempts and non-session tabs.
+            // Otherwise their formal indices can put the copy past its source.
+            for (index, tab) in tabs.iter().enumerate() {
+                let index = index + usize::from(index >= insert_index);
+                self.set_session_strip_tab_position(tab, index);
+            }
+        }
+        if let Some(group) = group {
             self.shell
                 .reserve_terminal_start_group(placement.request_sequence, group);
         }

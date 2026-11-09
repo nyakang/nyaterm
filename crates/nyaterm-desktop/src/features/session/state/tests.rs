@@ -2763,6 +2763,7 @@ fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
     assert_eq!(state.pending_event_count(), 3);
 }
 
+mod start_tab_placement;
 mod tab_actions;
 
 #[test]
