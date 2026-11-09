@@ -10,7 +10,6 @@ use crate::models::KeywordHighlightEditorField;
 use crate::theme::ThemePalette;
 use nyaterm_core::keyword_highlight_presets::{
     builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized, builtin_keyword_rule_label,
-    builtin_keyword_rule_swatch_ansi,
 };
 use nyaterm_ui::NyaSwitch;
 use nyaterm_ui::NyaTooltip;
@@ -673,7 +672,6 @@ impl SettingsPanel {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
-        let is_dark = self.terminal_theme_is_dark();
         let enabled = self.settings.keyword_config().enabled
             && (!specialized || self.settings.summary().ui_highlight_line_roles);
         let title = if specialized {
@@ -707,11 +705,7 @@ impl SettingsPanel {
                         .copied()
                         .filter(|id| builtin_keyword_rule_is_specialized(id) == specialized)
                         .map(|id| {
-                            let swatch = builtin_keyword_rule_swatch_ansi(
-                                id,
-                                palette.terminal_ansi,
-                                is_dark,
-                            );
+                            let swatch = self.settings.builtin_keyword_swatch(id);
                             let checked = self
                                 .settings
                                 .keyword_config()

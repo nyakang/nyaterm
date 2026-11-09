@@ -123,8 +123,8 @@ pub fn builtin_keyword_rule_is_specialized(id: &str) -> bool {
 /// ANSI palette index (0..=15) used by a built-in rule.
 ///
 /// Used by palette-based categories and as a fallback for invalid colours.
-/// `builtin_keyword_rule_swatch_ansi` preserves legacy light/dark swatches for
-/// command, path, option, prompt and debug highlights.
+/// `builtin_keyword_rule_swatch_ansi` preserves v2.0.2 light/dark swatches for
+/// the original 21 categories; newer categories follow the terminal palette.
 pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
     match id {
         "builtin-command" => 2,
@@ -167,11 +167,31 @@ pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
     }
 }
 
-/// Resolve a built-in swatch, preserving selected v2.0.2 light/dark colours.
+/// Resolve a built-in swatch, preserving all v2.0.2 light/dark colours.
 pub fn builtin_keyword_rule_swatch_ansi(id: &str, ansi: [u32; 16], is_dark: bool) -> String {
     if matches!(
         id,
-        "builtin-command" | "builtin-path" | "builtin-option" | "builtin-prompt" | "builtin-debug"
+        "builtin-command"
+            | "builtin-path"
+            | "builtin-permissions"
+            | "builtin-url"
+            | "builtin-version"
+            | "builtin-address"
+            | "builtin-size"
+            | "builtin-string"
+            | "builtin-option"
+            | "builtin-uuid"
+            | "builtin-datetime"
+            | "builtin-error"
+            | "builtin-warn"
+            | "builtin-success"
+            | "builtin-info"
+            | "builtin-debug"
+            | "builtin-duration"
+            | "builtin-constant"
+            | "builtin-number"
+            | "builtin-prompt"
+            | "builtin-operator"
     ) {
         return builtin_keyword_rule_swatch(id, is_dark).to_string();
     }
@@ -489,9 +509,11 @@ pub fn builtin_keyword_rule_swatch(id: &str, is_dark: bool) -> &'static str {
             }
         }
         "builtin-operator" => {
-            // Matches the command colour: OxideTerm paints `[ ]`, `|`, `=` in the
-            // same cyan as the prompt and command head.
-            if dark { "#66D9EF" } else { "#007197" }
+            if dark {
+                "#A6E22E"
+            } else {
+                "#008573"
+            }
         }
         "builtin-version" => {
             if dark {
@@ -908,13 +930,29 @@ mod palette_tests {
     use std::collections::HashMap;
 
     #[test]
-    fn selected_categories_keep_v2_0_2_colours_while_other_builtins_follow_ansi() {
+    fn all_v2_0_2_categories_keep_their_colours_while_new_builtins_follow_ansi() {
         let legacy_swatches = [
             ("builtin-command", "#66D9EF", "#007197"),
             ("builtin-path", "#E6DB74", "#8a6700"),
+            ("builtin-permissions", "#b267e6", "#8250df"),
+            ("builtin-url", "#8be9fd", "#2aa198"),
+            ("builtin-version", "#ff9e64", "#b04a00"),
+            ("builtin-address", "#A6E22E", "#1a7f37"),
+            ("builtin-size", "#2ac3de", "#007197"),
+            ("builtin-string", "#E6DB74", "#1a8c8c"),
             ("builtin-option", "#FD971F", "#b04a00"),
-            ("builtin-prompt", "#f92672", "#e00862"),
+            ("builtin-uuid", "#ffb86c", "#bc4c00"),
+            ("builtin-datetime", "#A6E22E", "#a58900"),
+            ("builtin-error", "#f44747", "#cf222e"),
+            ("builtin-warn", "#cd9731", "#9a6700"),
+            ("builtin-success", "#32cd32", "#116329"),
+            ("builtin-info", "#6796e6", "#0969da"),
             ("builtin-debug", "#b267e6", "#8250df"),
+            ("builtin-duration", "#E6DB74", "#859900"),
+            ("builtin-constant", "#ffb86c", "#cb4b16"),
+            ("builtin-number", "#AE81FF", "#6f42c1"),
+            ("builtin-prompt", "#f92672", "#e00862"),
+            ("builtin-operator", "#A6E22E", "#008573"),
         ];
         for base in [0x123400, 0xabcdef] {
             let ansi = std::array::from_fn(|index| base + index as u32);

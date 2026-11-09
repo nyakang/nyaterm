@@ -149,6 +149,8 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) snapshot_password_prompt_active: bool,
     pub(in crate::features) config_path_prompt_active: bool,
     pub(in crate::features) terminal_theme_is_dark: bool,
+    /// Read-only palette projection from the settings owner, matching terminal paint.
+    pub(in crate::features) terminal_ansi: [u32; 16],
 }
 
 impl SettingsPresentation {
@@ -182,6 +184,7 @@ impl SettingsPresentation {
             snapshot_password_prompt_active: false,
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
+            terminal_ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
         }
     }
 }
@@ -277,6 +280,14 @@ impl SettingsPresentation {
 
     pub(in crate::features) fn terminal_theme_is_dark(&self) -> bool {
         self.terminal_theme_is_dark
+    }
+
+    pub(in crate::features) fn builtin_keyword_swatch(&self, id: &str) -> String {
+        nyaterm_core::keyword_highlight_presets::builtin_keyword_rule_swatch_ansi(
+            id,
+            self.terminal_ansi,
+            self.terminal_theme_is_dark,
+        )
     }
 }
 
@@ -2871,6 +2882,60 @@ mod tests {
             before,
             "unrelated app notifications must not repaint the cached settings panel"
         );
+    }
+
+    #[test]
+    fn keyword_swatches_follow_independent_terminal_themes_in_the_cached_panel() {
+        let dir = TestConfigDir::new("nyaterm-settings-keyword-palette");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, dir.path());
+        let panel = vcx.update(|_, cx| main_panel(&app, cx));
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.settings.set_appearance_theme("github-dark".into());
+                let mut keywords = app.settings.keyword_config().clone();
+                keywords.enabled = true;
+                app.settings.replace_keyword_config(keywords);
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+            });
+        });
+
+        for theme in [Some("dracula"), Some("github-light"), None] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.settings.set_terminal_theme(theme.map(str::to_string));
+                    app.invalidate_paint_theme_caches();
+                    app.request_settings_panel_refresh(cx);
+                });
+            });
+            draw(&app, vcx);
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                let panel = panel.read(cx);
+                let snapshot = panel.snapshot().expect("published settings snapshot");
+                assert_eq!(
+                    snapshot.chrome.palette.terminal_ansi,
+                    nyaterm_ui::theme_palette("github-dark").terminal_ansi
+                );
+                assert_eq!(
+                    snapshot.settings.terminal_ansi,
+                    app.terminal_theme_palette().terminal_ansi
+                );
+                assert_eq!(
+                    snapshot.settings.terminal_theme_is_dark(),
+                    app.terminal_theme_is_dark()
+                );
+                for rule in app.resolved_keyword_highlight_rules().iter() {
+                    assert_eq!(
+                        snapshot.settings.builtin_keyword_swatch(&rule.id),
+                        rule.color,
+                        "{} under terminal theme {theme:?}",
+                        rule.id
+                    );
+                }
+            });
+        }
     }
 
     #[test]
