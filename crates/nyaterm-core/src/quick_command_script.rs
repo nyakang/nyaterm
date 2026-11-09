@@ -35,17 +35,38 @@ pub struct QuickCommandChunk {
 /// Windows path still reach the terminal as typed. A trailing `\p` has nothing
 /// to wait for and is dropped.
 ///
+/// A real line break that follows `\r\p` is script layout, not input: the
+/// carriage return already ended the line, so the editor's newline must not
+/// add a second Enter. This keeps SecureCRT-style scripts, where each input
+/// sits on its own `command\r\p` line, working unchanged. A line break after a
+/// pause that did not follow `\r` is still sent, so multi-line command scripts
+/// keep their existing behaviour.
+///
 /// `execute` only decides whether the last chunk gets a carriage return: a
 /// script that already ends in `\r` (escape or literal) is left alone, exactly
 /// like the pre-escape behaviour.
 pub fn plan_quick_command(text: &str, execute: bool) -> Vec<QuickCommandChunk> {
-    let mut chunks = Vec::new();
+    let mut chunks: Vec<QuickCommandChunk> = Vec::new();
     let mut pending = String::new();
     let mut delay = Duration::ZERO;
-    let mut chars = text.chars();
+    let mut chars = text.chars().peekable();
 
     while let Some(ch) = chars.next() {
         if ch != '\\' {
+            if matches!(ch, '\r' | '\n')
+                && pending.is_empty()
+                && !delay.is_zero()
+                && chunks
+                    .last()
+                    .is_some_and(|chunk| chunk.bytes.ends_with(b"\r"))
+            {
+                // Drop the whole editor line ending; Windows editors may
+                // store the layout break as CRLF.
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                continue;
+            }
             pending.push(ch);
             continue;
         }
@@ -274,6 +295,54 @@ mod tests {
                 (Duration::ZERO, b"conf t".to_vec()),
                 (Duration::from_secs(1), b"interface gi0/1".to_vec()),
                 (Duration::from_secs(1), b"shutdown\r".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn securecrt_style_layout_breaks_after_a_cr_pause_are_not_sent() {
+        let script = "user\\r\\p\npassword\\r\\p\nsu\\r\\p\nroot-password\\r\\p\n";
+        assert_eq!(
+            chunks(script, true),
+            vec![
+                (Duration::ZERO, b"user\r".to_vec()),
+                (Duration::from_secs(1), b"password\r".to_vec()),
+                (Duration::from_secs(1), b"su\r".to_vec()),
+                (Duration::from_secs(1), b"root-password\r".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn layout_breaks_after_a_cr_pause_drop_crlf_and_blank_lines() {
+        assert_eq!(
+            chunks("a\\r\\p\r\n\r\nb", false),
+            vec![
+                (Duration::ZERO, b"a\r".to_vec()),
+                (Duration::from_secs(1), b"b".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn escaped_line_feed_after_a_cr_pause_is_still_sent() {
+        assert_eq!(
+            chunks("a\\r\\p\\nb", false),
+            vec![
+                (Duration::ZERO, b"a\r".to_vec()),
+                (Duration::from_secs(1), b"\nb".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn line_breaks_after_a_pause_without_a_cr_remain_input() {
+        assert_eq!(
+            chunks("conf t\\p\ninterface gi0/1\\p\nshutdown", true),
+            vec![
+                (Duration::ZERO, b"conf t".to_vec()),
+                (Duration::from_secs(1), b"\ninterface gi0/1".to_vec()),
+                (Duration::from_secs(1), b"\nshutdown\r".to_vec()),
             ]
         );
     }
