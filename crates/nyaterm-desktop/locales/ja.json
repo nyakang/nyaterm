@@ -2104,7 +2104,8 @@
     "explainPublic": "任意のネットワークインターフェース経由で他のマシンから到達できます。",
     "explainInterface": "そのネットワークインターフェース上のマシンから到達できます。",
     "explainLocal": "このマシンからのみ到達できます。",
-    "back": "戻る"
+    "back": "戻る",
+    "copyName": "名前をコピー"
   },
   "quickCommands": {
     "add": "追加",

@@ -72,7 +72,6 @@ impl HostToolKind {
 pub(in crate::features) struct HostContext {
     /// Identity of the machine: data from one host is never shown for another.
     pub key: String,
-    pub label: String,
     pub target: HostTarget,
     pub os: HostOs,
 }

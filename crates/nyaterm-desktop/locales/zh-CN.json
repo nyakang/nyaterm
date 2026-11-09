@@ -2104,7 +2104,8 @@
     "explainPublic": "可通过任意网络接口从其他机器访问。",
     "explainInterface": "可从该网络接口上的机器访问。",
     "explainLocal": "仅可从本机访问。",
-    "back": "返回"
+    "back": "返回",
+    "copyName": "复制名称"
   },
   "quickCommands": {
     "add": "添加",

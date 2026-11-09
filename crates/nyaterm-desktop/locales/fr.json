@@ -2104,7 +2104,8 @@
     "explainPublic": "Accessible depuis d'autres machines via n'importe quelle interface réseau.",
     "explainInterface": "Accessible depuis les machines de cette interface réseau.",
     "explainLocal": "Accessible uniquement depuis cette machine.",
-    "back": "Retour"
+    "back": "Retour",
+    "copyName": "Copier le nom"
   },
   "quickCommands": {
     "add": "Ajouter",

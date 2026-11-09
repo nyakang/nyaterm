@@ -2104,7 +2104,8 @@
     "explainPublic": "可透過任何網路介面從其他機器存取。",
     "explainInterface": "可從該網路介面上的機器存取。",
     "explainLocal": "僅可從本機存取。",
-    "back": "返回"
+    "back": "返回",
+    "copyName": "複製名稱"
   },
   "quickCommands": {
     "add": "新增",

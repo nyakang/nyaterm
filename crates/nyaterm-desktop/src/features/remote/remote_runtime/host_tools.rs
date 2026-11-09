@@ -77,21 +77,9 @@ impl NyaTermApp {
         if self.session.active_ssh_config().is_some() {
             return match self.active_ssh_runtime_context("opening host tools") {
                 Ok(context) => {
-                    let label = context
-                        .target
-                        .ssh_config()
-                        .map(|config| {
-                            if config.name.trim().is_empty() {
-                                config.host.clone()
-                            } else {
-                                config.name.clone()
-                            }
-                        })
-                        .unwrap_or_default();
                     let os = context.target.os_hint();
                     HostResolution::Ready(HostContext {
                         key: format!("ssh:{id}"),
-                        label,
                         target: context.target,
                         os,
                     })
@@ -153,7 +141,6 @@ fn local_host() -> HostResolution {
     let os = target.os_hint();
     HostResolution::Ready(HostContext {
         key: "local".to_string(),
-        label: t!("hostTools.thisMachine").to_string(),
         target,
         os,
     })

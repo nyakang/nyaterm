@@ -74,27 +74,24 @@ fn chip(
         .px_2()
         .flex()
         .items_center()
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(if active {
-            palette.primary
-        } else {
-            palette.border
-        }))
+        .rounded_md()
         .bg(if active {
-            rgb(palette.primary).alpha(0.16)
+            rgb(palette.surface_elevated)
         } else {
             rgb(palette.surface).alpha(0.0)
         })
         .text_size(px(10.5))
-        .font_weight(FontWeight(600.))
+        .font_weight(FontWeight(if active { 700. } else { 500. }))
         .text_color(rgb(if active {
             palette.text
         } else {
-            palette.text_muted
+            palette.text_dimmed
         }))
         .cursor_pointer()
-        .hover(move |this| this.bg(rgb(palette.hover)))
+        .hover(move |this| {
+            this.bg(rgb(palette.surface_elevated))
+                .text_color(rgb(palette.text))
+        })
         .child(label.into())
         .on_click(on_click)
         .into_any_element()
@@ -103,14 +100,9 @@ fn chip(
 fn badge(label: impl Into<SharedString>, color: u32) -> AnyElement {
     div()
         .flex_none()
-        .h(px(16.))
-        .px(px(6.))
-        .flex()
-        .items_center()
-        .rounded(px(4.))
-        .bg(rgb(color).alpha(0.16))
-        .text_size(px(9.5))
-        .font_weight(FontWeight(700.))
+        .font_family(gpui_code_font_family())
+        .text_size(px(10.5))
+        .font_weight(FontWeight(600.))
         .text_color(rgb(color))
         .child(label.into())
         .into_any_element()
@@ -206,87 +198,71 @@ fn guard(
     }
 }
 
-fn host_strip(
+/// The two rows every host panel starts with, laid out like Processes: the
+/// search box with the item count (and the sudo shield) on one row, filters and
+/// sorting on the next. The panel header already names the panel, so there is
+/// no extra title line.
+fn top_rows(
     panel: &HostToolsPanel,
     palette: ThemePalette,
-    detail: String,
+    search_id: &'static str,
+    count: String,
+    filters: AnyElement,
+    sort: AnyElement,
     cx: &mut Context<HostToolsPanel>,
-) -> AnyElement {
-    let label = match &panel.host {
-        Some(HostResolution::Ready(context)) => context.label.clone(),
-        _ => String::new(),
-    };
-    let supports = panel.supports_elevation();
+) -> Vec<AnyElement> {
     let elevated = panel.elevated;
-    div()
-        .flex_none()
-        .h(px(26.))
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            svg()
-                .size(px(14.))
-                .flex_none()
-                .path(
-                    if panel
-                        .context()
-                        .is_some_and(|context| context.target.is_local())
-                    {
-                        "icons/workspace.svg"
-                    } else {
-                        "icons/connections.svg"
-                    },
-                )
-                .text_color(rgb(palette.success)),
+    let shield = panel.supports_elevation().then(|| {
+        icon_button(
+            palette,
+            "host-tools-elevate",
+            "icons/shield.svg",
+            if elevated {
+                t!("hostTools.elevatedOn").to_string()
+            } else {
+                t!("hostTools.elevatedOff").to_string()
+            },
+            true,
+            Some(if elevated {
+                palette.warning
+            } else {
+                palette.text_muted
+            }),
+            cx.listener(|panel, _, _, cx| panel.toggle_elevation(cx)),
         )
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .flex()
-                .items_baseline()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_none()
-                        .max_w(px(150.))
-                        .truncate()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight(700.))
-                        .text_color(rgb(palette.text))
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(10.5))
-                        .text_color(rgb(palette.text_dimmed))
-                        .child(detail),
-                ),
-        )
-        .when(supports, |this| {
-            this.child(icon_button(
-                palette,
-                "host-tools-elevate",
-                "icons/shield.svg",
-                if elevated {
-                    t!("hostTools.elevatedOn").to_string()
-                } else {
-                    t!("hostTools.elevatedOff").to_string()
-                },
-                true,
-                Some(if elevated {
-                    palette.warning
-                } else {
-                    palette.text_muted
-                }),
-                cx.listener(|panel, _, _, cx| panel.toggle_elevation(cx)),
-            ))
-        })
-        .into_any_element()
+    });
+    vec![
+        div()
+            .flex_none()
+            .h(px(32.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(NyaSearchInput::new(search_id, &panel.search)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(count),
+            )
+            .children(shield)
+            .into_any_element(),
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().min_w_0().child(filters))
+            .child(sort)
+            .into_any_element(),
+    ]
 }
 
 fn sudo_banner(
@@ -415,7 +391,6 @@ pub(super) fn ports_panel(
     } else {
         format!("{shown} / {total}")
     };
-    let detail = format!("{count} {}", t!("hostTools.listening"));
 
     let chips = div()
         .flex_none()
@@ -511,22 +486,15 @@ pub(super) fn ports_panel(
         view.direction.marker()
     );
 
-    let mut children = vec![
-        host_strip(panel, palette, detail, cx),
-        div()
-            .flex_none()
-            .h(px(32.))
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(div().flex_1().min_w_0().child(NyaSearchInput::new(
-                "host-tools-ports-search",
-                &panel.search,
-            )))
-            .child(sort_menu("ports-sort", sort_label, sort_items))
-            .into_any_element(),
+    let mut children = top_rows(
+        panel,
+        palette,
+        "host-tools-ports-search",
+        count,
         chips.into_any_element(),
-    ];
+        sort_menu("ports-sort", sort_label, sort_items),
+        cx,
+    );
     children.extend(sudo_banner(panel, palette, cx));
     if panel.ports_owners_hidden && !panel.elevated && panel.supports_elevation() {
         children.push(
@@ -592,7 +560,7 @@ fn port_row(
     let key = entry.key();
     let selected = panel.selected.as_deref() == Some(key.as_str());
     let details = selected
-        .then(|| port_details_block(panel, palette, cx))
+        .then(|| port_details_block(panel, palette))
         .flatten();
     let exposure = entry.exposure();
     let (exposure_label, exposure_color) = match exposure {
@@ -672,7 +640,7 @@ fn port_row(
                 ),
         )
         .child(badge(exposure_label, exposure_color))
-        .child(chevron(palette, selected))
+        .child(div().flex_none().child(port_menu(panel, &entry, cx)))
         .into_any_element();
     card(palette, selected, header, details)
 }
@@ -734,19 +702,6 @@ pub(super) fn services_panel(
     let view = panel.services_view;
     let counts = count_services(&panel.services);
     let shown = panel.services_rows.len();
-    let mut detail = panel
-        .services_backend
-        .map(|backend| backend.label().to_string())
-        .unwrap_or_default();
-    detail.push_str(&format!(
-        " · {} {}",
-        counts.total,
-        t!("hostTools.servicesCount")
-    ));
-    if panel.services_partial {
-        detail.push_str(&format!(" · {}", t!("hostTools.partialSupport")));
-    }
-
     let chips = div()
         .flex_none()
         .flex()
@@ -819,22 +774,25 @@ pub(super) fn services_panel(
         .collect::<Vec<_>>();
     let sort_label = format!("{} {}", sort_name(view.sort), view.direction.marker());
 
-    let mut children = vec![
-        host_strip(panel, palette, detail, cx),
-        div()
-            .flex_none()
-            .h(px(32.))
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(div().flex_1().min_w_0().child(NyaSearchInput::new(
-                "host-tools-services-search",
-                &panel.search,
-            )))
-            .child(sort_menu("services-sort", sort_label, sort_items))
-            .into_any_element(),
+    let mut children = top_rows(
+        panel,
+        palette,
+        "host-tools-services-search",
+        counts.total.to_string(),
         chips.into_any_element(),
-    ];
+        sort_menu("services-sort", sort_label, sort_items),
+        cx,
+    );
+    if panel.services_partial {
+        children.push(
+            div()
+                .flex_none()
+                .text_size(px(10.5))
+                .text_color(rgb(palette.text_dimmed))
+                .child(t!("hostTools.partialSupport").to_string())
+                .into_any_element(),
+        );
+    }
     children.extend(sudo_banner(panel, palette, cx));
     children.extend(status_line(panel, palette));
 
@@ -949,7 +907,7 @@ fn service_row(
                         }),
                 ),
         )
-        .child(chevron(palette, selected))
+        .child(div().flex_none().child(service_menu(panel, &entry, cx)))
         .into_any_element();
     card(palette, selected, header, details)
 }
@@ -1080,8 +1038,8 @@ fn mono(text: impl Into<SharedString>) -> gpui::Div {
         .child(text.into())
 }
 
-/// A list row and, when selected, its details: the card itself grows instead of
-/// sending the user to another screen or a sheet at the bottom.
+/// A list row and, when selected, its details. Flat like the Processes rows: a
+/// hairline between rows and a thin accent bar on the selected one.
 fn card(
     palette: ThemePalette,
     selected: bool,
@@ -1089,43 +1047,31 @@ fn card(
     details: Option<AnyElement>,
 ) -> AnyElement {
     div()
+        .relative()
         .w_full()
         .min_w_0()
-        .mb(px(4.))
         .flex()
         .flex_col()
-        .rounded_md()
-        .border_1()
-        .border_color(
-            rgb(if selected {
-                palette.primary
-            } else {
-                palette.border
-            })
-            .alpha(if selected { 0.8 } else { 0.5 }),
-        )
+        .border_b_1()
+        .border_color(rgb(palette.surface_elevated))
         .bg(if selected {
-            rgb(palette.surface_elevated)
+            rgb(palette.hover)
         } else {
-            rgb(palette.surface).alpha(0.0)
+            rgb(palette.surface)
         })
-        .overflow_hidden()
+        .when(selected, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(2.))
+                    .bg(rgb(palette.primary)),
+            )
+        })
         .child(header)
         .when_some(details, |this, details| this.child(details))
-        .into_any_element()
-}
-
-/// Says "this opens": a small chevron that flips while the row is expanded.
-fn chevron(palette: ThemePalette, expanded: bool) -> AnyElement {
-    svg()
-        .size(px(14.))
-        .flex_none()
-        .path(if expanded {
-            "icons/chevron-up.svg"
-        } else {
-            "icons/chevron-down.svg"
-        })
-        .text_color(rgb(palette.text_dimmed))
         .into_any_element()
 }
 
@@ -1145,30 +1091,20 @@ fn inline_details_with(
 ) -> AnyElement {
     div()
         .w_full()
+        .min_w_0()
         .border_t_1()
         .border_color(rgb(palette.border))
-        .p_2()
+        .bg(rgb(palette.bg))
+        .px_2()
+        .py_2()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap_2()
         .children(body)
-        .child(div().flex().flex_wrap().gap_1().pt_1().children(actions))
+        .when(!actions.is_empty(), |this| {
+            this.child(div().flex().flex_wrap().gap_2().children(actions))
+        })
         .children(extra)
-        .into_any_element()
-}
-
-fn action_button(
-    id: impl Into<SharedString>,
-    label: String,
-    variant: NyaButtonVariant,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    NyaButton::new(id, label)
-        .variant(variant)
-        .height(px(26.))
-        .disabled(!enabled)
-        .on_click(on_click)
         .into_any_element()
 }
 
@@ -1187,11 +1123,148 @@ fn bind_text(address: &str) -> String {
     .to_string()
 }
 
-fn port_details_block(
+/// The most useful address to copy: a specific interface, else the bare port.
+fn copy_address_of(row: &PortRow) -> String {
+    row.addresses
+        .iter()
+        .find(|a| !matches!(a.as_str(), "*" | "0.0.0.0" | "::" | ""))
+        .map(|a| {
+            if a.contains(':') {
+                format!("[{a}]:{}", row.port)
+            } else {
+                format!("{a}:{}", row.port)
+            }
+        })
+        .unwrap_or_else(|| row.port.to_string())
+}
+
+/// The "⋯" menu at the right of a port row, like the one on process rows.
+fn port_menu(
     panel: &HostToolsPanel,
-    palette: ThemePalette,
+    row: &PortRow,
     cx: &mut Context<HostToolsPanel>,
-) -> Option<AnyElement> {
+) -> AnyElement {
+    let key = row.key();
+    let pid = row.pid;
+    let address = copy_address_of(row);
+    let command = panel
+        .port_details
+        .as_ref()
+        .filter(|state| state.key == key)
+        .and_then(|state| state.details.command.clone());
+    NyaDropdownMenu::new(format!("port-menu-{key}"))
+        .icon("icons/conn/more.svg")
+        .icon_size(px(14.))
+        .tooltip(t!("common.more").to_string())
+        .min_width(px(190.))
+        .items([
+            NyaMenuItem::action(t!("hostTools.copyAddress").to_string())
+                .icon("icons/copy.svg")
+                .on_click(cx.listener(move |panel, _, _, cx| panel.copy(address.clone(), cx))),
+            NyaMenuItem::action(t!("hostTools.copyPid").to_string())
+                .disabled(pid.is_none())
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                    if let Some(pid) = pid {
+                        panel.copy(pid.to_string(), cx);
+                    }
+                })),
+            NyaMenuItem::action(t!("hostTools.copyCommand").to_string())
+                .disabled(command.is_none())
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                    if let Some(command) = command.clone() {
+                        panel.copy(command, cx);
+                    }
+                })),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("hostTools.stopProcess").to_string())
+                .icon("icons/stop.svg")
+                .disabled(pid.is_none())
+                .on_click(cx.listener(move |panel, _, window, cx| {
+                    if let Some(pid) = pid {
+                        panel.confirm_kill(pid, false, window, cx);
+                    }
+                })),
+            NyaMenuItem::action(t!("hostTools.killProcess").to_string())
+                .icon("icons/close.svg")
+                .danger()
+                .disabled(pid.is_none())
+                .on_click(cx.listener(move |panel, _, window, cx| {
+                    if let Some(pid) = pid {
+                        panel.confirm_kill(pid, true, window, cx);
+                    }
+                })),
+        ])
+        .on_trigger(|_, _, cx| cx.stop_propagation())
+        .into_any_element()
+}
+
+/// The "⋯" menu at the right of a service row.
+fn service_menu(
+    panel: &HostToolsPanel,
+    entry: &ServiceEntry,
+    cx: &mut Context<HostToolsPanel>,
+) -> AnyElement {
+    let running = matches!(
+        entry.state,
+        ServiceState::Running | ServiceState::Transitioning
+    );
+    let enabled = entry.startup == ServiceStartup::Enabled;
+    let can_toggle_startup = matches!(
+        entry.startup,
+        ServiceStartup::Enabled | ServiceStartup::Disabled
+    );
+    let idle = panel.busy.is_none();
+    let act = |action: ServiceAction| {
+        let entry = entry.clone();
+        cx.listener(move |panel, _, _, cx| panel.service_action(entry.clone(), action, cx))
+    };
+    let logs_entry = entry.clone();
+    let name = entry.name.clone();
+    NyaDropdownMenu::new(format!("service-menu-{}", entry.name))
+        .icon("icons/conn/more.svg")
+        .icon_size(px(14.))
+        .tooltip(t!("common.more").to_string())
+        .min_width(px(200.))
+        .items([
+            NyaMenuItem::action(t!("hostTools.start").to_string())
+                .icon("icons/play.svg")
+                .disabled(!(idle && !running))
+                .on_click(act(ServiceAction::Start)),
+            NyaMenuItem::action(t!("hostTools.stop").to_string())
+                .icon("icons/stop.svg")
+                .disabled(!(idle && running))
+                .on_click(act(ServiceAction::Stop)),
+            NyaMenuItem::action(t!("hostTools.restart").to_string())
+                .icon("icons/fe/refresh.svg")
+                .disabled(!(idle && running))
+                .on_click(act(ServiceAction::Restart)),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(if enabled {
+                t!("hostTools.disableStartup").to_string()
+            } else {
+                t!("hostTools.enableStartup").to_string()
+            })
+            .disabled(!(idle && can_toggle_startup))
+            .on_click(act(if enabled {
+                ServiceAction::Disable
+            } else {
+                ServiceAction::Enable
+            })),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("hostTools.logs").to_string())
+                .icon("icons/menu/article.svg")
+                .on_click(
+                    cx.listener(move |panel, _, _, cx| panel.open_logs(logs_entry.clone(), cx)),
+                ),
+            NyaMenuItem::action(t!("hostTools.copyName").to_string())
+                .icon("icons/copy.svg")
+                .on_click(cx.listener(move |panel, _, _, cx| panel.copy(name.clone(), cx))),
+        ])
+        .on_trigger(|_, _, cx| cx.stop_propagation())
+        .into_any_element()
+}
+
+fn port_details_block(panel: &HostToolsPanel, palette: ThemePalette) -> Option<AnyElement> {
     let row = panel.selected_port()?.clone();
     let key = row.key();
     let loaded = panel.port_details.as_ref().filter(|state| state.key == key);
@@ -1287,75 +1360,7 @@ fn port_details_block(
             .into_any_element(),
     );
 
-    // Copy the most useful address: a specific interface, else the bare port.
-    let copy_address = row
-        .addresses
-        .iter()
-        .find(|a| !matches!(a.as_str(), "*" | "0.0.0.0" | "::" | ""))
-        .map(|a| {
-            if a.contains(':') {
-                format!("[{a}]:{}", row.port)
-            } else {
-                format!("{a}:{}", row.port)
-            }
-        })
-        .unwrap_or_else(|| row.port.to_string());
-    let pid = row.pid;
-    let command = fetched.command.clone();
-    let actions = vec![
-        action_button(
-            "port-copy-address",
-            t!("hostTools.copyAddress").to_string(),
-            NyaButtonVariant::Secondary,
-            true,
-            cx.listener(move |panel, _, _, cx| panel.copy(copy_address.clone(), cx)),
-        ),
-        action_button(
-            "port-copy-pid",
-            t!("hostTools.copyPid").to_string(),
-            NyaButtonVariant::Secondary,
-            pid.is_some(),
-            cx.listener(move |panel, _, _, cx| {
-                if let Some(pid) = pid {
-                    panel.copy(pid.to_string(), cx);
-                }
-            }),
-        ),
-        action_button(
-            "port-copy-command",
-            t!("hostTools.copyCommand").to_string(),
-            NyaButtonVariant::Secondary,
-            command.is_some(),
-            cx.listener(move |panel, _, _, cx| {
-                if let Some(command) = command.clone() {
-                    panel.copy(command, cx);
-                }
-            }),
-        ),
-        action_button(
-            "port-stop",
-            t!("hostTools.stopProcess").to_string(),
-            NyaButtonVariant::Secondary,
-            pid.is_some(),
-            cx.listener(move |panel, _, window, cx| {
-                if let Some(pid) = pid {
-                    panel.confirm_kill(pid, false, window, cx);
-                }
-            }),
-        ),
-        action_button(
-            "port-kill",
-            t!("hostTools.killProcess").to_string(),
-            NyaButtonVariant::Danger,
-            pid.is_some(),
-            cx.listener(move |panel, _, window, cx| {
-                if let Some(pid) = pid {
-                    panel.confirm_kill(pid, true, window, cx);
-                }
-            }),
-        ),
-    ];
-    Some(inline_details(palette, body, actions))
+    Some(inline_details(palette, body, Vec::new()))
 }
 
 fn service_details_block(
@@ -1364,16 +1369,6 @@ fn service_details_block(
     cx: &mut Context<HostToolsPanel>,
 ) -> Option<AnyElement> {
     let entry = panel.selected_service()?.clone();
-    let running = matches!(
-        entry.state,
-        ServiceState::Running | ServiceState::Transitioning
-    );
-    let enabled = entry.startup == ServiceStartup::Enabled;
-    let can_toggle_startup = matches!(
-        entry.startup,
-        ServiceStartup::Enabled | ServiceStartup::Disabled
-    );
-    let idle = panel.busy.is_none();
     let dash = || "—".to_string();
 
     let mut body = vec![kv(
@@ -1425,60 +1420,6 @@ fn service_details_block(
         ));
     }
 
-    let act = |action: ServiceAction, entry: ServiceEntry| {
-        cx.listener(move |panel, _, _, cx| panel.service_action(entry.clone(), action, cx))
-    };
-    let actions = vec![
-        action_button(
-            "svc-start",
-            t!("hostTools.start").to_string(),
-            NyaButtonVariant::Primary,
-            idle && !running,
-            act(ServiceAction::Start, entry.clone()),
-        ),
-        action_button(
-            "svc-stop",
-            t!("hostTools.stop").to_string(),
-            NyaButtonVariant::Secondary,
-            idle && running,
-            act(ServiceAction::Stop, entry.clone()),
-        ),
-        action_button(
-            "svc-restart",
-            t!("hostTools.restart").to_string(),
-            NyaButtonVariant::Secondary,
-            idle && running,
-            act(ServiceAction::Restart, entry.clone()),
-        ),
-        action_button(
-            "svc-startup",
-            if enabled {
-                t!("hostTools.disableStartup").to_string()
-            } else {
-                t!("hostTools.enableStartup").to_string()
-            },
-            NyaButtonVariant::Secondary,
-            idle && can_toggle_startup,
-            act(
-                if enabled {
-                    ServiceAction::Disable
-                } else {
-                    ServiceAction::Enable
-                },
-                entry.clone(),
-            ),
-        ),
-        action_button(
-            "svc-logs",
-            t!("hostTools.logs").to_string(),
-            NyaButtonVariant::Secondary,
-            true,
-            {
-                let entry = entry.clone();
-                cx.listener(move |panel, _, _, cx| panel.open_logs(entry.clone(), cx))
-            },
-        ),
-    ];
     let mut extra: Vec<AnyElement> = Vec::new();
     if panel
         .logs
@@ -1487,5 +1428,5 @@ fn service_details_block(
     {
         extra.push(logs_drawer(panel, palette, cx));
     }
-    Some(inline_details_with(palette, body, actions, extra))
+    Some(inline_details_with(palette, body, Vec::new(), extra))
 }
