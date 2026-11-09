@@ -1,7 +1,29 @@
 use crate::completion::privacy::bare_word;
 use crate::completion::types::{CandidateKind, CompletionContext};
+use flate2::bufread::ZlibDecoder;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::io::Read;
+
+const MAX_CATALOG_BYTES: usize = 32 * 1024 * 1024;
+const EMBEDDED_CATALOG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/catalog.json.zlib"));
+
+fn decompress_catalog(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    // Read one byte beyond the limit to distinguish a valid boundary-sized
+    // catalog from oversized output without decompressing the entire stream.
+    let mut decoder = ZlibDecoder::new(data).take((MAX_CATALOG_BYTES + 1) as u64);
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .map_err(|_| "Invalid compressed completion catalog")?;
+    if decoded.len() > MAX_CATALOG_BYTES {
+        return Err("Completion catalog exceeds size limit");
+    }
+    if !decoder.into_inner().into_inner().is_empty() {
+        return Err("Invalid compressed completion catalog");
+    }
+    Ok(decoded)
+}
 
 #[derive(Deserialize)]
 pub struct Catalog {
@@ -47,10 +69,10 @@ impl CommandFlag {
 
 impl Catalog {
     pub fn embedded() -> Result<Self, &'static str> {
-        Self::decode(include_bytes!("../../assets/completion/catalog.json"))
+        Self::decode(&decompress_catalog(EMBEDDED_CATALOG)?)
     }
     pub fn decode(data: &[u8]) -> Result<Self, &'static str> {
-        if data.len() > 32 * 1024 * 1024 {
+        if data.len() > MAX_CATALOG_BYTES {
             return Err("Completion catalog exceeds size limit");
         }
         let mut catalog: Self =
@@ -255,9 +277,126 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use crate::completion::catalog::Catalog;
+    use crate::completion::catalog::{
+        Catalog, EMBEDDED_CATALOG, MAX_CATALOG_BYTES, decompress_catalog,
+    };
     use crate::completion::parser::parse_context;
     use crate::completion::types::{CompletionScope, ShellDialect};
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+
+    const ORIGINAL_CATALOG: &[u8] = include_bytes!("../../assets/completion/catalog.json");
+
+    fn compress(data: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn embedded_compression_preserves_every_source_byte_and_reduces_resource_size() {
+        assert_eq!(
+            decompress_catalog(EMBEDDED_CATALOG).unwrap(),
+            ORIGINAL_CATALOG
+        );
+        assert!(EMBEDDED_CATALOG.len() * 100 < ORIGINAL_CATALOG.len() * 15);
+    }
+
+    #[test]
+    fn compressed_catalog_preserves_command_subcommand_alias_and_option_candidates() {
+        let embedded = Catalog::embedded().unwrap();
+        let original = Catalog::decode(ORIGINAL_CATALOG).unwrap();
+        for input in [
+            "",
+            "docker ",
+            "docker run --",
+            "git log --",
+            "git stage --",
+            "bazelisk --",
+            "kubectl get ",
+        ] {
+            let mut expected_context = parse_context(
+                input,
+                input.len(),
+                ShellDialect::Bash,
+                CompletionScope::legacy(),
+            )
+            .unwrap();
+            let mut actual_context = expected_context.clone();
+            let expected = original.candidates(&mut expected_context);
+            assert!(!expected.is_empty(), "catalog fixture must cover {input:?}");
+            assert_eq!(
+                embedded.candidates(&mut actual_context),
+                expected,
+                "{input:?}"
+            );
+            assert_eq!(actual_context.command_path, expected_context.command_path);
+            assert_eq!(actual_context.option_value, expected_context.option_value);
+            assert_eq!(actual_context.token_range, expected_context.token_range);
+            assert_eq!(actual_context.prefix, expected_context.prefix);
+        }
+    }
+
+    #[test]
+    fn decompression_rejects_truncated_headers_payloads_and_checksums() {
+        for end in [
+            0,
+            1,
+            2,
+            EMBEDDED_CATALOG.len() / 2,
+            EMBEDDED_CATALOG.len() - 1,
+        ] {
+            assert_eq!(
+                decompress_catalog(&EMBEDDED_CATALOG[..end]),
+                Err("Invalid compressed completion catalog"),
+                "truncation at {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn decompression_rejects_corrupt_headers_and_checksums() {
+        for index in [0, EMBEDDED_CATALOG.len() - 1] {
+            let mut corrupt = EMBEDDED_CATALOG.to_vec();
+            corrupt[index] ^= 0xff;
+            assert_eq!(
+                decompress_catalog(&corrupt),
+                Err("Invalid compressed completion catalog")
+            );
+        }
+    }
+
+    #[test]
+    fn decompression_rejects_trailing_data_and_concatenated_streams() {
+        for trailing in [b"trailing".as_slice(), EMBEDDED_CATALOG] {
+            let mut data = EMBEDDED_CATALOG.to_vec();
+            data.extend_from_slice(trailing);
+            assert_eq!(
+                decompress_catalog(&data),
+                Err("Invalid compressed completion catalog")
+            );
+        }
+    }
+
+    #[test]
+    fn compressed_catalog_accepts_exact_size_limit_and_rejects_one_byte_more() {
+        let mut source = br#"{"version":1,"roots":[]}"#.to_vec();
+        source.resize(MAX_CATALOG_BYTES, b' ');
+        let decoded = decompress_catalog(&compress(&source)).unwrap();
+        assert_eq!(decoded.len(), MAX_CATALOG_BYTES);
+        assert!(Catalog::decode(&decoded).unwrap().roots.is_empty());
+        source.push(b' ');
+        assert_eq!(
+            decompress_catalog(&compress(&source)),
+            Err("Completion catalog exceeds size limit")
+        );
+        assert!(matches!(
+            Catalog::decode(&source),
+            Err("Completion catalog exceeds size limit")
+        ));
+    }
+
     fn fixture() -> Catalog {
         let flag = |long, short, takes_value, values: Vec<&str>| {
             serde_json::json!({

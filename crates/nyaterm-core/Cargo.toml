@@ -51,3 +51,6 @@ unicode-segmentation.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 zip.workspace = true
+
+[build-dependencies]
+flate2.workspace = true
