@@ -1478,7 +1478,7 @@ fn current_gpui_cloud_pull_preserves_local_master_password_without_importing_vau
 
 #[test]
 fn cloud_pull_preserves_device_secret_ciphertext_across_restart_and_second_sync() {
-    use crate::runtime::{LoadBootstrap, StoreRequest};
+    use crate::runtime::LoadBootstrap;
 
     for version in ["2.0.0-preview.5", "1.2.10"] {
         for legacy in [false, true] {
@@ -1554,7 +1554,7 @@ fn cloud_pull_preserves_device_secret_ciphertext_across_restart_and_second_sync(
                     .unwrap();
                 assert_eq!(target.load_cloud_sync_settings().unwrap(), local);
                 assert_eq!(
-                    LoadBootstrap.execute(&target).unwrap().cloud_sync_settings,
+                    LoadBootstrap.load(&target).unwrap().cloud_sync_settings,
                     local
                 );
                 let new_key = target.load_master_key_token().unwrap().unwrap();
@@ -1596,7 +1596,7 @@ fn cloud_pull_preserves_device_secret_ciphertext_across_restart_and_second_sync(
 
                 let target = ConnectionStore::open(&target_dir).unwrap();
                 assert_eq!(
-                    LoadBootstrap.execute(&target).unwrap().cloud_sync_settings,
+                    LoadBootstrap.load(&target).unwrap().cloud_sync_settings,
                     local
                 );
                 target.save_cloud_sync_settings(local.clone()).unwrap();
@@ -1613,10 +1613,7 @@ fn cloud_pull_preserves_device_secret_ciphertext_across_restart_and_second_sync(
                 drop(target);
                 let restarted = ConnectionStore::open(&target_dir).unwrap();
                 assert_eq!(
-                    LoadBootstrap
-                        .execute(&restarted)
-                        .unwrap()
-                        .cloud_sync_settings,
+                    LoadBootstrap.load(&restarted).unwrap().cloud_sync_settings,
                     local
                 );
             }
@@ -1770,7 +1767,7 @@ fn cloud_pull_store_worker_flushes_and_reopens_with_local_provider_secrets() {
 
 #[test]
 fn cloud_pull_preserves_secrets_retained_from_partial_settings() {
-    use crate::runtime::{LoadBootstrap, StoreRequest};
+    use crate::runtime::LoadBootstrap;
 
     let source_dir = unique_temp_dir("partial-rekey-source");
     let target_dir = unique_temp_dir("partial-rekey-target");
@@ -1816,7 +1813,7 @@ fn cloud_pull_preserves_secrets_retained_from_partial_settings() {
     assert_eq!(saved["translation"]["future_option"], 43);
     drop(target);
     let restarted = ConnectionStore::open(&target_dir).unwrap();
-    let bootstrap = LoadBootstrap.execute(&restarted).unwrap();
+    let bootstrap = LoadBootstrap.load(&restarted).unwrap();
     assert_eq!(bootstrap.ai_settings, ai);
     assert_eq!(bootstrap.translation_settings, translation);
 }
@@ -8745,4 +8742,76 @@ fn atomic_common_edits_preserve_untouched_unsupported_legacy_agent_values() {
     let saved = store.get_connection(&connection.id).unwrap().unwrap();
     assert_eq!(saved.config, original.config);
     assert_eq!(saved.description.as_deref(), Some("common description"));
+}
+
+#[test]
+fn startup_compaction_reclaims_large_free_space() {
+    use redb::TableDefinition;
+    let dir = unique_temp_dir("startup-compaction");
+    let first: TableDefinition<&str, &[u8]> = TableDefinition::new("compaction_probe_first");
+    let second: TableDefinition<&str, &[u8]> = TableDefinition::new("compaction_probe_second");
+    let chunk = vec![7_u8; 64 * 1024];
+    // Two tables written in separate sessions leave the second table's pages
+    // above the first's. Deleting the first then frees the middle of the file,
+    // which commit-time trailing shrinking cannot reclaim.
+    for probe in [first, second] {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(probe).unwrap();
+            for index in 0..96 {
+                table
+                    .insert(format!("chunk-{index}").as_str(), chunk.as_slice())
+                    .unwrap();
+            }
+        }
+        txn.commit().unwrap();
+    }
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.delete_table(first).unwrap();
+        txn.commit().unwrap();
+    }
+    let path = dir.path().join("nyaterm.redb");
+    let before = std::fs::metadata(&path).unwrap().len();
+    let store = ConnectionStore::open(&dir).unwrap();
+    let after = std::fs::metadata(&path).unwrap().len();
+    assert!(after < before, "before={before} after={after}");
+    assert!(store.list_connections().unwrap().is_empty());
+}
+
+#[test]
+fn failed_compaction_does_not_prevent_startup() {
+    use redb::{Database, ReadableDatabase, TableDefinition};
+    let dir = unique_temp_dir("compaction-failure");
+    std::fs::create_dir_all(dir.path()).unwrap();
+    let path = dir.path().join("nyaterm.redb");
+    let probe: TableDefinition<&str, &[u8]> = TableDefinition::new("compaction_probe");
+    let mut db = Database::create(&path).unwrap();
+    let txn = db.begin_write().unwrap();
+    {
+        let mut table = txn.open_table(probe).unwrap();
+        let chunk = vec![9_u8; 64 * 1024];
+        for index in 0..80 {
+            table
+                .insert(format!("chunk-{index}").as_str(), chunk.as_slice())
+                .unwrap();
+        }
+    }
+    txn.commit().unwrap();
+    let txn = db.begin_write().unwrap();
+    txn.delete_table(probe).unwrap();
+    txn.commit().unwrap();
+    let before = std::fs::metadata(&path).unwrap().len();
+    // A live read reference makes Database::compact() fail; the helper must
+    // swallow that error and leave the file untouched.
+    let read = db.begin_read().unwrap();
+    super::compact_if_beneficial(&mut db, &path);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), before);
+    drop(read);
+    drop(db);
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(std::fs::metadata(&path).unwrap().len() < before);
+    assert!(store.list_connections().unwrap().is_empty());
 }

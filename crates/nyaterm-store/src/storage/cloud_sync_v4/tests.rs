@@ -1699,3 +1699,298 @@ fn ssh_compatibility_mode_survives_database_json_backup_and_cloud_sync_round_tri
         );
     }
 }
+
+#[test]
+fn compressed_local_replica_round_trips_through_store() {
+    let dir = TestTempDir::new("nyaterm-compressed-local-replica");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    let record = crate::sync_v4::LocalReplica {
+        owner: "fixture-owner".into(),
+        effective: std::collections::BTreeMap::from([(
+            "connection/server/name".into(),
+            nyaterm_core::sync_schema::SyncValue::new(&json!("Server")),
+        )]),
+        ..Default::default()
+    };
+    store
+        .persist_v4_record("destination", "fixture-password", None, &record)
+        .unwrap();
+    let (loaded, _) = store
+        .load_v4_replica("destination", "fixture-password")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&loaded).unwrap(),
+        serde_json::to_vec(&record).unwrap()
+    );
+    let txn = store.db.begin_read().unwrap();
+    let stored = txn
+        .open_table(super::REPLICAS)
+        .unwrap()
+        .get("destination")
+        .unwrap()
+        .unwrap();
+    assert!(stored.value().starts_with(b"NYASYNC5"));
+}
+
+#[test]
+fn legacy_local_replica_records_read_back_identically() {
+    let dir = TestTempDir::new("nyaterm-legacy-local-replica");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    let record = crate::sync_v4::LocalReplica {
+        owner: "fixture-owner".into(),
+        effective: std::collections::BTreeMap::from([(
+            "connection/server/name".into(),
+            nyaterm_core::sync_schema::SyncValue::new(&json!("Server")),
+        )]),
+        ..Default::default()
+    };
+    // A record written by a build that predates the compressed envelope.
+    let plaintext = serde_json::to_vec(&record).unwrap();
+    let legacy = nyaterm_core::sync_schema::encryption::seal(
+        "fixture-password",
+        "local-replica",
+        "destination",
+        &plaintext,
+    )
+    .unwrap();
+    assert!(legacy.starts_with(b"NYASYNC4"));
+    let txn = store.db.begin_write().unwrap();
+    txn.open_table(super::REPLICAS)
+        .unwrap()
+        .insert("destination", legacy.as_slice())
+        .unwrap();
+    txn.commit().unwrap();
+    let (loaded, hash) = store
+        .load_v4_replica("destination", "fixture-password")
+        .unwrap()
+        .unwrap();
+    let expected = serde_json::to_vec(&record).unwrap();
+    assert_eq!(serde_json::to_vec(&loaded).unwrap(), expected);
+
+    // Rewriting the same replica compresses it, and both encodings decode to
+    // the same record.
+    store
+        .persist_v4_record("destination", "fixture-password", Some(&hash), &record)
+        .unwrap();
+    let (rewritten, _) = store
+        .load_v4_replica("destination", "fixture-password")
+        .unwrap()
+        .unwrap();
+    assert_eq!(serde_json::to_vec(&rewritten).unwrap(), expected);
+    let txn = store.db.begin_read().unwrap();
+    let stored = txn
+        .open_table(super::REPLICAS)
+        .unwrap()
+        .get("destination")
+        .unwrap()
+        .unwrap();
+    assert!(stored.value().starts_with(b"NYASYNC5"));
+}
+
+#[test]
+fn consumed_field_edits_are_purged_and_newer_edits_are_kept() {
+    let dir = TestTempDir::new("nyaterm-purge-consumed-edits");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    let txn = store.db.begin_write().unwrap();
+    {
+        let mut edits = txn.open_table(super::EDITS).unwrap();
+        edits.insert("field/consumed", 3).unwrap();
+        edits.insert("field/applied", 7).unwrap();
+        edits.insert("field/newer", 9).unwrap();
+    }
+    super::purge_consumed_edits(&txn, 7).unwrap();
+    // Repeated cleanup inside the same transaction stays harmless.
+    super::purge_consumed_edits(&txn, 7).unwrap();
+    txn.commit().unwrap();
+    let txn = store.db.begin_read().unwrap();
+    let edits = txn.open_table(super::EDITS).unwrap();
+    assert!(edits.get("field/consumed").unwrap().is_none());
+    assert!(edits.get("field/applied").unwrap().is_none());
+    assert_eq!(edits.get("field/newer").unwrap().unwrap().value(), 9);
+}
+
+fn migration_record(applied_generation: u64) -> crate::sync_v4::LocalReplica {
+    crate::sync_v4::LocalReplica {
+        owner: "fixture-owner".into(),
+        applied_generation,
+        effective: std::collections::BTreeMap::from([(
+            "connection/server/name".into(),
+            nyaterm_core::sync_schema::SyncValue::new(&json!("Server")),
+        )]),
+        ..Default::default()
+    }
+}
+
+fn legacy_bytes(record: &crate::sync_v4::LocalReplica, destination: &str) -> Vec<u8> {
+    nyaterm_core::sync_schema::encryption::seal(
+        "fixture-password",
+        "local-replica",
+        destination,
+        &serde_json::to_vec(record).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn legacy_replicas_migrate_once_and_purge_consumed_edits() {
+    let dir = TestTempDir::new("nyaterm-local-replica-migration");
+    let record = migration_record(7);
+    let expected = serde_json::to_vec(&record).unwrap();
+    let legacy = legacy_bytes(&record, "destination");
+    {
+        let mut store = ConnectionStore::open(dir.path()).unwrap();
+        store
+            .save_master_password(Some("fixture-password"))
+            .unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.open_table(super::REPLICAS)
+            .unwrap()
+            .insert("destination", legacy.as_slice())
+            .unwrap();
+        {
+            let mut edits = txn.open_table(super::EDITS).unwrap();
+            edits.insert("field/consumed", 3).unwrap();
+            edits.insert("field/applied", 7).unwrap();
+            edits.insert("field/newer", 9).unwrap();
+        }
+        txn.commit().unwrap();
+        assert!(store.migrate_local_replica_storage().unwrap());
+        let txn = store.db.begin_read().unwrap();
+        {
+            let stored = txn
+                .open_table(super::REPLICAS)
+                .unwrap()
+                .get("destination")
+                .unwrap()
+                .unwrap();
+            assert!(stored.value().starts_with(b"NYASYNC5"));
+        }
+        {
+            let edits = txn.open_table(super::EDITS).unwrap();
+            assert!(edits.get("field/consumed").unwrap().is_none());
+            assert!(edits.get("field/applied").unwrap().is_none());
+            assert_eq!(edits.get("field/newer").unwrap().unwrap().value(), 9);
+        }
+        {
+            let marker = txn
+                .open_table(crate::storage::META_TABLE)
+                .unwrap()
+                .get(super::LOCAL_REPLICA_MIGRATION)
+                .unwrap()
+                .unwrap();
+            assert_eq!(marker.value(), "done");
+        }
+        drop(txn);
+        let (loaded, _) = store
+            .load_v4_replica("destination", "fixture-password")
+            .unwrap()
+            .unwrap();
+        assert_eq!(serde_json::to_vec(&loaded).unwrap(), expected);
+
+        // A finished migration re-runs neither the rewrite nor the cleanup.
+        let txn = store.db.begin_write().unwrap();
+        txn.open_table(super::EDITS)
+            .unwrap()
+            .insert("field/late", 1)
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(!store.migrate_local_replica_storage().unwrap());
+        let txn = store.db.begin_read().unwrap();
+        let edits = txn.open_table(super::EDITS).unwrap();
+        assert_eq!(edits.get("field/late").unwrap().unwrap().value(), 1);
+    }
+    let mut store = ConnectionStore::open(dir.path()).unwrap();
+    assert!(!store.migrate_local_replica_storage().unwrap());
+}
+
+#[test]
+fn legacy_replica_migration_reclaims_file_space() {
+    let dir = TestTempDir::new("nyaterm-local-replica-migration-space");
+    let path = dir.path().join("nyaterm.redb");
+    let mut record = migration_record(0);
+    for index in 0..4096 {
+        record.effective.insert(
+            format!("connection/server/field-{index}"),
+            nyaterm_core::sync_schema::SyncValue::new(&json!("x".repeat(120))),
+        );
+    }
+    let mut store = ConnectionStore::open(dir.path()).unwrap();
+    store
+        .save_master_password(Some("fixture-password"))
+        .unwrap();
+    let legacy = legacy_bytes(&record, "destination");
+    let txn = store.db.begin_write().unwrap();
+    txn.open_table(super::REPLICAS)
+        .unwrap()
+        .insert("destination", legacy.as_slice())
+        .unwrap();
+    txn.commit().unwrap();
+    let before = std::fs::metadata(&path).unwrap().len();
+    assert!(store.migrate_local_replica_storage().unwrap());
+    let after = std::fs::metadata(&path).unwrap().len();
+    assert!(after < before, "before={before} after={after}");
+    let (loaded, _) = store
+        .load_v4_replica("destination", "fixture-password")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&loaded).unwrap(),
+        serde_json::to_vec(&record).unwrap()
+    );
+}
+
+#[test]
+fn unreadable_legacy_replica_aborts_migration_without_marker() {
+    let dir = TestTempDir::new("nyaterm-local-replica-migration-failure");
+    let record = migration_record(7);
+    let expected = serde_json::to_vec(&record).unwrap();
+    let legacy = legacy_bytes(&record, "good");
+    let mut broken = b"NYASYNC4".to_vec();
+    broken.extend_from_slice(&[0xFF; 32]);
+    let mut store = ConnectionStore::open(dir.path()).unwrap();
+    store
+        .save_master_password(Some("fixture-password"))
+        .unwrap();
+    let txn = store.db.begin_write().unwrap();
+    {
+        let mut table = txn.open_table(super::REPLICAS).unwrap();
+        table.insert("good", legacy.as_slice()).unwrap();
+        table.insert("broken", broken.as_slice()).unwrap();
+    }
+    txn.open_table(super::EDITS)
+        .unwrap()
+        .insert("field/consumed", 3)
+        .unwrap();
+    txn.commit().unwrap();
+    assert!(!store.migrate_local_replica_storage().unwrap());
+    let txn = store.db.begin_read().unwrap();
+    {
+        let table = txn.open_table(super::REPLICAS).unwrap();
+        let good = table.get("good").unwrap().unwrap();
+        assert!(good.value().starts_with(b"NYASYNC4"));
+        let broken_stored = table.get("broken").unwrap().unwrap();
+        assert_eq!(broken_stored.value(), broken.as_slice());
+    }
+    assert!(
+        txn.open_table(super::EDITS)
+            .unwrap()
+            .get("field/consumed")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        txn.open_table(crate::storage::META_TABLE)
+            .unwrap()
+            .get(super::LOCAL_REPLICA_MIGRATION)
+            .unwrap()
+            .is_none()
+    );
+    drop(txn);
+    // The untouched record stays readable through the ordinary load path.
+    let (loaded, _) = store
+        .load_v4_replica("good", "fixture-password")
+        .unwrap()
+        .unwrap();
+    assert_eq!(serde_json::to_vec(&loaded).unwrap(), expected);
+}

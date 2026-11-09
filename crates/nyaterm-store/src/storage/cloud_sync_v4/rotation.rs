@@ -232,13 +232,18 @@ impl ConnectionStore {
             let plaintext = Zeroizing::new(serde_json::to_vec(&archived)?);
             replacements.insert(
                 key.value().to_owned(),
-                encryption::seal(next_password, "local-replica", key.value(), &plaintext)?,
+                encryption::seal_compressed(
+                    next_password,
+                    "local-replica",
+                    key.value(),
+                    &plaintext,
+                )?,
             );
         }
         let plaintext = Zeroizing::new(serde_json::to_vec(&record)?);
         replacements.insert(
             target.into(),
-            encryption::seal(next_password, "local-replica", target, &plaintext)?,
+            encryption::seal_compressed(next_password, "local-replica", target, &plaintext)?,
         );
         let stage = StagedRotation {
             source: source.destination.clone(),
