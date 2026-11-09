@@ -297,13 +297,16 @@ impl NyaNumberInputState {
                         }
                         cx.emit(NyaNumberInputEvent::Changed(value));
                     }
-                    InputEvent::PressEnter { .. } => {
+                    // Same contract as `forward_input_event` in input.rs:
+                    // `Shift+Enter` is the newline gesture, not a submit.
+                    InputEvent::PressEnter { shift, .. } if !shift => {
                         let committed = this.committed_value(input.read(cx).value().as_ref());
                         input.update(cx, |input, cx| {
                             input.set_value(SharedString::from(committed.clone()), window, cx);
                         });
                         cx.emit(NyaNumberInputEvent::Submitted(committed));
                     }
+                    InputEvent::PressEnter { .. } => {}
                     InputEvent::Blur if this.options.allow_infinity => {
                         // The native blur clamp only applies to numeric masks.
                         let value = input.read(cx).value().to_string();
@@ -760,6 +763,37 @@ mod tests {
                 NyaNumberInputEvent::Stepped(_) => false,
             }));
         }
+    }
+
+    #[gpui::test]
+    fn shift_enter_does_not_submit(cx: &mut TestAppContext) {
+        let (field, cx) = number_fixture(cx, "100", NyaNumberInputOptions::default());
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|_, cx| {
+            let events = events.clone();
+            cx.subscribe(&field, move |_, event, _| {
+                events.borrow_mut().push(event.clone())
+            })
+        });
+
+        cx.simulate_keystrokes("shift-enter");
+        cx.run_until_parked();
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .all(|event| !matches!(event, NyaNumberInputEvent::Submitted(_))),
+            "shift-enter must not submit"
+        );
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, NyaNumberInputEvent::Submitted(_)))
+        );
     }
 
     #[gpui::test]
