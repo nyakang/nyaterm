@@ -44,6 +44,26 @@ pub fn horizontal_resize_handle_visual(
     dragging: bool,
     highlighted: bool,
 ) -> gpui::Div {
+    horizontal_resize_handle_visual_impl(palette, dragging, highlighted, true)
+}
+
+/// Same hit strip without the resting divider line. Use it where the dragged
+/// edge already borders a framed control — an idle seam there reads as noise,
+/// so only the hover/drag highlight shows.
+pub fn horizontal_resize_handle_borderless(
+    palette: ThemePalette,
+    dragging: bool,
+    highlighted: bool,
+) -> gpui::Div {
+    horizontal_resize_handle_visual_impl(palette, dragging, highlighted, false)
+}
+
+fn horizontal_resize_handle_visual_impl(
+    palette: ThemePalette,
+    dragging: bool,
+    highlighted: bool,
+    idle_line: bool,
+) -> gpui::Div {
     div()
         .relative()
         .h(px(5.))
@@ -51,15 +71,17 @@ pub fn horizontal_resize_handle_visual(
         .mb(px(-2.))
         .w_full()
         .flex_none()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px(2.))
-                .h(px(1.))
-                .bg(rgb(palette.border)),
-        )
+        .when(idle_line, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(2.))
+                    .h(px(1.))
+                    .bg(rgb(palette.border)),
+            )
+        })
         .child(
             div()
                 .absolute()
