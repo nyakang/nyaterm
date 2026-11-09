@@ -1824,13 +1824,12 @@ fn prompt_prefix_survives_the_row_leaving_the_live_input_state() {
 #[test]
 fn scrolled_view_keeps_the_prompt_coloured() {
     // A scrolled viewport has no cursor row at all (`cursor.row == usize::MAX`),
-    // so the live-input heuristic cannot fire and history rows carry no anchors.
-    // The prompt must not turn black just because the user scrolled back.
+    // and without shell integration history rows have no input anchors. Prompt
+    // colouring must come from the line shape rather than operator colours.
     let mut screen = TerminalScreen::new(40, 5);
-    screen.advance(b"\x1b]133;A\x07[root@nginx-wan ~]#\x1b]133;B\x07ls");
-    screen.advance(b"\r\n\x1b]133;C\x07one\r\n");
+    screen.advance(b"[root@nginx-wan ~]# ls\r\none\r\n");
     screen.advance(b"[root@nginx-wan ~]# tail\r\ntwo\r\nthree\r\n");
-    screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07[root@nginx-wan ~]#\x1b]133;B\x07");
+    screen.advance(b"[root@nginx-wan ~]# ");
     let scrolled = screen.viewport_snapshot(1);
     assert_eq!(
         scrolled.cursor.row,
@@ -1843,6 +1842,7 @@ fn scrolled_view_keeps_the_prompt_coloured() {
         .position(|row| row.text.starts_with("[root@nginx-wan ~]# tail"))
         .expect("history prompt row stays inside the window");
     assert!(scrolled.row(prompt_row).unwrap().shell_input.is_none());
+    assert!(!scrolled.row(prompt_row).unwrap().shell_integration);
     let colors = snapshot_colors(&scrolled);
     let base = prompt_row * 40;
     assert_eq!(

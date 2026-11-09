@@ -122,9 +122,9 @@ pub fn builtin_keyword_rule_is_specialized(id: &str) -> bool {
 
 /// ANSI palette index (0..=15) used by a built-in rule.
 ///
-/// Mirrors OxideTerm's semantic scheme: every class resolves to a slot in the
-/// terminal's own 16-colour palette, so highlights follow the theme instead of
-/// being frozen hex values.
+/// Used by palette-based categories and as a fallback for invalid colours.
+/// `builtin_keyword_rule_swatch_ansi` preserves legacy light/dark swatches for
+/// command, path, option, prompt and debug highlights.
 pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
     match id {
         "builtin-command" => 2,
@@ -167,13 +167,19 @@ pub fn builtin_keyword_rule_ansi(id: &str) -> u8 {
     }
 }
 
-/// Hex string for a rule, resolved against a terminal's ANSI palette.
-pub fn builtin_keyword_rule_swatch_ansi(id: &str, ansi: [u32; 16], _is_dark: bool) -> String {
+/// Resolve a built-in swatch, preserving selected v2.0.2 light/dark colours.
+pub fn builtin_keyword_rule_swatch_ansi(id: &str, ansi: [u32; 16], is_dark: bool) -> String {
+    if matches!(
+        id,
+        "builtin-command" | "builtin-path" | "builtin-option" | "builtin-prompt" | "builtin-debug"
+    ) {
+        return builtin_keyword_rule_swatch(id, is_dark).to_string();
+    }
     let index = usize::from(builtin_keyword_rule_ansi(id).min(15));
     format!("#{:06x}", ansi[index])
 }
 
-/// Built-in rules coloured from a terminal ANSI palette.
+/// Built-in rules with legacy light/dark swatches and terminal ANSI colours.
 pub fn get_builtin_keyword_rules_with_ansi(
     ansi: [u32; 16],
     is_dark: bool,
@@ -190,7 +196,7 @@ pub fn get_builtin_keyword_rules_with_ansi(
         .collect()
 }
 
-/// Merge user rules then built-ins, with built-ins coloured from the palette.
+/// Merge user rules then built-ins, preserving each category's colour policy.
 pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
     user_rules: &[KeywordHighlightRule],
     builtin_settings: &HashMap<String, bool>,
@@ -509,9 +515,11 @@ pub fn builtin_keyword_rule_swatch(id: &str, is_dark: bool) -> &'static str {
             }
         }
         "builtin-prompt" => {
-            // Same cyan family as the command and operator colours, matching
-            // OxideTerm's prompt treatment.
-            if dark { "#66D9EF" } else { "#007197" }
+            if dark {
+                "#f92672"
+            } else {
+                "#e00862"
+            }
         }
         _ => {
             if dark {
@@ -900,17 +908,34 @@ mod palette_tests {
     use std::collections::HashMap;
 
     #[test]
-    fn every_builtin_including_prompt_command_and_operator_follows_ansi() {
-        let ansi = std::array::from_fn(|index| 0x123400 + index as u32);
-        for dark in [true, false] {
-            for rule in get_builtin_keyword_rules_with_ansi(ansi, dark) {
-                assert_eq!(
-                    rule.color,
-                    format!(
-                        "#{:06x}",
-                        ansi[usize::from(builtin_keyword_rule_ansi(&rule.id))]
-                    )
-                );
+    fn selected_categories_keep_v2_0_2_colours_while_other_builtins_follow_ansi() {
+        let legacy_swatches = [
+            ("builtin-command", "#66D9EF", "#007197"),
+            ("builtin-path", "#E6DB74", "#8a6700"),
+            ("builtin-option", "#FD971F", "#b04a00"),
+            ("builtin-prompt", "#f92672", "#e00862"),
+            ("builtin-debug", "#b267e6", "#8250df"),
+        ];
+        for base in [0x123400, 0xabcdef] {
+            let ansi = std::array::from_fn(|index| base + index as u32);
+            for dark in [true, false] {
+                for rule in get_builtin_keyword_rules_with_ansi(ansi, dark) {
+                    let expected = legacy_swatches
+                        .iter()
+                        .find(|(id, _, _)| *id == rule.id)
+                        .map_or_else(
+                            || {
+                                format!(
+                                    "#{:06x}",
+                                    ansi[usize::from(builtin_keyword_rule_ansi(&rule.id))]
+                                )
+                            },
+                            |(_, color_dark, color_light)| {
+                                if dark { color_dark } else { color_light }.to_string()
+                            },
+                        );
+                    assert_eq!(rule.color, expected, "{} (dark={dark})", rule.id);
+                }
             }
         }
     }
@@ -925,7 +950,10 @@ mod palette_tests {
             color_light: "#654321".into(),
             enabled: true,
         };
-        let disabled = HashMap::from([("builtin-info".to_string(), false)]);
+        let disabled = HashMap::from([
+            ("builtin-info".to_string(), false),
+            ("builtin-prompt".to_string(), false),
+        ]);
         for (dark, expected) in [(true, "#123456"), (false, "#654321")] {
             let rules = merge_keyword_highlight_rules_for_paint_with_ansi(
                 std::slice::from_ref(&user),
@@ -934,13 +962,9 @@ mod palette_tests {
                 [0xabcdef; 16],
             );
             assert_eq!(rules[0].color, expected);
-            assert!(
-                !rules
-                    .iter()
-                    .find(|rule| rule.id == "builtin-info")
-                    .unwrap()
-                    .enabled
-            );
+            for id in disabled.keys() {
+                assert!(!rules.iter().find(|rule| &rule.id == id).unwrap().enabled);
+            }
         }
     }
 }
