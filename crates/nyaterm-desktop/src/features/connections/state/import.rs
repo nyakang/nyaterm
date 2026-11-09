@@ -17,7 +17,14 @@ enum ImportPhase {
     Selecting,
     Running,
     AwaitingWindtermPassword(PathBuf),
+    AwaitingMobaxtermPassword(MobaXtermPasswordContext),
     AwaitingWindtermAccounts,
+}
+
+pub(in crate::features) struct MobaXtermPasswordContext {
+    pub path: PathBuf,
+    pub passwords_path: Option<PathBuf>,
+    pub decryption_failed: bool,
 }
 
 /// A reusable existing account offered when a OneKey name already exists.
@@ -221,6 +228,25 @@ pub(super) struct ConnectionImportState {
 }
 
 impl ConnectionImportState {
+    fn await_mobaxterm_password(&mut self, context: MobaXtermPasswordContext) {
+        self.phase = ImportPhase::AwaitingMobaxtermPassword(context);
+    }
+
+    fn mobaxterm_password_context(&self) -> Option<&MobaXtermPasswordContext> {
+        match &self.phase {
+            ImportPhase::AwaitingMobaxtermPassword(context) => Some(context),
+            _ => None,
+        }
+    }
+
+    fn take_mobaxterm_password_context(&mut self) -> Option<MobaXtermPasswordContext> {
+        self.mobaxterm_password_context()?;
+        match std::mem::replace(&mut self.phase, ImportPhase::Running) {
+            ImportPhase::AwaitingMobaxtermPassword(context) => Some(context),
+            _ => unreachable!(),
+        }
+    }
+
     pub fn path_prompt_active(&self) -> bool {
         !matches!(self.phase, ImportPhase::Idle)
     }
@@ -283,7 +309,8 @@ impl ConnectionImportState {
         match slot {
             MobaImportSlot::Session => {
                 self.mobaxterm.session_extension_warning =
-                    !moba_extension_matches(&path, "mxtsessions");
+                    !moba_extension_matches(&path, "mxtsessions")
+                        && !moba_extension_matches(&path, "ini");
                 self.mobaxterm.session_path = Some(path);
                 if self.mobaxterm.drop_hover == Some(MobaImportSlot::Session) {
                     self.mobaxterm.drop_hover = None;
@@ -457,6 +484,32 @@ impl ConnectionImportState {
 }
 
 impl ConnectionFeatureState {
+    pub(in crate::features) fn await_mobaxterm_password(
+        &mut self,
+        path: PathBuf,
+        passwords_path: Option<PathBuf>,
+        decryption_failed: bool,
+    ) {
+        self.import
+            .await_mobaxterm_password(MobaXtermPasswordContext {
+                path,
+                passwords_path,
+                decryption_failed,
+            });
+    }
+
+    pub(in crate::features) fn mobaxterm_password_context(
+        &self,
+    ) -> Option<&MobaXtermPasswordContext> {
+        self.import.mobaxterm_password_context()
+    }
+
+    pub(in crate::features) fn take_mobaxterm_password_context(
+        &mut self,
+    ) -> Option<MobaXtermPasswordContext> {
+        self.import.take_mobaxterm_password_context()
+    }
+
     pub(in crate::features) fn begin_session_import_job(&mut self) {
         self.import.begin_running();
         self.import.import_report = None;
@@ -606,7 +659,7 @@ mod tests {
 
     use super::{
         ConnectionImportReportView, ConnectionImportState, ImportPhase, MobaImportSlot,
-        build_drafts,
+        MobaXtermPasswordContext, build_drafts,
     };
 
     fn preview_with_accounts() -> WindtermPreview {
@@ -641,6 +694,40 @@ mod tests {
             skipped_session_count: 0,
             total_session_count: 2,
         }
+    }
+
+    #[test]
+    fn mobaxterm_challenge_retains_both_paths_blocks_other_imports_and_clears_on_cancel() {
+        let mut state = ConnectionImportState::default();
+        state.await_mobaxterm_password(MobaXtermPasswordContext {
+            path: PathBuf::from("MobaXterm.ini"),
+            passwords_path: Some(PathBuf::from("synthetic.txt")),
+            decryption_failed: true,
+        });
+        assert!(state.path_prompt_active());
+        state.begin_path_prompt(ConnectionImportSource::WindTerm);
+        assert!(
+            state
+                .mobaxterm_password_context()
+                .unwrap()
+                .decryption_failed
+        );
+        let context = state.take_mobaxterm_password_context().unwrap();
+        assert_eq!(context.path, PathBuf::from("MobaXterm.ini"));
+        assert_eq!(context.passwords_path, Some(PathBuf::from("synthetic.txt")));
+        assert!(matches!(state.phase, ImportPhase::Running));
+        assert!(state.take_mobaxterm_password_context().is_none());
+        state.finish_path_prompt();
+        assert!(!state.path_prompt_active());
+        assert!(state.mobaxterm_password_context().is_none());
+    }
+
+    #[test]
+    fn mobaxterm_ini_is_an_expected_extension() {
+        let mut state = ConnectionImportState::default();
+        state.set_mobaxterm_file(MobaImportSlot::Session, PathBuf::from("MobaXterm.INI"));
+        assert!(state.mobaxterm_import_ready());
+        assert!(!state.mobaxterm_session_extension_warning());
     }
 
     fn existing_password() -> SavedPassword {

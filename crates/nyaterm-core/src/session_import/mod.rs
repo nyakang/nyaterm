@@ -10,7 +10,8 @@ use thiserror::Error;
 
 mod electerm;
 mod finalshell;
-mod mobaxterm;
+pub mod mobaxterm;
+mod mobaxterm_crypto;
 mod nyaterm_json;
 mod securecrt;
 mod ssh_config;
@@ -38,6 +39,10 @@ const XSHELL_ENTRY_LIMIT: usize = 10_000;
 pub enum SessionImportError {
     #[error("WindTerm master password is required")]
     WindTermMasterPasswordRequired,
+    #[error("MobaXterm credentials require a master password or cannot be decrypted automatically")]
+    MobaXtermMasterPasswordRequired,
+    #[error("MobaXterm master password is incorrect or credential data is damaged")]
+    MobaXtermCredentialDecryptionFailed,
     #[error("{0}")]
     Config(String),
     #[error("{0}")]
@@ -52,6 +57,8 @@ pub struct SessionImportOptions<'a> {
     pub windterm_master_password: Option<&'a str>,
     /// Optional `MobaXterm Stored Passwords.txt` chosen alongside the session file.
     pub mobaxterm_passwords_path: Option<&'a Path>,
+    pub mobaxterm_master_password: Option<&'a str>,
+    pub mobaxterm_skip_encrypted_credentials: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +67,7 @@ pub enum SessionImportWarningKind {
     UnreadableProfileConfig,
     UnreadableAutoLogin,
     UnreadablePrivateKey,
+    UnreadableMobaXtermCredential,
 }
 
 /// Import diagnostics contain only a source index and a reason, never user data.
@@ -325,8 +333,8 @@ pub fn prepare_session_import_with_options(
     let lower = path.to_ascii_lowercase();
     let prepared = if lower.ends_with(".xts") {
         prepare_legacy_sessions(parse_xshell(&path)?)
-    } else if lower.ends_with(".mxtsessions") {
-        parse_mobaxterm(&path, options.mobaxterm_passwords_path)?
+    } else if lower.ends_with(".mxtsessions") || lower.ends_with(".ini") {
+        parse_mobaxterm(file_path, options)?
     } else if lower.ends_with(".sessions") {
         parse_windterm(file_path, options.windterm_master_password)?
     } else if lower.ends_with(".xml") {
@@ -335,7 +343,7 @@ pub fn prepare_session_import_with_options(
         electerm::parse_json_import(file_path)?
     } else {
         return Err(AppError::Config(
-            "Unsupported file format. Please use .xts (Xshell), .mxtsessions (MobaXterm), .sessions (WindTerm), .xml (SecureCRT), .json (NyaTerm JSON or Electerm bookmarks), or a FinalShell conn directory."
+            "Unsupported file format. Please use .xts (Xshell), .mxtsessions or MobaXterm .ini, .sessions (WindTerm), .xml (SecureCRT), .json (NyaTerm JSON or Electerm bookmarks), or a FinalShell conn directory."
                 .to_string(),
         ));
     };

@@ -17,6 +17,98 @@ use crate::models::ConnectionImportSource;
 use crate::theme::ThemePalette;
 
 impl NyaTermApp {
+    pub(in crate::features) fn open_mobaxterm_password_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_mobaxterm_password_input(cx);
+        let field = self.text_input("mobaxterm-password.value", "", TextInputSetup::secret(), cx);
+        self.open_form_dialog(
+            (
+                t!("savedConnections.mobaxtermMasterPasswordTitle").to_string(),
+                480.,
+                t!("savedConnections.mobaxtermMasterPasswordConfirm").to_string(),
+                |app, _, cx| app.mobaxterm_password_dialog_content(cx),
+                |app, window, cx| app.submit_mobaxterm_password(window, cx),
+                |app, cx| app.cancel_mobaxterm_password(cx),
+            ),
+            window,
+            cx,
+        );
+        window.focus(&field.read(cx).focus_handle(), cx);
+        cx.notify();
+    }
+
+    fn mobaxterm_password_dialog_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(field) = self.existing_text_input("mobaxterm-password.value") else {
+            return div().into_any_element();
+        };
+        let failed = self
+            .connection_state
+            .mobaxterm_password_context()
+            .is_some_and(|context| context.decryption_failed);
+        let palette = self.theme_palette();
+        div()
+            .id("mobaxterm-password-dialog-content")
+            .debug_selector(|| "mobaxterm-password-dialog-content".to_owned())
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!(if failed {
+                        "savedConnections.mobaxtermMasterPasswordFailed"
+                    } else {
+                        "savedConnections.mobaxtermMasterPasswordDesc"
+                    })),
+            )
+            .child(
+                NyaInputShell::new("mobaxterm-password.value", &field)
+                    .height(px(36.))
+                    .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.modifiers.platform
+                            || event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.alt
+                        {
+                            return;
+                        }
+                        match event.keystroke.key.as_str() {
+                            "enter" => {
+                                if app.submit_mobaxterm_password(window, cx) {
+                                    window.close_nya_dialog(cx);
+                                }
+                            }
+                            "escape" => {
+                                app.cancel_mobaxterm_password(cx);
+                                window.close_nya_dialog(cx);
+                            }
+                            _ => return,
+                        }
+                        cx.stop_propagation();
+                    })),
+            )
+            .child(
+                div().flex().justify_end().child(
+                    NyaButton::new(
+                        "mobaxterm-password-skip",
+                        t!("savedConnections.mobaxtermSkipEncrypted").to_string(),
+                    )
+                    .variant(NyaButtonVariant::Secondary)
+                    .height(px(32.))
+                    .on_click(
+                        cx.listener(|app, _, window, cx| {
+                            app.skip_mobaxterm_credentials(window, cx)
+                        }),
+                    ),
+                ),
+            )
+            .into_any_element()
+    }
+
     pub(in crate::features) fn open_windterm_password_dialog(
         &mut self,
         window: &mut Window,
@@ -139,7 +231,7 @@ impl NyaTermApp {
                         "connection-import-mobaxterm",
                         "color/brand/mobaxterm.png",
                         "MobaXterm",
-                        ".mxtsessions",
+                        ".mxtsessions / .ini",
                         cx.listener(|this, _, window, cx| {
                             this.select_connection_import_source(
                                 ConnectionImportSource::MobaXterm,

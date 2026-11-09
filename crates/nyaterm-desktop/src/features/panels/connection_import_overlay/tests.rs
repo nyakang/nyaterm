@@ -8,6 +8,7 @@ use nyaterm_core::test_support::TestTempDir;
 use nyaterm_ui::{NyaDialogWindowExt as _, NyaInputKind, nya_root};
 
 use crate::features::NyaTermApp;
+use crate::features::connections::MobaImportSlot;
 use crate::features::test_support::app_with_visible_local_session;
 
 struct Workspace {
@@ -45,6 +46,223 @@ fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
+    });
+}
+
+fn wait_mobaxterm_job(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        cx.run_until_parked();
+        if app.read_with(cx, |app, _| {
+            !app.connection_state.import_path_prompt_active()
+                || app.connection_state.mobaxterm_password_context().is_some()
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MobaXterm import did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Confirm actions restore focus after the component's 250 ms exit animation.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    draw(cx);
+}
+
+fn mobaxterm_fixture(root: &TestTempDir) -> std::path::PathBuf {
+    std::fs::create_dir_all(root.path()).unwrap();
+    let path = root.join("MobaXterm.ini");
+    // Synthetic AES-CFB8 vector generated independently with Python cryptography.
+    std::fs::write(&path, "[Sesspass]\n[Credentials]\nprod=deploy:Lw+8ew2leHRCfHlGFP0SMA==\n[Bookmarks]\nSubRep=Imported\\Moba\nA=#109#0%a.example%22%[prod]%\n").unwrap();
+    path
+}
+
+#[gpui::test]
+fn mobaxterm_password_prompt_masks_focuses_and_cancels_without_writing(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-mobaxterm-dialog-cancel");
+    let path = mobaxterm_fixture(&root);
+    let (app, cx, focus) = hosted(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_state
+                .set_mobaxterm_file(MobaImportSlot::Session, path);
+            app.start_mobaxterm_import(window, cx);
+        })
+    });
+    wait_mobaxterm_job(&app, cx);
+    let field = cx.update(|window, cx| {
+        let field = app
+            .read(cx)
+            .existing_text_input("mobaxterm-password.value")
+            .unwrap();
+        assert!(field.read(cx).is_masked());
+        assert_eq!(field.read(cx).input_kind(), NyaInputKind::Secret);
+        assert!(field.read(cx).component_focus_handle(cx).is_focused(window));
+        field
+    });
+    cx.simulate_input("synthetic-password");
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        assert!(focus.is_focused(window));
+        assert_eq!(field.read(cx).value(cx), "");
+        app.update(cx, |app, _| {
+            assert!(!app.connection_state.import_path_prompt_active());
+            assert!(
+                app.existing_text_input("mobaxterm-password.value")
+                    .is_none()
+            );
+            let store = app.store_blocking_client();
+            assert!(
+                store
+                    .request_fn(nyaterm_store::StoreDomain::Connections, |store| store
+                        .list_connections())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                store
+                    .request_fn(nyaterm_store::StoreDomain::Connections, |store| store
+                        .list_passwords())
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn mobaxterm_empty_submit_failed_retry_and_success_clear_password_and_write_once(
+    cx: &mut TestAppContext,
+) {
+    let root = TestTempDir::new("nyaterm-mobaxterm-dialog-retry");
+    let path = mobaxterm_fixture(&root);
+    let (app, cx, focus) = hosted(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_state
+                .await_mobaxterm_password(path, None, false);
+            app.open_mobaxterm_password_dialog(window, cx);
+        })
+    });
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.update(|window, cx| assert!(window.has_active_nya_dialog(cx)));
+    let failed_field = app.read_with(cx, |app, _| {
+        app.existing_text_input("mobaxterm-password.value").unwrap()
+    });
+    cx.simulate_input("wrong-password");
+    cx.simulate_keystrokes("enter");
+    wait_mobaxterm_job(&app, cx);
+    cx.update(|window, cx| {
+        assert!(window.has_active_nya_dialog(cx));
+        assert_eq!(failed_field.read(cx).value(cx), "");
+        app.update(cx, |app, _| {
+            assert!(
+                app.connection_state
+                    .mobaxterm_password_context()
+                    .unwrap()
+                    .decryption_failed
+            );
+            assert!(
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Connections, |store| store
+                        .list_connections())
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    });
+    let success_field = app.read_with(cx, |app, _| {
+        app.existing_text_input("mobaxterm-password.value").unwrap()
+    });
+    cx.simulate_input("synthetic-master");
+    cx.simulate_keystrokes("enter");
+    wait_mobaxterm_job(&app, cx);
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        assert!(focus.is_focused(window));
+        assert_eq!(success_field.read(cx).value(cx), "");
+        app.update(cx, |app, _| {
+            assert!(
+                app.existing_text_input("mobaxterm-password.value")
+                    .is_none()
+            );
+            let store = app.store_blocking_client();
+            let connections = store
+                .request_fn(nyaterm_store::StoreDomain::Connections, |store| {
+                    store.list_connections()
+                })
+                .unwrap();
+            assert_eq!(connections.len(), 1);
+            let id = connections[0]
+                .auth
+                .as_ref()
+                .unwrap()
+                .account_id
+                .clone()
+                .unwrap();
+            let account = store
+                .request_fn(nyaterm_store::StoreDomain::Connections, move |store| {
+                    store.load_decrypted_password_by_id(&id)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(account.username, "deploy");
+            assert_eq!(account.password.as_deref(), Some("synthetic-import"));
+        });
+    });
+}
+
+#[gpui::test]
+fn mobaxterm_skip_keeps_selected_plaintext_path_and_clears_password(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-mobaxterm-dialog-skip");
+    let path = mobaxterm_fixture(&root);
+    let passwords_path = root.join("synthetic.txt");
+    std::fs::write(&passwords_path, "prod(manual-user) = synthetic-manual").unwrap();
+    let (app, cx, _) = hosted(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_state
+                .await_mobaxterm_password(path, Some(passwords_path), true);
+            app.open_mobaxterm_password_dialog(window, cx);
+        })
+    });
+    draw(cx);
+    cx.simulate_input("discard-this-password");
+    let field = app.read_with(cx, |app, _| {
+        app.existing_text_input("mobaxterm-password.value").unwrap()
+    });
+    cx.update(|window, cx| app.update(cx, |app, cx| app.skip_mobaxterm_credentials(window, cx)));
+    wait_mobaxterm_job(&app, cx);
+    assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "");
+    app.update(cx, |app, _| {
+        let store = app.store_blocking_client();
+        let connections = store
+            .request_fn(nyaterm_store::StoreDomain::Connections, |store| {
+                store.list_connections()
+            })
+            .unwrap();
+        assert_eq!(connections.len(), 1);
+        let id = connections[0]
+            .auth
+            .as_ref()
+            .unwrap()
+            .account_id
+            .clone()
+            .unwrap();
+        let account = store
+            .request_fn(nyaterm_store::StoreDomain::Connections, move |store| {
+                store.load_decrypted_password_by_id(&id)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.password.as_deref(), Some("synthetic-manual"));
+        assert!(!app.connection_state.import_path_prompt_active());
     });
 }
 

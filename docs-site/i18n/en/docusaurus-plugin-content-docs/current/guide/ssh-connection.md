@@ -275,12 +275,20 @@ Configuration, filtering, broadcast control, and the send command panel are docu
 NyaTerm can import session definitions from other terminal clients. Current supported imports are:
 
 - **Xshell** (`.xts`)
-- **MobaXterm** (`.mxtsessions`)
+- **MobaXterm** (`.mxtsessions` or `MobaXterm.ini`)
 - **WindTerm** (`.sessions`)
 - **SecureCRT** (`.xml`)
 - **FinalShell** (`conn` directory)
 - **Termius** (local IndexedDB)
 - **NyaTerm JSON** (`.json`)
+
+### Import from MobaXterm
+
+Select a session export or a complete `MobaXterm.ini` configuration. Encrypted credentials in the configuration are included. When prompted, enter the **MobaXterm Master Password**, or choose **Skip encrypted credentials** to import the sessions. If the password is incorrect or credentials are damaged, you can retry or cancel before any connections are saved.
+
+You can also select a plaintext `MobaXterm Stored Passwords.txt` file; its matches take priority over embedded credentials. Named credentials follow explicit session references, while connection passwords match addresses and usernames. Ambiguous matches are skipped and reported.
+
+Passwords stored only in the Windows registry cannot be imported from the configuration. Whole-file encrypted exports are unsupported.
 
 ### Import from Termius
 

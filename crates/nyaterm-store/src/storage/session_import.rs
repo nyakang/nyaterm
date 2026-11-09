@@ -307,6 +307,129 @@ mod tests {
 
     use super::{ConnectionStore, META_MASTER_KEY, META_TABLE};
 
+    fn mobaxterm_fixture(root: &std::path::Path) -> std::path::PathBuf {
+        std::fs::create_dir_all(root).unwrap();
+        let path = root.join("MobaXterm.ini");
+        std::fs::write(&path, "[Sesspass]\n[Credentials]\nprod=deploy:Lw+8ew2leHRCfHlGFP0SMA==\n[Bookmarks]\nSubRep=Imported\\Moba\nA=#109#0%a.example%22%[prod]%\nB=#91#0%b.example%3389%[prod]%\n").unwrap();
+        path
+    }
+
+    fn prepare_mobaxterm(path: &std::path::Path) -> PreparedSessionImport {
+        nyaterm_core::session_import::prepare_session_import_with_options(
+            path,
+            nyaterm_core::session_import::SessionImportOptions {
+                mobaxterm_master_password: Some("synthetic-master"),
+                ..nyaterm_core::session_import::SessionImportOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn mobaxterm_import_reopens_encrypted_accounts_with_shared_ssh_and_rdp_references() {
+        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-mobaxterm-store-roundtrip");
+        let path = mobaxterm_fixture(dir.path());
+        let prepared = prepare_mobaxterm(&path);
+        let account_id = prepared.passwords[0].id.clone();
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        assert_eq!(store.commit_session_import(prepared).unwrap(), 2);
+        drop(store);
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let account = store
+            .load_decrypted_password_by_id(&account_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.username, "deploy");
+        assert_eq!(account.password.as_deref(), Some("synthetic-import"));
+        let raw = store.load_password_by_id(&account_id).unwrap().unwrap();
+        assert_ne!(raw.password.as_deref(), Some("synthetic-import"));
+        assert!(raw.has_password);
+        let connections = store.list_connections().unwrap();
+        for connection in &connections {
+            let auth = connection.auth.as_ref().unwrap();
+            assert_eq!(auth.account_id.as_deref(), Some(account_id.as_str()));
+            assert_eq!(auth.password_id.as_deref(), Some(account_id.as_str()));
+        }
+        assert_eq!(store.list_groups().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn mobaxterm_skipped_password_reopens_real_username_without_creating_accounts() {
+        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-mobaxterm-store-skip");
+        let path = mobaxterm_fixture(dir.path());
+        let prepared = nyaterm_core::session_import::prepare_session_import_with_options(
+            &path,
+            nyaterm_core::session_import::SessionImportOptions {
+                mobaxterm_skip_encrypted_credentials: true,
+                ..nyaterm_core::session_import::SessionImportOptions::default()
+            },
+        )
+        .unwrap();
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        assert_eq!(store.commit_session_import(prepared).unwrap(), 2);
+        drop(store);
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        assert!(store.list_passwords().unwrap().is_empty());
+        let connections = store.list_connections().unwrap();
+        assert!(
+            matches!(&connections[0].config, ConnectionType::Ssh { username, .. } if username == "deploy")
+        );
+        assert!(
+            matches!(&connections[1].config, ConnectionType::Rdp { username, .. } if username == "deploy")
+        );
+        for connection in &connections {
+            let auth = connection.auth.as_ref().unwrap();
+            assert!(auth.account_id.is_none());
+            assert!(auth.password_id.is_none());
+        }
+    }
+
+    #[test]
+    fn mobaxterm_challenges_and_wrong_password_leave_existing_data_unchanged() {
+        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-mobaxterm-store-challenge");
+        let path = mobaxterm_fixture(dir.path());
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        store.commit_session_import(prepared_import()).unwrap();
+        assert!(matches!(
+            prepare_session_import(&path),
+            Err(SessionImportError::MobaXtermMasterPasswordRequired)
+        ));
+        assert!(matches!(
+            nyaterm_core::session_import::prepare_session_import_with_options(
+                &path,
+                nyaterm_core::session_import::SessionImportOptions {
+                    mobaxterm_master_password: Some("wrong-password"),
+                    ..nyaterm_core::session_import::SessionImportOptions::default()
+                }
+            ),
+            Err(SessionImportError::MobaXtermCredentialDecryptionFailed)
+        ));
+        assert_eq!(store.list_connections().unwrap().len(), 1);
+        assert_eq!(store.list_passwords().unwrap().len(), 1);
+        assert_eq!(store.list_groups().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mobaxterm_import_rolls_back_all_domains_when_storage_encryption_fails() {
+        let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-mobaxterm-store-rollback");
+        let path = mobaxterm_fixture(dir.path());
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        txn.open_table(META_TABLE)
+            .unwrap()
+            .insert(META_MASTER_KEY, "invalid-master-key-token")
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(
+            store
+                .commit_session_import(prepare_mobaxterm(&path))
+                .is_err()
+        );
+        assert!(store.list_connections().unwrap().is_empty());
+        assert!(store.list_passwords().unwrap().is_empty());
+        assert!(store.list_groups().unwrap().is_empty());
+    }
+
     fn windterm_fixture(root: &std::path::Path) -> std::path::PathBuf {
         let terminal = root.join("profile/terminal");
         std::fs::create_dir_all(&terminal).unwrap();

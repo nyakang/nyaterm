@@ -277,12 +277,20 @@ SSH 的 `mode` 可选：
 NyaTerm 支持导入其他客户端的会话配置，目前可导入：
 
 - **Xshell**（`.xts`）
-- **MobaXterm**（`.mxtsessions`）
+- **MobaXterm**（`.mxtsessions` 或 `MobaXterm.ini`）
 - **WindTerm**（`.sessions`）
 - **SecureCRT**（`.xml`）
 - **FinalShell**（`conn` 目录）
 - **Termius**（本机 IndexedDB）
 - **NyaTerm JSON**（`.json`）
+
+### 从 MobaXterm 导入
+
+选择会话导出文件或完整的 `MobaXterm.ini` 配置。配置中的加密凭据会一并读取；需要主密码时，输入 **MobaXterm 主密码**，也可选择 **跳过加密凭据** 继续导入会话。主密码错误或凭据损坏时可以重试或取消，确认前不会保存连接。
+
+可额外选择 `MobaXterm Stored Passwords.txt` 明文密码文件，其匹配结果优先于配置内的凭据。配置中的命名凭据按会话引用关联，连接密码按地址和用户名关联；无法确定匹配关系的凭据会跳过并在结果中提示。
+
+仅保存在 Windows 注册表中的密码不会从配置文件中导入。整文件加密的导出不在支持范围内。
 
 ### 从 Termius 导入
 

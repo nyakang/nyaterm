@@ -9,8 +9,55 @@ use crate::{
 
 use super::{
     AppResult, PreparedSessionConnection, PreparedSessionImport, SESSION_IMPORT_MAX_BYTES,
-    SessionImportNotice, SessionImportNoticeKind, decode_bytes, read_file_limited,
+    SessionImportError, SessionImportNotice, SessionImportNoticeKind, SessionImportOptions,
+    SessionImportWarning, SessionImportWarningKind, decode_bytes, read_file_limited,
 };
+
+mod credentials;
+
+use credentials::{EncryptedCredentials, match_encrypted};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MobaXtermCredentialDiagnosticKind {
+    RegistryOnly,
+    SkippedEncrypted,
+    Undecryptable,
+    MissingReference,
+    AmbiguousMatch,
+    Unmatched,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MobaXtermCredentialDiagnostic {
+    pub kind: MobaXtermCredentialDiagnosticKind,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MobaXtermImportReport {
+    pub linked_credentials: usize,
+    pub diagnostics: Vec<MobaXtermCredentialDiagnostic>,
+}
+
+impl MobaXtermImportReport {
+    fn record(&mut self, kind: MobaXtermCredentialDiagnosticKind, count: usize) {
+        if count == 0 {
+            return;
+        }
+        if let Some(diagnostic) = self.diagnostics.iter_mut().find(|item| item.kind == kind) {
+            diagnostic.count += count;
+        } else {
+            self.diagnostics
+                .push(MobaXtermCredentialDiagnostic { kind, count });
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MobaXtermImportOutcome {
+    pub prepared: PreparedSessionImport,
+    pub report: MobaXtermImportReport,
+}
 
 const DEFAULT_SSH_PORT: u16 = 22;
 const DEFAULT_TELNET_PORT: u16 = 23;
@@ -23,12 +70,19 @@ const MOBA_FOLDER_SEPARATOR: char = '\\';
 /// one section per folder. `SubRep` carries the folder path, so all sections
 /// must be read even though only the first one is literally named `Bookmarks`.
 pub(super) fn parse_mobaxterm(
-    path: &str,
-    passwords_path: Option<&Path>,
+    path: &Path,
+    options: SessionImportOptions<'_>,
 ) -> AppResult<PreparedSessionImport> {
+    Ok(prepare_mobaxterm_import(path, options)?.prepared)
+}
+
+pub fn prepare_mobaxterm_import(
+    path: &Path,
+    options: SessionImportOptions<'_>,
+) -> Result<MobaXtermImportOutcome, SessionImportError> {
     let raw = read_file_limited(path, "MobaXterm session file", SESSION_IMPORT_MAX_BYTES)?;
     let content = decode_bytes(&raw);
-    let stored_passwords = match passwords_path {
+    let stored_passwords = match options.mobaxterm_passwords_path {
         Some(passwords_path) => {
             let raw = read_file_limited(
                 passwords_path,
@@ -39,7 +93,7 @@ pub(super) fn parse_mobaxterm(
         }
         None => Vec::new(),
     };
-    Ok(parse_mobaxterm_content(&content, &stored_passwords))
+    prepare_content(&content, &stored_passwords, &options)
 }
 
 struct MobaSection {
@@ -68,6 +122,7 @@ struct MobaSession {
     /// `None` when the session has no username at all, so a default username
     /// never accidentally claims an unrelated saved password.
     login_reference: Option<String>,
+    credential_reference: Option<String>,
     /// Serial device name extracted from the trailing device label.
     serial_port_name: Option<String>,
     group_path: Option<Vec<String>>,
@@ -191,6 +246,7 @@ fn parse_session(
             port: 0,
             username: String::new(),
             login_reference: None,
+            credential_reference: None,
             serial_port_name: Some(port_name.to_string()),
             group_path: group_path.clone(),
         });
@@ -222,6 +278,10 @@ fn parse_session(
         port,
         username,
         login_reference: (!unset).then(|| stripped_username.to_string()),
+        credential_reference: (!unset
+            && raw_username.starts_with('[')
+            && raw_username.ends_with(']'))
+        .then(|| stripped_username.to_string()),
         serial_port_name: None,
         group_path: group_path.clone(),
     })
@@ -315,18 +375,38 @@ fn login_match_score(session: &MobaSession, stored: &MobaStoredPassword) -> Opti
     None
 }
 
+#[cfg(test)]
 fn parse_mobaxterm_content(
     content: &str,
     stored_passwords: &[MobaStoredPassword],
 ) -> PreparedSessionImport {
+    prepare_content(content, stored_passwords, &SessionImportOptions::default())
+        .expect("unencrypted synthetic MobaXterm sessions")
+        .prepared
+}
+
+fn prepare_content(
+    content: &str,
+    stored_passwords: &[MobaStoredPassword],
+    options: &SessionImportOptions<'_>,
+) -> AppResult<MobaXtermImportOutcome> {
     let sections = parse_sections(content);
+    if !sections
+        .iter()
+        .any(|section| is_bookmark_section(&section.name))
+    {
+        return Err(SessionImportError::Config(
+            "This file is not a MobaXterm session or configuration file: no Bookmarks section"
+                .into(),
+        ));
+    }
     let mut groups: Vec<Vec<String>> = Vec::new();
     let mut seen_groups: HashSet<Vec<String>> = HashSet::new();
     let mut sessions: Vec<MobaSession> = Vec::new();
     let mut notices: Vec<SessionImportNotice> = Vec::new();
 
     for section in &sections {
-        if !section.name.starts_with("Bookmarks") {
+        if !is_bookmark_section(&section.name) {
             continue;
         }
         let group_path = parse_group_path(section.sub_rep.as_deref());
@@ -363,10 +443,22 @@ fn parse_mobaxterm_content(
         }
     }
 
+    if sessions.is_empty() {
+        return Err(SessionImportError::Config(
+            "MobaXterm file contains no supported sessions with usable endpoints".into(),
+        ));
+    }
+    let mut report = MobaXtermImportReport::default();
+    let encrypted = EncryptedCredentials::read(&sections, options, &mut report)?;
+    let plaintext_count = stored_passwords.len();
+    let mut all_passwords: Vec<&MobaStoredPassword> = stored_passwords.iter().collect();
+    all_passwords.extend(encrypted.entries.iter().map(|entry| &entry.stored));
+    let mut incomplete = Vec::new();
     let matches: Vec<Option<usize>> = sessions
         .iter()
-        .map(|session| {
-            stored_passwords
+        .enumerate()
+        .map(|(session_index, session)| {
+            let plaintext = stored_passwords
                 .iter()
                 .enumerate()
                 .filter_map(|(index, stored)| {
@@ -379,7 +471,26 @@ fn parse_mobaxterm_content(
                         _ => Some((score, index)),
                     },
                 )
-                .map(|(_, index)| index)
+                .map(|(_, index)| index);
+            if plaintext.is_some() {
+                return plaintext;
+            }
+            let result = match_encrypted(session, &sessions, &encrypted);
+            if let Some(kind) = result.diagnostic {
+                report.record(kind, 1);
+            }
+            if result.index.is_none()
+                && session.protocol != MobaProtocol::Serial
+                && (session.credential_reference.is_some()
+                    || result.diagnostic.is_some()
+                    || encrypted.unavailable_for(session))
+            {
+                incomplete.push(SessionImportWarning {
+                    session_index,
+                    kind: SessionImportWarningKind::UnreadableMobaXtermCredential,
+                });
+            }
+            result.index.map(|index| plaintext_count + index)
         })
         .collect();
 
@@ -390,7 +501,7 @@ fn parse_mobaxterm_content(
         if used_accounts.contains_key(stored_index) {
             continue;
         }
-        let stored = &stored_passwords[*stored_index];
+        let stored = all_passwords[*stored_index];
         let base_name = stored.login.trim();
         let occurrence = account_names
             .entry(base_name.to_string())
@@ -412,6 +523,17 @@ fn parse_mobaxterm_content(
             has_password: false,
         });
     }
+
+    report.linked_credentials = passwords.len();
+    let matched_encrypted: HashSet<usize> = matches
+        .iter()
+        .flatten()
+        .filter_map(|index| index.checked_sub(plaintext_count))
+        .collect();
+    report.record(
+        MobaXtermCredentialDiagnosticKind::Unmatched,
+        encrypted.entries.len() - matched_encrypted.len(),
+    );
 
     let mut connections = Vec::with_capacity(sessions.len());
     for (sort_order, (session, stored_index)) in sessions.into_iter().zip(matches).enumerate() {
@@ -439,7 +561,10 @@ fn parse_mobaxterm_content(
                 )
             }
             None => (
-                session.username.clone(),
+                encrypted
+                    .referenced_username(&session)
+                    .map(|username| username.trim().to_string())
+                    .unwrap_or_else(|| session.username.clone()),
                 ConnectionAuth {
                     mode: "password".to_string(),
                     ..ConnectionAuth::default()
@@ -461,15 +586,28 @@ fn parse_mobaxterm_content(
         });
     }
 
-    PreparedSessionImport {
-        warnings: Vec::new(),
-        custom_icons: Vec::new(),
-        groups,
-        passwords,
-        ssh_keys: Vec::new(),
-        connections,
-        notices,
-    }
+    Ok(MobaXtermImportOutcome {
+        prepared: PreparedSessionImport {
+            warnings: incomplete,
+            custom_icons: Vec::new(),
+            groups,
+            passwords,
+            ssh_keys: Vec::new(),
+            connections,
+            notices,
+        },
+        report,
+    })
+}
+
+fn is_bookmark_section(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Bookmarks")
+        || name
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Bookmarks_"))
+            && name.get(10..).is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            })
 }
 
 fn connection_config(session: &MobaSession, username: String) -> ConnectionType {
@@ -555,3 +693,6 @@ pub(super) fn parse_mobaxterm_content_with_passwords(
         .unwrap_or_default();
     parse_mobaxterm_content(content, &stored_passwords)
 }
+
+#[cfg(test)]
+mod tests;
