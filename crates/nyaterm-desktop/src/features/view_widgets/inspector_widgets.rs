@@ -142,7 +142,8 @@ fn tab_menu_item_enabled_with_icon(
     let text_color = rgb(palette.text);
     let icon_color = rgb(palette.text_muted);
     div()
-        .id(SharedString::from(id))
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id.clone())
         .h(px(28.))
         .flex_none()
         .px_2()

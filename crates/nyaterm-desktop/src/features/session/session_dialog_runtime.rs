@@ -6,6 +6,7 @@ use nyaterm_store::StoreDomain;
 use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::NyaTermApp;
+use crate::features::text_inputs::TextInputSetup;
 use crate::models::{SessionLaunchConfig, StartupCommandAction};
 
 use super::state::RenameSessionSubmission;
@@ -33,8 +34,17 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
-        self.session.dialogs.open_tab_rename(target, &current_name);
+        self.session
+            .dialogs
+            .open_tab_rename(target.clone(), &current_name);
         self.forget_text_inputs("session.rename");
+        let rename_draft = self.session.dialogs.rename_draft().to_string();
+        let input = self.text_input(
+            "session.rename",
+            &rename_draft,
+            TextInputSetup::placeholder(t!("tabCtx.renamePlaceholder")),
+            cx,
+        );
         self.shell.set_status("rename tab opened".to_string());
         let handle = self.open_tracked_form_dialog(
             (
@@ -51,7 +61,27 @@ impl NyaTermApp {
             window,
             cx,
         );
-        self.session.dialogs.set_rename_dialog_handle(handle);
+        self.session
+            .dialogs
+            .set_rename_dialog_handle(handle.clone());
+        let app = cx.weak_entity();
+        // Focus once after opening so closing the tab menu cannot steal it back.
+        window.defer(cx, move |window, cx| {
+            if !handle.is_top(window, cx) {
+                return;
+            }
+            let _ = app.update(cx, |app, cx| {
+                if app.session.dialogs.rename_target() != Some(&target)
+                    || app.session.tab_action_display_name(&target).is_none()
+                    || app.existing_text_input("session.rename").as_ref() != Some(&input)
+                {
+                    return;
+                }
+                input.update(cx, |input, cx| {
+                    input.select_all_with_cursor_at_end(window, cx);
+                });
+            });
+        });
         cx.notify();
     }
 

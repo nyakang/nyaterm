@@ -553,6 +553,175 @@ fn start_tab_double_click_respects_settings_and_close_buttons_stop_propagation()
 }
 
 #[test]
+fn tab_rename_dialog_focuses_and_selects_all_once_when_opened_from_the_context_menu() {
+    use nyaterm_ui::NyaDialogWindowExt as _;
+
+    let root = TestConfigDir::new("nyaterm-tab-rename-focus");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "target");
+    app.update(&mut cx, |app, cx| {
+        app.settings.set_tab_right_click_action("none".into());
+        app.sync_component_theme(cx);
+    });
+    let fixture_app = app.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let content = cx.new(move |cx| {
+            cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+            StartTabActionsHost { app: fixture_app }
+        });
+        nyaterm_ui::nya_root(content, window, cx)
+    });
+    let target = TabActionTarget::Session("target".into());
+    for name in ["172.16.0.100", "服务器标签"] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.session.rename_tab_target(&target, name.into()));
+                window.focus(app.terminal.input_focus(), cx);
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        });
+        let tab = cx.debug_bounds("session-tab-target").unwrap();
+        cx.simulate_mouse_down(tab.center(), MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(tab.center(), MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let rename = cx.debug_bounds("tab-ctx-rename").unwrap();
+        cx.simulate_click(rename.center(), Default::default());
+        cx.run_until_parked();
+        let input = cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let input = app.read(cx).existing_text_input("session.rename").unwrap();
+            assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+            let component = input.read(cx).component_state().unwrap();
+            assert_eq!(component.read(cx).selected_range(), 0..name.len());
+            input
+        });
+        cx.simulate_input("新名称");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("home");
+        cx.update(|window, cx| {
+            assert_eq!(input.read(cx).value(cx), "新名称");
+            assert_eq!(app.read(cx).session.dialogs.rename_draft(), "新名称");
+            app.update(cx, |_, cx| cx.notify());
+            let _ = window.draw(cx);
+            let component = input.read(cx).component_state().unwrap();
+            assert_eq!(component.read(cx).selected_range(), 0..0);
+        });
+        cx.simulate_keystrokes("tab");
+        cx.update(|window, cx| {
+            assert!(!input.read(cx).component_focus_handle(cx).is_focused(window));
+        });
+        cx.simulate_keystrokes("shift-tab");
+        cx.update(|window, cx| {
+            assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+            let _ = window.draw(cx);
+        });
+        let save = cx.debug_bounds("nya-dialog-action-button").unwrap();
+        cx.simulate_click(save.center(), Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(app.read(cx).session.custom_name("target"), Some("新名称"));
+            assert!(!window.has_active_nya_dialog(cx));
+            app.update(cx, |app, cx| {
+                app.open_rename_tab_target(target.clone(), window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let reopened = app.read(cx).existing_text_input("session.rename").unwrap();
+            assert_ne!(input, reopened);
+            assert!(
+                reopened
+                    .read(cx)
+                    .component_focus_handle(cx)
+                    .is_focused(window)
+            );
+            let component = reopened.read(cx).component_state().unwrap();
+            assert_eq!(component.read(cx).selected_range(), 0.."新名称".len());
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(!window.has_active_nya_dialog(cx));
+            assert!(app.read(cx).existing_text_input("session.rename").is_none());
+            assert_eq!(app.read(cx).session.custom_name("target"), Some("新名称"));
+        });
+    }
+}
+
+#[test]
+fn tab_rename_deferred_focus_skips_closed_inputs_and_dialogs_covered_by_another_modal() {
+    use gpui::IntoElement as _;
+    use nyaterm_ui::NyaDialogWindowExt as _;
+
+    let root = TestConfigDir::new("nyaterm-tab-rename-deferred-focus");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "target");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let fixture_app = app.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let content = cx.new(move |cx| {
+            cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+            StartTabActionsHost { app: fixture_app }
+        });
+        nyaterm_ui::nya_root(content, window, cx)
+    });
+    let closed_input = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_rename_session("target".into(), window, cx);
+            let input = app.existing_text_input("session.rename").unwrap();
+            app.close_rename_session(cx);
+            window.close_nya_dialog(cx);
+            app.open_rename_session("target".into(), window, cx);
+            input
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(closed_input.read(cx).component_state().is_none());
+        let input = app.read(cx).existing_text_input("session.rename").unwrap();
+        assert_ne!(closed_input, input);
+        assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+        app.update(cx, |app, cx| {
+            app.close_rename_session(cx);
+            window.close_nya_dialog(cx);
+        });
+    });
+    let covered_input = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_rename_session("target".into(), window, cx);
+            let input = app.existing_text_input("session.rename").unwrap();
+            app.open_content_dialog(
+                "Another dialog".into(),
+                320.,
+                |_, _, _| gpui::div().into_any_element(),
+                |_, _| {},
+                window,
+                cx,
+            );
+            input
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            !covered_input
+                .read(cx)
+                .component_focus_handle(cx)
+                .is_focused(window)
+        );
+        app.update(cx, |app, cx| app.close_rename_session(cx));
+        window.close_all_nya_dialogs(cx);
+    });
+}
+
+#[test]
 fn start_tab_rename_dialog_dismisses_itself_when_its_target_is_closed() {
     use nyaterm_ui::NyaDialogWindowExt as _;
     let root = TestConfigDir::new("nyaterm-start-tab-rename-dismiss");
