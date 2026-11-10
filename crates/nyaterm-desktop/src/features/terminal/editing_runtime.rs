@@ -245,6 +245,9 @@ impl NyaTermApp {
             state.model.version = state.model.version.wrapping_add(1);
             mapping = resolve_input(&snapshot, &state.model.input.value, cursor);
         }
+        // Confirmed echo at a recognized shell prompt proves that a shell line
+        // editor owns this line again; see the recovery below.
+        let mut confirmed_shell_prompt = false;
         let queued = if let Some(mapping) = mapping {
             // A unique echo can also come from canonical TTY input (cat/tee).
             // Require a shell prompt or a positively identified child line editor.
@@ -263,11 +266,13 @@ impl NyaTermApp {
                     })
                     .collect::<String>()
             });
-            let known_prompt = prompt.as_ref().is_some_and(|prefix| {
-                !prefix.trim().is_empty()
-                    && (strip_terminal_command_prompt(prefix).is_empty()
-                        || state.line_editor_prompt.as_ref() == Some(prefix))
+            let shell_prompt = prompt.as_ref().is_some_and(|prefix| {
+                !prefix.trim().is_empty() && strip_terminal_command_prompt(prefix).is_empty()
             });
+            let known_prompt = shell_prompt
+                || prompt.as_ref().is_some_and(|prefix| {
+                    !prefix.trim().is_empty() && state.line_editor_prompt.as_ref() == Some(prefix)
+                });
             let has_prompt = prompt
                 .as_ref()
                 .is_some_and(|prefix| !prefix.trim().is_empty());
@@ -280,6 +285,8 @@ impl NyaTermApp {
             {
                 state.line_editor_prompt = prompt;
             }
+            confirmed_shell_prompt =
+                shell_session && shell_prompt && !state.model.input.value.trim().is_empty();
             if state.mapping.as_ref().is_some_and(|old| old != &mapping) {
                 state.selection = None;
                 state.selection_origin_version = None;
@@ -307,6 +314,20 @@ impl NyaTermApp {
             }
             None
         };
+        // A child shell hides the OSC 133 lifecycle from us: the outer shell
+        // emits C for the command that started it, but its matching D arrives
+        // only after the child exits, and the child emits no marks itself.
+        // Without a D the suppression would outlive that command for the whole
+        // child shell (`su`, `sudo -i`, `docker exec`, nested `ssh`). A locally
+        // predicted line echoed back behind a recognized prompt is structural
+        // evidence that a shell line editor is accepting input again, so
+        // release the suppression instead of waiting for a D that cannot come.
+        // Pagers and child REPLs echo without a shell prompt prefix and keep
+        // their suppression.
+        if confirmed_shell_prompt && self.terminal.assist.command_suggestions_suppressed {
+            self.terminal.assist.command_suggestions_suppressed = false;
+            self.schedule_command_suggestion_refresh(cx);
+        }
         if let Some(target) = queued {
             let _ = self.move_smart_input_cursor(target, cx);
         }
@@ -659,7 +680,9 @@ mod tests {
                 EditCapability::EchoMatched
             );
             assert!(app.can_use_smart_cursor_selection());
-            assert!(app.terminal.assist.command_suggestions_suppressed);
+            // The unmarked child shell never emits OSC 133; a confirmed prompt
+            // echo releases the outer command's suppression instead.
+            assert!(!app.terminal.assist.command_suggestions_suppressed);
         });
     }
 

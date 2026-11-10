@@ -196,6 +196,15 @@ impl NyaTermApp {
         root_overlay_dirty
     }
 
+    /// Test adapter for the snapshot-driven credential prompt tick.
+    #[cfg(test)]
+    pub(in crate::features) fn sync_credential_autofill_for_test(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.sync_credential_autofill_from_active_snapshot(cx)
+    }
+
     fn sync_credential_autofill_from_active_snapshot(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
@@ -241,11 +250,15 @@ impl NyaTermApp {
         if detected_prompt_kind.is_none()
             && self.terminal.assist.credential_autofill_pending.is_none()
         {
-            if !self.terminal.assist.credential_autofill_buffer.is_empty() {
-                self.terminal.assist.credential_autofill_buffer.clear();
-                self.terminal.assist.credential_prompt_input_until_ms = 0;
-                return false;
-            }
+            // The visible prompt is no longer a credential prompt, so the
+            // no-echo input window must end with the prompt it guarded. The
+            // buffer is often already empty here because a prompt-instance
+            // change cleared it, so clearing the deadline must not depend on
+            // the buffer still holding text: a prompt such as `su`'s child
+            // shell would otherwise keep discarding every keystroke for the
+            // remainder of the TTL.
+            self.terminal.assist.credential_autofill_buffer.clear();
+            self.terminal.assist.credential_prompt_input_until_ms = 0;
             return false;
         }
 

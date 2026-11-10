@@ -2098,6 +2098,281 @@ mod tests {
         });
     }
 
+    /// Deterministic replay of a real `su` round trip. Every step feeds the
+    /// screen text the remote would produce and drives the same gates the live
+    /// input path drives, so a rejection is localized to the step that causes it.
+    #[test]
+    fn su_round_trip_keeps_suggestions_available_across_prompts() {
+        use nyaterm_core::completion::types::CompletionMode;
+
+        let dir = TestConfigDir::new("nyaterm-suggestions-su-round-trip");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            macro_rules! output {
+                ($screen:expr) => {{
+                    app.terminal
+                        .seed_session_view("s1".into(), $screen.to_string(), "UTF-8");
+                    if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                        let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                        view.frame_snapshot = Some(snapshot);
+                    }
+                    app.drain_pending_credential_autofill_detection(cx);
+                    app.reconcile_shell_editing("s1", cx);
+                }};
+            }
+            let mut screen = String::from("user@host:~$ ");
+            output!(screen);
+
+            // 1. Login shell: type and submit `su - root`.
+            app.note_shell_editing_input(b"su - root", cx);
+            app.note_command_suggestion_input(b"su - root", cx);
+            assert!(
+                app.prepare_command_suggestion_search(1, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work before su"
+            );
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            // bash preexec emits OSC 133 C for the foreground `su`.
+            app.apply_shell_integration_edges("s1", true, false, true);
+
+            // 2. su writes a no-echo password prompt; the password is never echoed.
+            screen.push_str("su - root\r\nPassword: ");
+            output!(screen);
+            app.note_shell_editing_input(b"password", cx);
+            app.note_command_suggestion_input(b"password", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+
+            // 3. Authentication succeeds; the child root shell owns the prompt.
+            screen.push_str("\r\nroot@host:~# ");
+            output!(screen);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(2, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work inside the child shell"
+            );
+
+            // 4. `ls` runs and the child prompt returns without any OSC 133 marks.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            screen.push_str("\r\nfile1 file2\r\nroot@host:~# ");
+            output!(screen);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(3, CompletionMode::Token, cx)
+                    .is_some(),
+                "a second command inside the child shell must still suggest"
+            );
+
+            // 5. `exit` returns to the outer shell, which emits OSC 133 D.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.note_shell_editing_input(b"exit", cx);
+            app.note_command_suggestion_input(b"exit", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            screen.push_str("\r\nlogout\r\nuser@host:~$ ");
+            app.terminal
+                .seed_session_view("s1".into(), screen.clone(), "UTF-8");
+            app.apply_shell_integration_edges("s1", false, true, false);
+            app.drain_pending_credential_autofill_detection(cx);
+            app.reconcile_shell_editing("s1", cx);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(4, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work after exiting the child shell"
+            );
+        });
+    }
+
+    /// Reproduces the reported `su` failure without an SSH server: a saved
+    /// credential makes the credential tick arm the no-echo input window at
+    /// `su`'s password prompt. The window must end when the child prompt is
+    /// visible, otherwise every later keystroke is discarded as password input.
+    #[test]
+    fn su_password_prompt_input_window_ends_at_the_child_prompt() {
+        use nyaterm_core::completion::types::CompletionMode;
+
+        let dir = TestConfigDir::new("nyaterm-suggestions-su-credential-window");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+
+            // The credential tick ran at `su`'s no-echo password prompt and
+            // armed the no-echo input window, remembering that prompt instance.
+            app.terminal.seed_session_view(
+                "s1".into(),
+                "user@host:~$ su - root\r\nPassword: ".into(),
+                "UTF-8",
+            );
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            assert!(app.is_credential_prompt_input_mode());
+
+            // Authentication succeeded; the prompt line changed and is no longer
+            // a credential prompt. `observe_credential_prompt_instance` clears
+            // the buffer during this tick.
+            app.terminal.seed_session_view(
+                "s1".into(),
+                "user@host:~$ su - root\r\nPassword: \r\nroot@host:~# ".into(),
+                "UTF-8",
+            );
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            assert!(
+                !app.is_credential_prompt_input_mode(),
+                "the no-echo input window must end once the visible prompt is not a credential prompt"
+            );
+
+            // Typing at the child prompt must reach the suggestion gates.
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# ls".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                app.prepare_command_suggestion_search(1, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work in the child shell"
+            );
+
+            // `exit` returns to the outer shell. The window must stay closed:
+            // this is the reported "still no suggestions after leaving su"
+            // symptom, which a per-prompt re-arm would bring back.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.note_shell_editing_input(b"exit", cx);
+            app.note_command_suggestion_input(b"exit", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "logout\r\nuser@host:~$ ".into(), "UTF-8");
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                !app.is_credential_prompt_input_mode(),
+                "the window must not reopen at the outer prompt after exit"
+            );
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "logout\r\nuser@host:~$ ls".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                app.prepare_command_suggestion_search(2, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work after exiting the child shell"
+            );
+        });
+    }
+
+    #[test]
+    fn confirmed_prompt_echo_in_a_child_shell_releases_suppression() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-child-shell-resync");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // `su - root` started. The outer shell sent OSC 133 C, while its D
+            // can only arrive after the child exits, so the latch outlives it.
+            app.terminal.assist.command_suggestions_suppressed = true;
+            app.note_shell_editing_input(b"git", cx);
+            app.note_command_suggestion_input(b"git", cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // The root prompt echoes the locally predicted line back.
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(!app.terminal.assist.command_suggestions_suppressed);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn echo_without_a_shell_prompt_prefix_keeps_suppression() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-pager-prompt-resync");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.terminal.assist.command_suggestions_suppressed = true;
+            app.note_shell_editing_input(b"git", cx);
+
+            // A pager status line and a child REPL echo the text, but neither
+            // prefix is a shell prompt, so the suppression must survive.
+            for seeded in ["/git", ">>> git"] {
+                app.terminal
+                    .seed_session_view("s1".into(), seeded.into(), "UTF-8");
+                app.reconcile_shell_editing("s1", cx);
+                assert!(
+                    app.terminal.assist.command_suggestions_suppressed,
+                    "{seeded}"
+                );
+            }
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+        });
+    }
+
     #[test]
     fn published_candidates_require_explicit_selection_even_for_a_single_match() {
         let dir = TestConfigDir::new("nyaterm-suggestions-explicit-selection");
