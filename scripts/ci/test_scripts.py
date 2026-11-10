@@ -15,6 +15,7 @@ NATIVE = {
     "windows-resources": ("scripts.tests.test_windows_resources.WindowsResourcesTests", ("cargo", "rustc")),
     "windows-msi": ("scripts.tests.test_windows_msi.CompiledWindowsMsiTests", ("wix",)),
     "diagnostic": ("scripts.tests.test_package_diagnostic.DiagnosticRuntimeTests", ("cargo", "rustc")),
+    "android-ffmpeg": ("scripts.tests.test_prepare_android.WindowsFfmpegTests", ("rustc", "cl.exe", "lib.exe", "dumpbin.exe")),
 }
 
 

@@ -12,6 +12,7 @@ import struct
 import re
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 
@@ -19,6 +20,68 @@ ROOT = Path(__file__).resolve().parents[2]
 METADATA_PATH = Path(__file__).with_name("android-package.json")
 METADATA = json.loads(METADATA_PATH.read_text())
 STAGING = ROOT / "target" / "android-deps"
+WINDOWS_FFMPEG_LIBRARIES = {"avcodec": 62, "avformat": 62, "avutil": 60, "swscale": 9}
+
+
+def is_coff_archive(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    with path.open("rb") as stream:
+        return stream.read(8) == b"!<arch>\n" and bool(stream.read(1))
+
+
+def find_msvc_lib() -> Path:
+    # Prefer the librarian beside the selected compiler, including cross tools.
+    compiler = shutil.which("cl.exe")
+    if compiler:
+        librarian = Path(compiler).resolve().with_name("lib.exe")
+        if librarian.is_file():
+            return librarian
+    librarian = shutil.which("lib.exe")
+    if librarian:
+        return Path(librarian).resolve()
+    raise FileNotFoundError("MSVC lib.exe not found; open a Visual Studio Developer PowerShell for the target architecture")
+
+
+def ensure_windows_import_libraries(prefix: Path, target: str) -> None:
+    machines = {"x86_64-pc-windows-msvc": "X64", "aarch64-pc-windows-msvc": "ARM64"}
+    if target not in machines:
+        raise ValueError(f"Unsupported Windows FFmpeg target: {target}")
+    machine = machines[target]
+    library_dir = prefix / "lib"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    librarian = None
+    for name, major in WINDOWS_FFMPEG_LIBRARIES.items():
+        destination = library_dir / f"{name}.lib"
+        dll = prefix / "bin" / f"{name}-{major}.dll"
+        definition = library_dir / f"{name}-{major}.def"
+        try:
+            if not dll.is_file() or dll.stat().st_size == 0:
+                raise FileNotFoundError(f"Missing or empty FFmpeg DLL: {dll}")
+            if is_coff_archive(destination):
+                continue
+            installed = prefix / "bin" / destination.name
+            # MSVC FFmpeg installs import libraries in bin, while Rust searches lib.
+            # lib.exe can also emit an .exp; keep all intermediate outputs private.
+            with tempfile.TemporaryDirectory(prefix=f".{name}-", dir=library_dir) as directory:
+                temporary = Path(directory) / destination.name
+                if is_coff_archive(installed):
+                    shutil.copy2(installed, temporary)
+                else:
+                    if not definition.is_file() or definition.stat().st_size == 0:
+                        raise FileNotFoundError(f"Missing or empty FFmpeg definition: {definition}")
+                    if librarian is None:
+                        librarian = find_msvc_lib()
+                    subprocess.run([str(librarian), "/NOLOGO", f"/MACHINE:{machine}",
+                                    f"/DEF:{definition.resolve()}", f"/NAME:{dll.name}",
+                                    f"/OUT:{temporary.resolve()}"], cwd=directory, check=True)
+                if not is_coff_archive(temporary):
+                    raise ValueError(f"Invalid COFF import library output: {temporary}")
+                temporary.replace(destination)
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(f"Cannot prepare {destination} for {target} ({machine}): {error}. "
+                               f"If the cached installation is incomplete, remove {prefix} and rerun prepare_android.py "
+                               "in a Visual Studio Developer PowerShell for the target architecture.") from error
 
 
 def download(metadata: dict, name: str) -> Path:
@@ -126,6 +189,11 @@ def prepare_ffmpeg(target: str) -> Path:
         options.extend(["--install-name-dir=@rpath", "--arch=aarch64" if target.startswith("aarch64") else "--arch=x86_64"])
     provenance = {**METADATA["ffmpeg"], "target": target, "configure": [option.replace(str(prefix), "${FFMPEG_DIR}").replace(str(source), "${FFMPEG_SOURCE}") for option in options]}
     if stamp.is_file() and json.loads(stamp.read_text()) == provenance:
+        if "windows" in target:
+            ensure_windows_import_libraries(prefix, target)
+            license_path = prefix / "LICENSE.txt"
+            if not license_path.is_file() or license_path.stat().st_size == 0:
+                shutil.copy2(source / "COPYING.LGPLv2.1", license_path)
         return prefix
     if prefix.exists():
         shutil.rmtree(prefix)
@@ -136,8 +204,10 @@ def prepare_ffmpeg(target: str) -> Path:
     subprocess.run(["make", "-j4"], cwd=build, check=True)
     subprocess.run(["make", "install"], cwd=build, check=True)
     prefix.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(json.dumps(provenance, indent=2) + "\n")
+    if "windows" in target:
+        ensure_windows_import_libraries(prefix, target)
     shutil.copy2(source / "COPYING.LGPLv2.1", prefix / "LICENSE.txt")
+    stamp.write_text(json.dumps(provenance, indent=2) + "\n")
     return prefix
 
 

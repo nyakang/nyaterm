@@ -100,7 +100,8 @@ def select_paths(paths: Iterable[str]) -> Selection:
             jobs = {"run_python"}
             if path.startswith("scripts/plugins/"):
                 jobs.add("run_plugin_sdk")
-            if path in {"scripts/tests/test_windows_resources.py", "scripts/tests/test_windows_msi.py", "scripts/tests/test_package_diagnostic.py"}:
+            if path in {"scripts/tests/test_windows_resources.py", "scripts/tests/test_windows_msi.py", "scripts/tests/test_package_diagnostic.py",
+                        "scripts/tests/test_prepare_android.py", "scripts/release/prepare_android.py"}:
                 jobs.add("run_rust")
             selection.enable(jobs, f"Script or script test: {description}")
         elif path.startswith(".github/workflows/"):

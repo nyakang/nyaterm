@@ -15,6 +15,16 @@ from scripts.ci import test_scripts
 
 
 class NativeTestRunnerTests(unittest.TestCase):
+    def test_android_ffmpeg_suite_requires_real_windows_build_tools(self):
+        with patch.object(sys, "argv", ["test_scripts", "--suite", "android-ffmpeg"]), \
+                patch.object(sys, "platform", "win32"), \
+                patch.object(test_scripts.shutil, "which", return_value=None), \
+                contextlib.redirect_stderr(io.StringIO()) as output, self.assertRaises(SystemExit) as error:
+            test_scripts.main()
+        self.assertNotEqual(error.exception.code, 0)
+        self.assertIn("cl.exe", output.getvalue())
+        self.assertIn("lib.exe", output.getvalue())
+
     def test_missing_native_tool_fails_and_reports_zero_coverage(self):
         with tempfile.TemporaryDirectory() as folder:
             summary = Path(folder) / "summary.md"
