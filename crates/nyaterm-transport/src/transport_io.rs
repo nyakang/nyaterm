@@ -611,8 +611,12 @@ impl TerminalTransport for TmuxPaneTransport {
         self.tmux_tx.write(&self.pane, data).map_err(Into::into)
     }
 
-    fn write_raw(&mut self, _data: &[u8]) -> anyhow::Result<()> {
-        Err(tmux_modem_unsupported().into())
+    /// Protocol bytes stay literal; the control session classifies them for
+    /// `send-keys` so remote panes receive the right key encoding. Modem
+    /// transfers stay gated by `supports_modem_transfer` and the cancellable
+    /// transfer writer, not by this channel.
+    fn write_raw(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        self.write(data)
     }
 
     fn resize(
