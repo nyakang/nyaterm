@@ -927,6 +927,14 @@ impl NyaTermApp {
                 // Refresh the target session's cached listing in place if it is
                 // showing the destination directory — never switch the active
                 // session, and never touch the source browser.
+                // The visible session lives in `browser`, not in the cache. An empty
+                // listing means re-reading the target failed; keep what is shown.
+                if !entries.is_empty()
+                    && self.session.active_id() == Some(target_session_id.as_str())
+                    && transfer_event_paths_match(&self.transfer.browser.path, &target_parent_path)
+                {
+                    self.transfer.browser.entries = Arc::new(entries.clone());
+                }
                 let refreshed = self.transfer.refresh_browser_session_cache_listing(
                     &target_session_id,
                     &target_parent_path,
@@ -2004,6 +2012,75 @@ mod tests {
         let vcx: &mut VisualTestContext = vcx;
         vcx.run_until_parked();
         (app, vcx)
+    }
+
+    #[test]
+    fn finished_send_updates_only_the_visible_target_directory() {
+        // (target session, target directory, reported listing, whether the list changes)
+        let cases = [
+            ("active", "/remote", vec!["old", "pasted"], true),
+            ("active", "/remote/", vec!["old", "pasted"], true),
+            ("active", "/elsewhere", vec!["other"], false),
+            ("background", "/remote", vec!["other"], false),
+            // `run_send_to` reports an empty listing when re-reading the target failed.
+            ("active", "/remote", Vec::new(), false),
+        ];
+        for (target_session, target_parent, listing, changes) in cases {
+            let test_dir = TestConfigDir::new("nyaterm-send-refreshes-target");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = crate::features::test_support::app_with_visible_local_session(
+                &mut cx,
+                test_dir.path(),
+                "active",
+            );
+            let host_app = app.clone();
+            let (_, vcx) = cx.add_window_view(move |_, _| AppHost { app: host_app });
+            let vcx: &mut VisualTestContext = vcx;
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    assert_eq!(app.session.active_id(), Some("active"));
+                    app.transfer.browser.path = "/remote".to_string();
+                    app.transfer.browser.entries = std::sync::Arc::new(vec![browser_entry("old")]);
+                    let mut job = running_job("paste");
+                    // Events for a closed source session are dropped before this path.
+                    job.session_id = Some("active".into());
+                    app.transfer.enqueue_transfer_job(job);
+                    app.apply_transfer_event(
+                        TransferJobResult {
+                            id: "paste".into(),
+                            event: TransferJobEvent::Finished(Ok(TransferJobOutput::Sent {
+                                source_path: "/source/pasted".into(),
+                                source_parent_path: None,
+                                source_entries: None,
+                                target_session_id: target_session.into(),
+                                target_path: format!("{target_parent}/pasted"),
+                                target_parent_path: target_parent.into(),
+                                bytes: 1,
+                                used_local_staging: false,
+                                entries: listing.iter().copied().map(browser_entry).collect(),
+                            })),
+                        },
+                        window,
+                        cx,
+                    );
+                    let names: Vec<_> = app
+                        .transfer
+                        .browser
+                        .entries
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect();
+                    let expected = if changes {
+                        listing.clone()
+                    } else {
+                        vec!["old"]
+                    };
+                    assert_eq!(names, expected, "{target_session} {target_parent}");
+                })
+            });
+        }
     }
 
     fn browser_entry(name: &str) -> nyaterm_files::sftp::SftpFileEntry {
