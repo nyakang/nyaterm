@@ -424,6 +424,39 @@ impl Default for ActivityBarLayoutState {
 }
 
 impl ActivityBarLayoutState {
+    /// Use the same compatibility projection for startup and optimistic
+    /// settings comparisons; a missing optional slot is not an external edit.
+    pub(crate) fn complete_settings_layout(settings: &mut nyaterm_core::AppSettingsSummary) {
+        let mut layout = Self {
+            left_top: settings.ui_activity_bar_left_top.clone(),
+            left_bottom: settings.ui_activity_bar_left_bottom.clone(),
+            right_top: settings.ui_activity_bar_right_top.clone(),
+            right_bottom: settings.ui_activity_bar_right_bottom.clone(),
+            hidden_items: settings.ui_activity_bar_hidden_items.clone(),
+            show_labels: settings.ui_activity_bar_show_labels,
+        };
+        layout.ensure_plugin_entry();
+        layout.ensure_remote_monitor_entries();
+        layout.ensure_host_tool_entries();
+        settings.ui_activity_bar_left_top = layout.left_top;
+        settings.ui_activity_bar_left_bottom = layout.left_bottom;
+        settings.ui_activity_bar_right_top = layout.right_top;
+        settings.ui_activity_bar_right_bottom = layout.right_bottom;
+        settings.ui_activity_bar_hidden_items = layout.hidden_items;
+        for open in [
+            &mut settings.ui_left_open_panels,
+            &mut settings.ui_right_open_panels,
+        ] {
+            for id in open {
+                match id.as_str() {
+                    "ports" => *id = "portsManager".into(),
+                    "services" => *id = "servicesManager".into(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Optional tools need slots for customization, but introducing a missing
     /// slot must never opt a user into showing it. Existing slots are choices.
     pub(crate) fn ensure_host_tool_entries(&mut self) {
