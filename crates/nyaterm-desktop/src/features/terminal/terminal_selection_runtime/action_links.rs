@@ -5,17 +5,20 @@ use gpui::{
 };
 
 use crate::action_links::{
-    ActionLinkAction, ActionLinkMatch, ActionLinkTarget, actions_for_match, match_at_offset,
+    ActionLinkAction, ActionLinkMatch, ActionLinkPlatform, ActionLinkTarget, actions_for_match_on,
+    match_at_offset,
 };
 use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_runtime::{
     TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
 };
 use crate::models::{
-    ActionLinkMenuAction, ActionLinkMenuState, ActionLinkTooltipState, TerminalPerformanceMode,
-    terminal_action_link_matcher_key, terminal_expensive_interactions_enabled,
+    ActionLinkMenuAction, ActionLinkMenuState, ActionLinkTooltipState, SessionLaunchConfig,
+    TerminalPerformanceMode, terminal_action_link_matcher_key,
+    terminal_expensive_interactions_enabled,
 };
 use crate::terminal::terminal_byte_index_for_cell_col;
+use nyaterm_remote_ops::host::HostOs;
 
 fn action_link_hover_should_yield_to_terminal_latency(
     last_input_at: Option<Instant>,
@@ -222,6 +225,32 @@ impl NyaTermApp {
         }
     }
 
+    /// Platform whose command spelling applies to an action link.
+    ///
+    /// This is about where the command executes, not where NyaTerm runs: a
+    /// local session executes on this machine, while SSH/Telnet/Serial execute
+    /// on the far side, where the live shell dialect is the only signal
+    /// available at hover time.
+    fn action_link_platform_for_session(&self, session_id: Option<&str>) -> ActionLinkPlatform {
+        let Some(session_id) = session_id.filter(|id| !id.is_empty()) else {
+            return ActionLinkPlatform::default();
+        };
+        let local_session = self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(metadata.launch_config, SessionLaunchConfig::Local(_))
+        });
+        if local_session {
+            return if HostOs::local() == HostOs::Windows {
+                ActionLinkPlatform::Windows
+            } else {
+                ActionLinkPlatform::Posix
+            };
+        }
+        self.commands
+            .command_context(session_id)
+            .and_then(|context| context.dialect.action_link_platform())
+            .unwrap_or_default()
+    }
+
     pub(in crate::features) fn action_link_at_point(
         &self,
         position: Point<Pixels>,
@@ -291,7 +320,8 @@ impl NyaTermApp {
                 let matchers = &self.settings.summary().terminal_action_links_matchers;
                 match_at_offset(line, byte_offset, matchers)
             })?;
-        let actions = actions_for_match(&item);
+        let actions =
+            actions_for_match_on(&item, self.action_link_platform_for_session(session_id));
         Some((item, actions))
     }
 

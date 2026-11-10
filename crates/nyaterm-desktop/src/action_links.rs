@@ -1,11 +1,15 @@
 //! Compatibility facade for UI-independent command/connection policy.
 pub(crate) use nyaterm_core::action_links::{
-    ActionLinkAction, ActionLinkKind, ActionLinkMatch, ActionLinkTarget, match_at_offset,
+    ActionLinkAction, ActionLinkKind, ActionLinkMatch, ActionLinkPlatform, ActionLinkTarget,
+    match_at_offset,
 };
 
-/// Localize presentation labels after the shared policy has planned the actions.
-pub(crate) fn actions_for_match(item: &ActionLinkMatch) -> Vec<ActionLinkAction> {
-    let mut actions = nyaterm_core::action_links::actions_for_match(item);
+/// Plan actions for a known execution platform and localize their labels.
+pub(crate) fn actions_for_match_on(
+    item: &ActionLinkMatch,
+    platform: ActionLinkPlatform,
+) -> Vec<ActionLinkAction> {
+    let mut actions = nyaterm_core::action_links::actions_for_match_on(item, platform);
     if item.kind == ActionLinkKind::Mac {
         for action in &mut actions {
             action.label = match action.target {

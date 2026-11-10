@@ -7,6 +7,7 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
     TestAppContext, Window,
 };
+use nyaterm_core::completion::types::{CompletionScope, ShellCommandContext, ShellDialect};
 use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
 use nyaterm_transport::{SessionManager, TelnetSessionConfig};
 
@@ -1399,5 +1400,71 @@ fn clicking_a_multiline_candidate_opens_review_even_without_shell_editing_capabi
         );
         assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
     });
+    f.assert_quiet();
+}
+
+fn make_cmd_session(
+    app: &mut NyaTermApp,
+    cx: &mut Context<NyaTermApp>,
+    id: &str,
+    typed: &str,
+    echo: &str,
+) {
+    app.commands.set_command_context(
+        id.to_string(),
+        ShellCommandContext {
+            scope: CompletionScope::legacy(),
+            dialect: ShellDialect::Cmd,
+            command_events: false,
+        },
+    );
+    app.terminal.editing.clear_active();
+    app.terminal
+        .seed_session_view(id.into(), String::new(), "UTF-8");
+    app.note_shell_editing_input(typed.as_bytes(), cx);
+    app.terminal
+        .seed_session_view(id.into(), format!("C:\\Users\\DYQ>{echo}"), "UTF-8");
+    app.reconcile_shell_editing(id, cx);
+    assert_eq!(
+        app.terminal.editing.state().unwrap().model.phase,
+        EditPhase::Ready
+    );
+}
+
+#[test]
+fn cmd_completion_appends_without_waiting_for_an_echo_acknowledgement() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pi", "pi");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        let state = app.terminal.editing.state().unwrap();
+        assert_eq!(state.model.input.value, "ping 172.22.222.149");
+        assert!(
+            state.suggestion_fill.is_none(),
+            "conhost publishes no echo acknowledgement to wait for"
+        );
+    });
+    f.receive(b"ng 172.22.222.149");
+    f.assert_quiet();
+}
+
+#[test]
+fn cmd_completion_rewrites_the_line_with_console_backspaces() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+    });
+    let mut expected = vec![0x08; "pong".len()];
+    expected.extend_from_slice(b"ping 172.22.222.149");
+    f.receive(&expected);
     f.assert_quiet();
 }

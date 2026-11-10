@@ -201,14 +201,41 @@ impl NyaTermApp {
         command: String,
         cx: &mut Context<Self>,
     ) {
-        let mut bytes = command.into_bytes();
-        if !bytes.ends_with(b"\n") {
-            bytes.push(b'\n');
-        }
+        let bytes = action_link_command_bytes(command);
         if self.send_terminal_input(bytes, cx) {
             self.shell
                 .set_status("action link command sent".to_string());
             cx.notify();
+        }
+    }
+}
+
+/// A line submission is `\r`, not `\n`.
+///
+/// POSIX shells accept either because the tty maps CR to NL, but PSReadLine
+/// treats a bare LF as "insert a newline" and continues on `>>`, and the
+/// Windows console input buffer only commits a line on CR.
+fn action_link_command_bytes(command: String) -> Vec<u8> {
+    let mut bytes = command.into_bytes();
+    while matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        bytes.pop();
+    }
+    bytes.push(b'\r');
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action_link_command_bytes;
+
+    #[test]
+    fn action_link_commands_submit_with_a_carriage_return() {
+        for command in ["ping 172.22.222.149", "ping 172.22.222.149\r\n"] {
+            let bytes = action_link_command_bytes(command.to_string());
+            assert_eq!(bytes.last(), Some(&b'\r'));
+            assert!(!bytes[..bytes.len() - 1].contains(&b'\r'));
+            assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
+            assert_eq!(&bytes[..bytes.len() - 1], b"ping 172.22.222.149");
         }
     }
 }

@@ -31,6 +31,27 @@ impl EditCapability {
     }
 }
 
+/// Which line editor owns the command line, and therefore which wire encoding
+/// can safely move over or delete text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellLineEditing {
+    /// ANSI-capable line editors (readline, zle, PSReadLine): arrow keys move
+    /// the cursor and `0x7f` erases one character.
+    #[default]
+    AnsiLineEditor,
+    /// Windows conhost cooked input: ANSI cursor motion is ignored and `0x08`
+    /// is the erase character, so replacements must stay at the end of the line.
+    LegacyConsole,
+    /// A shell that published an OSC 133 input anchor; echo evidence is exact.
+    Marked,
+}
+
+impl ShellLineEditing {
+    pub fn allows_cursor_motion(self) -> bool {
+        self != Self::LegacyConsole
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditPhase {
     Ready,

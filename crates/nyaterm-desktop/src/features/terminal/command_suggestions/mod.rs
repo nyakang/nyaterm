@@ -13,11 +13,13 @@ use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
     CompletionScope, ShellCommandContext, ShellDialect,
 };
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditIntent, plan_edit};
+use nyaterm_core::terminal::editing::{
+    EDIT_CONFIRMATION_TIMEOUT, EditIntent, ShellLineEditing, plan_edit,
+};
 use nyaterm_core::{QuickCommand, TerminalInputState, terminal_input_tracker_below_min_chars};
 
 use crate::features::NyaTermApp;
-use crate::features::terminal::editing_payload::shell_edit_payload;
+use crate::features::terminal::editing_payload::shell_edit_payload_with_backend;
 use crate::features::terminal::editing_state::{SnapshotEvidence, SuggestionFillRequest};
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
@@ -550,6 +552,26 @@ impl NyaTermApp {
                 dialect: ShellDialect::Unknown,
                 command_events: false,
             })
+    }
+
+    /// Line-editing backend of the active session's shell.
+    ///
+    /// A known Windows console program decides on its own; every other shell is
+    /// classified from live evidence so a nested shell (for example `su`) still
+    /// uses the anchor-based path rather than a launch-time guess.
+    fn shell_line_editing(&self, session_id: &str) -> ShellLineEditing {
+        if let Some(backend) = self
+            .command_suggestion_context(session_id)
+            .dialect
+            .line_editing_backend()
+        {
+            return backend;
+        }
+        if self.completion_has_marked_shell(session_id) {
+            ShellLineEditing::Marked
+        } else {
+            ShellLineEditing::AnsiLineEditor
+        }
     }
 
     fn prepare_command_suggestion_search(
@@ -1086,7 +1108,10 @@ impl NyaTermApp {
                 }
             }
             SuggestionFill::Replace(command) => {
-                if !state.allows_editing() {
+                let backend = self.shell_line_editing(&popup.session_id);
+                // A console host has no anchor to confirm editing capability,
+                // but it does own the line and can erase it with backspace.
+                if backend.allows_cursor_motion() && !state.allows_editing() {
                     return self.reject_command_suggestion(
                         "This terminal has no confirmed shell editing capability",
                         cx,
@@ -1116,7 +1141,8 @@ impl NyaTermApp {
                     }
                 };
                 let mode = self.terminal_key_mode_for_session(Some(&popup.session_id));
-                let (wire, logical) = shell_edit_payload(&plan, mode, insertion_wire);
+                let (wire, logical) =
+                    shell_edit_payload_with_backend(&plan, backend, mode, insertion_wire);
                 self.dismiss_command_suggestions(cx);
                 self.terminal.view.frame_pipeline.arm_output_event_wake();
                 if let Err(error) =
@@ -1137,8 +1163,22 @@ impl NyaTermApp {
                 state.selection_origin_version = None;
                 self.clear_terminal_selection(cx);
                 self.arm_terminal_input_wake(cx);
-                self.schedule_shell_edit_confirmation_timeout(cx);
+                if backend.allows_cursor_motion() {
+                    self.schedule_shell_edit_confirmation_timeout(cx);
+                }
             }
+        }
+        if self.shell_line_editing(&popup.session_id) == ShellLineEditing::LegacyConsole {
+            // The console host owns the line and never publishes an anchor, so
+            // there is no echo acknowledgement to wait for: the write is the
+            // fill, and a stale-echo timeout would only report a false failure.
+            self.shell.set_status(if execute_requested {
+                "Suggestion filled; press Enter again to execute"
+            } else {
+                "Suggestion filled"
+            });
+            cx.notify();
+            return SuggestionSubmitResult::Submitted;
         }
         let state = self.terminal.editing.state_mut();
         state.suggestion_fill = Some(SuggestionFillRequest {

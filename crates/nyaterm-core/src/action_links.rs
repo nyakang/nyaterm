@@ -323,7 +323,35 @@ pub fn match_at_offset(
         .find(|item| offset >= item.start && offset < item.end)
 }
 
+/// Where an action link's command will run, as far as the spelling of a
+/// platform-specific tool is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActionLinkPlatform {
+    /// Linux, macOS and other POSIX targets.
+    #[default]
+    Posix,
+    /// Windows targets: `tracert` instead of `traceroute`.
+    Windows,
+}
+
+impl ActionLinkPlatform {
+    pub const fn traceroute_program(self) -> &'static str {
+        match self {
+            Self::Posix => "traceroute",
+            Self::Windows => "tracert",
+        }
+    }
+}
+
 pub fn actions_for_match(item: &ActionLinkMatch) -> Vec<ActionLinkAction> {
+    actions_for_match_on(item, ActionLinkPlatform::default())
+}
+
+pub fn actions_for_match_on(
+    item: &ActionLinkMatch,
+    platform: ActionLinkPlatform,
+) -> Vec<ActionLinkAction> {
+    let traceroute = platform.traceroute_program();
     match item.kind {
         ActionLinkKind::Mac => {
             let Ok(mac) = item.value.parse::<MacAddress>() else {
@@ -383,7 +411,7 @@ pub fn actions_for_match(item: &ActionLinkMatch) -> Vec<ActionLinkAction> {
             ActionLinkAction {
                 id: "traceroute".into(),
                 label: "Traceroute".into(),
-                target: ActionLinkTarget::ExecuteCommand(format!("traceroute {}", item.value)),
+                target: ActionLinkTarget::ExecuteCommand(format!("{} {}", traceroute, item.value)),
                 mac_format: None,
                 is_default: false,
             },
@@ -510,8 +538,48 @@ mod tests {
     use crate::mac_address::MacAddressFormat;
 
     use super::{
-        ActionLinkKind, ActionLinkTarget, actions_for_match, find_action_links, match_at_offset,
+        ActionLinkKind, ActionLinkPlatform, ActionLinkTarget, actions_for_match,
+        actions_for_match_on, find_action_links, match_at_offset,
     };
+
+    #[test]
+    fn ip_traceroute_uses_the_target_platform_spelling() {
+        let found = find_action_links(
+            "172.22.222.149",
+            &ActionLinksMatcherSettings::default(),
+            true,
+        );
+        assert_eq!(found.len(), 1);
+        let item = &found[0];
+        assert_eq!(item.kind, ActionLinkKind::Ip);
+        for (platform, program) in [
+            (ActionLinkPlatform::Posix, "traceroute"),
+            (ActionLinkPlatform::Windows, "tracert"),
+        ] {
+            let actions = actions_for_match_on(item, platform);
+            assert_eq!(
+                actions
+                    .iter()
+                    .find(|action| action.id == "traceroute")
+                    .unwrap()
+                    .target,
+                ActionLinkTarget::ExecuteCommand(format!("{program} 172.22.222.149"))
+            );
+            // Commands that exist on every platform keep one spelling.
+            assert_eq!(
+                actions
+                    .iter()
+                    .find(|action| action.id == "ping")
+                    .unwrap()
+                    .target,
+                ActionLinkTarget::ExecuteCommand("ping 172.22.222.149".into())
+            );
+            assert_eq!(
+                actions.iter().find(|action| action.is_default).unwrap().id,
+                "ping"
+            );
+        }
+    }
 
     #[test]
     fn mac_formats_share_five_copy_and_paste_candidates_and_one_safe_default() {
