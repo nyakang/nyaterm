@@ -11,6 +11,23 @@ pub(in crate::features) struct ActiveSshRuntimeContext {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn local_host_tools_unsupported(&self) -> bool {
+        cfg!(windows) && self.session.active_is_local_pty()
+    }
+
+    pub(in crate::features) fn process_control_capabilities(
+        &self,
+    ) -> nyaterm_remote_ops::process_control::ProcessControlCapabilities {
+        use nyaterm_remote_ops::host::HostOs;
+        nyaterm_remote_ops::process_control::ProcessControlCapabilities::for_os(
+            if self.session.active_is_local_pty() {
+                HostOs::local()
+            } else {
+                HostOs::OtherUnix
+            },
+        )
+    }
+
     pub(in crate::features) fn active_ssh_runtime_context(
         &mut self,
         action: &str,

@@ -2012,6 +2012,7 @@
     "visible": "Affichés"
   },
   "hostTools": {
+    "localWindowsUnsupported": "Ce panneau ne prend pas encore en charge la machine Windows locale. Il reste disponible pour les hôtes SSH.",
     "portsTitle": "Ports",
     "servicesTitle": "Services",
     "searchPorts": "Rechercher ports, processus, PID…",
@@ -2046,6 +2047,7 @@
     "stopTitle": "Arrêter le processus ?",
     "killTitle": "Tuer le processus ?",
     "confirmStop": "Le processus %{pid} recevra une demande d'arrêt. Les données non enregistrées peuvent être perdues.",
+    "confirmKill": "Le processus %{pid} sera arrêté de force. Les données non enregistrées peuvent être perdues.",
     "stopping": "Arrêt du processus %{pid}…",
     "stopped": "Processus %{pid} arrêté",
     "sortPort": "Port",

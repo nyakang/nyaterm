@@ -1193,7 +1193,7 @@ impl NyaTermApp {
                         "host-tools-header-refresh",
                         "icons/fe/refresh.svg",
                         t!("common.refresh"),
-                        true,
+                        self.host_tool_panels.entity(kind).read(cx).can_refresh(),
                         cx.listener(move |this, _, _window, cx| {
                             this.refresh_host_tool(kind, cx);
                         }),
@@ -1227,8 +1227,9 @@ impl NyaTermApp {
             }
             NavItem::GpuMonitor => {
                 let palette = self.theme_palette();
-                let can_refresh =
-                    self.session.active_has_inspectable_host() && !self.remote_ops.gpu_is_pending();
+                let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
+                    && !self.remote_ops.gpu_is_pending();
                 Some(
                     header_svg_icon_button(
                         palette,
@@ -1246,8 +1247,9 @@ impl NyaTermApp {
             }
             NavItem::AscendNpuMonitor => {
                 let palette = self.theme_palette();
-                let can_refresh =
-                    self.session.active_has_inspectable_host() && !self.remote_ops.npu_is_pending();
+                let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
+                    && !self.remote_ops.npu_is_pending();
                 Some(
                     header_svg_icon_button(
                         palette,
@@ -1285,6 +1287,7 @@ impl NyaTermApp {
             NavItem::Docker => {
                 let palette = self.theme_palette();
                 let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
                     && !self.remote_ops.docker_is_pending();
                 let can_prune = can_refresh && self.remote_ops.docker_can_prune();
                 let more_label = t!("dockerManager.moreActions").to_string();

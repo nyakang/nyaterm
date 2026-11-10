@@ -2012,6 +2012,7 @@
     "visible": "Shown"
   },
   "hostTools": {
+    "localWindowsUnsupported": "This panel does not yet support the local Windows machine. It remains available for SSH hosts.",
     "portsTitle": "Ports",
     "servicesTitle": "Services",
     "searchPorts": "Search ports, processes, PIDs…",
@@ -2046,6 +2047,7 @@
     "stopTitle": "Stop process?",
     "killTitle": "Kill process?",
     "confirmStop": "Process %{pid} will be asked to terminate. Unsaved data in it may be lost.",
+    "confirmKill": "Process %{pid} will be forcibly terminated. Unsaved data in it may be lost.",
     "stopping": "Stopping process %{pid}…",
     "stopped": "Process %{pid} stopped",
     "sortPort": "Port",

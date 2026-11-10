@@ -2012,6 +2012,7 @@
     "visible": "表示中"
   },
   "hostTools": {
+    "localWindowsUnsupported": "このパネルは Windows のローカル環境には未対応です。SSH ホストでは引き続き利用できます。",
     "portsTitle": "ポート",
     "servicesTitle": "サービス",
     "searchPorts": "ポート、プロセス、PID を検索…",
@@ -2046,6 +2047,7 @@
     "stopTitle": "プロセスを停止しますか？",
     "killTitle": "プロセスを強制終了しますか？",
     "confirmStop": "プロセス %{pid} に終了を要求します。保存されていないデータは失われる可能性があります。",
+    "confirmKill": "プロセス %{pid} を強制終了します。保存されていないデータは失われる可能性があります。",
     "stopping": "プロセス %{pid} を停止中…",
     "stopped": "プロセス %{pid} を停止しました",
     "sortPort": "ポート",

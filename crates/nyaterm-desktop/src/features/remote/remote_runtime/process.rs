@@ -121,21 +121,35 @@ impl NyaTermApp {
             self.signal_process(pid, signal, window, cx);
             return;
         }
-        let description = t!(
-            "processManager.confirmSignalDesc",
-            signal = signal,
-            pid = pid,
-            command = format!("kill -{signal} -- {pid}")
-        )
-        .to_string();
+        let identity = self.host_interaction_identity(cx);
+        let windows = self.process_control_capabilities()
+            == nyaterm_remote_ops::process_control::ProcessControlCapabilities::TerminateOnly;
+        let description = if windows {
+            t!("hostTools.confirmKill", pid = pid).to_string()
+        } else {
+            t!(
+                "processManager.confirmSignalDesc",
+                signal = signal,
+                pid = pid,
+                command = format!("kill -{signal} -- {pid}")
+            )
+            .to_string()
+        };
+        let title = if windows {
+            t!("hostTools.killTitle").to_string()
+        } else {
+            t!("processManager.confirmSignalTitle").to_string()
+        };
         self.open_confirm_dialog(
             (
-                t!("processManager.confirmSignalTitle").to_string(),
+                title,
                 description,
                 t!("common.confirm").to_string(),
                 true,
                 move |app, window, cx| {
-                    app.signal_process(pid, signal, window, cx);
+                    if app.host_interaction_identity(cx) == identity {
+                        app.signal_process(pid, signal, window, cx);
+                    }
                     true
                 },
             ),

@@ -7,6 +7,7 @@ use gpui::{
     App, ClickEvent, FontWeight, IntoElement, SharedString, Window, deferred, div, prelude::*, px,
     rgb,
 };
+use nyaterm_remote_ops::process_control::ProcessControlCapabilities;
 use nyaterm_remote_ops::remote_process::RemoteProcess;
 use std::borrow::Cow;
 
@@ -92,6 +93,7 @@ where
 {
     let ProcessTableRowPresentation {
         palette,
+        capabilities,
         menu_bg,
         mode,
         labels,
@@ -160,30 +162,38 @@ where
                             on_copy_command,
                         ))
                         .child(process_menu_sep(palette))
-                        .child(process_menu_item(
-                            palette,
-                            format!("process-term-{}", process.pid),
-                            labels.signal_term.clone(),
-                            on_term,
-                        ))
-                        .child(process_menu_item(
-                            palette,
-                            format!("process-hup-{}", process.pid),
-                            labels.signal_hup.clone(),
-                            on_hup,
-                        ))
-                        .child(process_menu_item(
-                            palette,
-                            format!("process-stop-{}", process.pid),
-                            labels.signal_stop.clone(),
-                            on_stop,
-                        ))
-                        .child(process_menu_item(
-                            palette,
-                            format!("process-cont-{}", process.pid),
-                            labels.signal_cont.clone(),
-                            on_cont,
-                        ))
+                        .when(capabilities == ProcessControlCapabilities::Posix, |this| {
+                            this.child(process_menu_item(
+                                palette,
+                                format!("process-term-{}", process.pid),
+                                labels.signal_term.clone(),
+                                on_term,
+                            ))
+                        })
+                        .when(capabilities == ProcessControlCapabilities::Posix, |this| {
+                            this.child(process_menu_item(
+                                palette,
+                                format!("process-hup-{}", process.pid),
+                                labels.signal_hup.clone(),
+                                on_hup,
+                            ))
+                        })
+                        .when(capabilities == ProcessControlCapabilities::Posix, |this| {
+                            this.child(process_menu_item(
+                                palette,
+                                format!("process-stop-{}", process.pid),
+                                labels.signal_stop.clone(),
+                                on_stop,
+                            ))
+                        })
+                        .when(capabilities == ProcessControlCapabilities::Posix, |this| {
+                            this.child(process_menu_item(
+                                palette,
+                                format!("process-cont-{}", process.pid),
+                                labels.signal_cont.clone(),
+                                on_cont,
+                            ))
+                        })
                         .child(process_menu_item(
                             palette,
                             format!("process-kill-{}", process.pid),
@@ -332,6 +342,7 @@ pub(in crate::features::pages::remote) struct ProcessTableLabels {
 #[derive(Clone)]
 pub(in crate::features::pages::remote) struct ProcessTableRowPresentation {
     pub palette: ThemePalette,
+    pub capabilities: ProcessControlCapabilities,
     pub menu_bg: gpui::Rgba,
     pub mode: ProcessDisplayMode,
     pub labels: ProcessTableLabels,
@@ -368,8 +379,11 @@ fn process_menu_item(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
+    let id = id.into();
+    let selector = id.clone();
     div()
-        .id(gpui::SharedString::from(id.into()))
+        .id(gpui::SharedString::from(id))
+        .debug_selector(move || selector.clone())
         .h(px(24.))
         .px_3()
         .flex()

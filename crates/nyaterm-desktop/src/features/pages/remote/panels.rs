@@ -45,6 +45,7 @@ use gpui::{
 };
 use nyaterm_remote_ops::ascend_npu::RemoteNpuProcess;
 use nyaterm_remote_ops::gpu::RemoteGpuProcess;
+use nyaterm_remote_ops::process_control::ProcessControlCapabilities;
 use nyaterm_remote_ops::remote_process::RemoteProcess;
 use nyaterm_ui::{
     NyaInputState, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSelectState,
@@ -133,9 +134,12 @@ pub(in crate::features) struct RemoteMonitorSnapshot {
 /// a stale panel -- which is why the freshness tests drive each one rather than trusting
 /// the key. The explicit boundary list stays the discipline; the key only stops a flush
 /// from concluding "nothing changed" when something outside the pane did.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RemoteMonitorKey {
     revision: u64,
+    host_identity: crate::features::remote::remote_runtime::host_tools::HostInteractionIdentity,
+    process_control: ProcessControlCapabilities,
+    local_unsupported: bool,
     chrome: PanelChrome,
     has_session: bool,
     ssh_compatibility_mode: bool,
@@ -256,7 +260,7 @@ impl RemoteMonitorPanel {
     }
 
     fn snapshot_key(&self) -> Option<RemoteMonitorKey> {
-        self.snapshot.as_ref().map(|snapshot| snapshot.key)
+        self.snapshot.as_ref().map(|snapshot| snapshot.key.clone())
     }
 
     fn set_snapshot(&mut self, snapshot: RemoteMonitorSnapshot, cx: &mut Context<Self>) {
@@ -433,6 +437,16 @@ impl Render for RemoteMonitorPanel {
                 return div().into_any_element();
             };
             let chrome = snapshot.key.chrome;
+            if snapshot.key.local_unsupported {
+                return div()
+                    .size_full()
+                    .bg(chrome.transparent_surface)
+                    .child(nyaterm_ui::empty_panel(
+                        t!("hostTools.localWindowsUnsupported"),
+                        chrome.palette,
+                    ))
+                    .into_any_element();
+            }
             if snapshot.key.ssh_compatibility_mode {
                 return div()
                     .size_full()
@@ -505,6 +519,8 @@ impl Render for RemoteMonitorPanel {
                     );
                     processes_panel(
                         chrome,
+                        snapshot.key.process_control,
+                        snapshot.key.host_identity.clone(),
                         has_session,
                         state,
                         processes,
@@ -605,9 +621,9 @@ impl NyaTermApp {
     /// Cheap when nothing changed: one `u64` compare per kind.
     pub(in crate::features) fn flush_remote_panel_snapshots(&mut self, cx: &mut Context<Self>) {
         for kind in RemoteMonitorPanel::SNAPSHOT_KINDS {
-            let key = self.remote_monitor_key(kind);
+            let key = self.remote_monitor_key(kind, cx);
             let panel = self.remote_panels.entity(kind).clone();
-            if panel.read(cx).snapshot_key() == Some(key) {
+            if panel.read(cx).snapshot_key() == Some(key.clone()) {
                 continue;
             }
             let snapshot = self.build_remote_monitor_snapshot(kind, key, cx);
@@ -623,13 +639,13 @@ impl NyaTermApp {
         for kind in RemoteMonitorPanel::SNAPSHOT_KINDS {
             debug_assert_eq!(
                 self.remote_panels.entity(kind).read(cx).snapshot_key(),
-                Some(self.remote_monitor_key(kind)),
+                Some(self.remote_monitor_key(kind, cx)),
                 "flush left a panel behind its pane"
             );
         }
     }
 
-    fn remote_monitor_key(&self, kind: RemoteMonitorKind) -> RemoteMonitorKey {
+    fn remote_monitor_key(&self, kind: RemoteMonitorKind, cx: &gpui::App) -> RemoteMonitorKey {
         let revision = match kind {
             RemoteMonitorKind::Stats => self.remote_ops.stats_revision(),
             RemoteMonitorKind::Gpu => self.remote_ops.gpu_revision(),
@@ -639,6 +655,13 @@ impl NyaTermApp {
         };
         RemoteMonitorKey {
             revision,
+            host_identity: self.host_interaction_identity(cx),
+            process_control: self.process_control_capabilities(),
+            local_unsupported: self.local_host_tools_unsupported()
+                && matches!(
+                    kind,
+                    RemoteMonitorKind::Gpu | RemoteMonitorKind::Npu | RemoteMonitorKind::Docker
+                ),
             chrome: self.panel_chrome(),
             has_session: self.session.active_ssh_config().is_some()
                 || self.session.active_is_local_pty(),
@@ -747,14 +770,17 @@ impl NyaTermApp {
                 );
                 // Keyed per pid and only while something is selected, matching what the
                 // view used to build inline.
-                let nice = state.selected_pid.map(|pid| {
-                    self.number_input(
-                        format!("remote.process.{pid}.nice"),
-                        &state.nice_draft.clone(),
-                        NyaNumberInputOptions::default().range(-20.0, 19.0),
-                        cx,
-                    )
-                });
+                let nice = state
+                    .selected_pid
+                    .filter(|_| self.process_control_capabilities().supports_priority())
+                    .map(|pid| {
+                        self.number_input(
+                            format!("remote.process.{pid}.nice"),
+                            &state.nice_draft.clone(),
+                            NyaNumberInputOptions::default().range(-20.0, 19.0),
+                            cx,
+                        )
+                    });
                 RemoteMonitorData::Processes {
                     state,
                     processes,
@@ -1249,7 +1275,7 @@ mod tests {
             let panel = app.remote_panels.entity(RemoteMonitorKind::Docker).read(cx);
             assert_eq!(
                 panel.snapshot_key(),
-                Some(app.remote_monitor_key(RemoteMonitorKind::Docker))
+                Some(app.remote_monitor_key(RemoteMonitorKind::Docker, cx))
             );
             let RemoteMonitorData::Docker(docker) = &panel.snapshot.as_ref().unwrap().data else {
                 panic!("Docker snapshot")
@@ -2070,6 +2096,66 @@ mod isolation_tests {
             Some(revision),
             "the snapshot must be current before any paint"
         );
+    }
+
+    #[test]
+    fn process_menu_and_priority_controls_follow_the_captured_capabilities() {
+        use super::RemoteMonitorData;
+        use nyaterm_remote_ops::process_control::ProcessControlCapabilities;
+        let test_dir = TestConfigDir::new("nyaterm-process-capabilities");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_processes(&mut cx, test_dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.remote_ops.apply_processes(vec![process(42)]);
+                app.remote_ops.toggle_process_selection(42);
+                app.remote_ops.toggle_process_menu(42);
+                app.flush_remote_panel_snapshots(cx);
+            });
+        });
+        for capabilities in [
+            ProcessControlCapabilities::TerminateOnly,
+            ProcessControlCapabilities::Posix,
+        ] {
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    // Build the production snapshot, substituting the host capability
+                    // to verify both menus on every runner, including Linux.
+                    let mut key = app.remote_monitor_key(RemoteMonitorKind::Processes, cx);
+                    key.process_control = capabilities;
+                    let mut snapshot =
+                        app.build_remote_monitor_snapshot(RemoteMonitorKind::Processes, key, cx);
+                    if capabilities == ProcessControlCapabilities::TerminateOnly
+                        && let RemoteMonitorData::Processes { nice, .. } = &mut snapshot.data
+                    {
+                        *nice = None;
+                    }
+                    app.remote_panels
+                        .entity(RemoteMonitorKind::Processes)
+                        .update(cx, |panel, cx| {
+                            panel.clock = None;
+                            panel.set_snapshot(snapshot, cx);
+                        });
+                });
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            assert!(vcx.debug_bounds("process-kill-42").is_some());
+            for selector in [
+                "process-term-42",
+                "process-hup-42",
+                "process-stop-42",
+                "process-cont-42",
+                "process-priority-controls",
+            ] {
+                assert_eq!(
+                    vcx.debug_bounds(selector).is_some(),
+                    capabilities == ProcessControlCapabilities::Posix,
+                    "{selector}"
+                );
+            }
+        }
     }
 
     /// A sibling pane's data must not re-render Processes.

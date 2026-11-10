@@ -42,6 +42,12 @@ impl NyaTermApp {
     }
 
     fn refresh_gpu_with_mode(&mut self, skip_unavailable: bool, cx: &mut Context<Self>) {
+        if self.local_host_tools_unsupported() {
+            self.remote_ops
+                .set_gpu_status(rust_i18n::t!("hostTools.localWindowsUnsupported").to_string());
+            cx.notify();
+            return;
+        }
         let context = match self.active_ssh_runtime_context("inspecting GPU") {
             Ok(context) => context,
             Err(message) => {
@@ -165,6 +171,12 @@ impl NyaTermApp {
     }
 
     fn refresh_npu_with_mode(&mut self, skip_unavailable: bool, cx: &mut Context<Self>) {
+        if self.local_host_tools_unsupported() {
+            self.remote_ops
+                .set_npu_status(rust_i18n::t!("hostTools.localWindowsUnsupported").to_string());
+            cx.notify();
+            return;
+        }
         let context = match self.active_ssh_runtime_context("inspecting NPU") {
             Ok(context) => context,
             Err(message) => {

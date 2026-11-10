@@ -4,7 +4,7 @@ mod panel_layout;
 mod docker;
 mod gpu;
 mod helpers;
-mod host_tools;
+pub(in crate::features) mod host_tools;
 
 mod process;
 mod stats;

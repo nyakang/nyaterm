@@ -2012,6 +2012,7 @@
     "visible": "顯示"
   },
   "hostTools": {
+    "localWindowsUnsupported": "此面板暫不支援 Windows 本機，仍可用於 SSH 主機。",
     "portsTitle": "連接埠",
     "servicesTitle": "服務",
     "searchPorts": "搜尋連接埠、處理程序、PID…",
@@ -2046,6 +2047,7 @@
     "stopTitle": "停止處理程序？",
     "killTitle": "強制結束處理程序？",
     "confirmStop": "將要求處理程序 %{pid} 終止，其中未儲存的資料可能遺失。",
+    "confirmKill": "將強制結束處理程序 %{pid}，其中未儲存的資料可能遺失。",
     "stopping": "正在停止處理程序 %{pid}…",
     "stopped": "處理程序 %{pid} 已停止",
     "sortPort": "連接埠",

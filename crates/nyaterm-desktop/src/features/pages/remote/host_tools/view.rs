@@ -1,6 +1,7 @@
 //! Rendering for the Ports and Services panels. Pure presentation: every value
 //! comes from the panel entity, nothing is read from the app.
 
+use super::jobs::Lane;
 use super::state::{
     BindKind, PortProtocolFilter, PortRow, PortScopeFilter, PortSortKey, ServiceSortKey,
     ServiceStateFilter, SortDirection, bind_kind, count_services, well_known_service,
@@ -164,13 +165,14 @@ fn guard(
         }
         Some(HostResolution::Ready(_)) => {}
     }
+    if panel.sudo_prompt.is_some() {
+        return None;
+    }
     if has_data {
         return None;
     }
     match &panel.load {
-        LoadState::Idle | LoadState::Loading => {
-            Some(message(chrome, t!("common.loading").to_string(), icon))
-        }
+        LoadState::Idle => Some(message(chrome, t!("common.loading").to_string(), icon)),
         LoadState::Failed(error) => Some(
             div()
                 .size_full()
@@ -212,6 +214,7 @@ fn top_rows(
     cx: &mut Context<HostToolsPanel>,
 ) -> Vec<AnyElement> {
     let elevated = panel.elevated;
+    let epoch = panel.jobs.epoch;
     let shield = panel.supports_elevation().then(|| {
         icon_button(
             palette,
@@ -222,13 +225,17 @@ fn top_rows(
             } else {
                 t!("hostTools.elevatedOff").to_string()
             },
-            true,
+            !panel.jobs.pending(Lane::Action),
             Some(if elevated {
                 palette.warning
             } else {
                 palette.text_muted
             }),
-            cx.listener(|panel, _, _, cx| panel.toggle_elevation(cx)),
+            cx.listener(move |panel, _, _, cx| {
+                if epoch == panel.jobs.epoch {
+                    panel.toggle_elevation(cx);
+                }
+            }),
         )
     });
     vec![
@@ -270,6 +277,7 @@ fn sudo_banner(
     palette: ThemePalette,
     cx: &mut Context<HostToolsPanel>,
 ) -> Option<AnyElement> {
+    let epoch = panel.jobs.epoch;
     let reason = panel.sudo_prompt.clone()?;
     Some(
         div()
@@ -297,17 +305,26 @@ fn sudo_banner(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .h(px(32.))
                             .child(NyaInputShell::new("host-tools-sudo", &panel.sudo_input)),
                     )
                     .child(
                         NyaButton::new("host-tools-sudo-ok", t!("hostTools.authorize").to_string())
                             .variant(NyaButtonVariant::Primary)
-                            .on_click(cx.listener(|panel, _, _, cx| panel.submit_sudo(cx))),
+                            .on_click(cx.listener(move |panel, _, _, cx| {
+                                if epoch == panel.jobs.epoch {
+                                    panel.submit_sudo(cx);
+                                }
+                            })),
                     )
                     .child(
                         NyaButton::new("host-tools-sudo-cancel", t!("common.cancel").to_string())
                             .variant(NyaButtonVariant::Ghost)
-                            .on_click(cx.listener(|panel, _, _, cx| panel.cancel_sudo(cx))),
+                            .on_click(cx.listener(move |panel, _, _, cx| {
+                                if epoch == panel.jobs.epoch {
+                                    panel.cancel_sudo(cx);
+                                }
+                            })),
                     ),
             )
             .into_any_element(),
@@ -315,7 +332,7 @@ fn sudo_banner(
 }
 
 fn status_line(panel: &HostToolsPanel, palette: ThemePalette) -> Option<AnyElement> {
-    let (text, color) = if let Some(busy) = &panel.busy {
+    let (text, color) = if let Some(busy) = panel.busy_label() {
         (busy.clone(), palette.text_muted)
     } else {
         let (text, is_error) = panel.status.clone()?;
@@ -589,6 +606,7 @@ fn port_row(
     };
     let owner_hidden = entry.process.is_none();
     let click_key = key.clone();
+    let epoch = panel.jobs.epoch;
 
     let header = div()
         .id(SharedString::from(format!("port-row-{key}")))
@@ -602,7 +620,11 @@ fn port_row(
         .gap_2()
         .cursor_pointer()
         .hover(move |this| this.bg(rgb(palette.hover)))
-        .on_click(cx.listener(move |panel, _, _, cx| panel.select(click_key.clone(), cx)))
+        .on_click(cx.listener(move |panel, _, _, cx| {
+            if epoch == panel.jobs.epoch {
+                panel.select(click_key.clone(), cx);
+            }
+        }))
         .child(
             div()
                 .w(px(58.))
@@ -646,8 +668,15 @@ fn port_row(
 }
 
 impl HostToolsPanel {
-    fn confirm_kill(&mut self, pid: u32, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_kill(
+        &mut self,
+        pid: u32,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let panel = cx.weak_entity();
+        let epoch = self.jobs.epoch;
         let Some(app) = self.app.upgrade() else {
             return;
         };
@@ -656,7 +685,15 @@ impl HostToolsPanel {
         } else {
             t!("hostTools.stopTitle").to_string()
         };
-        let description = t!("hostTools.confirmStop", pid = pid).to_string();
+        let description = t!(
+            if force {
+                "hostTools.confirmKill"
+            } else {
+                "hostTools.confirmStop"
+            },
+            pid = pid
+        )
+        .to_string();
         let confirm = if force {
             t!("hostTools.killProcess").to_string()
         } else {
@@ -670,7 +707,9 @@ impl HostToolsPanel {
                     confirm,
                     true,
                     move |_app, _window, cx| {
-                        let _ = panel.update(cx, |panel, cx| panel.kill_pid(pid, force, cx));
+                        let _ = panel.update(cx, |panel, cx| {
+                            panel.kill_pid_for_epoch(epoch, pid, force, cx)
+                        });
                         true
                     },
                 ),
@@ -845,13 +884,13 @@ fn service_row(
     entry: ServiceEntry,
     cx: &mut Context<HostToolsPanel>,
 ) -> AnyElement {
-    let selected = panel.selected.as_deref() == Some(entry.name.as_str());
+    let selected = panel.selected.as_deref() == Some(entry.key().as_str());
     let details = selected
         .then(|| service_details_block(panel, palette, cx))
         .flatten();
     let color = state_color(palette, entry.state);
-    let name = entry.name.clone();
-    let click_name = name.clone();
+    let click_name = entry.key();
+    let epoch = panel.jobs.epoch;
 
     let mut meta = vec![state_label(entry.state)];
     if let Some(startup) = startup_label(entry.startup) {
@@ -867,7 +906,7 @@ fn service_row(
     };
 
     let header = div()
-        .id(SharedString::from(format!("service-row-{name}")))
+        .id(SharedString::from(format!("service-row-{}", entry.key())))
         .h(px(SERVICE_ROW_HEIGHT - 4.))
         .w_full()
         .min_w_0()
@@ -878,7 +917,11 @@ fn service_row(
         .gap_2()
         .cursor_pointer()
         .hover(move |this| this.bg(rgb(palette.hover)))
-        .on_click(cx.listener(move |panel, _, _, cx| panel.select(click_name.clone(), cx)))
+        .on_click(cx.listener(move |panel, _, _, cx| {
+            if epoch == panel.jobs.epoch {
+                panel.select(click_name.clone(), cx);
+            }
+        }))
         .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(color)))
         .child(
             div()
@@ -920,9 +963,10 @@ fn logs_drawer(
     let Some(drawer) = panel.logs.as_ref() else {
         return div().into_any_element();
     };
+    let epoch = panel.jobs.epoch;
     let text = drawer.lines.join("\n");
     let title: SharedString = drawer.title.clone();
-    let loading = drawer.loading;
+    let loading = panel.jobs.pending_key(Lane::Logs, &drawer.entry.key());
     let lines = drawer.lines.clone();
     let entry = drawer.entry.clone();
     div()
@@ -961,7 +1005,11 @@ fn logs_drawer(
                     t!("common.refresh").to_string(),
                     !loading,
                     None,
-                    cx.listener(move |panel, _, _, cx| panel.open_logs(entry.clone(), cx)),
+                    cx.listener(move |panel, _, _, cx| {
+                        if epoch == panel.jobs.epoch {
+                            panel.open_logs(entry.clone(), cx);
+                        }
+                    }),
                 ))
                 .child(icon_button(
                     palette,
@@ -979,10 +1027,11 @@ fn logs_drawer(
                     t!("common.close").to_string(),
                     true,
                     None,
-                    cx.listener(|panel, _, _, cx| {
-                        panel.logs = None;
-                        panel.remeasure_list();
-                        cx.notify();
+                    cx.listener(move |panel, _, _, cx| {
+                        if epoch != panel.jobs.epoch {
+                            return;
+                        }
+                        panel.close_logs(cx);
                     }),
                 )),
         )
@@ -1144,58 +1193,82 @@ fn port_menu(
     row: &PortRow,
     cx: &mut Context<HostToolsPanel>,
 ) -> AnyElement {
+    NyaDropdownMenu::new(format!("port-menu-{}", row.key()))
+        .icon("icons/conn/more.svg")
+        .icon_size(px(14.))
+        .tooltip(t!("common.more").to_string())
+        .min_width(px(190.))
+        .items(port_menu_items(panel, row, cx))
+        .on_trigger(|_, _, cx| cx.stop_propagation())
+        .into_any_element()
+}
+
+pub(super) fn port_menu_items(
+    panel: &HostToolsPanel,
+    row: &PortRow,
+    cx: &mut Context<HostToolsPanel>,
+) -> Vec<NyaMenuItem> {
     let key = row.key();
     let pid = row.pid;
+    let epoch = panel.jobs.epoch;
+    let posix = panel.context().is_some_and(|host| {
+        nyaterm_remote_ops::process_control::ProcessControlCapabilities::for_os(host.os)
+            .ensure_signal("TERM")
+            .is_ok()
+    });
     let address = copy_address_of(row);
     let command = panel
         .port_details
         .as_ref()
         .filter(|state| state.key == key)
         .and_then(|state| state.details.command.clone());
-    NyaDropdownMenu::new(format!("port-menu-{key}"))
-        .icon("icons/conn/more.svg")
-        .icon_size(px(14.))
-        .tooltip(t!("common.more").to_string())
-        .min_width(px(190.))
-        .items([
-            NyaMenuItem::action(t!("hostTools.copyAddress").to_string())
-                .icon("icons/copy.svg")
-                .on_click(cx.listener(move |panel, _, _, cx| panel.copy(address.clone(), cx))),
-            NyaMenuItem::action(t!("hostTools.copyPid").to_string())
-                .disabled(pid.is_none())
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                    if let Some(pid) = pid {
-                        panel.copy(pid.to_string(), cx);
-                    }
-                })),
-            NyaMenuItem::action(t!("hostTools.copyCommand").to_string())
-                .disabled(command.is_none())
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                    if let Some(command) = command.clone() {
-                        panel.copy(command, cx);
-                    }
-                })),
-            NyaMenuItem::separator(),
+    let mut items = vec![
+        NyaMenuItem::action(t!("hostTools.copyAddress").to_string())
+            .icon("icons/copy.svg")
+            .on_click(cx.listener(move |panel, _, _, cx| panel.copy(address.clone(), cx))),
+        NyaMenuItem::action(t!("hostTools.copyPid").to_string())
+            .disabled(pid.is_none())
+            .on_click(cx.listener(move |panel, _, _, cx| {
+                if let Some(pid) = pid {
+                    panel.copy(pid.to_string(), cx);
+                }
+            })),
+        NyaMenuItem::action(t!("hostTools.copyCommand").to_string())
+            .disabled(command.is_none())
+            .on_click(cx.listener(move |panel, _, _, cx| {
+                if let Some(command) = command.clone() {
+                    panel.copy(command, cx);
+                }
+            })),
+        NyaMenuItem::separator(),
+        NyaMenuItem::action(t!("hostTools.killProcess").to_string())
+            .icon("icons/close.svg")
+            .danger()
+            .disabled(pid.is_none())
+            .on_click(cx.listener(move |panel, _, window, cx| {
+                if epoch == panel.jobs.epoch
+                    && let Some(pid) = pid
+                {
+                    panel.confirm_kill(pid, true, window, cx);
+                }
+            })),
+    ];
+    if posix {
+        items.insert(
+            items.len() - 1,
             NyaMenuItem::action(t!("hostTools.stopProcess").to_string())
                 .icon("icons/stop.svg")
                 .disabled(pid.is_none())
                 .on_click(cx.listener(move |panel, _, window, cx| {
-                    if let Some(pid) = pid {
+                    if epoch == panel.jobs.epoch
+                        && let Some(pid) = pid
+                    {
                         panel.confirm_kill(pid, false, window, cx);
                     }
                 })),
-            NyaMenuItem::action(t!("hostTools.killProcess").to_string())
-                .icon("icons/close.svg")
-                .danger()
-                .disabled(pid.is_none())
-                .on_click(cx.listener(move |panel, _, window, cx| {
-                    if let Some(pid) = pid {
-                        panel.confirm_kill(pid, true, window, cx);
-                    }
-                })),
-        ])
-        .on_trigger(|_, _, cx| cx.stop_propagation())
-        .into_any_element()
+        );
+    }
+    items
 }
 
 /// The "⋯" menu at the right of a service row.
@@ -1213,14 +1286,17 @@ fn service_menu(
         entry.startup,
         ServiceStartup::Enabled | ServiceStartup::Disabled
     );
-    let idle = panel.busy.is_none();
+    let idle = !panel.jobs.pending(Lane::Action);
+    let name = entry.name.clone();
+    let epoch = panel.jobs.epoch;
     let act = |action: ServiceAction| {
         let entry = entry.clone();
-        cx.listener(move |panel, _, _, cx| panel.service_action(entry.clone(), action, cx))
+        cx.listener(move |panel, _, _, cx| {
+            panel.service_action_for_epoch(epoch, entry.clone(), action, cx)
+        })
     };
     let logs_entry = entry.clone();
-    let name = entry.name.clone();
-    NyaDropdownMenu::new(format!("service-menu-{}", entry.name))
+    NyaDropdownMenu::new(format!("service-menu-{}", entry.key()))
         .icon("icons/conn/more.svg")
         .icon_size(px(14.))
         .tooltip(t!("common.more").to_string())
@@ -1253,9 +1329,11 @@ fn service_menu(
             NyaMenuItem::separator(),
             NyaMenuItem::action(t!("hostTools.logs").to_string())
                 .icon("icons/menu/article.svg")
-                .on_click(
-                    cx.listener(move |panel, _, _, cx| panel.open_logs(logs_entry.clone(), cx)),
-                ),
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                    if epoch == panel.jobs.epoch {
+                        panel.open_logs(logs_entry.clone(), cx);
+                    }
+                })),
             NyaMenuItem::action(t!("hostTools.copyName").to_string())
                 .icon("icons/copy.svg")
                 .on_click(cx.listener(move |panel, _, _, cx| panel.copy(name.clone(), cx))),
@@ -1268,7 +1346,7 @@ fn port_details_block(panel: &HostToolsPanel, palette: ThemePalette) -> Option<A
     let row = panel.selected_port()?.clone();
     let key = row.key();
     let loaded = panel.port_details.as_ref().filter(|state| state.key == key);
-    let loading = loaded.is_some_and(|state| state.loading);
+    let loading = panel.jobs.pending_key(Lane::Details, &key);
     let fetched = loaded
         .map(|state| state.details.clone())
         .unwrap_or_default();
@@ -1307,6 +1385,15 @@ fn port_details_block(panel: &HostToolsPanel, palette: ThemePalette) -> Option<A
             },
         ),
     ];
+    if let Some(error) = loaded.and_then(|state| state.error.as_ref()) {
+        body.push(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette.danger))
+                .child(error.clone())
+                .into_any_element(),
+        );
+    }
     if let Some(command) = &fetched.command {
         body.push(kv(
             palette,
@@ -1424,7 +1511,7 @@ fn service_details_block(
     if panel
         .logs
         .as_ref()
-        .is_some_and(|logs| logs.entry.name == entry.name)
+        .is_some_and(|logs| logs.entry.key() == entry.key())
     {
         extra.push(logs_drawer(panel, palette, cx));
     }

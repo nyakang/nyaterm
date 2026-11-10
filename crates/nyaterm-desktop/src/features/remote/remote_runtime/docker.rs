@@ -75,6 +75,12 @@ impl NyaTermApp {
         action: &str,
         cx: &mut Context<Self>,
     ) -> Option<ActiveSshRuntimeContext> {
+        if self.local_host_tools_unsupported() {
+            self.remote_ops
+                .set_docker_status(t!("hostTools.localWindowsUnsupported").to_string());
+            cx.notify();
+            return None;
+        }
         match self.active_ssh_runtime_context(action) {
             Ok(context) => Some(context),
             Err(message) => {

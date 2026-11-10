@@ -60,7 +60,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn refresh_gpu_if_due(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.session.active_remote_probes_enabled() {
+        if self.local_host_tools_unsupported() || !self.session.active_remote_probes_enabled() {
             return false;
         }
         if !self.remote_ops.gpu_is_pending()
@@ -76,7 +76,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn refresh_npu_if_due(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.session.active_remote_probes_enabled() {
+        if self.local_host_tools_unsupported() || !self.session.active_remote_probes_enabled() {
             return false;
         }
         if !self.remote_ops.npu_is_pending()
@@ -112,7 +112,7 @@ impl NyaTermApp {
 
     /// The overview and visible resource, or an open container's details on the off beats.
     pub(in crate::features) fn refresh_docker_if_due(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.session.active_remote_probes_enabled() {
+        if self.local_host_tools_unsupported() || !self.session.active_remote_probes_enabled() {
             return false;
         }
         if self.remote_ops.docker_is_pending() {

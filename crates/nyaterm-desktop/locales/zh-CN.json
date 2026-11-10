@@ -2012,6 +2012,7 @@
     "visible": "显示"
   },
   "hostTools": {
+    "localWindowsUnsupported": "此面板暂不支持 Windows 本机，仍可用于 SSH 主机。",
     "portsTitle": "端口",
     "servicesTitle": "服务",
     "searchPorts": "搜索端口、进程、PID…",
@@ -2046,6 +2047,7 @@
     "stopTitle": "停止进程？",
     "killTitle": "强制结束进程？",
     "confirmStop": "将请求进程 %{pid} 终止，其中未保存的数据可能丢失。",
+    "confirmKill": "将强制结束进程 %{pid}，其中未保存的数据可能丢失。",
     "stopping": "正在停止进程 %{pid}…",
     "stopped": "进程 %{pid} 已停止",
     "sortPort": "端口",
