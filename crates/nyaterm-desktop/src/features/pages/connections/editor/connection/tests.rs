@@ -1153,6 +1153,116 @@ fn serial_custom_baud_accepts_pointer_focus_and_keyboard_edits(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn connection_editor_icon_picker_matches_protocol_defaults_and_explicit_icons(
+    cx: &mut TestAppContext,
+) {
+    let test_dir = TestConfigDir::new("nyaterm-connection-icon-picker-selection");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+    for (kind, key, selector) in [
+        (
+            ConnectionKindTab::Ssh,
+            "server",
+            "connection-editor-icon-selected-server",
+        ),
+        (
+            ConnectionKindTab::Local,
+            "local",
+            "connection-editor-icon-selected-local",
+        ),
+        (
+            ConnectionKindTab::Telnet,
+            "telnet",
+            "connection-editor-icon-selected-telnet",
+        ),
+        (
+            ConnectionKindTab::Serial,
+            "serial",
+            "connection-editor-icon-selected-serial",
+        ),
+        (
+            ConnectionKindTab::Rdp,
+            "rdp",
+            "connection-editor-icon-selected-rdp",
+        ),
+        (
+            ConnectionKindTab::Vnc,
+            "vnc",
+            "connection-editor-icon-selected-vnc",
+        ),
+    ] {
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_kind(kind, cx);
+                app.set_connection_editor_icon(None, cx);
+                app.set_connection_icon_picker_open(true, cx);
+            });
+        });
+        for _ in 0..3 {
+            draw_editor(&app, vcx);
+        }
+        let selected = vcx
+            .debug_bounds(selector)
+            .expect("the protocol default must be selected in the picker");
+        if kind != ConnectionKindTab::Ssh {
+            assert!(
+                vcx.debug_bounds("connection-editor-icon-selected-server")
+                    .is_none()
+            );
+        }
+        vcx.simulate_click(selected.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|_, cx| {
+            app.read(cx)
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .icon
+                .as_deref()
+                == Some(key)
+        }));
+    }
+    for (stored_key, selector) in [
+        ("server", "connection-editor-icon-selected-server"),
+        (" Ubuntu.SVG ", "connection-editor-icon-selected-ubuntu"),
+        ("kubernetes", "connection-editor-icon-selected-k8s"),
+        ("unknown-icon", "connection-editor-icon-selected-vnc"),
+        ("", "connection-editor-icon-selected-vnc"),
+    ] {
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_icon(Some(stored_key), cx);
+                app.set_connection_icon_picker_open(true, cx);
+            });
+        });
+        for _ in 0..3 {
+            draw_editor(&app, vcx);
+        }
+        assert!(vcx.debug_bounds(selector).is_some(), "{stored_key}");
+    }
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_state.custom_icons.records = vec![ConnectionCustomIcon {
+                id: "test-custom-icon".into(),
+                name: "Test icon".into(),
+                data_url: String::new(),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            }];
+            app.set_connection_editor_icon(Some("test-custom-icon"), cx);
+            app.set_connection_icon_picker_open(true, cx);
+        });
+    });
+    for _ in 0..3 {
+        draw_editor(&app, vcx);
+    }
+    assert!(
+        vcx.debug_bounds("connection-editor-icon-selected-vnc")
+            .is_none(),
+        "a custom icon awaiting its image must not select the protocol fallback"
+    );
+}
+
+#[gpui::test]
 fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
     cx: &mut TestAppContext,
 ) {
@@ -1210,7 +1320,7 @@ fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
     assert_eq!(first_custom_image.left() - first_custom_icon.left(), px(6.));
     assert_eq!(
         popup_with_seven_custom.size.height - popup_without_custom.size.height,
-        px(32.)
+        px(28.)
     );
 
     vcx.update(|_, cx| {
@@ -1234,12 +1344,12 @@ fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
     let auto_detect_before = vcx
         .debug_bounds("connection-editor-icon-auto-detect")
         .expect("auto-detect action should render below the icon grid");
-    assert_eq!(grid_without_custom.size.height, px(220.));
+    assert_eq!(grid_without_custom.size.height, px(252.));
     assert!(grid_before.size.height > px(280.));
     assert!(popup_before.right() - rightmost_icon.right() >= px(25.));
     assert_eq!(
         popup_before.size.height - popup_without_custom.size.height,
-        px(60.)
+        px(28.)
     );
     vcx.simulate_event(ScrollEvent {
         position: point(grid_before.left() + px(20.), grid_before.top() + px(20.)),
