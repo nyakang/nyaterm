@@ -1,15 +1,33 @@
 use crate::features::NyaTermApp;
 use nyaterm_remote_ops::docker::RemoteDockerOverview;
-use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
+use nyaterm_remote_ops::host::HostTarget;
 
+/// Where the active session's host tools run: this machine for a local shell,
+/// or the shared SSH connection for a remote one.
 pub(in crate::features) struct ActiveSshRuntimeContext {
     pub(in crate::features) session_id: String,
-    pub(in crate::features) config: SshSessionConfig,
-    pub(in crate::features) multiplex: SshMultiplexHandle,
+    pub(in crate::features) target: HostTarget,
     pub(in crate::features) docker_state: nyaterm_remote_ops::docker::DockerConnectionState,
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn local_host_tools_unsupported(&self) -> bool {
+        cfg!(windows) && self.session.active_is_local_pty()
+    }
+
+    pub(in crate::features) fn process_control_capabilities(
+        &self,
+    ) -> nyaterm_remote_ops::process_control::ProcessControlCapabilities {
+        use nyaterm_remote_ops::host::HostOs;
+        nyaterm_remote_ops::process_control::ProcessControlCapabilities::for_os(
+            if self.session.active_is_local_pty() {
+                HostOs::local()
+            } else {
+                HostOs::OtherUnix
+            },
+        )
+    }
+
     pub(in crate::features) fn active_ssh_runtime_context(
         &mut self,
         action: &str,
@@ -17,7 +35,17 @@ impl NyaTermApp {
         let session_id = self
             .session
             .active_id_owned()
-            .ok_or_else(|| format!("start an SSH session before {action}"))?;
+            .ok_or_else(|| format!("start a session before {action}"))?;
+        if self.session.is_local_pty(&session_id) {
+            if self.session.is_disconnected(&session_id) {
+                return Err(format!("reconnect the local shell before {action}"));
+            }
+            return Ok(ActiveSshRuntimeContext {
+                session_id,
+                target: HostTarget::Local,
+                docker_state: self.remote_ops.local_docker_state(),
+            });
+        }
         let config = self
             .session
             .active_ssh_config_owned()
@@ -40,8 +68,10 @@ impl NyaTermApp {
         {
             return Ok(ActiveSshRuntimeContext {
                 session_id,
-                config,
-                multiplex: connection.handle(),
+                target: HostTarget::Ssh {
+                    config,
+                    multiplex: Some(connection.handle()),
+                },
                 docker_state: connection.docker_state(),
             });
         }

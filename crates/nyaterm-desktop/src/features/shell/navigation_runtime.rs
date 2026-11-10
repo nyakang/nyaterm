@@ -40,6 +40,7 @@ impl NyaTermApp {
             // every session keeps running exactly as before it was opened.
             self.shell.navigation.selected_nav = NavItem::Settings;
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             self.shell.set_status("settings opened".to_string());
             self.open_settings_workspace_tab(cx);
             return;
@@ -118,6 +119,7 @@ impl NyaTermApp {
 
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
         // Publish the new panel visibility and browser state.
         self.flush_transfer_panel_snapshot(cx);
@@ -130,6 +132,7 @@ impl NyaTermApp {
         {
             self.shell.panels.set_floating_panel(side, Some(item));
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             return;
         }
         if self.shell.panels.multi_open && self.panel_side_for_item(item).is_some() {
@@ -154,6 +157,7 @@ impl NyaTermApp {
             None => {}
         }
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
     }
 
     pub(in crate::features) fn toggle_left_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -197,6 +201,7 @@ impl NyaTermApp {
         self.persist_ui_layout();
         self.ensure_visible_notes_loaded(cx);
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -241,6 +246,7 @@ impl NyaTermApp {
         self.persist_ui_layout();
         self.ensure_visible_notes_loaded(cx);
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -261,6 +267,7 @@ impl NyaTermApp {
         }
         self.ensure_visible_notes_loaded(cx);
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -281,6 +288,7 @@ impl NyaTermApp {
         }
         self.ensure_visible_notes_loaded(cx);
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 

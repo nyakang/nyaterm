@@ -4,17 +4,15 @@ pub use nyaterm_core::ascend_npu::{
     RemoteNpu, RemoteNpuOverview, RemoteNpuProcess, parse_npu_overview_output,
 };
 
-use nyaterm_transport::ssh_execution::{
-    RemoteCommandOutput, ensure_remote_command_success, run_ssh_command,
-};
+use crate::host::HostTarget;
+use nyaterm_transport::ssh_execution::{RemoteCommandOutput, ensure_remote_command_success};
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 
 const ASCEND_NPU_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct RemoteNpuService {
-    config: SshSessionConfig,
-    multiplex: Option<SshMultiplexHandle>,
+    target: HostTarget,
 }
 
 pub const ASCEND_NPU_OVERVIEW_SCRIPT: &str = r#"sh -s <<'NYATERM_ASCEND_NPU_SCRIPT'
@@ -102,10 +100,14 @@ NYATERM_ASCEND_NPU_SCRIPT
 
 impl RemoteNpuService {
     pub fn new(config: SshSessionConfig) -> Self {
-        Self {
+        Self::with_target(HostTarget::Ssh {
             config,
             multiplex: None,
-        }
+        })
+    }
+
+    pub fn with_target(target: HostTarget) -> Self {
+        Self { target }
     }
 
     pub fn with_multiplex(
@@ -113,10 +115,10 @@ impl RemoteNpuService {
         multiplex: SshMultiplexHandle,
     ) -> anyhow::Result<Self> {
         multiplex.ensure_matches_config(&config)?;
-        Ok(Self {
+        Ok(Self::with_target(HostTarget::Ssh {
             config,
             multiplex: Some(multiplex),
-        })
+        }))
     }
 
     pub fn overview(&self) -> anyhow::Result<RemoteNpuOverview> {
@@ -128,13 +130,10 @@ impl RemoteNpuService {
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
-        let output = run_ssh_command(
-            self.config.clone(),
-            self.multiplex.clone(),
-            command.as_bytes().to_vec(),
-            ASCEND_NPU_TIMEOUT,
-        )?;
+        self.target.ensure_probes_allowed()?;
+        let output = self
+            .target
+            .run_raw(command.to_string(), None, ASCEND_NPU_TIMEOUT)?;
         ensure_remote_command_success(output, context)
     }
 }

@@ -41,9 +41,11 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
-        if !config.remote_stats_enabled() {
+        let target = context.target;
+        if target
+            .ssh_config()
+            .is_some_and(|config| !config.remote_stats_enabled())
+        {
             self.remote_ops
                 .set_stats_status("remote stats are unavailable for network device sessions");
             self.shell
@@ -79,21 +81,19 @@ impl NyaTermApp {
         let options = RemoteStatsOptions {
             collect_logged_in_users: self.settings.summary().ui_remote_stats_show_users,
         };
-        if let Err(error) =
-            self.blocking_jobs
-                .submit_detached("remote-stats", move |_| {
-                    let result = (|| {
-                        RemoteStatsService::with_multiplex(config, multiplex)?
-                            .snapshot_with_options(sampler.as_ref(), &sampling_session_id, options)
-                    })()
+        if let Err(error) = self
+            .blocking_jobs
+            .submit_detached("remote-stats", move |_| {
+                let result = RemoteStatsService::with_target(target)
+                    .snapshot_with_options(sampler.as_ref(), &sampling_session_id, options)
                     .map_err(|error| error.to_string());
-                    let _ = tx.unbounded_send(StatsJobResult {
-                        users_revision,
-                        job_id,
-                        session_id: job_session_id,
-                        result,
-                    });
-                })
+                let _ = tx.unbounded_send(StatsJobResult {
+                    users_revision,
+                    job_id,
+                    session_id: job_session_id,
+                    result,
+                });
+            })
         {
             let _ = rejected_tx.unbounded_send(StatsJobResult {
                 users_revision,

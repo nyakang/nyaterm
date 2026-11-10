@@ -609,10 +609,16 @@ impl NyaTermApp {
         }
     }
 
+    /// The header shows host metrics for any live terminal: an SSH session or
+    /// a local shell (this machine). Without one it shows the "no session" hint.
+    pub(in crate::features) fn header_status_has_host(&self) -> bool {
+        self.session.active_has_inspectable_host()
+    }
+
     fn gpu_header_content(&self) -> HeaderStatusContent {
         let icon = header_status_mode_icon(HeaderStatusMode::Gpu);
         let fallback = |label| HeaderStatusContent::simple(icon, label);
-        if self.session.active_ssh_config().is_none() {
+        if !self.header_status_has_host() {
             return fallback(t!("gpuMonitor.noSession").to_string());
         }
         let gpu = self.remote_ops.gpu_presentation();
@@ -647,7 +653,7 @@ impl NyaTermApp {
     fn npu_header_content(&self) -> HeaderStatusContent {
         let icon = header_status_mode_icon(HeaderStatusMode::Npu);
         let fallback = |label| HeaderStatusContent::simple(icon, label);
-        if self.session.active_ssh_config().is_none() {
+        if !self.header_status_has_host() {
             return fallback(t!("ascendNpuMonitor.noSession").to_string());
         }
         let npu = self.remote_ops.npu_presentation();
@@ -690,7 +696,7 @@ impl NyaTermApp {
                 self.remote_stats_header_fallback(),
             )
         };
-        if self.session.active_ssh_config().is_none() {
+        if !self.header_status_has_host() {
             return fallback();
         }
         let stats_state = self.remote_ops.stats_presentation();
@@ -854,7 +860,7 @@ impl NyaTermApp {
     }
 
     fn remote_stats_header_fallback(&self) -> String {
-        if self.session.active_ssh_config().is_none() {
+        if !self.header_status_has_host() {
             t!("panel.resourceMonitorNoSession").to_string()
         } else {
             let stats = self.remote_ops.stats_presentation();

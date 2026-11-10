@@ -142,6 +142,9 @@ impl SshConnectionPool {
 }
 
 impl SshConnectionLease {
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
     pub(crate) fn docker_state(&self) -> nyaterm_remote_ops::docker::DockerConnectionState {
         self.inner.docker_state.clone()
     }
@@ -238,6 +241,8 @@ mod tests {
         let pool = SshConnectionPool::default();
         let old = pool.register_for_test("shared", || {});
         let new = pool.register_for_test("shared", || {});
+        assert!(old.same_connection(&old.clone()));
+        assert!(!old.same_connection(&new));
         drop(old);
         pool.finish_disconnects();
         let found = pool.get("shared").unwrap();

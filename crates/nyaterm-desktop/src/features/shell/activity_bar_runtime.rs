@@ -90,6 +90,10 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn normalize_activity_bar_layout(&mut self) {
+        self.shell
+            .chrome
+            .activity_bar_layout
+            .ensure_host_tool_entries();
         let mut seen = std::collections::HashSet::new();
         for zone in ActivityBarZone::all() {
             let mut next = Vec::new();
@@ -238,6 +242,7 @@ impl NyaTermApp {
         }
         self.shell.chrome.activity_bar_context_menu = None;
         self.shell.set_status(format!("{entry_id} hidden"));
+        self.sync_host_tools(cx);
         self.persist_ui_layout();
         cx.notify();
     }
@@ -255,6 +260,7 @@ impl NyaTermApp {
         }
         self.shell.chrome.activity_bar_context_menu = None;
         self.shell.set_status(format!("{entry_id} shown"));
+        self.sync_host_tools(cx);
         self.persist_ui_layout();
         cx.notify();
     }
@@ -274,6 +280,7 @@ impl NyaTermApp {
         self.shell.panels.right_collapsed = true;
         self.shell.chrome.activity_bar_context_menu = None;
         self.shell.set_status("activity bar reset".to_string());
+        self.sync_host_tools(cx);
         self.persist_ui_layout();
         cx.notify();
     }
@@ -416,6 +423,7 @@ impl NyaTermApp {
             entry_id,
             target_zone.label().to_lowercase()
         ));
+        self.sync_host_tools(cx);
         self.persist_ui_layout();
         cx.notify();
     }
@@ -498,6 +506,7 @@ impl NyaTermApp {
                             _ => {}
                         }
                     }
+                    self.sync_host_tools(cx);
                     cx.notify();
                 }
                 if item == NavItem::Plugins && !self.panel_entry_selected(item) {
@@ -742,6 +751,122 @@ mod tests {
     }
 
     #[test]
+    fn optional_host_tools_preserve_saved_layout_across_application_restarts() {
+        for aliases in [false, true] {
+            let test_dir = TestConfigDir::new("nyaterm-host-tools-layout-restart");
+            {
+                let store = nyaterm_store::ConnectionStore::open(test_dir.path().join("config"))
+                    .expect("store");
+                let mut settings = store.load_app_settings_summary().expect("settings");
+                settings
+                    .ui_activity_bar_right_top
+                    .retain(|id| !matches!(id.as_str(), "portsManager" | "servicesManager"));
+                if aliases {
+                    settings.ui_activity_bar_left_top.push("ports".into());
+                    settings
+                        .ui_activity_bar_right_bottom
+                        .push("services".into());
+                    settings
+                        .ui_activity_bar_hidden_items
+                        .push("services".into());
+                    settings.ui_panel_multi_open = true;
+                    settings.ui_left_open_panels = vec!["ports".into()];
+                }
+                settings
+                    .ui_activity_bar_left_bottom
+                    .push("futureEntry".into());
+                store
+                    .save_ui_layout_settings(&settings)
+                    .expect("save legacy layout");
+            }
+            let (saved, _first_app_config_guard) = {
+                let mut cx = TestAppContext::single();
+                let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+                let app = test_app(&mut cx, test_dir.path());
+                let (store, settings, layout, config_guard) = cx.update_entity(&app, |app, cx| {
+                    let layout = app.shell.activity_bar_layout();
+                    if aliases {
+                        assert_eq!(layout.side_for_entry("portsManager"), Some(PanelSide::Left));
+                        assert!(!layout.is_hidden("portsManager"));
+                        assert!(
+                            app.side_open_panel_ids(PanelSide::Left)
+                                .contains(&"portsManager".into())
+                        );
+                    } else {
+                        assert!(layout.is_hidden("portsManager"));
+                        assert!(layout.is_hidden("servicesManager"));
+                    }
+                    assert_eq!(
+                        app.settings.summary().ui_activity_bar_hidden_items,
+                        layout.hidden_items
+                    );
+                    app.show_activity_entry("portsManager".into(), cx);
+                    app.move_activity_entry(
+                        "portsManager".into(),
+                        ActivityBarZone::LeftBottom,
+                        Some(0),
+                        cx,
+                    );
+                    app.hide_activity_entry("servicesManager".into(), cx);
+                    app.normalize_activity_bar_layout();
+                    let normalized = app.shell.activity_bar_layout().clone();
+                    app.normalize_activity_bar_layout();
+                    assert_eq!(app.shell.activity_bar_layout(), &normalized);
+                    (
+                        app.store_blocking_client().clone(),
+                        app.settings.summary().clone(),
+                        normalized,
+                        app._test_config_dir.take(),
+                    )
+                });
+                // Use the production persistence adapter outside the GPUI update.
+                store
+                    .request_fn(nyaterm_store::StoreDomain::Settings, move |store| {
+                        store.save_ui_layout_settings(&settings)
+                    })
+                    .expect("save UI choices");
+                // Retain the first app's directory guard across its teardown;
+                // the second app must reopen the actual saved database.
+                (layout, config_guard)
+            };
+            // Store workers close asynchronously after the last client drops.
+            // Wait for the old database lease before constructing the next app.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(store) =
+                    nyaterm_store::ConnectionStore::open(test_dir.path().join("config"))
+                {
+                    drop(store);
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "previous app retained its database lease"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = test_app(&mut cx, test_dir.path());
+            cx.update_entity(&app, |app, cx| {
+                assert_eq!(app.shell.activity_bar_layout(), &saved);
+                assert!(!app.shell.activity_bar_layout().is_hidden("portsManager"));
+                assert!(app.shell.activity_bar_layout().is_hidden("servicesManager"));
+                assert!(
+                    app.shell
+                        .activity_bar_layout()
+                        .left_bottom
+                        .contains(&"futureEntry".into())
+                );
+                app.reset_activity_bar_layout(cx);
+                for id in ["portsManager", "servicesManager"] {
+                    assert!(app.shell.activity_bar_layout().is_hidden(id));
+                }
+            });
+        }
+    }
+
+    #[test]
     fn startup_completes_legacy_plugin_layout_and_preserves_saved_right_placement() {
         for moved in [false, true] {
             let test_dir = TestConfigDir::new("nyaterm-plugin-startup-layout");
@@ -902,7 +1027,7 @@ mod tests {
 
             assert_eq!(
                 app.shell.activity_bar_layout().hidden_items,
-                nyaterm_core::models::settings::panel_visibility::default_hidden_items()
+                crate::models::ActivityBarLayoutState::default().hidden_items
             );
             assert_eq!(app.shell.active_left_panel(), None);
             assert_eq!(app.shell.active_right_panel(), None);
