@@ -360,6 +360,9 @@ impl HostToolsPanel {
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) {
+        if !self.can_refresh() {
+            return;
+        }
         if self.jobs.pending(Lane::Refresh)
             || self.jobs.pending(Lane::Action)
             || self.sudo_prompt.is_some()
@@ -454,7 +457,7 @@ impl HostToolsPanel {
     }
 
     pub(in crate::features) fn can_refresh(&self) -> bool {
-        self.host_ready()
+        self.clock.is_some() && self.host_ready()
     }
 
     fn busy_label(&self) -> Option<&SharedString> {
@@ -473,6 +476,9 @@ impl HostToolsPanel {
     }
 
     fn submit_job(&mut self, lane: Lane, key: String, request: Request, cx: &mut Context<Self>) {
+        if lane != Lane::Action && !self.can_refresh() {
+            return;
+        }
         let Some(context) = self.context() else {
             return;
         };
@@ -503,7 +509,7 @@ impl HostToolsPanel {
     }
 
     pub(in crate::features) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if !self.host_ready() {
+        if !self.can_refresh() {
             return;
         }
         if self.jobs.pending(Lane::Refresh) || self.jobs.pending(Lane::Action) {
@@ -810,6 +816,9 @@ impl HostToolsPanel {
     }
 
     fn open_logs(&mut self, entry: ServiceEntry, cx: &mut Context<Self>) {
+        if !self.can_refresh() {
+            return;
+        }
         let Some(backend) = self.services_backend else {
             return;
         };
@@ -872,6 +881,9 @@ impl HostToolsPanel {
     }
 
     fn load_port_details(&mut self, row: &PortRow, cx: &mut Context<Self>) {
+        if !self.can_refresh() {
+            return;
+        }
         let Some(pid) = row.pid else {
             return;
         };

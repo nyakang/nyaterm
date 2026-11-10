@@ -144,6 +144,7 @@ impl NyaTermApp {
         });
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -176,6 +177,7 @@ impl NyaTermApp {
         });
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -194,6 +196,7 @@ impl NyaTermApp {
             format!("{} floating panel closed", item.persistence_id())
         });
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -206,6 +209,7 @@ impl NyaTermApp {
         if self.shell.panels.floating_panel(side).is_some() {
             self.shell.panels.set_floating_panel(side, None);
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
         }
     }
@@ -423,6 +427,7 @@ impl NyaTermApp {
         let browser_was_visible = self.transfer_browser_is_visible();
         self.shell.panels.clear_floating();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -621,6 +626,7 @@ impl NyaTermApp {
             }
             self.persist_ui_layout();
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
             return;
         }
@@ -654,6 +660,7 @@ impl NyaTermApp {
             self.shell.set_status(format!("{} focused", item.label()));
             self.persist_ui_layout();
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
             return;
         }
@@ -701,6 +708,7 @@ impl NyaTermApp {
         }
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
         // Publish the new panel visibility and browser state.
         self.flush_transfer_panel_snapshot(cx);
@@ -755,6 +763,7 @@ impl NyaTermApp {
             None => {}
         }
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
     }
 
     pub(in crate::features) fn start_panel_stack_resize(

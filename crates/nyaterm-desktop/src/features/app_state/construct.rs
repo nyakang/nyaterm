@@ -164,8 +164,24 @@ impl NyaTermApp {
         };
         activity_bar_layout.ensure_plugin_entry();
         activity_bar_layout.ensure_remote_monitor_entries();
+        activity_bar_layout.ensure_host_tool_entries();
+        settings.ui_activity_bar_left_top = activity_bar_layout.left_top.clone();
+        settings.ui_activity_bar_right_bottom = activity_bar_layout.right_bottom.clone();
+        settings.ui_activity_bar_hidden_items = activity_bar_layout.hidden_items.clone();
         settings.ui_activity_bar_right_top = activity_bar_layout.right_top.clone();
         settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
+        for open in [
+            &mut settings.ui_left_open_panels,
+            &mut settings.ui_right_open_panels,
+        ] {
+            for id in open {
+                match id.as_str() {
+                    "ports" => *id = "portsManager".into(),
+                    "services" => *id = "servicesManager".into(),
+                    _ => {}
+                }
+            }
+        }
         let mut active_left_panel = settings
             .ui_active_left_panel
             .as_deref()

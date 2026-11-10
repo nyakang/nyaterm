@@ -918,8 +918,6 @@ fn default_activity_right_top() -> Vec<String> {
         "ascendNpuMonitor".to_string(),
         "processManager".to_string(),
         "dockerManager".to_string(),
-        "portsManager".to_string(),
-        "servicesManager".to_string(),
     ]
 }
 
@@ -1152,6 +1150,25 @@ mod tests {
             summary.ui_file_explorer_view_mode,
             TransferBrowserViewMode::List
         );
+    }
+
+    #[test]
+    fn host_tools_are_absent_from_new_and_legacy_default_activity_layouts() {
+        let defaults = AppSettingsSummary::default();
+        let mut legacy = serde_json::to_value(&defaults).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("ui_activity_bar_right_top");
+        let restored: AppSettingsSummary = serde_json::from_value(legacy).unwrap();
+        for summary in [defaults, restored] {
+            assert!(
+                !summary
+                    .ui_activity_bar_right_top
+                    .iter()
+                    .any(|id| matches!(id.as_str(), "portsManager" | "servicesManager"))
+            );
+        }
     }
 
     #[test]

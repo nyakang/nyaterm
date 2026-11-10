@@ -3410,6 +3410,69 @@ fn legacy_settings_default_hidden_items_and_docked_panel_mode() {
 }
 
 #[test]
+fn host_tools_are_not_added_to_new_or_legacy_store_defaults() {
+    let dir = unique_temp_dir("host-tools-default-layout");
+    let store = ConnectionStore::open(&dir).unwrap();
+    for document in [
+        serde_json::json!({}),
+        serde_json::json!({"ui": {"activity_bar_layout": "default"}}),
+        serde_json::json!({"ui": {"activity_bar_layout": {"right_top": [], "hidden_items": [], "future": 7}}}),
+    ] {
+        store.save_settings_value(&document).unwrap();
+        let summary = store.load_app_settings_summary().unwrap();
+        assert!(
+            !summary
+                .ui_activity_bar_right_top
+                .iter()
+                .any(|id| matches!(id.as_str(), "portsManager" | "servicesManager"))
+        );
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn saved_host_tool_placement_and_visibility_survive_reopening_the_store() {
+    let dir = unique_temp_dir("host-tools-saved-layout");
+    let saved;
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(
+                &serde_json::json!({"future": 13, "ui": {"activity_bar_layout": {
+                    "left_top": ["portsManager", "futureEntry"],
+                    "right_top": ["dockerManager", "servicesManager"],
+                    "hidden_items": ["servicesManager", "futureEntry"],
+                    "futureLayoutOption": {"version": 9}
+                }}}),
+            )
+            .unwrap();
+        saved = store.load_app_settings_summary().unwrap();
+        store.save_ui_layout_settings(&saved).unwrap();
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    let loaded = store.load_app_settings_summary().unwrap();
+    assert_eq!(
+        loaded.ui_activity_bar_left_top,
+        saved.ui_activity_bar_left_top
+    );
+    assert_eq!(
+        loaded.ui_activity_bar_right_top,
+        saved.ui_activity_bar_right_top
+    );
+    assert_eq!(
+        loaded.ui_activity_bar_hidden_items,
+        saved.ui_activity_bar_hidden_items
+    );
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["future"], 13);
+    assert_eq!(
+        raw["ui"]["activity_bar_layout"]["futureLayoutOption"]["version"],
+        9
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn plugin_layout_roundtrips_without_losing_legacy_or_unknown_settings() {
     let dir = unique_temp_dir("settings-plugin-layout-compatibility");
     let store = ConnectionStore::open(&dir).expect("store");

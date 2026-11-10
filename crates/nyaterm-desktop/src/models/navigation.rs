@@ -386,7 +386,7 @@ pub(crate) struct ActivityBarLayoutState {
 
 impl Default for ActivityBarLayoutState {
     fn default() -> Self {
-        Self {
+        let mut layout = Self {
             left_top: vec![
                 "fileExplorer".to_string(),
                 "notes".to_string(),
@@ -408,8 +408,6 @@ impl Default for ActivityBarLayoutState {
                 "ascendNpuMonitor".to_string(),
                 "processManager".to_string(),
                 "dockerManager".to_string(),
-                "portsManager".to_string(),
-                "servicesManager".to_string(),
             ],
             right_bottom: vec![
                 "quickCmdBar".to_string(),
@@ -419,11 +417,50 @@ impl Default for ActivityBarLayoutState {
             ],
             hidden_items: nyaterm_core::models::settings::panel_visibility::default_hidden_items(),
             show_labels: false,
-        }
+        };
+        layout.ensure_host_tool_entries();
+        layout
     }
 }
 
 impl ActivityBarLayoutState {
+    /// Optional tools need slots for customization, but introducing a missing
+    /// slot must never opt a user into showing it. Existing slots are choices.
+    pub(crate) fn ensure_host_tool_entries(&mut self) {
+        for zone in ActivityBarZone::all() {
+            for id in self.zone_mut(zone) {
+                match id.as_str() {
+                    "ports" => *id = "portsManager".into(),
+                    "services" => *id = "servicesManager".into(),
+                    _ => {}
+                }
+            }
+        }
+        for id in &mut self.hidden_items {
+            match id.as_str() {
+                "ports" => *id = "portsManager".into(),
+                "services" => *id = "servicesManager".into(),
+                _ => {}
+            }
+        }
+        for (id, anchor) in [
+            ("portsManager", "dockerManager"),
+            ("servicesManager", "portsManager"),
+        ] {
+            if self.find_entry(id).is_some() {
+                continue;
+            }
+            let insert_at = self
+                .right_top
+                .iter()
+                .position(|entry| entry == anchor)
+                .map(|index| index + 1)
+                .unwrap_or(self.right_top.len());
+            self.right_top.insert(insert_at, id.into());
+            self.hide_entry(id);
+        }
+    }
+
     /// Older store defaults omitted accelerator slots entirely. Restore only
     /// those missing slots, retaining unknown ids and all saved visibility.
     pub(crate) fn ensure_remote_monitor_entries(&mut self) {
@@ -894,7 +931,9 @@ mod tests {
             vec![
                 "fileExplorer".to_string(),
                 "gpuMonitor".to_string(),
-                "ascendNpuMonitor".to_string()
+                "ascendNpuMonitor".to_string(),
+                "portsManager".to_string(),
+                "servicesManager".to_string()
             ]
         );
 
@@ -967,7 +1006,72 @@ mod tests {
         assert!(layout.has_hidden_entries());
         assert_eq!(
             layout.hidden_items,
-            nyaterm_core::models::settings::panel_visibility::default_hidden_items()
+            ActivityBarLayoutState::default().hidden_items
         );
+    }
+
+    #[test]
+    fn optional_host_tools_are_hidden_on_first_registration_and_keep_saved_choices() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: vec!["futureEntry".into()],
+            left_bottom: Vec::new(),
+            right_top: vec!["dockerManager".into(), "after".into()],
+            right_bottom: Vec::new(),
+            hidden_items: vec!["futureEntry".into()],
+            show_labels: true,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(
+            layout.right_top,
+            ["dockerManager", "portsManager", "servicesManager", "after"]
+        );
+        assert_eq!(
+            layout.hidden_items,
+            ["futureEntry", "portsManager", "servicesManager"]
+        );
+        assert!(layout.show_entry("portsManager"));
+        layout.right_top.retain(|id| id != "portsManager");
+        layout.left_top.insert(0, "portsManager".into());
+        let saved = layout.clone();
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout, saved);
+        assert!(!layout.is_hidden("portsManager"));
+        assert!(layout.is_hidden("servicesManager"));
+    }
+
+    #[test]
+    fn optional_host_tool_aliases_keep_placement_and_visibility_without_duplicates() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: vec!["ports".into(), "futureEntry".into()],
+            left_bottom: Vec::new(),
+            right_top: Vec::new(),
+            right_bottom: vec!["services".into()],
+            hidden_items: vec!["services".into(), "futureEntry".into()],
+            show_labels: false,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout.left_top, ["portsManager", "futureEntry"]);
+        assert_eq!(layout.right_bottom, ["servicesManager"]);
+        assert!(layout.right_top.is_empty());
+        assert_eq!(layout.hidden_items, ["servicesManager", "futureEntry"]);
+        let saved = layout.clone();
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout, saved);
+    }
+
+    #[test]
+    fn an_empty_layout_offers_host_tools_as_hidden_customization_entries() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: Vec::new(),
+            left_bottom: Vec::new(),
+            right_top: Vec::new(),
+            right_bottom: Vec::new(),
+            hidden_items: Vec::new(),
+            show_labels: false,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout.right_top, ["portsManager", "servicesManager"]);
+        assert_eq!(layout.hidden_items, layout.right_top);
+        assert_eq!(layout.first_panel_on_side(PanelSide::Right), None);
     }
 }
