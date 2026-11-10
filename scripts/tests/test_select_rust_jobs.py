@@ -58,6 +58,8 @@ class PathSelectionTests(unittest.TestCase):
             ("scripts/release/package_native.py", {"run_python"}),
             ("scripts/tests/test_release_workflow.py", {"run_python"}),
             ("scripts/tests/test_windows_resources.py", {"run_rust", "run_python"}),
+            ("scripts/tests/test_prepare_android.py", {"run_rust", "run_python"}),
+            ("scripts/release/prepare_android.py", {"run_rust", "run_python"}),
             ("scripts/plugins/build.py", {"run_python", "run_plugin_sdk"}),
             ("examples/plugins/guests/text-tools/src/lib.rs", {"run_plugin_sdk"}),
             ("examples/plugins/templates/templates/inspect.txt", {"run_plugin_sdk"}),

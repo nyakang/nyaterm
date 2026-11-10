@@ -32,8 +32,11 @@ export its reported `FFMPEG_DIR` before Cargo commands. Build
 `nyaterm-android-helper` beside `nyaterm`. `NYATERM_ANDROID_HELPER` overrides the
 helper path. `package_native.py` prepares and packages the same dependencies.
 FFmpeg builds require a C compiler, make, pkg-config and libclang; Windows uses
-MSVC and sh/make. Linux ARM64 additionally uses cmake, Ninja and the libraries
+MSVC and MSYS2 sh/make. Linux ARM64 additionally uses cmake, Ninja and the libraries
 listed in the release workflow.
+On Windows the preparation script supplies all four MSVC import libraries in
+`FFMPEG_DIR/lib`, reuses FFmpeg's installed libraries or generates missing ones
+with the selected MSVC librarian, and repairs incomplete cached installations.
 
 FFmpeg disables GPL, nonfree, autodetection, network and programs, and enables
 H.264 decoding/parsing and BGRA scaling. The pinned ffmpeg-next 8.1.0 needs its
