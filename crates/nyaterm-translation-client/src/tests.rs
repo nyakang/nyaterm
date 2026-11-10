@@ -39,6 +39,8 @@ fn serve(
                     Err(error) => panic!("fixture accept failed: {error}"),
                 }
             };
+            // Windows accepted sockets inherit the listener's nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
