@@ -27,6 +27,7 @@ pub fn collect_local() -> LocalUsers {
                 sessions,
             }
         }
+        #[cfg(not(windows))]
         Err(LoginSessionsError::Unavailable) => LocalUsers {
             status: LoggedInUsersStatus::Unavailable,
             users: Vec::new(),
@@ -41,6 +42,7 @@ pub fn collect_local() -> LocalUsers {
 }
 
 enum LoginSessionsError {
+    #[cfg(not(windows))]
     Unavailable,
     Failed,
 }
