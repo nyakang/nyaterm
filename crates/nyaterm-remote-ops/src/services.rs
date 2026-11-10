@@ -60,6 +60,13 @@ pub struct ServiceEntry {
     pub scope: String,
 }
 
+impl ServiceEntry {
+    /// Scope is part of a launchd job's identity; labels may repeat across domains.
+    pub fn key(&self) -> String {
+        format!("{}|{}", self.scope, self.name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServicesSnapshot {
     pub backend: ServiceBackend,
@@ -176,6 +183,7 @@ pub fn list_services(
     os: HostOs,
     elevation: Elevation,
 ) -> anyhow::Result<ServicesSnapshot> {
+    target.ensure_probes_allowed()?;
     #[cfg(windows)]
     if matches!(os, HostOs::Windows) && target.is_local() {
         return windows_scm::list().map(|entries| ServicesSnapshot {
@@ -650,6 +658,7 @@ pub fn run_action(
     action: ServiceAction,
     elevation: Elevation,
 ) -> anyhow::Result<()> {
+    target.ensure_probes_allowed()?;
     #[cfg(windows)]
     if matches!(os, HostOs::Windows) && target.is_local() {
         validate_service_name(&entry.name)?;
@@ -684,6 +693,7 @@ pub fn fetch_logs(
     lines: u32,
     elevation: Elevation,
 ) -> anyhow::Result<String> {
+    target.ensure_probes_allowed()?;
     validate_service_name(&entry.name)?;
     let lines = lines.clamp(10, 2000);
     let output = match backend {

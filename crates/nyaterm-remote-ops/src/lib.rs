@@ -6,6 +6,7 @@ pub mod local_process;
 pub mod local_stats;
 pub mod login_sessions;
 pub mod ports;
+pub mod process_control;
 pub mod remote_process;
 pub mod services;
 pub mod stats;

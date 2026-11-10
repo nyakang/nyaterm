@@ -262,6 +262,8 @@ impl SshProcessService {
     ) -> anyhow::Result<RemoteCommandOutput> {
         self.target.ensure_probes_allowed()?;
         let signal = normalize_process_signal(signal.as_ref())?;
+        crate::process_control::ProcessControlCapabilities::for_os(self.target.os_hint())
+            .ensure_signal(signal)?;
         if self.native_windows() {
             crate::local_process::kill_local_process(pid, signal == "KILL")?;
             return Ok(RemoteCommandOutput {
@@ -279,8 +281,10 @@ impl SshProcessService {
 
     pub fn renice_process(&self, pid: u32, nice: i32) -> anyhow::Result<RemoteCommandOutput> {
         self.target.ensure_probes_allowed()?;
-        if self.native_windows() {
-            anyhow::bail!("changing priority is not supported on Windows");
+        if !crate::process_control::ProcessControlCapabilities::for_os(self.target.os_hint())
+            .supports_priority()
+        {
+            return Err(crate::process_control::UnsupportedProcessControl.into());
         }
         if !(-20..=19).contains(&nice) {
             anyhow::bail!("Nice value must be between -20 and 19");

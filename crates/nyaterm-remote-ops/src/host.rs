@@ -3,22 +3,44 @@
 //!
 //! Design constraints:
 //! * No async runtime is created per call. Local commands use `std::process`
-//!   with reader threads and a deadline; SSH reuses the transport's multiplex
+//!   with bounded pipe I/O and a deadline; SSH reuses the transport's multiplex
 //!   runtime.
 //! * Callers batch everything a refresh needs into one script, so a refresh is
 //!   one process spawn (local) or one exec channel (SSH).
 //! * Elevated commands send the sudo password on stdin only; it never enters
 //!   argv, logs, or `Debug` output.
 
-use anyhow::{Context, bail};
+mod local_exec;
+
+use anyhow::bail;
+use local_exec::run_local;
 use nyaterm_core::SecretString;
 use nyaterm_transport::ssh_execution::{
     RemoteCommandOutput, run_ssh_command, run_ssh_command_with_input,
 };
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
+
+/// Failures produced by the bounded local command supervisor. No command,
+/// input, or captured output is included in these errors.
+#[derive(Debug)]
+pub enum HostCommandError {
+    Timeout(Duration),
+    OutputLimitExceeded,
+}
+
+impl std::fmt::Display for HostCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout(timeout) => write!(f, "local command timed out after {timeout:?}"),
+            Self::OutputLimitExceeded => {
+                f.write_str("local command output exceeds the 16 MiB per-stream limit")
+            }
+        }
+    }
+}
+impl std::error::Error for HostCommandError {}
 
 /// Operating-system family of a target, which selects the backend scripts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -276,6 +298,18 @@ pub fn signal_pid(
     force: bool,
     elevation: Elevation,
 ) -> anyhow::Result<()> {
+    // A caller's cached platform hint must never weaken local control policy.
+    let os = if target.is_local() {
+        HostOs::local()
+    } else {
+        os
+    };
+    target.ensure_probes_allowed()?;
+    crate::process_control::ProcessControlCapabilities::for_os(os).ensure_signal(if force {
+        "KILL"
+    } else {
+        "TERM"
+    })?;
     if pid == 0 {
         bail!("this socket has no known owning process");
     }
@@ -321,67 +355,6 @@ pub fn looks_like_permission_error(message: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
-}
-
-/// Spawn, feed stdin, drain both pipes on threads (so a full pipe cannot
-/// deadlock the child), and enforce a deadline with a short backoff poll.
-fn run_local(
-    command: &mut Command,
-    input: Option<String>,
-    timeout: Duration,
-) -> anyhow::Result<RemoteCommandOutput> {
-    let mut child = command
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to start local command")?;
-
-    if let Some(text) = input
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        // Feed on a thread: a script larger than the pipe buffer must not
-        // block before the child starts reading.
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(text.as_bytes());
-        });
-    }
-    let out = drain(child.stdout.take());
-    let err = drain(child.stderr.take());
-
-    let deadline = Instant::now() + timeout;
-    let mut delay = Duration::from_millis(1);
-    let status = loop {
-        if let Some(status) = child.try_wait().context("failed to poll local command")? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("local command timed out after {}s", timeout.as_secs());
-        }
-        std::thread::sleep(delay);
-        delay = (delay * 2).min(Duration::from_millis(20));
-    };
-    Ok(RemoteCommandOutput {
-        stdout: String::from_utf8_lossy(&out.join().unwrap_or_default()).into_owned(),
-        stderr: String::from_utf8_lossy(&err.join().unwrap_or_default()).into_owned(),
-        exit_status: status.code().map(|code| code as u32),
-    })
-}
-
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buffer = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buffer);
-        }
-        buffer
-    })
 }
 
 /// POSIX single-quote escaping.

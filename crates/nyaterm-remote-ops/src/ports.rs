@@ -119,6 +119,7 @@ pub fn list_ports(
     os: HostOs,
     elevation: Elevation,
 ) -> anyhow::Result<PortsSnapshot> {
+    target.ensure_probes_allowed()?;
     #[cfg(windows)]
     if target.is_local() && matches!(os, HostOs::Windows) {
         return native::list_windows();
@@ -174,6 +175,7 @@ pub fn process_details(
     pid: u32,
     elevation: Elevation,
 ) -> anyhow::Result<ProcessDetails> {
+    target.ensure_probes_allowed()?;
     if matches!(os, HostOs::Windows) {
         anyhow::ensure!(target.is_local(), "remote Windows hosts are not supported");
         let found = crate::local_process::list_local_processes()

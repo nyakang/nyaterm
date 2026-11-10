@@ -152,6 +152,10 @@ pub fn list_local_processes() -> Vec<RemoteProcess> {
 /// Terminate a local process. `kill` is a hard stop on Windows, which has no
 /// signal model; other signals are not offered there.
 pub fn kill_local_process(pid: u32, force: bool) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if !force {
+        return Err(crate::process_control::UnsupportedProcessControl.into());
+    }
     let mut system = System::new();
     let pid = Pid::from_u32(pid);
     system.refresh_processes_specifics(
