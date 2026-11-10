@@ -154,6 +154,7 @@ impl NyaTermApp {
         let transfer_panel_height = settings.ui_transfer_height as f32;
         let quick_cmd_height = settings.ui_quick_cmd_height as f32;
         let serial_send_height = settings.ui_serial_send_height as f32;
+        ActivityBarLayoutState::complete_settings_layout(&mut settings);
         let mut activity_bar_layout = ActivityBarLayoutState {
             left_top: settings.ui_activity_bar_left_top.clone(),
             left_bottom: settings.ui_activity_bar_left_bottom.clone(),
@@ -164,6 +165,10 @@ impl NyaTermApp {
         };
         activity_bar_layout.ensure_plugin_entry();
         activity_bar_layout.ensure_remote_monitor_entries();
+        activity_bar_layout.ensure_host_tool_entries();
+        settings.ui_activity_bar_left_top = activity_bar_layout.left_top.clone();
+        settings.ui_activity_bar_right_bottom = activity_bar_layout.right_bottom.clone();
+        settings.ui_activity_bar_hidden_items = activity_bar_layout.hidden_items.clone();
         settings.ui_activity_bar_right_top = activity_bar_layout.right_top.clone();
         settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
         let mut active_left_panel = settings
@@ -256,6 +261,11 @@ impl NyaTermApp {
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
 
         let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
+        let host_tool_panels = crate::features::remote::HostToolPanels::new(
+            app_entity.downgrade(),
+            blocking_jobs.clone(),
+            cx,
+        );
         let send_command = SendCommandFeatureState::new(cx);
         cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
             .detach();
@@ -369,6 +379,7 @@ impl NyaTermApp {
             ),
             remote_ops: RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {}),
             remote_panels,
+            host_tool_panels,
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
             translation: TranslationFeatureState::new(translation_settings),
             update,

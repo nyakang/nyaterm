@@ -1153,6 +1153,25 @@ mod tests {
     }
 
     #[test]
+    fn host_tools_are_absent_from_new_and_legacy_default_activity_layouts() {
+        let defaults = AppSettingsSummary::default();
+        let mut legacy = serde_json::to_value(&defaults).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("ui_activity_bar_right_top");
+        let restored: AppSettingsSummary = serde_json::from_value(legacy).unwrap();
+        for summary in [defaults, restored] {
+            assert!(
+                !summary
+                    .ui_activity_bar_right_top
+                    .iter()
+                    .any(|id| matches!(id.as_str(), "portsManager" | "servicesManager"))
+            );
+        }
+    }
+
+    #[test]
     fn summary_deserializes_missing_new_fields_to_defaults() {
         // A minimal JSON document (legacy shape) must fill the new fields with
         // serde defaults rather than failing to deserialize. Built from a raw

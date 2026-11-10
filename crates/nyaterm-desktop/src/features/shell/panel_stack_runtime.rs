@@ -14,6 +14,7 @@ use gpui::{
 use nyaterm_core::truncate_preview;
 
 use crate::features::NyaTermApp;
+use crate::features::pages::remote::HostToolKind;
 use crate::features::view_widgets::{
     conversation_panel_header_with_actions, panel_header_with_actions,
 };
@@ -143,6 +144,7 @@ impl NyaTermApp {
         });
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -175,6 +177,7 @@ impl NyaTermApp {
         });
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -193,6 +196,7 @@ impl NyaTermApp {
             format!("{} floating panel closed", item.persistence_id())
         });
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -205,6 +209,7 @@ impl NyaTermApp {
         if self.shell.panels.floating_panel(side).is_some() {
             self.shell.panels.set_floating_panel(side, None);
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
         }
     }
@@ -422,6 +427,7 @@ impl NyaTermApp {
         let browser_was_visible = self.transfer_browser_is_visible();
         self.shell.panels.clear_floating();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
     }
 
@@ -620,6 +626,7 @@ impl NyaTermApp {
             }
             self.persist_ui_layout();
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
             return;
         }
@@ -653,6 +660,7 @@ impl NyaTermApp {
             self.shell.set_status(format!("{} focused", item.label()));
             self.persist_ui_layout();
             self.transfer_browser_visibility_changed(browser_was_visible, cx);
+            self.sync_host_tools(cx);
             cx.notify();
             return;
         }
@@ -700,6 +708,7 @@ impl NyaTermApp {
         }
         self.persist_ui_layout();
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
         cx.notify();
         // Publish the new panel visibility and browser state.
         self.flush_transfer_panel_snapshot(cx);
@@ -754,6 +763,7 @@ impl NyaTermApp {
             None => {}
         }
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
+        self.sync_host_tools(cx);
     }
 
     pub(in crate::features) fn start_panel_stack_resize(
@@ -1028,8 +1038,9 @@ impl NyaTermApp {
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
                 .session
-                .active_ssh_config()
-                .and_then(|_| self.remote_ops.loaded_process_count())
+                .active_has_inspectable_host()
+                .then(|| self.remote_ops.loaded_process_count())
+                .flatten()
                 .map(|count| SharedString::from(count.to_string()))
                 .unwrap_or_else(|| SharedString::from("")),
             NavItem::GpuMonitor => self
@@ -1063,7 +1074,7 @@ impl NyaTermApp {
                 })
                 .unwrap_or_else(|| SharedString::from("")),
             NavItem::Docker => {
-                if self.session.active_ssh_config().is_none() {
+                if !self.session.active_has_inspectable_host() {
                     return SharedString::from("");
                 }
                 let Some(version) = self.remote_ops.docker_engine_version() else {
@@ -1178,10 +1189,31 @@ impl NyaTermApp {
                         .into_any_element(),
                 )
             }
+            NavItem::Ports | NavItem::Services => {
+                let palette = self.theme_palette();
+                let kind = if panel == NavItem::Ports {
+                    HostToolKind::Ports
+                } else {
+                    HostToolKind::Services
+                };
+                Some(
+                    header_svg_icon_button(
+                        palette,
+                        "host-tools-header-refresh",
+                        "icons/fe/refresh.svg",
+                        t!("common.refresh"),
+                        self.host_tool_panels.entity(kind).read(cx).can_refresh(),
+                        cx.listener(move |this, _, _window, cx| {
+                            this.refresh_host_tool(kind, cx);
+                        }),
+                    )
+                    .into_any_element(),
+                )
+            }
             NavItem::Stats => {
                 let palette = self.theme_palette();
                 let manual_refreshing = self.remote_ops.stats_manual_refreshing();
-                let can_refresh = self.session.active_ssh_config().is_some()
+                let can_refresh = self.session.active_has_inspectable_host()
                     && !self.remote_ops.stats_is_pending();
                 Some(
                     header_svg_icon_button(
@@ -1204,8 +1236,9 @@ impl NyaTermApp {
             }
             NavItem::GpuMonitor => {
                 let palette = self.theme_palette();
-                let can_refresh =
-                    self.session.active_ssh_config().is_some() && !self.remote_ops.gpu_is_pending();
+                let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
+                    && !self.remote_ops.gpu_is_pending();
                 Some(
                     header_svg_icon_button(
                         palette,
@@ -1223,8 +1256,9 @@ impl NyaTermApp {
             }
             NavItem::AscendNpuMonitor => {
                 let palette = self.theme_palette();
-                let can_refresh =
-                    self.session.active_ssh_config().is_some() && !self.remote_ops.npu_is_pending();
+                let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
+                    && !self.remote_ops.npu_is_pending();
                 Some(
                     header_svg_icon_button(
                         palette,
@@ -1242,7 +1276,7 @@ impl NyaTermApp {
             }
             NavItem::Processes => {
                 let palette = self.theme_palette();
-                let can_refresh = self.session.active_ssh_config().is_some()
+                let can_refresh = self.session.active_has_inspectable_host()
                     && !self.remote_ops.process_is_pending();
                 Some(
                     header_svg_icon_button(
@@ -1261,7 +1295,8 @@ impl NyaTermApp {
             }
             NavItem::Docker => {
                 let palette = self.theme_palette();
-                let can_refresh = self.session.active_ssh_config().is_some()
+                let can_refresh = self.session.active_has_inspectable_host()
+                    && !self.local_host_tools_unsupported()
                     && !self.remote_ops.docker_is_pending();
                 let can_prune = can_refresh && self.remote_ops.docker_can_prune();
                 let more_label = t!("dockerManager.moreActions").to_string();

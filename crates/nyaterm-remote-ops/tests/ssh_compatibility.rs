@@ -20,6 +20,59 @@ fn blocked<T: std::fmt::Debug>(result: anyhow::Result<T>) {
 }
 
 fn check_blocked_services(config: SshSessionConfig, multiplex: Option<SshMultiplexHandle>) {
+    let target = nyaterm_remote_ops::host::HostTarget::Ssh {
+        config: config.clone(),
+        multiplex: multiplex.clone(),
+    };
+    let os = target.os_hint();
+    let entry = nyaterm_remote_ops::services::ServiceEntry {
+        name: "fixture.service".into(),
+        description: String::new(),
+        state: nyaterm_remote_ops::services::ServiceState::Running,
+        detail: String::new(),
+        startup: nyaterm_remote_ops::services::ServiceStartup::Enabled,
+        pid: Some(42),
+        scope: "system".into(),
+    };
+    blocked(nyaterm_remote_ops::ports::list_ports(
+        &target,
+        os,
+        Default::default(),
+    ));
+    blocked(nyaterm_remote_ops::ports::process_details(
+        &target,
+        os,
+        42,
+        Default::default(),
+    ));
+    blocked(nyaterm_remote_ops::services::list_services(
+        &target,
+        os,
+        Default::default(),
+    ));
+    blocked(nyaterm_remote_ops::services::run_action(
+        &target,
+        os,
+        nyaterm_remote_ops::services::ServiceBackend::Systemd,
+        &entry,
+        nyaterm_remote_ops::services::ServiceAction::Stop,
+        Default::default(),
+    ));
+    blocked(nyaterm_remote_ops::services::fetch_logs(
+        &target,
+        os,
+        nyaterm_remote_ops::services::ServiceBackend::Systemd,
+        &entry,
+        10,
+        Default::default(),
+    ));
+    blocked(nyaterm_remote_ops::host::signal_pid(
+        &target,
+        os,
+        42,
+        true,
+        Default::default(),
+    ));
     let (stats, processes, gpu, npu, docker) = if let Some(multiplex) = multiplex {
         (
             RemoteStatsService::with_multiplex(config.clone(), multiplex.clone()).unwrap(),

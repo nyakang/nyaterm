@@ -58,6 +58,8 @@ pub(crate) enum NavItem {
     AscendNpuMonitor,
     Processes,
     Docker,
+    Ports,
+    Services,
     Transfers,
     Notes,
     Settings,
@@ -80,6 +82,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "panel.npuMonitor",
             NavItem::Processes => "panel.processManager",
             NavItem::Docker => "panel.dockerManager",
+            NavItem::Ports => "hostTools.portsTitle",
+            NavItem::Services => "hostTools.servicesTitle",
             NavItem::Transfers => "panel.fileExplorer",
             NavItem::Notes => "panel.notes",
             NavItem::Settings => "settings.title",
@@ -104,6 +108,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "Ascend NPU Monitor",
             NavItem::Processes => "Process Manager",
             NavItem::Docker => "Docker",
+            NavItem::Ports => "Ports",
+            NavItem::Services => "Services",
             NavItem::Transfers => "File Explorer",
             NavItem::Notes => "Notes",
             NavItem::Settings => "Settings",
@@ -132,6 +138,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "NPU",
             NavItem::Processes => "Processes",
             NavItem::Docker => "Docker",
+            NavItem::Ports => "Ports",
+            NavItem::Services => "Services",
             NavItem::SyncBackupHistory => "Cloud Sync",
             NavItem::SecurityAuth => "Security",
             NavItem::Recording => "Recording",
@@ -161,6 +169,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "icons/npu.svg",
             NavItem::Processes => "icons/processes.svg",
             NavItem::Docker => "icons/docker.svg",
+            NavItem::Ports => "icons/ports.svg",
+            NavItem::Services => "icons/services.svg",
             NavItem::Recording => "icons/record.svg",
             NavItem::Workspace => "icons/workspace.svg",
         }
@@ -190,6 +200,8 @@ impl NavItem {
                 | NavItem::AscendNpuMonitor
                 | NavItem::Processes
                 | NavItem::Docker
+                | NavItem::Ports
+                | NavItem::Services
                 | NavItem::Recording
                 | NavItem::Workspace
         )
@@ -210,6 +222,8 @@ impl NavItem {
             NavItem::AscendNpuMonitor => "ascendNpuMonitor",
             NavItem::Processes => "processManager",
             NavItem::Docker => "dockerManager",
+            NavItem::Ports => "portsManager",
+            NavItem::Services => "servicesManager",
             NavItem::Transfers => "fileExplorer",
             NavItem::Notes => "notes",
             NavItem::Settings => "settings",
@@ -233,6 +247,8 @@ impl NavItem {
             "npu" | "ascendNpuMonitor" => Some(NavItem::AscendNpuMonitor),
             "processes" | "processManager" => Some(NavItem::Processes),
             "docker" | "dockerManager" => Some(NavItem::Docker),
+            "ports" | "portsManager" => Some(NavItem::Ports),
+            "services" | "servicesManager" => Some(NavItem::Services),
             "fileExplorer" | "fileTransfer" | "transfers" => Some(NavItem::Transfers),
             "notes" => Some(NavItem::Notes),
             "settings" => Some(NavItem::Settings),
@@ -370,7 +386,7 @@ pub(crate) struct ActivityBarLayoutState {
 
 impl Default for ActivityBarLayoutState {
     fn default() -> Self {
-        Self {
+        let mut layout = Self {
             left_top: vec![
                 "fileExplorer".to_string(),
                 "notes".to_string(),
@@ -401,11 +417,83 @@ impl Default for ActivityBarLayoutState {
             ],
             hidden_items: nyaterm_core::models::settings::panel_visibility::default_hidden_items(),
             show_labels: false,
-        }
+        };
+        layout.ensure_host_tool_entries();
+        layout
     }
 }
 
 impl ActivityBarLayoutState {
+    /// Use the same compatibility projection for startup and optimistic
+    /// settings comparisons; a missing optional slot is not an external edit.
+    pub(crate) fn complete_settings_layout(settings: &mut nyaterm_core::AppSettingsSummary) {
+        let mut layout = Self {
+            left_top: settings.ui_activity_bar_left_top.clone(),
+            left_bottom: settings.ui_activity_bar_left_bottom.clone(),
+            right_top: settings.ui_activity_bar_right_top.clone(),
+            right_bottom: settings.ui_activity_bar_right_bottom.clone(),
+            hidden_items: settings.ui_activity_bar_hidden_items.clone(),
+            show_labels: settings.ui_activity_bar_show_labels,
+        };
+        layout.ensure_plugin_entry();
+        layout.ensure_remote_monitor_entries();
+        layout.ensure_host_tool_entries();
+        settings.ui_activity_bar_left_top = layout.left_top;
+        settings.ui_activity_bar_left_bottom = layout.left_bottom;
+        settings.ui_activity_bar_right_top = layout.right_top;
+        settings.ui_activity_bar_right_bottom = layout.right_bottom;
+        settings.ui_activity_bar_hidden_items = layout.hidden_items;
+        for open in [
+            &mut settings.ui_left_open_panels,
+            &mut settings.ui_right_open_panels,
+        ] {
+            for id in open {
+                match id.as_str() {
+                    "ports" => *id = "portsManager".into(),
+                    "services" => *id = "servicesManager".into(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Optional tools need slots for customization, but introducing a missing
+    /// slot must never opt a user into showing it. Existing slots are choices.
+    pub(crate) fn ensure_host_tool_entries(&mut self) {
+        for zone in ActivityBarZone::all() {
+            for id in self.zone_mut(zone) {
+                match id.as_str() {
+                    "ports" => *id = "portsManager".into(),
+                    "services" => *id = "servicesManager".into(),
+                    _ => {}
+                }
+            }
+        }
+        for id in &mut self.hidden_items {
+            match id.as_str() {
+                "ports" => *id = "portsManager".into(),
+                "services" => *id = "servicesManager".into(),
+                _ => {}
+            }
+        }
+        for (id, anchor) in [
+            ("portsManager", "dockerManager"),
+            ("servicesManager", "portsManager"),
+        ] {
+            if self.find_entry(id).is_some() {
+                continue;
+            }
+            let insert_at = self
+                .right_top
+                .iter()
+                .position(|entry| entry == anchor)
+                .map(|index| index + 1)
+                .unwrap_or(self.right_top.len());
+            self.right_top.insert(insert_at, id.into());
+            self.hide_entry(id);
+        }
+    }
+
     /// Older store defaults omitted accelerator slots entirely. Restore only
     /// those missing slots, retaining unknown ids and all saved visibility.
     pub(crate) fn ensure_remote_monitor_entries(&mut self) {
@@ -802,7 +890,25 @@ mod tests {
                 "ascendNpuMonitor",
                 "processManager",
                 "dockerManager",
+                "portsManager",
+                "servicesManager",
             ]
+        );
+    }
+
+    #[test]
+    fn ports_and_services_panels_have_stable_ids_and_sit_on_the_right() {
+        assert_eq!(NavItem::Ports.persistence_id(), "portsManager");
+        assert_eq!(NavItem::Services.persistence_id(), "servicesManager");
+        assert_eq!(
+            NavItem::from_persistence_id("servicesManager"),
+            Some(NavItem::Services)
+        );
+        assert!(NavItem::Ports.is_right_panel() && !NavItem::Ports.is_left_panel());
+        assert!(NavItem::Services.is_right_panel() && !NavItem::Services.is_left_panel());
+        assert_eq!(
+            ActivityBarLayoutState::default().side_for_entry("portsManager"),
+            Some(PanelSide::Right)
         );
     }
 
@@ -858,7 +964,9 @@ mod tests {
             vec![
                 "fileExplorer".to_string(),
                 "gpuMonitor".to_string(),
-                "ascendNpuMonitor".to_string()
+                "ascendNpuMonitor".to_string(),
+                "portsManager".to_string(),
+                "servicesManager".to_string()
             ]
         );
 
@@ -931,7 +1039,72 @@ mod tests {
         assert!(layout.has_hidden_entries());
         assert_eq!(
             layout.hidden_items,
-            nyaterm_core::models::settings::panel_visibility::default_hidden_items()
+            ActivityBarLayoutState::default().hidden_items
         );
+    }
+
+    #[test]
+    fn optional_host_tools_are_hidden_on_first_registration_and_keep_saved_choices() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: vec!["futureEntry".into()],
+            left_bottom: Vec::new(),
+            right_top: vec!["dockerManager".into(), "after".into()],
+            right_bottom: Vec::new(),
+            hidden_items: vec!["futureEntry".into()],
+            show_labels: true,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(
+            layout.right_top,
+            ["dockerManager", "portsManager", "servicesManager", "after"]
+        );
+        assert_eq!(
+            layout.hidden_items,
+            ["futureEntry", "portsManager", "servicesManager"]
+        );
+        assert!(layout.show_entry("portsManager"));
+        layout.right_top.retain(|id| id != "portsManager");
+        layout.left_top.insert(0, "portsManager".into());
+        let saved = layout.clone();
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout, saved);
+        assert!(!layout.is_hidden("portsManager"));
+        assert!(layout.is_hidden("servicesManager"));
+    }
+
+    #[test]
+    fn optional_host_tool_aliases_keep_placement_and_visibility_without_duplicates() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: vec!["ports".into(), "futureEntry".into()],
+            left_bottom: Vec::new(),
+            right_top: Vec::new(),
+            right_bottom: vec!["services".into()],
+            hidden_items: vec!["services".into(), "futureEntry".into()],
+            show_labels: false,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout.left_top, ["portsManager", "futureEntry"]);
+        assert_eq!(layout.right_bottom, ["servicesManager"]);
+        assert!(layout.right_top.is_empty());
+        assert_eq!(layout.hidden_items, ["servicesManager", "futureEntry"]);
+        let saved = layout.clone();
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout, saved);
+    }
+
+    #[test]
+    fn an_empty_layout_offers_host_tools_as_hidden_customization_entries() {
+        let mut layout = ActivityBarLayoutState {
+            left_top: Vec::new(),
+            left_bottom: Vec::new(),
+            right_top: Vec::new(),
+            right_bottom: Vec::new(),
+            hidden_items: Vec::new(),
+            show_labels: false,
+        };
+        layout.ensure_host_tool_entries();
+        assert_eq!(layout.right_top, ["portsManager", "servicesManager"]);
+        assert_eq!(layout.hidden_items, layout.right_top);
+        assert_eq!(layout.first_panel_on_side(PanelSide::Right), None);
     }
 }

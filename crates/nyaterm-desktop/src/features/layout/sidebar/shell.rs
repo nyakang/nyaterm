@@ -1,7 +1,7 @@
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 
 use crate::features::NyaTermApp;
-use crate::features::pages::remote::RemoteMonitorKind;
+use crate::features::pages::remote::{HostToolKind, RemoteMonitorKind};
 use crate::models::{NavItem, PanelSide};
 
 /// Layout for a cached panel subtree.
@@ -111,6 +111,18 @@ impl NyaTermApp {
             NavItem::Docker => self
                 .remote_panels
                 .entity(RemoteMonitorKind::Docker)
+                .clone()
+                .cached(cached_panel_style())
+                .into_any_element(),
+            NavItem::Ports => self
+                .host_tool_panels
+                .entity(HostToolKind::Ports)
+                .clone()
+                .cached(cached_panel_style())
+                .into_any_element(),
+            NavItem::Services => self
+                .host_tool_panels
+                .entity(HostToolKind::Services)
                 .clone()
                 .cached(cached_panel_style())
                 .into_any_element(),

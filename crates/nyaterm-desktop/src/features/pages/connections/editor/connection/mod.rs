@@ -55,10 +55,10 @@ use self::vnc::connection_editor_vnc_section;
 use super::super::list::{ConnectionEditorChoice, ConnectionEditorFields, editor_field};
 use crate::features::selects::NO_SELECTION_VALUE;
 use crate::features::{
-    NyaTermApp, icons::CONNECTION_ICON_OPTIONS, icons::DEFAULT_CONNECTION_ICON,
-    icons::resolve_connection_icon, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX,
-    text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
-    view_widgets::modal_dialog_shell, view_widgets::themed_icon,
+    NyaTermApp, icons::CONNECTION_ICON_OPTIONS, icons::resolve_connection_icon,
+    text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
+    text_inputs::ordinary_input_shell_border_color, view_widgets::modal_dialog_shell,
+    view_widgets::themed_icon,
 };
 use crate::models::{
     ConnectionEditorField, ConnectionEditorSection, ConnectionEditorSelect, ConnectionEditorState,
@@ -742,6 +742,17 @@ impl NyaTermApp {
                     .map(|image| (record.clone(), image))
             })
             .collect::<Vec<_>>();
+        let custom_selected = editor
+            .icon
+            .as_ref()
+            .filter(|id| {
+                self.connection_state
+                    .custom_icons
+                    .records
+                    .iter()
+                    .any(|record| &record.id == *id)
+            })
+            .cloned();
         let icon_rows = (CONNECTION_ICON_OPTIONS.len() + custom_icons.len()).div_ceil(7);
         // Every icon cell is 28 px, with a 4 px gap between rows.
         let icon_grid_height = icon_rows * 28 + icon_rows.saturating_sub(1) * 4;
@@ -754,7 +765,9 @@ impl NyaTermApp {
             .debug_selector(|| "connection-editor-icon-grid".to_string());
         for (index, icon_key) in CONNECTION_ICON_OPTIONS.iter().copied().enumerate() {
             let icon = resolve_connection_icon(Some(icon_key), editor.kind.label());
-            let selected = editor.icon.as_deref().unwrap_or(DEFAULT_CONNECTION_ICON) == icon_key;
+            // Match the trigger's resolved icon, including protocol fallbacks
+            // and legacy aliases, without treating a custom icon as a default.
+            let selected = custom_selected.is_none() && icon == icon_def;
             icon_grid = icon_grid.child(
                 div()
                     .id(SharedString::from(format!("connection-icon-{icon_key}")))
@@ -778,6 +791,11 @@ impl NyaTermApp {
                     .hover(|this| this.bg(rgb(palette.hover)))
                     .when(index == 6, |this| {
                         this.debug_selector(|| "connection-editor-icon-rightmost".to_string())
+                    })
+                    .when(selected, |this| {
+                        this.debug_selector(move || {
+                            format!("connection-editor-icon-selected-{icon_key}")
+                        })
                     })
                     .child(themed_icon(palette, icon, false, 16.))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -830,17 +848,6 @@ impl NyaTermApp {
                     })),
             );
         }
-        let custom_selected = editor
-            .icon
-            .as_ref()
-            .filter(|id| {
-                self.connection_state
-                    .custom_icons
-                    .records
-                    .iter()
-                    .any(|record| &record.id == *id)
-            })
-            .cloned();
         let selected_image = editor
             .icon
             .as_ref()

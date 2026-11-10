@@ -42,6 +42,12 @@ impl NyaTermApp {
     }
 
     fn refresh_gpu_with_mode(&mut self, skip_unavailable: bool, cx: &mut Context<Self>) {
+        if self.local_host_tools_unsupported() {
+            self.remote_ops
+                .set_gpu_status(rust_i18n::t!("hostTools.localWindowsUnsupported").to_string());
+            cx.notify();
+            return;
+        }
         let context = match self.active_ssh_runtime_context("inspecting GPU") {
             Ok(context) => context,
             Err(message) => {
@@ -52,8 +58,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if skip_unavailable && self.remote_ops.gpu_unavailable_for(&job_session_id) {
             return;
@@ -74,7 +79,8 @@ impl NyaTermApp {
         let rejected_tx = tx.clone();
         let rejected_session_id = job_session_id.clone();
         if let Err(error) = self.blocking_jobs.submit_detached("remote-gpu", move |_| {
-            let result = (|| RemoteGpuService::with_multiplex(config, multiplex)?.overview())()
+            let result = RemoteGpuService::with_target(target)
+                .overview()
                 .map_err(|error| error.to_string());
             let _ = tx.unbounded_send(GpuJobResult {
                 job_id,
@@ -165,6 +171,12 @@ impl NyaTermApp {
     }
 
     fn refresh_npu_with_mode(&mut self, skip_unavailable: bool, cx: &mut Context<Self>) {
+        if self.local_host_tools_unsupported() {
+            self.remote_ops
+                .set_npu_status(rust_i18n::t!("hostTools.localWindowsUnsupported").to_string());
+            cx.notify();
+            return;
+        }
         let context = match self.active_ssh_runtime_context("inspecting NPU") {
             Ok(context) => context,
             Err(message) => {
@@ -175,8 +187,7 @@ impl NyaTermApp {
                 return;
             }
         };
-        let config = context.config;
-        let multiplex = context.multiplex;
+        let target = context.target;
         let job_session_id = context.session_id;
         if skip_unavailable && self.remote_ops.npu_unavailable_for(&job_session_id) {
             return;
@@ -197,7 +208,8 @@ impl NyaTermApp {
         let rejected_tx = tx.clone();
         let rejected_session_id = job_session_id.clone();
         if let Err(error) = self.blocking_jobs.submit_detached("remote-npu", move |_| {
-            let result = (|| RemoteNpuService::with_multiplex(config, multiplex)?.overview())()
+            let result = RemoteNpuService::with_target(target)
+                .overview()
                 .map_err(|error| error.to_string());
             let _ = tx.unbounded_send(NpuJobResult {
                 job_id,

@@ -10,7 +10,7 @@
 use super::IconDef;
 use super::aliases::{normalize_connection_icon_key, resolve_alias};
 
-/// Key stored when a connection has no icon of its own.
+/// Blue server key retained for existing explicit selections and batch editing.
 pub(in crate::features) const DEFAULT_CONNECTION_ICON: &str = "server";
 
 /// The default glyph in seven theme-friendly hues. One asset, seven tints — this
@@ -159,18 +159,25 @@ const SYSTEM_ICONS: &[(&str, IconDef)] = &[
     ("powershell", IconDef::full_color("color/os/powershell.svg")),
 ];
 
+/// Protocol defaults are selectable with the same assets and tints used when a
+/// connection has no explicit icon.
+const PROTOCOL_ICONS: &[(&str, IconDef)] = &[
+    ("local", IconDef::mono("icons/conn/terminal.svg", 0x4ade80)),
+    ("telnet", IconDef::mono("icons/conn/telnet.svg", 0xd29922)),
+    ("serial", IconDef::mono("icons/conn/serial.svg", 0xbc8cff)),
+    ("rdp", IconDef::mono("icons/conn/rdp.svg", 0x22d3ee)),
+    ("vnc", IconDef::mono("icons/conn/vnc.svg", 0xfb7185)),
+];
+
 /// Keys the GPUI build has written that the old app never had. They are not
 /// offered in the picker, but stored connections already carry them, so they must
 /// keep resolving. Do not prune this list without a data migration.
 const LEGACY_ICONS: &[(&str, IconDef)] = &[
     ("kubernetes", IconDef::full_color("color/os/k8s.svg")),
-    ("local", IconDef::mono("icons/conn/terminal.svg", 0x4ade80)),
     (
         "terminal",
         IconDef::mono("icons/conn/terminal.svg", 0x4ade80),
     ),
-    ("telnet", IconDef::mono("icons/conn/telnet.svg", 0xd29922)),
-    ("serial", IconDef::mono("icons/conn/serial.svg", 0xbc8cff)),
     ("folder", IconDef::mono("icons/conn/folder.svg", 0xfbbf24)),
     ("group", IconDef::mono("icons/conn/folder.svg", 0xfbbf24)),
     // The old app had no FreeBSD entry; the GPUI picker offered one backed by the
@@ -179,12 +186,13 @@ const LEGACY_ICONS: &[(&str, IconDef)] = &[
 ];
 
 /// Picker contents, in the old app's display order: the seven server hues, the
-/// seven Linux hues, then every OS logo.
+/// seven Linux hues, then every OS logo, followed by protocol defaults.
 pub(in crate::features) fn connection_icon_options() -> impl Iterator<Item = &'static str> {
     SERVER_ICONS
         .iter()
         .chain(LINUX_ICONS)
         .chain(SYSTEM_ICONS)
+        .chain(PROTOCOL_ICONS)
         .map(|(key, _)| *key)
 }
 
@@ -199,6 +207,7 @@ fn lookup(key: &str) -> Option<IconDef> {
         BRAND_ICONS,
         LINUX_ICONS,
         SERVER_ICONS,
+        PROTOCOL_ICONS,
         LEGACY_ICONS,
     ] {
         if let Some((_, def)) = table.iter().find(|(candidate, _)| *candidate == key) {
@@ -231,14 +240,15 @@ pub(in crate::features) fn resolve_connection_icon(icon_key: Option<&str>, kind:
 /// giving each non-SSH kind its own mark also distinguishes saved connections
 /// and session tabs when no custom icon is selected.
 pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconDef {
-    match kind {
-        "Local" => IconDef::mono("icons/conn/terminal.svg", 0x4ade80),
-        "Telnet" => IconDef::mono("icons/conn/telnet.svg", 0xd29922),
-        "Serial" => IconDef::mono("icons/conn/serial.svg", 0xbc8cff),
-        "RDP" => IconDef::mono("icons/conn/rdp.svg", 0x22d3ee),
-        "VNC" => IconDef::mono("icons/conn/vnc.svg", 0xfb7185),
-        _ => IconDef::mono("icons/brand/server.svg", 0x60a5fa),
-    }
+    let key = match kind {
+        "Local" => "local",
+        "Telnet" => "telnet",
+        "Serial" => "serial",
+        "RDP" => "rdp",
+        "VNC" => "vnc",
+        _ => DEFAULT_CONNECTION_ICON,
+    };
+    lookup(key).expect("protocol defaults must be registered connection icons")
 }
 
 #[cfg(test)]
@@ -246,7 +256,7 @@ mod tests {
     use super::super::IconPaint;
     use super::super::aliases::CONNECTION_ICON_ALIASES;
     use super::{
-        CONNECTION_ICON_OPTIONS, LINUX_ICONS, SERVER_ICONS, SYSTEM_ICONS,
+        CONNECTION_ICON_OPTIONS, LINUX_ICONS, PROTOCOL_ICONS, SERVER_ICONS, SYSTEM_ICONS,
         default_connection_icon_for_kind, lookup, resolve_connection_icon,
     };
 
@@ -414,7 +424,7 @@ mod tests {
         let options = &*CONNECTION_ICON_OPTIONS;
         assert_eq!(
             options.len(),
-            SERVER_ICONS.len() + LINUX_ICONS.len() + SYSTEM_ICONS.len()
+            SERVER_ICONS.len() + LINUX_ICONS.len() + SYSTEM_ICONS.len() + PROTOCOL_ICONS.len()
         );
         let mut sorted = options.clone();
         sorted.sort_unstable();
@@ -426,6 +436,25 @@ mod tests {
             assert!(
                 lookup(key).is_some(),
                 "picker offers unresolvable key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_protocol_default_has_one_matching_picker_option() {
+        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC"] {
+            let default = resolve_connection_icon(None, kind);
+            let matching_options = CONNECTION_ICON_OPTIONS
+                .iter()
+                .filter(|key| resolve_connection_icon(Some(key), kind) == default)
+                .count();
+            assert_eq!(matching_options, 1, "{kind} default must be selectable");
+        }
+        for key in ["rdp", "vnc"] {
+            assert_eq!(
+                resolve_connection_icon(Some(key), "SSH"),
+                resolve_connection_icon(None, &key.to_uppercase()),
+                "explicit protocol icons must survive switching protocols"
             );
         }
     }

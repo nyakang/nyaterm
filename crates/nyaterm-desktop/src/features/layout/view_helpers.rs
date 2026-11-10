@@ -166,7 +166,7 @@ pub(super) fn session_kind_icon_path(kind: SessionKind) -> &'static str {
         SessionKind::Telnet | SessionKind::RawTcp => "icons/conn/telnet.svg",
         SessionKind::Serial => "icons/conn/serial.svg",
         SessionKind::LocalPty => "icons/conn/terminal.svg",
-        SessionKind::Rdp => "icons/conn/server.svg",
-        SessionKind::Vnc => "icons/conn/server.svg",
+        SessionKind::Rdp => "icons/conn/rdp.svg",
+        SessionKind::Vnc => "icons/conn/vnc.svg",
     }
 }

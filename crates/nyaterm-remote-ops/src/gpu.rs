@@ -1,6 +1,5 @@
-use nyaterm_transport::ssh_execution::{
-    RemoteCommandOutput, ensure_remote_command_success, run_ssh_command,
-};
+use crate::host::HostTarget;
+use nyaterm_transport::ssh_execution::{RemoteCommandOutput, ensure_remote_command_success};
 use nyaterm_transport::{SshMultiplexHandle, SshSessionConfig};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -45,8 +44,7 @@ pub struct RemoteGpuProcess {
 
 #[derive(Debug, Clone)]
 pub struct RemoteGpuService {
-    config: SshSessionConfig,
-    multiplex: Option<SshMultiplexHandle>,
+    target: HostTarget,
 }
 
 pub const GPU_OVERVIEW_SCRIPT: &str = r#"sh -s <<'NYATERM_GPU_SCRIPT'
@@ -89,10 +87,14 @@ NYATERM_GPU_SCRIPT
 
 impl RemoteGpuService {
     pub fn new(config: SshSessionConfig) -> Self {
-        Self {
+        Self::with_target(HostTarget::Ssh {
             config,
             multiplex: None,
-        }
+        })
+    }
+
+    pub fn with_target(target: HostTarget) -> Self {
+        Self { target }
     }
 
     pub fn with_multiplex(
@@ -100,10 +102,10 @@ impl RemoteGpuService {
         multiplex: SshMultiplexHandle,
     ) -> anyhow::Result<Self> {
         multiplex.ensure_matches_config(&config)?;
-        Ok(Self {
+        Ok(Self::with_target(HostTarget::Ssh {
             config,
             multiplex: Some(multiplex),
-        })
+        }))
     }
 
     pub fn overview(&self) -> anyhow::Result<RemoteGpuOverview> {
@@ -112,13 +114,10 @@ impl RemoteGpuService {
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
-        self.config.ensure_remote_resource_probes_allowed()?;
-        let output = run_ssh_command(
-            self.config.clone(),
-            self.multiplex.clone(),
-            command.as_bytes().to_vec(),
-            GPU_TIMEOUT,
-        )?;
+        self.target.ensure_probes_allowed()?;
+        let output = self
+            .target
+            .run_raw(command.to_string(), None, GPU_TIMEOUT)?;
         ensure_remote_command_success(output, context)
     }
 }

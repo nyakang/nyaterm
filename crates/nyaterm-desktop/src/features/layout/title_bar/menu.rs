@@ -662,9 +662,40 @@ mod tests {
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
-    use crate::features::layout::title_bar::definition::TitleMenuCommand;
+    use crate::features::layout::title_bar::definition::{TitleMenuCommand, TitleMenuKind};
     use crate::features::update::{UpdateCheckKind, UpdateEvent};
     use crate::models::TitleMenu;
+
+    #[test]
+    fn optional_host_tools_can_be_enabled_from_the_existing_customization_menu() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = menu_app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            for visible in [false, true, false] {
+                if visible {
+                    app.show_activity_entry("portsManager".into(), cx);
+                    app.show_activity_entry("servicesManager".into(), cx);
+                } else {
+                    app.reset_activity_bar_layout(cx);
+                }
+                let menu = app.title_side_panel_menu_items(crate::models::PanelSide::Right, cx);
+                for (id, item) in [
+                    ("portsManager", crate::models::NavItem::Ports),
+                    ("servicesManager", crate::models::NavItem::Services),
+                ] {
+                    let command = TitleMenuCommand::TogglePanelVisibility(id.into());
+                    let entry = menu.iter().find(|entry| {
+                        matches!(&entry.kind, TitleMenuKind::Action(Some(candidate)) if *candidate == command)
+                    }).expect("optional tool remains in customization menu");
+                    assert_eq!(entry.checked, visible);
+                    assert!(!entry.disabled);
+                    assert_eq!(app.shell.activity_bar_layout().is_hidden(id), !visible);
+                    assert!(!app.panel_is_rendered(item));
+                }
+            }
+        });
+    }
 
     struct MenuCommandWindow;
     impl gpui::Render for MenuCommandWindow {

@@ -107,12 +107,32 @@ pub struct JobHandle {
     outcome_rx: mpsc::Receiver<JobOutcome>,
 }
 
+/// Cancels a submitted job without owning or consuming its result future.
+#[derive(Clone)]
+pub struct JobCancellationHandle {
+    cancelled: Arc<AtomicBool>,
+}
+impl JobCancellationHandle {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
 pub struct JobTask<T> {
     handle: JobHandle,
     result_rx: oneshot::Receiver<Result<T, JobExecutionError>>,
 }
 
 impl<T> JobTask<T> {
+    pub fn cancellation_handle(&self) -> JobCancellationHandle {
+        JobCancellationHandle {
+            cancelled: Arc::clone(&self.handle.cancelled),
+        }
+    }
+
     pub fn id(&self) -> u64 {
         self.handle.id()
     }
@@ -587,6 +607,34 @@ mod tests {
             futures::executor::block_on(panicked),
             Err(JobExecutionError::Failed(JobFailure::Panicked))
         );
+        scheduler.shutdown();
+    }
+
+    #[test]
+    fn cloned_cancellation_handle_skips_queued_work_without_consuming_the_future() {
+        let scheduler = BlockingJobScheduler::with_limits(1, 2).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let running = scheduler
+            .submit_task("held", move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let queued = scheduler
+            .submit_task::<()>("cancelled", |_| panic!("queued job executed"))
+            .unwrap();
+        let cancellation = queued.cancellation_handle();
+        cancellation.clone().cancel();
+        release_tx.send(()).unwrap();
+        assert_eq!(futures::executor::block_on(running), Ok(()));
+        assert_eq!(
+            futures::executor::block_on(queued),
+            Err(JobExecutionError::Cancelled)
+        );
+        assert!(cancellation.is_cancelled());
+        assert_eq!(scheduler.metrics().panicked, 0);
         scheduler.shutdown();
     }
 

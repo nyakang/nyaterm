@@ -273,12 +273,13 @@ impl NyaTermApp {
         self.hide_ai_provider_secret(cx);
         self.ai.invalidate_provider_jobs();
         let settings = self.settings.summary().clone();
-        let base_settings = self
+        let mut base_settings = self
             .shell
             .settings_draft_snapshot()
             .expect("settings draft checked above")
             .settings
             .clone();
+        crate::models::ActivityBarLayoutState::complete_settings_layout(&mut base_settings);
         let base = self
             .shell
             .settings_draft_snapshot()
@@ -379,6 +380,7 @@ impl NyaTermApp {
                     shared_settings.ui_right_panel_collapsed =
                         persisted_settings.ui_right_panel_collapsed;
                     let mut persisted = persisted_settings;
+                    crate::models::ActivityBarLayoutState::complete_settings_layout(&mut persisted);
                     // These fields are workspace-local projections, not shared settings.
                     persisted.ui_left_panel_width = base_settings.ui_left_panel_width;
                     persisted.ui_right_panel_width = base_settings.ui_right_panel_width;
@@ -1553,6 +1555,64 @@ mod tests {
             ("host".to_string(), true),
             "apply must write the header back on, not leave it hidden on disk"
         );
+    }
+
+    #[test]
+    fn completing_host_tool_slots_does_not_mask_concurrent_visibility_or_placement_changes() {
+        for move_left in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            let (store, mut external) = cx.update_entity(&app, |app, cx| {
+                app.begin_settings_draft(cx);
+                app.apply_interaction_word_separators("fixture changed separators".into(), cx);
+                (
+                    app.store_blocking_client().clone(),
+                    app.settings.summary().clone(),
+                )
+            });
+            if move_left {
+                external
+                    .ui_activity_bar_right_top
+                    .retain(|id| id != "portsManager");
+                external
+                    .ui_activity_bar_left_top
+                    .push("portsManager".into());
+            } else {
+                external
+                    .ui_activity_bar_hidden_items
+                    .retain(|id| id != "portsManager");
+            }
+            let original_separators = store
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+                .interaction_word_separators;
+            let expected = external.clone();
+            store
+                .request_fn(nyaterm_store::StoreDomain::Settings, move |store| {
+                    store.save_ui_layout_settings(&external)
+                })
+                .unwrap();
+            cx.update_entity(&app, |app, cx| app.apply_settings_draft(false, cx));
+            cx.run_until_parked();
+            let saved = store
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(saved.interaction_word_separators, original_separators);
+            assert_eq!(
+                saved.ui_activity_bar_left_top,
+                expected.ui_activity_bar_left_top
+            );
+            assert_eq!(
+                saved.ui_activity_bar_hidden_items,
+                expected.ui_activity_bar_hidden_items
+            );
+            cx.update_entity(&app, |app, _| assert!(app.shell.has_settings_draft()));
+        }
     }
 
     #[test]

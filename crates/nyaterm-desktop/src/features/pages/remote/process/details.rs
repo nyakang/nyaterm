@@ -21,8 +21,10 @@ pub(in crate::features::pages::remote) struct ProcessDetailLabels {
     pub apply_nice: Cow<'static, str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::features::pages::remote) fn process_details(
     palette: ThemePalette,
+    host_identity: crate::features::remote::remote_runtime::host_tools::HostInteractionIdentity,
     process: &RemoteProcess,
     mode: ProcessDisplayMode,
     labels: ProcessDetailLabels,
@@ -176,40 +178,50 @@ pub(in crate::features::pages::remote) fn process_details(
                     on_copy_command,
                 )),
         )
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .min_w_0()
-                        .w(px(80.))
-                        .h(px(28.))
-                        .flex_none()
-                        .on_key_down(cx.listener(|panel, event: &KeyDownEvent, window, cx| {
+        .when_some(nice_input, |element, nice_input| {
+            element.child(
+                div()
+                    .debug_selector(|| "process-priority-controls".into())
+                    .flex_none()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .w(px(80.))
+                            .h(px(28.))
+                            .flex_none()
+                            .on_key_down(cx.listener({
+                                let identity = host_identity.clone();
+                                move |panel, event: &KeyDownEvent, window, cx| {
+                                    panel.with_app(cx, |this, cx| {
+                                        if this.host_interaction_identity(cx) == identity
+                                            && event.keystroke.key.as_str() == "enter"
+                                        {
+                                            cx.stop_propagation();
+                                            this.apply_process_nice_draft(window, cx);
+                                        }
+                                    });
+                                }
+                            }))
+                            .child(nice_input),
+                    )
+                    .child(small_button(
+                        palette,
+                        format!("process-nice-apply-{pid}"),
+                        labels.apply_nice.clone(),
+                        cx.listener(move |panel, _, window, cx| {
                             panel.with_app(cx, |this, cx| {
-                                if event.keystroke.key.as_str() == "enter" {
-                                    cx.stop_propagation();
+                                if this.host_interaction_identity(cx) == host_identity {
                                     this.apply_process_nice_draft(window, cx);
                                 }
                             });
-                        }))
-                        .children(nice_input),
-                )
-                .child(small_button(
-                    palette,
-                    format!("process-nice-apply-{pid}"),
-                    labels.apply_nice.clone(),
-                    cx.listener(move |panel, _, window, cx| {
-                        panel.with_app(cx, |this, cx| {
-                            this.apply_process_nice_draft(window, cx);
-                        });
-                    }),
-                )),
-        )
+                        }),
+                    )),
+            )
+        })
         .into_any_element()
 }
 
